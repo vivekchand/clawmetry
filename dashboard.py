@@ -37,7 +37,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 app = Flask(__name__)
 
@@ -924,13 +924,13 @@ DASHBOARD_HTML = r"""
       <path class="flow-path" id="path-human-wa"       d="M 100 76 C 82 190, 82 410, 100 478"/>
 
       <!-- Connection Paths -->
-      <path class="flow-path" id="path-tg-gw"          d="M 165 200 C 210.2.1, 220 310, 260 335"/>
+      <path class="flow-path" id="path-tg-gw"          d="M 165 200 C 210.2.2, 220 310, 260 335"/>
       <path class="flow-path" id="path-sig-gw"         d="M 165 350 L 260 350"/>
       <path class="flow-path" id="path-wa-gw"          d="M 165 500 C 210 500, 220 390, 260 365"/>
       <path class="flow-path" id="path-gw-brain"       d="M 380 350 C 425 350, 440 365, 480 365"/>
       <path class="flow-path" id="path-brain-session"   d="M 570 310 L 570 185"/>
       <path class="flow-path" id="path-brain-exec"      d="M 660 335 C 720 310, 770 160, 810 150"/>
-      <path class="flow-path" id="path-brain-browser"   d="M 660 350 C 760 340, 880.2.1, 920 255"/>
+      <path class="flow-path" id="path-brain-browser"   d="M 660 350 C 760 340, 880.2.2, 920 255"/>
       <path class="flow-path" id="path-brain-search"    d="M 660 370 C 790 370, 920 380, 960 380"/>
       <path class="flow-path" id="path-brain-cron"      d="M 660 385 C 760 400, 880 500, 920 510"/>
       <path class="flow-path" id="path-brain-tts"       d="M 660 400 C 720 450, 770 570, 810 585"/>
