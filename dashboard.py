@@ -3284,7 +3284,10 @@ def api_subagents():
         key = session.get('key', '')
         
         # Filter for sub-agent sessions (pattern: agent:main:subagent:UUID)
-        if ':subagent:' in key and not key.endswith(':main'):
+        # Also check for other potential patterns as sub-agents evolve
+        if (':subagent:' in key or 
+            'subagent' in key.lower() or 
+            session.get('channel', '') != 'unknown'):  # Non-unknown channel might indicate sub-agent
             # Extract UUID and create display info
             parts = key.split(':')
             if len(parts) >= 4:
