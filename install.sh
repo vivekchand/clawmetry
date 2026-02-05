@@ -16,7 +16,7 @@ echo -e "${CYAN}  / _ \ _ __   ___ _ __  / ___| | __ ___      __${NC}"
 echo -e "${CYAN} | | | | '_ \ / _ \ '_ \| |   | |/ _\` \ \ /\ / /${NC}"
 echo -e "${CYAN} | |_| | |_) |  __/ | | | |___| | (_| |\ V  V / ${NC}"
 echo -e "${CYAN}  \___/| .__/ \___|_| |_|\____|_|\__,_| \_/\_/  ${NC}"
-echo -e "${CYAN}       |_|          ${YELLOW}Dashboard v0.1.0${NC}"
+echo -e "${CYAN}       |_|          ${YELLOW}Dashboard v0.2.4${NC}"
 echo ""
 
 # Check Python
