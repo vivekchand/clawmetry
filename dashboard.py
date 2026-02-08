@@ -1052,39 +1052,66 @@ DASHBOARD_HTML = r"""
   <div class="card" id="sessions-list">Loading...</div>
 </div>
 
-<!-- SUB-AGENTS -->
+<!-- SUB-AGENTS — Live Activity Dashboard -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar">
     <button class="refresh-btn" onclick="loadSubAgentsPage()">↻ Refresh</button>
-    <span style="margin-left: 16px; font-size: 12px; color: #666;">🐝 AI Workforce Dashboard</span>
+    <label style="margin-left:12px;font-size:12px;color:#888;display:flex;align-items:center;gap:4px;cursor:pointer;">
+      <input type="checkbox" id="sa-auto-refresh" checked onchange="toggleSAAutoRefresh()" style="accent-color:#60a0ff;"> Auto-refresh (5s)
+    </label>
+    <span style="margin-left:auto;font-size:11px;color:#555;" id="sa-refresh-time"></span>
   </div>
-  
+
+  <!-- Status legend -->
+  <div style="display:flex;gap:16px;margin-bottom:12px;padding:8px 12px;background:var(--bg-secondary,#111128);border-radius:8px;font-size:12px;color:#888;flex-wrap:wrap;align-items:center;">
+    <span style="font-weight:600;color:#aaa;">Status:</span>
+    <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:#27ae60;display:inline-block;"></span> Active — working right now</span>
+    <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:#f0c040;display:inline-block;"></span> Idle — finished recently (&lt;30m)</span>
+    <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:#e74c3c;display:inline-block;"></span> Done — completed or timed out</span>
+  </div>
+
   <!-- Sub-Agent Stats Overview -->
   <div class="grid">
     <div class="card">
-      <div class="card-title"><span class="icon">🟢</span> Active</div>
+      <div class="card-title"><span class="icon">🟢</span> Active Now</div>
       <div class="card-value" id="subagents-active-count">—</div>
-      <div class="card-sub">Working now</div>
+      <div class="card-sub">Currently working</div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">🟡</span> Idle</div>
+      <div class="card-title"><span class="icon">🟡</span> Recently Idle</div>
       <div class="card-value" id="subagents-idle-count">—</div>
-      <div class="card-sub">Standing by</div>
+      <div class="card-sub">Finished in last 30m</div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">🔴</span> Stale</div>
+      <div class="card-title"><span class="icon">✅</span> Completed</div>
       <div class="card-value" id="subagents-stale-count">—</div>
-      <div class="card-sub">Disconnected</div>
+      <div class="card-sub">Done &amp; dusted</div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">⚡</span> Total Spawned</div>
+      <div class="card-title"><span class="icon">📊</span> Total Spawned</div>
       <div class="card-value" id="subagents-total-count">—</div>
-      <div class="card-sub">All time workers</div>
+      <div class="card-sub">All sub-agents ever</div>
     </div>
   </div>
-  
-  <div class="section-title">🐝 Active Worker Bees</div>
-  <div class="card" id="subagents-list">Loading workforce...</div>
+
+  <div class="section-title">🐝 Sub-Agent Activity <span style="font-size:12px;font-weight:400;color:#666;">— click a worker to see what it's doing</span></div>
+  <div class="card" id="subagents-list" style="padding:0;">Loading workforce...</div>
+
+  <!-- Expanded activity panel (shown when clicking a sub-agent) -->
+  <div id="sa-activity-panel" style="display:none;margin-top:12px;">
+    <div class="card" style="padding:0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border-secondary,#2a2a4a);background:var(--bg-secondary,#111128);">
+        <div>
+          <span style="font-weight:700;font-size:15px;color:var(--text-primary,#e0e0e0);" id="sa-panel-title">Sub-Agent</span>
+          <span style="font-size:11px;color:#666;margin-left:8px;" id="sa-panel-status"></span>
+        </div>
+        <button onclick="closeSAPanel()" style="background:none;border:1px solid #444;color:#aaa;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;">✕ Close</button>
+      </div>
+      <div id="sa-activity-timeline" style="max-height:500px;overflow-y:auto;padding:8px 0;">
+        <div style="padding:20px;text-align:center;color:#666;">Loading activity...</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- CRONS -->
@@ -1137,11 +1164,31 @@ DASHBOARD_HTML = r"""
 
 <!-- FLOW -->
 <div class="page active" id="page-flow">
+  <!-- How to read this diagram (collapsible) -->
+  <details style="margin-bottom:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:0;">
+    <summary style="padding:10px 16px;cursor:pointer;font-size:13px;color:#aaa;font-weight:600;list-style:none;display:flex;align-items:center;gap:8px;">
+      <span>ℹ️ How to read this diagram</span>
+      <span style="font-size:11px;font-weight:400;color:#666;">(click to expand)</span>
+    </summary>
+    <div style="padding:4px 16px 14px;font-size:12px;color:#888;line-height:1.6;">
+      <p style="margin:0 0 8px;">This diagram shows how your AI agent processes messages in real-time:</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;">
+        <div><span style="color:#c0a0ff;">💜 Purple particles</span> = incoming messages from you</div>
+        <div><span style="color:#60a0ff;">💙 Blue particles</span> = message being processed internally</div>
+        <div><span style="color:#f0c040;">💛 Yellow particles</span> = AI using a tool (search, code, etc.)</div>
+        <div><span style="color:#50e080;">💚 Green particles</span> = AI sending a reply back to you</div>
+        <div><span style="color:#40a0b0;">🩵 Cyan particles</span> = infrastructure activity (disk, network)</div>
+        <div><span style="color:#e04040;">❤️ Red flash on brain</span> = an error occurred</div>
+      </div>
+      <p style="margin:8px 0 0;color:#666;">💡 Nodes glow when active. Watch the particles flow left→right (incoming) and right→left (replies).</p>
+    </div>
+  </details>
+
   <div class="flow-stats">
-    <div class="flow-stat"><span class="flow-stat-label">Msgs / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Events</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Tokens</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
+    <div class="flow-stat"><span class="flow-stat-label">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
+    <div class="flow-stat"><span class="flow-stat-label">Events Processed</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
+    <div class="flow-stat"><span class="flow-stat-label">Tools In Use</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
+    <div class="flow-stat"><span class="flow-stat-label">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
   </div>
   <div class="flow-container">
     <svg id="flow-svg" viewBox="0 0 1200 950" preserveAspectRatio="xMidYMid meet">
@@ -1255,11 +1302,14 @@ DASHBOARD_HTML = r"""
         <circle class="tool-indicator" id="ind-memory" cx="775" cy="607" r="4" fill="#e06040"/>
       </g>
 
-      <!-- Flow direction labels -->
-      <text class="flow-label" x="195" y="255">inbound</text>
-      <text class="flow-label" x="420" y="342">dispatch</text>
-      <text class="flow-label" x="548" y="250">context</text>
-      <text class="flow-label" x="750" y="320">tools</text>
+      <!-- Flow direction labels (plain English) -->
+      <text class="flow-label" x="195" y="255" style="font-size:10px;">your message</text>
+      <text class="flow-label" x="195" y="268" style="font-size:8px;fill:#555;">arrives here</text>
+      <text class="flow-label" x="420" y="342" style="font-size:10px;">routes to AI</text>
+      <text class="flow-label" x="548" y="245" style="font-size:10px;">remembers</text>
+      <text class="flow-label" x="548" y="258" style="font-size:8px;fill:#555;">conversation</text>
+      <text class="flow-label" x="750" y="315" style="font-size:10px;">uses tools</text>
+      <text class="flow-label" x="750" y="328" style="font-size:8px;fill:#555;">to get things done</text>
 
       <!-- Infrastructure Layer -->
       <line class="flow-ground" x1="80" y1="755" x2="1120" y2="755"/>
@@ -1288,10 +1338,21 @@ DASHBOARD_HTML = r"""
 
       <!-- Infra labels -->
       <text class="flow-label" x="440" y="680">runtime</text>
-      <text class="flow-label" x="570" y="650">host</text>
-      <text class="flow-label" x="720" y="710">disk I/O</text>
-      <text class="flow-label" x="870" y="660">network</text>
+      <text class="flow-label" x="570" y="650">host computer</text>
+      <text class="flow-label" x="720" y="710">file storage</text>
+      <text class="flow-label" x="870" y="660">internet</text>
     </svg>
+  </div>
+
+  <!-- Live activity feed under the flow diagram -->
+  <div style="margin-top:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:12px 16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <span style="font-size:13px;font-weight:600;color:#aaa;">📡 Live Activity Feed</span>
+      <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
+    </div>
+    <div id="flow-live-feed" style="max-height:120px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.5;color:#777;">
+      <div style="color:#555;">Waiting for activity...</div>
+    </div>
   </div>
 </div>
 
@@ -1658,57 +1719,167 @@ async function loadActivityStream() {
   }
 }
 
-async function loadSubAgentsPage() {
+// ===== Sub-Agent Live Activity System =====
+var _saAutoRefreshTimer = null;
+var _saSelectedId = null;
+
+function toggleSAAutoRefresh() {
+  if (document.getElementById('sa-auto-refresh').checked) {
+    _saAutoRefreshTimer = setInterval(function() { loadSubAgentsPage(true); }, 5000);
+  } else {
+    clearInterval(_saAutoRefreshTimer);
+    _saAutoRefreshTimer = null;
+  }
+}
+
+async function loadSubAgentsPage(silent) {
   try {
     var data = await fetch('/api/subagents').then(r => r.json());
     var counts = data.counts;
     var subagents = data.subagents;
-    
-    // Update stats cards
+
+    // Update stats
     document.getElementById('subagents-active-count').textContent = counts.active;
     document.getElementById('subagents-idle-count').textContent = counts.idle;
     document.getElementById('subagents-stale-count').textContent = counts.stale;
     document.getElementById('subagents-total-count').textContent = counts.total;
-    
-    // Build detailed list
+    document.getElementById('sa-refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
     var listHtml = '';
     if (subagents.length === 0) {
-      listHtml = '<div style="padding:40px;text-align:center;color:#666;">';
-      listHtml += '<div style="font-size:48px;margin-bottom:16px;">🐝</div>';
-      listHtml += '<div style="font-size:16px;margin-bottom:8px;">No Worker Bees Active</div>';
-      listHtml += '<div style="font-size:12px;">Sub-agents will appear here when spawned by the main agent</div>';
-      listHtml += '</div>';
+      listHtml = '<div style="padding:40px;text-align:center;color:#666;">'
+        + '<div style="font-size:48px;margin-bottom:16px;">🐝</div>'
+        + '<div style="font-size:16px;margin-bottom:8px;">No Sub-Agents Yet</div>'
+        + '<div style="font-size:12px;max-width:400px;margin:0 auto;">Sub-agents are spawned by the main AI to handle complex tasks in parallel. They\'ll appear here when active.</div>'
+        + '</div>';
     } else {
       subagents.forEach(function(agent) {
-        listHtml += '<div class="subagent-row">';
-        listHtml += '<div class="subagent-indicator ' + agent.status + '" title="Status: ' + agent.status + '"></div>';
-        listHtml += '<div class="subagent-info">';
-        listHtml += '<div class="subagent-header">';
-        listHtml += '<span class="subagent-id">' + escHtml(agent.displayName) + '</span>';
-        listHtml += '<span class="subagent-runtime-badge">' + agent.runtime + '</span>';
-        listHtml += '</div>';
-        listHtml += '<div class="subagent-description">' + escHtml(agent.task) + '</div>';
-        listHtml += '<div class="subagent-meta">';
-        listHtml += '<span>🤖 Model: ' + escHtml(agent.model) + '</span>';
-        listHtml += '<span>📡 Channel: ' + escHtml(agent.channel) + '</span>';
-        if (agent.totalTokens > 0) {
-          var tokenDisplay = agent.totalTokens >= 1000 ? (agent.totalTokens/1000).toFixed(0) + 'K' : agent.totalTokens;
-          listHtml += '<span>🎯 Tokens: ' + tokenDisplay + '</span>';
+        var isSelected = _saSelectedId === agent.sessionId;
+        var statusIcon = agent.status === 'active' ? '🟢' : agent.status === 'idle' ? '🟡' : '⬜';
+        var statusLabel = agent.status === 'active' ? 'Working...' : agent.status === 'idle' ? 'Recently finished' : 'Completed';
+
+        listHtml += '<div class="subagent-row" style="cursor:pointer;' + (isSelected ? 'background:var(--bg-hover,#1a1a3a);border-left:3px solid #60a0ff;' : '') + '" onclick="openSAActivity(\'' + agent.sessionId + '\',\'' + escHtml(agent.displayName) + '\',\'' + agent.status + '\')">';
+        listHtml += '<div class="subagent-indicator ' + agent.status + '"></div>';
+        listHtml += '<div class="subagent-info" style="flex:1;">';
+
+        // Header line: name + status badge + time
+        listHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
+        listHtml += '<span class="subagent-id">' + statusIcon + ' ' + escHtml(agent.displayName) + '</span>';
+        listHtml += '<div style="display:flex;gap:8px;align-items:center;">';
+        listHtml += '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:' + (agent.status === 'active' ? '#1a3a2a' : '#1a1a2a') + ';color:' + (agent.status === 'active' ? '#60ff80' : '#888') + ';">' + statusLabel + '</span>';
+        listHtml += '<span style="font-size:11px;color:#666;">' + agent.runtime + '</span>';
+        listHtml += '</div></div>';
+
+        // Recent tool calls (live activity preview)
+        if (agent.recentTools && agent.recentTools.length > 0) {
+          listHtml += '<div style="margin-top:4px;display:flex;flex-direction:column;gap:2px;">';
+          var showTools = agent.recentTools.slice(-3);  // Show last 3 tools
+          showTools.forEach(function(tool) {
+            var toolColor = tool.name === 'exec' ? '#f0c040' : tool.name.match(/Read|Write|Edit/) ? '#60a0ff' : tool.name === 'web_search' ? '#c0a0ff' : '#50e080';
+            listHtml += '<div style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;font-family:monospace;">';
+            listHtml += '<span style="color:' + toolColor + ';font-weight:600;min-width:70px;">' + escHtml(tool.name) + '</span>';
+            listHtml += '<span style="color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(tool.summary) + '</span>';
+            listHtml += '</div>';
+          });
+          listHtml += '</div>';
         }
-        listHtml += '<span>🆔 ' + agent.uuid + '</span>';
-        if (agent.updatedAt) {
-          listHtml += '<span>⏰ Updated: ' + timeAgo(agent.updatedAt) + '</span>';
+
+        // Last assistant text (what it's thinking/saying)
+        if (agent.lastText) {
+          listHtml += '<div style="margin-top:4px;font-size:11px;color:#777;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">💭 ' + escHtml(agent.lastText.substring(0, 120)) + '</div>';
         }
-        listHtml += '</div>';
-        listHtml += '</div>';
-        listHtml += '</div>';
+
+        listHtml += '</div></div>';
       });
     }
-    
+
     document.getElementById('subagents-list').innerHTML = listHtml;
-    
+
+    // If we have a selected sub-agent, refresh its activity panel too
+    if (_saSelectedId && !silent) {
+      loadSAActivity(_saSelectedId);
+    }
+
+    // Start auto-refresh if enabled
+    if (!_saAutoRefreshTimer && document.getElementById('sa-auto-refresh').checked) {
+      _saAutoRefreshTimer = setInterval(function() { loadSubAgentsPage(true); }, 5000);
+    }
+
   } catch(e) {
-    document.getElementById('subagents-list').innerHTML = '<div style="padding:20px;color:#e74c3c;text-align:center;">Failed to load sub-agents: ' + e.message + '</div>';
+    if (!silent) {
+      document.getElementById('subagents-list').innerHTML = '<div style="padding:20px;color:#e74c3c;text-align:center;">Failed to load: ' + e.message + '</div>';
+    }
+  }
+}
+
+function openSAActivity(sessionId, name, status) {
+  _saSelectedId = sessionId;
+  document.getElementById('sa-activity-panel').style.display = 'block';
+  document.getElementById('sa-panel-title').textContent = '🐝 ' + name;
+  document.getElementById('sa-panel-status').textContent = status === 'active' ? '🟢 Working' : status === 'idle' ? '🟡 Idle' : '⬜ Done';
+  loadSAActivity(sessionId);
+  // Re-render list to highlight selected
+  loadSubAgentsPage(true);
+}
+
+function closeSAPanel() {
+  _saSelectedId = null;
+  document.getElementById('sa-activity-panel').style.display = 'none';
+  loadSubAgentsPage(true);
+}
+
+async function loadSAActivity(sessionId) {
+  var container = document.getElementById('sa-activity-timeline');
+  try {
+    var data = await fetch('/api/subagent/' + sessionId + '/activity').then(r => r.json());
+    if (!data.events || data.events.length === 0) {
+      container.innerHTML = '<div style="padding:20px;text-align:center;color:#666;">No activity recorded yet</div>';
+      return;
+    }
+
+    var html = '';
+    data.events.forEach(function(evt, i) {
+      var time = evt.ts ? new Date(evt.ts).toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
+
+      if (evt.type === 'tool_call') {
+        var color = evt.tool === 'exec' ? '#f0c040' : evt.tool.match(/Read|Write|Edit/) ? '#60a0ff' : evt.tool === 'web_search' ? '#c0a0ff' : evt.tool === 'browser' ? '#40a0b0' : '#50e080';
+        html += '<div style="display:flex;gap:8px;padding:6px 16px;align-items:flex-start;border-left:3px solid ' + color + ';">';
+        html += '<span style="font-size:10px;color:#555;min-width:55px;font-family:monospace;">' + time + '</span>';
+        html += '<span style="font-size:11px;color:' + color + ';font-weight:700;min-width:80px;">⚡ ' + escHtml(evt.tool) + '</span>';
+        html += '<span style="font-size:11px;color:#aaa;font-family:monospace;word-break:break-all;">' + escHtml(evt.input) + '</span>';
+        html += '</div>';
+      } else if (evt.type === 'tool_result') {
+        var resultColor = evt.isError ? '#e04040' : '#2a5a3a';
+        html += '<div style="display:flex;gap:8px;padding:4px 16px 4px 24px;align-items:flex-start;">';
+        html += '<span style="font-size:10px;color:#555;min-width:55px;font-family:monospace;">' + time + '</span>';
+        html += '<span style="font-size:10px;color:' + (evt.isError ? '#e04040' : '#555') + ';min-width:80px;">' + (evt.isError ? '❌ error' : '✓ result') + '</span>';
+        html += '<span style="font-size:10px;color:#666;font-family:monospace;max-height:40px;overflow:hidden;word-break:break-all;">' + escHtml((evt.preview || '').substring(0, 200)) + '</span>';
+        html += '</div>';
+      } else if (evt.type === 'thinking') {
+        html += '<div style="display:flex;gap:8px;padding:8px 16px;align-items:flex-start;border-left:3px solid #50e080;">';
+        html += '<span style="font-size:10px;color:#555;min-width:55px;font-family:monospace;">' + time + '</span>';
+        html += '<span style="font-size:11px;color:#50e080;min-width:80px;">💬 says</span>';
+        html += '<span style="font-size:12px;color:#ccc;">' + escHtml(evt.text) + '</span>';
+        html += '</div>';
+      } else if (evt.type === 'internal_thought') {
+        html += '<div style="display:flex;gap:8px;padding:4px 16px;align-items:flex-start;opacity:0.6;">';
+        html += '<span style="font-size:10px;color:#555;min-width:55px;font-family:monospace;">' + time + '</span>';
+        html += '<span style="font-size:10px;color:#9070d0;min-width:80px;">🧠 thinks</span>';
+        html += '<span style="font-size:10px;color:#888;font-style:italic;">' + escHtml(evt.text) + '</span>';
+        html += '</div>';
+      } else if (evt.type === 'model_change') {
+        html += '<div style="display:flex;gap:8px;padding:4px 16px;align-items:center;opacity:0.5;">';
+        html += '<span style="font-size:10px;color:#555;min-width:55px;font-family:monospace;">' + time + '</span>';
+        html += '<span style="font-size:10px;color:#888;">🔄 Model: ' + escHtml(evt.model) + '</span>';
+        html += '</div>';
+      }
+    });
+
+    container.innerHTML = html;
+    // Auto-scroll to bottom
+    container.scrollTop = container.scrollHeight;
+  } catch(e) {
+    container.innerHTML = '<div style="padding:20px;text-align:center;color:#e74c3c;">Failed to load activity: ' + e.message + '</div>';
   }
 }
 
@@ -2476,6 +2647,26 @@ function triggerInfraStorage() {
   highlightNode('node-storage', 2000);
 }
 
+// Live feed for Flow tab — shows recent events in plain English
+var _flowFeedItems = [];
+var _flowFeedMax = 30;
+function addFlowFeedItem(text, color) {
+  var now = new Date();
+  var time = now.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  _flowFeedItems.push({time: time, text: text, color: color || '#888'});
+  if (_flowFeedItems.length > _flowFeedMax) _flowFeedItems.shift();
+  var el = document.getElementById('flow-live-feed');
+  if (!el) return;
+  var html = '';
+  for (var i = _flowFeedItems.length - 1; i >= Math.max(0, _flowFeedItems.length - 15); i--) {
+    var item = _flowFeedItems[i];
+    html += '<div><span style="color:#555;">' + item.time + '</span> <span style="color:' + item.color + ';">' + item.text + '</span></div>';
+  }
+  el.innerHTML = html;
+  var countEl = document.getElementById('flow-feed-count');
+  if (countEl) countEl.textContent = flowStats.events + ' events';
+}
+
 var flowThrottles = {};
 function processFlowEvent(line) {
   flowStats.events++;
@@ -2496,11 +2687,13 @@ function processFlowEvent(line) {
     if (msg.includes('signal')) ch = 'sig';
     else if (msg.includes('whatsapp')) ch = 'wa';
     triggerInbound(ch);
+    addFlowFeedItem('📨 New message arrived via ' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal'), '#c0a0ff');
     flowStats.msgTimestamps.push(now);
     return;
   }
   if (msg.includes('inbound') || msg.includes('dispatching') || msg.includes('message received')) {
     triggerInbound('tg');
+    addFlowFeedItem('📨 Incoming message received', '#c0a0ff');
     flowStats.msgTimestamps.push(now);
     return;
   }
@@ -2529,6 +2722,8 @@ function processFlowEvent(line) {
     }
     if (now - (flowThrottles['tool-'+flowTool]||0) < 300) return;
     flowThrottles['tool-'+flowTool] = now;
+    var toolNames = {exec:'running a command',browser:'browsing the web',search:'searching the web',cron:'scheduling a task',tts:'generating speech',memory:'accessing memory'};
+    addFlowFeedItem('⚡ AI is ' + (toolNames[flowTool] || 'using ' + flowTool), '#f0c040');
     triggerToolCall(flowTool); return;
   }
 
@@ -2552,6 +2747,7 @@ function processFlowEvent(line) {
     var ch = 'tg';
     if (msg.includes('signal')) ch = 'sig';
     else if (msg.includes('whatsapp')) ch = 'wa';
+    addFlowFeedItem('✉️ AI sent a reply via ' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal'), '#50e080');
     triggerOutbound(ch);
     return;
   }
@@ -3276,157 +3472,283 @@ def api_transcript(session_id):
 
 @app.route('/api/subagents')
 def api_subagents():
-    """Get information about active sub-agents."""
-    sessions = _get_sessions()
+    """Get sub-agent sessions from sessions.json index (batch read, no N+1)."""
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    index_path = os.path.join(sessions_dir, 'sessions.json')
     subagents = []
-    
-    for session in sessions:
-        key = session.get('key', '')
-        
-        # Filter for sub-agent sessions (pattern: agent:main:subagent:UUID)
-        # Also check for other potential patterns as sub-agents evolve
-        if (':subagent:' in key or 
-            'subagent' in key.lower() or 
-            session.get('channel', '') != 'unknown'):  # Non-unknown channel might indicate sub-agent
-            # Extract UUID and create display info
-            parts = key.split(':')
-            if len(parts) >= 4:
-                uuid = parts[-1]
-                display_name = f"SubAgent-{uuid[:8]}"
-                
-                # Determine status based on recent activity
-                updated_at = session.get('updatedAt', 0)
-                now = time.time() * 1000  # Convert to milliseconds
-                inactive_threshold = 5 * 60 * 1000  # 5 minutes
-                
-                if updated_at and (now - updated_at) < inactive_threshold:
-                    status = 'active'
-                    status_color = 'green'
-                elif updated_at and (now - updated_at) < 30 * 60 * 1000:  # 30 minutes
-                    status = 'idle'
-                    status_color = 'yellow'
-                else:
-                    status = 'stale'
-                    status_color = 'red'
-                
-                # Calculate runtime
-                created_at = session.get('createdAt', updated_at or now)
-                runtime_ms = now - created_at if created_at else 0
-                
-                if runtime_ms < 60000:
-                    runtime = f"{int(runtime_ms/1000)}s"
-                elif runtime_ms < 3600000:
-                    runtime = f"{int(runtime_ms/60000)}m"
-                else:
-                    runtime = f"{int(runtime_ms/3600000)}h"
-                
-                # Try to determine current task from recent messages
-                task = _get_subagent_current_task(key)
-                
-                subagents.append({
-                    'key': key,
-                    'uuid': uuid,
-                    'displayName': display_name,
-                    'status': status,
-                    'statusColor': status_color,
-                    'runtime': runtime,
-                    'runtimeMs': runtime_ms,
-                    'task': task,
-                    'updatedAt': updated_at,
-                    'totalTokens': session.get('totalTokens', 0),
-                    'model': session.get('model', 'unknown'),
-                    'channel': session.get('channel', 'unknown'),
-                })
-    
-    # Sort by most recently active first
-    subagents.sort(key=lambda x: x['updatedAt'] or 0, reverse=True)
-    
-    # Count by status
-    status_counts = {
-        'active': len([s for s in subagents if s['status'] == 'active']),
-        'idle': len([s for s in subagents if s['status'] == 'idle']),
-        'stale': len([s for s in subagents if s['status'] == 'stale']),
-        'total': len(subagents)
-    }
-    
-    return jsonify({
-        'subagents': subagents,
-        'counts': status_counts,
-        'totalActive': status_counts['active'],
-    })
+    now = time.time() * 1000
 
+    # Read the authoritative session index
+    try:
+        with open(index_path, 'r') as f:
+            index = json.load(f)
+    except Exception:
+        return jsonify({'subagents': [], 'counts': {'active': 0, 'idle': 0, 'stale': 0, 'total': 0}, 'totalActive': 0})
 
-def _get_subagent_current_task(session_key):
-    """Try to determine what a sub-agent is currently working on."""
-    uuid = session_key.split(':')[-1]
-    
-    # Try to read recent transcript messages to understand the task
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.moltbot/agents/main/sessions')
-    transcript_file = os.path.join(sessions_dir, f"{session_key.replace(':', '_').replace('agent_main_', '')}.jsonl")
-    
-    # Look for the session file by matching UUID
-    for fname in os.listdir(sessions_dir) if os.path.isdir(sessions_dir) else []:
-        if uuid in fname and fname.endswith('.jsonl'):
-            transcript_file = os.path.join(sessions_dir, fname)
-            break
-    
-    if os.path.exists(transcript_file):
+    # Collect sub-agent entries and their session IDs for batch transcript reading
+    sa_entries = []
+    for key, meta in index.items():
+        if ':subagent:' not in key:
+            continue
+        sa_entries.append((key, meta))
+
+    # Batch: read first+last lines of each transcript for task detection
+    tasks = {}
+    labels = {}
+    for key, meta in sa_entries:
+        sid = meta.get('sessionId', '')
+        if not sid:
+            continue
+        fpath = os.path.join(sessions_dir, f"{sid}.jsonl")
+        if not os.path.exists(fpath):
+            continue
         try:
-            with open(transcript_file, 'r') as f:
-                # Read last few lines to get recent activity
-                lines = f.readlines()
-                recent_lines = lines[-10:] if len(lines) > 10 else lines
-                
-                for line in reversed(recent_lines):
+            with open(fpath, 'rb') as f:
+                # Read first few lines for session label
+                first_lines = []
+                for _ in range(10):
+                    line = f.readline()
+                    if not line:
+                        break
+                    first_lines.append(line)
+
+                # Read last ~8KB for recent activity
+                try:
+                    f.seek(0, 2)
+                    fsize = f.tell()
+                    tail_start = max(0, fsize - 8192)
+                    f.seek(tail_start)
+                    tail_data = f.read().decode('utf-8', errors='replace')
+                    tail_lines = tail_data.strip().split('\n')
+                    if tail_start > 0:
+                        tail_lines = tail_lines[1:]  # drop partial first line
+                except Exception:
+                    tail_lines = []
+
+                # Extract label from session spawn message (first user message)
+                label = None
+                for raw in first_lines:
                     try:
-                        obj = json.loads(line.strip())
-                        if obj.get('type') == 'message':
-                            message = obj.get('message', {})
-                            if message.get('role') == 'user':
-                                content = message.get('content', [])
-                                if isinstance(content, list) and len(content) > 0:
-                                    text = content[0].get('text', '')
-                                    if text:
-                                        # Extract task from user message
-                                        text = text[:200]  # First 200 chars
-                                        # Look for common patterns
-                                        if 'cron:' in text:
-                                            return text.split('cron:')[1].split(']')[0].strip() + ' (Cron Job)'
-                                        elif 'search' in text.lower():
-                                            return 'Web Search Task'
-                                        elif 'message' in text.lower():
-                                            return 'Message Handler'
-                                        elif 'browser' in text.lower():
-                                            return 'Browser Automation'
-                                        elif 'analysis' in text.lower():
-                                            return 'Data Analysis'
-                                        else:
-                                            # Return first meaningful part
-                                            words = text.split()[:8]
-                                            return ' '.join(words) + ('...' if len(text) > 50 else '')
-                    except (json.JSONDecodeError, KeyError):
+                        obj = json.loads(raw)
+                        if obj.get('type') == 'message' and obj.get('message', {}).get('role') == 'user':
+                            content = obj['message'].get('content', [])
+                            if isinstance(content, list):
+                                for block in content:
+                                    if block.get('type') == 'text':
+                                        text = block.get('text', '')
+                                        # Extract the label from subagent context
+                                        if 'Label:' in text:
+                                            label = text.split('Label:')[1].split('\n')[0].strip()
+                                        elif len(text) > 20:
+                                            # Use first line as label
+                                            label = text.split('\n')[0][:100]
+                                        break
+                            break
+                    except Exception:
                         continue
+                if label:
+                    labels[key] = label
+
+                # Extract recent tool calls and activity from tail
+                recent_tools = []
+                last_text = None
+                for raw in reversed(tail_lines[-20:]):
+                    try:
+                        obj = json.loads(raw)
+                        if obj.get('type') != 'message':
+                            continue
+                        msg = obj.get('message', {})
+                        content = msg.get('content', [])
+                        if not isinstance(content, list):
+                            continue
+                        for block in content:
+                            btype = block.get('type', '')
+                            if btype in ('tool_use', 'toolCall') and len(recent_tools) < 5:
+                                tool_name = block.get('name', '?')
+                                tool_input = block.get('input') or block.get('arguments') or {}
+                                summary = _summarize_tool_input(tool_name, tool_input)
+                                recent_tools.append({'name': tool_name, 'summary': summary[:120], 'ts': obj.get('timestamp', '')})
+                            elif btype == 'text' and msg.get('role') == 'assistant' and not last_text:
+                                t = block.get('text', '').strip()
+                                if t and len(t) > 5:
+                                    last_text = t[:200]
+                    except Exception:
+                        continue
+                tasks[key] = {
+                    'recentTools': list(reversed(recent_tools)),
+                    'lastText': last_text,
+                }
         except Exception:
-            pass
-    
-    # Fallback to session key hints
-    task_hints = {
-        'telegram': 'Telegram Message Handler',
-        'whatsapp': 'WhatsApp Automation', 
-        'browser': 'Web Browser Automation',
-        'cron': 'Scheduled Task Runner',
-        'search': 'Web Search Agent',
-        'analysis': 'Data Analysis Worker',
-        'subagent': 'Sub-Agent Worker',
+            continue
+
+    # Build response
+    for key, meta in sa_entries:
+        uuid = key.split(':')[-1]
+        updated_at = meta.get('updatedAt', 0)
+        sid = meta.get('sessionId', '')
+
+        # Status based on recency
+        age_ms = now - updated_at if updated_at else float('inf')
+        if age_ms < 5 * 60 * 1000:
+            status = 'active'
+        elif age_ms < 30 * 60 * 1000:
+            status = 'idle'
+        else:
+            status = 'stale'
+
+        # Runtime (from first seen to last update)
+        runtime_ms = age_ms if age_ms != float('inf') else 0
+        if runtime_ms < 60000:
+            runtime = f"{int(runtime_ms / 1000)}s ago"
+        elif runtime_ms < 3600000:
+            runtime = f"{int(runtime_ms / 60000)}m ago"
+        elif runtime_ms < 86400000:
+            runtime = f"{int(runtime_ms / 3600000)}h ago"
+        else:
+            runtime = f"{int(runtime_ms / 86400000)}d ago"
+
+        task_info = tasks.get(key, {})
+        # Prefer label from sessions.json metadata, fallback to transcript extraction
+        label = meta.get('label') or labels.get(key, f'Worker {uuid[:8]}')
+
+        subagents.append({
+            'key': key,
+            'uuid': uuid,
+            'sessionId': sid,
+            'displayName': label,
+            'status': status,
+            'runtime': runtime,
+            'runtimeMs': runtime_ms,
+            'updatedAt': updated_at,
+            'recentTools': task_info.get('recentTools', []),
+            'lastText': task_info.get('lastText', ''),
+            'model': meta.get('model', 'unknown'),
+            'channel': meta.get('channel', meta.get('lastChannel', 'agent')),
+            'spawnedBy': meta.get('spawnedBy', ''),
+        })
+
+    subagents.sort(key=lambda x: x['updatedAt'] or 0, reverse=True)
+
+    counts = {
+        'active': sum(1 for s in subagents if s['status'] == 'active'),
+        'idle': sum(1 for s in subagents if s['status'] == 'idle'),
+        'stale': sum(1 for s in subagents if s['status'] == 'stale'),
+        'total': len(subagents),
     }
-    
-    # Look for hints in the session key
-    key_lower = session_key.lower()
-    for hint, task in task_hints.items():
-        if hint in key_lower:
-            return task
-            
-    return f"Worker ({uuid[:8]})"
+
+    return jsonify({'subagents': subagents, 'counts': counts, 'totalActive': counts['active']})
+
+
+@app.route('/api/subagent/<session_id>/activity')
+def api_subagent_activity(session_id):
+    """Stream recent activity from a sub-agent's transcript. Progressive: reads tail only."""
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    fpath = os.path.join(sessions_dir, f"{session_id}.jsonl")
+    if not os.path.exists(fpath):
+        return jsonify({'error': 'not found', 'events': []}), 404
+
+    # Read last ~16KB for activity timeline
+    tail_size = int(request.args.get('tail', 16384))
+    events = []
+    try:
+        with open(fpath, 'rb') as f:
+            f.seek(0, 2)
+            fsize = f.tell()
+            start = max(0, fsize - tail_size)
+            f.seek(start)
+            data = f.read().decode('utf-8', errors='replace')
+            lines = data.strip().split('\n')
+            if start > 0:
+                lines = lines[1:]
+
+            for raw in lines:
+                try:
+                    obj = json.loads(raw)
+                    etype = obj.get('type', '')
+                    ts = obj.get('timestamp', '')
+
+                    if etype == 'message':
+                        msg = obj.get('message', {})
+                        role = msg.get('role', '')
+                        content = msg.get('content', [])
+                        if not isinstance(content, list):
+                            continue
+                        for block in content:
+                            btype = block.get('type', '')
+                            if btype in ('tool_use', 'toolCall'):
+                                inp = block.get('input') or block.get('arguments') or {}
+                                events.append({
+                                    'type': 'tool_call',
+                                    'ts': ts,
+                                    'tool': block.get('name', '?'),
+                                    'input': _summarize_tool_input(block.get('name', ''), inp),
+                                })
+                            elif btype in ('tool_result', 'toolResult'):
+                                result_text = ''
+                                sub = block.get('content', '')
+                                if isinstance(sub, list):
+                                    for sb in sub[:1]:
+                                        result_text = sb.get('text', '')[:300]
+                                elif isinstance(sub, str):
+                                    result_text = sub[:300]
+                                events.append({
+                                    'type': 'tool_result',
+                                    'ts': ts,
+                                    'preview': result_text,
+                                    'isError': block.get('is_error', False),
+                                })
+                            elif btype == 'text' and role == 'assistant':
+                                text = block.get('text', '').strip()
+                                if text:
+                                    events.append({
+                                        'type': 'thinking',
+                                        'ts': ts,
+                                        'text': text[:500],
+                                    })
+                            elif btype == 'thinking':
+                                text = block.get('thinking', '').strip()
+                                if text:
+                                    events.append({
+                                        'type': 'internal_thought',
+                                        'ts': ts,
+                                        'text': text[:300],
+                                    })
+                    elif etype == 'model_change':
+                        events.append({
+                            'type': 'model_change',
+                            'ts': ts,
+                            'model': obj.get('modelId', '?'),
+                        })
+                except Exception:
+                    continue
+    except Exception as e:
+        return jsonify({'error': str(e), 'events': []}), 500
+
+    return jsonify({'events': events, 'fileSize': fsize if 'fsize' in dir() else 0})
+
+
+def _summarize_tool_input(name, inp):
+    """Create a human-readable one-line summary of a tool call."""
+    if name == 'exec':
+        return (inp.get('command') or str(inp))[:150]
+    elif name in ('Read', 'read'):
+        return f"📖 {inp.get('file_path') or inp.get('path') or '?'}"
+    elif name in ('Write', 'write'):
+        return f"✏️ {inp.get('file_path') or inp.get('path') or '?'}"
+    elif name in ('Edit', 'edit'):
+        return f"🔧 {inp.get('file_path') or inp.get('path') or '?'}"
+    elif name == 'web_search':
+        return f"🔍 {inp.get('query', '?')}"
+    elif name == 'web_fetch':
+        return f"🌐 {inp.get('url', '?')[:80]}"
+    elif name == 'browser':
+        return f"🖥️ {inp.get('action', '?')}"
+    elif name == 'message':
+        return f"💬 {inp.get('action', '?')} → {inp.get('message', '')[:60]}"
+    elif name == 'tts':
+        return f"🔊 {inp.get('text', '')[:60]}"
+    else:
+        return str(inp)[:120]
 
 
 @app.route('/api/heatmap')
