@@ -522,14 +522,46 @@ DASHBOARD_HTML = r"""
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OpenClaw Dashboard 🦞</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    /* Dark theme (default) */
+    /* Light theme (default) */
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8fafc;
+    --bg-tertiary: #ffffff;
+    --bg-hover: #f1f5f9;
+    --bg-accent: #2563eb;
+    --border-primary: #e2e8f0;
+    --border-secondary: #f1f5f9;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-tertiary: #64748b;
+    --text-muted: #94a3b8;
+    --text-faint: #cbd5e1;
+    --text-accent: #2563eb;
+    --text-link: #2563eb;
+    --text-success: #16a34a;
+    --text-warning: #ea580c;
+    --text-error: #dc2626;
+    --bg-success: #f0fdf4;
+    --bg-warning: #fffbeb;
+    --bg-error: #fef2f2;
+    --log-bg: #f8fafc;
+    --file-viewer-bg: #ffffff;
+    --button-bg: #f1f5f9;
+    --button-hover: #e2e8f0;
+    --card-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --card-shadow-hover: 0 4px 12px rgba(0,0,0,0.08);
+  }
+
+  [data-theme="dark"] {
+    /* Dark theme */
     --bg-primary: #0a0a14;
     --bg-secondary: #12122a;
     --bg-tertiary: #141428;
     --bg-hover: #1a1a35;
-    --bg-accent: #f0c040;
+    --bg-accent: #3b82f6;
     --border-primary: #2a2a4a;
     --border-secondary: #1a1a30;
     --text-primary: #e0e0e0;
@@ -537,7 +569,7 @@ DASHBOARD_HTML = r"""
     --text-tertiary: #888;
     --text-muted: #666;
     --text-faint: #555;
-    --text-accent: #f0c040;
+    --text-accent: #3b82f6;
     --text-link: #60a0ff;
     --text-success: #27ae60;
     --text-warning: #f0c040;
@@ -549,41 +581,15 @@ DASHBOARD_HTML = r"""
     --file-viewer-bg: #0d0d1a;
     --button-bg: #2a2a4a;
     --button-hover: #3a3a5a;
-  }
-
-  [data-theme="light"] {
-    /* Light theme */
-    --bg-primary: #ffffff;
-    --bg-secondary: #f8f9fa;
-    --bg-tertiary: #ffffff;
-    --bg-hover: #f1f3f4;
-    --bg-accent: #1976d2;
-    --border-primary: #e0e0e0;
-    --border-secondary: #f0f0f0;
-    --text-primary: #212529;
-    --text-secondary: #495057;
-    --text-tertiary: #6c757d;
-    --text-muted: #868e96;
-    --text-faint: #adb5bd;
-    --text-accent: #1976d2;
-    --text-link: #1976d2;
-    --text-success: #198754;
-    --text-warning: #fd7e14;
-    --text-error: #dc3545;
-    --bg-success: #d1e7dd;
-    --bg-warning: #fff3cd;
-    --bg-error: #f8d7da;
-    --log-bg: #f8f9fa;
-    --file-viewer-bg: #ffffff;
-    --button-bg: #e9ecef;
-    --button-hover: #dee2e6;
+    --card-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    --card-shadow-hover: 0 4px 12px rgba(0,0,0,0.4);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-primary); color: var(--text-primary); min-height: 100vh; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-primary); color: var(--text-primary); min-height: 100vh; }
 
-  .nav { background: var(--bg-secondary); border-bottom: 1px solid var(--border-primary); padding: 12px 20px; display: flex; align-items: center; gap: 16px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .nav h1 { font-size: 20px; color: var(--text-primary); white-space: nowrap; }
+  .nav { background: var(--bg-secondary); border-bottom: 1px solid var(--border-primary); padding: 14px 24px; display: flex; align-items: center; gap: 16px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .nav h1 { font-size: 18px; font-weight: 700; color: var(--text-primary); white-space: nowrap; letter-spacing: -0.3px; }
   .nav h1 span { color: var(--text-accent); }
   .theme-toggle { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; padding: 8px 12px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; margin-left: 12px; transition: all 0.15s; }
   .theme-toggle:hover { background: var(--button-hover); color: var(--text-secondary); }
@@ -596,16 +602,16 @@ DASHBOARD_HTML = r"""
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; }
   .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid var(--border-primary); color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.15s; }
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
-  .nav-tab.active { background: var(--bg-accent); color: var(--bg-primary); border-color: var(--bg-accent); }
+  .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
 
-  .page { display: none; padding: 16px; max-width: 1200px; margin: 0 auto; }
+  .page { display: none; padding: 24px 28px; max-width: 1200px; margin: 0 auto; }
   .page.active { display: block; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 16px; }
-  .card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; }
+  .card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 20px; box-shadow: var(--card-shadow); }
   .card-title { font-size: 12px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
   .card-title .icon { font-size: 16px; }
-  .card-value { font-size: 28px; font-weight: 700; color: var(--text-primary); }
+  .card-value { font-size: 32px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.5px; }
   .card-sub { font-size: 12px; color: var(--text-faint); margin-top: 4px; }
 
   .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-secondary); }
@@ -654,40 +660,46 @@ DASHBOARD_HTML = r"""
   .memory-size { font-size: 12px; color: var(--text-faint); }
 
   .refresh-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-  .refresh-btn { padding: 8px 16px; background: var(--button-bg); border: none; border-radius: 6px; color: var(--text-primary); cursor: pointer; font-size: 13px; font-weight: 600; }
+  .refresh-btn { padding: 8px 16px; background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px; font-weight: 500; }
   .refresh-btn:hover { background: var(--button-hover); }
-  .refresh-time { font-size: 12px; color: #555; }
+  .refresh-time { font-size: 12px; color: var(--text-muted); }
   .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #27ae60; animation: pulse 1.5s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; box-shadow: 0 0 4px #27ae60; } 50% { opacity: 0.3; box-shadow: none; } }
-  .live-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; background: #1a3a2a; color: #27ae60; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; animation: pulse 1.5s infinite; }
+  .live-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; background: var(--bg-success); color: var(--text-success); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; animation: pulse 1.5s infinite; }
 
   .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .badge.model { background: #1a2a3a; color: #60a0ff; }
-  .badge.channel { background: #2a1a3a; color: #a060ff; }
-  .badge.tokens { background: #1a3a2a; color: #60ff80; }
+  .badge.model { background: var(--bg-hover); color: var(--text-accent); }
+  .badge.channel { background: var(--bg-hover); color: #7c3aed; }
+  .badge.tokens { background: var(--bg-success); color: var(--text-success); }
 
   .full-width { grid-column: 1 / -1; }
-  .section-title { font-size: 16px; font-weight: 700; color: #fff; margin: 20px 0 12px; display: flex; align-items: center; gap: 8px; }
+  .section-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 24px 0 12px; display: flex; align-items: center; gap: 8px; }
 
   /* === Flow Visualization === */
   .flow-container { width: 100%; overflow-x: auto; overflow-y: hidden; position: relative; -webkit-overflow-scrolling: touch; }
   .flow-stats { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
-  .flow-stat { background: #141428; border: 1px solid #2a2a4a; border-radius: 8px; padding: 8px 14px; flex: 1; min-width: 100px; }
-  .flow-stat-label { font-size: 10px; text-transform: uppercase; color: #555; letter-spacing: 1px; display: block; }
-  .flow-stat-value { font-size: 20px; font-weight: 700; color: #fff; display: block; margin-top: 2px; }
+  .flow-stat { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 8px 14px; flex: 1; min-width: 100px; box-shadow: var(--card-shadow); }
+  .flow-stat-label { font-size: 10px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; display: block; }
+  .flow-stat-value { font-size: 20px; font-weight: 700; color: var(--text-primary); display: block; margin-top: 2px; }
   #flow-svg { width: 100%; min-width: 800px; height: auto; display: block; overflow: visible; }
-  #flow-svg text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; font-weight: 600; fill: #d0d0d0; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
-  .flow-node rect { rx: 12; ry: 12; stroke-width: 1.5; transition: all 0.3s ease; }
-  .flow-node-channel rect { fill: #161630; stroke: #6a40bf; }
-  .flow-node-gateway rect { fill: #141830; stroke: #4080e0; }
-  .flow-node-session rect { fill: #142818; stroke: #40c060; }
-  .flow-node-brain rect { fill: #221c08; stroke: #f0c040; stroke-width: 2.5; }
-  .flow-node-tool rect { fill: #1e1414; stroke: #c05030; }
+  #flow-svg text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; font-weight: 600; fill: var(--text-primary); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+  .flow-node rect { rx: 12; ry: 12; stroke-width: 1.5; transition: all 0.3s ease; fill: var(--bg-tertiary); }
+  .flow-node-channel rect { stroke: #7c3aed; box-shadow: var(--card-shadow); }
+  .flow-node-gateway rect { stroke: #2563eb; }
+  .flow-node-session rect { stroke: #16a34a; }
+  .flow-node-brain rect { stroke: #d97706; stroke-width: 2.5; }
+  .flow-node-tool rect { stroke: #dc2626; }
+  [data-theme="dark"] .flow-node rect { fill: none; }
+  [data-theme="dark"] .flow-node-channel rect { fill: #161630; stroke: #6a40bf; }
+  [data-theme="dark"] .flow-node-gateway rect { fill: #141830; stroke: #4080e0; }
+  [data-theme="dark"] .flow-node-session rect { fill: #142818; stroke: #40c060; }
+  [data-theme="dark"] .flow-node-brain rect { fill: #221c08; stroke: #f0c040; }
+  [data-theme="dark"] .flow-node-tool rect { fill: #1e1414; stroke: #c05030; }
   .flow-node-channel.active rect { filter: drop-shadow(0 0 12px rgba(106,64,191,0.8)) drop-shadow(0 0 20px rgba(106,64,191,0.4)); stroke-width: 2.5; transform: scale(1.05); }
   .flow-node-gateway.active rect { filter: drop-shadow(0 0 12px rgba(64,128,224,0.8)) drop-shadow(0 0 20px rgba(64,128,224,0.4)); stroke-width: 2.5; transform: scale(1.05); }
   .flow-node-session.active rect { filter: drop-shadow(0 0 12px rgba(64,192,96,0.8)) drop-shadow(0 0 20px rgba(64,192,96,0.4)); stroke-width: 2.5; transform: scale(1.05); }
   .flow-node-tool.active rect { filter: drop-shadow(0 0 12px rgba(224,96,64,0.9)) drop-shadow(0 0 24px rgba(224,96,64,0.5)); stroke: #ff8050; stroke-width: 2.5; transform: scale(1.1); }
-  .flow-path { fill: none; stroke: #1a1a36; stroke-width: 2; stroke-linecap: round; transition: stroke 0.4s, opacity 0.4s; }
+  .flow-path { fill: none; stroke: var(--border-primary); stroke-width: 2; stroke-linecap: round; transition: stroke 0.4s, opacity 0.4s; }
   .flow-path.glow-blue { stroke: #4080e0; filter: drop-shadow(0 0 6px rgba(64,128,224,0.6)); }
   .flow-path.glow-yellow { stroke: #f0c040; filter: drop-shadow(0 0 6px rgba(240,192,64,0.6)); }
   .flow-path.glow-green { stroke: #50e080; filter: drop-shadow(0 0 6px rgba(80,224,128,0.6)); }
@@ -696,20 +708,25 @@ DASHBOARD_HTML = r"""
   .brain-group { animation: brainPulse 2.2s ease-in-out infinite; }
   .tool-indicator { opacity: 0.2; transition: opacity 0.3s ease; }
   .tool-indicator.active { opacity: 1; }
-  .flow-label { font-size: 9px !important; fill: #333 !important; font-weight: 400 !important; }
+  .flow-label { font-size: 9px !important; fill: var(--text-muted) !important; font-weight: 400 !important; }
   .flow-node-human circle { transition: all 0.3s ease; }
   .flow-node-human.active circle { filter: drop-shadow(0 0 12px rgba(176,128,255,0.7)); }
   @keyframes humanGlow { 0%,100% { filter: drop-shadow(0 0 3px rgba(160,112,224,0.15)); } 50% { filter: drop-shadow(0 0 10px rgba(160,112,224,0.45)); } }
   .flow-node-human { animation: humanGlow 3.5s ease-in-out infinite; }
-  .flow-ground { stroke: #20203a; stroke-width: 1; stroke-dasharray: 8 4; }
-  .flow-ground-label { font-size: 10px !important; fill: #1e1e38 !important; font-weight: 600 !important; letter-spacing: 4px; }
-  .flow-node-infra rect { rx: 6; ry: 6; stroke-width: 2; stroke-dasharray: 5 2; transition: all 0.3s ease; }
+  .flow-ground { stroke: var(--border-primary); stroke-width: 1; stroke-dasharray: 8 4; }
+  .flow-ground-label { font-size: 10px !important; fill: var(--text-muted) !important; font-weight: 600 !important; letter-spacing: 4px; }
+  .flow-node-infra rect { rx: 6; ry: 6; stroke-width: 2; stroke-dasharray: 5 2; transition: all 0.3s ease; fill: var(--bg-secondary); }
   .flow-node-infra text { font-size: 12px !important; }
-  .flow-node-infra .infra-sub { font-size: 9px !important; fill: #444 !important; font-weight: 400 !important; }
-  .flow-node-runtime rect { fill: #10182a; stroke: #4a7090; }
-  .flow-node-machine rect { fill: #141420; stroke: #606880; }
-  .flow-node-storage rect { fill: #1a1810; stroke: #806a30; }
-  .flow-node-network rect { fill: #0e1c20; stroke: #308080; }
+  .flow-node-infra .infra-sub { font-size: 9px !important; fill: var(--text-muted) !important; font-weight: 400 !important; }
+  .flow-node-runtime rect { stroke: #4a7090; }
+  .flow-node-machine rect { stroke: #606880; }
+  .flow-node-storage rect { stroke: #806a30; }
+  .flow-node-network rect { stroke: #308080; }
+  [data-theme="dark"] .flow-node-infra rect { fill: none; }
+  [data-theme="dark"] .flow-node-runtime rect { fill: #10182a; }
+  [data-theme="dark"] .flow-node-machine rect { fill: #141420; }
+  [data-theme="dark"] .flow-node-storage rect { fill: #1a1810; }
+  [data-theme="dark"] .flow-node-network rect { fill: #0e1c20; }
   .flow-node-runtime.active rect { filter: drop-shadow(0 0 10px rgba(74,112,144,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
   .flow-node-machine.active rect { filter: drop-shadow(0 0 10px rgba(96,104,128,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
   .flow-node-storage.active rect { filter: drop-shadow(0 0 10px rgba(128,106,48,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
@@ -731,7 +748,7 @@ DASHBOARD_HTML = r"""
 
   /* === Health Checks === */
   .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-  .health-item { background: #141428; border: 1px solid #2a2a4a; border-radius: 10px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; transition: border-color 0.3s; }
+  .health-item { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; transition: border-color 0.3s; box-shadow: var(--card-shadow); }
   .health-item.healthy { border-left: 3px solid #27ae60; }
   .health-item.warning { border-left: 3px solid #f0c040; }
   .health-item.critical { border-left: 3px solid #e74c3c; }
@@ -740,37 +757,37 @@ DASHBOARD_HTML = r"""
   .health-dot.yellow { background: #f0c040; box-shadow: 0 0 8px rgba(240,192,64,0.5); }
   .health-dot.red { background: #e74c3c; box-shadow: 0 0 8px rgba(231,76,60,0.5); }
   .health-info { flex: 1; }
-  .health-name { font-size: 13px; font-weight: 600; color: #ccc; }
-  .health-detail { font-size: 11px; color: #666; margin-top: 2px; }
+  .health-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .health-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
   /* === Usage/Token Charts === */
   .usage-chart { display: flex; align-items: flex-end; gap: 6px; height: 200px; padding: 16px 8px 32px; position: relative; }
   .usage-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; position: relative; }
-  .usage-bar { width: 100%; min-width: 20px; max-width: 48px; border-radius: 4px 4px 0 0; background: linear-gradient(180deg, #f0c040, #c09020); transition: height 0.4s ease; position: relative; cursor: default; }
+  .usage-bar { width: 100%; min-width: 20px; max-width: 48px; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, var(--bg-accent), #1d4ed8); transition: height 0.4s ease; position: relative; cursor: default; }
   .usage-bar:hover { filter: brightness(1.25); }
-  .usage-bar-label { font-size: 9px; color: #555; margin-top: 6px; text-align: center; white-space: nowrap; }
-  .usage-bar-value { font-size: 9px; color: #888; text-align: center; position: absolute; top: -16px; width: 100%; white-space: nowrap; }
-  .usage-grid-line { position: absolute; left: 0; right: 0; border-top: 1px dashed #1a1a30; }
-  .usage-grid-label { position: absolute; right: 100%; padding-right: 8px; font-size: 10px; color: #444; white-space: nowrap; }
+  .usage-bar-label { font-size: 9px; color: var(--text-muted); margin-top: 6px; text-align: center; white-space: nowrap; }
+  .usage-bar-value { font-size: 9px; color: var(--text-tertiary); text-align: center; position: absolute; top: -16px; width: 100%; white-space: nowrap; }
+  .usage-grid-line { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border-secondary); }
+  .usage-grid-label { position: absolute; right: 100%; padding-right: 8px; font-size: 10px; color: var(--text-muted); white-space: nowrap; }
   .usage-table { width: 100%; border-collapse: collapse; }
-  .usage-table th { text-align: left; font-size: 12px; color: #666; padding: 8px 12px; border-bottom: 1px solid #2a2a4a; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-  .usage-table td { padding: 8px 12px; font-size: 13px; color: #ccc; border-bottom: 1px solid #1a1a30; }
-  .usage-table tr:last-child td { border-bottom: none; font-weight: 700; color: #f0c040; }
+  .usage-table th { text-align: left; font-size: 12px; color: var(--text-muted); padding: 8px 12px; border-bottom: 1px solid var(--border-primary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .usage-table td { padding: 8px 12px; font-size: 13px; color: var(--text-secondary); border-bottom: 1px solid var(--border-secondary); }
+  .usage-table tr:last-child td { border-bottom: none; font-weight: 700; color: var(--text-accent); }
   
   /* === Cost Warnings === */
   .cost-warning { padding: 12px 16px; border-radius: 8px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
-  .cost-warning.error { background: #4a1a1a; border: 1px solid #8b2635; color: #ff6b6b; }
-  .cost-warning.warning { background: #4a3a1a; border: 1px solid #d4a017; color: #f0c040; }
+  .cost-warning.error { background: var(--bg-error); border: 1px solid var(--text-error); color: var(--text-error); }
+  .cost-warning.warning { background: var(--bg-warning); border: 1px solid var(--text-warning); color: var(--text-warning); }
   .cost-warning-icon { font-size: 16px; }
   .cost-warning-message { flex: 1; }
 
   /* === Transcript Viewer === */
-  .transcript-item { padding: 12px 16px; border-bottom: 1px solid #1a1a30; cursor: pointer; transition: background 0.15s; display: flex; justify-content: space-between; align-items: center; }
-  .transcript-item:hover { background: #1a1a35; }
+  .transcript-item { padding: 12px 16px; border-bottom: 1px solid var(--border-secondary); cursor: pointer; transition: background 0.15s; display: flex; justify-content: space-between; align-items: center; }
+  .transcript-item:hover { background: var(--bg-hover); }
   .transcript-item:last-child { border-bottom: none; }
-  .transcript-name { font-weight: 600; font-size: 14px; color: #60a0ff; }
-  .transcript-meta-row { font-size: 12px; color: #666; margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
-  .transcript-viewer-meta { background: #141428; border: 1px solid #2a2a4a; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .transcript-name { font-weight: 600; font-size: 14px; color: var(--text-link); }
+  .transcript-meta-row { font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .transcript-viewer-meta { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
   .transcript-viewer-meta .stat-row { padding: 6px 0; }
   .chat-messages { display: flex; flex-direction: column; gap: 10px; padding: 8px 0; }
   .chat-msg { max-width: 85%; padding: 12px 16px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
@@ -788,9 +805,9 @@ DASHBOARD_HTML = r"""
   .chat-msg.tool .chat-content-truncated::after { background: linear-gradient(transparent, rgba(26,26,36,0.9)); }
 
   /* === Mini Dashboard Widgets === */
-  .tool-spark { font-size: 9px; color: #555; padding: 2px 6px; background: #1a1a30; border-radius: 4px; }
-  .tool-spark span { color: #f0c040; font-weight: 600; }
-  .card:hover { transform: translateY(-2px); transition: all 0.2s ease; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+  .tool-spark { font-size: 11px; color: var(--text-muted); padding: 3px 8px; background: var(--bg-secondary); border-radius: 6px; border: 1px solid var(--border-secondary); }
+  .tool-spark span { color: var(--text-accent); font-weight: 600; }
+  .card:hover { transform: translateY(-2px); transition: all 0.2s ease; box-shadow: var(--card-shadow-hover); }
   .card[onclick] { cursor: pointer; }
 
   /* === Sub-Agent Worker Bees === */
@@ -819,6 +836,26 @@ DASHBOARD_HTML = r"""
   .subagent-meta span { display: flex; align-items: center; gap: 4px; }
   .subagent-description { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  /* === Active Tasks Cards === */
+  .task-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; box-shadow: var(--card-shadow); position: relative; overflow: hidden; }
+  .task-card.running { border-left: 4px solid #16a34a; }
+  .task-card.complete { border-left: 4px solid #2563eb; opacity: 0.7; }
+  .task-card.failed { border-left: 4px solid #dc2626; }
+  .task-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+  .task-card-name { font-weight: 700; font-size: 14px; color: var(--text-primary); line-height: 1.3; }
+  .task-card-badge { padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .task-card-badge.running { background: #dcfce7; color: #166534; }
+  .task-card-badge.complete { background: #dbeafe; color: #1e40af; }
+  .task-card-badge.failed { background: #fef2f2; color: #991b1b; }
+  [data-theme="dark"] .task-card-badge.running { background: #14532d; color: #86efac; }
+  [data-theme="dark"] .task-card-badge.complete { background: #1e3a5f; color: #93c5fd; }
+  [data-theme="dark"] .task-card-badge.failed { background: #450a0a; color: #fca5a5; }
+  .task-card-duration { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+  .task-card-action { font-size: 12px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; background: var(--bg-secondary); padding: 6px 10px; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task-card-pulse { position: absolute; top: 12px; right: 12px; width: 10px; height: 10px; border-radius: 50%; background: #22c55e; }
+  .task-card-pulse.active { animation: taskPulse 1.5s ease-in-out infinite; }
+  @keyframes taskPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); } 50% { box-shadow: 0 0 0 8px rgba(34,197,94,0); } }
 
   /* === Zoom Wrapper === */
   .zoom-wrapper { transform-origin: top left; transition: transform 0.3s ease; }
@@ -868,15 +905,12 @@ DASHBOARD_HTML = r"""
     <button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl/Cmd + +)">+</button>
   </div>
   <div class="nav-tabs">
-    <div class="nav-tab active" onclick="switchTab('flow')">🌊 Flow</div>
+    <div class="nav-tab active" onclick="switchTab('flow')">Flow</div>
     <div class="nav-tab" onclick="switchTab('overview')">Overview</div>
-    <div class="nav-tab" onclick="switchTab('usage')">📊 Usage</div>
     <div class="nav-tab" onclick="switchTab('sessions')">Sessions</div>
-    <div class="nav-tab" onclick="switchTab('subagents')">🐝 Workers</div>
-    <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
+    <div class="nav-tab" onclick="switchTab('crons')">Schedules</div>
     <div class="nav-tab" onclick="switchTab('logs')">Logs</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
-    <div class="nav-tab" onclick="switchTab('transcripts')">📜 Transcripts</div>
   </div>
 </div>
 
@@ -891,95 +925,88 @@ DASHBOARD_HTML = r"""
 
   <!-- Mini Dashboard Widgets Grid -->
   <div class="grid">
-    <!-- 🧠 Thinking Feed -->
-    <div class="card" onclick="openDetailView('thinking')" style="cursor:pointer;">
-      <div class="card-title"><span class="icon">🧠</span> Thinking Feed</div>
-      <div class="card-value" id="thinking-status">—</div>
-      <div class="card-sub" id="thinking-latest">Live stream of AI thoughts...</div>
-      <div style="margin-top:10px; max-height:60px; overflow:hidden; font-size:11px; line-height:1.3; color:#888;" id="thinking-preview">Initializing...</div>
-    </div>
-
-    <!-- 💰 Cost Ticker -->
+    <!-- 💰 Spending Today -->
     <div class="card" onclick="openDetailView('cost')" style="cursor:pointer;">
-      <div class="card-title"><span class="icon">💰</span> Cost Ticker</div>
+      <div class="card-title"><span class="icon">💰</span> Spending Today</div>
       <div class="card-value" id="cost-today">$0.00</div>
       <div class="card-sub" id="cost-trend">Today's running total</div>
-      <div style="margin-top:8px;">
-        <div style="font-size:10px; color:#666;">This week: <span id="cost-week" style="color:#f0c040;">—</span></div>
-        <div style="font-size:10px; color:#666;">This month: <span id="cost-month" style="color:#f0c040;">—</span></div>
+      <div style="margin-top:10px;">
+        <div style="font-size:12px; color:var(--text-muted);">This week: <span id="cost-week" style="color:var(--text-accent);font-weight:600;">—</span></div>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">This month: <span id="cost-month" style="color:var(--text-accent);font-weight:600;">—</span></div>
       </div>
     </div>
 
-    <!-- ⚡ Tool Activity -->
+    <!-- 🤖 AI Model -->
+    <div class="card" onclick="openDetailView('models')" style="cursor:pointer;">
+      <div class="card-title"><span class="icon">🤖</span> AI Model</div>
+      <div class="card-value" id="model-primary">—</div>
+      <div class="card-sub">Currently in use</div>
+      <div style="margin-top:10px;">
+        <div style="font-size:12px; color:var(--text-muted);" id="model-breakdown">Loading...</div>
+      </div>
+    </div>
+
+    <!-- ⚡ Actions Taken -->
     <div class="card" onclick="openDetailView('tools')" style="cursor:pointer;">
-      <div class="card-title"><span class="icon">⚡</span> Tool Activity</div>
+      <div class="card-title"><span class="icon">⚡</span> Actions Taken</div>
       <div class="card-value" id="tools-active">—</div>
-      <div class="card-sub" id="tools-recent">Most recent tool calls</div>
-      <div style="margin-top:10px; display:flex; gap:4px; flex-wrap:wrap;" id="tools-sparklines">
-        <div class="tool-spark" title="exec">exec: <span>—</span></div>
-        <div class="tool-spark" title="browser">browser: <span>—</span></div>
-        <div class="tool-spark" title="search">search: <span>—</span></div>
+      <div class="card-sub" id="tools-recent">Recent activity</div>
+      <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;" id="tools-sparklines">
+        <div class="tool-spark" title="Commands run">Commands: <span>—</span></div>
+        <div class="tool-spark" title="Web browsing">Browser: <span>—</span></div>
+        <div class="tool-spark" title="Web searches">Search: <span>—</span></div>
       </div>
     </div>
 
-    <!-- 📊 Token Burn Rate -->
+    <!-- 📊 Tokens Used -->
     <div class="card" onclick="openDetailView('tokens')" style="cursor:pointer;">
-      <div class="card-title"><span class="icon">📊</span> Token Burn Rate</div>
+      <div class="card-title"><span class="icon">📊</span> Tokens Used</div>
       <div class="card-value" id="token-rate">—</div>
-      <div class="card-sub">tokens/minute (last hour)</div>
-      <div style="margin-top:8px;">
-        <div style="font-size:10px; color:#666;">Today: <span id="tokens-today" style="color:#60ff80;">—</span></div>
-        <div style="font-size:10px; color:#666;">Peak: <span id="tokens-peak" style="color:#f0c040;">—</span></div>
+      <div class="card-sub">per minute (last hour)</div>
+      <div style="margin-top:10px;">
+        <div style="font-size:12px; color:var(--text-muted);">Today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">—</span></div>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">Peak: <span id="tokens-peak" style="color:var(--text-accent);font-weight:600;">—</span></div>
       </div>
     </div>
 
-    <!-- 🔥 Hot Sessions -->
-    <div class="card" onclick="openDetailView('sessions')" style="cursor:pointer;">
-      <div class="card-title"><span class="icon">🔥</span> Hot Sessions</div>
+    <!-- 💬 Active Sessions -->
+    <div class="card" onclick="switchTab('sessions')" style="cursor:pointer;">
+      <div class="card-title"><span class="icon">💬</span> Active Sessions</div>
       <div class="card-value" id="hot-sessions-count">—</div>
-      <div class="card-sub">Most active right now</div>
+      <div class="card-sub">Currently running</div>
       <div style="margin-top:10px; max-height:50px; overflow:hidden;" id="hot-sessions-list">Loading...</div>
     </div>
 
-    <!-- 📈 Model Mix -->
-    <div class="card" onclick="openDetailView('models')" style="cursor:pointer;">
-      <div class="card-title"><span class="icon">📈</span> Model Mix</div>
-      <div class="card-value" id="model-primary">—</div>
-      <div class="card-sub">Primary model usage</div>
-      <div style="margin-top:8px;">
-        <div style="font-size:10px; color:#666;" id="model-breakdown">Loading mix...</div>
-      </div>
-    </div>
-
-    <!-- 🐝 Worker Bees (Sub-Agents) -->
-    <div class="card" onclick="openDetailView('subagents')" style="cursor:pointer;">
-      <div class="card-title"><span class="icon">🐝</span> Worker Bees</div>
+    <!-- 🐝 Sub-Agents -->
+    <div class="card" onclick="switchTab('sessions')" style="cursor:pointer;">
+      <div class="card-title"><span class="icon">🐝</span> Sub-Agents</div>
       <div class="card-value" id="subagents-count">—</div>
-      <div class="card-sub" id="subagents-status">Sub-agents spawned</div>
-      <div style="margin-top:10px; max-height:60px; overflow:hidden;" id="subagents-preview">Loading workforce...</div>
+      <div class="card-sub" id="subagents-status">Workers spawned</div>
+      <div style="margin-top:10px; max-height:60px; overflow:hidden;" id="subagents-preview">Loading...</div>
     </div>
+  </div>
 
-    <!-- 🎯 Task Pipeline -->
-    <div class="card" onclick="openDetailView('pipeline')" style="cursor:pointer;">
-      <div class="card-title"><span class="icon">🎯</span> Task Pipeline</div>
-      <div class="card-value" id="pipeline-active">—</div>
-      <div class="card-sub">Active workflows</div>
-      <div style="margin-top:8px;">
-        <div style="font-size:10px; color:#666;" id="pipeline-summary">Pipeline status...</div>
+  <!-- Active Tasks (Mission Control) -->
+  <div class="section-title">🚀 Active Tasks <span style="font-size:12px;font-weight:400;color:var(--text-muted);">auto-refreshes every 5s</span></div>
+  <div id="active-tasks-panel" style="margin-bottom:16px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(340px, 1fr));gap:12px;" id="active-tasks-grid">
+      <div class="card" style="text-align:center;padding:32px;color:var(--text-muted);">
+        <div style="font-size:32px;margin-bottom:8px;">🐝</div>
+        <div>Loading active tasks...</div>
       </div>
     </div>
   </div>
 
   <!-- Topics/Activity Stream -->
-  <div class="section-title">🗣️ Activity Stream <span style="font-size:12px;color:#666;font-weight:400;">(What AI is working on)</span></div>
+  <div class="section-title">📋 What's happening now</div>
   <div class="card">
-    <div style="max-height:200px; overflow-y:auto; font-family:'SF Mono',monospace; font-size:12px; line-height:1.4;" id="activity-stream">
+    <div style="max-height:200px; overflow-y:auto; font-family:'Inter','SF Mono',monospace; font-size:13px; line-height:1.6;" id="activity-stream">
       <div style="color:#666;">Parsing recent assistant messages...</div>
     </div>
   </div>
 
   <!-- System Health (Compact) -->
-  <div class="section-title">❤️ System Health</div>
+  <div class="section-title">🟢 System Status</div>
   <div class="health-grid" id="health-grid">
     <div class="health-item" id="health-gateway"><div class="health-dot" id="health-dot-gateway"></div><div class="health-info"><div class="health-name">Gateway</div><div class="health-detail" id="health-detail-gateway">Checking...</div></div></div>
     <div class="health-item" id="health-disk"><div class="health-dot" id="health-dot-disk"></div><div class="health-info"><div class="health-name">Disk Space</div><div class="health-detail" id="health-detail-disk">Checking...</div></div></div>
@@ -1046,14 +1073,64 @@ DASHBOARD_HTML = r"""
   </div>
 </div>
 
-<!-- SESSIONS -->
+<!-- SESSIONS (with Sub-Agent Tree) -->
 <div class="page" id="page-sessions">
-  <div class="refresh-bar"><button class="refresh-btn" onclick="loadSessions()">↻ Refresh</button></div>
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadSessions(); loadSubAgentsPage();">↻ Refresh</button>
+    <label style="margin-left:12px;font-size:13px;color:var(--text-muted);display:flex;align-items:center;gap:6px;cursor:pointer;">
+      <input type="checkbox" id="sa-auto-refresh" checked onchange="toggleSAAutoRefresh()" style="accent-color:var(--bg-accent);"> Auto-refresh
+    </label>
+    <span style="margin-left:auto;font-size:12px;color:var(--text-faint);" id="sa-refresh-time"></span>
+  </div>
+
+  <!-- Sub-Agent Mission Control -->
+  <div class="section-title">🐝 Sub-Agent Activity <span style="font-size:12px;font-weight:400;color:var(--text-muted);">— click to see live details</span></div>
+
+  <!-- Sub-Agent Stats Row -->
+  <div class="grid" style="margin-bottom:16px;">
+    <div class="card">
+      <div class="card-title"><span class="icon">🟢</span> Active Now</div>
+      <div class="card-value" id="subagents-active-count">—</div>
+      <div class="card-sub">Currently working</div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">✅</span> Completed</div>
+      <div class="card-value" id="subagents-stale-count">—</div>
+      <div class="card-sub">Finished tasks</div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">📊</span> Total</div>
+      <span id="subagents-idle-count" style="display:none;">—</span>
+      <div class="card-value" id="subagents-total-count">—</div>
+      <div class="card-sub">All sub-agents</div>
+    </div>
+  </div>
+
+  <div class="card" id="subagents-list" style="padding:0;">Loading agents...</div>
+
+  <!-- Activity detail panel -->
+  <div id="sa-activity-panel" style="display:none;margin-top:12px;">
+    <div class="card" style="padding:0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border-secondary);background:var(--bg-secondary);border-radius:12px 12px 0 0;">
+        <div>
+          <span style="font-weight:700;font-size:15px;color:var(--text-primary);" id="sa-panel-title">Sub-Agent</span>
+          <span style="font-size:11px;color:var(--text-muted);margin-left:8px;" id="sa-panel-status"></span>
+        </div>
+        <button onclick="closeSAPanel()" style="background:var(--button-bg);border:1px solid var(--border-primary);color:var(--text-secondary);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">✕ Close</button>
+      </div>
+      <div id="sa-activity-timeline" style="max-height:500px;overflow-y:auto;padding:8px 0;">
+        <div style="padding:20px;text-align:center;color:var(--text-muted);">Loading activity...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Session Tree -->
+  <div class="section-title" style="margin-top:24px;">💬 Session Tree</div>
   <div class="card" id="sessions-list">Loading...</div>
 </div>
 
-<!-- SUB-AGENTS — Live Activity Dashboard -->
-<div class="page" id="page-subagents">
+<!-- SUB-AGENTS (hidden, merged into Sessions) -->
+<div class="page" id="page-subagents" style="display:none !important;">
   <div class="refresh-bar">
     <button class="refresh-btn" onclick="loadSubAgentsPage()">↻ Refresh</button>
     <label style="margin-left:12px;font-size:12px;color:#888;display:flex;align-items:center;gap:4px;cursor:pointer;">
@@ -1124,7 +1201,7 @@ DASHBOARD_HTML = r"""
 <div class="page" id="page-logs">
   <div class="refresh-bar">
     <button class="refresh-btn" onclick="loadLogs()">↻ Refresh</button>
-    <select id="log-lines" onchange="loadLogs()" style="background:#1a1a35;color:#e0e0e0;border:1px solid #2a2a4a;padding:6px;border-radius:6px;font-size:13px;">
+    <select id="log-lines" onchange="loadLogs()" style="background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-primary);padding:6px 10px;border-radius:6px;font-size:13px;">
       <option value="50">50 lines</option>
       <option value="100" selected>100 lines</option>
       <option value="300">300 lines</option>
@@ -1164,39 +1241,20 @@ DASHBOARD_HTML = r"""
 
 <!-- FLOW -->
 <div class="page active" id="page-flow">
-  <!-- How to read this diagram (collapsible) -->
-  <details style="margin-bottom:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:0;">
-    <summary style="padding:10px 16px;cursor:pointer;font-size:13px;color:#aaa;font-weight:600;list-style:none;display:flex;align-items:center;gap:8px;">
-      <span>ℹ️ How to read this diagram</span>
-      <span style="font-size:11px;font-weight:400;color:#666;">(click to expand)</span>
-    </summary>
-    <div style="padding:4px 16px 14px;font-size:12px;color:#888;line-height:1.6;">
-      <p style="margin:0 0 8px;">This diagram shows how your AI agent processes messages in real-time:</p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;">
-        <div><span style="color:#c0a0ff;">💜 Purple particles</span> = incoming messages from you</div>
-        <div><span style="color:#60a0ff;">💙 Blue particles</span> = message being processed internally</div>
-        <div><span style="color:#f0c040;">💛 Yellow particles</span> = AI using a tool (search, code, etc.)</div>
-        <div><span style="color:#50e080;">💚 Green particles</span> = AI sending a reply back to you</div>
-        <div><span style="color:#40a0b0;">🩵 Cyan particles</span> = infrastructure activity (disk, network)</div>
-        <div><span style="color:#e04040;">❤️ Red flash on brain</span> = an error occurred</div>
-      </div>
-      <p style="margin:8px 0 0;color:#666;">💡 Nodes glow when active. Watch the particles flow left→right (incoming) and right→left (replies).</p>
-    </div>
-  </details>
-
   <div class="flow-stats">
     <div class="flow-stat"><span class="flow-stat-label">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Events Processed</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Tools In Use</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
+    <div class="flow-stat"><span class="flow-stat-label">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
+    <div class="flow-stat"><span class="flow-stat-label">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
     <div class="flow-stat"><span class="flow-stat-label">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
   </div>
   <div class="flow-container">
     <svg id="flow-svg" viewBox="0 0 1200 950" preserveAspectRatio="xMidYMid meet">
       <defs>
         <pattern id="flow-grid" width="40" height="40" patternUnits="userSpaceOnUse">
-          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#111128" stroke-width="0.5"/>
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="var(--border-secondary)" stroke-width="0.5"/>
         </pattern>
       </defs>
+      <rect width="1200" height="950" fill="var(--bg-primary)" rx="12"/>
       <rect width="1200" height="950" fill="url(#flow-grid)"/>
 
       <!-- Human → Channel paths -->
@@ -1225,11 +1283,11 @@ DASHBOARD_HTML = r"""
 
       <!-- Human Origin -->
       <g class="flow-node flow-node-human" id="node-human">
-        <circle cx="100" cy="48" r="28" fill="#0e0c22" stroke="#b080ff" stroke-width="2"/>
-        <circle cx="100" cy="40" r="7" fill="#9070d0" opacity="0.45"/>
-        <path d="M 86 56 Q 86 65 100 65 Q 114 65 114 56" fill="#9070d0" opacity="0.3"/>
-        <text x="100" y="92" style="font-size:13px;fill:#c0a8f0;font-weight:700;" id="flow-human-name">You</text>
-        <text x="100" y="106" style="font-size:9px;fill:#3a3a5a;">origin</text>
+        <circle cx="100" cy="48" r="28" fill="var(--bg-secondary)" stroke="#7c3aed" stroke-width="2"/>
+        <circle cx="100" cy="40" r="7" fill="#7c3aed" opacity="0.45"/>
+        <path d="M 86 56 Q 86 65 100 65 Q 114 65 114 56" fill="#7c3aed" opacity="0.3"/>
+        <text x="100" y="92" style="font-size:13px;fill:#7c3aed;font-weight:700;" id="flow-human-name">You</text>
+        <text x="100" y="106" style="font-size:9px;fill:var(--text-muted);">origin</text>
       </g>
 
       <!-- Channel Nodes -->
@@ -1364,7 +1422,7 @@ function switchTab(name) {
   event.target.classList.add('active');
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
-  if (name === 'sessions') loadSessions();
+  if (name === 'sessions') { loadSessions(); loadSubAgentsPage(); }
   if (name === 'subagents') loadSubAgentsPage();
   if (name === 'crons') loadCrons();
   if (name === 'logs') loadLogs();
@@ -1380,33 +1438,34 @@ function exportUsageData() {
 function toggleTheme() {
   const body = document.body;
   const toggle = document.querySelector('.theme-toggle');
-  const isDark = !body.hasAttribute('data-theme') || body.getAttribute('data-theme') === 'dark';
+  const isLight = !body.hasAttribute('data-theme') || body.getAttribute('data-theme') !== 'dark';
   
-  if (isDark) {
-    body.setAttribute('data-theme', 'light');
-    toggle.textContent = '☀️';
-    toggle.title = 'Switch to dark theme';
-    localStorage.setItem('openclaw-theme', 'light');
-  } else {
+  if (isLight) {
     body.setAttribute('data-theme', 'dark');
-    toggle.textContent = '🌙';
+    toggle.textContent = '☀️';
     toggle.title = 'Switch to light theme';
     localStorage.setItem('openclaw-theme', 'dark');
+  } else {
+    body.removeAttribute('data-theme');
+    toggle.textContent = '🌙';
+    toggle.title = 'Switch to dark theme';
+    localStorage.setItem('openclaw-theme', 'light');
   }
 }
 
 function initTheme() {
-  const savedTheme = localStorage.getItem('openclaw-theme') || 'dark';
+  const savedTheme = localStorage.getItem('openclaw-theme') || 'light';
   const body = document.body;
   const toggle = document.querySelector('.theme-toggle');
   
-  body.setAttribute('data-theme', savedTheme);
-  if (savedTheme === 'light') {
+  if (savedTheme === 'dark') {
+    body.setAttribute('data-theme', 'dark');
     toggle.textContent = '☀️';
-    toggle.title = 'Switch to dark theme';
-  } else {
-    toggle.textContent = '🌙';
     toggle.title = 'Switch to light theme';
+  } else {
+    body.removeAttribute('data-theme');
+    toggle.textContent = '🌙';
+    toggle.title = 'Switch to dark theme';
   }
 }
 
@@ -1498,6 +1557,9 @@ async function loadAll() {
   // Load new mini dashboard widgets
   loadMiniWidgets(overview, usage);
   
+  // Load active tasks panel
+  startActiveTasksRefresh();
+  
   // Load activity stream
   loadActivityStream();
 
@@ -1518,10 +1580,6 @@ async function loadAll() {
 }
 
 async function loadMiniWidgets(overview, usage) {
-  // 🧠 Thinking Feed
-  document.getElementById('thinking-status').textContent = 'Active';
-  document.getElementById('thinking-latest').textContent = 'Monitoring thoughts...';
-  
   // 💰 Cost Ticker 
   function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
   document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
@@ -1574,9 +1632,6 @@ async function loadMiniWidgets(overview, usage) {
   // 🐝 Worker Bees (Sub-Agents)
   loadSubAgents();
   
-  // 🎯 Task Pipeline
-  document.getElementById('pipeline-active').textContent = '—';
-  document.getElementById('pipeline-summary').textContent = 'Analyzing workflows...';
 }
 
 async function loadSubAgents() {
@@ -1628,6 +1683,56 @@ async function loadSubAgents() {
     document.getElementById('subagents-status').textContent = 'Error loading sub-agents';
     document.getElementById('subagents-preview').innerHTML = '<div style="color:#e74c3c;font-size:11px;">Failed to load workforce</div>';
   }
+}
+
+// === Active Tasks for Overview ===
+var _activeTasksTimer = null;
+async function loadActiveTasks() {
+  try {
+    var data = await fetch('/api/subagents').then(r => r.json());
+    var grid = document.getElementById('active-tasks-grid');
+    if (!grid) return;
+    var agents = data.subagents || [];
+    if (agents.length === 0) {
+      grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
+        + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
+        + '<div style="font-size:13px;">No active sub-agents — all quiet</div></div>';
+      return;
+    }
+    var html = '';
+    agents.forEach(function(agent) {
+      var statusClass = agent.status === 'active' ? 'running' : agent.status === 'idle' ? 'complete' : 'complete';
+      var badgeText = agent.status === 'active' ? '🟢 Running' : agent.status === 'idle' ? '✅ Complete' : '✅ Done';
+      // Duration
+      var dur = agent.runtime || '—';
+      // Last action
+      var lastAction = '—';
+      if (agent.recentTools && agent.recentTools.length > 0) {
+        var last = agent.recentTools[agent.recentTools.length - 1];
+        lastAction = last.name + ' — ' + last.summary;
+      } else if (agent.lastText) {
+        lastAction = '💭 ' + agent.lastText.substring(0, 80);
+      }
+      html += '<div class="task-card ' + statusClass + '">';
+      if (agent.status === 'active') html += '<div class="task-card-pulse active"></div>';
+      html += '<div class="task-card-header">';
+      html += '<div class="task-card-name">' + escHtml(agent.displayName || agent.uuid.substring(0,8)) + '</div>';
+      html += '<span class="task-card-badge ' + statusClass + '">' + badgeText + '</span>';
+      html += '</div>';
+      html += '<div class="task-card-duration">⏱ ' + escHtml(dur) + '</div>';
+      html += '<div class="task-card-action">' + escHtml(lastAction.substring(0, 120)) + '</div>';
+      html += '</div>';
+    });
+    grid.innerHTML = html;
+  } catch(e) {
+    // silently fail
+  }
+}
+// Auto-refresh active tasks every 5s
+function startActiveTasksRefresh() {
+  loadActiveTasks();
+  if (_activeTasksTimer) clearInterval(_activeTasksTimer);
+  _activeTasksTimer = setInterval(loadActiveTasks, 5000);
 }
 
 async function loadToolActivity() {
@@ -1978,19 +2083,63 @@ function closeFileViewer() {
 }
 
 async function loadSessions() {
-  var data = await fetch('/api/sessions').then(r => r.json());
+  var [sessData, saData] = await Promise.all([
+    fetch('/api/sessions').then(r => r.json()),
+    fetch('/api/subagents').then(r => r.json())
+  ]);
   var html = '';
-  data.sessions.forEach(function(s) {
-    html += '<div class="session-item">';
-    html += '<div class="session-name">' + escHtml(s.displayName || s.key) + '</div>';
+  // Main sessions (non-subagent)
+  var mainSessions = sessData.sessions.filter(function(s) { return !(s.sessionId || '').includes('subagent'); });
+  var subagents = saData.subagents || [];
+  
+  mainSessions.forEach(function(s) {
+    html += '<div class="session-item" style="border-left:3px solid var(--bg-accent);padding-left:16px;">';
+    html += '<div class="session-name">🖥️ ' + escHtml(s.displayName || s.key) + ' <span style="font-size:11px;color:var(--text-muted);font-weight:400;">Main Session</span></div>';
     html += '<div class="session-meta">';
     html += '<span><span class="badge model">' + (s.model||'default') + '</span></span>';
     if (s.channel !== 'unknown') html += '<span><span class="badge channel">' + s.channel + '</span></span>';
-    html += '<span><span class="badge tokens">' + (s.totalTokens/1000).toFixed(0) + 'K tokens</span></span>';
     html += '<span>Updated ' + timeAgo(s.updatedAt) + '</span>';
-    html += '</div></div>';
+    html += '</div>';
+    // Sub-agents nested underneath
+    if (subagents.length > 0) {
+      html += '<div style="margin-top:8px;margin-left:16px;border-left:2px solid var(--border-primary);padding-left:12px;">';
+      subagents.forEach(function(sa) {
+        var statusIcon = sa.status === 'active' ? '🟢' : sa.status === 'idle' ? '🟡' : '⬜';
+        html += '<details style="margin-bottom:4px;">';
+        html += '<summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);padding:4px 0;">';
+        html += statusIcon + ' <strong>' + escHtml(sa.displayName) + '</strong>';
+        html += ' <span style="color:var(--text-muted);font-size:11px;">' + sa.runtime + '</span>';
+        html += '</summary>';
+        html += '<div style="padding:6px 0 6px 20px;font-size:12px;color:var(--text-muted);">';
+        if (sa.recentTools && sa.recentTools.length > 0) {
+          sa.recentTools.slice(-3).forEach(function(t) {
+            html += '<div style="font-family:monospace;margin-bottom:2px;">⚡ <span style="color:var(--text-accent);">' + escHtml(t.name) + '</span> ' + escHtml(t.summary.substring(0,80)) + '</div>';
+          });
+        }
+        if (sa.lastText) {
+          html += '<div style="font-style:italic;margin-top:4px;">💭 ' + escHtml(sa.lastText.substring(0, 120)) + '</div>';
+        }
+        html += '</div></details>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
   });
-  document.getElementById('sessions-list').innerHTML = html || 'No sessions';
+  
+  // Show orphan sessions that aren't main
+  var subSessions = sessData.sessions.filter(function(s) { return (s.sessionId || '').includes('subagent'); });
+  if (subSessions.length > 0 && mainSessions.length === 0) {
+    sessData.sessions.forEach(function(s) {
+      html += '<div class="session-item">';
+      html += '<div class="session-name">' + escHtml(s.displayName || s.key) + '</div>';
+      html += '<div class="session-meta">';
+      html += '<span><span class="badge model">' + (s.model||'default') + '</span></span>';
+      html += '<span>Updated ' + timeAgo(s.updatedAt) + '</span>';
+      html += '</div></div>';
+    });
+  }
+  
+  document.getElementById('sessions-list').innerHTML = html || '<div style="padding:16px;color:var(--text-muted);">No sessions found</div>';
 }
 
 async function loadCrons() {
@@ -2757,10 +2906,9 @@ function processFlowEvent(line) {
 document.addEventListener('DOMContentLoaded', function() {
   initTheme();
   initZoom();
-  // Initialize Flow page by default
+  // Flow is the default tab - initialize it
   initFlow();
-  
-  // Load data for all sections
+  // Also preload overview data
   loadAll();
 });
 </script>
