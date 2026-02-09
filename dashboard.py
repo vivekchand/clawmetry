@@ -412,6 +412,51 @@ def _safe_date_ts(date_str):
         return 0
 
 
+def validate_configuration():
+    """Validate the detected configuration and provide helpful feedback for new users."""
+    warnings = []
+    tips = []
+    
+    # Check if workspace looks like a real OpenClaw setup
+    workspace_files = ['SOUL.md', 'AGENTS.md', 'MEMORY.md', 'memory']
+    found_files = []
+    for f in workspace_files:
+        path = os.path.join(WORKSPACE, f)
+        if os.path.exists(path):
+            found_files.append(f)
+    
+    if not found_files:
+        warnings.append(f"⚠️  No OpenClaw workspace files found in {WORKSPACE}")
+        tips.append("💡 Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
+    
+    # Check if log directory exists and has recent logs
+    if not os.path.exists(LOG_DIR):
+        warnings.append(f"⚠️  Log directory doesn't exist: {LOG_DIR}")
+        tips.append("💡 Make sure OpenClaw/Moltbot is running to generate logs")
+    else:
+        # Check for recent log files
+        log_pattern = os.path.join(LOG_DIR, "*claw*.log")
+        recent_logs = [f for f in glob.glob(log_pattern) 
+                      if os.path.getmtime(f) > time.time() - 86400]  # Last 24h
+        if not recent_logs:
+            warnings.append(f"⚠️  No recent log files found in {LOG_DIR}")
+            tips.append("💡 Start your OpenClaw agent to see real-time data")
+    
+    # Check if sessions directory exists
+    if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
+        warnings.append(f"⚠️  Sessions directory not found: {SESSIONS_DIR}")
+        tips.append("💡 Sessions will appear when your agent starts conversations")
+    
+    # Check if OpenClaw binary is available
+    try:
+        subprocess.run(['openclaw', '--version'], capture_output=True, timeout=2)
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+        warnings.append("⚠️  OpenClaw binary not found in PATH")
+        tips.append("💡 Install OpenClaw: https://github.com/openclaw/openclaw")
+    
+    return warnings, tips
+
+
 def detect_config(args=None):
     """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
     global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
@@ -7644,6 +7689,19 @@ def main():
     print(f"  OTLP:       {'✅ Ready (opentelemetry-proto installed)' if _HAS_OTEL_PROTO else '❌ Not available (pip install openclaw-dashboard[otel])'}")
     print(f"  User:       {USER_NAME}")
     print()
+
+    # Validate configuration and show warnings/tips for new users
+    warnings, tips = validate_configuration()
+    if warnings or tips:
+        print("🔍 Configuration Check:")
+        for warning in warnings:
+            print(f"  {warning}")
+        for tip in tips:
+            print(f"  {tip}")
+        print()
+        if warnings:
+            print("💡 The dashboard will work with limited functionality. See tips above for full experience.")
+            print()
 
     local_ip = get_local_ip()
     print(f"  → http://localhost:{args.port}")

@@ -2,6 +2,44 @@
 
 ## Latest Updates
 
+### February 9, 2026 - 7:47 PM CET  
+**Feature: Startup Configuration Validation for New Users** ✅ COMPLETE
+
+Enhanced user experience for open source launch with comprehensive startup validation:
+
+**🔍 Configuration Validation:**
+- **Smart Detection**: Automatically validates detected workspace, logs, sessions directories
+- **Helpful Warnings**: Clear alerts when OpenClaw installation or workspace files are missing
+- **Actionable Tips**: Specific guidance on setting up SOUL.md, AGENTS.md, MEMORY.md
+- **OpenClaw Binary Check**: Detects if OpenClaw is installed and provides installation link
+- **Recent Activity Check**: Warns if no recent log files found (agent not running)
+
+**🎯 User Experience Improvements:**
+- **New User Friendly**: Clear guidance for users trying the dashboard before setting up OpenClaw
+- **Non-Blocking**: Dashboard still functions with limited features when setup is incomplete
+- **Educational**: Tips teach users about OpenClaw workspace structure
+- **Visual Indicators**: Emoji-based warning/tip system for quick scanning
+
+**📋 Validation Checks:**
+- ✅ Workspace files existence (SOUL.md, AGENTS.md, MEMORY.md, memory/)
+- ✅ Log directory presence and recent activity (last 24h)
+- ✅ Sessions directory availability
+- ✅ OpenClaw binary in PATH
+- ✅ Configuration completeness assessment
+
+**🚀 Impact:**
+- Reduces confusion for new open source users
+- Provides clear path from demo to full setup
+- Educational about OpenClaw workspace structure
+- Maintains functionality even with incomplete setup
+- Prepares users for successful first experience
+
+**Technical Implementation:**
+- New `validate_configuration()` function with comprehensive checks
+- Enhanced main() startup sequence with validation output
+- Non-intrusive warnings that don't block dashboard functionality
+- Helpful tips with direct links to installation resources
+
 ### February 9, 2026 - 6:50 PM CET  
 **Feature: Local Model Fallback for Low-Stakes Tasks** ✅ COMPLETE
 
