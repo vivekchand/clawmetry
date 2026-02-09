@@ -699,6 +699,18 @@ DASHBOARD_HTML = r"""
   .badge.channel { background: var(--bg-hover); color: #7c3aed; }
   .badge.tokens { background: var(--bg-success); color: var(--text-success); }
 
+  /* Cost Optimizer Styles */
+  .cost-optimizer-summary { margin-bottom: 20px; }
+  .cost-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+  .cost-stat { background: var(--bg-hover); border-radius: 8px; padding: 12px; text-align: center; border: 1px solid var(--border-primary); }
+  .cost-label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; margin-bottom: 4px; }
+  .cost-value { font-size: 20px; font-weight: 700; color: var(--text-primary); }
+  .local-status-good { padding: 8px 12px; background: var(--bg-success); color: var(--text-success); border-radius: 6px; font-size: 13px; font-weight: 600; }
+  .local-status-warning { padding: 8px 12px; background: var(--bg-warning); color: var(--text-warning); border-radius: 6px; font-size: 13px; font-weight: 600; }
+  .model-list { display: flex; flex-wrap: wrap; gap: 6px; }
+  .model-badge { background: var(--bg-accent); color: #ffffff; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .recommendation { border-left: 3px solid var(--text-accent); }
+
   .full-width { grid-column: 1 / -1; }
   .section-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 24px 0 12px; display: flex; align-items: center; gap: 8px; }
 
@@ -711,6 +723,7 @@ DASHBOARD_HTML = r"""
   #flow-svg { width: 100%; height: auto; display: block; overflow: visible; }
   #flow-svg text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 15px; font-weight: 700; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
   .flow-node-channel text, .flow-node-gateway text, .flow-node-session text, .flow-node-tool text { fill: #ffffff !important; }
+  .flow-node-optimizer text { fill: #ffffff !important; }
   .flow-node-infra > text { fill: #ffffff !important; }
   .flow-node-clickable { cursor: pointer; }
   .flow-node-clickable:hover rect, .flow-node-clickable:hover circle { filter: brightness(1.3); }
@@ -723,6 +736,7 @@ DASHBOARD_HTML = r"""
   .flow-node-gateway.active rect { filter: drop-shadow(0 0 12px rgba(64,128,224,0.8)) drop-shadow(0 0 20px rgba(64,128,224,0.4)); stroke-width: 2.5; }
   .flow-node-session.active rect { filter: drop-shadow(0 0 12px rgba(64,192,96,0.8)) drop-shadow(0 0 20px rgba(64,192,96,0.4)); stroke-width: 2.5; }
   .flow-node-tool.active rect { filter: drop-shadow(0 0 8px rgba(224,96,64,0.6)); stroke-width: 2.5; }
+  .flow-node-optimizer.active rect { filter: drop-shadow(0 0 8px rgba(46,125,50,0.8)) drop-shadow(0 0 16px rgba(46,125,50,0.4)); stroke-width: 2.5; }
   .flow-path { fill: none; stroke: var(--text-muted); stroke-width: 2; stroke-linecap: round; transition: stroke 0.4s, opacity 0.4s; opacity: 0.6; }
   .flow-path.glow-blue { stroke: #4080e0; filter: drop-shadow(0 0 6px rgba(64,128,224,0.6)); }
   .flow-path.glow-yellow { stroke: #f0c040; filter: drop-shadow(0 0 6px rgba(240,192,64,0.6)); }
@@ -1425,6 +1439,13 @@ DASHBOARD_HTML = r"""
         <rect x="560" y="370" width="110" height="38" rx="10" ry="10" fill="#283593" stroke="#1A237E" stroke-width="2" filter="url(#dropShadow)"/>
         <text x="615" y="394" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">&#x1F4BE; Memory</text>
         <circle class="tool-indicator" id="ind-memory" cx="665" cy="378" r="5" fill="#7986CB"/>
+      </g>
+
+      <!-- Cost Optimizer -->
+      <g class="flow-node flow-node-optimizer" id="node-cost-optimizer">
+        <rect x="690" y="370" width="120" height="38" rx="10" ry="10" fill="#2E7D32" stroke="#1B5E20" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="750" y="394" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">&#x1F4B0; Cost Optimizer</text>
+        <circle class="tool-indicator" id="ind-cost-optimizer" cx="805" cy="378" r="5" fill="#66BB6A"/>
       </g>
 
       <!-- Infrastructure Layer -->
@@ -3633,6 +3654,7 @@ var COMP_MAP = {
   'node-cron': {type:'tool', name:'Cron', icon:'⏰'},
   'node-tts': {type:'tool', name:'TTS', icon:'🔊'},
   'node-memory': {type:'tool', name:'Memory', icon:'💾'},
+  'node-cost-optimizer': {type:'optimizer', name:'Cost Optimizer', icon:'💰'},
   'node-runtime': {type:'infra', name:'Runtime', icon:'⚙️'},
   'node-machine': {type:'infra', name:'Machine', icon:'🖥️'},
   'node-storage': {type:'infra', name:'Storage', icon:'💿'},
@@ -3686,6 +3708,7 @@ function openCompModal(nodeId) {
   if (_gwRefreshTimer) { clearInterval(_gwRefreshTimer); _gwRefreshTimer = null; }
   if (_brainRefreshTimer) { clearInterval(_brainRefreshTimer); _brainRefreshTimer = null; }
   if (_toolRefreshTimer) { clearInterval(_toolRefreshTimer); _toolRefreshTimer = null; }
+  if (_costOptimizerRefreshTimer) { clearInterval(_costOptimizerRefreshTimer); _costOptimizerRefreshTimer = null; }
   
   // Track current component for time travel
   window._currentComponentId = nodeId;
@@ -3722,6 +3745,14 @@ function openCompModal(nodeId) {
     _brainPage = 0;
     loadBrainData(false);
     _brainRefreshTimer = setInterval(function() { loadBrainData(true); }, 10000);
+    return;
+  }
+
+  if (nodeId === 'node-cost-optimizer') {
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Analyzing costs...</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    loadCostOptimizerData(false);
+    _costOptimizerRefreshTimer = setInterval(function() { loadCostOptimizerData(true); }, 15000);
     return;
   }
 
@@ -3969,6 +4000,87 @@ function loadBrainData(isRefresh) {
   });
 }
 
+function loadCostOptimizerData(isRefresh) {
+  fetch('/api/cost-optimization').then(function(r) { return r.json(); }).then(function(data) {
+    var body = document.getElementById('comp-modal-body');
+    var html = '';
+    
+    // Cost Summary
+    html += '<div class="cost-optimizer-summary">';
+    html += '<div class="cost-stat-grid">';
+    html += '<div class="cost-stat"><div class="cost-label">Today</div><div class="cost-value">$' + (data.costs.today || 0).toFixed(3) + '</div></div>';
+    html += '<div class="cost-stat"><div class="cost-label">This Week</div><div class="cost-value">$' + (data.costs.week || 0).toFixed(3) + '</div></div>';
+    html += '<div class="cost-stat"><div class="cost-label">This Month</div><div class="cost-value">$' + (data.costs.month || 0).toFixed(3) + '</div></div>';
+    html += '<div class="cost-stat"><div class="cost-label">Projected Monthly</div><div class="cost-value">$' + (data.costs.projected || 0).toFixed(2) + '</div></div>';
+    html += '</div>';
+    html += '</div>';
+    
+    // Local Model Availability
+    html += '<div class="local-models-section" style="margin-top:20px;">';
+    html += '<h3 style="color:var(--text-accent);margin-bottom:12px;">🖥️ Local Model Availability</h3>';
+    if (data.localModels.available) {
+      html += '<div class="local-status-good">✅ Ollama detected with ' + data.localModels.count + ' tool-capable models</div>';
+      html += '<div class="model-list" style="margin-top:8px;">';
+      data.localModels.models.forEach(function(model) {
+        html += '<span class="model-badge">' + model + '</span>';
+      });
+      html += '</div>';
+    } else {
+      html += '<div class="local-status-warning">⚠️ No local models available</div>';
+      html += '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Install Ollama and pull tool-capable models to reduce API costs</div>';
+      html += '<div style="margin-top:4px;font-size:11px;color:var(--text-muted);">Example: <code>ollama pull llama3.3</code></div>';
+    }
+    html += '</div>';
+    
+    // Cost Optimization Recommendations
+    html += '<div class="recommendations-section" style="margin-top:20px;">';
+    html += '<h3 style="color:var(--text-accent);margin-bottom:12px;">💡 Optimization Recommendations</h3>';
+    
+    if (data.recommendations.length === 0) {
+      html += '<div style="padding:12px;background:var(--bg-success);border-radius:8px;color:var(--text-success);">✅ Cost usage is optimal</div>';
+    } else {
+      data.recommendations.forEach(function(rec) {
+        var priority = rec.priority === 'high' ? '🔥' : rec.priority === 'medium' ? '⚡' : '💡';
+        var bgClass = rec.priority === 'high' ? 'bg-error' : rec.priority === 'medium' ? 'bg-warning' : 'bg-hover';
+        html += '<div class="recommendation" style="padding:12px;margin-bottom:8px;background:var(--' + bgClass + ');border-radius:8px;">';
+        html += '<div style="font-weight:600;margin-bottom:4px;">' + priority + ' ' + rec.title + '</div>';
+        html += '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:6px;">' + rec.description + '</div>';
+        if (rec.action) {
+          html += '<div style="font-size:12px;color:var(--text-muted);font-family:monospace;">' + rec.action + '</div>';
+        }
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+    
+    // Recent High-Cost Operations
+    if (data.expensiveOps && data.expensiveOps.length > 0) {
+      html += '<div class="expensive-ops-section" style="margin-top:20px;">';
+      html += '<h3 style="color:var(--text-accent);margin-bottom:12px;">💸 Recent High-Cost Operations</h3>';
+      data.expensiveOps.forEach(function(op) {
+        html += '<div class="expensive-op" style="padding:10px;margin-bottom:6px;background:var(--bg-hover);border-radius:6px;border-left:3px solid var(--text-error);">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+        html += '<div style="font-weight:600;">' + op.model + '</div>';
+        html += '<div style="color:var(--text-error);font-weight:600;">$' + op.cost.toFixed(4) + '</div>';
+        html += '</div>';
+        html += '<div style="font-size:12px;color:var(--text-muted);margin-top:2px;">' + op.tokens + ' tokens · ' + op.timeAgo + '</div>';
+        if (op.canOptimize) {
+          html += '<div style="font-size:11px;color:var(--text-success);margin-top:4px;">💡 Could use local model for this task type</div>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    
+    body.innerHTML = html;
+    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing · Last updated: ' + new Date().toLocaleTimeString();
+  }).catch(function(e) {
+    if (!isRefresh) {
+      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load cost optimizer: ' + e.message + '</div>';
+    }
+  });
+}
+
 var _gwRefreshTimer = null;
 var _gwPage = 0;
 
@@ -4090,6 +4202,13 @@ function reloadCurrentComponent() {
   }
 }
 
+function loadCostOptimizerDataWithTime() {
+  var body = document.getElementById('comp-modal-body');
+  var timeContext = _currentTimeContext ? ' (' + _currentTimeContext.date + ')' : '';
+  body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">💰</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">Cost Optimizer' + timeContext + '</div><div style="color:var(--text-muted);">Historical cost analysis coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">optimizer</div></div>';
+  document.getElementById('comp-modal-footer').textContent = 'Time travel: ' + (_currentTimeContext ? _currentTimeContext.date : 'Live');
+}
+
 function loadComponentWithTimeContext(nodeId) {
   var c = COMP_MAP[nodeId];
   if (!c) return;
@@ -4099,6 +4218,7 @@ function loadComponentWithTimeContext(nodeId) {
   if (_gwRefreshTimer) { clearInterval(_gwRefreshTimer); _gwRefreshTimer = null; }
   if (_brainRefreshTimer) { clearInterval(_brainRefreshTimer); _brainRefreshTimer = null; }
   if (_toolRefreshTimer) { clearInterval(_toolRefreshTimer); _toolRefreshTimer = null; }
+  if (_costOptimizerRefreshTimer) { clearInterval(_costOptimizerRefreshTimer); _costOptimizerRefreshTimer = null; }
   
   // Load data based on component type
   if (nodeId === 'node-telegram') {
@@ -4107,6 +4227,8 @@ function loadComponentWithTimeContext(nodeId) {
     loadGatewayDataWithTime();
   } else if (nodeId === 'node-brain') {
     loadBrainDataWithTime();
+  } else if (nodeId === 'node-cost-optimizer') {
+    loadCostOptimizerDataWithTime();
   } else if (c.type === 'tool') {
     var toolKey = nodeId.replace('node-', '');
     loadToolDataWithTime(toolKey, c);
@@ -4199,6 +4321,7 @@ function loadGatewayData(isRefresh) {
 }
 
 var _toolRefreshTimer = null;
+var _costOptimizerRefreshTimer = null;
 var TOOL_COLORS = {
   'session': '#1565C0', 'exec': '#E65100', 'browser': '#6A1B9A',
   'search': '#00695C', 'cron': '#546E7A', 'tts': '#F9A825', 'memory': '#283593'
@@ -4546,6 +4669,7 @@ function closeCompModal() {
   if (_gwRefreshTimer) { clearInterval(_gwRefreshTimer); _gwRefreshTimer = null; }
   if (_brainRefreshTimer) { clearInterval(_brainRefreshTimer); _brainRefreshTimer = null; }
   if (_toolRefreshTimer) { clearInterval(_toolRefreshTimer); _toolRefreshTimer = null; }
+  if (_costOptimizerRefreshTimer) { clearInterval(_costOptimizerRefreshTimer); _costOptimizerRefreshTimer = null; }
   
   // Reset time travel state
   _timeTravelMode = false;
@@ -7202,6 +7326,37 @@ def api_health_stream():
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
+@app.route('/api/cost-optimization')
+def api_cost_optimization():
+    """Cost optimization analysis and local model fallback recommendations."""
+    try:
+        # Get cost metrics
+        costs = _get_cost_summary()
+        
+        # Check Ollama availability
+        local_models = _check_ollama_availability()
+        
+        # Generate recommendations
+        recommendations = _generate_cost_recommendations(costs, local_models)
+        
+        # Get recent expensive operations
+        expensive_ops = _get_expensive_operations()
+        
+        return jsonify({
+            'costs': costs,
+            'localModels': local_models,
+            'recommendations': recommendations,
+            'expensiveOps': expensive_ops
+        })
+    except Exception as e:
+        return jsonify({
+            'costs': {'today': 0, 'week': 0, 'month': 0, 'projected': 0},
+            'localModels': {'available': False, 'count': 0, 'models': []},
+            'recommendations': [{'title': 'API Error', 'description': str(e), 'priority': 'low'}],
+            'expensiveOps': []
+        })
+
+
 # ── Data Helpers ────────────────────────────────────────────────────────
 
 def _get_sessions():
@@ -7270,6 +7425,163 @@ def _get_memory_files():
             name = 'memory/' + os.path.basename(f)
             result.append({'path': name, 'size': os.path.getsize(f)})
     return result
+
+
+def _get_cost_summary():
+    """Calculate cost summary from metrics store."""
+    now = datetime.now(CET)
+    today = now.strftime('%Y-%m-%d')
+    week_start = (now - timedelta(days=7)).strftime('%Y-%m-%d')
+    month_start = (now - timedelta(days=30)).strftime('%Y-%m-%d')
+    
+    costs = {'today': 0, 'week': 0, 'month': 0, 'projected': 0}
+    
+    with _metrics_lock:
+        for entry in metrics_store.get('cost', []):
+            entry_date = datetime.fromtimestamp(entry.get('timestamp', 0) / 1000, CET).strftime('%Y-%m-%d')
+            entry_cost = entry.get('usd', 0)
+            
+            if entry_date == today:
+                costs['today'] += entry_cost
+            if entry_date >= week_start:
+                costs['week'] += entry_cost
+            if entry_date >= month_start:
+                costs['month'] += entry_cost
+    
+    # Project monthly cost based on current daily average
+    if costs['month'] > 0:
+        days_in_period = min(30, (now - datetime.strptime(month_start, '%Y-%m-%d').replace(tzinfo=CET)).days + 1)
+        daily_avg = costs['month'] / days_in_period
+        costs['projected'] = daily_avg * 30
+    
+    return costs
+
+
+def _check_ollama_availability():
+    """Check if Ollama is running and what models are available."""
+    try:
+        import requests
+        response = requests.get('http://localhost:11434/api/tags', timeout=3)
+        if response.status_code == 200:
+            data = response.json()
+            models = data.get('models', [])
+            tool_capable_models = []
+            
+            for model in models:
+                # Check if model supports tools (simplified check)
+                model_name = model.get('name', '')
+                # Common tool-capable models
+                if any(x in model_name.lower() for x in ['llama3', 'qwen', 'gpt-oss', 'mistral', 'deepseek']):
+                    tool_capable_models.append(model_name)
+            
+            return {
+                'available': True,
+                'count': len(tool_capable_models),
+                'models': tool_capable_models[:10]  # Limit display
+            }
+    except Exception:
+        pass
+    
+    return {'available': False, 'count': 0, 'models': []}
+
+
+def _generate_cost_recommendations(costs, local_models):
+    """Generate cost optimization recommendations."""
+    recommendations = []
+    
+    # High cost alerts
+    if costs['today'] > 1.0:
+        recommendations.append({
+            'title': 'High Daily Cost',
+            'description': f"Today's usage (${costs['today']:.3f}) is high. Consider using local models for routine tasks.",
+            'priority': 'high',
+            'action': 'Review recent expensive operations below'
+        })
+    
+    # Local model setup
+    if not local_models['available']:
+        recommendations.append({
+            'title': 'Install Local Models',
+            'description': 'Set up Ollama with local models to reduce API costs for formatting, simple lookups, and drafts.',
+            'priority': 'medium',
+            'action': 'curl -fsSL https://ollama.ai/install.sh | sh && ollama pull llama3.3'
+        })
+    elif local_models['count'] < 2:
+        recommendations.append({
+            'title': 'Expand Local Model Selection',
+            'description': 'Add more local models for better task coverage and cost optimization.',
+            'priority': 'low',
+            'action': 'ollama pull qwen2.5-coder:32b'
+        })
+    
+    # Projected cost warning
+    if costs['projected'] > 50.0:
+        recommendations.append({
+            'title': 'High Monthly Projection',
+            'description': f"Projected monthly cost (${costs['projected']:.2f}) is high. Implement local model fallback urgently.",
+            'priority': 'high',
+            'action': 'Configure cost thresholds and local model routing'
+        })
+    
+    # Low-stakes task identification
+    with _metrics_lock:
+        recent_calls = metrics_store.get('tokens', [])[-100:]  # Last 100 calls
+        high_cost_calls = [c for c in recent_calls if c.get('total', 0) > 10000]
+        if len(high_cost_calls) > 20:
+            recommendations.append({
+                'title': 'High Token Usage Detected',
+                'description': 'Many recent calls use >10K tokens. Review if all require cloud models.',
+                'priority': 'medium',
+                'action': 'Implement task classification for local vs cloud routing'
+            })
+    
+    return recommendations
+
+
+def _get_expensive_operations():
+    """Get recent high-cost operations for analysis."""
+    expensive_ops = []
+    
+    with _metrics_lock:
+        # Combine cost and token data
+        recent_tokens = metrics_store.get('tokens', [])[-50:]
+        recent_costs = metrics_store.get('cost', [])[-50:]
+        
+        # Match tokens with costs by timestamp (approximate)
+        for cost_entry in recent_costs:
+            if cost_entry.get('usd', 0) > 0.01:  # Only show operations >$0.01
+                timestamp = cost_entry.get('timestamp', 0)
+                model = cost_entry.get('model', 'unknown')
+                cost = cost_entry.get('usd', 0)
+                
+                # Find matching token entry
+                token_entry = None
+                for t in recent_tokens:
+                    if abs(t.get('timestamp', 0) - timestamp) < 5000:  # Within 5 seconds
+                        if t.get('model', '') == model:
+                            token_entry = t
+                            break
+                
+                tokens = token_entry.get('total', 0) if token_entry else 0
+                time_ago = datetime.fromtimestamp(timestamp / 1000, CET).strftime('%H:%M')
+                
+                # Determine if this operation could be optimized
+                can_optimize = False
+                if tokens > 0:
+                    # Simple heuristic: high token count with low complexity ratio might be local-model suitable
+                    # This is a simplified check - in practice you'd analyze the actual request content
+                    if tokens < 5000 and 'gpt' not in model.lower() and 'simple' in model.lower():
+                        can_optimize = True
+                
+                expensive_ops.append({
+                    'model': model,
+                    'cost': cost,
+                    'tokens': f"{tokens:,}" if tokens > 0 else "unknown",
+                    'timeAgo': time_ago,
+                    'canOptimize': can_optimize
+                })
+    
+    return sorted(expensive_ops, key=lambda x: x['cost'], reverse=True)[:10]
 
 
 # ── CLI Entry Point ─────────────────────────────────────────────────────
