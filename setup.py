@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="openclaw-dashboard",
-    version="0.2.5",
+    version="0.2.6",
     description="Real-time observability dashboard for OpenClaw AI agents",
     long_description=long_description,
     long_description_content_type="text/markdown",
