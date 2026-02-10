@@ -90,8 +90,19 @@ def _load_metrics_from_disk():
                     metrics_store[key] = data[key][-MAX_STORE_ENTRIES:]
             _otel_last_received = data.get('_last_received', 0)
         _expire_old_entries()
-    except Exception:
-        pass
+    except json.JSONDecodeError as e:
+        print(f"⚠️  Warning: Failed to parse metrics file {path}: {e}")
+        # Create backup of corrupted file
+        backup_path = f"{path}.corrupted.{int(time.time())}"
+        try:
+            os.rename(path, backup_path)
+            print(f"💾 Corrupted file backed up to {backup_path}")
+        except OSError:
+            pass
+    except (IOError, OSError) as e:
+        print(f"⚠️  Warning: Failed to read metrics file {path}: {e}")
+    except Exception as e:
+        print(f"⚠️  Warning: Unexpected error loading metrics: {e}")
 
 
 def _save_metrics_to_disk():
@@ -111,8 +122,14 @@ def _save_metrics_to_disk():
         with open(tmp, 'w') as f:
             json.dump(data, f)
         os.replace(tmp, path)
-    except Exception:
-        pass
+    except OSError as e:
+        print(f"⚠️  Warning: Failed to save metrics to {path}: {e}")
+        if "No space left on device" in str(e):
+            print("💾 Disk full! Consider cleaning up old files or expanding storage.")
+    except json.JSONEncodeError as e:
+        print(f"⚠️  Warning: Failed to serialize metrics data: {e}")
+    except Exception as e:
+        print(f"⚠️  Warning: Unexpected error saving metrics: {e}")
 
 
 def _expire_old_entries():
@@ -143,8 +160,12 @@ def _metrics_flush_loop():
         try:
             _expire_old_entries()
             _save_metrics_to_disk()
-        except Exception:
-            pass
+        except KeyboardInterrupt:
+            print("📊 Metrics flush loop shutting down...")
+            break
+        except Exception as e:
+            print(f"⚠️  Warning: Error in metrics flush loop: {e}")
+            # Continue running despite errors
 
 
 def _start_metrics_flush_thread():
@@ -406,9 +427,15 @@ def _get_otel_usage_data():
 
 def _safe_date_ts(date_str):
     """Parse a YYYY-MM-DD date string to a timestamp, returning 0 on failure."""
+    if not date_str or not isinstance(date_str, str):
+        return 0
     try:
         return datetime.strptime(date_str, '%Y-%m-%d').timestamp()
-    except Exception:
+    except ValueError:
+        # Invalid date format - expected but handled gracefully
+        return 0
+    except Exception as e:
+        print(f"⚠️  Warning: Unexpected error parsing date '{date_str}': {e}")
         return 0
 
 
@@ -555,7 +582,11 @@ def get_local_ip():
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
+    except (socket.error, OSError) as e:
+        # Network unavailable or socket error - common in offline/restricted environments
+        return "127.0.0.1"
+    except Exception as e:
+        print(f"⚠️  Warning: Unexpected error getting local IP: {e}")
         return "127.0.0.1"
 
 
@@ -1493,8 +1524,15 @@ DASHBOARD_HTML = r"""
         <circle class="tool-indicator" id="ind-cost-optimizer" cx="805" cy="378" r="5" fill="#66BB6A"/>
       </g>
 
+      <!-- Automation Advisor -->
+      <g class="flow-node flow-node-advisor" id="node-automation-advisor">
+        <rect x="820" y="370" width="130" height="38" rx="10" ry="10" fill="#7B1FA2" stroke="#4A148C" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="885" y="394" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">&#x1F9E0; Automation Advisor</text>
+        <circle class="tool-indicator" id="ind-automation-advisor" cx="945" cy="378" r="5" fill="#BA68C8"/>
+      </g>
+
       <!-- Infrastructure Layer -->
-      <line class="flow-ground" x1="20" y1="440" x2="780" y2="440"/>
+      <line class="flow-ground" x1="20" y1="440" x2="950" y2="440"/>
       <text class="flow-ground-label" x="400" y="438" style="text-anchor:middle;font-size:10px;">I N F R A S T R U C T U R E</text>
 
       <g class="flow-node flow-node-infra flow-node-runtime" id="node-runtime">
@@ -3700,6 +3738,7 @@ var COMP_MAP = {
   'node-tts': {type:'tool', name:'TTS', icon:'🔊'},
   'node-memory': {type:'tool', name:'Memory', icon:'💾'},
   'node-cost-optimizer': {type:'optimizer', name:'Cost Optimizer', icon:'💰'},
+  'node-automation-advisor': {type:'advisor', name:'Automation Advisor', icon:'🧠'},
   'node-runtime': {type:'infra', name:'Runtime', icon:'⚙️'},
   'node-machine': {type:'infra', name:'Machine', icon:'🖥️'},
   'node-storage': {type:'infra', name:'Storage', icon:'💿'},
@@ -4254,6 +4293,66 @@ function loadCostOptimizerDataWithTime() {
   document.getElementById('comp-modal-footer').textContent = 'Time travel: ' + (_currentTimeContext ? _currentTimeContext.date : 'Live');
 }
 
+function loadAutomationAdvisorDataWithTime() {
+  var body = document.getElementById('comp-modal-body');
+  var timeContext = _currentTimeContext ? ' (' + _currentTimeContext.date + ')' : '';
+  
+  if (_currentTimeContext) {
+    body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">🧠</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">Automation Advisor' + timeContext + '</div><div style="color:var(--text-muted);">Historical pattern analysis coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">advisor</div></div>';
+    document.getElementById('comp-modal-footer').textContent = 'Time travel: ' + _currentTimeContext.date;
+    return;
+  }
+  
+  body.innerHTML = '<div style="text-align:center;padding:40px;"><div style="font-size:24px;margin-bottom:20px;">🧠 Loading automation analysis...</div></div>';
+  document.getElementById('comp-modal-footer').textContent = 'Live';
+  
+  fetch('/api/automation-analysis').then(function(r){return r.json();}).then(function(data) {
+    var html = '<div style="padding:20px;">';
+    html += '<div style="text-align:center;margin-bottom:30px;"><div style="font-size:48px;margin-bottom:12px;">🧠</div><h2 style="margin:0;font-size:20px;">Automation Advisor</h2><p style="color:var(--text-muted);margin:8px 0 0 0;">Analyzing patterns to suggest new automations</p></div>';
+    
+    if (data.patterns && data.patterns.length > 0) {
+      html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">🔍 Detected Patterns</h3>';
+      data.patterns.forEach(function(pattern) {
+        var priorityColor = pattern.priority === 'high' ? '#f44336' : pattern.priority === 'medium' ? '#ff9800' : '#4caf50';
+        html += '<div style="background:var(--bg-hover);border-radius:8px;padding:16px;margin-bottom:16px;border-left:4px solid ' + priorityColor + ';">';
+        html += '<div style="font-weight:600;margin-bottom:8px;">' + pattern.title + '</div>';
+        html += '<div style="color:var(--text-muted);margin-bottom:12px;">' + pattern.description + '</div>';
+        html += '<div style="font-size:12px;color:var(--text-muted);">Frequency: ' + pattern.frequency + ' • Confidence: ' + pattern.confidence + '%</div>';
+        html += '</div>';
+      });
+    }
+    
+    if (data.suggestions && data.suggestions.length > 0) {
+      html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">💡 Automation Suggestions</h3>';
+      data.suggestions.forEach(function(suggestion) {
+        var typeIcon = suggestion.type === 'cron' ? '⏰' : suggestion.type === 'skill' ? '🛠️' : '🔧';
+        html += '<div style="background:var(--bg-hover);border-radius:8px;padding:16px;margin-bottom:16px;">';
+        html += '<div style="display:flex;align-items:center;margin-bottom:8px;"><span style="font-size:20px;margin-right:8px;">' + typeIcon + '</span>';
+        html += '<span style="font-weight:600;">' + suggestion.title + '</span></div>';
+        html += '<div style="color:var(--text-muted);margin-bottom:12px;">' + suggestion.description + '</div>';
+        if (suggestion.implementation) {
+          html += '<div style="background:var(--bg-primary);padding:8px;border-radius:4px;font-family:monospace;font-size:12px;color:var(--text-muted);margin-bottom:8px;">' + suggestion.implementation + '</div>';
+        }
+        html += '<div style="font-size:12px;color:var(--text-muted);">Impact: ' + suggestion.impact + ' • Effort: ' + suggestion.effort + '</div>';
+        html += '</div>';
+      });
+    }
+    
+    if (!data.patterns || data.patterns.length === 0) {
+      html += '<div style="text-align:center;padding:40px;color:var(--text-muted);">';
+      html += '<div style="font-size:48px;margin-bottom:16px;">🌱</div>';
+      html += '<h3>No patterns detected yet</h3>';
+      html += '<p>Continue using the agent and check back later for automation suggestions.</p>';
+      html += '</div>';
+    }
+    
+    html += '</div>';
+    body.innerHTML = html;
+  }).catch(function(e) {
+    body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><h3>Analysis Unavailable</h3><p>Unable to load automation analysis: ' + e.message + '</p></div>';
+  });
+}
+
 function loadComponentWithTimeContext(nodeId) {
   var c = COMP_MAP[nodeId];
   if (!c) return;
@@ -4274,6 +4373,8 @@ function loadComponentWithTimeContext(nodeId) {
     loadBrainDataWithTime();
   } else if (nodeId === 'node-cost-optimizer') {
     loadCostOptimizerDataWithTime();
+  } else if (nodeId === 'node-automation-advisor') {
+    loadAutomationAdvisorDataWithTime();
   } else if (c.type === 'tool') {
     var toolKey = nodeId.replace('node-', '');
     loadToolDataWithTime(toolKey, c);
@@ -7402,6 +7503,30 @@ def api_cost_optimization():
         })
 
 
+@app.route('/api/automation-analysis')
+def api_automation_analysis():
+    """Automation pattern analysis and suggestions for new cron jobs or skills."""
+    try:
+        # Analyze recent patterns
+        patterns = _analyze_work_patterns()
+        
+        # Generate automation suggestions
+        suggestions = _generate_automation_suggestions(patterns)
+        
+        return jsonify({
+            'patterns': patterns,
+            'suggestions': suggestions,
+            'lastAnalysis': datetime.now(timezone.utc).isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            'patterns': [],
+            'suggestions': [],
+            'error': str(e),
+            'lastAnalysis': datetime.now(timezone.utc).isoformat()
+        })
+
+
 # ── Data Helpers ────────────────────────────────────────────────────────
 
 def _get_sessions():
@@ -7627,6 +7752,246 @@ def _get_expensive_operations():
                 })
     
     return sorted(expensive_ops, key=lambda x: x['cost'], reverse=True)[:10]
+
+
+def _analyze_work_patterns():
+    """Analyze recent work patterns from logs and metrics to detect repetitive tasks."""
+    patterns = []
+    
+    try:
+        # Analyze recent log files for repetitive patterns
+        log_files = _get_recent_log_files(7)  # Last 7 days
+        command_frequency = {}
+        tool_frequency = {}
+        error_patterns = {}
+        
+        for log_file in log_files:
+            try:
+                with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        # Track tool usage patterns
+                        if 'tool_call' in line and 'exec' in line:
+                            try:
+                                if '"command"' in line:
+                                    # Extract command from tool call
+                                    import re
+                                    cmd_match = re.search(r'"command":\s*"([^"]+)"', line)
+                                    if cmd_match:
+                                        cmd = cmd_match.group(1).split()[0]  # First word only
+                                        command_frequency[cmd] = command_frequency.get(cmd, 0) + 1
+                            except:
+                                pass
+                        
+                        # Track tool names
+                        for tool in ['curl', 'git', 'npm', 'systemctl', 'grep', 'find', 'ls']:
+                            if tool in line and 'tool_call' in line:
+                                tool_frequency[tool] = tool_frequency.get(tool, 0) + 1
+                        
+                        # Track common error patterns
+                        if 'error' in line.lower() or 'failed' in line.lower():
+                            for pattern in ['connection failed', 'timeout', 'not found', 'permission denied']:
+                                if pattern in line.lower():
+                                    error_patterns[pattern] = error_patterns.get(pattern, 0) + 1
+                                    
+            except Exception:
+                continue
+        
+        # Generate pattern insights
+        # High-frequency commands
+        for cmd, count in command_frequency.items():
+            if count >= 5:  # Used 5+ times in the past week
+                confidence = min(90, count * 10)  # Higher frequency = higher confidence
+                priority = 'high' if count >= 15 else 'medium' if count >= 10 else 'low'
+                patterns.append({
+                    'title': f'Frequent "{cmd}" command usage',
+                    'description': f'Command "{cmd}" has been used {count} times in the past week. This might be a candidate for automation.',
+                    'frequency': f'{count} times/week',
+                    'confidence': confidence,
+                    'priority': priority,
+                    'type': 'command',
+                    'target': cmd
+                })
+        
+        # Repeated error handling
+        for error, count in error_patterns.items():
+            if count >= 3:
+                patterns.append({
+                    'title': f'Recurring error: {error}',
+                    'description': f'This error pattern has occurred {count} times. Consider adding error handling automation.',
+                    'frequency': f'{count} occurrences/week',
+                    'confidence': 75,
+                    'priority': 'medium',
+                    'type': 'error',
+                    'target': error
+                })
+        
+        # Check for Mission Control task patterns
+        try:
+            mc_response = subprocess.run(['curl', '-s', 'http://localhost:3002/api/tasks'], 
+                                       capture_output=True, text=True, timeout=5)
+            if mc_response.returncode == 0:
+                import json
+                mc_data = json.loads(mc_response.stdout)
+                if 'tasks' in mc_data:
+                    # Analyze task patterns
+                    task_types = {}
+                    for task in mc_data['tasks']:
+                        title = task.get('title', '').lower()
+                        for keyword in ['deploy', 'fix', 'update', 'build', 'test', 'backup']:
+                            if keyword in title:
+                                task_types[keyword] = task_types.get(keyword, 0) + 1
+                    
+                    for task_type, count in task_types.items():
+                        if count >= 3:
+                            patterns.append({
+                                'title': f'Frequent {task_type} tasks',
+                                'description': f'You have {count} tasks involving "{task_type}". This could be automated.',
+                                'frequency': f'{count} tasks',
+                                'confidence': 80,
+                                'priority': 'medium',
+                                'type': 'task',
+                                'target': task_type
+                            })
+        except:
+            pass
+            
+    except Exception as e:
+        # Add a debug pattern if analysis fails
+        patterns.append({
+            'title': 'Pattern analysis limited',
+            'description': f'Could not fully analyze patterns: {str(e)}',
+            'frequency': 'unknown',
+            'confidence': 10,
+            'priority': 'low',
+            'type': 'debug',
+            'target': 'analysis'
+        })
+    
+    return sorted(patterns, key=lambda x: (x['priority'] == 'high', x['priority'] == 'medium', x['confidence']), reverse=True)
+
+
+def _generate_automation_suggestions(patterns):
+    """Generate concrete automation suggestions based on detected patterns."""
+    suggestions = []
+    
+    for pattern in patterns:
+        if pattern['type'] == 'command' and pattern['target']:
+            cmd = pattern['target']
+            
+            # Command-specific automation suggestions
+            if cmd in ['curl', 'git', 'systemctl']:
+                suggestions.append({
+                    'title': f'Automate {cmd} monitoring',
+                    'description': f'Create a cron job to monitor and auto-fix common {cmd} operations.',
+                    'type': 'cron',
+                    'implementation': f'# Add to cron: */15 * * * * /path/to/auto-{cmd}.sh',
+                    'impact': 'Medium - reduces manual monitoring',
+                    'effort': 'Low - single script creation'
+                })
+            
+            elif cmd in ['npm', 'git']:
+                suggestions.append({
+                    'title': f'{cmd.upper()} automation skill',
+                    'description': f'Create a skill that automates common {cmd} workflows with error handling.',
+                    'type': 'skill',
+                    'implementation': f'Skills/{cmd}-automation/SKILL.md - wrapper with retry logic',
+                    'impact': 'High - automates entire workflow',
+                    'effort': 'Medium - requires skill development'
+                })
+        
+        elif pattern['type'] == 'error':
+            error_type = pattern['target']
+            suggestions.append({
+                'title': f'Auto-recovery for {error_type}',
+                'description': f'Create monitoring that detects "{error_type}" errors and attempts automatic recovery.',
+                'type': 'cron',
+                'implementation': f'*/10 * * * * /scripts/auto-recover-{error_type.replace(" ", "-")}.sh',
+                'impact': 'High - prevents manual intervention',
+                'effort': 'Medium - requires error detection logic'
+            })
+        
+        elif pattern['type'] == 'task':
+            task_type = pattern['target']
+            if task_type in ['deploy', 'build', 'update']:
+                suggestions.append({
+                    'title': f'CI/CD pipeline for {task_type}',
+                    'description': f'Automate {task_type} tasks with GitHub Actions or cron-based pipeline.',
+                    'type': 'automation',
+                    'implementation': f'.github/workflows/{task_type}.yml or cron-based pipeline',
+                    'impact': 'Very High - eliminates manual tasks',
+                    'effort': 'High - requires pipeline setup'
+                })
+    
+    # Add some universal automation suggestions
+    suggestions.extend([
+        {
+            'title': 'Health monitoring cron',
+            'description': 'Create a cron job that monitors system health and alerts on issues.',
+            'type': 'cron',
+            'implementation': '0 */6 * * * /scripts/health-check.sh | logger',
+            'impact': 'Medium - proactive issue detection',
+            'effort': 'Low - single monitoring script'
+        },
+        {
+            'title': 'Log rotation automation',
+            'description': 'Automate log cleanup to prevent disk space issues.',
+            'type': 'cron',
+            'implementation': '0 2 * * 0 find /var/log -type f -name "*.log" -mtime +7 -delete',
+            'impact': 'Medium - prevents disk space issues',
+            'effort': 'Very Low - single command cron'
+        },
+        {
+            'title': 'Backup verification skill',
+            'description': 'Create a skill that verifies backup integrity and reports status.',
+            'type': 'skill',
+            'implementation': 'Skills/backup-monitor/SKILL.md - checks backup health',
+            'impact': 'High - ensures backup reliability',
+            'effort': 'Medium - requires backup checking logic'
+        }
+    ])
+    
+    # Remove duplicates and limit to top suggestions
+    seen_titles = set()
+    unique_suggestions = []
+    for suggestion in suggestions:
+        if suggestion['title'] not in seen_titles:
+            seen_titles.add(suggestion['title'])
+            unique_suggestions.append(suggestion)
+    
+    return unique_suggestions[:8]  # Limit to 8 suggestions max
+
+
+def _get_recent_log_files(days=7):
+    """Get list of recent log files to analyze."""
+    log_files = []
+    
+    if LOG_DIR and os.path.isdir(LOG_DIR):
+        # OpenClaw/Moltbot logs
+        for i in range(days):
+            date = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+            log_file = os.path.join(LOG_DIR, f'moltbot-{date}.log')
+            if os.path.isfile(log_file):
+                log_files.append(log_file)
+    
+    # Also check journalctl if available
+    try:
+        result = subprocess.run(['journalctl', '--user', '-u', 'moltbot-gateway', 
+                               '--since', f'{days} days ago', '--no-pager'], 
+                              capture_output=True, text=True, timeout=10)
+        if result.returncode == 0 and result.stdout.strip():
+            # Create temporary file with journalctl output for analysis
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
+                f.write(result.stdout)
+                log_files.append(f.name)
+    except:
+        pass
+    
+    return log_files
 
 
 # ── CLI Entry Point ─────────────────────────────────────────────────────
