@@ -1,0 +1,9 @@
+*
+!index.html
+!Dockerfile
+!Clawmetry_files/
+!Clawmetry_files/**
+!Clawmetry_updated_files/
+!Clawmetry_updated_files/**
+!videos/
+!videos/**

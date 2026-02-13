@@ -1,0 +1,10 @@
+{
+  "name": "openclaw-dashboard-repo",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Repo-level scripts for OpenClaw Dashboard and Clawmetry landing deployment",
+  "scripts": {
+    "deploy": "bash scripts/deploy-landing.sh",
+    "deploy:landing": "bash scripts/deploy-landing.sh"
+  }
+}
