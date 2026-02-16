@@ -53,4 +53,4 @@ These templates are based on real skills:
 - **API Wrapper**: weather, news-headlines skills
 - **CLI Wrapper**: github, docker skills  
 - **Media Pipeline**: video-reels, vedicvoice-instagram skills
-- **Dashboard**: weather-dashboard, openclaw-dashboard skills
+- **Dashboard**: weather-dashboard, clawmetry skills

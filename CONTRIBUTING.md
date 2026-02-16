@@ -10,8 +10,8 @@ OpenClaw Dashboard is built to be **simple, fast, and useful** for personal AI a
 
 ### 1. **Clone & Setup**
 ```bash
-git clone https://github.com/vivekchand/openclaw-dashboard.git
-cd openclaw-dashboard
+git clone https://github.com/vivekchand/clawmetry.git
+cd clawmetry
 pip install -r requirements.txt
 ```
 
@@ -24,7 +24,7 @@ python3 dashboard.py --port 8900
 ### 3. **Test Console Entry Point**
 ```bash
 pip install -e .
-openclaw-dashboard --help
+clawmetry --help
 ```
 
 ### 4. **Make Changes & Test**
@@ -37,7 +37,7 @@ openclaw-dashboard --help
 ## 📁 Project Structure
 
 ```
-openclaw-dashboard/
+clawmetry/
 ├── dashboard.py          # 🎯 Main application (single file)
 ├── README.md             # 📖 Documentation
 ├── setup.py              # 📦 Package configuration
@@ -54,17 +54,17 @@ openclaw-dashboard/
 ## 🎯 Contribution Guidelines
 
 ### **What We're Looking For**
-- 🐛 **Bug fixes** — especially around auto-detection, log parsing, or UI edge cases
-- ✨ **Small features** — new visualizations, better error handling, performance improvements  
-- 📖 **Documentation** — clearer setup instructions, troubleshooting guides
-- 🎨 **UI polish** — better mobile support, dark theme, accessibility improvements
-- 🧪 **Testing** — help us test on different OpenClaw setups
+- 🐛 **Bug fixes** - especially around auto-detection, log parsing, or UI edge cases
+- ✨ **Small features** - new visualizations, better error handling, performance improvements  
+- 📖 **Documentation** - clearer setup instructions, troubleshooting guides
+- 🎨 **UI polish** - better mobile support, dark theme, accessibility improvements
+- 🧪 **Testing** - help us test on different OpenClaw setups
 
 ### **What to Avoid**
-- ❌ **Complex dependencies** — no heavy frameworks, ML libraries, or databases
-- ❌ **Breaking the single-file architecture** — keep everything in `dashboard.py`
-- ❌ **Enterprise features** — this is for personal AI agents, not teams
-- ❌ **Major architectural changes** — discuss large changes in Issues first
+- ❌ **Complex dependencies** - no heavy frameworks, ML libraries, or databases
+- ❌ **Breaking the single-file architecture** - keep everything in `dashboard.py`
+- ❌ **Enterprise features** - this is for personal AI agents, not teams
+- ❌ **Major architectural changes** - discuss large changes in Issues first
 
 ---
 
@@ -73,9 +73,9 @@ openclaw-dashboard/
 ### **Code Style**
 - **Python 3.8+** compatible
 - **PEP 8** formatting (but don't obsess)
-- **Clear variable names** — readability over brevity
-- **Comments for complex logic** — especially auto-detection and log parsing
-- **No external formatting tools required** — just make it readable
+- **Clear variable names** - readability over brevity
+- **Comments for complex logic** - especially auto-detection and log parsing
+- **No external formatting tools required** - just make it readable
 
 ### **Testing Your Changes**
 Before submitting, test these scenarios:
@@ -95,8 +95,8 @@ Before submitting, test these scenarios:
 
 3. **Console entry point works** (after `pip install -e .`):
    ```bash
-   openclaw-dashboard --version
-   openclaw-dashboard --port 8902
+   clawmetry --version
+   clawmetry --port 8902
    ```
 
 4. **UI loads without errors**:
@@ -108,10 +108,10 @@ Before submitting, test these scenarios:
 
 If you want to add a new tab or major feature:
 
-1. **Open an Issue first** — describe what you want to build and why
-2. **Keep it lightweight** — remember this is a single-file app
-3. **Follow the existing pattern** — look at how other tabs are implemented
-4. **Update the README** — document your new feature in the features table
+1. **Open an Issue first** - describe what you want to build and why
+2. **Keep it lightweight** - remember this is a single-file app
+3. **Follow the existing pattern** - look at how other tabs are implemented
+4. **Update the README** - document your new feature in the features table
 
 ---
 
@@ -131,7 +131,7 @@ Brief description of the change.
 
 ## Testing
 - [ ] Tested auto-detection: `cd /tmp && python3 dashboard.py`
-- [ ] Tested console entry point: `openclaw-dashboard --help`
+- [ ] Tested console entry point: `clawmetry --help`
 - [ ] Tested new feature with real OpenClaw data
 - [ ] All tabs load without browser console errors
 
@@ -155,7 +155,7 @@ Brief description of the change.
 Brief description.
 
 **Steps to reproduce:**
-1. Start dashboard with `openclaw-dashboard`
+1. Start dashboard with `clawmetry`
 2. Click on Sessions tab
 3. Error appears in browser console
 
@@ -163,7 +163,7 @@ Brief description.
 - OS: Linux/macOS/Windows
 - Python version: `python3 --version` 
 - OpenClaw version: X.X.X
-- Dashboard version: `openclaw-dashboard --version`
+- Dashboard version: `clawmetry --version`
 
 **Logs/Screenshots:**
 Paste relevant error messages or attach screenshots.
@@ -180,9 +180,9 @@ Paste relevant error messages or attach screenshots.
 
 Have an idea? Great! But first:
 
-1. **Check existing Issues** — someone might have already suggested it
-2. **Consider the scope** — would this benefit most personal AI agent users?
-3. **Think about complexity** — can it be done without adding dependencies?
+1. **Check existing Issues** - someone might have already suggested it
+2. **Consider the scope** - would this benefit most personal AI agent users?
+3. **Think about complexity** - can it be done without adding dependencies?
 
 ### **Good Feature Request Template**
 ```markdown

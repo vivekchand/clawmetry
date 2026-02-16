@@ -3,24 +3,24 @@
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PyPI version](https://img.shields.io/pypi/v/clawmetry)](https://pypi.org/project/clawmetry/)
-[![GitHub issues](https://img.shields.io/github/issues/vivekchand/openclaw-dashboard)](https://github.com/vivekchand/openclaw-dashboard/issues)
-[![GitHub stars](https://img.shields.io/github/stars/vivekchand/openclaw-dashboard)](https://github.com/vivekchand/openclaw-dashboard/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/vivekchand/clawmetry)](https://github.com/vivekchand/clawmetry/issues)
+[![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry)](https://github.com/vivekchand/clawmetry/stargazers)
 
 **See your agent think.** The Grafana for your personal AI agent.
 
 Real-time observability dashboard for [OpenClaw](https://github.com/openclaw/openclaw) AI agents. One file. Zero config. Just run it.
 
-> *Previously published as `openclaw-dashboard` — same project, better name.*
+> *Previously published as `openclaw-dashboard` - same project, better name.*
 
-![Flow Visualization](https://raw.githubusercontent.com/vivekchand/openclaw-dashboard/main/screenshots/flow.png)
+![Flow Visualization](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
 ## 🎬 Demo
 
-<video src="https://raw.githubusercontent.com/vivekchand/openclaw-dashboard/main/clawmetry-landing/videos/clawmetry.webm" controls muted loop playsinline width="100%"></video>
+<video src="https://raw.githubusercontent.com/vivekchand/clawmetry/main/clawmetry-landing/videos/clawmetry.webm" controls muted loop playsinline width="100%"></video>
 
-[▶ Watch video directly](https://raw.githubusercontent.com/vivekchand/openclaw-dashboard/main/clawmetry-landing/videos/clawmetry.webm)
+[▶ Watch video directly](https://raw.githubusercontent.com/vivekchand/clawmetry/main/clawmetry-landing/videos/clawmetry.webm)
 
-> 🌟 **[Star this repo](https://github.com/vivekchand/openclaw-dashboard)** if you find it useful!
+> 🌟 **[Star this repo](https://github.com/vivekchand/clawmetry)** if you find it useful!
 
 ---
 
@@ -31,12 +31,12 @@ pip install clawmetry
 clawmetry
 ```
 
-🎉 Opens at **http://localhost:8900** — auto-detects your OpenClaw workspace.
+🎉 Opens at **http://localhost:8900** - auto-detects your OpenClaw workspace.
 
 ### Alternative: run from source
 
 ```bash
-curl -O https://raw.githubusercontent.com/vivekchand/openclaw-dashboard/main/dashboard.py
+curl -O https://raw.githubusercontent.com/vivekchand/clawmetry/main/dashboard.py
 pip install flask
 python3 dashboard.py
 ```
@@ -63,25 +63,25 @@ python3 dashboard.py
 
 | Tab | What it shows |
 |-----|--------------|
-| **🌊 Flow** | **Real-time animated SVG** — data flow from You → Channels → Gateway → Brain → Tools → Infrastructure |
+| **🌊 Flow** | **Real-time animated SVG** - data flow from You → Channels → Gateway → Brain → Tools → Infrastructure |
 | **Overview** | Model, sessions, crons, tokens, memory, **❤️ health checks** (auto-refresh via SSE), **🔥 activity heatmap** (GitHub-style) |
-| **📊 Usage** | **Token/cost tracking** — bar charts, daily/weekly/monthly totals, model breakdown. With OTLP: real token counts & actual cost |
+| **📊 Usage** | **Token/cost tracking** - bar charts, daily/weekly/monthly totals, model breakdown. With OTLP: real token counts & actual cost |
 | **Sessions** | Active agent sessions with model, channel, token usage, last activity |
 | **Crons** | Scheduled jobs with status, schedule, last/next run, duration |
 | **Logs** | Color-coded JSON logs with **real-time SSE streaming** |
 | **Memory** | Clickable file browser for SOUL.md, MEMORY.md, AGENTS.md, daily notes |
-| **📜 Transcripts** | Session transcript viewer — chat-bubble UI with color-coded roles |
+| **📜 Transcripts** | Session transcript viewer - chat-bubble UI with color-coded roles |
 
 ### 🌊 Flow Visualization
 
-The star feature — a live animated architecture diagram that lights up as your agent processes messages:
+The star feature - a live animated architecture diagram that lights up as your agent processes messages:
 
-- 🟣 **Purple** — your message entering through a channel
-- 🔵 **Blue** — request flowing to the brain
-- 🟡 **Yellow** — tool calls (exec, browser, search, cron, tts, memory)
-- 🟢 **Green** — response flowing back
-- 🔴 **Red** — errors
-- 🔵 **Cyan** — infrastructure activity
+- 🟣 **Purple** - your message entering through a channel
+- 🔵 **Blue** - request flowing to the brain
+- 🟡 **Yellow** - tool calls (exec, browser, search, cron, tts, memory)
+- 🟢 **Green** - response flowing back
+- 🔴 **Red** - errors
+- 🔵 **Cyan** - infrastructure activity
 
 ### 📡 Built-in OpenTelemetry Collector
 
@@ -133,13 +133,13 @@ clawmetry --no-debug               # Disable auto-reload
 | `OPENCLAW_WORKSPACE` | Alternative to OPENCLAW_HOME | Auto-detected |
 | `OPENCLAW_SESSIONS_DIR` | Sessions directory (.jsonl transcripts) | Auto-detected |
 | `OPENCLAW_LOG_DIR` | Log directory | `/tmp/moltbot` |
-| `OPENCLAW_METRICS_FILE` | Metrics persistence file path | `{workspace}/.openclaw-dashboard-metrics.json` |
+| `OPENCLAW_METRICS_FILE` | Metrics persistence file path | `{workspace}/.clawmetry-metrics.json` |
 | `OPENCLAW_USER` | Your name in Flow tab | `You` |
 | `OPENCLAW_SSE_MAX_SECONDS` | Max duration per SSE stream | `300` |
 
 ### Auto-Detection
 
-No config needed — the dashboard searches for your workspace, logs, sessions, and crons automatically.
+No config needed - the dashboard searches for your workspace, logs, sessions, and crons automatically.
 
 ---
 
@@ -153,15 +153,15 @@ clawmetry
 
 ### From source
 ```bash
-git clone https://github.com/vivekchand/openclaw-dashboard.git
-cd openclaw-dashboard
+git clone https://github.com/vivekchand/clawmetry.git
+cd clawmetry
 pip install -r requirements.txt
 python3 dashboard.py
 ```
 
 ### One-liner
 ```bash
-curl -sSL https://raw.githubusercontent.com/vivekchand/openclaw-dashboard/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
 ```
 
 ---
@@ -170,7 +170,7 @@ curl -sSL https://raw.githubusercontent.com/vivekchand/openclaw-dashboard/main/i
 
 - **Python 3.8+**
 - **Flask** (only required dependency)
-- **opentelemetry-proto + protobuf** (optional — `pip install clawmetry[otel]`)
+- **opentelemetry-proto + protobuf** (optional - `pip install clawmetry[otel]`)
 - **OpenClaw/Moltbot** running on the same machine
 - Linux/macOS
 
