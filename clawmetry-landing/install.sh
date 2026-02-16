@@ -24,7 +24,7 @@ sudo python3 -m venv /opt/clawmetry
 
 # Install clawmetry
 echo "→ Installing clawmetry from PyPI..."
-sudo /opt/clawmetry/bin/pip install --upgrade clawmetry >/dev/null 2>&1
+sudo /opt/clawmetry/bin/pip install --upgrade --no-cache-dir clawmetry >/dev/null 2>&1
 
 # Create symlink for easy access
 sudo ln -sf /opt/clawmetry/bin/clawmetry /usr/local/bin/clawmetry
