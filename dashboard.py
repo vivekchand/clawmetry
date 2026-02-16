@@ -39,7 +39,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.3.6"
+__version__ = "0.4.0"
 
 app = Flask(__name__)
 
@@ -496,6 +496,24 @@ def validate_configuration():
 def detect_config(args=None):
     """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
     global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
+
+    # 0. --data-dir: set defaults from OpenClaw data directory (e.g. /path/.openclaw)
+    data_dir = None
+    if args and getattr(args, 'data_dir', None):
+        data_dir = os.path.expanduser(args.data_dir)
+    elif os.environ.get("OPENCLAW_DATA_DIR"):
+        data_dir = os.path.expanduser(os.environ["OPENCLAW_DATA_DIR"])
+    
+    if data_dir and os.path.isdir(data_dir):
+        # Auto-set workspace, sessions, crons from data dir
+        ws = os.path.join(data_dir, 'workspace')
+        if os.path.isdir(ws) and not (args and args.workspace):
+            if not args:
+                import argparse; args = argparse.Namespace()
+            args.workspace = ws
+        sess = os.path.join(data_dir, 'agents', 'main', 'sessions')
+        if os.path.isdir(sess) and not (args and getattr(args, 'sessions_dir', None)):
+            args.sessions_dir = sess
 
     # 1. Workspace - where agent files live (SOUL.md, MEMORY.md, memory/, etc.)
     if args and args.workspace:
@@ -8051,18 +8069,26 @@ def _get_sessions():
 
 
 def _get_crons():
-    """Read crons from moltbot state."""
-    try:
-        crons_file = os.path.expanduser('~/.clawdbot/cron/jobs.json')
-        if os.path.exists(crons_file):
-            with open(crons_file) as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-                if isinstance(data, dict):
-                    return data.get('jobs', list(data.values()))
-    except Exception:
-        pass
+    """Read crons from OpenClaw/moltbot state."""
+    candidates = [
+        os.path.expanduser('~/.openclaw/cron/jobs.json'),
+        os.path.expanduser('~/.clawdbot/cron/jobs.json'),
+    ]
+    # Also check data dir if set via env
+    data_dir = os.environ.get('OPENCLAW_DATA_DIR', '')
+    if data_dir:
+        candidates.insert(0, os.path.join(data_dir, 'cron', 'jobs.json'))
+    for crons_file in candidates:
+        try:
+            if os.path.exists(crons_file):
+                with open(crons_file) as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        return data
+                    if isinstance(data, dict):
+                        return data.get('jobs', list(data.values()))
+        except Exception:
+            pass
     return []
 
 
@@ -8511,6 +8537,7 @@ def main():
     parser.add_argument('--port', '-p', type=int, default=8900, help='Port (default: 8900)')
     parser.add_argument('--host', '-H', type=str, default='127.0.0.1', help='Host (default: 127.0.0.1)')
     parser.add_argument('--workspace', '-w', type=str, help='Agent workspace directory')
+    parser.add_argument('--data-dir', '-d', type=str, help='OpenClaw data directory (e.g. ~/.openclaw). Auto-sets sessions, crons, workspace if not specified.')
     parser.add_argument('--log-dir', '-l', type=str, help='Log directory')
     parser.add_argument('--sessions-dir', '-s', type=str, help='Sessions directory (transcript .jsonl files)')
     parser.add_argument('--metrics-file', '-m', type=str, help='Path to metrics persistence JSON file')
