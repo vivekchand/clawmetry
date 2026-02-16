@@ -1,49 +1,57 @@
 #!/bin/bash
-# OpenClaw Dashboard — One-line installer
-# Usage: curl -sSL https://raw.githubusercontent.com/vivekchand/openclaw-dashboard/main/install.sh | bash
-
+# Clawmetry — One-line installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
 set -e
 
-BOLD='\033[1m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-echo ""
-echo -e "${CYAN}   ___                    ____ _                ${NC}"
-echo -e "${CYAN}  / _ \ _ __   ___ _ __  / ___| | __ ___      __${NC}"
-echo -e "${CYAN} | | | | '_ \ / _ \ '_ \| |   | |/ _\` \ \ /\ / /${NC}"
-echo -e "${CYAN} | |_| | |_) |  __/ | | | |___| | (_| |\ V  V / ${NC}"
-echo -e "${CYAN}  \___/| .__/ \___|_| |_|\____|_|\__,_| \_/\_/  ${NC}"
-echo -e "${CYAN}       |_|          ${YELLOW}Dashboard v0.2.4${NC}"
+echo "🔭 Installing Clawmetry — OpenClaw Observability Dashboard"
 echo ""
 
-# Check Python
-if ! command -v python3 &> /dev/null; then
-    echo -e "${YELLOW}❌ Python 3 is required but not found.${NC}"
-    echo "   Install it: sudo apt install python3 python3-pip"
-    exit 1
+# Detect OS and install python3-venv if needed
+if command -v apt-get &>/dev/null; then
+    echo "→ Installing Python venv (apt)..."
+    sudo apt-get update -qq && sudo apt-get install -y -qq python3-venv python3-pip >/dev/null 2>&1
+elif command -v yum &>/dev/null; then
+    echo "→ Installing Python venv (yum)..."
+    sudo yum install -y python3 python3-pip >/dev/null 2>&1
+elif command -v apk &>/dev/null; then
+    echo "→ Installing Python venv (apk)..."
+    sudo apk add python3 py3-pip >/dev/null 2>&1
 fi
 
-echo -e "${GREEN}✓${NC} Python 3 found: $(python3 --version)"
+# Create isolated venv
+echo "→ Creating virtual environment at /opt/clawmetry..."
+sudo python3 -m venv /opt/clawmetry
 
-# Install via pip
-echo -e "\n${BOLD}Installing openclaw-dashboard...${NC}"
-pip3 install --user openclaw-dashboard 2>/dev/null || pip3 install openclaw-dashboard
+# Install clawmetry
+echo "→ Installing clawmetry from PyPI..."
+sudo /opt/clawmetry/bin/pip install --upgrade clawmetry >/dev/null 2>&1
 
-# Verify
-if command -v openclaw-dashboard &> /dev/null; then
-    echo -e "\n${GREEN}✅ Installed successfully!${NC}"
-    echo ""
-    echo -e "  Run it:  ${BOLD}openclaw-dashboard${NC}"
-    echo -e "  Options: ${BOLD}openclaw-dashboard --help${NC}"
-    echo ""
-else
-    echo -e "\n${YELLOW}⚠️  Installed, but 'openclaw-dashboard' not in PATH.${NC}"
-    echo -e "  Try:  ${BOLD}python3 -m dashboard${NC}"
-    echo -e "  Or add ~/.local/bin to your PATH"
+# Create symlink for easy access
+sudo ln -sf /opt/clawmetry/bin/clawmetry /usr/local/bin/clawmetry
+
+# Detect OpenClaw workspace
+WORKSPACE=""
+if [ -d "$HOME/.openclaw" ]; then
+    WORKSPACE="$HOME/.openclaw"
+elif [ -d "/root/.openclaw" ]; then
+    WORKSPACE="/root/.openclaw"
 fi
 
-echo -e "${CYAN}🦞 See your agent think → http://localhost:8900${NC}"
 echo ""
+echo "✅ Clawmetry installed successfully!"
+echo ""
+echo "  Version: $(clawmetry --version 2>/dev/null || echo 'installed')"
+echo ""
+echo "  Start with:"
+echo "    clawmetry --host 0.0.0.0 --port 8900"
+echo ""
+if [ -n "$WORKSPACE" ]; then
+    echo "  OpenClaw workspace detected: $WORKSPACE"
+    echo ""
+fi
+echo "  Then open http://YOUR_IP:8900 in your browser"
+echo ""
+echo "  To run in background:"
+echo "    nohup clawmetry --host 0.0.0.0 --port 8900 &"
+echo ""
+echo "🔭 Happy observing!"
