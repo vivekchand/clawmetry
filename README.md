@@ -45,17 +45,13 @@ python3 dashboard.py
 
 ## 📸 Screenshots
 
-| Overview | Flow | Usage |
-|----------|------|-------|
-| ![Overview](screenshots/overview.png) | ![Flow](screenshots/flow.png) | ![Usage](screenshots/usage.png) |
+| Flow | Overview | Crons |
+|------|----------|-------|
+| ![Flow](screenshots/flow.png) | ![Overview](screenshots/overview.png) | ![Crons](screenshots/crons.png) |
 
-| Sessions | Logs | Memory |
-|----------|------|--------|
-| ![Sessions](screenshots/sessions.png) | ![Logs](screenshots/logs.png) | ![Memory](screenshots/memory.png) |
-
-| Crons | Transcripts |
-|-------|-------------|
-| ![Crons](screenshots/crons.png) | ![Transcripts](screenshots/transcripts.png) |
+| Sub-Agent (running) | Sub-Agent (completion) | Memory |
+|---------------------|----------------------|--------|
+| ![Sub-Agent](screenshots/subagent.png) | ![Summary](screenshots/summary.png) | ![Memory](screenshots/memory.png) |
 
 ---
 

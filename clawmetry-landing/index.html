@@ -267,11 +267,8 @@
 <nav>
   <div class="nav-inner">
     <a href="/" class="nav-logo">
-      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="16" cy="16" r="14" fill="#E5443A" opacity="0.15"/>
-        <text x="16" y="22" text-anchor="middle" font-size="20">🦞</text>
-      </svg>
-      <div class="nav-logo-text"><span>Claw</span><span>metry</span></div>
+      <span style="font-size:26px;line-height:28px;">🦞</span>
+      <div class="nav-logo-text"><span>Claw</span><span>metry</span></div><span style="font-size:12px;color:var(--text-muted);margin-left:6px;opacity:0.7;">for OpenClaw</span>
     </a>
     <div class="nav-links">
       <a href="#features" class="nav-link-text">Features</a>
@@ -290,14 +287,14 @@
   <div style="position:relative;z-index:1;">
     <div class="hero-badge">
       <div class="hero-badge-dot"></div>
-      Open source. Free forever.
+      Real-time dashboard for OpenClaw. Open source. Free forever.
     </div>
     <h1>
       Know what your agents are doing.<br>
       <span class="accent">Right now.</span>
     </h1>
     <p class="hero-sub">
-      Your agents spawn sub-agents, burn tokens, call tools. You stare at logs. Clawmetry gives you a dashboard instead.
+      Your OpenClaw agents spawn sub-agents, burn tokens, call tools. You have no idea what they're actually doing. ClawMetry shows you, in real-time.
     </p>
     <div class="hero-buttons">
       <a href="#get-started" class="btn-primary">Install in 30 seconds</a>
@@ -390,10 +387,12 @@ function copyActiveCmd() {
 
   <!-- Screenshot tab selector -->
   <div style="display:flex;justify-content:center;gap:6px;margin-bottom:16px;flex-wrap:wrap;">
-    <button onclick="showScreenshot('flow')" id="ss-tab-flow" class="ss-tab active" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#28c840;color:#000;font-family:'Inter',sans-serif;transition:all 0.15s;">Flow</button>
-    <button onclick="showScreenshot('overview')" id="ss-tab-overview" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Overview</button>
-    <button onclick="showScreenshot('crons')" id="ss-tab-crons" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Crons</button>
-    <button onclick="showScreenshot('memory')" id="ss-tab-memory" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Memory</button>
+    <button onclick="showScreenshot('flow',true)" id="ss-tab-flow" class="ss-tab active" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#28c840;color:#000;font-family:'Inter',sans-serif;transition:all 0.15s;">Flow</button>
+    <button onclick="showScreenshot('overview',true)" id="ss-tab-overview" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Overview</button>
+    <button onclick="showScreenshot('subagent',true)" id="ss-tab-subagent" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Sub-Agent</button>
+    <button onclick="showScreenshot('summary',true)" id="ss-tab-summary" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Summary</button>
+    <button onclick="showScreenshot('crons',true)" id="ss-tab-crons" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Crons</button>
+    <button onclick="showScreenshot('memory',true)" id="ss-tab-memory" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Memory</button>
   </div>
 
   <div class="demo-container">
@@ -407,10 +406,14 @@ function copyActiveCmd() {
   </div>
 
   <script>
-  var ssNames = ['flow','overview','crons','memory'];
-  function showScreenshot(name) {
+  var ssNames = ['flow','overview','subagent','summary','crons','memory'];
+  var ssIndex = 0;
+  var ssAutoPlay = null;
+  var ssPaused = false;
+  function showScreenshot(name, userClicked) {
     document.getElementById('ss-img').src = 'screenshots/' + name + '.png';
     document.getElementById('ss-title').textContent = 'clawmetry - ' + name;
+    ssIndex = ssNames.indexOf(name);
     ssNames.forEach(function(n) {
       var tab = document.getElementById('ss-tab-' + n);
       if (tab) {
@@ -419,14 +422,20 @@ function copyActiveCmd() {
         tab.style.fontWeight = n === name ? '600' : '500';
       }
     });
+    if (userClicked) { ssPaused = true; if (ssAutoPlay) clearInterval(ssAutoPlay); }
   }
+  ssAutoPlay = setInterval(function() {
+    if (ssPaused) return;
+    ssIndex = (ssIndex + 1) % ssNames.length;
+    showScreenshot(ssNames[ssIndex]);
+  }, 4000);
   </script>
 </section>
 
 <!-- FEATURES -->
 <section id="features" style="padding-top:80px;padding-bottom:40px;">
   <h2 class="section-title">What you get</h2>
-  <p class="section-sub">The stuff you keep building yourself, already built.</p>
+  <p class="section-sub">Built because we needed it. Now you don't have to build it yourself.</p>
 
   <!-- Killer feature card -->
   <div class="killer-feature">
@@ -435,8 +444,22 @@ function copyActiveCmd() {
     </div>
     <div>
       <div style="display:inline-block;background:rgba(229,68,58,0.15);color:#E5443A;font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:3px 10px;border-radius:6px;margin-bottom:10px;">The big one</div>
-      <h3 style="font-size:22px;font-weight:700;margin-bottom:8px;">Sub-agent tree, live</h3>
-      <p style="font-size:15px;color:#94A3B8;line-height:1.7;margin:0;">Main agent spawns five sub-agents. Each one calls tools, burns tokens, runs for minutes. Without this, you're blind. Clawmetry shows the full tree: who spawned what, what it's doing, what it costs.</p>
+      <h3 style="font-size:22px;font-weight:700;margin-bottom:8px;">See what every sub-agent is doing. Right now.</h3>
+      <p style="font-size:15px;color:#94A3B8;line-height:1.7;margin:0;">Your agent says "spawning sub-agent" and you just... hope it works? ClawMetry shows you every step: what files it's reading, what commands it's running, what tools it's calling, and what it's thinking. Summary, narrative, full logs. No more guessing.</p>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px;max-width:960px;margin-left:auto;margin-right:auto;">
+    <div style="text-align:center;">
+      <div style="border-radius:12px;overflow:hidden;border:1px solid var(--border);">
+        <img src="screenshots/subagent.png" alt="Sub-agent running" style="width:100%;display:block;">
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-top:10px;">Sub-agent running</p>
+    </div>
+    <div style="text-align:center;">
+      <div style="border-radius:12px;overflow:hidden;border:1px solid var(--border);">
+        <img src="screenshots/summary.png" alt="Sub-agent on completion" style="width:100%;display:block;">
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);margin-top:10px;">Sub-agent on completion</p>
     </div>
   </div>
 </section>
