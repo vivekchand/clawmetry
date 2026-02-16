@@ -12,6 +12,13 @@ Real-time observability dashboard for [OpenClaw/Moltbot](https://github.com/open
 
 ![Flow Visualization](https://raw.githubusercontent.com/vivekchand/openclaw-dashboard/main/screenshots/flow.jpg)
 
+## 🎬 Latest Demo Video
+
+<video src="https://raw.githubusercontent.com/vivekchand/openclaw-dashboard/main/clawmetry-landing/videos/clawmetry.webm" controls muted loop playsinline width="100%"></video>
+
+If the embedded player does not render on your GitHub view, open the video directly:
+[clawmetry-landing/videos/clawmetry.webm](https://raw.githubusercontent.com/vivekchand/openclaw-dashboard/main/clawmetry-landing/videos/clawmetry.webm)
+
 > 🌟 **[Star this repo](https://github.com/vivekchand/openclaw-dashboard)** if you find it useful!
 
 ---
@@ -200,6 +207,12 @@ Your Agent (Moltbot)          OpenClaw Dashboard
 ```
 
 **Real-time streaming** uses `tail -f` piped through Server-Sent Events (SSE) — no WebSockets, no dependencies, just works.
+
+---
+
+## ☁️ Cloud & Remote Deployment
+
+Want to run the dashboard on a VPS, Cloud Run, or Docker? See the **[Cloud Testing Guide](docs/CLOUD_TESTING.md)** for SSH tunnels, reverse proxy configs, Docker setups, and OTLP-only mode.
 
 ---
 
