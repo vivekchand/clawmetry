@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Clawmetry — See your agent think 🦞
+ClawMetry — See your agent think 🦞
 
 Real-time observability dashboard for OpenClaw AI agents.
 Single-file Flask app with zero config — auto-detects your setup.
@@ -39,7 +39,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 app = Flask(__name__)
 

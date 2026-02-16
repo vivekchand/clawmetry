@@ -1,4 +1,4 @@
-# 🦞 Clawmetry
+# 🦞 ClawMetry
 
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -97,9 +97,9 @@ Install OTLP support: `pip install clawmetry[otel]`
 
 ---
 
-## 🤔 Why Clawmetry?
+## 🤔 Why ClawMetry?
 
-| | Clawmetry | Langfuse | AgentOps |
+| | ClawMetry | Langfuse | AgentOps |
 |---|---|---|---|
 | **Install** | `pip install clawmetry` | Docker + Postgres | SDK + cloud account |
 | **Config** | Zero. Auto-detects everything. | Database URLs, API keys | API keys, SDK init |
@@ -190,5 +190,5 @@ MIT
 
 <p align="center">
   <strong>🦞 See your agent think</strong><br>
-  <sub>Built by <a href="https://linkedin.com/in/vivekchand46">Vivek Chand</a> as part of the <a href="https://github.com/openclaw/openclaw">OpenClaw</a> ecosystem</sub>
+  <sub>Built by <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://linkedin.com/in/vivekchand">LinkedIn</a> · Part of the <a href="https://github.com/openclaw/openclaw">OpenClaw</a> ecosystem</sub>
 </p>
