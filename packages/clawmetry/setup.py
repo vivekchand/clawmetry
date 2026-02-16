@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 setup(
     name="clawmetry",
     version="0.1.0",
-    description="Clawmetry alias package for OpenClaw Dashboard",
+    description="ClawMetry alias package for OpenClaw Dashboard",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Vivek Chand",
