@@ -582,6 +582,15 @@ def _detect_workspace_from_config():
     return None
 
 
+def get_public_ip():
+    """Get the machine's public IP address (useful for cloud/VPS users)."""
+    try:
+        import urllib.request
+        return urllib.request.urlopen("https://api.ipify.org", timeout=2).read().decode().strip()
+    except Exception:
+        return None
+
+
 def get_local_ip():
     """Get the machine's LAN IP address."""
     try:
@@ -8461,9 +8470,12 @@ def main():
             print()
 
     local_ip = get_local_ip()
+    public_ip = get_public_ip()
     print(f"  → http://localhost:{args.port}")
     if local_ip != '127.0.0.1':
-        print(f"  → http://{local_ip}:{args.port}")
+        print(f"  → http://{local_ip}:{args.port}  (LAN)")
+    if public_ip and public_ip != local_ip:
+        print(f"  → http://{public_ip}:{args.port}  (Public — ensure port is open)")
     if _HAS_OTEL_PROTO:
         print(f"  → OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
     print()
