@@ -4,9 +4,9 @@ with open("README.md", "r", encoding="utf-8") as f:
     long_description = f.read()
 
 setup(
-    name="openclaw-dashboard",
-    version="0.2.8",
-    description="Real-time observability dashboard for OpenClaw AI agents",
+    name="clawmetry",
+    version="0.3.0",
+    description="Real-time observability dashboard for OpenClaw AI agents — the Grafana for your personal AI",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Vivek Chand",
@@ -22,6 +22,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
+            "clawmetry=dashboard:main",
             "openclaw-dashboard=dashboard:main",
         ],
     },
@@ -38,7 +39,7 @@ setup(
         "Topic :: Software Development :: Quality Assurance",
         "Topic :: System :: Monitoring",
     ],
-    keywords="openclaw moltbot dashboard observability ai agent monitoring",
+    keywords="clawmetry openclaw moltbot dashboard observability ai agent monitoring opentelemetry",
     license="MIT",
     project_urls={
         "Bug Reports": "https://github.com/vivekchand/openclaw-dashboard/issues",

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-OpenClaw Dashboard — See your agent think 🦞
+Clawmetry — See your agent think 🦞
 
-Real-time observability dashboard for OpenClaw/Moltbot AI agents.
+Real-time observability dashboard for OpenClaw AI agents.
 Single-file Flask app with zero config — auto-detects your setup.
 
 Usage:
-    openclaw-dashboard                    # Auto-detect everything
-    openclaw-dashboard --port 9000        # Custom port
-    openclaw-dashboard --workspace ~/bot  # Custom workspace
-    OPENCLAW_HOME=~/bot openclaw-dashboard
+    clawmetry                             # Auto-detect everything
+    clawmetry --port 9000                 # Custom port
+    clawmetry --workspace ~/bot           # Custom workspace
+    OPENCLAW_HOME=~/bot clawmetry
 
 https://github.com/vivekchand/openclaw-dashboard
 MIT License — Built by Vivek Chand
@@ -3962,6 +3962,11 @@ var _tgRefreshTimer = null;
 var _tgOffset = 0;
 var _tgAllMessages = [];
 
+function isCompModalActive(nodeId) {
+  var overlay = document.getElementById('comp-modal-overlay');
+  return !!(overlay && overlay.classList.contains('open') && window._currentComponentId === nodeId);
+}
+
 function openCompModal(nodeId) {
   var c = COMP_MAP[nodeId];
   if (!c) return;
@@ -4040,6 +4045,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading ' + c.name + ' info...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     fetch('/api/component/' + nodeId.replace('node-', '')).then(function(r){return r.json();}).then(function(data) {
+      if (!isCompModalActive(nodeId)) return;
       var body = document.getElementById('comp-modal-body');
       var html = '<div style="text-align:center;margin-bottom:16px;font-size:36px;">' + c.icon + '</div>';
       var items = data.items || [];
@@ -4052,6 +4058,7 @@ function openCompModal(nodeId) {
       body.innerHTML = html;
       document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
     }).catch(function(e) {
+      if (!isCompModalActive(nodeId)) return;
       document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load: ' + e.message + '</div>';
     });
     return;
@@ -4063,8 +4070,10 @@ function openCompModal(nodeId) {
 }
 
 function loadTelegramMessages(isRefresh) {
+  var expectedNodeId = 'node-telegram';
   var url = '/api/channel/telegram?limit=50&offset=0';
   fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    if (!isCompModalActive(expectedNodeId)) return;
     var msgs = data.messages || [];
     var body = document.getElementById('comp-modal-body');
     var html = '<div class="tg-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
@@ -4090,6 +4099,7 @@ function loadTelegramMessages(isRefresh) {
     body.innerHTML = html;
     document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' · ' + data.total + ' total messages';
   }).catch(function(e) {
+    if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
       document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load messages</div>';
     }
@@ -4099,6 +4109,7 @@ function loadTelegramMessages(isRefresh) {
 function loadMoreTelegram() {
   // Simple: just increase limit
   fetch('/api/channel/telegram?limit=200&offset=0').then(function(r) { return r.json(); }).then(function(data) {
+    if (!isCompModalActive('node-telegram')) return;
     // Re-render with all data
     var msgs = data.messages || [];
     var body = document.getElementById('comp-modal-body');
@@ -4170,6 +4181,7 @@ var _brainRefreshTimer = null;
 var _brainPage = 0;
 
 function loadBrainData(isRefresh) {
+  var expectedNodeId = 'node-brain';
   var url = '/api/component/brain?limit=50&offset=' + (_brainPage * 50);
   fetchJsonWithTimeout(url, 8000).catch(function(err) {
     if (String((err && err.message) || '').toLowerCase().includes('abort')) {
@@ -4177,6 +4189,7 @@ function loadBrainData(isRefresh) {
     }
     throw err;
   }).then(function(data) {
+    if (!isCompModalActive(expectedNodeId)) return;
     var body = document.getElementById('comp-modal-body');
     var s = data.stats || {};
     var tok = s.today_tokens || {};
@@ -4263,6 +4276,7 @@ function loadBrainData(isRefresh) {
     body.innerHTML = html;
     document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing · Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total||0) + ' LLM calls today';
   }).catch(function(e) {
+    if (!isCompModalActive(expectedNodeId)) return;
     var msg = String((e && e.message) || 'Unknown error');
     if (msg.toLowerCase().includes('abort')) {
       msg = 'Request timed out. The brain panel is heavy; please retry in 2-3 seconds.';
@@ -4272,7 +4286,9 @@ function loadBrainData(isRefresh) {
 }
 
 function loadCostOptimizerData(isRefresh) {
+  var expectedNodeId = 'node-cost-optimizer';
   fetch('/api/cost-optimization').then(function(r) { return r.json(); }).then(function(data) {
+    if (!isCompModalActive(expectedNodeId)) return;
     var body = document.getElementById('comp-modal-body');
     var html = '';
     
@@ -4346,6 +4362,7 @@ function loadCostOptimizerData(isRefresh) {
     body.innerHTML = html;
     document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing · Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
+    if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
       document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load cost optimizer: ' + e.message + '</div>';
     }
@@ -4575,7 +4592,9 @@ function loadComponentWithTimeContext(nodeId) {
 }
 
 function loadGatewayData(isRefresh) {
+  var expectedNodeId = 'node-gateway';
   fetch('/api/component/gateway?limit=50&offset=' + (_gwPage * 50)).then(function(r) { return r.json(); }).then(function(data) {
+    if (!isCompModalActive(expectedNodeId)) return;
     var body = document.getElementById('comp-modal-body');
     var s = data.stats || {};
     var cfg = s.config || {};
@@ -4647,6 +4666,7 @@ function loadGatewayData(isRefresh) {
     body.innerHTML = html;
     document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing · Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total||0) + ' events today';
   }).catch(function(e) {
+    if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
       document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load gateway data</div>';
     }
@@ -4691,7 +4711,7 @@ function loadToolData(toolKey, comp, isRefresh) {
   var _expectedNodeId = 'node-' + toolKey;
   fetch('/api/component/tool/' + toolKey).then(function(r) { return r.json(); }).then(function(data) {
     // Guard: don't render if user switched to a different modal
-    if (window._currentComponentId !== _expectedNodeId) return;
+    if (!isCompModalActive(_expectedNodeId)) return;
     _toolDataCache[toolKey] = data;
     _toolCacheAge[toolKey] = Date.now();
     var body = document.getElementById('comp-modal-body');
@@ -4976,6 +4996,7 @@ function loadToolData(toolKey, comp, isRefresh) {
     body.innerHTML = html;
     document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing · Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total||0) + ' events today';
   }).catch(function(e) {
+    if (!isCompModalActive(_expectedNodeId)) return;
     if (!isRefresh) {
       document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load data: ' + e + '</div>';
     }
