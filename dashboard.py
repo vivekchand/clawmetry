@@ -39,7 +39,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 app = Flask(__name__)
 
@@ -50,6 +50,8 @@ MEMORY_DIR = None
 LOG_DIR = None
 SESSIONS_DIR = None
 USER_NAME = None
+GATEWAY_URL = None  # e.g. http://localhost:18789
+GATEWAY_TOKEN = None  # Bearer token for /tools/invoke
 CET = timezone(timedelta(hours=1))
 SSE_MAX_SECONDS = 300
 MAX_LOG_STREAM_CLIENTS = 10
@@ -648,7 +650,29 @@ def _detect_gateway_port():
 
 
 def _detect_gateway_token():
-    """Detect the OpenClaw gateway auth token from config files."""
+    """Detect the OpenClaw gateway auth token from env, config files, or running process."""
+    # 1. Environment variable (most reliable - matches running gateway)
+    env_token = os.environ.get('OPENCLAW_GATEWAY_TOKEN', '').strip()
+    if env_token:
+        return env_token
+    # 2. Try reading from running gateway process env (Linux only)
+    try:
+        import subprocess as _sp
+        result = _sp.run(['pgrep', '-f', 'openclaw-gatewa'], capture_output=True, text=True, timeout=3)
+        for pid in result.stdout.strip().split('\n'):
+            pid = pid.strip()
+            if pid:
+                try:
+                    with open(f'/proc/{pid}/environ', 'r') as f:
+                        env_data = f.read()
+                    for entry in env_data.split('\0'):
+                        if entry.startswith('OPENCLAW_GATEWAY_TOKEN='):
+                            return entry.split('=', 1)[1]
+                except (PermissionError, FileNotFoundError):
+                    pass
+    except Exception:
+        pass
+    # 3. Config files
     json_paths = [
         os.path.expanduser('~/.openclaw/moltbot.json'),
         os.path.expanduser('~/.openclaw/clawdbot.json'),
@@ -1368,6 +1392,7 @@ DASHBOARD_HTML = r"""
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
   <h1><span>🦞</span> ClawMetry</h1>
+  <div class="theme-toggle" onclick="document.getElementById('gw-setup-overlay').style.display='flex'" title="Gateway settings" style="cursor:pointer;">⚙️</div>
   <div class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌙</div>
   <div class="zoom-controls">
     <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
@@ -5451,6 +5476,112 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
   </div>
 </div>
+
+<!-- Gateway Setup Wizard -->
+<div id="gw-setup-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:10000; align-items:center; justify-content:center; font-family:Manrope,sans-serif;">
+  <div style="background:var(--bg-secondary, #1a1a2e); border:1px solid var(--border-primary, #333); border-radius:16px; padding:40px; max-width:440px; width:90%; text-align:center; box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+    <div style="font-size:48px; margin-bottom:16px;">🦞</div>
+    <h2 style="color:var(--text-primary, #fff); margin:0 0 8px; font-size:24px; font-weight:700;">ClawMetry Setup</h2>
+    <p style="color:var(--text-muted, #888); margin:0 0 24px; font-size:14px;">Enter your OpenClaw gateway token to connect.</p>
+    <input id="gw-token-input" type="password" placeholder="Paste your gateway token" 
+      style="width:100%; padding:12px 16px; border:1px solid var(--border-primary, #444); border-radius:8px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:14px; font-family:monospace; box-sizing:border-box; outline:none; margin-bottom:8px;"
+      onkeydown="if(event.key==='Enter')gwSetupConnect()">
+    <p id="gw-setup-hint" style="color:var(--text-muted, #888); font-size:12px; margin:0 0 4px; text-align:left;">Find it in your config: <code style="color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:2px 6px; border-radius:4px;">gateway.auth.token</code></p>
+    <p id="gw-url-hint" style="color:var(--text-muted, #666); font-size:11px; margin:0 0 16px; text-align:left;">Optional: <input id="gw-url-input" type="text" placeholder="http://localhost:18789 (auto-detected)" style="width:70%; padding:4px 8px; border:1px solid var(--border-primary, #444); border-radius:4px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:11px; font-family:monospace;"></p>
+    <div id="gw-setup-error" style="color:#ff4444; font-size:13px; margin-bottom:12px; display:none;"></div>
+    <div id="gw-setup-status" style="color:var(--text-accent, #0af); font-size:13px; margin-bottom:12px; display:none;"></div>
+    <button onclick="gwSetupConnect()" id="gw-connect-btn"
+      style="width:100%; padding:12px; border:none; border-radius:8px; background:var(--bg-accent, #0f6fff); color:#fff; font-size:15px; font-weight:600; cursor:pointer; font-family:Manrope,sans-serif;">
+      Connect
+    </button>
+    <p style="color:var(--text-faint, #555); font-size:11px; margin:16px 0 0;">Token is stored locally on this ClawMetry instance.</p>
+  </div>
+</div>
+
+<script>
+// Gateway setup wizard
+async function checkGwConfig() {
+  try {
+    const r = await fetch('/api/gw/config');
+    const d = await r.json();
+    if (!d.configured) {
+      // Check localStorage first
+      const saved = localStorage.getItem('clawmetry-gw-token');
+      if (saved) {
+        // Try auto-connecting with saved token
+        const r2 = await fetch('/api/gw/config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({token: saved})
+        });
+        const d2 = await r2.json();
+        if (d2.ok) { updateGwStatus(true, d2.url); return; }
+      }
+      document.getElementById('gw-setup-overlay').style.display = 'flex';
+    } else {
+      updateGwStatus(true, d.url);
+    }
+  } catch(e) {}
+}
+
+function updateGwStatus(connected, url) {
+  const dot = document.getElementById('gw-status-dot');
+  if (!dot) return;
+  dot.style.color = connected ? '#4ade80' : '#f87171';
+  dot.title = connected ? 'Gateway: connected' + (url ? ' (' + url + ')' : '') : 'Gateway: disconnected';
+}
+
+async function gwSetupConnect() {
+  const btn = document.getElementById('gw-connect-btn');
+  const errEl = document.getElementById('gw-setup-error');
+  const statusEl = document.getElementById('gw-setup-status');
+  const token = document.getElementById('gw-token-input').value.trim();
+  const url = document.getElementById('gw-url-input').value.trim();
+  
+  errEl.style.display = 'none';
+  if (!token) { errEl.textContent = 'Please enter a token'; errEl.style.display = 'block'; return; }
+  
+  btn.textContent = 'Scanning for gateway...';
+  btn.disabled = true;
+  statusEl.textContent = 'Scanning ports to find your OpenClaw gateway...';
+  statusEl.style.display = 'block';
+  
+  try {
+    const r = await fetch('/api/gw/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token, url})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      statusEl.textContent = 'Connected to ' + d.url;
+      btn.textContent = 'Connected!';
+      localStorage.setItem('clawmetry-gw-token', token);
+      updateGwStatus(true, d.url);
+      setTimeout(() => {
+        document.getElementById('gw-setup-overlay').style.display = 'none';
+        location.reload();
+      }, 800);
+    } else {
+      errEl.textContent = d.error || 'Connection failed';
+      errEl.style.display = 'block';
+      btn.textContent = 'Connect';
+      btn.disabled = false;
+      statusEl.style.display = 'none';
+    }
+  } catch(e) {
+    errEl.textContent = 'Network error: ' + e.message;
+    errEl.style.display = 'block';
+    btn.textContent = 'Connect';
+    btn.disabled = false;
+    statusEl.style.display = 'none';
+  }
+}
+
+// Check on load
+document.addEventListener('DOMContentLoaded', checkGwConfig);
+</script>
+
 </body>
 </html>
 """
@@ -5483,6 +5614,332 @@ def _release_stream_slot(kind):
         elif kind == 'health':
             _active_health_stream_clients = max(0, _active_health_stream_clients - 1)
 
+
+# ── Gateway API proxy (WebSocket JSON-RPC + HTTP fallback) ──────────────
+import urllib.request as _urllib_req
+import urllib.error as _urllib_err
+import uuid as _uuid
+
+_GW_CONFIG_FILE = os.path.expanduser('~/.clawmetry-gateway.json')
+
+# ── WebSocket RPC Client ────────────────────────────────────────────────
+_ws_client = None
+_ws_lock = threading.Lock()
+_ws_connected = False
+
+
+def _gw_ws_connect(url=None, token=None):
+    """Connect to the OpenClaw gateway via WebSocket JSON-RPC."""
+    global _ws_client, _ws_connected
+    try:
+        import websocket
+    except ImportError:
+        return False
+
+    cfg = _load_gw_config()
+    ws_url = (url or cfg.get('url', '') or '').replace('http://', 'ws://').replace('https://', 'wss://').rstrip('/')
+    tok = token or cfg.get('token', '')
+    if not ws_url or not tok:
+        return False
+
+    try:
+        ws = websocket.create_connection(f'{ws_url}/', timeout=5)
+        # Read challenge event
+        ws.recv()
+        # Send connect
+        connect_msg = {
+            'type': 'req', 'id': 'clawmetry-connect', 'method': 'connect',
+            'params': {
+                'minProtocol': 3, 'maxProtocol': 3,
+                'client': {'id': 'cli', 'version': __version__, 'platform': 'linux',
+                           'mode': 'cli', 'instanceId': f'clawmetry-{_uuid.uuid4().hex[:8]}'},
+                'role': 'operator', 'scopes': ['operator.admin'],
+                'auth': {'token': tok},
+            }
+        }
+        ws.send(json.dumps(connect_msg))
+        # Wait for connect response
+        for _ in range(5):
+            r = json.loads(ws.recv())
+            if r.get('type') == 'res' and r.get('id') == 'clawmetry-connect':
+                if r.get('ok'):
+                    _ws_client = ws
+                    _ws_connected = True
+                    return True
+                else:
+                    ws.close()
+                    return False
+        ws.close()
+    except Exception:
+        pass
+    return False
+
+
+def _gw_ws_rpc(method, params=None):
+    """Make a JSON-RPC call over the WebSocket connection. Returns payload or None."""
+    global _ws_client, _ws_connected
+    with _ws_lock:
+        if not _ws_connected or _ws_client is None:
+            if not _gw_ws_connect():
+                return None
+        try:
+            mid = f'cm-{_uuid.uuid4().hex[:8]}'
+            msg = {'type': 'req', 'id': mid, 'method': method, 'params': params or {}}
+            _ws_client.send(json.dumps(msg))
+            # Read responses, skipping events
+            for _ in range(30):
+                r = json.loads(_ws_client.recv())
+                if r.get('type') == 'res' and r.get('id') == mid:
+                    if r.get('ok'):
+                        return r.get('payload', {})
+                    else:
+                        return None
+        except Exception:
+            # Connection lost, reset
+            _ws_connected = False
+            try:
+                _ws_client.close()
+            except Exception:
+                pass
+            _ws_client = None
+    return None
+
+
+def _load_gw_config():
+    """Load gateway config from globals, env, or file."""
+    global GATEWAY_URL, GATEWAY_TOKEN
+    # Already set via CLI/env/auto-detect
+    if GATEWAY_URL and GATEWAY_TOKEN:
+        return {'url': GATEWAY_URL, 'token': GATEWAY_TOKEN}
+    # Try config file
+    try:
+        with open(_GW_CONFIG_FILE) as f:
+            cfg = json.load(f)
+            GATEWAY_URL = cfg.get('url', GATEWAY_URL)
+            GATEWAY_TOKEN = cfg.get('token', GATEWAY_TOKEN)
+            return cfg
+    except Exception:
+        pass
+    # Auto-detect from environment/process
+    token = _detect_gateway_token()
+    port = _detect_gateway_port()
+    if token:
+        GATEWAY_TOKEN = token
+        GATEWAY_URL = f'http://127.0.0.1:{port}'
+        return {'url': GATEWAY_URL, 'token': GATEWAY_TOKEN}
+    return {}
+
+
+def _gw_invoke(tool, args=None):
+    """Invoke a tool via the OpenClaw gateway /tools/invoke endpoint."""
+    cfg = _load_gw_config()
+    url = cfg.get('url')
+    token = cfg.get('token')
+    if not url or not token:
+        return None
+    try:
+        payload = json.dumps({'tool': tool, 'args': args or {}}).encode()
+        req = _urllib_req.Request(
+            f"{url.rstrip('/')}/tools/invoke",
+            data=payload,
+            headers={
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json',
+            },
+            method='POST'
+        )
+        with _urllib_req.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            if data.get('ok'):
+                return data.get('result', {}).get('details', data.get('result', {}))
+    except Exception:
+        pass
+    return None
+
+
+@app.route('/api/gw/config', methods=['GET', 'POST'])
+def api_gw_config():
+    """Get or set gateway configuration."""
+    global GATEWAY_URL, GATEWAY_TOKEN, _ws_client, _ws_connected
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        token = data.get('token', '').strip()
+        if not token:
+            return jsonify({'error': 'Token is required'}), 400
+        # Auto-discover gateway port by scanning common ports
+        gw_url = data.get('url', '').strip()
+        if not gw_url:
+            gw_url = _auto_discover_gateway(token)
+        if not gw_url:
+            return jsonify({'error': 'Could not find OpenClaw gateway. Please provide URL.'}), 404
+        # Validate via WebSocket RPC first, fall back to HTTP
+        valid = False
+        ws_url = gw_url.replace('http://', 'ws://').replace('https://', 'wss://')
+        try:
+            import websocket
+            ws = websocket.create_connection(f'{ws_url}/', timeout=5)
+            ws.recv()  # challenge
+            connect_msg = {
+                'type': 'req', 'id': 'validate', 'method': 'connect',
+                'params': {
+                    'minProtocol': 3, 'maxProtocol': 3,
+                    'client': {'id': 'cli', 'version': __version__, 'platform': 'linux',
+                               'mode': 'cli', 'instanceId': 'clawmetry-validate'},
+                    'role': 'operator', 'scopes': ['operator.admin'],
+                    'auth': {'token': token},
+                }
+            }
+            ws.send(json.dumps(connect_msg))
+            for _ in range(5):
+                r = json.loads(ws.recv())
+                if r.get('type') == 'res' and r.get('id') == 'validate':
+                    valid = r.get('ok', False)
+                    break
+            ws.close()
+        except Exception:
+            pass
+        # HTTP fallback validation
+        if not valid:
+            try:
+                payload = json.dumps({'tool': 'session_status', 'args': {}}).encode()
+                req = _urllib_req.Request(
+                    f"{gw_url.rstrip('/')}/tools/invoke",
+                    data=payload,
+                    headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                with _urllib_req.urlopen(req, timeout=5) as resp:
+                    result = json.loads(resp.read())
+                    valid = result.get('ok', False)
+            except Exception as e:
+                return jsonify({'error': f'Connection failed: {str(e)}'}), 500
+        if not valid:
+            return jsonify({'error': 'Invalid token or gateway not responding'}), 401
+        # Save config
+        GATEWAY_URL = gw_url
+        GATEWAY_TOKEN = token
+        # Reset WS connection to use new credentials
+        _ws_connected = False
+        _ws_client = None
+        cfg = {'url': gw_url, 'token': token}
+        try:
+            with open(_GW_CONFIG_FILE, 'w') as f:
+                json.dump(cfg, f)
+        except Exception:
+            pass
+        return jsonify({'ok': True, 'url': gw_url})
+    else:
+        cfg = _load_gw_config()
+        return jsonify({
+            'configured': bool(cfg.get('url') and cfg.get('token')),
+            'url': cfg.get('url', ''),
+            'hasToken': bool(cfg.get('token')),
+        })
+
+
+@app.route('/api/gw/invoke', methods=['POST'])
+def api_gw_invoke():
+    """Proxy a tool invocation to the OpenClaw gateway."""
+    data = request.get_json(silent=True) or {}
+    tool = data.get('tool')
+    args = data.get('args', {})
+    if not tool:
+        return jsonify({'error': 'tool is required'}), 400
+    result = _gw_invoke(tool, args)
+    if result is None:
+        return jsonify({'error': 'Gateway not configured or unreachable'}), 503
+    return jsonify(result)
+
+
+@app.route('/api/gw/rpc', methods=['POST'])
+def api_gw_rpc():
+    """Proxy a JSON-RPC method call to the OpenClaw gateway via WebSocket."""
+    data = request.get_json(silent=True) or {}
+    method = data.get('method', '')
+    params = data.get('params', {})
+    if not method:
+        return jsonify({'error': 'method is required'}), 400
+    result = _gw_ws_rpc(method, params)
+    if result is None:
+        return jsonify({'error': 'Gateway not connected or method failed'}), 503
+    return jsonify(result)
+
+
+def _auto_discover_gateway(token):
+    """Scan common ports to find an OpenClaw gateway."""
+    common_ports = [18789, 56089]
+    # Also check env and config files
+    env_port = os.environ.get('OPENCLAW_GATEWAY_PORT')
+    if env_port:
+        try:
+            common_ports.insert(0, int(env_port))
+        except ValueError:
+            pass
+    # Add ports from config files
+    for cfg_name in ['moltbot.json', 'clawdbot.json', 'openclaw.json']:
+        for base in [os.path.expanduser('~/.openclaw'), os.path.expanduser('~/.clawdbot')]:
+            try:
+                with open(os.path.join(base, cfg_name)) as f:
+                    c = json.load(f)
+                    p = c.get('gateway', {}).get('port')
+                    if p and p not in common_ports:
+                        common_ports.insert(0, int(p))
+            except Exception:
+                pass
+    # Scan for additional ports
+    for port_offset in range(0, 100):
+        p = 18700 + port_offset
+        if p not in common_ports:
+            common_ports.append(p)
+
+    for port in common_ports[:20]:  # Cap at 20 ports to scan
+        # Try WebSocket first, then HTTP
+        url = f"http://127.0.0.1:{port}"
+        ws_url = f"ws://127.0.0.1:{port}"
+        try:
+            import websocket
+            ws = websocket.create_connection(f'{ws_url}/', timeout=2)
+            ws.recv()  # challenge
+            connect_msg = {
+                'type': 'req', 'id': 'discover', 'method': 'connect',
+                'params': {
+                    'minProtocol': 3, 'maxProtocol': 3,
+                    'client': {'id': 'cli', 'version': __version__, 'platform': 'linux',
+                               'mode': 'cli', 'instanceId': 'clawmetry-discover'},
+                    'role': 'operator', 'scopes': ['operator.admin'],
+                    'auth': {'token': token},
+                }
+            }
+            ws.send(json.dumps(connect_msg))
+            for _ in range(5):
+                r = json.loads(ws.recv())
+                if r.get('type') == 'res' and r.get('id') == 'discover':
+                    ws.close()
+                    if r.get('ok'):
+                        return url
+                    break
+            try:
+                ws.close()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # HTTP fallback
+        try:
+            payload = json.dumps({'tool': 'session_status', 'args': {}}).encode()
+            req = _urllib_req.Request(
+                f"{url}/tools/invoke",
+                data=payload,
+                headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with _urllib_req.urlopen(req, timeout=2) as resp:
+                result = json.loads(resp.read())
+                if result.get('ok'):
+                    return url
+        except Exception:
+            continue
+    return None
 
 @app.route('/')
 def index():
@@ -5595,8 +6052,13 @@ def api_channels():
 
 @app.route('/api/overview')
 def api_overview():
-    sessions = _get_sessions()
-    main = next((s for s in sessions if 'subagent' not in (s.get('sessionId', '').lower())), sessions[0] if sessions else {})
+    # Try gateway API for sessions
+    gw_sessions = _gw_invoke('sessions_list', {'limit': 50, 'messageLimit': 0})
+    if gw_sessions and 'sessions' in gw_sessions:
+        sessions = gw_sessions['sessions']
+    else:
+        sessions = _get_sessions()
+    main = next((s for s in sessions if 'subagent' not in (s.get('key', s.get('sessionId', '')).lower())), sessions[0] if sessions else {})
 
     crons = _get_crons()
     enabled = len([j for j in crons if j.get('enabled')])
@@ -5677,11 +6139,18 @@ def api_overview():
 
 @app.route('/api/sessions')
 def api_sessions():
+    gw_data = _gw_invoke('sessions_list', {'limit': 50, 'messageLimit': 0})
+    if gw_data and 'sessions' in gw_data:
+        return jsonify({'sessions': gw_data['sessions']})
     return jsonify({'sessions': _get_sessions()})
 
 
 @app.route('/api/crons')
 def api_crons():
+    # Try gateway API first
+    gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': True})
+    if gw_data and 'jobs' in gw_data:
+        return jsonify({'jobs': gw_data['jobs']})
     return jsonify({'jobs': _get_crons()})
 
 
@@ -7748,8 +8217,16 @@ def api_system_health():
 
     # --- SERVICES (auto-detect gateway + user-configured extras) ---
     services = []
-    # Always check OpenClaw Gateway (detect port from config or default 18789)
-    gw_port = _detect_gateway_port()
+    # Always check OpenClaw Gateway (from gateway config or auto-detect)
+    cfg = _load_gw_config()
+    if cfg.get('url'):
+        try:
+            from urllib.parse import urlparse
+            gw_port = urlparse(cfg['url']).port or 18789
+        except Exception:
+            gw_port = _detect_gateway_port()
+    else:
+        gw_port = _detect_gateway_port()
     service_checks = [('OpenClaw Gateway', gw_port)]
     # Add any user-configured extra services
     for svc in EXTRA_SERVICES:
@@ -8003,10 +8480,39 @@ def api_automation_analysis():
 # ── Data Helpers ────────────────────────────────────────────────────────
 
 def _get_sessions():
-    """Read active sessions from the session directory."""
+    """Get sessions via gateway API first, file fallback."""
     now = time.time()
     if _sessions_cache['data'] is not None and (now - _sessions_cache['ts']) < _SESSIONS_CACHE_TTL:
         return _sessions_cache['data']
+
+    # Try WebSocket RPC first
+    api_data = _gw_ws_rpc('sessions.list')
+    if api_data and 'sessions' in api_data:
+        sessions = []
+        for s in api_data['sessions'][:30]:
+            sessions.append({
+                'sessionId': s.get('key', ''),
+                'key': s.get('key', '')[:12] + '...',
+                'displayName': s.get('displayName', s.get('key', '')[:20]),
+                'updatedAt': s.get('updatedAtMs', s.get('lastActiveMs', 0)),
+                'model': s.get('model', s.get('modelRef', 'unknown')),
+                'channel': s.get('channel', 'unknown'),
+                'totalTokens': s.get('totalTokens', 0),
+                'contextTokens': api_data.get('defaults', {}).get('contextTokens', 200000),
+                'kind': s.get('kind', 'direct'),
+                'agent': s.get('agentId', 'main'),
+            })
+        _sessions_cache['data'] = sessions
+        _sessions_cache['ts'] = now
+        return sessions
+
+    # File-based fallback
+    return _get_sessions_from_files()
+
+
+def _get_sessions_from_files():
+    """Read active sessions from the session directory (file-based fallback)."""
+    now = time.time()
 
     def _read_session_model_fast(file_path):
         """Best-effort model extraction from the tail of a session file."""
@@ -8069,7 +8575,17 @@ def _get_sessions():
 
 
 def _get_crons():
-    """Read crons from OpenClaw/moltbot state."""
+    """Get crons via gateway API first, file fallback."""
+    # Try WebSocket RPC first
+    api_data = _gw_ws_rpc('cron.list')
+    if api_data and 'jobs' in api_data:
+        return api_data['jobs']
+    # File-based fallback
+    return _get_crons_from_files()
+
+
+def _get_crons_from_files():
+    """Read crons from OpenClaw/moltbot state (file-based fallback)."""
     candidates = [
         os.path.expanduser('~/.openclaw/cron/jobs.json'),
         os.path.expanduser('~/.clawdbot/cron/jobs.json'),
