@@ -10,3 +10,9 @@
 !install.sh
 !install.ps1
 !install.cmd
+!screenshots/
+!screenshots/**
+!dashboard-flow.png
+!dashboard-full.png
+!*.png
+!*.png

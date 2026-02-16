@@ -665,7 +665,7 @@ DASHBOARD_HTML = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpenClaw Dashboard 🦞</title>
+<title>ClawMetry 🦞</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -1299,7 +1299,7 @@ DASHBOARD_HTML = r"""
 <div class="boot-overlay" id="boot-overlay">
   <div class="boot-card">
     <div class="boot-spinner"></div>
-    <div class="boot-title">Initializing OpenClaw Dashboard</div>
+    <div class="boot-title">Initializing ClawMetry</div>
     <div class="boot-sub" id="boot-sub">Loading model, tasks, system health, and live streams…</div>
     <div class="boot-steps">
       <div class="boot-step loading" id="boot-step-overview"><span class="boot-dot"></span><span>Loading overview + model context</span></div>
@@ -1311,7 +1311,7 @@ DASHBOARD_HTML = r"""
 </div>
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
-  <h1><span>🦞</span> OpenClaw</h1>
+  <h1><span>🦞</span> ClawMetry</h1>
   <div class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌙</div>
   <div class="zoom-controls">
     <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
@@ -5316,6 +5316,10 @@ async function bootDashboard() {
   try { startHealthStream(); } catch (e) {}
   setBootStep('streams', 'done', 'Live streams connected');
 
+  // Pre-fetch crons and memory so they're ready when tabs are clicked
+  try { await loadCrons(); } catch (e) { console.warn('Crons prefetch failed:', e); }
+  try { await loadMemory(); } catch (e) { console.warn('Memory prefetch failed:', e); }
+
   startSystemHealthRefresh();
   startOverviewRefresh();
   startOverviewTasksRefresh();
@@ -8457,7 +8461,7 @@ BANNER = r"""
 
 def main():
     parser = argparse.ArgumentParser(
-        description="OpenClaw Dashboard - Real-time observability for your AI agent",
+        description="ClawMetry - Real-time observability for your AI agent",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Environment variables:\n"
                "  OPENCLAW_HOME         Agent workspace directory\n"

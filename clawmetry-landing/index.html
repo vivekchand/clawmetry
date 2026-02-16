@@ -3,13 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Clawmetry: Real-time Observability for AI Agents</title>
-  <meta name="description" content="See every agent move in real time. Real-time telemetry and visibility for OpenClaw agents. Install in 30 seconds.">
-  <meta property="og:title" content="Clawmetry: Real-time Observability for AI Agents">
-  <meta property="og:description" content="See every agent move in real time. Install in 30 seconds with pip install clawmetry.">
+  <title>Clawmetry - See what your AI agents are actually doing</title>
+  <meta name="description" content="Real-time dashboard for OpenClaw agents. Token costs, sub-agent trees, tool calls. pip install clawmetry.">
+  <meta property="og:title" content="Clawmetry - See what your AI agents are actually doing">
+  <meta property="og:description" content="Real-time dashboard for OpenClaw agents. Token costs, sub-agents, tool calls. Install in 30 seconds.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://clawmetry.com">
+  <meta property="og:image" content="https://clawmetry.com/dashboard-flow.png">
   <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://clawmetry.com/dashboard-flow.png">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦞</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -46,7 +49,6 @@
       overflow-x: hidden;
     }
 
-    /* Radial glow behind hero */
     .hero-glow {
       position: absolute;
       top: -200px;
@@ -59,7 +61,7 @@
       z-index: 0;
     }
 
-    /* ─── NAV ─── */
+    /* NAV */
     nav {
       position: fixed; top: 0; left: 0; right: 0; z-index: 100;
       background: rgba(11,15,26,0.85);
@@ -91,11 +93,11 @@
     .nav-gh:hover { border-color: var(--border-hover); color: var(--text); }
     .nav-gh svg { width: 16px; height: 16px; }
 
-    /* ─── HERO ─── */
+    /* HERO */
     .hero {
       position: relative;
       text-align: center;
-      padding: 140px 24px 20px;
+      padding: 140px 24px 80px;
       max-width: 1100px; margin: 0 auto;
     }
     .hero-badge {
@@ -127,7 +129,7 @@
     }
     .hero-sub {
       font-size: 18px; color: var(--text-muted);
-      max-width: 560px; margin: 0 auto 40px; line-height: 1.7;
+      max-width: 560px; margin: 0 auto 40px; line-height: 1.6;
     }
     .hero-buttons { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-bottom: 0; }
     .btn-primary {
@@ -149,52 +151,7 @@
     }
     .btn-secondary:hover { border-color: var(--border-hover); color: var(--accent); }
 
-    /* ─── TERMINAL ─── */
-    .terminal {
-      max-width: 560px; margin: 0 auto;
-      background: var(--terminal-bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-      box-shadow: 0 4px 40px rgba(0,0,0,0.4), 0 0 60px rgba(229,68,58,0.06);
-    }
-    .terminal-bar {
-      display: flex; align-items: center; gap: 8px;
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-      background: rgba(255,255,255,0.02);
-    }
-    .terminal-dot { width: 12px; height: 12px; border-radius: 50%; }
-    .terminal-dot.red { background: #FF5F57; }
-    .terminal-dot.yellow { background: #FEBC2E; }
-    .terminal-dot.green { background: #28C840; }
-    .terminal-title { margin-left: 8px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-dim); }
-    .terminal-body {
-      padding: 20px 24px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 14px; line-height: 2;
-    }
-    .terminal-body .prompt { color: var(--green); }
-    .terminal-body .cmd { color: var(--text); }
-    .terminal-body .comment { color: var(--text-dim); }
-    .terminal-body .output { color: var(--blue); }
-    .terminal-body .cursor {
-      display: inline-block; width: 8px; height: 18px;
-      background: var(--accent); vertical-align: middle;
-      animation: blink 1s step-end infinite;
-      margin-left: 2px;
-    }
-    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-
-    /* Typing animation */
-    .type-line { overflow: hidden; white-space: nowrap; width: 0; }
-    .type-line.animate { animation: typing 0.8s steps(30) forwards; }
-    .type-line.delay1 { animation-delay: 0.5s; }
-    .type-line.delay2 { animation-delay: 1.8s; }
-    .type-line.delay3 { animation-delay: 3s; }
-    @keyframes typing { from { width: 0; } to { width: 100%; } }
-
-    /* ─── SECTIONS ─── */
+    /* SECTIONS */
     section { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
     .section-title {
       font-size: clamp(1.75rem, 4vw, 2.5rem);
@@ -206,36 +163,7 @@
       font-size: 17px; max-width: 600px; margin: 0 auto 48px;
     }
 
-    /* ─── GETTING STARTED ─── */
-    .getting-started { padding-top: 40px; padding-bottom: 80px; }
-    .steps {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 24px; max-width: 900px; margin: 0 auto;
-    }
-    .step {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 16px; padding: 28px;
-      transition: all 0.3s;
-    }
-    .step:hover { border-color: var(--border-hover); background: var(--bg-card-hover); }
-    .step-num {
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 32px; height: 32px; border-radius: 8px;
-      background: var(--accent-glow-strong); color: var(--accent);
-      font-size: 14px; font-weight: 700; margin-bottom: 14px;
-    }
-    .step h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
-    .step p { font-size: 14px; color: var(--text-muted); line-height: 1.6; }
-    .step code {
-      display: block; margin-top: 12px;
-      font-family: 'JetBrains Mono', monospace; font-size: 13px;
-      background: rgba(0,0,0,0.3); padding: 10px 14px; border-radius: 8px;
-      color: var(--green); border: 1px solid var(--border);
-    }
-
-    /* ─── DEMO VIDEO ─── */
-    .demo { padding-top: 60px; padding-bottom: 60px; }
+    /* DEMO */
     .demo-container {
       max-width: 900px; margin: 0 auto;
       border-radius: 16px; overflow: hidden;
@@ -248,10 +176,14 @@
       padding: 12px 16px; border-bottom: 1px solid var(--border);
       background: rgba(255,255,255,0.02);
     }
-    .demo-container video { width: 100%; display: block; }
+    .demo-container video, .demo-container img { width: 100%; display: block; }
+    .terminal-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .terminal-dot.red { background: #FF5F57; }
+    .terminal-dot.yellow { background: #FEBC2E; }
+    .terminal-dot.green { background: #28C840; }
+    .terminal-title { margin-left: 8px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-dim); }
 
-    /* ─── FEATURES ─── */
-    .features { padding-top: 40px; padding-bottom: 60px; }
+    /* FEATURES */
     .features-grid {
       display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
       gap: 20px;
@@ -273,51 +205,24 @@
     .feature-icon.green { background: rgba(52,211,153,0.15); color: var(--green); }
     .feature-icon.purple { background: rgba(167,139,250,0.15); color: var(--purple); }
     .feature-icon.yellow { background: rgba(251,191,36,0.15); color: var(--yellow); }
-    .feature-card h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+    .feature-card h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
     .feature-card p { font-size: 14px; color: var(--text-muted); line-height: 1.6; }
 
-    /* ─── ALT INSTALL ─── */
-    .alt-install {
-      padding-top: 60px; padding-bottom: 100px;
-      text-align: center;
+    /* KILLER FEATURE */
+    .killer-feature {
+      max-width: 800px; margin: 0 auto 40px;
+      background: linear-gradient(135deg, rgba(229,68,58,0.08) 0%, rgba(229,68,58,0.02) 100%);
+      border: 1px solid rgba(229,68,58,0.25);
+      border-radius: 20px; padding: 36px 40px;
+      display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap;
     }
-    .alt-install-box {
-      max-width: 600px; margin: 0 auto;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 16px; padding: 36px;
+    .killer-feature-icon {
+      flex-shrink: 0; width: 56px; height: 56px; border-radius: 14px;
+      background: rgba(229,68,58,0.18);
+      display: flex; align-items: center; justify-content: center;
     }
-    .alt-install-box h3 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
-    .alt-install-box p { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
-    .alt-install-box .install-tabs {
-      display: flex; gap: 0; margin-bottom: 16px;
-      background: rgba(0,0,0,0.3); border-radius: 10px; padding: 4px;
-      max-width: 300px; margin-left: auto; margin-right: auto; margin-bottom: 16px;
-    }
-    .tab-btn {
-      flex: 1; padding: 8px 16px; border: none; background: transparent;
-      color: var(--text-muted); font-size: 13px; font-weight: 500;
-      border-radius: 8px; cursor: pointer; transition: all 0.2s;
-      font-family: inherit;
-    }
-    .tab-btn.active { background: var(--accent-glow-strong); color: var(--accent); }
-    .install-cmd {
-      font-family: 'JetBrains Mono', monospace; font-size: 14px;
-      background: rgba(0,0,0,0.4); padding: 14px 20px; border-radius: 10px;
-      color: var(--green); border: 1px solid var(--border);
-      display: flex; align-items: center; justify-content: space-between; gap: 12px;
-      cursor: pointer; transition: border-color 0.2s;
-    }
-    .install-cmd:hover { border-color: var(--border-hover); }
-    .install-cmd code { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .copy-btn {
-      background: none; border: none; color: var(--text-dim); cursor: pointer;
-      padding: 4px; transition: color 0.2s; flex-shrink: 0;
-    }
-    .copy-btn:hover { color: var(--text); }
-    .copy-btn svg { width: 18px; height: 18px; }
 
-    /* ─── FOOTER ─── */
+    /* FOOTER */
     footer {
       border-top: 1px solid var(--border);
       padding: 32px 24px;
@@ -339,22 +244,21 @@
     .footer-links a:hover { color: var(--text); }
     .footer-links a svg { width: 16px; height: 16px; }
 
-    /* ─── RESPONSIVE ─── */
+    /* RESPONSIVE */
+    @media (max-width: 768px) {
+      .killer-feature { flex-direction: column; padding: 24px; }
+      .features-grid { grid-template-columns: 1fr; }
+    }
     @media (max-width: 640px) {
       .hero { padding-top: 110px; }
       .hero-buttons { flex-direction: column; align-items: center; }
       .nav-links .nav-link-text { display: none; }
-      .steps { grid-template-columns: 1fr; }
-      .features-grid { grid-template-columns: 1fr; }
       .footer-inner { flex-direction: column; text-align: center; }
     }
-
-    /* Fade-in animations */
-    .fade-in {
-      opacity: 0; transform: translateY(20px);
-      transition: opacity 0.6s ease, transform 0.6s ease;
+    @media (max-width: 480px) {
+      .hero h1 { font-size: 2rem; }
+      .section-title { font-size: 1.5rem; }
     }
-    .fade-in.visible { opacity: 1; transform: translateY(0); }
   </style>
 </head>
 <body>
@@ -386,73 +290,68 @@
   <div style="position:relative;z-index:1;">
     <div class="hero-badge">
       <div class="hero-badge-dot"></div>
-      Observability for OpenClaw
+      Open source. Free forever.
     </div>
     <h1>
-      See Every Agent Move<br>
-      <span class="accent">In Real Time</span>
+      Know what your agents are doing.<br>
+      <span class="accent">Right now.</span>
     </h1>
     <p class="hero-sub">
-      Your agents are running. Do you actually know what they're doing? Clawmetry shows you every tool call, every token spent, every sub-agent spawned.
+      Your agents spawn sub-agents, burn tokens, call tools. You stare at logs. Clawmetry gives you a dashboard instead.
     </p>
     <div class="hero-buttons">
-      <a href="#get-started" class="btn-primary">Get Started</a>
+      <a href="#get-started" class="btn-primary">Install in 30 seconds</a>
       <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener" class="btn-secondary">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        View on GitHub
+        GitHub
       </a>
     </div>
-
-    <!-- Terminal removed: Quick Start section handles install display -->
   </div>
 </section>
 
 <!-- QUICK START -->
-<section id="get-started" style="padding-top:40px;padding-bottom:60px;">
-  <h2 class="section-title" style="display:flex;align-items:center;gap:8px;justify-content:center;"><span style="color:#E5443A;">❯</span> Quick Start</h2>
+<section id="get-started" style="padding-top:80px;padding-bottom:80px;">
+  <h2 class="section-title" style="display:flex;align-items:center;gap:8px;justify-content:center;"><span style="color:#E5443A;">&#10095;</span> Quick Start</h2>
   <div style="max-width:780px;margin:0 auto;">
-    <!-- Terminal window -->
     <div style="background:linear-gradient(180deg, #141922 0%, #0d1117 100%);border:1px solid rgba(255,255,255,0.08);border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
-      <!-- Terminal bar with dots + tabs -->
       <div style="display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);gap:12px;">
         <div style="display:flex;gap:6px;flex-shrink:0;">
           <div style="width:12px;height:12px;border-radius:50%;background:#ff5f57;"></div>
           <div style="width:12px;height:12px;border-radius:50%;background:#febc2e;"></div>
           <div style="width:12px;height:12px;border-radius:50%;background:#28c840;"></div>
         </div>
-        <div style="display:flex;gap:2px;margin-left:8px;">
+        <div style="display:flex;gap:2px;margin-left:8px;flex-wrap:wrap;">
           <button onclick="showTab('oneliner')" id="tab-oneliner" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#28c840;color:#000;font-family:'JetBrains Mono',monospace;transition:all 0.15s;">One-liner</button>
           <button onclick="showTab('pip')" id="tab-pip" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">pip</button>
           <button onclick="showTab('powershell')" id="tab-powershell" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">PowerShell</button>
           <button onclick="showTab('cmd')" id="tab-cmd" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">CMD</button>
         </div>
-        <!-- Right side: copy button -->
         <div style="margin-left:auto;display:flex;align-items:center;">
           <button id="copy-btn" onclick="copyActiveCmd()" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:rgba(255,255,255,0.5);cursor:pointer;padding:5px 8px;display:flex;align-items:center;transition:all 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.06)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
         </div>
       </div>
-      <!-- Terminal body -->
       <div style="padding:20px 24px;font-family:'JetBrains Mono',monospace;font-size:14px;line-height:2;">
         <div id="panel-oneliner">
-          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Detects your OS, installs everything</div>
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># One command. That's it. &#x1F99E;</div>
           <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">curl -fsSL https://clawmetry.com/install.sh | bash</span></div>
         </div>
         <div id="panel-pip" style="display:none;">
-          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Install and run</div>
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Install it</div>
           <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">pip install clawmetry</span></div>
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Run it</div>
           <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">clawmetry</span></div>
         </div>
         <div id="panel-powershell" style="display:none;">
-          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># PowerShell one-liner</div>
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Same thing, Windows style &#x1F99E;</div>
           <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">iwr -useb https://clawmetry.com/install.ps1 | iex</span></div>
         </div>
         <div id="panel-cmd" style="display:none;">
-          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># CMD prompt</div>
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># For the CMD holdouts</div>
           <div><span style="color:rgba(255,255,255,0.4);">&gt; </span><span style="color:#28c840;font-size:13px;">curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd</span></div>
         </div>
       </div>
     </div>
-    <p style="text-align:center;color:var(--text-dim);font-size:13px;margin-top:16px;">Works on macOS, Windows, and Linux. The installer handles everything for you.</p>
+    <p style="text-align:center;color:var(--text-dim);font-size:13px;margin-top:16px;">macOS, Linux, Windows. The installer figures it out.</p>
   </div>
 </section>
 <script>
@@ -484,89 +383,116 @@ function copyActiveCmd() {
 }
 </script>
 
-<!-- DEMO VIDEO -->
-<section class="demo">
-  <h2 class="section-title">See What You Get</h2>
-  <p class="section-sub">One dashboard. Everything your agents are doing, right now.</p>
+<!-- DASHBOARD PREVIEW -->
+<section style="padding-top:80px;padding-bottom:80px;">
+  <h2 class="section-title">Here's what it looks like</h2>
+  <p class="section-sub">One screen. Everything happening across your agents.</p>
+
+  <!-- Screenshot tab selector -->
+  <div style="display:flex;justify-content:center;gap:6px;margin-bottom:16px;flex-wrap:wrap;">
+    <button onclick="showScreenshot('flow')" id="ss-tab-flow" class="ss-tab active" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#28c840;color:#000;font-family:'Inter',sans-serif;transition:all 0.15s;">Flow</button>
+    <button onclick="showScreenshot('overview')" id="ss-tab-overview" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Overview</button>
+    <button onclick="showScreenshot('crons')" id="ss-tab-crons" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Crons</button>
+    <button onclick="showScreenshot('memory')" id="ss-tab-memory" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Memory</button>
+  </div>
+
   <div class="demo-container">
     <div class="demo-bar">
       <div class="terminal-dot red"></div>
       <div class="terminal-dot yellow"></div>
       <div class="terminal-dot green"></div>
-      <span class="terminal-title">clawmetry dashboard</span>
+      <span class="terminal-title" id="ss-title">clawmetry - flow</span>
     </div>
-    <video autoplay loop muted playsinline src="/videos/clawmetry.webm"></video>
+    <img id="ss-img" src="screenshots/flow.png" alt="Clawmetry dashboard" loading="eager" style="width:100%;display:block;">
   </div>
+
+  <script>
+  var ssNames = ['flow','overview','crons','memory'];
+  function showScreenshot(name) {
+    document.getElementById('ss-img').src = 'screenshots/' + name + '.png';
+    document.getElementById('ss-title').textContent = 'clawmetry - ' + name;
+    ssNames.forEach(function(n) {
+      var tab = document.getElementById('ss-tab-' + n);
+      if (tab) {
+        tab.style.background = n === name ? '#28c840' : 'rgba(255,255,255,0.06)';
+        tab.style.color = n === name ? '#000' : 'rgba(255,255,255,0.5)';
+        tab.style.fontWeight = n === name ? '600' : '500';
+      }
+    });
+  }
+  </script>
 </section>
 
-<!-- HERO FEATURE: SUB-AGENT VISIBILITY -->
-<section style="padding-top:60px;padding-bottom:0;" id="features">
-  <h2 class="section-title">What It Does</h2>
-  <p class="section-sub">Stop guessing. Start seeing.</p>
-  <div style="max-width:800px;margin:0 auto 40px;background:linear-gradient(135deg, rgba(229,68,58,0.08) 0%, rgba(229,68,58,0.02) 100%);border:1px solid rgba(229,68,58,0.25);border-radius:20px;padding:36px 40px;display:flex;gap:28px;align-items:flex-start;">
-    <div style="flex-shrink:0;width:56px;height:56px;border-radius:14px;background:rgba(229,68,58,0.18);display:flex;align-items:center;justify-content:center;">
+<!-- FEATURES -->
+<section id="features" style="padding-top:80px;padding-bottom:40px;">
+  <h2 class="section-title">What you get</h2>
+  <p class="section-sub">The stuff you keep building yourself, already built.</p>
+
+  <!-- Killer feature card -->
+  <div class="killer-feature">
+    <div class="killer-feature-icon">
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#E5443A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></svg>
     </div>
     <div>
-      <div style="display:inline-block;background:rgba(229,68,58,0.15);color:#E5443A;font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:3px 10px;border-radius:6px;margin-bottom:10px;">Killer Feature</div>
-      <h3 style="font-size:22px;font-weight:700;margin-bottom:8px;">Sub-Agent Visibility</h3>
-      <p style="font-size:15px;color:#94A3B8;line-height:1.7;margin:0;">Your main agent spawns sub-agents. Those sub-agents run commands, burn tokens, and you have no idea what's going on. Until now. See every sub-agent, what it's doing, and what it costs.</p>
+      <div style="display:inline-block;background:rgba(229,68,58,0.15);color:#E5443A;font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:3px 10px;border-radius:6px;margin-bottom:10px;">The big one</div>
+      <h3 style="font-size:22px;font-weight:700;margin-bottom:8px;">Sub-agent tree, live</h3>
+      <p style="font-size:15px;color:#94A3B8;line-height:1.7;margin:0;">Main agent spawns five sub-agents. Each one calls tools, burns tokens, runs for minutes. Without this, you're blind. Clawmetry shows the full tree: who spawned what, what it's doing, what it costs.</p>
     </div>
   </div>
 </section>
 
 <!-- FEATURES GRID -->
-<section class="features" style="padding-top:20px;">
+<section style="padding-top:0;padding-bottom:80px;">
   <div class="features-grid">
     <div class="feature-card">
       <div class="feature-icon red">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>
       </div>
-      <h3>Live Flow Graph</h3>
-      <p>Channels, gateway, model, tools, infra nodes. All connected, updating live.</p>
+      <h3>Live flow graph</h3>
+      <p>Channels, gateway, models, tools, nodes. All wired up, updating as things happen.</p>
     </div>
     <div class="feature-card">
       <div class="feature-icon blue">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
       </div>
-      <h3>AI Telemetry</h3>
-      <p>Token usage, response times, tool calls, cache hits, model costs. All the numbers, none of the guessing.</p>
+      <h3>Token and cost tracking</h3>
+      <p>Tokens in, tokens out, cache hits, response times, cost per call. Numbers you actually need.</p>
     </div>
     <div class="feature-card">
       <div class="feature-icon green">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
       </div>
-      <h3>System Health</h3>
-      <p>Cron health, service uptime, disk pressure, active sub-agents. One glance tells you everything.</p>
+      <h3>System health</h3>
+      <p>Cron jobs, service uptime, disk usage, active sub-agents. Glanceable.</p>
     </div>
     <div class="feature-card">
       <div class="feature-icon purple">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>
       </div>
-      <h3>Session Tracking</h3>
-      <p>Every session, start to finish. What happened, when, and what it cost.</p>
+      <h3>Session history</h3>
+      <p>Every session logged. Timeline, tool calls, cost. Go back and see what happened.</p>
     </div>
     <div class="feature-card">
       <div class="feature-icon yellow">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
       </div>
-      <h3>Mission Control</h3>
-      <p>Plugs into OpenClaw Mission Control. Tasks, agents, orchestration, all in one place.</p>
+      <h3>Mission Control integration</h3>
+      <p>Hooks into OpenClaw's task system. See which agents are on which tasks.</p>
     </div>
     <div class="feature-card">
       <div class="feature-icon red">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
       </div>
-      <h3>Cost Tracking</h3>
-      <p>Know exactly what each session, model call, and tool use costs before the bill hits.</p>
+      <h3>Cost breakdown</h3>
+      <p>Per-session, per-model, per-tool. Know what you're spending before the invoice shows up.</p>
     </div>
   </div>
 </section>
 
-<!-- WORKS WITH EVERYTHING -->
-<section class="" style="padding:60px 40px 80px;text-align:center;">
-  <h2 class="section-title">Works With Everything</h2>
-  <p class="section-sub">If it runs OpenClaw, Clawmetry works on it. Bare metal, cloud, your desk, whatever.</p>
+<!-- RUNS WHERE YOU RUN -->
+<section style="padding:60px 24px 80px;text-align:center;">
+  <h2 class="section-title">Runs where you run</h2>
+  <p class="section-sub">If OpenClaw runs there, Clawmetry runs there. Laptop, server, Raspberry Pi, whatever.</p>
   <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:32px;max-width:700px;margin-left:auto;margin-right:auto;">
     <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">macOS</span>
     <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">Ubuntu</span>
@@ -585,7 +511,7 @@ function copyActiveCmd() {
 <footer>
   <div class="footer-inner">
     <div class="footer-text">
-      Clawmetry by <a href="https://github.com/vivekchand">OpenClaw</a> · Open-source observability for AI agents
+      &#x1F99E; ClawMetry for <a href="https://github.com/openclaw/openclaw">OpenClaw</a> · Built by <a href="https://github.com/vivekchand">vivekchand</a> · MIT licensed
     </div>
     <div class="footer-links">
       <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener">
@@ -602,26 +528,6 @@ function copyActiveCmd() {
     </div>
   </div>
 </footer>
-
-<script>
-  // Fade-in on scroll
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); } });
-  }, { threshold: 0.1 });
-  document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
-
-  // Copy command
-  function copyCmd(el) {
-    const code = el.querySelector('code').textContent;
-    navigator.clipboard.writeText(code).then(() => {
-      const btn = el.querySelector('.copy-btn');
-      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
-      setTimeout(() => {
-        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-      }, 2000);
-    });
-  }
-</script>
 
 </body>
 </html>
