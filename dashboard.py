@@ -39,7 +39,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 app = Flask(__name__)
 
@@ -495,6 +495,63 @@ def validate_configuration():
     return warnings, tips
 
 
+def _auto_detect_data_dir():
+    """Auto-detect OpenClaw data directory, including Docker volume mounts."""
+    # Standard locations
+    candidates = [
+        os.path.expanduser('~/.openclaw'),
+        os.path.expanduser('~/.clawdbot'),
+    ]
+    # Docker volume mounts (Hostinger pattern: /docker/*/data/.openclaw)
+    try:
+        import glob as _glob
+        for pattern in ['/docker/*/data/.openclaw', '/docker/*/.openclaw',
+                        '/var/lib/docker/volumes/*/_data/.openclaw']:
+            candidates.extend(_glob.glob(pattern))
+    except Exception:
+        pass
+    # Check Docker inspect for mount points
+    try:
+        import subprocess as _sp
+        container_ids = _sp.check_output(
+            ['docker', 'ps', '-q', '--filter', 'ancestor=*openclaw*'],
+            timeout=3, stderr=_sp.DEVNULL
+        ).decode().strip().split()
+        if not container_ids:
+            # Try all containers
+            container_ids = _sp.check_output(
+                ['docker', 'ps', '-q'], timeout=3, stderr=_sp.DEVNULL
+            ).decode().strip().split()
+        for cid in container_ids[:3]:
+            try:
+                mounts = _sp.check_output(
+                    ['docker', 'inspect', cid, '--format',
+                     '{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}'],
+                    timeout=3, stderr=_sp.DEVNULL
+                ).decode().strip().split()
+                for mount in mounts:
+                    parts = mount.split(':')
+                    if len(parts) >= 1:
+                        src = parts[0]
+                        oc_path = os.path.join(src, '.openclaw')
+                        if os.path.isdir(oc_path) and oc_path not in candidates:
+                            candidates.insert(0, oc_path)
+                        # Also check if the mount itself is the .openclaw dir
+                        if src.endswith('.openclaw') and os.path.isdir(src):
+                            candidates.insert(0, src)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    for c in candidates:
+        if c and os.path.isdir(c) and (
+            os.path.isdir(os.path.join(c, 'agents')) or
+            os.path.isdir(os.path.join(c, 'workspace')) or
+            os.path.exists(os.path.join(c, 'cron', 'jobs.json'))
+        ):
+            return c
+    return None
+
 def detect_config(args=None):
     """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
     global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
@@ -505,6 +562,9 @@ def detect_config(args=None):
         data_dir = os.path.expanduser(args.data_dir)
     elif os.environ.get("OPENCLAW_DATA_DIR"):
         data_dir = os.path.expanduser(os.environ["OPENCLAW_DATA_DIR"])
+    else:
+        # Auto-detect: check common locations including Docker volumes
+        data_dir = _auto_detect_data_dir()
     
     if data_dir and os.path.isdir(data_dir):
         # Auto-set workspace, sessions, crons from data dir
@@ -528,6 +588,7 @@ def detect_config(args=None):
         # Auto-detect: check common locations
         candidates = [
             _detect_workspace_from_config(),
+            os.path.expanduser("~/.openclaw/workspace"),
             os.path.expanduser("~/.clawdbot/workspace"),
             os.path.expanduser("~/clawd"),
             os.path.expanduser("~/openclaw"),
@@ -563,17 +624,19 @@ def detect_config(args=None):
         SESSIONS_DIR = os.path.expanduser(os.environ["OPENCLAW_SESSIONS_DIR"])
     else:
         candidates = [
+            os.path.expanduser('~/.openclaw/agents/main/sessions'),
             os.path.expanduser('~/.clawdbot/agents/main/sessions'),
             os.path.join(WORKSPACE, 'sessions') if WORKSPACE else None,
+            os.path.expanduser('~/.openclaw/sessions'),
             os.path.expanduser('~/.clawdbot/sessions'),
         ]
-        # Also scan ~/.clawdbot/agents/*/sessions/
-        agents_base = os.path.expanduser('~/.clawdbot/agents')
-        if os.path.isdir(agents_base):
-            for agent in os.listdir(agents_base):
-                p = os.path.join(agents_base, agent, 'sessions')
-                if p not in candidates:
-                    candidates.append(p)
+        # Also scan agents dirs
+        for agents_base in [os.path.expanduser('~/.openclaw/agents'), os.path.expanduser('~/.clawdbot/agents')]:
+            if os.path.isdir(agents_base):
+                for agent in os.listdir(agents_base):
+                    p = os.path.join(agents_base, agent, 'sessions')
+                    if p not in candidates:
+                        candidates.append(p)
         SESSIONS_DIR = next((d for d in candidates if d and os.path.isdir(d)), candidates[0] if candidates else None)
 
     # 4. User name (shown in Flow visualization)
