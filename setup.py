@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="clawmetry",
-    version="0.3.0",
+    version="0.3.1",
     description="Real-time observability dashboard for OpenClaw AI agents — the Grafana for your personal AI",
     long_description=long_description,
     long_description_content_type="text/markdown",
