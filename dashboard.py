@@ -593,13 +593,30 @@ def _detect_gateway_port():
         except ValueError:
             pass
     # Try reading from gateway config
-    config_paths = [
+    # Try JSON configs first (moltbot.json / clawdbot.json)
+    json_paths = [
+        os.path.expanduser('~/.openclaw/moltbot.json'),
+        os.path.expanduser('~/.openclaw/clawdbot.json'),
+        os.path.expanduser('~/.clawdbot/clawdbot.json'),
+    ]
+    for jp in json_paths:
+        try:
+            import json as _json
+            with open(jp) as f:
+                cfg = _json.load(f)
+            gw = cfg.get('gateway', {})
+            if isinstance(gw, dict) and 'port' in gw:
+                return int(gw['port'])
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            pass
+    # Try YAML configs
+    yaml_paths = [
         os.path.expanduser('~/.openclaw/gateway.yaml'),
         os.path.expanduser('~/.openclaw/gateway.yml'),
         os.path.expanduser('~/.clawdbot/gateway.yaml'),
         os.path.expanduser('~/.clawdbot/gateway.yml'),
     ]
-    for cp in config_paths:
+    for cp in yaml_paths:
         try:
             with open(cp) as f:
                 for line in f:
@@ -610,6 +627,27 @@ def _detect_gateway_port():
         except (FileNotFoundError, ValueError, IndexError):
             pass
     return 18789  # Default OpenClaw gateway port
+
+
+def _detect_gateway_token():
+    """Detect the OpenClaw gateway auth token from config files."""
+    json_paths = [
+        os.path.expanduser('~/.openclaw/moltbot.json'),
+        os.path.expanduser('~/.openclaw/clawdbot.json'),
+        os.path.expanduser('~/.clawdbot/clawdbot.json'),
+    ]
+    for jp in json_paths:
+        try:
+            import json as _json
+            with open(jp) as f:
+                cfg = _json.load(f)
+            gw = cfg.get('gateway', {})
+            auth = gw.get('auth', {})
+            if isinstance(auth, dict) and 'token' in auth:
+                return auth['token']
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            pass
+    return None
 
 
 def _detect_disk_mounts():
