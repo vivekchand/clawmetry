@@ -12,7 +12,7 @@ Real-time observability dashboard for [OpenClaw](https://github.com/openclaw/ope
 
 > *Previously published as `openclaw-dashboard` - same project, better name.*
 
-![Flow Visualization](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
 
 ## 🎬 Demo
 
@@ -45,13 +45,13 @@ python3 dashboard.py
 
 ## 📸 Screenshots
 
-| Flow | Overview | Crons |
-|------|----------|-------|
-| ![Flow](screenshots/flow.png) | ![Overview](screenshots/overview.png) | ![Crons](screenshots/crons.png) |
+| Flow | Overview | Sub-Agent |
+|------|----------|-----------|
+| ![Flow](https://clawmetry.com/screenshots/flow.png) | ![Overview](https://clawmetry.com/screenshots/overview.png) | ![Sub-Agent](https://clawmetry.com/screenshots/subagent.png) |
 
-| Sub-Agent (running) | Sub-Agent (completion) | Memory |
-|---------------------|----------------------|--------|
-| ![Sub-Agent](screenshots/subagent.png) | ![Summary](screenshots/summary.png) | ![Memory](screenshots/memory.png) |
+| Summary | Crons | Memory |
+|---------|-------|--------|
+| ![Summary](https://clawmetry.com/screenshots/summary.png) | ![Crons](https://clawmetry.com/screenshots/crons.png) | ![Memory](https://clawmetry.com/screenshots/memory.png) |
 
 ---
 
