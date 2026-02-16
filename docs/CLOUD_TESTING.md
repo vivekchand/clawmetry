@@ -11,7 +11,7 @@ Any Linux VM works: DigitalOcean, Hetzner, AWS EC2, GCP Compute Engine, etc.
 ### 1. Install
 
 ```bash
-pip install openclaw-dashboard
+pip install clawmetry
 ```
 
 ### 2. Point to your OpenClaw workspace
@@ -19,13 +19,13 @@ pip install openclaw-dashboard
 If OpenClaw runs on the same machine, the dashboard auto-detects everything:
 
 ```bash
-openclaw-dashboard --host 0.0.0.0 --port 8900
+clawmetry --host 0.0.0.0 --port 8900
 ```
 
 If your OpenClaw workspace is on a different machine, mount or sync it, then:
 
 ```bash
-openclaw-dashboard --host 0.0.0.0 --workspace /path/to/openclaw/agent
+clawmetry --host 0.0.0.0 --workspace /path/to/openclaw/agent
 ```
 
 ### 3. Secure access
@@ -86,9 +86,9 @@ Ideal if your OpenClaw metrics are sent via OTLP. Note: Cloud Run is stateless, 
 
 ```dockerfile
 FROM python:3.12-slim
-RUN pip install openclaw-dashboard[otel]
+RUN pip install clawmetry[otel]
 EXPOSE 8900
-CMD ["openclaw-dashboard", "--host", "0.0.0.0", "--port", "8900", "--no-debug"]
+CMD ["clawmetry", "--host", "0.0.0.0", "--port", "8900", "--no-debug"]
 ```
 
 ### 2. Deploy
@@ -124,16 +124,16 @@ docker run -d \
   -p 8900:8900 \
   -v /path/to/openclaw/agent:/workspace \
   python:3.12-slim \
-  bash -c "pip install openclaw-dashboard && openclaw-dashboard --host 0.0.0.0 --workspace /workspace --no-debug"
+  bash -c "pip install clawmetry && clawmetry --host 0.0.0.0 --workspace /workspace --no-debug"
 ```
 
 For a proper image, create a Dockerfile:
 
 ```dockerfile
 FROM python:3.12-slim
-RUN pip install openclaw-dashboard[otel]
+RUN pip install clawmetry[otel]
 EXPOSE 8900
-ENTRYPOINT ["openclaw-dashboard"]
+ENTRYPOINT ["clawmetry"]
 CMD ["--host", "0.0.0.0", "--no-debug"]
 ```
 
@@ -154,7 +154,7 @@ These platforms support Docker or Python buildpacks.
 {
   "build": { "builder": "NIXPACKS" },
   "deploy": {
-    "startCommand": "pip install openclaw-dashboard[otel] && openclaw-dashboard --host 0.0.0.0 --port $PORT --no-debug"
+    "startCommand": "pip install clawmetry[otel] && clawmetry --host 0.0.0.0 --port $PORT --no-debug"
   }
 }
 ```
@@ -172,8 +172,8 @@ fly launch --image python:3.12-slim
 If you just want cost/token dashboards without local file access, the dashboard works in "OTLP-only" mode:
 
 ```bash
-openclaw-dashboard --host 0.0.0.0 --no-debug
-# No workspace needed — just send OTLP data to it
+clawmetry --host 0.0.0.0 --no-debug
+# No workspace needed - just send OTLP data to it
 ```
 
 Configure OpenClaw to send metrics:
@@ -193,6 +193,6 @@ You'll get: Usage tab (tokens, costs, model breakdown), health checks, and the F
 | Issue | Fix |
 |-------|-----|
 | SSE streams disconnect | Set `proxy_read_timeout 600s` and `proxy_buffering off` in nginx |
-| Empty tabs on Cloud Run | Expected — mount a volume or use OTLP-only mode |
+| Empty tabs on Cloud Run | Expected - mount a volume or use OTLP-only mode |
 | Port already in use | `--port 9000` or `OPENCLAW_DASHBOARD_PORT=9000` |
 | High memory on long runs | Metrics auto-cap at ~10K entries per category. Use `--metrics-file` to persist across restarts |

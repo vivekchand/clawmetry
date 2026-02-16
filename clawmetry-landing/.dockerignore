@@ -7,3 +7,6 @@
 !Clawmetry_updated_files/**
 !videos/
 !videos/**
+!install.sh
+!install.ps1
+!install.cmd

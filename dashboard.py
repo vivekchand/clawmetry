@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-ClawMetry — See your agent think 🦞
+ClawMetry - See your agent think 🦞
 
 Real-time observability dashboard for OpenClaw AI agents.
-Single-file Flask app with zero config — auto-detects your setup.
+Single-file Flask app with zero config - auto-detects your setup.
 
 Usage:
     clawmetry                             # Auto-detect everything
@@ -11,7 +11,7 @@ Usage:
     clawmetry --workspace ~/bot           # Custom workspace
     OPENCLAW_HOME=~/bot clawmetry
 
-https://github.com/vivekchand/openclaw-dashboard
+https://github.com/vivekchand/clawmetry
 MIT License
 """
 
@@ -60,7 +60,7 @@ _active_health_stream_clients = 0
 EXTRA_SERVICES = []  # List of {'name': str, 'port': int} from --monitor-service flags
 
 # ── OTLP Metrics Store ─────────────────────────────────────────────────
-METRICS_FILE = None  # Set via CLI/env, defaults to {WORKSPACE}/.openclaw-dashboard-metrics.json
+METRICS_FILE = None  # Set via CLI/env, defaults to {WORKSPACE}/.clawmetry-metrics.json
 _metrics_lock = threading.Lock()
 _otel_last_received = 0  # timestamp of last OTLP data received
 
@@ -80,8 +80,8 @@ def _metrics_file_path():
     if METRICS_FILE:
         return METRICS_FILE
     if WORKSPACE:
-        return os.path.join(WORKSPACE, '.openclaw-dashboard-metrics.json')
-    return os.path.expanduser('~/.openclaw-dashboard-metrics.json')
+        return os.path.join(WORKSPACE, '.clawmetry-metrics.json')
+    return os.path.expanduser('~/.clawmetry-metrics.json')
 
 
 def _load_metrics_from_disk():
@@ -497,7 +497,7 @@ def detect_config(args=None):
     """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
     global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
 
-    # 1. Workspace — where agent files live (SOUL.md, MEMORY.md, memory/, etc.)
+    # 1. Workspace - where agent files live (SOUL.md, MEMORY.md, memory/, etc.)
     if args and args.workspace:
         WORKSPACE = os.path.expanduser(args.workspace)
     elif os.environ.get("OPENCLAW_HOME"):
@@ -1492,7 +1492,7 @@ DASHBOARD_HTML = r"""
     </div>
     <div class="section-title">🤖 Model Breakdown</div>
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
-    <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP — real-time metrics from OpenClaw</div>
+    <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
   </div>
 </div>
 
@@ -1951,7 +1951,7 @@ async function loadAll() {
     return true;
   } catch (e) {
     console.error('Initial load failed', e);
-    document.getElementById('refresh-time').textContent = 'Load failed — retrying...';
+    document.getElementById('refresh-time').textContent = 'Load failed - retrying...';
     return false;
   }
 }
@@ -2127,7 +2127,7 @@ async function loadActiveTasks() {
     if (agents.length === 0) {
       grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
         + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
-        + '<div style="font-size:13px;">No active tasks — all quiet</div></div>';
+        + '<div style="font-size:13px;">No active tasks - all quiet</div></div>';
       return;
     }
 
@@ -2981,7 +2981,7 @@ async function loadHeatmap() {
         else if (intensity < 0.5) color = '#2a6a3a';
         else if (intensity < 0.75) color = '#4a9a2a';
         else color = '#6adb3a';
-        html += '<div class="heatmap-cell" style="background:' + color + ';" title="' + day.label + ' ' + (hi < 10 ? '0' : '') + hi + ':00 — ' + val + ' events"></div>';
+        html += '<div class="heatmap-cell" style="background:' + color + ';" title="' + day.label + ' ' + (hi < 10 ? '0' : '') + hi + ':00 - ' + val + ' events"></div>';
       });
     });
     grid.innerHTML = html;
@@ -3588,7 +3588,7 @@ function triggerInfraStorage() {
   highlightNode('node-storage', 2000);
 }
 
-// Live feed for Flow tab — shows recent events in plain English
+// Live feed for Flow tab - shows recent events in plain English
 var _flowFeedItems = [];
 var _flowFeedMax = 30;
 function addFlowFeedItem(text, color) {
@@ -5232,31 +5232,31 @@ function renderModalFull(el) {
     var ts = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
     if (evt.type === 'agent') {
       icon = '🤖'; typeClass = 'type-agent';
-      summary = '<strong>Agent</strong> — ' + escHtml((evt.text||'').substring(0, 120));
+      summary = '<strong>Agent</strong> - ' + escHtml((evt.text||'').substring(0, 120));
       body = evt.text || '';
     } else if (evt.type === 'thinking') {
       icon = '💭'; typeClass = 'type-thinking';
-      summary = '<strong>Thinking</strong> — ' + escHtml((evt.text||'').substring(0, 120));
+      summary = '<strong>Thinking</strong> - ' + escHtml((evt.text||'').substring(0, 120));
       body = evt.text || '';
     } else if (evt.type === 'user') {
       icon = '👤'; typeClass = 'type-user';
-      summary = '<strong>User</strong> — ' + escHtml((evt.text||'').substring(0, 120));
+      summary = '<strong>User</strong> - ' + escHtml((evt.text||'').substring(0, 120));
       body = evt.text || '';
     } else if (evt.type === 'exec') {
       icon = '⚡'; typeClass = 'type-exec';
-      summary = '<strong>EXEC</strong> — <code>' + escHtml(evt.command||'') + '</code>';
+      summary = '<strong>EXEC</strong> - <code>' + escHtml(evt.command||'') + '</code>';
       body = evt.command || '';
     } else if (evt.type === 'read') {
       icon = '📖'; typeClass = 'type-read';
-      summary = '<strong>READ</strong> — ' + escHtml(evt.file||'');
+      summary = '<strong>READ</strong> - ' + escHtml(evt.file||'');
       body = evt.file || '';
     } else if (evt.type === 'tool') {
       icon = '🔧'; typeClass = 'type-exec';
-      summary = '<strong>' + escHtml(evt.toolName||'tool') + '</strong> — ' + escHtml((evt.args||'').substring(0, 100));
+      summary = '<strong>' + escHtml(evt.toolName||'tool') + '</strong> - ' + escHtml((evt.args||'').substring(0, 100));
       body = evt.args || '';
     } else if (evt.type === 'result') {
       icon = '🔍'; typeClass = 'type-result';
-      summary = '<strong>Result</strong> — ' + escHtml((evt.text||'').substring(0, 120));
+      summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
       body = evt.text || '';
     } else {
       summary = '<strong>' + escHtml(evt.type) + '</strong>';
@@ -5750,7 +5750,7 @@ def api_logs():
 
 @app.route('/api/logs-stream')
 def api_logs_stream():
-    """SSE endpoint — streams new log lines in real-time."""
+    """SSE endpoint - streams new log lines in real-time."""
     if not _acquire_stream_slot('log'):
         return jsonify({'error': 'Too many active log streams'}), 429
 
@@ -5821,7 +5821,7 @@ def otlp_metrics():
     if not _HAS_OTEL_PROTO:
         return jsonify({
             'error': 'opentelemetry-proto not installed',
-            'message': 'Install OTLP support: pip install openclaw-dashboard[otel]  '
+            'message': 'Install OTLP support: pip install clawmetry[otel]  '
                        'or: pip install opentelemetry-proto protobuf',
         }), 501
 
@@ -5839,7 +5839,7 @@ def otlp_traces():
     if not _HAS_OTEL_PROTO:
         return jsonify({
             'error': 'opentelemetry-proto not installed',
-            'message': 'Install OTLP support: pip install openclaw-dashboard[otel]  '
+            'message': 'Install OTLP support: pip install clawmetry[otel]  '
                        'or: pip install opentelemetry-proto protobuf',
         }), 501
 
@@ -6006,7 +6006,7 @@ _SESSIONS_CACHE_TTL = 10  # seconds
 
 @app.route('/api/usage')
 def api_usage():
-    """Token/cost tracking from transcript files — Enhanced OTLP workaround."""
+    """Token/cost tracking from transcript files - Enhanced OTLP workaround."""
     import time as _time
     now = _time.time()
     if _usage_cache['data'] is not None and (now - _usage_cache['ts']) < _USAGE_CACHE_TTL:
@@ -7323,7 +7323,7 @@ def api_component_gateway():
                 ts = entry.get('time', '')
                 level = entry.get('_meta', {}).get('logLevelName', '')
 
-                # embedded run start — main routing event
+                # embedded run start - main routing event
                 if 'embedded run start:' in msg:
                     route = {'timestamp': ts, 'from': '', 'to': '', 'session': '', 'type': 'message', 'status': 'ok'}
                     # Extract fields: model, messageChannel, sessionId
@@ -7633,7 +7633,7 @@ def api_component_brain():
 
 @app.route('/api/heatmap')
 def api_heatmap():
-    """Activity heatmap — events per hour for the last 7 days."""
+    """Activity heatmap - events per hour for the last 7 days."""
     now = datetime.now()
     # Initialize 7 days × 24 hours grid
     grid = {}
@@ -7775,7 +7775,7 @@ def api_system_health():
 def api_health():
     """System health checks."""
     checks = []
-    # 1. Gateway — check if gateway port is responding
+    # 1. Gateway - check if gateway port is responding
     gw_port = _detect_gateway_port()
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -7794,7 +7794,7 @@ def api_health():
     except Exception:
         checks.append({'id': 'gateway', 'status': 'critical', 'color': 'red', 'detail': 'Check failed'})
 
-    # 2. Disk space — warn if < 5GB free
+    # 2. Disk space - warn if < 5GB free
     try:
         st = os.statvfs('/')
         free_gb = (st.f_bavail * st.f_frsize) / (1024 ** 3)
@@ -7840,26 +7840,26 @@ def api_health():
         if ago < 300:  # <5min
             total = sum(len(metrics_store[k]) for k in metrics_store)
             checks.append({'id': 'otel', 'status': 'healthy', 'color': 'green',
-                           'detail': f'Connected — {total} data points, last {int(ago)}s ago'})
+                           'detail': f'Connected - {total} data points, last {int(ago)}s ago'})
         elif ago < 3600:
             checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
-                           'detail': f'Stale — last data {int(ago/60)}m ago'})
+                           'detail': f'Stale - last data {int(ago/60)}m ago'})
         else:
             checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
-                           'detail': f'Stale — last data {int(ago/3600)}h ago'})
+                           'detail': f'Stale - last data {int(ago/3600)}h ago'})
     elif _HAS_OTEL_PROTO:
         checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
-                       'detail': 'OTLP ready — no data received yet'})
+                       'detail': 'OTLP ready - no data received yet'})
     else:
         checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
-                       'detail': 'Not installed — pip install openclaw-dashboard[otel]'})
+                       'detail': 'Not installed - pip install clawmetry[otel]'})
 
     return jsonify({'checks': checks})
 
 
 @app.route('/api/health-stream')
 def api_health_stream():
-    """SSE endpoint — auto-refresh health checks every 30 seconds."""
+    """SSE endpoint - auto-refresh health checks every 30 seconds."""
     if not _acquire_stream_slot('health'):
         return jsonify({'error': 'Too many active health streams'}), 429
 
@@ -8457,7 +8457,7 @@ BANNER = r"""
 
 def main():
     parser = argparse.ArgumentParser(
-        description="OpenClaw Dashboard — Real-time observability for your AI agent",
+        description="OpenClaw Dashboard - Real-time observability for your AI agent",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Environment variables:\n"
                "  OPENCLAW_HOME         Agent workspace directory\n"
@@ -8481,7 +8481,7 @@ def main():
     parser.add_argument('--monitor-service', action='append', default=[], metavar='NAME:PORT',
                         help='Additional service to monitor (e.g. "My App:8080"). Can be repeated.')
     parser.add_argument('--mc-url', type=str, help='Mission Control URL (e.g. http://localhost:3002). Disabled by default.')
-    parser.add_argument('--version', '-v', action='version', version=f'openclaw-dashboard {__version__}')
+    parser.add_argument('--version', '-v', action='version', version=f'clawmetry {__version__}')
 
     args = parser.parse_args()
     detect_config(args)
@@ -8536,7 +8536,7 @@ def main():
     print(f"  Sessions:   {SESSIONS_DIR}")
     print(f"  Logs:       {LOG_DIR}")
     print(f"  Metrics:    {_metrics_file_path()}")
-    print(f"  OTLP:       {'✅ Ready (opentelemetry-proto installed)' if _HAS_OTEL_PROTO else '❌ Not available (pip install openclaw-dashboard[otel])'}")
+    print(f"  OTLP:       {'✅ Ready (opentelemetry-proto installed)' if _HAS_OTEL_PROTO else '❌ Not available (pip install clawmetry[otel])'}")
     print(f"  User:       {USER_NAME}")
     print(f"  Mode:       {'🛠️  Dev (auto-reload ON)' if args.debug else '🚀 Prod (auto-reload OFF)'}")
     print(f"  SSE Limits: {SSE_MAX_SECONDS}s max duration · logs {MAX_LOG_STREAM_CLIENTS} clients · health {MAX_HEALTH_STREAM_CLIENTS} clients")
@@ -8561,7 +8561,7 @@ def main():
     if local_ip != '127.0.0.1':
         print(f"  → http://{local_ip}:{args.port}  (LAN)")
     if public_ip and public_ip != local_ip:
-        print(f"  → http://{public_ip}:{args.port}  (Public — ensure port is open)")
+        print(f"  → http://{public_ip}:{args.port}  (Public - ensure port is open)")
     if _HAS_OTEL_PROTO:
         print(f"  → OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
     print()

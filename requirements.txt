@@ -1,6 +1,6 @@
 flask>=2.0
 
 # Optional: enables real-time OTLP metrics from OpenClaw
-# Install with: pip install openclaw-dashboard[otel]
+# Install with: pip install clawmetry[otel]
 # opentelemetry-proto>=1.20.0
 # protobuf>=4.21.0

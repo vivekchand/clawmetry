@@ -1,255 +1,627 @@
 <!DOCTYPE html>
-<!-- saved from url=(0014)about:internet -->
-<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-    
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- TODO: Set the document title to the name of your application -->
-    <title>Clawmetry for OpenClaw</title>
-    <meta name="description" content="Real-time telemetry and visibility for OpenClaw agents.">
-    <meta name="author" content="Clawmetry">
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clawmetry: Real-time Observability for AI Agents</title>
+  <meta name="description" content="See every agent move in real time. Real-time telemetry and visibility for OpenClaw agents. Install in 30 seconds.">
+  <meta property="og:title" content="Clawmetry: Real-time Observability for AI Agents">
+  <meta property="og:description" content="See every agent move in real time. Install in 30 seconds with pip install clawmetry.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://clawmetry.com">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    <!-- TODO: Update og:title to match your application name -->
-    <meta property="og:title" content="Clawmetry for OpenClaw">
-    <meta property="og:description" content="Real-time telemetry and visibility for OpenClaw agents.">
-    <meta property="og:type" content="website">
-    <meta property="og:image" content="https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/29002d3a-61d5-412e-9a5f-99f0e38505af/id-preview-b3700410--c2c9130a-ff91-47e9-b086-35ea0dcb8e5c.lovable.app-1770942513016.png">
+    :root {
+      --bg: #0B0F1A;
+      --bg-card: #111827;
+      --bg-card-hover: #1a2236;
+      --border: rgba(255,255,255,0.08);
+      --border-hover: rgba(229,68,58,0.3);
+      --text: #F1F5F9;
+      --text-muted: #94A3B8;
+      --text-dim: #64748B;
+      --accent: #E5443A;
+      --accent-glow: rgba(229,68,58,0.15);
+      --accent-glow-strong: rgba(229,68,58,0.25);
+      --terminal-bg: #0D1117;
+      --green: #34D399;
+      --blue: #60A5FA;
+      --purple: #A78BFA;
+      --yellow: #FBBF24;
+    }
 
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:site" content="@Lovable">
-    <meta name="twitter:image" content="https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/29002d3a-61d5-412e-9a5f-99f0e38505af/id-preview-b3700410--c2c9130a-ff91-47e9-b086-35ea0dcb8e5c.lovable.app-1770942513016.png">
-    <script type="module" crossorigin="" src="./Clawmetry_updated_files/index-DGQyGXOI.js"></script>
-    <link rel="stylesheet" crossorigin="" href="./Clawmetry_updated_files/index-Cj5WhM87.css">
-  
-<style>
-	@font-face {
-		font-family: 'CameraPlainVariable';
-		src: url('https://cdn.gpteng.co/mcp-widgets/v1/fonts/CameraPlainVariable.woff2') format('woff2');
-		font-weight: 100 900;
-		font-style: normal;
-		font-display: swap;
-	}
+    html { scroll-behavior: smooth; }
 
-	#lovable-badge {
-		--badge-bg: #1b1b1b;
-		--badge-text: #c5c1b9;
-		--badge-text-hover: #dcdad5;
-		--badge-radius: 6px;
-		--badge-padding: 8px;
-		--badge-gap: 6px;
-		--badge-shadow: 
-			0 0 0 1px rgba(0, 0, 0, 0.88),
-			0 1px 0 0 rgba(0, 0, 0, 0.04),
-			0 2px 2px -1px rgba(0, 0, 0, 0.08),
-			0 4px 4px -2px rgba(0, 0, 0, 0.08),
-			0 8px 8px -4px rgba(0, 0, 0, 0.08),
-			0 16px 16px -8px rgba(0, 0, 0, 0.08);
-		--badge-transition-duration: 0.2s;
-		--badge-transition-easing: cubic-bezier(0.16, 1, 0.32, 1);
-		--focus-color: #575ECF;
-		--focus-offset: 2px;
-		--focus-width: 2px;
-		
-		position: fixed;
-		bottom: 12px;
-		right: 12px;
-		height: 24px;
-		display: flex;
-		align-items: center;
-		z-index: 1000000;
-		background-color: var(--badge-bg);
-		color: var(--badge-text);
-		border-radius: var(--badge-radius);
-		box-shadow: var(--badge-shadow);
-		font-size: 12px;
-		font-family: CameraPlainVariable, "CameraPlainVariable Fallback", -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-		font-weight: 400 !important;
-		text-transform: none !important;
-		font-feature-settings: normal !important;
-		transform: translateZ(0);
-		will-change: transform, opacity;
-	}
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
 
-	#lovable-badge-cta {
-		display: flex;
-		align-items: center;
-		gap: var(--badge-gap);
-		padding: 0 var(--badge-padding);
-		height: 100%;
-		color: inherit;
-		text-decoration: none;
-		white-space: nowrap;
-		border-radius: var(--badge-radius) 0 0 var(--badge-radius);
-		transition: 
-			background-color var(--badge-transition-duration) ease,
-			color var(--badge-transition-duration) ease,
-			transform 0.1s ease;
-	}
+    /* Radial glow behind hero */
+    .hero-glow {
+      position: absolute;
+      top: -200px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 600px;
+      background: radial-gradient(ellipse at center, rgba(229,68,58,0.12) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
 
-	#lovable-badge-cta:hover {
-		background: rgba(255, 255, 255, 0.04);
-		color: var(--badge-text-hover);
-	}
+    /* ─── NAV ─── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      background: rgba(11,15,26,0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      max-width: 1100px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px; height: 60px;
+    }
+    .nav-logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
+    .nav-logo svg { width: 28px; height: 28px; }
+    .nav-logo-text { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+    .nav-logo-text span:first-child { color: var(--text); }
+    .nav-logo-text span:last-child { color: var(--accent); }
+    .nav-links { display: flex; align-items: center; gap: 20px; }
+    .nav-links a {
+      color: var(--text-muted); text-decoration: none; font-size: 14px; font-weight: 500;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-gh {
+      display: inline-flex; align-items: center; gap: 6px;
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 14px; font-size: 13px; font-weight: 500;
+      color: var(--text-muted); text-decoration: none; transition: all 0.2s;
+    }
+    .nav-gh:hover { border-color: var(--border-hover); color: var(--text); }
+    .nav-gh svg { width: 16px; height: 16px; }
 
-	#lovable-badge-cta:active {
-		transform: scale(0.98);
-	}
+    /* ─── HERO ─── */
+    .hero {
+      position: relative;
+      text-align: center;
+      padding: 140px 24px 20px;
+      max-width: 1100px; margin: 0 auto;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--accent-glow);
+      border: 1px solid rgba(229,68,58,0.25);
+      border-radius: 999px; padding: 6px 16px;
+      font-size: 13px; color: var(--text-muted); font-weight: 500;
+      margin-bottom: 24px;
+    }
+    .hero-badge-dot {
+      width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(229,68,58,0.5); }
+      50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(229,68,58,0); }
+    }
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 4rem);
+      font-weight: 800; line-height: 1.1;
+      letter-spacing: -0.03em;
+      margin-bottom: 20px;
+    }
+    .hero h1 .accent {
+      background: linear-gradient(135deg, #E5443A 0%, #FF6B5A 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-sub {
+      font-size: 18px; color: var(--text-muted);
+      max-width: 560px; margin: 0 auto 40px; line-height: 1.7;
+    }
+    .hero-buttons { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-bottom: 0; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--accent); color: #fff;
+      padding: 12px 28px; border-radius: 10px;
+      font-size: 15px; font-weight: 600; text-decoration: none;
+      transition: all 0.2s;
+      box-shadow: 0 0 20px rgba(229,68,58,0.3);
+    }
+    .btn-primary:hover { filter: brightness(1.15); box-shadow: 0 0 30px rgba(229,68,58,0.4); transform: translateY(-1px); }
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: transparent; color: var(--text);
+      padding: 12px 28px; border-radius: 10px;
+      border: 1px solid var(--border);
+      font-size: 15px; font-weight: 600; text-decoration: none;
+      transition: all 0.2s;
+    }
+    .btn-secondary:hover { border-color: var(--border-hover); color: var(--accent); }
 
-	#lovable-badge-cta:focus {
-		outline: none;
-	}
+    /* ─── TERMINAL ─── */
+    .terminal {
+      max-width: 560px; margin: 0 auto;
+      background: var(--terminal-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 40px rgba(0,0,0,0.4), 0 0 60px rgba(229,68,58,0.06);
+    }
+    .terminal-bar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .terminal-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .terminal-dot.red { background: #FF5F57; }
+    .terminal-dot.yellow { background: #FEBC2E; }
+    .terminal-dot.green { background: #28C840; }
+    .terminal-title { margin-left: 8px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-dim); }
+    .terminal-body {
+      padding: 20px 24px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px; line-height: 2;
+    }
+    .terminal-body .prompt { color: var(--green); }
+    .terminal-body .cmd { color: var(--text); }
+    .terminal-body .comment { color: var(--text-dim); }
+    .terminal-body .output { color: var(--blue); }
+    .terminal-body .cursor {
+      display: inline-block; width: 8px; height: 18px;
+      background: var(--accent); vertical-align: middle;
+      animation: blink 1s step-end infinite;
+      margin-left: 2px;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
-	#lovable-badge-cta:focus-visible {
-		outline: var(--focus-width) solid var(--focus-color);
-		outline-offset: var(--focus-offset);
-		z-index: 1;
-	}
+    /* Typing animation */
+    .type-line { overflow: hidden; white-space: nowrap; width: 0; }
+    .type-line.animate { animation: typing 0.8s steps(30) forwards; }
+    .type-line.delay1 { animation-delay: 0.5s; }
+    .type-line.delay2 { animation-delay: 1.8s; }
+    .type-line.delay3 { animation-delay: 3s; }
+    @keyframes typing { from { width: 0; } to { width: 100%; } }
 
-	#lovable-badge-text {
-		line-height: 1;
-	}
+    /* ─── SECTIONS ─── */
+    section { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+    .section-title {
+      font-size: clamp(1.75rem, 4vw, 2.5rem);
+      font-weight: 700; letter-spacing: -0.02em;
+      text-align: center; margin-bottom: 12px;
+    }
+    .section-sub {
+      text-align: center; color: var(--text-muted);
+      font-size: 17px; max-width: 600px; margin: 0 auto 48px;
+    }
 
-	#lovable-badge-divider {
-		width: 1px;
-		height: 24px;
-		background-color: rgba(255, 255, 255, 0.04);
-		flex-shrink: 0;
-	}
+    /* ─── GETTING STARTED ─── */
+    .getting-started { padding-top: 40px; padding-bottom: 80px; }
+    .steps {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px; max-width: 900px; margin: 0 auto;
+    }
+    .step {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 28px;
+      transition: all 0.3s;
+    }
+    .step:hover { border-color: var(--border-hover); background: var(--bg-card-hover); }
+    .step-num {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 32px; height: 32px; border-radius: 8px;
+      background: var(--accent-glow-strong); color: var(--accent);
+      font-size: 14px; font-weight: 700; margin-bottom: 14px;
+    }
+    .step h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+    .step p { font-size: 14px; color: var(--text-muted); line-height: 1.6; }
+    .step code {
+      display: block; margin-top: 12px;
+      font-family: 'JetBrains Mono', monospace; font-size: 13px;
+      background: rgba(0,0,0,0.3); padding: 10px 14px; border-radius: 8px;
+      color: var(--green); border: 1px solid var(--border);
+    }
 
-	#lovable-badge-close {
-		width: 24px;
-		height: 24px;
-		min-width: 24px;
-		min-height: 24px;
-		cursor: pointer;
-		background: none;
-		border: none;
-		padding: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border-radius: 0 var(--badge-radius) var(--badge-radius) 0;
-		flex-shrink: 0;
-		transition: 
-			background-color var(--badge-transition-duration) ease,
-			transform 0.1s ease;
-	}
+    /* ─── DEMO VIDEO ─── */
+    .demo { padding-top: 60px; padding-bottom: 60px; }
+    .demo-container {
+      max-width: 900px; margin: 0 auto;
+      border-radius: 16px; overflow: hidden;
+      border: 1px solid var(--border);
+      background: var(--terminal-bg);
+      box-shadow: 0 8px 60px rgba(0,0,0,0.5), 0 0 80px rgba(229,68,58,0.08);
+    }
+    .demo-bar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .demo-container video { width: 100%; display: block; }
 
-	#lovable-badge-close:hover {
-		background: rgba(255, 255, 255, 0.04);
-	}
+    /* ─── FEATURES ─── */
+    .features { padding-top: 40px; padding-bottom: 60px; }
+    .features-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+    }
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 28px;
+      transition: all 0.3s;
+    }
+    .feature-card:hover { border-color: var(--border-hover); background: var(--bg-card-hover); transform: translateY(-2px); }
+    .feature-icon {
+      width: 44px; height: 44px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 16px; font-size: 20px;
+    }
+    .feature-icon.red { background: rgba(229,68,58,0.15); color: var(--accent); }
+    .feature-icon.blue { background: rgba(96,165,250,0.15); color: var(--blue); }
+    .feature-icon.green { background: rgba(52,211,153,0.15); color: var(--green); }
+    .feature-icon.purple { background: rgba(167,139,250,0.15); color: var(--purple); }
+    .feature-icon.yellow { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .feature-card h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+    .feature-card p { font-size: 14px; color: var(--text-muted); line-height: 1.6; }
 
-	#lovable-badge-close:active {
-		transform: scale(0.92);
-	}
+    /* ─── ALT INSTALL ─── */
+    .alt-install {
+      padding-top: 60px; padding-bottom: 100px;
+      text-align: center;
+    }
+    .alt-install-box {
+      max-width: 600px; margin: 0 auto;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 36px;
+    }
+    .alt-install-box h3 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+    .alt-install-box p { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
+    .alt-install-box .install-tabs {
+      display: flex; gap: 0; margin-bottom: 16px;
+      background: rgba(0,0,0,0.3); border-radius: 10px; padding: 4px;
+      max-width: 300px; margin-left: auto; margin-right: auto; margin-bottom: 16px;
+    }
+    .tab-btn {
+      flex: 1; padding: 8px 16px; border: none; background: transparent;
+      color: var(--text-muted); font-size: 13px; font-weight: 500;
+      border-radius: 8px; cursor: pointer; transition: all 0.2s;
+      font-family: inherit;
+    }
+    .tab-btn.active { background: var(--accent-glow-strong); color: var(--accent); }
+    .install-cmd {
+      font-family: 'JetBrains Mono', monospace; font-size: 14px;
+      background: rgba(0,0,0,0.4); padding: 14px 20px; border-radius: 10px;
+      color: var(--green); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      cursor: pointer; transition: border-color 0.2s;
+    }
+    .install-cmd:hover { border-color: var(--border-hover); }
+    .install-cmd code { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .copy-btn {
+      background: none; border: none; color: var(--text-dim); cursor: pointer;
+      padding: 4px; transition: color 0.2s; flex-shrink: 0;
+    }
+    .copy-btn:hover { color: var(--text); }
+    .copy-btn svg { width: 18px; height: 18px; }
 
-	#lovable-badge-close:focus {
-		outline: none;
-	}
+    /* ─── FOOTER ─── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 24px;
+      max-width: 1100px; margin: 0 auto;
+    }
+    .footer-inner {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 16px;
+    }
+    .footer-text { font-size: 13px; color: var(--text-dim); }
+    .footer-text a { color: var(--text-muted); text-decoration: none; transition: color 0.2s; }
+    .footer-text a:hover { color: var(--accent); }
+    .footer-links { display: flex; gap: 20px; }
+    .footer-links a {
+      font-size: 13px; color: var(--text-dim); text-decoration: none;
+      display: inline-flex; align-items: center; gap: 6px;
+      transition: color 0.2s;
+    }
+    .footer-links a:hover { color: var(--text); }
+    .footer-links a svg { width: 16px; height: 16px; }
 
-	#lovable-badge-close:focus-visible {
-		outline: var(--focus-width) solid var(--focus-color);
-		outline-offset: calc(var(--focus-offset) * -1);
-		z-index: 1;
-	}
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 640px) {
+      .hero { padding-top: 110px; }
+      .hero-buttons { flex-direction: column; align-items: center; }
+      .nav-links .nav-link-text { display: none; }
+      .steps { grid-template-columns: 1fr; }
+      .features-grid { grid-template-columns: 1fr; }
+      .footer-inner { flex-direction: column; text-align: center; }
+    }
 
-	#lovable-badge-close svg path {
-		fill: var(--badge-text);
-		transition: fill var(--badge-transition-duration) ease;
-	}
+    /* Fade-in animations */
+    .fade-in {
+      opacity: 0; transform: translateY(20px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .fade-in.visible { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
 
-	#lovable-badge-close:hover svg path {
-		fill: var(--badge-text-hover);
-	}
+<!-- NAV -->
+<nav>
+  <div class="nav-inner">
+    <a href="/" class="nav-logo">
+      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="16" cy="16" r="14" fill="#E5443A" opacity="0.15"/>
+        <text x="16" y="22" text-anchor="middle" font-size="20">🦞</text>
+      </svg>
+      <div class="nav-logo-text"><span>Claw</span><span>metry</span></div>
+    </a>
+    <div class="nav-links">
+      <a href="#features" class="nav-link-text">Features</a>
+      <a href="#get-started" class="nav-link-text">Install</a>
+      <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener" class="nav-gh">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        Star on GitHub
+      </a>
+    </div>
+  </div>
+</nav>
 
-	@media (prefers-reduced-motion: reduce) {
-		#lovable-badge-cta,
-		#lovable-badge-close,
-		#lovable-badge-close svg path {
-			transition: none;
-		}
-		
-		#lovable-badge-cta:active,
-		#lovable-badge-close:active {
-			transform: none;
-		}
-	}
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-glow"></div>
+  <div style="position:relative;z-index:1;">
+    <div class="hero-badge">
+      <div class="hero-badge-dot"></div>
+      Observability for OpenClaw
+    </div>
+    <h1>
+      See Every Agent Move<br>
+      <span class="accent">In Real Time</span>
+    </h1>
+    <p class="hero-sub">
+      Your agents are running. Do you actually know what they're doing? Clawmetry shows you every tool call, every token spent, every sub-agent spawned.
+    </p>
+    <div class="hero-buttons">
+      <a href="#get-started" class="btn-primary">Get Started</a>
+      <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener" class="btn-secondary">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        View on GitHub
+      </a>
+    </div>
 
-	@media (prefers-contrast: high) {
-		#lovable-badge {
-			--badge-bg: #000;
-			--badge-text: #fff;
-			--badge-text-hover: #fff;
-			border: 2px solid currentColor;
-		}
-		
-		#lovable-badge-cta:focus-visible,
-		#lovable-badge-close:focus-visible {
-			outline-width: 3px;
-		}
-	}
-</style>
-<script defer="" src="./Clawmetry_updated_files/_flock.js" data-proxy-url="https://clawmetry.lovable.app/~api/analytics"></script><style type="text/css">:where(html[dir="ltr"]),:where([data-sonner-toaster][dir="ltr"]){--toast-icon-margin-start: -3px;--toast-icon-margin-end: 4px;--toast-svg-margin-start: -1px;--toast-svg-margin-end: 0px;--toast-button-margin-start: auto;--toast-button-margin-end: 0;--toast-close-button-start: 0;--toast-close-button-end: unset;--toast-close-button-transform: translate(-35%, -35%)}:where(html[dir="rtl"]),:where([data-sonner-toaster][dir="rtl"]){--toast-icon-margin-start: 4px;--toast-icon-margin-end: -3px;--toast-svg-margin-start: 0px;--toast-svg-margin-end: -1px;--toast-button-margin-start: 0;--toast-button-margin-end: auto;--toast-close-button-start: unset;--toast-close-button-end: 0;--toast-close-button-transform: translate(35%, -35%)}:where([data-sonner-toaster]){position:fixed;width:var(--width);font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica Neue,Arial,Noto Sans,sans-serif,Apple Color Emoji,Segoe UI Emoji,Segoe UI Symbol,Noto Color Emoji;--gray1: hsl(0, 0%, 99%);--gray2: hsl(0, 0%, 97.3%);--gray3: hsl(0, 0%, 95.1%);--gray4: hsl(0, 0%, 93%);--gray5: hsl(0, 0%, 90.9%);--gray6: hsl(0, 0%, 88.7%);--gray7: hsl(0, 0%, 85.8%);--gray8: hsl(0, 0%, 78%);--gray9: hsl(0, 0%, 56.1%);--gray10: hsl(0, 0%, 52.3%);--gray11: hsl(0, 0%, 43.5%);--gray12: hsl(0, 0%, 9%);--border-radius: 8px;box-sizing:border-box;padding:0;margin:0;list-style:none;outline:none;z-index:999999999;transition:transform .4s ease}:where([data-sonner-toaster][data-lifted="true"]){transform:translateY(-10px)}@media (hover: none) and (pointer: coarse){:where([data-sonner-toaster][data-lifted="true"]){transform:none}}:where([data-sonner-toaster][data-x-position="right"]){right:var(--offset-right)}:where([data-sonner-toaster][data-x-position="left"]){left:var(--offset-left)}:where([data-sonner-toaster][data-x-position="center"]){left:50%;transform:translate(-50%)}:where([data-sonner-toaster][data-y-position="top"]){top:var(--offset-top)}:where([data-sonner-toaster][data-y-position="bottom"]){bottom:var(--offset-bottom)}:where([data-sonner-toast]){--y: translateY(100%);--lift-amount: calc(var(--lift) * var(--gap));z-index:var(--z-index);position:absolute;opacity:0;transform:var(--y);filter:blur(0);touch-action:none;transition:transform .4s,opacity .4s,height .4s,box-shadow .2s;box-sizing:border-box;outline:none;overflow-wrap:anywhere}:where([data-sonner-toast][data-styled="true"]){padding:16px;background:var(--normal-bg);border:1px solid var(--normal-border);color:var(--normal-text);border-radius:var(--border-radius);box-shadow:0 4px 12px #0000001a;width:var(--width);font-size:13px;display:flex;align-items:center;gap:6px}:where([data-sonner-toast]:focus-visible){box-shadow:0 4px 12px #0000001a,0 0 0 2px #0003}:where([data-sonner-toast][data-y-position="top"]){top:0;--y: translateY(-100%);--lift: 1;--lift-amount: calc(1 * var(--gap))}:where([data-sonner-toast][data-y-position="bottom"]){bottom:0;--y: translateY(100%);--lift: -1;--lift-amount: calc(var(--lift) * var(--gap))}:where([data-sonner-toast]) :where([data-description]){font-weight:400;line-height:1.4;color:inherit}:where([data-sonner-toast]) :where([data-title]){font-weight:500;line-height:1.5;color:inherit}:where([data-sonner-toast]) :where([data-icon]){display:flex;height:16px;width:16px;position:relative;justify-content:flex-start;align-items:center;flex-shrink:0;margin-left:var(--toast-icon-margin-start);margin-right:var(--toast-icon-margin-end)}:where([data-sonner-toast][data-promise="true"]) :where([data-icon])>svg{opacity:0;transform:scale(.8);transform-origin:center;animation:sonner-fade-in .3s ease forwards}:where([data-sonner-toast]) :where([data-icon])>*{flex-shrink:0}:where([data-sonner-toast]) :where([data-icon]) svg{margin-left:var(--toast-svg-margin-start);margin-right:var(--toast-svg-margin-end)}:where([data-sonner-toast]) :where([data-content]){display:flex;flex-direction:column;gap:2px}[data-sonner-toast][data-styled=true] [data-button]{border-radius:4px;padding-left:8px;padding-right:8px;height:24px;font-size:12px;color:var(--normal-bg);background:var(--normal-text);margin-left:var(--toast-button-margin-start);margin-right:var(--toast-button-margin-end);border:none;cursor:pointer;outline:none;display:flex;align-items:center;flex-shrink:0;transition:opacity .4s,box-shadow .2s}:where([data-sonner-toast]) :where([data-button]):focus-visible{box-shadow:0 0 0 2px #0006}:where([data-sonner-toast]) :where([data-button]):first-of-type{margin-left:var(--toast-button-margin-start);margin-right:var(--toast-button-margin-end)}:where([data-sonner-toast]) :where([data-cancel]){color:var(--normal-text);background:rgba(0,0,0,.08)}:where([data-sonner-toast][data-theme="dark"]) :where([data-cancel]){background:rgba(255,255,255,.3)}:where([data-sonner-toast]) :where([data-close-button]){position:absolute;left:var(--toast-close-button-start);right:var(--toast-close-button-end);top:0;height:20px;width:20px;display:flex;justify-content:center;align-items:center;padding:0;color:var(--gray12);border:1px solid var(--gray4);transform:var(--toast-close-button-transform);border-radius:50%;cursor:pointer;z-index:1;transition:opacity .1s,background .2s,border-color .2s}[data-sonner-toast] [data-close-button]{background:var(--gray1)}:where([data-sonner-toast]) :where([data-close-button]):focus-visible{box-shadow:0 4px 12px #0000001a,0 0 0 2px #0003}:where([data-sonner-toast]) :where([data-disabled="true"]){cursor:not-allowed}:where([data-sonner-toast]):hover :where([data-close-button]):hover{background:var(--gray2);border-color:var(--gray5)}:where([data-sonner-toast][data-swiping="true"]):before{content:"";position:absolute;left:-50%;right:-50%;height:100%;z-index:-1}:where([data-sonner-toast][data-y-position="top"][data-swiping="true"]):before{bottom:50%;transform:scaleY(3) translateY(50%)}:where([data-sonner-toast][data-y-position="bottom"][data-swiping="true"]):before{top:50%;transform:scaleY(3) translateY(-50%)}:where([data-sonner-toast][data-swiping="false"][data-removed="true"]):before{content:"";position:absolute;inset:0;transform:scaleY(2)}:where([data-sonner-toast]):after{content:"";position:absolute;left:0;height:calc(var(--gap) + 1px);bottom:100%;width:100%}:where([data-sonner-toast][data-mounted="true"]){--y: translateY(0);opacity:1}:where([data-sonner-toast][data-expanded="false"][data-front="false"]){--scale: var(--toasts-before) * .05 + 1;--y: translateY(calc(var(--lift-amount) * var(--toasts-before))) scale(calc(-1 * var(--scale)));height:var(--front-toast-height)}:where([data-sonner-toast])>*{transition:opacity .4s}:where([data-sonner-toast][data-expanded="false"][data-front="false"][data-styled="true"])>*{opacity:0}:where([data-sonner-toast][data-visible="false"]){opacity:0;pointer-events:none}:where([data-sonner-toast][data-mounted="true"][data-expanded="true"]){--y: translateY(calc(var(--lift) * var(--offset)));height:var(--initial-height)}:where([data-sonner-toast][data-removed="true"][data-front="true"][data-swipe-out="false"]){--y: translateY(calc(var(--lift) * -100%));opacity:0}:where([data-sonner-toast][data-removed="true"][data-front="false"][data-swipe-out="false"][data-expanded="true"]){--y: translateY(calc(var(--lift) * var(--offset) + var(--lift) * -100%));opacity:0}:where([data-sonner-toast][data-removed="true"][data-front="false"][data-swipe-out="false"][data-expanded="false"]){--y: translateY(40%);opacity:0;transition:transform .5s,opacity .2s}:where([data-sonner-toast][data-removed="true"][data-front="false"]):before{height:calc(var(--initial-height) + 20%)}[data-sonner-toast][data-swiping=true]{transform:var(--y) translateY(var(--swipe-amount-y, 0px)) translate(var(--swipe-amount-x, 0px));transition:none}[data-sonner-toast][data-swiped=true]{user-select:none}[data-sonner-toast][data-swipe-out=true][data-y-position=bottom],[data-sonner-toast][data-swipe-out=true][data-y-position=top]{animation-duration:.2s;animation-timing-function:ease-out;animation-fill-mode:forwards}[data-sonner-toast][data-swipe-out=true][data-swipe-direction=left]{animation-name:swipe-out-left}[data-sonner-toast][data-swipe-out=true][data-swipe-direction=right]{animation-name:swipe-out-right}[data-sonner-toast][data-swipe-out=true][data-swipe-direction=up]{animation-name:swipe-out-up}[data-sonner-toast][data-swipe-out=true][data-swipe-direction=down]{animation-name:swipe-out-down}@keyframes swipe-out-left{0%{transform:var(--y) translate(var(--swipe-amount-x));opacity:1}to{transform:var(--y) translate(calc(var(--swipe-amount-x) - 100%));opacity:0}}@keyframes swipe-out-right{0%{transform:var(--y) translate(var(--swipe-amount-x));opacity:1}to{transform:var(--y) translate(calc(var(--swipe-amount-x) + 100%));opacity:0}}@keyframes swipe-out-up{0%{transform:var(--y) translateY(var(--swipe-amount-y));opacity:1}to{transform:var(--y) translateY(calc(var(--swipe-amount-y) - 100%));opacity:0}}@keyframes swipe-out-down{0%{transform:var(--y) translateY(var(--swipe-amount-y));opacity:1}to{transform:var(--y) translateY(calc(var(--swipe-amount-y) + 100%));opacity:0}}@media (max-width: 600px){[data-sonner-toaster]{position:fixed;right:var(--mobile-offset-right);left:var(--mobile-offset-left);width:100%}[data-sonner-toaster][dir=rtl]{left:calc(var(--mobile-offset-left) * -1)}[data-sonner-toaster] [data-sonner-toast]{left:0;right:0;width:calc(100% - var(--mobile-offset-left) * 2)}[data-sonner-toaster][data-x-position=left]{left:var(--mobile-offset-left)}[data-sonner-toaster][data-y-position=bottom]{bottom:var(--mobile-offset-bottom)}[data-sonner-toaster][data-y-position=top]{top:var(--mobile-offset-top)}[data-sonner-toaster][data-x-position=center]{left:var(--mobile-offset-left);right:var(--mobile-offset-right);transform:none}}[data-sonner-toaster][data-theme=light]{--normal-bg: #fff;--normal-border: var(--gray4);--normal-text: var(--gray12);--success-bg: hsl(143, 85%, 96%);--success-border: hsl(145, 92%, 91%);--success-text: hsl(140, 100%, 27%);--info-bg: hsl(208, 100%, 97%);--info-border: hsl(221, 91%, 91%);--info-text: hsl(210, 92%, 45%);--warning-bg: hsl(49, 100%, 97%);--warning-border: hsl(49, 91%, 91%);--warning-text: hsl(31, 92%, 45%);--error-bg: hsl(359, 100%, 97%);--error-border: hsl(359, 100%, 94%);--error-text: hsl(360, 100%, 45%)}[data-sonner-toaster][data-theme=light] [data-sonner-toast][data-invert=true]{--normal-bg: #000;--normal-border: hsl(0, 0%, 20%);--normal-text: var(--gray1)}[data-sonner-toaster][data-theme=dark] [data-sonner-toast][data-invert=true]{--normal-bg: #fff;--normal-border: var(--gray3);--normal-text: var(--gray12)}[data-sonner-toaster][data-theme=dark]{--normal-bg: #000;--normal-bg-hover: hsl(0, 0%, 12%);--normal-border: hsl(0, 0%, 20%);--normal-border-hover: hsl(0, 0%, 25%);--normal-text: var(--gray1);--success-bg: hsl(150, 100%, 6%);--success-border: hsl(147, 100%, 12%);--success-text: hsl(150, 86%, 65%);--info-bg: hsl(215, 100%, 6%);--info-border: hsl(223, 100%, 12%);--info-text: hsl(216, 87%, 65%);--warning-bg: hsl(64, 100%, 6%);--warning-border: hsl(60, 100%, 12%);--warning-text: hsl(46, 87%, 65%);--error-bg: hsl(358, 76%, 10%);--error-border: hsl(357, 89%, 16%);--error-text: hsl(358, 100%, 81%)}[data-sonner-toaster][data-theme=dark] [data-sonner-toast] [data-close-button]{background:var(--normal-bg);border-color:var(--normal-border);color:var(--normal-text)}[data-sonner-toaster][data-theme=dark] [data-sonner-toast] [data-close-button]:hover{background:var(--normal-bg-hover);border-color:var(--normal-border-hover)}[data-rich-colors=true][data-sonner-toast][data-type=success],[data-rich-colors=true][data-sonner-toast][data-type=success] [data-close-button]{background:var(--success-bg);border-color:var(--success-border);color:var(--success-text)}[data-rich-colors=true][data-sonner-toast][data-type=info],[data-rich-colors=true][data-sonner-toast][data-type=info] [data-close-button]{background:var(--info-bg);border-color:var(--info-border);color:var(--info-text)}[data-rich-colors=true][data-sonner-toast][data-type=warning],[data-rich-colors=true][data-sonner-toast][data-type=warning] [data-close-button]{background:var(--warning-bg);border-color:var(--warning-border);color:var(--warning-text)}[data-rich-colors=true][data-sonner-toast][data-type=error],[data-rich-colors=true][data-sonner-toast][data-type=error] [data-close-button]{background:var(--error-bg);border-color:var(--error-border);color:var(--error-text)}.sonner-loading-wrapper{--size: 16px;height:var(--size);width:var(--size);position:absolute;inset:0;z-index:10}.sonner-loading-wrapper[data-visible=false]{transform-origin:center;animation:sonner-fade-out .2s ease forwards}.sonner-spinner{position:relative;top:50%;left:50%;height:var(--size);width:var(--size)}.sonner-loading-bar{animation:sonner-spin 1.2s linear infinite;background:var(--gray11);border-radius:6px;height:8%;left:-10%;position:absolute;top:-3.9%;width:24%}.sonner-loading-bar:nth-child(1){animation-delay:-1.2s;transform:rotate(.0001deg) translate(146%)}.sonner-loading-bar:nth-child(2){animation-delay:-1.1s;transform:rotate(30deg) translate(146%)}.sonner-loading-bar:nth-child(3){animation-delay:-1s;transform:rotate(60deg) translate(146%)}.sonner-loading-bar:nth-child(4){animation-delay:-.9s;transform:rotate(90deg) translate(146%)}.sonner-loading-bar:nth-child(5){animation-delay:-.8s;transform:rotate(120deg) translate(146%)}.sonner-loading-bar:nth-child(6){animation-delay:-.7s;transform:rotate(150deg) translate(146%)}.sonner-loading-bar:nth-child(7){animation-delay:-.6s;transform:rotate(180deg) translate(146%)}.sonner-loading-bar:nth-child(8){animation-delay:-.5s;transform:rotate(210deg) translate(146%)}.sonner-loading-bar:nth-child(9){animation-delay:-.4s;transform:rotate(240deg) translate(146%)}.sonner-loading-bar:nth-child(10){animation-delay:-.3s;transform:rotate(270deg) translate(146%)}.sonner-loading-bar:nth-child(11){animation-delay:-.2s;transform:rotate(300deg) translate(146%)}.sonner-loading-bar:nth-child(12){animation-delay:-.1s;transform:rotate(330deg) translate(146%)}@keyframes sonner-fade-in{0%{opacity:0;transform:scale(.8)}to{opacity:1;transform:scale(1)}}@keyframes sonner-fade-out{0%{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(.8)}}@keyframes sonner-spin{0%{opacity:1}to{opacity:.15}}@media (prefers-reduced-motion){[data-sonner-toast],[data-sonner-toast]>*,.sonner-loading-bar{transition:none!important;animation:none!important}}.sonner-loader{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);transform-origin:center;transition:opacity .2s,transform .2s}.sonner-loader[data-visible=false]{opacity:0;transform:scale(.8) translate(-50%,-50%)}
-</style></head>
+    <!-- Terminal removed: Quick Start section handles install display -->
+  </div>
+</section>
 
-  <body>
-    <div id="root"><div role="region" aria-label="Notifications (F8)" tabindex="-1" style="pointer-events: none;"><ol tabindex="-1" class="fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]"></ol></div><section aria-label="Notifications alt+T" tabindex="-1" aria-live="polite" aria-relevant="additions text" aria-atomic="false"></section><div class="min-h-screen bg-background bg-radial-glow"><nav class="fixed top-0 left-0 right-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl"><div class="container mx-auto flex h-14 items-center justify-between px-6"><div class="flex items-center gap-2"><span class="text-2xl">🦞</span><span class="text-lg font-bold tracking-tight"><span class="text-foreground">Open</span><span class="text-gradient-primary">Claw</span></span></div><div class="flex items-center gap-3"><span class="text-sm font-medium text-muted-foreground">Clawmetry</span><a href="https://github.com/" target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-github h-4 w-4"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path><path d="M9 18c-4.51 2-5-2-7-2"></path></svg>Star on GitHub</a></div></div></nav><section class="container mx-auto px-6 pt-32 pb-16 text-center"><div class="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-secondary px-4 py-1.5 text-sm text-muted-foreground"><span class="text-base">🦞</span>Clawmetry for OpenClaw</div><h1 class="mx-auto max-w-3xl text-4xl font-bold leading-tight tracking-tight sm:text-5xl lg:text-6xl"><span class="text-foreground">See Every Agent Move</span><br><span class="text-gradient-primary">In Real Time</span></h1><p class="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">Real-time telemetry and visibility for OpenClaw agents. Understand tool usage, model behavior, system health, and cost flow from one elegant dashboard.</p><div class="mt-10 flex items-center justify-center gap-4"><a href="https://clawmetry.lovable.app/#get-started" class="inline-flex items-center rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition-all hover:brightness-110 glow-primary">Get Started</a><a href="https://clawmetry.lovable.app/#docs" class="inline-flex items-center rounded-lg border border-border px-6 py-3 text-sm font-semibold text-foreground transition-colors hover:border-primary/50 hover:text-primary">Read Docs</a></div><div class="mt-16"><div class="mx-auto max-w-xl"><div class="overflow-hidden rounded-lg border border-border bg-terminal"><div class="flex items-center gap-2 border-b border-border px-4 py-2.5"><div class="h-3 w-3 rounded-full bg-[hsl(var(--terminal-dot-red))]"></div><div class="h-3 w-3 rounded-full bg-[hsl(var(--terminal-dot-yellow))]"></div><div class="h-3 w-3 rounded-full bg-[hsl(var(--terminal-dot-green))]"></div><span class="ml-2 text-xs font-mono text-muted-foreground">launch.sh</span></div><div class="p-5 font-mono text-sm leading-relaxed"><div class="text-muted-foreground">pip install openclaw-dashboard</div><div class="mt-1 text-muted-foreground">openclaw-dashboard --port 8900</div><div class="mt-2 text-[hsl(var(--terminal-comment))]"># Open http://localhost:8900</div></div></div></div></div></section><section class="container mx-auto px-6 py-20"><h2 class="text-center text-3xl font-bold tracking-tight text-foreground sm:text-4xl mb-4">See What You Get</h2><p class="text-center text-muted-foreground text-lg mb-10 max-w-2xl mx-auto">Real-time visibility into every agent interaction, tool call, and system metric — all from one dashboard.</p><div class="mx-auto max-w-5xl"><div class="overflow-hidden rounded-lg border border-border bg-terminal glow-primary"><div class="flex items-center gap-2 border-b border-border px-4 py-2.5"><div class="h-3 w-3 rounded-full bg-[hsl(var(--terminal-dot-red))]"></div><div class="h-3 w-3 rounded-full bg-[hsl(var(--terminal-dot-yellow))]"></div><div class="h-3 w-3 rounded-full bg-[hsl(var(--terminal-dot-green))]"></div><span class="ml-2 text-xs font-mono text-muted-foreground">dashboard preview</span></div><video class="w-full" autoplay="" loop="" playsinline="" src="/videos/clawmetry.webm"></video></div></div></section><section class="container mx-auto px-6 py-24"><div class="grid gap-6 md:grid-cols-3"><div class="group rounded-xl border border-border bg-card p-6 transition-all duration-300 hover:border-primary/30 hover:glow-primary"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-activity mb-4 h-8 w-8 text-primary"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"></path></svg><h3 class="mb-2 text-lg font-semibold text-foreground">Flow Visibility</h3><p class="text-sm leading-relaxed text-muted-foreground">Trace channels, gateway, model, tools, and infra nodes in one live graph.</p></div><div class="group rounded-xl border border-border bg-card p-6 transition-all duration-300 hover:border-primary/30 hover:glow-primary"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-cpu mb-4 h-8 w-8 text-primary"><rect width="16" height="16" x="4" y="4" rx="2"></rect><rect width="6" height="6" x="9" y="9" rx="1"></rect><path d="M15 2v2"></path><path d="M15 20v2"></path><path d="M2 15h2"></path><path d="M2 9h2"></path><path d="M20 15h2"></path><path d="M20 9h2"></path><path d="M9 2v2"></path><path d="M9 20v2"></path></svg><h3 class="mb-2 text-lg font-semibold text-foreground">AI Telemetry</h3><p class="text-sm leading-relaxed text-muted-foreground">Monitor token usage, response times, tool calls, and cache behavior with no guesswork.</p></div><div class="group rounded-xl border border-border bg-card p-6 transition-all duration-300 hover:border-primary/30 hover:glow-primary"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shield-check mb-4 h-8 w-8 text-primary"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></svg><h3 class="mb-2 text-lg font-semibold text-foreground">Ops Confidence</h3><p class="text-sm leading-relaxed text-muted-foreground">Track cron health, service uptime, storage pressure, and active sub-agents instantly.</p></div></div></section><footer class="border-t border-border py-8"><p class="text-center text-sm text-muted-foreground">Clawmetry by OpenClaw • Open-source observability for AI agents</p></footer></div></div>
-  
-<aside id="lovable-badge" role="complementary" aria-label="Edit with Lovable">
-	<a id="lovable-badge-cta" target="_blank" href="https://lovable.dev/projects/c2c9130a-ff91-47e9-b086-35ea0dcb8e5c?utm_source=lovable-badge" rel="noopener" aria-label="Edit with Lovable">
-		<span id="lovable-badge-text">Edit with</span>
-		<svg xmlns="http://www.w3.org/2000/svg" width="52" height="16" fill="none" viewBox="0 0 52 16">
-  <path fill="#FCFBF8" fill-rule="evenodd" d="M20.318 5.25c.643 0 1.206.14 1.69.418a2.81 2.81 0 0 1 1.118 1.191c.266.513.4 1.115.4 1.807s-.134 1.296-.4 1.812a2.81 2.81 0 0 1-1.118 1.193c-.484.278-1.047.418-1.69.418s-1.208-.14-1.695-.418a2.85 2.85 0 0 1-1.125-1.193c-.262-.516-.393-1.12-.393-1.812s.131-1.294.393-1.807a2.848 2.848 0 0 1 1.125-1.191c.487-.279 1.052-.418 1.695-.418Zm0 1.425c-.27 0-.504.076-.7.228-.193.147-.34.37-.443.67-.102.295-.153.66-.153 1.093 0 .435.05.801.153 1.1.102.3.25.524.443.676.196.147.43.22.7.22.27 0 .502-.073.694-.22.193-.152.341-.375.443-.67.103-.299.153-.667.153-1.106 0-.65-.112-1.145-.337-1.481a1.08 1.08 0 0 0-.953-.51ZM32.7 5.25c.61 0 1.127.1 1.549.3.422.197.74.48.953.849.217.368.325.809.325 1.32v2.704c0 .29.02.562.062.812.044.245.108.4.19.466V12h-1.935a5.895 5.895 0 0 1-.105-.684 7.745 7.745 0 0 1-.02-.228 2.293 2.293 0 0 1-.151.203c-.205.242-.47.437-.793.584-.32.143-.685.215-1.094.215-.406 0-.77-.08-1.094-.24a1.845 1.845 0 0 1-.756-.682 1.984 1.984 0 0 1-.27-1.045c0-.606.178-1.069.535-1.388.356-.324.87-.534 1.542-.633l1.125-.16c.225-.032.403-.074.534-.123a.622.622 0 0 0 .288-.196.549.549 0 0 0 .093-.327.65.65 0 0 0-.11-.367.702.702 0 0 0-.32-.27c-.14-.07-.31-.105-.51-.105-.32 0-.576.083-.768.251-.193.164-.298.39-.314.676h-1.923c.016-.434.147-.82.393-1.155.25-.34.596-.604 1.039-.792.442-.189.954-.283 1.535-.283Zm.99 3.498a.98.98 0 0 1-.215.14 2.49 2.49 0 0 1-.584.178l-.473.092c-.315.061-.553.156-.713.283-.155.127-.233.305-.233.534 0 .23.084.412.252.547.168.135.383.203.645.203s.494-.058.694-.173c.201-.118.355-.282.461-.49.11-.21.166-.448.166-.714v-.6Zm4.526-2.375c.065-.125.138-.243.221-.349.197-.25.437-.44.719-.571.282-.135.6-.203.952-.203.528 0 .988.138 1.377.412.389.275.688.67.896 1.186.21.512.314 1.12.314 1.824 0 .7-.107 1.309-.32 1.825-.213.512-.518.906-.915 1.18-.393.275-.854.412-1.383.412-.352 0-.667-.062-.946-.184a1.832 1.832 0 0 1-.7-.554 2.2 2.2 0 0 1-.234-.383V12h-1.843V3h1.862v3.373Zm1.284.296c-.274 0-.51.085-.707.253-.192.163-.338.397-.436.7a3.376 3.376 0 0 0-.148 1.05c0 .406.05.759.148 1.058.098.299.243.53.436.694.197.164.433.246.707.246.279 0 .512-.082.7-.246.193-.164.336-.395.43-.694.099-.3.148-.652.148-1.058 0-.405-.05-.757-.147-1.056-.095-.299-.238-.53-.43-.694a1.015 1.015 0 0 0-.7-.253Zm9.416-1.419c.602 0 1.136.131 1.604.393.466.262.829.643 1.086 1.143.263.5.394 1.097.394 1.794 0 .25-.002.449-.006.596H47.51c.018.288.071.538.164.75a1.3 1.3 0 0 0 .491.596c.214.13.465.196.757.196.319 0 .583-.082.792-.246.209-.167.34-.403.393-.706h1.862a2.48 2.48 0 0 1-.485 1.235 2.54 2.54 0 0 1-1.051.805c-.439.188-.949.283-1.53.283-.655 0-1.225-.125-1.708-.375a2.672 2.672 0 0 1-1.13-1.143c-.267-.508-.4-1.137-.4-1.887 0-.712.14-1.327.418-1.843a2.86 2.86 0 0 1 1.155-1.186c.491-.27 1.051-.405 1.678-.405Zm-.044 1.345c-.274 0-.516.068-.725.203a1.29 1.29 0 0 0-.479.59 2.045 2.045 0 0 0-.132.498h2.562a1.873 1.873 0 0 0-.138-.602 1.061 1.061 0 0 0-.418-.516 1.243 1.243 0 0 0-.67-.173Z" clip-rule="evenodd"></path>
-  <path fill="#FCFBF8" d="m26.605 9.995 1.342-4.566h1.924L27.628 12h-2.07l-2.33-6.57h1.98l1.397 4.565Zm-13.013.143h2.256c1.632 0 1.421 1.837 1.418 1.861h-5.603V3h1.93v7.138Zm31.516 1.861h-1.862V3h1.862v8.999Z"></path>
-  <path fill="url(#a)" fill-rule="evenodd" d="M2.7 3c1.492 0 2.7 1.192 2.7 2.663v1.012h.9c1.49 0 2.7 1.192 2.7 2.662S7.791 12 6.3 12H0V5.663C0 4.193 1.209 3 2.7 3Z" clip-rule="evenodd"></path>
-  <defs>
-    <radialgradient id="a" cx="0" cy="0" r="1" gradientTransform="matrix(-1.54236 7.07838 -10.231 -2.15602 4.627 5.022)" gradientUnits="userSpaceOnUse">
-      <stop offset=".106" stop-color="#FE7B02"></stop>
-      <stop offset=".394" stop-color="#FE3F21"></stop>
-      <stop offset=".608" stop-color="#F858BC"></stop>
-      <stop offset=".929" stop-color="#575ECF"></stop>
-    </radialgradient>
-  </defs>
-</svg>
-
-
-	</a>
-	
-	<span id="lovable-badge-divider" aria-hidden="true"></span>
-	
-	<button id="lovable-badge-close" aria-label="Dismiss" title="Dismiss" type="button">
-		<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 16 16" aria-hidden="true">
-			<path d="M10.646 4.646a.5.5 0 1 1 .707.708L8.707 8l2.646 2.646a.5.5 0 1 1-.707.707L8 8.707l-2.646 2.646a.5.5 0 1 1-.708-.707L7.293 8 4.646 5.354a.5.5 0 1 1 .708-.708L8 7.293l2.646-2.647Z"></path>
-		</svg>
-	</button>
-</aside>
+<!-- QUICK START -->
+<section id="get-started" style="padding-top:40px;padding-bottom:60px;">
+  <h2 class="section-title" style="display:flex;align-items:center;gap:8px;justify-content:center;"><span style="color:#E5443A;">❯</span> Quick Start</h2>
+  <div style="max-width:780px;margin:0 auto;">
+    <!-- Terminal window -->
+    <div style="background:linear-gradient(180deg, #141922 0%, #0d1117 100%);border:1px solid rgba(255,255,255,0.08);border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <!-- Terminal bar with dots + tabs -->
+      <div style="display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);gap:12px;">
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          <div style="width:12px;height:12px;border-radius:50%;background:#ff5f57;"></div>
+          <div style="width:12px;height:12px;border-radius:50%;background:#febc2e;"></div>
+          <div style="width:12px;height:12px;border-radius:50%;background:#28c840;"></div>
+        </div>
+        <div style="display:flex;gap:2px;margin-left:8px;">
+          <button onclick="showTab('oneliner')" id="tab-oneliner" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#28c840;color:#000;font-family:'JetBrains Mono',monospace;transition:all 0.15s;">One-liner</button>
+          <button onclick="showTab('pip')" id="tab-pip" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">pip</button>
+          <button onclick="showTab('powershell')" id="tab-powershell" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">PowerShell</button>
+          <button onclick="showTab('cmd')" id="tab-cmd" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">CMD</button>
+        </div>
+        <!-- Right side: copy button -->
+        <div style="margin-left:auto;display:flex;align-items:center;">
+          <button id="copy-btn" onclick="copyActiveCmd()" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:rgba(255,255,255,0.5);cursor:pointer;padding:5px 8px;display:flex;align-items:center;transition:all 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.06)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+        </div>
+      </div>
+      <!-- Terminal body -->
+      <div style="padding:20px 24px;font-family:'JetBrains Mono',monospace;font-size:14px;line-height:2;">
+        <div id="panel-oneliner">
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Detects your OS, installs everything</div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">curl -fsSL https://clawmetry.com/install.sh | bash</span></div>
+        </div>
+        <div id="panel-pip" style="display:none;">
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Install and run</div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">pip install clawmetry</span></div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">clawmetry</span></div>
+        </div>
+        <div id="panel-powershell" style="display:none;">
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># PowerShell one-liner</div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">iwr -useb https://clawmetry.com/install.ps1 | iex</span></div>
+        </div>
+        <div id="panel-cmd" style="display:none;">
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># CMD prompt</div>
+          <div><span style="color:rgba(255,255,255,0.4);">&gt; </span><span style="color:#28c840;font-size:13px;">curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd</span></div>
+        </div>
+      </div>
+    </div>
+    <p style="text-align:center;color:var(--text-dim);font-size:13px;margin-top:16px;">Works on macOS, Windows, and Linux. The installer handles everything for you.</p>
+  </div>
+</section>
 <script>
-	// Don't show the lovable-badge if the page is in an iframe or if it's being rendered by puppeteer (screenshot service)
-	if (window.self !== window.top || navigator.userAgent.includes('puppeteer')) {
-		// the page is in an iframe
-		var badge = document.getElementById('lovable-badge');
-		if (badge) {
-			badge.style.display = 'none';
-		}
-	}
-
-	// Add click event listener to close button with animation
-	var closeButton = document.getElementById('lovable-badge-close');
-	if (closeButton) {
-		closeButton.addEventListener('click', function(event) {
-			event.preventDefault();
-			event.stopPropagation();
-			var badge = document.getElementById('lovable-badge');
-			if (badge) {
-				badge.classList.add('closing');
-				setTimeout(function() {
-					if (badge) {
-						badge.style.display = 'none';
-					}
-				}, 240);
-			}
-		});
-	}
+var cmds = {
+  oneliner: 'curl -fsSL https://clawmetry.com/install.sh | bash',
+  pip: 'pip install clawmetry && clawmetry',
+  powershell: 'iwr -useb https://clawmetry.com/install.ps1 | iex',
+  cmd: 'curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd'
+};
+var activeTab = 'oneliner';
+function showTab(id) {
+  activeTab = id;
+  ['oneliner','pip','powershell','cmd'].forEach(function(t) {
+    var panel = document.getElementById('panel-'+t);
+    if(panel) panel.style.display = t===id ? 'block' : 'none';
+    var tab = document.getElementById('tab-'+t);
+    if(tab) {
+      tab.style.background = t===id ? '#28c840' : 'transparent';
+      tab.style.color = t===id ? '#000' : 'rgba(255,255,255,0.5)';
+      tab.style.fontWeight = t===id ? '600' : '500';
+    }
+  });
+}
+function copyActiveCmd() {
+  navigator.clipboard.writeText(cmds[activeTab]);
+  var btn = document.getElementById('copy-btn');
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#28c840" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+  setTimeout(function(){ btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'; }, 1500);
+}
 </script>
 
+<!-- DEMO VIDEO -->
+<section class="demo">
+  <h2 class="section-title">See What You Get</h2>
+  <p class="section-sub">One dashboard. Everything your agents are doing, right now.</p>
+  <div class="demo-container">
+    <div class="demo-bar">
+      <div class="terminal-dot red"></div>
+      <div class="terminal-dot yellow"></div>
+      <div class="terminal-dot green"></div>
+      <span class="terminal-title">clawmetry dashboard</span>
+    </div>
+    <video autoplay loop muted playsinline src="/videos/clawmetry.webm"></video>
+  </div>
+</section>
 
-</body></html>
+<!-- HERO FEATURE: SUB-AGENT VISIBILITY -->
+<section style="padding-top:60px;padding-bottom:0;" id="features">
+  <h2 class="section-title">What It Does</h2>
+  <p class="section-sub">Stop guessing. Start seeing.</p>
+  <div style="max-width:800px;margin:0 auto 40px;background:linear-gradient(135deg, rgba(229,68,58,0.08) 0%, rgba(229,68,58,0.02) 100%);border:1px solid rgba(229,68,58,0.25);border-radius:20px;padding:36px 40px;display:flex;gap:28px;align-items:flex-start;">
+    <div style="flex-shrink:0;width:56px;height:56px;border-radius:14px;background:rgba(229,68,58,0.18);display:flex;align-items:center;justify-content:center;">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#E5443A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></svg>
+    </div>
+    <div>
+      <div style="display:inline-block;background:rgba(229,68,58,0.15);color:#E5443A;font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;padding:3px 10px;border-radius:6px;margin-bottom:10px;">Killer Feature</div>
+      <h3 style="font-size:22px;font-weight:700;margin-bottom:8px;">Sub-Agent Visibility</h3>
+      <p style="font-size:15px;color:#94A3B8;line-height:1.7;margin:0;">Your main agent spawns sub-agents. Those sub-agents run commands, burn tokens, and you have no idea what's going on. Until now. See every sub-agent, what it's doing, and what it costs.</p>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES GRID -->
+<section class="features" style="padding-top:20px;">
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon red">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>
+      </div>
+      <h3>Live Flow Graph</h3>
+      <p>Channels, gateway, model, tools, infra nodes. All connected, updating live.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon blue">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
+      </div>
+      <h3>AI Telemetry</h3>
+      <p>Token usage, response times, tool calls, cache hits, model costs. All the numbers, none of the guessing.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon green">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+      </div>
+      <h3>System Health</h3>
+      <p>Cron health, service uptime, disk pressure, active sub-agents. One glance tells you everything.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon purple">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>
+      </div>
+      <h3>Session Tracking</h3>
+      <p>Every session, start to finish. What happened, when, and what it cost.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon yellow">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      </div>
+      <h3>Mission Control</h3>
+      <p>Plugs into OpenClaw Mission Control. Tasks, agents, orchestration, all in one place.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon red">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+      </div>
+      <h3>Cost Tracking</h3>
+      <p>Know exactly what each session, model call, and tool use costs before the bill hits.</p>
+    </div>
+  </div>
+</section>
+
+<!-- WORKS WITH EVERYTHING -->
+<section class="" style="padding:60px 40px 80px;text-align:center;">
+  <h2 class="section-title">Works With Everything</h2>
+  <p class="section-sub">If it runs OpenClaw, Clawmetry works on it. Bare metal, cloud, your desk, whatever.</p>
+  <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:32px;max-width:700px;margin-left:auto;margin-right:auto;">
+    <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">macOS</span>
+    <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">Ubuntu</span>
+    <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">Debian</span>
+    <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">Raspberry Pi</span>
+    <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">Digital Ocean</span>
+    <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">Hostinger</span>
+    <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">Hetzner</span>
+    <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">AWS</span>
+    <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">GCP</span>
+    <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">Windows WSL</span>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-text">
+      Clawmetry by <a href="https://github.com/vivekchand">OpenClaw</a> · Open-source observability for AI agents
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <a href="https://pypi.org/project/clawmetry/" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M12 0L1.5 6v12L12 24l10.5-6V6L12 0zm-.5 18.5l-6-3.5V9l6 3.5v6zm1-7L6.5 8 12 4.5 17.5 8l-6 3.5zm6.5 3.5l-6 3.5v-6l6-3.5v6z"/></svg>
+        PyPI
+      </a>
+      <a href="https://github.com/vivekchand/clawmetry/blob/main/README.md" target="_blank" rel="noopener">
+        Docs
+      </a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Fade-in on scroll
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); } });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+  // Copy command
+  function copyCmd(el) {
+    const code = el.querySelector('code').textContent;
+    navigator.clipboard.writeText(code).then(() => {
+      const btn = el.querySelector('.copy-btn');
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+      setTimeout(() => {
+        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+      }, 2000);
+    });
+  }
+</script>
+
+</body>
+</html>

@@ -86,7 +86,7 @@ These templates are based on proven patterns from our production skills:
 | [Simple API Wrapper](skill-templates/simple-api-wrapper.md) | `weather`, `news-headlines` | Free APIs, JSON processing, error handling |
 | [CLI Tool Wrapper](skill-templates/cli-tool-wrapper.md) | `github`, `docker-ops` | Command automation, JSON output parsing |
 | [Media Pipeline](skill-templates/media-pipeline.md) | `video-reels`, `vedicvoice-instagram` | TTS, video assembly, quality validation |
-| [Dashboard Component](skill-templates/dashboard-component.md) | `weather-dashboard`, `openclaw-dashboard` | Real-time monitoring, interactive charts |
+| [Dashboard Component](skill-templates/dashboard-component.md) | `weather-dashboard`, `clawmetry` | Real-time monitoring, interactive charts |
 
 ## Template Usage
 
