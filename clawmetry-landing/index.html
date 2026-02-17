@@ -3,15 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-XDF9MFD8FJ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-XDF9MFD8FJ');
+  </script>
+  <!-- Microsoft Clarity -->
+  <script type="text/javascript">
+    (function(c,l,a,r,i,t,y){
+      c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+      t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+      y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+    })(window, document, "clarity", "script", "virz7z5n97");
+  </script>
   <title>Clawmetry - See what your AI agents are actually doing</title>
   <meta name="description" content="Real-time dashboard for OpenClaw agents. Token costs, sub-agent trees, tool calls. pip install clawmetry.">
   <meta property="og:title" content="Clawmetry - See what your AI agents are actually doing">
   <meta property="og:description" content="Real-time dashboard for OpenClaw agents. Token costs, sub-agents, tool calls. Install in 30 seconds.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://clawmetry.com">
-  <meta property="og:image" content="https://clawmetry.com/dashboard-flow.png">
+  <meta property="og:image" content="https://clawmetry.com/dashboard-flow.png?v=3">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="https://clawmetry.com/dashboard-flow.png">
+  <meta name="twitter:image" content="https://clawmetry.com/dashboard-flow.png?v=3">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦞</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -391,7 +407,7 @@ function copyActiveCmd() {
     <button onclick="showScreenshot('overview',true)" id="ss-tab-overview" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Overview</button>
     <button onclick="showScreenshot('subagent',true)" id="ss-tab-subagent" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Sub-Agent</button>
     <button onclick="showScreenshot('summary',true)" id="ss-tab-summary" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Summary</button>
-    <button onclick="showScreenshot('crons',true)" id="ss-tab-crons" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Crons</button>
+    <button onclick="showScreenshot('crons-v2',true)" id="ss-tab-crons" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Crons</button>
     <button onclick="showScreenshot('memory',true)" id="ss-tab-memory" class="ss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);font-family:'Inter',sans-serif;transition:all 0.15s;">Memory</button>
   </div>
 
@@ -406,7 +422,7 @@ function copyActiveCmd() {
   </div>
 
   <script>
-  var ssNames = ['flow','overview','subagent','summary','crons','memory'];
+  var ssNames = ['flow','overview','subagent','summary','crons-v2','memory'];
   var ssIndex = 0;
   var ssAutoPlay = null;
   var ssPaused = false;
