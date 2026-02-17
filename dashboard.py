@@ -39,7 +39,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 app = Flask(__name__)
 
@@ -5869,34 +5869,44 @@ def api_gw_config():
             gw_url = _auto_discover_gateway(token)
         if not gw_url:
             return jsonify({'error': 'Could not find OpenClaw gateway. Please provide URL.'}), 404
-        # Validate via WebSocket RPC first, fall back to HTTP
+        # Validate the connection
         valid = False
-        ws_url = gw_url.replace('http://', 'ws://').replace('https://', 'wss://')
-        try:
-            import websocket
-            ws = websocket.create_connection(f'{ws_url}/', timeout=5)
-            ws.recv()  # challenge
-            connect_msg = {
-                'type': 'req', 'id': 'validate', 'method': 'connect',
-                'params': {
-                    'minProtocol': 3, 'maxProtocol': 3,
-                    'client': {'id': 'cli', 'version': __version__, 'platform': 'linux',
-                               'mode': 'cli', 'instanceId': 'clawmetry-validate'},
-                    'role': 'operator', 'scopes': ['operator.admin'],
-                    'auth': {'token': token},
+        
+        # Docker mode: skip HTTP/WS, validate via docker exec
+        if gw_url.startswith('docker://'):
+            result = _gw_invoke_docker('session_status', {}, token)
+            if result:
+                valid = True
+        
+        # WebSocket validation (non-docker)
+        if not valid and not gw_url.startswith('docker://'):
+            ws_url = gw_url.replace('http://', 'ws://').replace('https://', 'wss://')
+            try:
+                import websocket
+                ws = websocket.create_connection(f'{ws_url}/', timeout=5)
+                ws.recv()  # challenge
+                connect_msg = {
+                    'type': 'req', 'id': 'validate', 'method': 'connect',
+                    'params': {
+                        'minProtocol': 3, 'maxProtocol': 3,
+                        'client': {'id': 'cli', 'version': __version__, 'platform': 'linux',
+                                   'mode': 'cli', 'instanceId': 'clawmetry-validate'},
+                        'role': 'operator', 'scopes': ['operator.admin'],
+                        'auth': {'token': token},
+                    }
                 }
-            }
-            ws.send(json.dumps(connect_msg))
-            for _ in range(5):
-                r = json.loads(ws.recv())
-                if r.get('type') == 'res' and r.get('id') == 'validate':
-                    valid = r.get('ok', False)
-                    break
-            ws.close()
-        except Exception:
-            pass
-        # HTTP fallback validation
-        if not valid:
+                ws.send(json.dumps(connect_msg))
+                for _ in range(5):
+                    r = json.loads(ws.recv())
+                    if r.get('type') == 'res' and r.get('id') == 'validate':
+                        valid = r.get('ok', False)
+                        break
+                ws.close()
+            except Exception:
+                pass
+        
+        # HTTP fallback validation (non-docker)
+        if not valid and not gw_url.startswith('docker://'):
             try:
                 payload = json.dumps({'tool': 'session_status', 'args': {}}).encode()
                 req = _urllib_req.Request(
@@ -5908,14 +5918,16 @@ def api_gw_config():
                 with _urllib_req.urlopen(req, timeout=5) as resp:
                     result = json.loads(resp.read())
                     valid = result.get('ok', False)
-            except Exception as e:
-                return jsonify({'error': f'Connection failed: {str(e)}'}), 500
-        # Docker exec fallback validation
-        if not valid and (gw_url == 'docker://localhost:18789' or not gw_url):
+            except Exception:
+                pass
+        
+        # Docker exec fallback (last resort)
+        if not valid:
             result = _gw_invoke_docker('session_status', {}, token)
             if result:
                 valid = True
                 gw_url = 'docker://localhost:18789'
+        
         if not valid:
             return jsonify({'error': 'Invalid token or gateway not responding'}), 401
         # Save config
