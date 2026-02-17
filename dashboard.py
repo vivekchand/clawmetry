@@ -39,7 +39,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 app = Flask(__name__)
 
@@ -5549,7 +5549,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <input id="gw-token-input" type="password" placeholder="Paste your gateway token" 
       style="width:100%; padding:12px 16px; border:1px solid var(--border-primary, #444); border-radius:8px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:14px; font-family:monospace; box-sizing:border-box; outline:none; margin-bottom:8px;"
       onkeydown="if(event.key==='Enter')gwSetupConnect()">
-    <p id="gw-setup-hint" style="color:var(--text-muted, #888); font-size:12px; margin:0 0 4px; text-align:left;">Find it in your config: <code style="color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:2px 6px; border-radius:4px;">gateway.auth.token</code></p>
+    <p id="gw-setup-hint" style="color:var(--text-muted, #888); font-size:12px; margin:0 0 4px; text-align:left;">Find it: <code style="color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:2px 6px; border-radius:4px;">docker exec $(docker ps -q) env | grep TOKEN</code> or <code style="color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:2px 6px; border-radius:4px;">gateway.auth.token</code></p>
     <p id="gw-url-hint" style="color:var(--text-muted, #666); font-size:11px; margin:0 0 16px; text-align:left;">Optional: <input id="gw-url-input" type="text" placeholder="http://localhost:18789 (auto-detected)" style="width:70%; padding:4px 8px; border:1px solid var(--border-primary, #444); border-radius:4px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:11px; font-family:monospace;"></p>
     <div id="gw-setup-error" style="color:#ff4444; font-size:13px; margin-bottom:12px; display:none;"></div>
     <div id="gw-setup-status" style="color:var(--text-accent, #0af); font-size:13px; margin-bottom:12px; display:none;"></div>
@@ -5794,25 +5794,59 @@ def _load_gw_config():
 
 
 def _gw_invoke(tool, args=None):
-    """Invoke a tool via the OpenClaw gateway /tools/invoke endpoint."""
+    """Invoke a tool via the OpenClaw gateway /tools/invoke endpoint.
+    Tries: 1) Direct HTTP, 2) Docker exec fallback."""
     cfg = _load_gw_config()
-    url = cfg.get('url')
     token = cfg.get('token')
-    if not url or not token:
-        return None
+    url = cfg.get('url')
+    
+    # Try direct HTTP first
+    if url and token:
+        try:
+            payload = json.dumps({'tool': tool, 'args': args or {}}).encode()
+            req = _urllib_req.Request(
+                f"{url.rstrip('/')}/tools/invoke",
+                data=payload,
+                headers={
+                    'Authorization': f'Bearer {token}',
+                    'Content-Type': 'application/json',
+                },
+                method='POST'
+            )
+            with _urllib_req.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                if data.get('ok'):
+                    return data.get('result', {}).get('details', data.get('result', {}))
+        except Exception:
+            pass
+    
+    # Fallback: docker exec (for Hostinger/Docker installs where gateway binds to loopback)
+    if token:
+        result = _gw_invoke_docker(tool, args, token)
+        if result:
+            return result
+    
+    return None
+
+def _gw_invoke_docker(tool, args=None, token=None):
+    """Invoke gateway API via docker exec (when gateway is inside Docker)."""
     try:
-        payload = json.dumps({'tool': tool, 'args': args or {}}).encode()
-        req = _urllib_req.Request(
-            f"{url.rstrip('/')}/tools/invoke",
-            data=payload,
-            headers={
-                'Authorization': f'Bearer {token}',
-                'Content-Type': 'application/json',
-            },
-            method='POST'
-        )
-        with _urllib_req.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
+        container_id = subprocess.check_output(
+            ['docker', 'ps', '-q'], timeout=3, stderr=subprocess.DEVNULL
+        ).decode().strip().split('\n')[0]
+        if not container_id:
+            return None
+        payload = json.dumps({'tool': tool, 'args': args or {}})
+        cmd = [
+            'docker', 'exec', container_id, 'curl', '-s', '--max-time', '8',
+            '-X', 'POST', 'http://127.0.0.1:18789/tools/invoke',
+            '-H', f'Authorization: Bearer {token}',
+            '-H', 'Content-Type: application/json',
+            '-d', payload
+        ]
+        output = subprocess.check_output(cmd, timeout=15, stderr=subprocess.DEVNULL).decode()
+        if output:
+            data = json.loads(output)
             if data.get('ok'):
                 return data.get('result', {}).get('details', data.get('result', {}))
     except Exception:
@@ -5876,6 +5910,12 @@ def api_gw_config():
                     valid = result.get('ok', False)
             except Exception as e:
                 return jsonify({'error': f'Connection failed: {str(e)}'}), 500
+        # Docker exec fallback validation
+        if not valid and (gw_url == 'docker://localhost:18789' or not gw_url):
+            result = _gw_invoke_docker('session_status', {}, token)
+            if result:
+                valid = True
+                gw_url = 'docker://localhost:18789'
         if not valid:
             return jsonify({'error': 'Invalid token or gateway not responding'}), 401
         # Save config
@@ -6002,6 +6042,14 @@ def _auto_discover_gateway(token):
                     return url
         except Exception:
             continue
+    
+    # Last resort: try docker exec
+    try:
+        result = _gw_invoke_docker('session_status', {}, token)
+        if result:
+            return 'docker://localhost:18789'  # sentinel value indicating docker mode
+    except Exception:
+        pass
     return None
 
 @app.route('/')
