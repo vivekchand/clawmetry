@@ -39,7 +39,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 app = Flask(__name__)
 
@@ -8357,6 +8357,13 @@ def api_system_health():
             s.settimeout(2)
             ok = s.connect_ex(('127.0.0.1', port)) == 0
             s.close()
+            # If direct socket fails and this is the gateway, try docker exec
+            if not ok and 'Gateway' in name:
+                cfg_check = _load_gw_config()
+                if cfg_check.get('url', '').startswith('docker://') or cfg_check.get('token'):
+                    docker_result = _gw_invoke_docker('session_status', {}, cfg_check.get('token'))
+                    if docker_result:
+                        ok = True
             services.append({'name': name, 'port': port, 'up': ok})
         except Exception:
             services.append({'name': name, 'port': port, 'up': False})
@@ -8374,7 +8381,8 @@ def api_system_health():
             pass
 
     # --- CRON JOBS ---
-    crons = _get_crons()
+    gw_cron_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': True})
+    crons = gw_cron_data.get('jobs', []) if gw_cron_data and 'jobs' in gw_cron_data else _get_crons()
     cron_enabled = len([j for j in crons if j.get('enabled', True)])
     cron_ok_24h = 0
     cron_failed = []
