@@ -149,6 +149,7 @@ label{display:block;color:var(--muted);font-size:13px;margin-bottom:4px;margin-t
   <a href="/admin" class="{{ 'active' if active=='dash' }}">Dashboard</a>
   <a href="/admin/inbox" class="{{ 'active' if active=='inbox' }}">Inbox</a>
   <a href="/admin/compose" class="{{ 'active' if active=='compose' }}">Compose</a>
+  <a href="/admin/sent" class="{{ 'active' if active=='sent' }}">Sent</a>
   <a href="/admin/subscribers" class="{{ 'active' if active=='subs' }}">Subscribers</a>
   <a href="/admin/events" class="{{ 'active' if active=='events' }}">Events</a>
   <a href="/admin/logout" style="margin-left:auto">Logout</a>
@@ -659,6 +660,21 @@ def admin_compose():
     </div>
     """
     return _render_admin("Compose", html, "compose")
+
+
+@app.route("/admin/sent")
+@admin_required
+def admin_sent():
+    db = _get_db()
+    emails = db.execute("SELECT * FROM emails_sent ORDER BY id DESC").fetchall()
+    rows = ""
+    for e in emails:
+        rows += f'<tr><td>{e["to_email"]}</td><td>{e["subject"]}</td><td>{e["sent_at"]}</td></tr>'
+    html = f"""
+    <h2 style="margin-bottom:16px">Sent Emails ({len(emails)})</h2>
+    <table><thead><tr><th>To</th><th>Subject</th><th>Sent</th></tr></thead><tbody>{rows or '<tr><td colspan="3" style="text-align:center;color:var(--muted)">No sent emails yet</td></tr>'}</tbody></table>
+    """
+    return _render_admin("Sent", html, "sent")
 
 
 @app.route("/admin/subscribers")
