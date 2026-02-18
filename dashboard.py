@@ -7887,15 +7887,25 @@ def api_main_activity():
     sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
     if not os.path.isdir(sessions_dir):
         return jsonify({'calls': [], 'error': 'sessions dir not found'})
-    # Find most recently modified JSONL that is NOT a subagent
-    best, best_mt = None, 0
+    # Find the main session: largest recently-modified JSONL (main sessions accumulate far more data)
+    candidates = []
     for f in os.listdir(sessions_dir):
         if not f.endswith('.jsonl'):
             continue
         fp = os.path.join(sessions_dir, f)
-        mt = os.path.getmtime(fp)
-        if mt > best_mt:
-            best, best_mt = fp, mt
+        try:
+            st = os.stat(fp)
+            # Only consider files modified in last 24h
+            if time.time() - st.st_mtime < 86400:
+                candidates.append((fp, st.st_size, st.st_mtime))
+        except Exception:
+            continue
+    if not candidates:
+        return jsonify({'calls': []})
+    # Pick largest recent file (main session is always the biggest)
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    best = candidates[0][0]
+    best_mt = candidates[0][2]
     if not best:
         return jsonify({'calls': []})
     # Read last ~200 lines to find tool calls
