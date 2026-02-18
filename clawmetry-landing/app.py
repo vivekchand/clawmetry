@@ -663,7 +663,7 @@ def admin_compose():
 
 
 @app.route("/admin/sent")
-@admin_required
+@login_required
 def admin_sent():
     db = _get_db()
     emails = db.execute("SELECT * FROM emails_sent ORDER BY id DESC").fetchall()
