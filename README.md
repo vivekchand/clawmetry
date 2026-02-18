@@ -56,27 +56,6 @@ git clone https://github.com/vivekchand/clawmetry.git
 cd clawmetry && pip install flask && python3 dashboard.py
 ```
 
-## OpenTelemetry (Optional)
-
-ClawMetry has a built-in OTLP receiver. No Grafana or Prometheus needed.
-
-```bash
-pip install clawmetry[otel]
-```
-
-Then add to your `openclaw.json`:
-```json
-{
-  "diagnostics": {
-    "otel": {
-      "endpoint": "http://localhost:8900"
-    }
-  }
-}
-```
-
-This gives you real token counts, actual costs, and distributed traces on top of the file-based monitoring.
-
 ## Configuration
 
 Most people don't need any config. ClawMetry auto-detects your workspace, logs, sessions, and crons.
@@ -101,7 +80,7 @@ All options: `clawmetry --help`
 
 ## Cloud Deployment
 
-See the **[Cloud Testing Guide](docs/CLOUD_TESTING.md)** for SSH tunnels, reverse proxy, Docker, and OTLP-only mode.
+See the **[Cloud Testing Guide](docs/CLOUD_TESTING.md)** for SSH tunnels, reverse proxy, and Docker.
 
 ## License
 
