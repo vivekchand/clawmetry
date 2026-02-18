@@ -18,13 +18,15 @@ elif command -v apk &>/dev/null; then
     sudo apk add python3 py3-pip >/dev/null 2>&1
 fi
 
-# Create isolated venv
+# Create isolated venv (remove old one to ensure clean state)
 echo "→ Creating virtual environment at /opt/clawmetry..."
+sudo rm -rf /opt/clawmetry
 sudo python3 -m venv /opt/clawmetry
+sudo /opt/clawmetry/bin/pip install --upgrade pip >/dev/null 2>&1
 
-# Install clawmetry (force-reinstall ensures latest version even with cached venv)
+# Install clawmetry
 echo "→ Installing clawmetry from PyPI..."
-sudo /opt/clawmetry/bin/pip install --upgrade --force-reinstall --no-cache-dir clawmetry >/dev/null 2>&1
+sudo /opt/clawmetry/bin/pip install --no-cache-dir clawmetry >/dev/null 2>&1
 
 # Create symlink for easy access
 sudo ln -sf /opt/clawmetry/bin/clawmetry /usr/local/bin/clawmetry
