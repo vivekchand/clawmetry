@@ -1683,6 +1683,7 @@ DASHBOARD_HTML = r"""
   .flow-node-clickable:hover rect, .flow-node-clickable:hover circle { filter: brightness(1.08); }
   .flow-node rect { rx: 12; ry: 12; stroke-width: 1.6; transition: all 0.25s ease; }
   .flow-node-brain rect { stroke-width: 2.5; }
+  @keyframes pulse-dot { 0%,100% { opacity:1; box-shadow:0 0 4px #2ecc71; } 50% { opacity:0.4; box-shadow:none; } }
   @keyframes dashFlow { to { stroke-dashoffset: -24; } }
   .flow-path { stroke-dasharray: 8 4; animation: dashFlow 1.2s linear infinite; }
   .flow-path.flow-path-infra { stroke-dasharray: 6 3; animation: dashFlow 2s linear infinite; }
@@ -2284,6 +2285,24 @@ function clawmetryLogout(){
     <div class="overview-divider"></div>
 
     <!-- RIGHT: Active Tasks Panel -->
+    <div class="overview-tasks-pane">
+      <!-- 🧠 Brain Panel: Main Agent Activity -->
+      <div id="main-activity-panel" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:var(--card-shadow);max-height:300px;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🧠 <span id="main-activity-model">Claude Opus</span></span>
+            <span id="main-activity-status" style="display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:10px;background:var(--bg-tertiary);color:var(--text-muted);">
+              <span id="main-activity-dot" style="width:7px;height:7px;border-radius:50%;background:#888;display:inline-block;"></span>
+              <span id="main-activity-label">...</span>
+            </span>
+          </div>
+          <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 5s</span>
+        </div>
+        <div id="main-activity-list" style="overflow-y:auto;flex:1;font-size:12px;font-family:'JetBrains Mono',monospace;">
+          <div style="text-align:center;padding:20px;color:var(--text-muted);font-size:12px;">Loading...</div>
+        </div>
+      </div>
+    </div>
     <div class="overview-tasks-pane">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;">
@@ -3254,6 +3273,13 @@ async function loadMiniWidgets(overview, usage) {
   
   // 📈 Model Mix
   document.getElementById('model-primary').textContent = overview.model || 'unknown';
+  var modelLabel = document.getElementById('main-activity-model');
+  if (modelLabel && overview.model) {
+    var m = overview.model;
+    if (m.indexOf('/') !== -1) m = m.split('/').pop();
+    m = m.replace(/-/g, ' ').replace(/\b\w/g, function(c){return c.toUpperCase();});
+    modelLabel.textContent = m;
+  }
   var modelBreakdown = '';
   if (usage.modelBreakdown && usage.modelBreakdown.length > 0) {
     var primary = usage.modelBreakdown[0];
@@ -4659,6 +4685,57 @@ function startOverviewRefresh() {
   loadAll();
   if (window._overviewTimer) clearInterval(window._overviewTimer);
   window._overviewTimer = setInterval(loadAll, 10000);
+  loadMainActivity();
+  if (window._mainActivityTimer) clearInterval(window._mainActivityTimer);
+  window._mainActivityTimer = setInterval(loadMainActivity, 5000);
+}
+
+async function loadMainActivity() {
+  try {
+    var data = await fetchJsonWithTimeout('/api/main-activity', 3000);
+    var el = document.getElementById('main-activity-list');
+    var dot = document.getElementById('main-activity-dot');
+    var label = document.getElementById('main-activity-label');
+    if (!data || !data.calls || data.calls.length === 0) {
+      el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">No recent activity</div>';
+      dot.style.background = '#888';
+      label.textContent = 'No data';
+      return;
+    }
+    // Determine active/idle from lastModified
+    var now = Date.now() / 1000;
+    var idle = !data.lastModified || (now - data.lastModified) > 60;
+    if (idle) {
+      dot.style.background = '#f39c12';
+      dot.style.animation = 'none';
+      label.textContent = 'Idle';
+      label.style.color = '#f39c12';
+    } else {
+      dot.style.background = '#2ecc71';
+      dot.style.animation = 'pulse-dot 1.5s ease-in-out infinite';
+      label.textContent = 'Active';
+      label.style.color = '#2ecc71';
+    }
+    var html = '';
+    for (var i = data.calls.length - 1; i >= 0; i--) {
+      var c = data.calls[i];
+      var ts = '';
+      if (c.ts) {
+        try {
+          var d = typeof c.ts === 'number' ? new Date(c.ts > 1e12 ? c.ts : c.ts * 1000) : new Date(c.ts);
+          ts = d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        } catch(e) { ts = ''; }
+      }
+      var summary = (c.summary || '').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      if (summary.length > 60) summary = summary.substring(0, 57) + '...';
+      html += '<div style="display:flex;gap:6px;align-items:flex-start;padding:3px 0;border-bottom:1px solid var(--border-secondary);">';
+      html += '<span style="color:var(--text-faint);min-width:58px;font-size:11px;">' + ts + '</span>';
+      html += '<span style="min-width:20px;text-align:center;">' + (c.icon||'⚙️') + '</span>';
+      html += '<span style="color:var(--text-secondary);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + summary + '">' + summary + '</span>';
+      html += '</div>';
+    }
+    el.innerHTML = html;
+  } catch(e) {}
 }
 
 // Real-time log stream via SSE
@@ -7801,6 +7878,86 @@ def api_overview():
         'system': system,
         'infra': infra,
     })
+
+
+@app.route('/api/main-activity')
+def api_main_activity():
+    """Return recent tool calls from the main (most recently modified) session."""
+    import glob as _glob
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    if not os.path.isdir(sessions_dir):
+        return jsonify({'calls': [], 'error': 'sessions dir not found'})
+    # Find most recently modified JSONL that is NOT a subagent
+    best, best_mt = None, 0
+    for f in os.listdir(sessions_dir):
+        if not f.endswith('.jsonl'):
+            continue
+        fp = os.path.join(sessions_dir, f)
+        mt = os.path.getmtime(fp)
+        if mt > best_mt:
+            best, best_mt = fp, mt
+    if not best:
+        return jsonify({'calls': []})
+    # Read last ~200 lines to find tool calls
+    try:
+        with open(best, 'rb') as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            chunk = min(size, 512000)
+            fh.seek(max(0, size - chunk))
+            tail = fh.read().decode('utf-8', errors='replace')
+        lines = tail.strip().split('\n')
+    except Exception:
+        return jsonify({'calls': []})
+    tool_icons = {
+        'exec': '🔧', 'Read': '📖', 'read': '📖', 'Edit': '✏️', 'edit': '✏️',
+        'Write': '✏️', 'write': '✏️',
+        'web_search': '🌐', 'web_fetch': '🌐', 'browser': '🖥️',
+        'message': '💬', 'tts': '🔊', 'image': '🖼️',
+        'canvas': '🎨', 'nodes': '📱', 'process': '🔧',
+    }
+    calls = []
+    for line in lines:
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        msg = obj.get('message', obj)
+        ts = obj.get('timestamp') or msg.get('timestamp')
+        content = msg.get('content', [])
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if item.get('type') != 'toolCall':
+                continue
+            name = item.get('name', '?')
+            args = item.get('arguments', {}) or {}
+            # Build summary
+            if name == 'exec':
+                summary = args.get('command', '')[:60]
+            elif name in ('Read', 'read'):
+                summary = (args.get('file_path') or args.get('path') or '')[:60]
+            elif name in ('Edit', 'edit'):
+                summary = (args.get('file_path') or args.get('path') or '')[:60]
+            elif name in ('Write', 'write'):
+                summary = (args.get('file_path') or args.get('path') or '')[:60]
+            elif name == 'web_search':
+                summary = args.get('query', '')[:60]
+            elif name == 'web_fetch':
+                summary = args.get('url', '')[:60]
+            elif name == 'browser':
+                summary = args.get('action', '')
+            elif name == 'message':
+                summary = (args.get('message') or args.get('action', ''))[:60]
+            elif name == 'tts':
+                summary = (args.get('text', '')[:60])
+            else:
+                summary = str(args)[:60]
+            icon = tool_icons.get(name, '⚙️')
+            calls.append({'ts': ts, 'name': name, 'icon': icon, 'summary': summary})
+    # Return last 20
+    calls = calls[-20:]
+    return jsonify({'calls': calls, 'sessionFile': os.path.basename(best), 'lastModified': best_mt})
 
 
 @app.route('/api/sessions')
