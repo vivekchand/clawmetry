@@ -39,7 +39,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.1"
+__version__ = "0.9.2"
 
 app = Flask(__name__)
 
@@ -1562,6 +1562,23 @@ DASHBOARD_HTML = r"""
   .cron-confirm-box .confirm-yes:hover { background: #d97706; }
   .cron-confirm-box .confirm-no { background: var(--button-bg); color: var(--text-secondary); }
   .cron-confirm-box .confirm-no:hover { background: var(--button-hover); }
+  .cron-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .cron-actions button { padding: 4px 12px; border-radius: 6px; border: none; font-size: 11px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+  .cron-btn-run { background: #10b981; color: #fff; }
+  .cron-btn-run:hover { background: #059669; }
+  .cron-btn-toggle { background: #6366f1; color: #fff; }
+  .cron-btn-toggle:hover { background: #4f46e5; }
+  .cron-btn-edit { background: #3b82f6; color: #fff; }
+  .cron-btn-edit:hover { background: #2563eb; }
+  .cron-btn-delete { background: #ef4444; color: #fff; }
+  .cron-btn-delete:hover { background: #dc2626; }
+  .cron-disabled { opacity: 0.5; }
+  .cron-expand { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-secondary); font-size: 12px; color: var(--text-muted); }
+  .cron-expand .run-entry { padding: 4px 0; display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .cron-expand .run-status-ok { color: var(--text-success); }
+  .cron-expand .run-status-error { color: var(--text-error); }
+  .cron-item { cursor: pointer; }
+  .cron-config-detail { margin-top: 8px; padding: 8px; background: var(--bg-secondary); border-radius: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
 
   .log-viewer { background: var(--log-bg); border: 1px solid var(--border-primary); border-radius: 8px; font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.6; padding: 12px; max-height: 500px; overflow-y: auto; -webkit-overflow-scrolling: touch; white-space: pre-wrap; word-break: break-all; }
   .log-line { padding: 1px 0; }
@@ -2396,8 +2413,36 @@ function clawmetryLogout(){
 
 <!-- CRONS -->
 <div class="page" id="page-crons">
-  <div class="refresh-bar"><button class="refresh-btn" onclick="loadCrons()">↻ Refresh</button></div>
+  <div class="refresh-bar"><button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button></div>
   <div class="card" id="crons-list">Loading...</div>
+</div>
+
+<!-- Cron Edit Modal -->
+<div id="cron-edit-modal" style="display:none;position:fixed;inset:0;z-index:1500;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;">
+  <div style="background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:12px;padding:24px;width:420px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,0.4);">
+    <h3 style="margin:0 0 16px;color:var(--text-primary);font-size:16px;">Edit Cron Job</h3>
+    <input type="hidden" id="cron-edit-id">
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Name</label>
+      <input id="cron-edit-name" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;">
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Schedule (cron expression or interval in minutes)</label>
+      <input id="cron-edit-schedule" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;font-family:'SF Mono','Fira Code',monospace;box-sizing:border-box;">
+    </div>
+    <div style="margin-bottom:16px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Timezone (for cron expressions)</label>
+      <input id="cron-edit-tz" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. Europe/Amsterdam">
+    </div>
+    <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px;">
+      <input type="checkbox" id="cron-edit-enabled" style="accent-color:#6366f1;">
+      <label for="cron-edit-enabled" style="font-size:13px;color:var(--text-primary);">Enabled</label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="closeCronEditModal()" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:var(--button-bg);color:var(--text-secondary);">Cancel</button>
+      <button onclick="saveCronEdit()" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:#6366f1;color:#fff;">Save</button>
+    </div>
+  </div>
 </div>
 
 <!-- MEMORY -->
@@ -3769,33 +3814,193 @@ async function loadSessions() {
   document.getElementById('sessions-list').innerHTML = html || '<div style="padding:16px;color:var(--text-muted);">No sessions found</div>';
 }
 
+var _cronJobs = [];
+var _cronExpanded = {};
+
 async function loadCrons() {
   var data = await fetch('/api/crons').then(r => r.json());
+  _cronJobs = data.jobs || [];
+  renderCrons();
+}
+
+function renderCrons() {
   var html = '';
-  data.jobs.forEach(function(j) {
+  _cronJobs.forEach(function(j) {
     var status = j.state && j.state.lastStatus ? j.state.lastStatus : 'pending';
-    html += '<div class="cron-item">';
+    var isEnabled = j.enabled !== false;
+    var disabledClass = isEnabled ? '' : ' cron-disabled';
+    var expanded = _cronExpanded[j.id];
+
+    // Status badge -- show disabled if not enabled
+    var badgeLabel = isEnabled ? status : 'disabled';
+    var badgeClass = isEnabled ? status : 'pending';
+
+    html += '<div class="cron-item' + disabledClass + '" onclick="toggleCronExpand(\'' + escHtml(j.id) + '\')">';
     html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
     html += '<div class="cron-name">' + escHtml(j.name || j.id) + '</div>';
-    html += '<span class="cron-status ' + status + '">' + status + '</span>';
+    html += '<span class="cron-status ' + badgeClass + '">' + badgeLabel + '</span>';
     if (status === 'error') {
       var errMsg = (j.state && j.state.lastError) ? escHtml(j.state.lastError) : 'Unknown error';
       var errTime = (j.state && j.state.lastRunAtMs) ? new Date(j.state.lastRunAtMs).toLocaleString() : 'Unknown';
       var consecutiveFails = (j.state && j.state.consecutiveFailures) ? j.state.consecutiveFailures : '';
       html += '<span class="cron-error-actions">';
-      html += '<span class="cron-info-icon" title="Error details" onclick="event.stopPropagation();showCronError(this,\'' + errMsg.replace(/'/g,'\\&#39;').replace(/"/g,'&quot;') + '\',\'' + escHtml(errTime) + '\',' + (consecutiveFails||'null') + ')">ℹ️</span>';
-      html += '<button class="cron-fix-btn" onclick="event.stopPropagation();confirmCronFix(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">🔧 Fix</button>';
+      html += '<span class="cron-info-icon" title="Error details" onclick="event.stopPropagation();showCronError(this,\'' + errMsg.replace(/'/g,'\\&#39;').replace(/"/g,'&quot;') + '\',\'' + escHtml(errTime) + '\',' + (consecutiveFails||'null') + ')">&#x2139;&#xFE0F;</span>';
+      html += '<button class="cron-fix-btn" onclick="event.stopPropagation();confirmCronFix(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F527; Fix</button>';
       html += '</span>';
     }
     html += '</div>';
     html += '<div class="cron-schedule">' + formatSchedule(j.schedule) + '</div>';
     html += '<div class="cron-meta">';
     if (j.state && j.state.lastRunAtMs) html += 'Last: ' + timeAgo(j.state.lastRunAtMs);
-    if (j.state && j.state.nextRunAtMs) html += ' · Next: ' + formatTime(j.state.nextRunAtMs);
-    if (j.state && j.state.lastDurationMs) html += ' · Took: ' + (j.state.lastDurationMs/1000).toFixed(1) + 's';
-    html += '</div></div>';
+    if (j.state && j.state.nextRunAtMs) html += ' &middot; Next: ' + formatTime(j.state.nextRunAtMs);
+    if (j.state && j.state.lastDurationMs) html += ' &middot; Took: ' + (j.state.lastDurationMs/1000).toFixed(1) + 's';
+    html += '</div>';
+
+    // Action buttons
+    html += '<div class="cron-actions" onclick="event.stopPropagation()">';
+    html += '<button class="cron-btn-run" onclick="cronRunNow(\'' + escHtml(j.id) + '\')">&#x25B6; Run Now</button>';
+    html += '<button class="cron-btn-toggle" onclick="cronToggle(\'' + escHtml(j.id) + '\',' + !isEnabled + ')">' + (isEnabled ? '&#x23F8; Disable' : '&#x25B6; Enable') + '</button>';
+    html += '<button class="cron-btn-edit" onclick="cronEdit(\'' + escHtml(j.id) + '\')">&#x270F; Edit</button>';
+    html += '<button class="cron-btn-delete" onclick="cronConfirmDelete(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F5D1; Delete</button>';
+    html += '</div>';
+
+    // Expanded section
+    if (expanded) {
+      html += '<div class="cron-expand" id="cron-expand-' + escHtml(j.id) + '">';
+      if (j.state && j.state.lastError) {
+        html += '<div style="color:var(--text-error);margin-bottom:6px;"><strong>Last error:</strong> ' + escHtml(j.state.lastError) + '</div>';
+      }
+      html += '<div id="cron-runs-' + escHtml(j.id) + '">Loading run history...</div>';
+      if (j.payload || j.config) {
+        html += '<div class="cron-config-detail">' + escHtml(JSON.stringify(j.payload || j.config || {}, null, 2)) + '</div>';
+      }
+      html += '</div>';
+    }
+
+    html += '</div>';
   });
   document.getElementById('crons-list').innerHTML = html || 'No cron jobs';
+
+  // Load run history for expanded items
+  Object.keys(_cronExpanded).forEach(function(id) {
+    if (_cronExpanded[id]) loadCronRuns(id);
+  });
+}
+
+function toggleCronExpand(jobId) {
+  _cronExpanded[jobId] = !_cronExpanded[jobId];
+  renderCrons();
+}
+
+async function loadCronRuns(jobId) {
+  try {
+    var data = await fetch('/api/cron/' + encodeURIComponent(jobId) + '/runs').then(r => r.json());
+    var el = document.getElementById('cron-runs-' + jobId);
+    if (!el) return;
+    var runs = data.runs || [];
+    if (runs.length === 0) {
+      el.innerHTML = '<div style="color:var(--text-muted);">No run history available</div>';
+      return;
+    }
+    var h = '<div style="font-weight:600;margin-bottom:4px;">Run History (last ' + runs.length + ')</div>';
+    runs.forEach(function(r) {
+      var statusCls = r.status === 'ok' ? 'run-status-ok' : 'run-status-error';
+      h += '<div class="run-entry"><span>' + new Date(r.startedAt || r.ts).toLocaleString() + '</span><span class="' + statusCls + '">' + (r.status || 'unknown') + '</span></div>';
+    });
+    el.innerHTML = h;
+  } catch(e) {
+    var el = document.getElementById('cron-runs-' + jobId);
+    if (el) el.innerHTML = '<div style="color:var(--text-error);">Failed to load runs</div>';
+  }
+}
+
+async function cronRunNow(jobId) {
+  try {
+    var res = await fetch('/api/cron/run', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({jobId: jobId})});
+    var data = await res.json();
+    showCronToast(data.message || 'Job triggered');
+    setTimeout(loadCrons, 2000);
+  } catch(e) { showCronToast('Error: ' + e.message); }
+}
+
+async function cronToggle(jobId, enabled) {
+  try {
+    var res = await fetch('/api/cron/toggle', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({jobId: jobId, enabled: enabled})});
+    var data = await res.json();
+    showCronToast(data.message || (enabled ? 'Job enabled' : 'Job disabled'));
+    loadCrons();
+  } catch(e) { showCronToast('Error: ' + e.message); }
+}
+
+function cronConfirmDelete(jobId, jobName) {
+  var modal = document.createElement('div');
+  modal.className = 'cron-confirm-modal';
+  modal.innerHTML = '<div class="cron-confirm-box"><p>Delete cron job<br><strong>' + jobName + '</strong>?<br><span style="font-size:12px;color:var(--text-muted);">This cannot be undone.</span></p><button class="confirm-yes" style="background:#ef4444;" onclick="cronDelete(\'' + jobId + '\');this.closest(\'.cron-confirm-modal\').remove()">Delete</button><button class="confirm-no" onclick="this.closest(\'.cron-confirm-modal\').remove()">Cancel</button></div>';
+  document.body.appendChild(modal);
+  modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+}
+
+async function cronDelete(jobId) {
+  try {
+    var res = await fetch('/api/cron/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({jobId: jobId})});
+    var data = await res.json();
+    showCronToast(data.message || 'Job deleted');
+    delete _cronExpanded[jobId];
+    loadCrons();
+  } catch(e) { showCronToast('Error: ' + e.message); }
+}
+
+function cronEdit(jobId) {
+  var job = _cronJobs.find(function(j) { return j.id === jobId; });
+  if (!job) return;
+  document.getElementById('cron-edit-id').value = job.id;
+  document.getElementById('cron-edit-name').value = job.name || '';
+  var sched = job.schedule || {};
+  if (sched.kind === 'cron') {
+    document.getElementById('cron-edit-schedule').value = sched.expr || '';
+    document.getElementById('cron-edit-tz').value = sched.tz || '';
+  } else if (sched.kind === 'every') {
+    document.getElementById('cron-edit-schedule').value = 'every ' + (sched.everyMs/60000) + 'min';
+    document.getElementById('cron-edit-tz').value = '';
+  } else {
+    document.getElementById('cron-edit-schedule').value = JSON.stringify(sched);
+    document.getElementById('cron-edit-tz').value = '';
+  }
+  document.getElementById('cron-edit-enabled').checked = job.enabled !== false;
+  var modal = document.getElementById('cron-edit-modal');
+  modal.style.display = 'flex';
+}
+
+function closeCronEditModal() {
+  document.getElementById('cron-edit-modal').style.display = 'none';
+}
+
+async function saveCronEdit() {
+  var jobId = document.getElementById('cron-edit-id').value;
+  var name = document.getElementById('cron-edit-name').value.trim();
+  var schedStr = document.getElementById('cron-edit-schedule').value.trim();
+  var tz = document.getElementById('cron-edit-tz').value.trim();
+  var enabled = document.getElementById('cron-edit-enabled').checked;
+
+  var patch = { enabled: enabled };
+  if (name) patch.name = name;
+
+  // Parse schedule
+  var everyMatch = schedStr.match(/^every\s+(\d+)\s*min/i);
+  if (everyMatch) {
+    patch.schedule = { kind: 'every', everyMs: parseInt(everyMatch[1]) * 60000 };
+  } else if (schedStr && !schedStr.startsWith('{')) {
+    patch.schedule = { kind: 'cron', expr: schedStr };
+    if (tz) patch.schedule.tz = tz;
+  }
+
+  try {
+    var res = await fetch('/api/cron/update', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({jobId: jobId, patch: patch})});
+    var data = await res.json();
+    showCronToast(data.message || 'Job updated');
+    closeCronEditModal();
+    loadCrons();
+  } catch(e) { showCronToast('Error: ' + e.message); }
 }
 
 function showCronError(el, msg, ts, fails) {
@@ -7310,6 +7515,66 @@ def api_cron_fix():
             break
     # TODO: integrate with AI agent messaging system
     return jsonify({'ok': True, 'message': f'Fix request submitted for "{job_name}"'})
+
+
+@app.route('/api/cron/run', methods=['POST'])
+def api_cron_run():
+    data = request.get_json(silent=True) or {}
+    job_id = data.get('jobId', '')
+    if not job_id:
+        return jsonify({'error': 'Missing jobId'}), 400
+    result = _gw_invoke('cron', {'action': 'run', 'jobId': job_id})
+    if result is None:
+        return jsonify({'error': 'Gateway unavailable'}), 502
+    return jsonify({'ok': True, 'message': 'Job triggered', 'result': result})
+
+
+@app.route('/api/cron/toggle', methods=['POST'])
+def api_cron_toggle():
+    data = request.get_json(silent=True) or {}
+    job_id = data.get('jobId', '')
+    enabled = data.get('enabled', True)
+    if not job_id:
+        return jsonify({'error': 'Missing jobId'}), 400
+    result = _gw_invoke('cron', {'action': 'update', 'jobId': job_id, 'patch': {'enabled': enabled}})
+    if result is None:
+        return jsonify({'error': 'Gateway unavailable'}), 502
+    return jsonify({'ok': True, 'message': 'Job enabled' if enabled else 'Job disabled'})
+
+
+@app.route('/api/cron/delete', methods=['POST'])
+def api_cron_delete():
+    data = request.get_json(silent=True) or {}
+    job_id = data.get('jobId', '')
+    if not job_id:
+        return jsonify({'error': 'Missing jobId'}), 400
+    result = _gw_invoke('cron', {'action': 'remove', 'jobId': job_id})
+    if result is None:
+        return jsonify({'error': 'Gateway unavailable'}), 502
+    return jsonify({'ok': True, 'message': 'Job deleted'})
+
+
+@app.route('/api/cron/update', methods=['POST'])
+def api_cron_update():
+    data = request.get_json(silent=True) or {}
+    job_id = data.get('jobId', '')
+    patch = data.get('patch', {})
+    if not job_id:
+        return jsonify({'error': 'Missing jobId'}), 400
+    if not patch:
+        return jsonify({'error': 'Missing patch'}), 400
+    result = _gw_invoke('cron', {'action': 'update', 'jobId': job_id, 'patch': patch})
+    if result is None:
+        return jsonify({'error': 'Gateway unavailable'}), 502
+    return jsonify({'ok': True, 'message': 'Job updated'})
+
+
+@app.route('/api/cron/<job_id>/runs')
+def api_cron_runs(job_id):
+    result = _gw_invoke('cron', {'action': 'runs', 'jobId': job_id, 'limit': 10})
+    if result is None:
+        return jsonify({'error': 'Gateway unavailable'}), 502
+    return jsonify(result)
 
 
 def _find_log_file(ds):

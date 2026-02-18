@@ -676,10 +676,18 @@ document.getElementById('subscribe-form').addEventListener('submit',function(e){
   var email=document.getElementById('sub-email').value;
   var msg=document.getElementById('sub-msg');
   msg.style.display='block';
-  msg.textContent='Thanks! We\'ll keep you posted. 🦞';
-  msg.style.color='#28c840';
-  document.getElementById('sub-email').value='';
-  fetch('/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email,source:'clawmetry',ts:new Date().toISOString()})}).catch(function(){});
+  msg.textContent='Subscribing...';
+  msg.style.color='var(--text-muted)';
+  var btn=e.target.querySelector('button');
+  btn.disabled=true;
+  fetch('/api/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})}).then(function(r){return r.json();}).then(function(d){
+    msg.textContent=d.ok?'Thanks! We\'ll keep you posted. \u{1F99E}':'Something went wrong. Try again.';
+    msg.style.color=d.ok?'#28c840':'#E5443A';
+    if(d.ok)document.getElementById('sub-email').value='';
+  }).catch(function(){
+    msg.textContent='Something went wrong. Try again.';
+    msg.style.color='#E5443A';
+  }).finally(function(){btn.disabled=false;});
 });
 </script>
 
