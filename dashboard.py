@@ -39,7 +39,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.7.3"
+__version__ = "0.8.1"
 
 app = Flask(__name__)
 
@@ -1439,6 +1439,77 @@ DASHBOARD_HTML = r"""
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body data-theme="light" class="booting"><script>var t=localStorage.getItem('openclaw-theme');if(t==='dark')document.body.setAttribute('data-theme','dark');</script>
+<!-- Login overlay -->
+<div id="login-overlay" style="display:none;position:fixed;inset:0;z-index:99999;background:var(--bg-primary,#0f172a);align-items:center;justify-content:center;flex-direction:column;">
+  <div style="background:var(--card-bg,#1e293b);border-radius:16px;padding:40px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);text-align:center;">
+    <div style="font-size:48px;margin-bottom:16px;">🦞</div>
+    <h2 style="color:#e2e8f0;margin:0 0 8px;">ClawMetry</h2>
+    <p style="color:#94a3b8;margin:0 0 24px;font-size:14px;">Enter your OpenClaw Gateway Token</p>
+    <input id="login-token" type="password" placeholder="Gateway token..." style="width:100%;box-sizing:border-box;padding:12px 16px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:15px;margin-bottom:16px;outline:none;" onkeydown="if(event.key==='Enter')clawmetryLogin()">
+    <button onclick="clawmetryLogin()" style="width:100%;padding:12px;border-radius:8px;border:none;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer;">Login</button>
+    <p id="login-error" style="color:#f87171;margin:12px 0 0;font-size:13px;display:none;">Invalid token</p>
+  </div>
+</div>
+<script>
+(function(){
+  var stored = localStorage.getItem('clawmetry-token');
+  fetch('/api/auth/check' + (stored ? '?token=' + encodeURIComponent(stored) : ''))
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.needsSetup){
+        // No gateway token configured — show gateway setup wizard
+        document.getElementById('login-overlay').style.display='none';
+        document.getElementById('gw-setup-overlay').style.display='flex';
+        return;
+      }
+      if(!d.authRequired){
+        document.getElementById('login-overlay').style.display='none';
+        return;
+      }
+      if(d.valid){
+        document.getElementById('login-overlay').style.display='none';
+        var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
+        return;
+      }
+      document.getElementById('login-overlay').style.display='flex';
+    })
+    .catch(function(){document.getElementById('login-overlay').style.display='none';});
+})();
+function clawmetryLogin(){
+  var tok=document.getElementById('login-token').value.trim();
+  if(!tok)return;
+  fetch('/api/auth/check?token='+encodeURIComponent(tok))
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.valid){
+        localStorage.setItem('clawmetry-token',tok);
+        document.getElementById('login-overlay').style.display='none';
+        var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
+        location.reload();
+      } else {
+        document.getElementById('login-error').style.display='block';
+      }
+    });
+}
+function clawmetryLogout(){
+  localStorage.removeItem('clawmetry-token');
+  location.reload();
+}
+// Inject auth header into all fetch calls
+(function(){
+  var _origFetch=window.fetch;
+  window.fetch=function(url,opts){
+    var tok=localStorage.getItem('clawmetry-token');
+    if(tok && typeof url==='string' && url.startsWith('/api/')){
+      opts=opts||{};
+      opts.headers=opts.headers||{};
+      if(opts.headers instanceof Headers){opts.headers.set('Authorization','Bearer '+tok);}
+      else{opts.headers['Authorization']='Bearer '+tok;}
+    }
+    return _origFetch.call(this,url,opts);
+  };
+})();
+</script>
 <div class="boot-overlay" id="boot-overlay">
   <div class="boot-card">
     <div class="boot-spinner"></div>
@@ -1455,8 +1526,9 @@ DASHBOARD_HTML = r"""
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
   <h1><span>🦞</span> ClawMetry</h1>
-  <div class="theme-toggle" onclick="document.getElementById('gw-setup-overlay').style.display='flex'" title="Gateway settings" style="cursor:pointer;">⚙️</div>
-  <div class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌙</div>
+  <div class="theme-toggle" onclick="document.getElementById('gw-setup-overlay').style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+  <div class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle theme"><svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></div>
+  <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="zoom-controls">
     <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
@@ -1891,19 +1963,22 @@ function exportUsageData() {
   window.location.href = '/api/usage/export';
 }
 
+var _sunSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+var _moonSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+
 function toggleTheme() {
   const body = document.body;
-  const toggle = document.querySelector('.theme-toggle');
+  const toggle = document.getElementById('theme-toggle-btn');
   const isLight = !body.hasAttribute('data-theme') || body.getAttribute('data-theme') !== 'dark';
   
   if (isLight) {
     body.setAttribute('data-theme', 'dark');
-    toggle.textContent = '☀️';
+    toggle.innerHTML = _sunSVG;
     toggle.title = 'Switch to light theme';
     localStorage.setItem('openclaw-theme', 'dark');
   } else {
     body.removeAttribute('data-theme');
-    toggle.textContent = '🌙';
+    toggle.innerHTML = _moonSVG;
     toggle.title = 'Switch to dark theme';
     localStorage.setItem('openclaw-theme', 'light');
   }
@@ -1912,16 +1987,14 @@ function toggleTheme() {
 function initTheme() {
   const savedTheme = localStorage.getItem('openclaw-theme') || 'light';
   const body = document.body;
-  const toggle = document.querySelector('.theme-toggle');
+  const toggle = document.getElementById('theme-toggle-btn');
   
   if (savedTheme === 'dark') {
     body.setAttribute('data-theme', 'dark');
-    toggle.textContent = '☀️';
-    toggle.title = 'Switch to light theme';
+    if (toggle) { toggle.innerHTML = _sunSVG; toggle.title = 'Switch to light theme'; }
   } else {
     body.removeAttribute('data-theme');
-    toggle.textContent = '🌙';
-    toggle.title = 'Switch to dark theme';
+    if (toggle) { toggle.innerHTML = _moonSVG; toggle.title = 'Switch to dark theme'; }
   }
 }
 
@@ -3003,7 +3076,7 @@ async function loadHealth() {
 var healthStream = null;
 function startHealthStream() {
   if (healthStream) healthStream.close();
-  healthStream = new EventSource('/api/health-stream');
+  healthStream = new EventSource('/api/health-stream' + (localStorage.getItem('clawmetry-token') ? '?token=' + encodeURIComponent(localStorage.getItem('clawmetry-token')) : ''));
   healthStream.onmessage = function(e) {
     try {
       var data = JSON.parse(e.data);
@@ -3346,7 +3419,7 @@ var MAX_STREAM_LINES = 500;
 function startLogStream() {
   if (logStream) logStream.close();
   streamBuffer = [];
-  logStream = new EventSource('/api/logs-stream');
+  logStream = new EventSource('/api/logs-stream' + (localStorage.getItem('clawmetry-token') ? '?token=' + encodeURIComponent(localStorage.getItem('clawmetry-token')) : ''));
   logStream.onmessage = function(e) {
     var data = JSON.parse(e.data);
     streamBuffer.push(data.line);
@@ -5620,6 +5693,7 @@ async function gwSetupConnect() {
       statusEl.textContent = 'Connected to ' + d.url;
       btn.textContent = 'Connected!';
       localStorage.setItem('clawmetry-gw-token', token);
+      localStorage.setItem('clawmetry-token', token);
       updateGwStatus(true, d.url);
       setTimeout(() => {
         document.getElementById('gw-setup-overlay').style.display = 'none';
@@ -6063,6 +6137,38 @@ def _auto_discover_gateway(token):
     except Exception:
         pass
     return None
+
+@app.route('/api/auth/check')
+def api_auth_check():
+    """Check if auth is required and validate token."""
+    if not GATEWAY_TOKEN:
+        return jsonify({'authRequired': True, 'valid': False, 'needsSetup': True})
+    token = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
+    if not token:
+        token = request.args.get('token', '').strip()
+    if token == GATEWAY_TOKEN:
+        return jsonify({'authRequired': True, 'valid': True})
+    return jsonify({'authRequired': True, 'valid': False})
+
+
+@app.before_request
+def _check_auth():
+    """Require valid gateway token for all /api/* routes when GATEWAY_TOKEN is set."""
+    if request.path == '/api/auth/check':
+        return  # Auth check endpoint is always accessible
+    if request.path == '/api/gw/config':
+        return  # Gateway setup must work before auth is configured
+    if not request.path.startswith('/api/'):
+        return  # HTML, static, etc. are fine
+    if not GATEWAY_TOKEN:
+        return jsonify({'error': 'Gateway token not configured. Please set up your gateway token first.', 'needsSetup': True}), 401
+    token = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
+    if not token:
+        token = request.args.get('token', '').strip()
+    if token == GATEWAY_TOKEN:
+        return
+    return jsonify({'error': 'Unauthorized', 'authRequired': True}), 401
+
 
 @app.route('/')
 def index():
