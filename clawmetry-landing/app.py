@@ -187,25 +187,38 @@ button{width:100%;padding:12px;border-radius:8px;border:none;background:#E5443A;
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 WELCOME_HTML = """\
-<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;color:#1a1a2e;">
-  <div style="text-align:center;padding:32px 0 24px;">
-    <span style="font-size:48px;">&#x1F99E;</span>
-    <h1 style="font-size:24px;margin:12px 0 0;">Welcome to ClawMetry</h1>
+<div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;overflow:hidden;">
+  <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:32px 28px;text-align:center;">
+    <div style="font-size:28px;margin-bottom:8px;">🦞</div>
+    <h1 style="color:#fff;font-size:22px;margin:0 0 6px;">Welcome to ClawMetry!</h1>
+    <p style="color:#9ca3af;font-size:13px;margin:0;">Real-time observability for your AI agents</p>
   </div>
-  <p>Thanks for subscribing! You're now on the list for release updates.</p>
-  <p><strong>What is ClawMetry?</strong><br>
-  A free, open-source real-time observability dashboard for AI agents. See token costs, cron jobs, sub-agents, memory files, and session history in one place.</p>
-  <div style="background:#f4f4f8;border-radius:8px;padding:16px;margin:20px 0;font-family:'Courier New',monospace;font-size:14px;">
-    <span style="color:#888;">$</span> curl -fsSL https://clawmetry.com/install.sh | bash
+  <div style="padding:28px;">
+    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Hey there 👋</p>
+    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Thanks for subscribing! ClawMetry is a free, open-source dashboard that lets you see token costs, cron jobs, sub-agents, memory files, and session history in one place.</p>
+    <p style="font-size:14px;line-height:1.7;color:#9ca3af;">Get started in one line:</p>
+    <div style="background:#111827;border:1px solid #2d2d44;border-radius:8px;padding:14px 18px;font-family:monospace;font-size:13px;color:#10b981;margin:12px 0;">curl -fsSL https://clawmetry.com/install.sh | bash</div>
+    <p style="font-size:15px;line-height:1.7;color:#d1d5db;margin-top:20px;">We just launched on Product Hunt and would love your support:</p>
+    <div style="background:#1a1a2e;border:1px solid #2d2d44;border-radius:10px;padding:20px;margin:20px 0;">
+      <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:8px;">🔼 Upvote on Product Hunt</div>
+      <p style="font-size:13px;color:#9ca3af;margin:0 0 12px;">One click helps us reach more developers.</p>
+      <a href="https://www.producthunt.com/products/clawmetry" style="display:inline-block;background:#ff6154;color:#fff;font-weight:700;font-size:13px;padding:10px 24px;border-radius:8px;text-decoration:none;">Upvote on Product Hunt →</a>
+    </div>
+    <div style="background:#1a1a2e;border:1px solid #2d2d44;border-radius:10px;padding:20px;margin:20px 0;">
+      <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:8px;">⭐ Star us on GitHub</div>
+      <p style="font-size:13px;color:#9ca3af;margin:0 0 12px;">Help other OpenClaw users discover ClawMetry.</p>
+      <a href="https://github.com/vivekchand/clawmetry" style="display:inline-block;background:#238636;color:#fff;font-weight:700;font-size:13px;padding:10px 24px;border-radius:8px;text-decoration:none;">Star on GitHub →</a>
+    </div>
+    <div style="background:linear-gradient(135deg,#1e3a5f,#1a2744);border:1px solid #3b82f6;border-radius:10px;padding:20px;margin:24px 0;text-align:center;">
+      <div style="font-size:24px;margin-bottom:8px;">🎁</div>
+      <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:8px;">Get a $10 Amazon Gift Card</div>
+      <p style="font-size:13px;color:#93c5fd;line-height:1.6;margin:0;">Try ClawMetry, leave a <a href="https://www.producthunt.com/products/clawmetry/reviews/new" style="color:#93c5fd;font-weight:700;">Product Hunt review</a>, and reply to this email with a screenshot of your dashboard. We will send you a <strong>$10 Amazon gift card</strong> as a thank you.</p>
+    </div>
+    <p style="font-size:15px;color:#d1d5db;">Cheers,<br><strong style="color:#fff;">The ClawMetry Team</strong> 🦞</p>
   </div>
-  <p>
-    <a href="https://github.com/vivekchand/clawmetry" style="color:#E5443A;">GitHub</a> |
-    <a href="https://pypi.org/project/clawmetry/" style="color:#E5443A;">PyPI</a> |
-    <a href="https://clawmetry.com" style="color:#E5443A;">Website</a>
-  </p>
-  <p style="color:#888;font-size:13px;margin-top:32px;border-top:1px solid #eee;padding-top:16px;">
-    We'll email you on major releases only. No spam. Ever.
-  </p>
+  <div style="border-top:1px solid #1f1f2e;padding:16px 28px;text-align:center;">
+    <p style="font-size:11px;color:#6b7280;margin:0;">We email on major releases only. No spam. Ever.</p>
+  </div>
 </div>
 """
 
