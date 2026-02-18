@@ -1,11 +1,16 @@
+import re
 from setuptools import setup
 
 with open("README.md", "r", encoding="utf-8") as f:
     long_description = f.read()
 
+# Single source of truth: __version__ in dashboard.py
+with open("dashboard.py", "r") as f:
+    version = re.search(r'__version__\s*=\s*"(.+?)"', f.read()).group(1)
+
 setup(
     name="clawmetry",
-    version="0.9.5",
+    version=version,
     description="ClawMetry - Real-time observability dashboard for OpenClaw AI agents",
     long_description=long_description,
     long_description_content_type="text/markdown",
