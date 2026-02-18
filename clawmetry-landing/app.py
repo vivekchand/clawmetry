@@ -78,24 +78,31 @@ def _get_visitor_info(req):
     # Try IP geolocation (best-effort)
     location = "Unknown"
     try:
-        geo = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3).json()
+        geo = requests.get(f"https://ipapi.co/{ip}/json/", timeout=2).json()
         city = geo.get("city", "")
         region = geo.get("region", "")
         country = geo.get("country_name", "")
-        location = ", ".join(filter(None, [city, region, country]))
-    except Exception:
-        pass
+        loc = ", ".join(filter(None, [city, region, country]))
+        if loc:
+            location = loc
+    except Exception as e:
+        print(f"[geo] Failed for {ip}: {e}")
     return {"ip": ip, "user_agent": ua, "referer": referer, "location": location or "Unknown"}
 
 
 def notify_vivek(subject, body_html):
     """Send a notification email to Vivek."""
-    _resend_post("/emails", {
-        "from": FROM_EMAIL,
-        "to": [VIVEK_EMAIL],
-        "subject": subject,
-        "html": body_html,
-    })
+    try:
+        ok, resp = _resend_post("/emails", {
+            "from": FROM_EMAIL,
+            "to": [VIVEK_EMAIL],
+            "subject": subject,
+            "html": body_html,
+        })
+        if not ok:
+            print(f"[notify_vivek] Resend error: {resp}")
+    except Exception as e:
+        print(f"[notify_vivek] Exception: {e}")
 
 
 def add_contact(email):
@@ -128,20 +135,23 @@ def subscribe():
 
     send_welcome_email(email)
 
-    # Notify Vivek
-    visitor = _get_visitor_info(request)
-    notify_vivek(
-        f"🦞 New ClawMetry subscriber: {email}",
-        f"""<div style="font-family:sans-serif;max-width:500px;">
-        <h2>New Subscriber!</h2>
-        <p><strong>Email:</strong> {email}</p>
-        <p><strong>Location:</strong> {visitor['location']}</p>
-        <p><strong>IP:</strong> {visitor['ip']}</p>
-        <p><strong>Browser:</strong> {visitor['user_agent'][:120]}</p>
-        <p><strong>Referer:</strong> {visitor['referer']}</p>
-        <p><strong>Time:</strong> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
-        </div>"""
-    )
+    # Notify Vivek (best-effort, don't block response)
+    try:
+        visitor = _get_visitor_info(request)
+        notify_vivek(
+            f"🦞 New ClawMetry subscriber: {email}",
+            f"""<div style="font-family:sans-serif;max-width:500px;">
+            <h2>New Subscriber!</h2>
+            <p><strong>Email:</strong> {email}</p>
+            <p><strong>Location:</strong> {visitor['location']}</p>
+            <p><strong>IP:</strong> {visitor['ip']}</p>
+            <p><strong>Browser:</strong> {visitor['user_agent'][:120]}</p>
+            <p><strong>Referer:</strong> {visitor['referer']}</p>
+            <p><strong>Time:</strong> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+            </div>"""
+        )
+    except Exception as e:
+        print(f"[subscribe] Notify error: {e}")
 
     return jsonify({"ok": True, "message": "Subscribed!"})
 
