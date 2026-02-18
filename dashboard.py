@@ -4928,9 +4928,15 @@ function returnToPool(elem, isTrail) {
 }
 
 function animateParticle(pathId, color, duration, reverse) {
+  // Animate on main Flow SVG
+  _animateParticleOn(pathId, 'flow-svg', color, duration, reverse);
+  // Also animate on Overview clone (ov- prefixed IDs)
+  _animateParticleOn('ov-' + pathId, 'overview-flow-svg', color, duration, reverse);
+}
+function _animateParticleOn(pathId, svgId, color, duration, reverse) {
   var path = document.getElementById(pathId);
   if (!path) return;
-  var svg = document.getElementById('flow-svg');
+  var svg = document.getElementById(svgId);
   if (!svg) return;
   
   // Skip if too many particles (performance)
@@ -5011,6 +5017,12 @@ function highlightNode(nodeId, dur) {
   if (!node) return;
   node.classList.add('active');
   setTimeout(function() { node.classList.remove('active'); }, dur || 2000);
+  // Also highlight on overview clone
+  var ovNode = document.getElementById('ov-' + nodeId);
+  if (ovNode) {
+    ovNode.classList.add('active');
+    setTimeout(function() { ovNode.classList.remove('active'); }, dur || 2000);
+  }
 }
 
 function triggerInbound(ch) {
