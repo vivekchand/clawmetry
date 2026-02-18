@@ -22,3 +22,5 @@
 !sitemap.xml
 !.well-known/
 !.well-known/**
+!app.py
+!requirements.txt
