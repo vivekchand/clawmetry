@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.5"
+__version__ = "0.9.6"
 
 app = Flask(__name__)
 
@@ -2299,7 +2299,7 @@ function clawmetryLogout(){
       </div>
       <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">—</span></span>
     </div>
-    <div class="stats-footer-item" onclick="switchTab('sessions')">
+    <div class="stats-footer-item" onclick="openDetailView('sessions')">
       <span class="stats-footer-icon">💬</span>
       <div>
         <div class="stats-footer-label">Sessions</div>
@@ -3724,7 +3724,7 @@ function openDetailView(type) {
   } else if (type === 'tokens') {
     switchTab('usage');
   } else if (type === 'sessions') {
-    switchTab('sessions');
+    showSessionsModal();
   } else if (type === 'subagents') {
     switchTab('subagents');
   } else if (type === 'tools') {
@@ -3733,6 +3733,54 @@ function openDetailView(type) {
     // For thinking feed and models, stay on overview but could expand in future
     alert('Detail view for ' + type + ' coming soon!');
   }
+}
+
+function showSessionsModal() {
+  fetch('/api/overview').then(r=>r.json()).then(function(d) {
+    var sessions = (d.sessions || {}).active || [];
+    var html = '<div style="max-height:60vh;overflow-y:auto;">';
+    if (!sessions.length) {
+      html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">No active sessions</div>';
+    } else {
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+      html += '<tr style="border-bottom:1px solid var(--border-primary);color:var(--text-muted);text-transform:uppercase;font-size:10px;letter-spacing:0.5px;">';
+      html += '<th style="padding:8px;text-align:left;">Session</th><th style="padding:8px;text-align:left;">Kind</th><th style="padding:8px;text-align:right;">Tokens</th><th style="padding:8px;text-align:right;">Age</th></tr>';
+      sessions.forEach(function(s) {
+        var age = s.lastActivityAge || '';
+        var tokens = s.totalTokens ? (s.totalTokens > 1e6 ? (s.totalTokens/1e6).toFixed(1)+'M' : (s.totalTokens > 1e3 ? (s.totalTokens/1e3).toFixed(0)+'K' : s.totalTokens)) : '0';
+        var kind = s.kind || 'main';
+        var label = s.label || s.sessionKey || '—';
+        var kindColor = kind === 'main' ? 'var(--text-success)' : kind === 'isolated' ? '#a78bfa' : 'var(--text-muted)';
+        html += '<tr style="border-bottom:1px solid var(--border-primary);">';
+        html += '<td style="padding:8px;color:var(--text-primary);font-weight:600;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(label) + '</td>';
+        html += '<td style="padding:8px;"><span style="color:'+kindColor+';font-size:10px;font-weight:600;text-transform:uppercase;">'+escHtml(kind)+'</span></td>';
+        html += '<td style="padding:8px;text-align:right;color:var(--text-primary);font-family:monospace;">'+tokens+'</td>';
+        html += '<td style="padding:8px;text-align:right;color:var(--text-muted);">'+escHtml(age)+'</td>';
+        html += '</tr>';
+      });
+      html += '</table>';
+    }
+    html += '</div>';
+    var total = (d.sessions || {}).total || sessions.length;
+    showGenericModal('💬 Active Sessions (' + total + ')', html);
+  });
+}
+
+function showGenericModal(title, bodyHtml) {
+  var existing = document.getElementById('generic-modal-overlay');
+  if (existing) existing.remove();
+  var overlay = document.createElement('div');
+  overlay.id = 'generic-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;backdrop-filter:blur(4px);';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  var modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:0;min-width:400px;max-width:600px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);';
+  modal.innerHTML = '<div style="padding:16px 20px;border-bottom:1px solid var(--border-primary);display:flex;align-items:center;justify-content:space-between;">'
+    + '<span style="font-size:15px;font-weight:700;color:var(--text-primary);">'+title+'</span>'
+    + '<span onclick="document.getElementById(\'generic-modal-overlay\').remove()" style="cursor:pointer;color:var(--text-muted);font-size:18px;">✕</span>'
+    + '</div><div style="padding:16px 20px;">'+bodyHtml+'</div>';
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
 }
 
 function renderLogs(elId, lines) {
