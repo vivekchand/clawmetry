@@ -2290,7 +2290,7 @@ function clawmetryLogout(){
           <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
           <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
         </div>
-        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 10s</span>
+        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
       </div>
       <div class="tasks-panel-scroll" id="overview-tasks-list">
         <div style="text-align:center;padding:32px;color:var(--text-muted);">
@@ -3381,119 +3381,105 @@ function humanTimeDone(runtimeMs) {
 
 async function loadActiveTasks() {
   try {
-    var data = await fetch('/api/subagents').then(r => r.json());
     var grid = document.getElementById('overview-tasks-list') || document.getElementById('active-tasks-grid');
     if (!grid) return;
-    var agents = data.subagents || [];
-    if (agents.length === 0) {
+
+    // Fetch from both MC tasks and subagents in parallel
+    var [mcData, saData] = await Promise.all([
+      fetch('/api/mc-tasks').then(r => r.json()).catch(function() { return {tasks:[]}; }),
+      fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; })
+    ]);
+
+    var mcTasks = mcData.tasks || [];
+    var agents = (saData.subagents || []).filter(function(a) {
+      return a.status === 'active';
+    });
+
+    if (mcTasks.length === 0 && agents.length === 0) {
       grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
         + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
         + '<div style="font-size:13px;">No active tasks - all quiet</div></div>';
-      return;
-    }
-
-    // Group by status: running first, then recently completed, then truly failed
-    var running = [], done = [], failed = [];
-    agents.forEach(function(agent) {
-      var isRealFailure = agent.status === 'stale' && agent.abortedLastRun && (agent.outputTokens || 0) === 0;
-      if (agent.status === 'active') running.push(agent);
-      else if (isRealFailure) failed.push(agent);
-      else done.push(agent);
-    });
-    var sorted = running.concat(done).concat(failed);
-
-    // Only show recent ones (last 2 hours for done, all running)
-    sorted = sorted.filter(function(a) {
-      if (a.status === 'active') return true;
-      return a.runtimeMs < 2 * 60 * 60 * 1000; // 2 hours
-    });
-
-    if (sorted.length === 0) {
-      grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
-        + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
-        + '<div style="font-size:13px;">No recent tasks</div></div>';
+      var badge = document.getElementById('overview-tasks-count-badge');
+      if (badge) badge.textContent = '';
       return;
     }
 
     var html = '';
-    sorted.forEach(function(agent) {
-      // Determine true completion status: only "failed" if zero output and aborted
-      var isRealFailure = agent.status === 'stale' && agent.abortedLastRun && (agent.outputTokens || 0) === 0;
-      var statusClass = agent.status === 'active' ? 'running' : isRealFailure ? 'failed' : 'complete';
-      var statusEmoji, statusLabel, timeStr;
-      if (agent.status === 'active') {
-        var mins = Math.max(1, Math.floor((agent.runtimeMs || 0) / 60000));
-        statusEmoji = '🔄';
-        statusLabel = 'Running (' + mins + ' min)';
-        timeStr = humanTime(agent.runtimeMs);
-      } else if (isRealFailure) {
-        statusEmoji = '❌';
-        statusLabel = 'Failed';
-        timeStr = humanTimeDone(agent.runtimeMs);
-      } else {
-        statusEmoji = '✅';
-        statusLabel = 'Done';
-        timeStr = humanTimeDone(agent.runtimeMs);
-      }
+    var totalCount = mcTasks.length + agents.length;
+    var badge = document.getElementById('overview-tasks-count-badge');
+    if (badge) badge.textContent = totalCount + ' active';
 
-      var taskName = cleanTaskName(agent.displayName);
-      var badge = detectProjectBadge(agent.displayName);
+    // Priority colors
+    var priColors = { urgent: '#ef4444', high: '#f97316', medium: '#eab308', low: '#22c55e' };
 
-      html += '<div class="task-card ' + statusClass + '" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
-      if (agent.status === 'active') html += '<div class="task-card-pulse active"></div>';
+    // Render MC tasks
+    mcTasks.forEach(function(task) {
+      var now = Date.now();
+      var created = new Date(task.createdAt).getTime();
+      var elapsed = now - created;
+      var timeStr = humanTime(elapsed);
+      var pri = (task.priority || 'medium').toLowerCase();
+      var priColor = priColors[pri] || '#6b7280';
+      var taskTitle = (task.title || 'Untitled').replace(/^\[.*?\]\s*/, '');
+      if (taskTitle.length > 80) taskTitle = taskTitle.substring(0, 77) + '…';
+      var mcUrl = 'http://192.168.178.57:3002';
+
+      html += '<div class="task-card running" style="cursor:pointer;" onclick="window.open(\'' + mcUrl + '\',\'_blank\')">';
+      html += '<div class="task-card-pulse active"></div>';
       html += '<div class="task-card-header">';
-      html += '<div class="task-card-name">' + escHtml(taskName) + '</div>';
-      html += '<span class="task-card-badge ' + statusClass + '">' + statusEmoji + ' ' + statusLabel + '</span>';
+      html += '<div class="task-card-name">' + escHtml(taskTitle) + '</div>';
+      html += '<span class="task-card-badge running" style="font-size:10px;">🔄 In Progress</span>';
       html += '</div>';
-      // Project badge + human time
-      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
-      if (badge) {
-        html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:' + badge.color + '22;color:' + badge.color + ';border:1px solid ' + badge.color + '44;">' + badge.label + '</span>';
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">';
+      html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:' + priColor + '22;color:' + priColor + ';border:1px solid ' + priColor + '44;text-transform:capitalize;">' + escHtml(pri) + '</span>';
+      if (task.companyId) {
+        html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:600;background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border-secondary);">' + escHtml(task.companyId) + '</span>';
       }
       if (timeStr) {
-        html += '<span style="font-size:12px;color:var(--text-muted);">' + escHtml(timeStr) + '</span>';
+        html += '<span style="font-size:11px;color:var(--text-muted);">' + escHtml(timeStr) + '</span>';
       }
       html += '</div>';
-      // Show/Hide details toggle + logs link
-      var detailId = 'task-detail-' + agent.sessionId.replace(/[^a-z0-9]/gi, '');
-      html += '<div style="display:flex;align-items:center;gap:12px;margin-top:4px;">';
-      html += '<span style="font-size:11px;color:var(--text-tertiary);cursor:pointer;user-select:none;" onclick="event.stopPropagation();var d=document.getElementById(\'' + detailId + '\');var open=d.style.display!==\'none\';d.style.display=open?\'none\':\'block\';this.textContent=open?\'▶ Show details\':\'▼ Hide details\';">▶ Show details</span>';
-      html += '<span style="font-size:11px;color:var(--text-link);cursor:pointer;opacity:0.7;" onclick="event.stopPropagation();openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\');setTimeout(function(){switchModalTab(\'full\');},100);">📋 View logs</span>';
+      if (task.comments && task.comments.length > 0) {
+        var lastComment = task.comments[task.comments.length - 1];
+        if (lastComment && lastComment.text) {
+          var commentText = lastComment.text.length > 100 ? lastComment.text.substring(0, 97) + '…' : lastComment.text;
+          html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;font-style:italic;">💬 ' + escHtml(commentText) + '</div>';
+        }
+      }
       html += '</div>';
-      // Collapsible technical details
-      html += '<div id="' + detailId + '" style="display:none;margin-top:8px;padding:10px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;font-size:11px;line-height:1.7;color:var(--text-tertiary);">';
-      html += '<div><span style="color:var(--text-muted);">Session:</span> <span style="font-family:monospace;font-size:10px;">' + escHtml(agent.sessionId) + '</span></div>';
-      html += '<div><span style="color:var(--text-muted);">Key:</span> <span style="font-family:monospace;font-size:10px;">' + escHtml(agent.key) + '</span></div>';
-      html += '<div><span style="color:var(--text-muted);">Model:</span> ' + escHtml(agent.model || 'unknown') + '</div>';
-      html += '<div><span style="color:var(--text-muted);">Channel:</span> ' + escHtml(agent.channel || '—') + '</div>';
-      html += '<div><span style="color:var(--text-muted);">Runtime:</span> ' + escHtml(agent.runtime) + ' (' + Math.round((agent.runtimeMs||0)/1000) + 's)</div>';
-      // Full task prompt
-      html += '<div style="margin-top:6px;"><span style="color:var(--text-muted);">Full prompt:</span></div>';
-      html += '<div style="font-size:10px;font-family:monospace;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow-y:auto;padding:6px;background:var(--bg-primary);border-radius:4px;margin-top:2px;">' + escHtml(agent.displayName) + '</div>';
-      // Recent tool calls
-      if (agent.recentTools && agent.recentTools.length > 0) {
-        html += '<div style="margin-top:6px;"><span style="color:var(--text-muted);">Recent tools:</span></div>';
-        agent.recentTools.forEach(function(t) {
-          html += '<div style="font-size:10px;font-family:monospace;color:var(--text-tertiary);"><span style="color:var(--text-accent);">' + escHtml(t.name) + '</span> ' + escHtml(t.summary) + '</div>';
-        });
+    });
+
+    // Render active sub-agents (compact)
+    agents.forEach(function(agent) {
+      var taskName = cleanTaskName(agent.displayName);
+      var badge2 = detectProjectBadge(agent.displayName);
+      var mins = Math.max(1, Math.floor((agent.runtimeMs || 0) / 60000));
+
+      html += '<div class="task-card running" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
+      html += '<div class="task-card-pulse active"></div>';
+      html += '<div class="task-card-header">';
+      html += '<div class="task-card-name">' + escHtml(taskName) + '</div>';
+      html += '<span class="task-card-badge running" style="font-size:10px;">🤖 ' + mins + ' min</span>';
+      html += '</div>';
+      html += '<div style="display:flex;align-items:center;gap:8px;">';
+      if (badge2) {
+        html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:' + badge2.color + '22;color:' + badge2.color + ';border:1px solid ' + badge2.color + '44;">' + badge2.label + '</span>';
       }
-      if (agent.lastText) {
-        html += '<div style="margin-top:6px;"><span style="color:var(--text-muted);">Last output:</span></div>';
-        html += '<div style="font-size:10px;font-style:italic;color:var(--text-tertiary);max-height:60px;overflow-y:auto;">' + escHtml(agent.lastText) + '</div>';
-      }
+      html += '<span style="font-size:11px;color:var(--text-muted);">' + escHtml(humanTime(agent.runtimeMs)) + '</span>';
       html += '</div>';
       html += '</div>';
     });
+
     grid.innerHTML = html;
   } catch(e) {
     // silently fail
   }
 }
-// Auto-refresh active tasks every 5s
+// Auto-refresh active tasks every 30s
 function startActiveTasksRefresh() {
   loadActiveTasks();
   if (_activeTasksTimer) clearInterval(_activeTasksTimer);
-  _activeTasksTimer = setInterval(loadActiveTasks, 5000);
+  _activeTasksTimer = setInterval(loadActiveTasks, 30000);
 }
 
 async function loadToolActivity() {
@@ -10431,6 +10417,21 @@ def api_component_brain():
         'total': total,
     }
     return jsonify(result)
+
+
+@app.route('/api/mc-tasks')
+def api_mc_tasks():
+    """Proxy to Mission Control tasks API, filtered to in_progress."""
+    import urllib.request
+    import json as _json
+    try:
+        req = urllib.request.Request('http://localhost:3002/api/tasks', headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read().decode())
+        tasks = [t for t in (data.get('tasks') or []) if t.get('column') == 'in_progress']
+        return jsonify({'tasks': tasks})
+    except Exception as e:
+        return jsonify({'tasks': [], 'error': str(e)})
 
 
 @app.route('/api/heatmap')
