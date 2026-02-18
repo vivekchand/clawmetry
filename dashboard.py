@@ -45,7 +45,7 @@ _history_collector = None
 _HAS_OTEL_PROTO = False
 try:
     from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2
-    from opentelemetry.proto.collector.traces.v1 import trace_service_pb2
+    from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
     _HAS_OTEL_PROTO = True
 except ImportError:
     metrics_service_pb2 = None
