@@ -2413,34 +2413,50 @@ function clawmetryLogout(){
 
 <!-- CRONS -->
 <div class="page" id="page-crons">
-  <div class="refresh-bar"><button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button></div>
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
+    <button class="refresh-btn" style="background:#10b981;color:#fff;" onclick="cronCreateNew()">&#x2795; New Cron Job</button>
+  </div>
   <div class="card" id="crons-list">Loading...</div>
 </div>
 
-<!-- Cron Edit Modal -->
+<!-- Cron Edit/Create Modal -->
 <div id="cron-edit-modal" style="display:none;position:fixed;inset:0;z-index:1500;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;">
-  <div style="background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:12px;padding:24px;width:420px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,0.4);">
-    <h3 style="margin:0 0 16px;color:var(--text-primary);font-size:16px;">Edit Cron Job</h3>
+  <div style="background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:12px;padding:24px;width:480px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,0.4);max-height:90vh;overflow-y:auto;">
+    <h3 id="cron-modal-title" style="margin:0 0 16px;color:var(--text-primary);font-size:16px;">Edit Cron Job</h3>
     <input type="hidden" id="cron-edit-id">
+    <input type="hidden" id="cron-edit-mode" value="edit">
     <div style="margin-bottom:12px;">
       <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Name</label>
-      <input id="cron-edit-name" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;">
+      <input id="cron-edit-name" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="my-health-check">
     </div>
     <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Schedule (cron expression or interval in minutes)</label>
-      <input id="cron-edit-schedule" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;font-family:'SF Mono','Fira Code',monospace;box-sizing:border-box;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Schedule (cron expression or interval like "every 30min")</label>
+      <input id="cron-edit-schedule" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;font-family:'SF Mono','Fira Code',monospace;box-sizing:border-box;" placeholder="*/30 * * * *  or  every 30min">
     </div>
-    <div style="margin-bottom:16px;">
+    <div style="margin-bottom:12px;">
       <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Timezone (for cron expressions)</label>
       <input id="cron-edit-tz" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. Europe/Amsterdam">
     </div>
+    <div id="cron-edit-prompt-section" style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Prompt / Message</label>
+      <textarea id="cron-edit-prompt" rows="3" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;" placeholder="What should the agent do when this cron fires?"></textarea>
+    </div>
+    <div id="cron-edit-channel-section" style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Channel (optional)</label>
+      <input id="cron-edit-channel" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. discord, telegram">
+    </div>
+    <div id="cron-edit-model-section" style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Model (optional)</label>
+      <input id="cron-edit-model" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. anthropic/claude-sonnet-4-20250514">
+    </div>
     <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px;">
-      <input type="checkbox" id="cron-edit-enabled" style="accent-color:#6366f1;">
+      <input type="checkbox" id="cron-edit-enabled" style="accent-color:#6366f1;" checked>
       <label for="cron-edit-enabled" style="font-size:13px;color:var(--text-primary);">Enabled</label>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;">
       <button onclick="closeCronEditModal()" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:var(--button-bg);color:var(--text-secondary);">Cancel</button>
-      <button onclick="saveCronEdit()" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:#6366f1;color:#fff;">Save</button>
+      <button onclick="saveCronEdit()" id="cron-save-btn" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:#6366f1;color:#fff;">Save</button>
     </div>
   </div>
 </div>
@@ -3902,10 +3918,20 @@ async function loadCronRuns(jobId) {
       el.innerHTML = '<div style="color:var(--text-muted);">No run history available</div>';
       return;
     }
-    var h = '<div style="font-weight:600;margin-bottom:4px;">Run History (last ' + runs.length + ')</div>';
+    var h = '<div style="font-weight:600;margin-bottom:8px;">Run History (last ' + runs.length + ')</div>';
     runs.forEach(function(r) {
       var statusCls = r.status === 'ok' ? 'run-status-ok' : 'run-status-error';
-      h += '<div class="run-entry"><span>' + new Date(r.startedAt || r.ts).toLocaleString() + '</span><span class="' + statusCls + '">' + (r.status || 'unknown') + '</span></div>';
+      var dur = r.durationMs ? ' · ' + (r.durationMs/1000).toFixed(1) + 's' : '';
+      h += '<div class="run-entry">';
+      h += '<span>' + new Date(r.startedAt || r.ts).toLocaleString() + dur + '</span>';
+      h += '<span class="' + statusCls + '">' + (r.status || 'unknown') + '</span>';
+      h += '</div>';
+      if (r.status === 'error' && r.error) {
+        h += '<div style="color:var(--text-error);font-size:11px;padding:2px 0 4px 8px;border-left:2px solid var(--text-error);margin-left:4px;">' + escHtml(r.error).substring(0,200) + '</div>';
+      }
+      if (r.output) {
+        h += '<div style="font-size:11px;padding:2px 0 4px 8px;border-left:2px solid var(--border-secondary);margin-left:4px;color:var(--text-muted);white-space:pre-wrap;max-height:80px;overflow:auto;">' + escHtml(typeof r.output === 'string' ? r.output : JSON.stringify(r.output)).substring(0,500) + '</div>';
+      }
     });
     el.innerHTML = h;
   } catch(e) {
@@ -3953,6 +3979,9 @@ async function cronDelete(jobId) {
 function cronEdit(jobId) {
   var job = _cronJobs.find(function(j) { return j.id === jobId; });
   if (!job) return;
+  document.getElementById('cron-edit-mode').value = 'edit';
+  document.getElementById('cron-modal-title').textContent = 'Edit Cron Job';
+  document.getElementById('cron-save-btn').textContent = 'Save';
   document.getElementById('cron-edit-id').value = job.id;
   document.getElementById('cron-edit-name').value = job.name || '';
   var sched = job.schedule || {};
@@ -3966,7 +3995,26 @@ function cronEdit(jobId) {
     document.getElementById('cron-edit-schedule').value = JSON.stringify(sched);
     document.getElementById('cron-edit-tz').value = '';
   }
+  document.getElementById('cron-edit-prompt').value = (job.payload && job.payload.prompt) || (job.config && job.config.prompt) || '';
+  document.getElementById('cron-edit-channel').value = (job.payload && job.payload.channel) || (job.config && job.config.channel) || '';
+  document.getElementById('cron-edit-model').value = (job.payload && job.payload.model) || (job.config && job.config.model) || '';
   document.getElementById('cron-edit-enabled').checked = job.enabled !== false;
+  var modal = document.getElementById('cron-edit-modal');
+  modal.style.display = 'flex';
+}
+
+function cronCreateNew() {
+  document.getElementById('cron-edit-mode').value = 'create';
+  document.getElementById('cron-modal-title').textContent = 'Create New Cron Job';
+  document.getElementById('cron-save-btn').textContent = 'Create';
+  document.getElementById('cron-edit-id').value = '';
+  document.getElementById('cron-edit-name').value = '';
+  document.getElementById('cron-edit-schedule').value = '';
+  document.getElementById('cron-edit-tz').value = '';
+  document.getElementById('cron-edit-prompt').value = '';
+  document.getElementById('cron-edit-channel').value = '';
+  document.getElementById('cron-edit-model').value = '';
+  document.getElementById('cron-edit-enabled').checked = true;
   var modal = document.getElementById('cron-edit-modal');
   modal.style.display = 'flex';
 }
@@ -3976,31 +4024,56 @@ function closeCronEditModal() {
 }
 
 async function saveCronEdit() {
+  var mode = document.getElementById('cron-edit-mode').value;
   var jobId = document.getElementById('cron-edit-id').value;
   var name = document.getElementById('cron-edit-name').value.trim();
   var schedStr = document.getElementById('cron-edit-schedule').value.trim();
   var tz = document.getElementById('cron-edit-tz').value.trim();
+  var prompt = document.getElementById('cron-edit-prompt').value.trim();
+  var channel = document.getElementById('cron-edit-channel').value.trim();
+  var model = document.getElementById('cron-edit-model').value.trim();
   var enabled = document.getElementById('cron-edit-enabled').checked;
 
-  var patch = { enabled: enabled };
-  if (name) patch.name = name;
-
   // Parse schedule
+  var schedule = null;
   var everyMatch = schedStr.match(/^every\s+(\d+)\s*min/i);
   if (everyMatch) {
-    patch.schedule = { kind: 'every', everyMs: parseInt(everyMatch[1]) * 60000 };
+    schedule = { kind: 'every', everyMs: parseInt(everyMatch[1]) * 60000 };
   } else if (schedStr && !schedStr.startsWith('{')) {
-    patch.schedule = { kind: 'cron', expr: schedStr };
-    if (tz) patch.schedule.tz = tz;
+    schedule = { kind: 'cron', expr: schedStr };
+    if (tz) schedule.tz = tz;
   }
 
-  try {
-    var res = await fetch('/api/cron/update', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({jobId: jobId, patch: patch})});
-    var data = await res.json();
-    showCronToast(data.message || 'Job updated');
-    closeCronEditModal();
-    loadCrons();
-  } catch(e) { showCronToast('Error: ' + e.message); }
+  if (mode === 'create') {
+    if (!name) { showCronToast('Name is required'); return; }
+    if (!schedule) { showCronToast('Schedule is required'); return; }
+    var body = { name: name, schedule: schedule, enabled: enabled };
+    if (prompt) body.prompt = prompt;
+    if (channel) body.channel = channel;
+    if (model) body.model = model;
+    try {
+      var res = await fetch('/api/cron/create', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+      var data = await res.json();
+      if (data.error) { showCronToast('Error: ' + data.error); return; }
+      showCronToast(data.message || 'Job created');
+      closeCronEditModal();
+      loadCrons();
+    } catch(e) { showCronToast('Error: ' + e.message); }
+  } else {
+    var patch = { enabled: enabled };
+    if (name) patch.name = name;
+    if (schedule) patch.schedule = schedule;
+    if (prompt) patch.prompt = prompt;
+    if (channel) patch.channel = channel;
+    if (model) patch.model = model;
+    try {
+      var res = await fetch('/api/cron/update', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({jobId: jobId, patch: patch})});
+      var data = await res.json();
+      showCronToast(data.message || 'Job updated');
+      closeCronEditModal();
+      loadCrons();
+    } catch(e) { showCronToast('Error: ' + e.message); }
+  }
 }
 
 function showCronError(el, msg, ts, fails) {
@@ -7567,6 +7640,34 @@ def api_cron_update():
     if result is None:
         return jsonify({'error': 'Gateway unavailable'}), 502
     return jsonify({'ok': True, 'message': 'Job updated'})
+
+
+@app.route('/api/cron/create', methods=['POST'])
+def api_cron_create():
+    data = request.get_json(silent=True) or {}
+    name = data.get('name', '').strip()
+    schedule = data.get('schedule')
+    enabled = data.get('enabled', True)
+    if not name:
+        return jsonify({'error': 'Missing name'}), 400
+    if not schedule:
+        return jsonify({'error': 'Missing schedule'}), 400
+    args = {
+        'action': 'add',
+        'name': name,
+        'schedule': schedule,
+        'enabled': enabled,
+    }
+    if data.get('prompt'):
+        args['prompt'] = data['prompt']
+    if data.get('channel'):
+        args['channel'] = data['channel']
+    if data.get('model'):
+        args['model'] = data['model']
+    result = _gw_invoke('cron', args)
+    if result is None:
+        return jsonify({'error': 'Gateway unavailable'}), 502
+    return jsonify({'ok': True, 'message': f'Job "{name}" created', 'result': result})
 
 
 @app.route('/api/cron/<job_id>/runs')
