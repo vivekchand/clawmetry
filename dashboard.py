@@ -7849,8 +7849,8 @@ def api_main_activity():
             continue
     if not candidates:
         return jsonify({'calls': []})
-    # Pick largest recent file (main session is always the biggest)
-    candidates.sort(key=lambda x: x[1], reverse=True)
+    # Pick most recently modified file (active main session)
+    candidates.sort(key=lambda x: x[2], reverse=True)
     best = candidates[0][0]
     best_mt = candidates[0][2]
     if not best:
