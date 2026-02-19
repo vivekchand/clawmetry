@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.7"
+__version__ = "0.9.8"
 
 app = Flask(__name__)
 
@@ -3258,18 +3258,14 @@ async function loadMiniWidgets(overview, usage) {
   document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
   document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
   
-  // 🔥 Hot Sessions
-  document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
-  var hotHtml = '';
-  if (overview.sessionCount > 0) {
-    hotHtml = '<div style="font-size:11px;color:#f0c040;">Main session active</div>';
-    if (overview.mainSessionUpdated) {
-      hotHtml += '<div style="font-size:10px;color:#666;">Updated ' + timeAgo(overview.mainSessionUpdated) + '</div>';
-    }
-  } else {
-    hotHtml = '<div style="font-size:11px;color:#666;">No active sessions</div>';
-  }
-  document.getElementById('hot-sessions-list').innerHTML = hotHtml;
+  // 🔥 Hot Sessions — use /api/sessions for consistency with modal
+  fetch('/api/sessions').then(function(r){return r.json()}).then(function(sd) {
+    var sl = sd.sessions || sd || [];
+    if (!Array.isArray(sl)) sl = [];
+    document.getElementById('hot-sessions-count').textContent = sl.length;
+  }).catch(function() {
+    document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
+  });
   
   // 📈 Model Mix
   document.getElementById('model-primary').textContent = overview.model || 'unknown';
