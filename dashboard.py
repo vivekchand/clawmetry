@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.13"
+__version__ = "0.9.14"
 
 app = Flask(__name__)
 
@@ -2285,7 +2285,7 @@ function clawmetryLogout(){
       </div>
       <span id="cost-trend" style="display:none;">Today's running total</span>
     </div>
-    <div class="stats-footer-item" onclick="openDetailView('models')">
+    <div class="stats-footer-item">
       <span class="stats-footer-icon">🤖</span>
       <div>
         <div class="stats-footer-label">Model</div>
@@ -2293,7 +2293,7 @@ function clawmetryLogout(){
       </div>
       <div id="model-breakdown" style="display:none;">Loading...</div>
     </div>
-    <div class="stats-footer-item" onclick="openDetailView('tokens')">
+    <div class="stats-footer-item">
       <span class="stats-footer-icon">📊</span>
       <div>
         <div class="stats-footer-label">Tokens</div>
