@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.15"
+__version__ = "0.9.16"
 
 app = Flask(__name__)
 
@@ -2371,8 +2371,7 @@ function clawmetryLogout(){
         <div id="sh-crons" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
         <div id="sh-subagents" style="margin-bottom:14px;"></div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Token Usage</div>
-        <div style="padding:12px;background:var(--bg-tertiary);border-radius:8px;text-align:center;color:var(--text-muted);font-size:12px;">📊 Coming soon</div>
+        <!-- Token Usage removed, now has dedicated Tokens tab -->
       </div>
     </div>
   </div>
