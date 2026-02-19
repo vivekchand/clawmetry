@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.11"
+__version__ = "0.9.12"
 
 app = Flask(__name__)
 
@@ -2152,7 +2152,8 @@ function clawmetryLogout(){
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
-    <div class="nav-tab" onclick="switchTab('history')">History</div>
+    <!-- History tab hidden until mature -->
+    <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
 </div>
 
