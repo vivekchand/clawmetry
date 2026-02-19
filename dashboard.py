@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.9"
+__version__ = "0.9.11"
 
 app = Flask(__name__)
 
@@ -2452,14 +2452,14 @@ function clawmetryLogout(){
 <div class="page" id="page-crons">
   <div class="refresh-bar">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
-    <button class="refresh-btn" style="background:#10b981;color:#fff;" onclick="cronCreateNew()">&#x2795; New Cron Job</button>
+    <!-- New Cron Job button disabled until gateway CRUD is properly tested -->
   </div>
   <div class="card" id="crons-list">Loading...</div>
 </div>
 
 <!-- Cron Edit/Create Modal -->
-<div id="cron-edit-modal" style="display:none;position:fixed;inset:0;z-index:1500;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;">
-  <div style="background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:12px;padding:24px;width:480px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,0.4);max-height:90vh;overflow-y:auto;">
+<div id="cron-edit-modal" style="display:none;position:fixed;inset:0;z-index:1500;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+  <div style="background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:12px;padding:24px;width:480px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,0.4);max-height:80vh;overflow-y:auto;margin:auto;">
     <h3 id="cron-modal-title" style="margin:0 0 16px;color:var(--text-primary);font-size:16px;">Edit Cron Job</h3>
     <input type="hidden" id="cron-edit-id">
     <input type="hidden" id="cron-edit-mode" value="edit">
@@ -3962,10 +3962,12 @@ function renderCrons() {
 
     // Action buttons
     html += '<div class="cron-actions" onclick="event.stopPropagation()">';
-    html += '<button class="cron-btn-run" onclick="cronRunNow(\'' + escHtml(j.id) + '\')">&#x25B6; Run Now</button>';
-    html += '<button class="cron-btn-toggle" onclick="cronToggle(\'' + escHtml(j.id) + '\',' + !isEnabled + ')">' + (isEnabled ? '&#x23F8; Disable' : '&#x25B6; Enable') + '</button>';
-    html += '<button class="cron-btn-edit" onclick="cronEdit(\'' + escHtml(j.id) + '\')">&#x270F; Edit</button>';
-    html += '<button class="cron-btn-delete" onclick="cronConfirmDelete(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F5D1; Delete</button>';
+    // Run Now disabled until gateway CRUD is properly tested
+    // html += '<button class="cron-btn-run" onclick="cronRunNow(\'' + escHtml(j.id) + '\')">&#x25B6; Run Now</button>';
+    // CRUD buttons disabled until gateway integration is properly tested
+    // html += '<button class="cron-btn-toggle" onclick="cronToggle(\'' + escHtml(j.id) + '\',' + !isEnabled + ')">' + (isEnabled ? '&#x23F8; Disable' : '&#x25B6; Enable') + '</button>';
+    // html += '<button class="cron-btn-edit" onclick="cronEdit(\'' + escHtml(j.id) + '\')">&#x270F; Edit</button>';
+    // html += '<button class="cron-btn-delete" onclick="cronConfirmDelete(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F5D1; Delete</button>';
     html += '</div>';
 
     // Expanded section
@@ -4041,8 +4043,13 @@ async function cronToggle(jobId, enabled) {
   try {
     var res = await fetch('/api/cron/toggle', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({jobId: jobId, enabled: enabled})});
     var data = await res.json();
+    if (data.error) { showCronToast('Error: ' + data.error); return; }
     showCronToast(data.message || (enabled ? 'Job enabled' : 'Job disabled'));
-    loadCrons();
+    // Update local state immediately for instant UI feedback
+    var job = _cronJobs.find(function(j) { return j.id === jobId; });
+    if (job) { job.enabled = enabled; renderCrons(); }
+    // Then refresh from server after a short delay
+    setTimeout(loadCrons, 1000);
   } catch(e) { showCronToast('Error: ' + e.message); }
 }
 
@@ -4083,7 +4090,7 @@ function cronEdit(jobId) {
     document.getElementById('cron-edit-schedule').value = JSON.stringify(sched);
     document.getElementById('cron-edit-tz').value = '';
   }
-  document.getElementById('cron-edit-prompt').value = (job.payload && job.payload.prompt) || (job.config && job.config.prompt) || '';
+  document.getElementById('cron-edit-prompt').value = (job.payload && (job.payload.text || job.payload.message || job.payload.prompt)) || (job.config && job.config.prompt) || '';
   document.getElementById('cron-edit-channel').value = (job.payload && job.payload.channel) || (job.config && job.config.channel) || '';
   document.getElementById('cron-edit-model').value = (job.payload && job.payload.model) || (job.config && job.config.model) || '';
   document.getElementById('cron-edit-enabled').checked = job.enabled !== false;
