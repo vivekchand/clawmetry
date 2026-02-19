@@ -2012,14 +2012,17 @@ DASHBOARD_HTML = r"""
   }
 
   @media (max-width: 768px) {
-    .nav { padding: 10px 12px; gap: 8px; }
-    .nav h1 { font-size: 16px; }
-    .nav-tab { padding: 6px 12px; font-size: 12px; }
-    .page { padding: 12px; }
-    .grid { grid-template-columns: 1fr; gap: 12px; }
-    .card-value { font-size: 22px; }
-    .flow-stats { gap: 8px; }
-    .flow-stat { min-width: 70px; padding: 6px 10px; }
+    .nav { padding: 8px 10px; gap: 6px; flex-wrap: wrap; }
+    .nav h1 { font-size: 15px; }
+    .nav-tab { padding: 5px 10px; font-size: 11px; }
+    .nav-tabs { gap: 2px; flex-wrap: wrap; margin-left: 0; width: 100%; justify-content: center; }
+    .page { padding: 10px 8px; }
+    #page-overview { padding: 6px 4px; }
+    .grid { grid-template-columns: 1fr; gap: 10px; }
+    .card { padding: 14px; }
+    .card-value { font-size: 20px; }
+    .flow-stats { gap: 6px; flex-wrap: wrap; }
+    .flow-stat { min-width: 70px; padding: 6px 10px; flex: 1 1 calc(50% - 6px); }
     .flow-stat-value { font-size: 16px; }
     #flow-svg { min-width: 0; }
     .heatmap-grid { min-width: 500px; }
@@ -2035,17 +2038,115 @@ DASHBOARD_HTML = r"""
     .flow-label { font-size: 7px !important; }
     .flow-node rect { stroke-width: 1 !important; }
     .flow-node.active rect { stroke-width: 1.5 !important; }
-    .brain-group { animation-duration: 1.8s; } /* Faster on mobile */
+    .brain-group { animation-duration: 1.8s; }
     
     /* Mobile zoom controls */
     .zoom-controls { margin-left: 8px; gap: 2px; }
     .zoom-btn { width: 24px; height: 24px; font-size: 14px; }
     .zoom-level { min-width: 32px; font-size: 10px; }
+
+    /* Stats footer mobile */
+    .stats-footer { flex-wrap: wrap; }
+    .stats-footer-item { flex: 1 1 calc(50% - 1px); min-width: 0; padding: 6px 8px; }
+    .stats-footer-value { font-size: 13px; }
+    .stats-footer-label { font-size: 9px; }
+
+    /* Overview split mobile */
+    .overview-split { grid-template-columns: 1fr !important; height: auto !important; }
+    .overview-flow-pane { height: 35vh !important; min-height: 200px; border-radius: 8px 8px 0 0 !important; }
+    .overview-divider { width: auto !important; height: 1px !important; }
+    .overview-tasks-pane { height: auto !important; max-height: 60vh; border-radius: 0 0 8px 8px !important; border-left: 1px solid var(--border-primary) !important; border-top: none !important; }
+
+    /* Health grid mobile */
+    .health-grid { grid-template-columns: 1fr; }
+
+    /* Modal mobile */
+    .modal-card { width: 98%; max-height: 90vh; border-radius: 12px; }
+    .comp-modal-card { width: 95%; }
+
+    /* Session items compact on mobile */
+    .session-meta { gap: 8px; }
+
+    /* Language switcher mobile */
+    .lang-switcher select { padding: 3px 6px; font-size: 11px; }
+    
+    /* Theme toggle mobile */
+    .theme-toggle { padding: 6px 8px; font-size: 14px; }
+
+    /* Budget modal mobile */
+    #budget-modal > div { width: 95%; padding: 16px; }
+
+    /* Transcript bubbles mobile */
+    .tg-bubble { max-width: 92%; padding: 8px 12px; }
+  }
+
+  /* Extra small screens (phones) */
+  @media (max-width: 480px) {
+    .nav h1 { font-size: 14px; }
+    .nav-tab { padding: 4px 8px; font-size: 10px; }
+    .stats-footer-item { flex: 1 1 100%; }
+    .overview-flow-pane { height: 30vh !important; min-height: 180px; }
+    .card-value { font-size: 18px; }
+    .flow-stat { flex: 1 1 100%; }
+    .card { padding: 12px; border-radius: 10px; }
   }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script>
+/* ── i18n Internationalization System ─────────────────────────────────── */
+window.I18N = (function() {
+  var _translations = {};
+  var _currentLang = localStorage.getItem('clawmetry-lang') || 'en';
+  var _listeners = [];
+
+  function setTranslations(data) { _translations = data; }
+  function getLang() { return _currentLang; }
+  function getAvailableLanguages() { return Object.keys(_translations); }
+
+  function t(key, fallback) {
+    var lang = _currentLang;
+    if (_translations[lang] && _translations[lang][key]) return _translations[lang][key];
+    if (_translations['en'] && _translations['en'][key]) return _translations['en'][key];
+    return fallback || key;
+  }
+
+  function setLang(lang) {
+    if (!_translations[lang]) return;
+    _currentLang = lang;
+    localStorage.setItem('clawmetry-lang', lang);
+    document.documentElement.setAttribute('lang', lang);
+    applyAll();
+    _listeners.forEach(function(fn) { try { fn(lang); } catch(e) {} });
+  }
+
+  function onChange(fn) { _listeners.push(fn); }
+
+  function applyAll() {
+    document.querySelectorAll('[data-i18n]').forEach(function(el) {
+      var key = el.getAttribute('data-i18n');
+      var val = t(key);
+      if (el.tagName === 'INPUT' && el.type !== 'hidden') {
+        if (el.placeholder) el.placeholder = val;
+      } else {
+        el.textContent = val;
+      }
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach(function(el) {
+      el.title = t(el.getAttribute('data-i18n-title'));
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(function(el) {
+      el.placeholder = t(el.getAttribute('data-i18n-placeholder'));
+    });
+    // Update page title
+    document.title = t('app.title');
+  }
+
+  return { setTranslations: setTranslations, t: t, getLang: getLang, setLang: setLang,
+           getAvailableLanguages: getAvailableLanguages, applyAll: applyAll, onChange: onChange };
+})();
+</script>
 </head>
 <body data-theme="dark" class="booting"><script>var t=localStorage.getItem('openclaw-theme');if(t==='light')document.body.setAttribute('data-theme','light');</script>
 <!-- Login overlay -->
@@ -2125,13 +2226,13 @@ function clawmetryLogout(){
 <div class="boot-overlay" id="boot-overlay">
   <div class="boot-card">
     <div class="boot-spinner"></div>
-    <div class="boot-title">Initializing ClawMetry</div>
-    <div class="boot-sub" id="boot-sub">Loading model, tasks, system health, and live streams…</div>
+    <div class="boot-title" data-i18n="boot.title">Initializing ClawMetry</div>
+    <div class="boot-sub" id="boot-sub" data-i18n="boot.sub">Loading model, tasks, system health, and live streams…</div>
     <div class="boot-steps">
-      <div class="boot-step loading" id="boot-step-overview"><span class="boot-dot"></span><span>Loading overview + model context</span></div>
-      <div class="boot-step" id="boot-step-tasks"><span class="boot-dot"></span><span>Loading active tasks</span></div>
-      <div class="boot-step" id="boot-step-health"><span class="boot-dot"></span><span>Loading system health</span></div>
-      <div class="boot-step" id="boot-step-streams"><span class="boot-dot"></span><span>Connecting live streams</span></div>
+      <div class="boot-step loading" id="boot-step-overview"><span class="boot-dot"></span><span data-i18n="boot.step.overview">Loading overview + model context</span></div>
+      <div class="boot-step" id="boot-step-tasks"><span class="boot-dot"></span><span data-i18n="boot.step.tasks">Loading active tasks</span></div>
+      <div class="boot-step" id="boot-step-health"><span class="boot-dot"></span><span data-i18n="boot.step.health">Loading system health</span></div>
+      <div class="boot-step" id="boot-step-streams"><span class="boot-dot"></span><span data-i18n="boot.step.streams">Connecting live streams</span></div>
     </div>
   </div>
 </div>
@@ -2148,14 +2249,20 @@ function clawmetryLogout(){
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
     <button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl/Cmd + +)">+</button>
   </div>
+  <div class="lang-switcher" style="margin-left:4px;">
+    <select id="lang-select" onchange="I18N.setLang(this.value)" style="background:var(--button-bg);border:1px solid var(--border-primary);border-radius:6px;padding:4px 8px;color:var(--text-secondary);font-size:12px;font-weight:600;cursor:pointer;outline:none;">
+      <option value="en">EN</option>
+      <option value="zh-CN">中文</option>
+    </select>
+  </div>
   <div class="nav-tabs">
-    <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
-    <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
-    <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
-    <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
-    <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('flow')" data-i18n="nav.flow">Flow</div>
+    <div class="nav-tab active" onclick="switchTab('overview')" data-i18n="nav.overview">Overview</div>
+    <div class="nav-tab" onclick="switchTab('crons')" data-i18n="nav.crons">Crons</div>
+    <div class="nav-tab" onclick="switchTab('usage')" data-i18n="nav.tokens">Tokens</div>
+    <div class="nav-tab" onclick="switchTab('memory')" data-i18n="nav.memory">Memory</div>
     <!-- History tab hidden until mature -->
-    <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
+    <!-- <div class="nav-tab" onclick="switchTab('history')" data-i18n="nav.history">History</div> -->
   </div>
 </div>
 
@@ -2277,7 +2384,7 @@ function clawmetryLogout(){
     <div class="stats-footer-item">
       <span class="stats-footer-icon">💰</span>
       <div>
-        <div class="stats-footer-label">Spending</div>
+        <div class="stats-footer-label" data-i18n="stats.spending">Spending</div>
         <div class="stats-footer-value" id="cost-today">$0.00</div>
       </div>
       <div style="margin-left:auto;text-align:right;">
@@ -2289,7 +2396,7 @@ function clawmetryLogout(){
     <div class="stats-footer-item">
       <span class="stats-footer-icon">🤖</span>
       <div>
-        <div class="stats-footer-label">Model</div>
+        <div class="stats-footer-label" data-i18n="stats.model">Model</div>
         <div class="stats-footer-value" id="model-primary">—</div>
       </div>
       <div id="model-breakdown" style="display:none;">Loading...</div>
@@ -2297,7 +2404,7 @@ function clawmetryLogout(){
     <div class="stats-footer-item">
       <span class="stats-footer-icon">📊</span>
       <div>
-        <div class="stats-footer-label">Tokens</div>
+        <div class="stats-footer-label" data-i18n="stats.tokens">Tokens</div>
         <div class="stats-footer-value" id="token-rate">—</div>
       </div>
       <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">—</span></span>
@@ -2305,7 +2412,7 @@ function clawmetryLogout(){
     <div class="stats-footer-item">
       <span class="stats-footer-icon">💬</span>
       <div>
-        <div class="stats-footer-label">Sessions</div>
+        <div class="stats-footer-label" data-i18n="stats.sessions">Sessions</div>
         <div class="stats-footer-value" id="hot-sessions-count">—</div>
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
@@ -2349,7 +2456,7 @@ function clawmetryLogout(){
     <div class="overview-tasks-pane">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
+          <span style="font-size:15px;font-weight:700;color:var(--text-primary);" data-i18n="overview.activeTasks">🐝 Active Tasks</span>
           <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
         </div>
         <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
@@ -2362,7 +2469,7 @@ function clawmetryLogout(){
       </div>
       <!-- System Health Panel (inside tasks pane) -->
       <div id="system-health-panel" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:16px;margin-top:14px;box-shadow:var(--card-shadow);">
-        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
+        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;" data-i18n="overview.systemHealth">🏥 System Health</div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
         <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
@@ -2405,17 +2512,17 @@ function clawmetryLogout(){
   <!-- Main Usage Stats -->
   <div class="grid">
     <div class="card">
-      <div class="card-title"><span class="icon">📊</span> Today</div>
+      <div class="card-title"><span class="icon">📊</span> <span data-i18n="usage.today">Today</span></div>
       <div class="card-value" id="usage-today">—</div>
       <div class="card-sub" id="usage-today-cost"></div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">📅</span> This Week</div>
+      <div class="card-title"><span class="icon">📅</span> <span data-i18n="usage.thisWeek">This Week</span></div>
       <div class="card-value" id="usage-week">—</div>
       <div class="card-sub" id="usage-week-cost"></div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">📆</span> This Month</div>
+      <div class="card-title"><span class="icon">📆</span> <span data-i18n="usage.thisMonth">This Month</span></div>
       <div class="card-value" id="usage-month">—</div>
       <div class="card-sub" id="usage-month-cost"></div>
     </div>
@@ -2425,11 +2532,11 @@ function clawmetryLogout(){
       <div class="card-sub" id="trend-prediction"></div>
     </div>
   </div>
-  <div class="section-title">📊 Token Usage (14 days)</div>
+  <div class="section-title" data-i18n="usage.tokenUsage14d">📊 Token Usage (14 days)</div>
   <div class="card">
     <div class="usage-chart" id="usage-chart">Loading...</div>
   </div>
-  <div class="section-title">💰 Cost Breakdown</div>
+  <div class="section-title" data-i18n="usage.costBreakdown">💰 Cost Breakdown</div>
   <div class="card"><table class="usage-table" id="usage-cost-table"><tbody><tr><td colspan="3" style="color:#666;">Loading...</td></tr></tbody></table></div>
   <div id="otel-extra-sections" style="display:none;">
     <div class="grid" style="margin-top:16px;">
@@ -2588,10 +2695,10 @@ function clawmetryLogout(){
 <!-- FLOW -->
 <div class="page" id="page-flow">
   <div class="flow-stats">
-    <div class="flow-stat"><span class="flow-stat-label">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.messagesPerMin">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.actionsTaken">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.activeTools">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
+    <div class="flow-stat"><span class="flow-stat-label" data-i18n="flow.tokensUsed">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
   </div>
   <div class="flow-container">
     <svg id="flow-svg" viewBox="0 0 980 550" preserveAspectRatio="xMidYMid meet">
@@ -7255,6 +7362,33 @@ async function gwSetupConnect() {
 
 // Check on load
 document.addEventListener('DOMContentLoaded', checkGwConfig);
+
+// ── i18n initialization ──────────────────────────────────────────────
+(function() {
+  fetch('/api/translations')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      I18N.setTranslations(data);
+      // Restore saved language
+      var saved = localStorage.getItem('clawmetry-lang');
+      if (saved && data[saved]) {
+        I18N.setLang(saved);
+        var sel = document.getElementById('lang-select');
+        if (sel) sel.value = saved;
+      } else {
+        // Auto-detect browser language
+        var browserLang = navigator.language || navigator.userLanguage || 'en';
+        if (browserLang.startsWith('zh') && data['zh-CN']) {
+          I18N.setLang('zh-CN');
+          var sel = document.getElementById('lang-select');
+          if (sel) sel.value = 'zh-CN';
+        } else {
+          I18N.applyAll();
+        }
+      }
+    })
+    .catch(function(e) { console.warn('i18n load failed:', e); });
+})();
 </script>
 
 </body>
@@ -7715,6 +7849,19 @@ def index():
     resp = make_response(render_template_string(DASHBOARD_HTML))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     return resp
+
+
+@app.route('/api/translations')
+def api_translations():
+    """Return i18n translations JSON."""
+    translations_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'translations.json')
+    try:
+        with open(translations_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return jsonify(data)
+    except (FileNotFoundError, json.JSONDecodeError):
+        # Fallback: return minimal English translations
+        return jsonify({"en": {"app.title": "ClawMetry 🦞"}})
 
 
 @app.route('/api/channels')
