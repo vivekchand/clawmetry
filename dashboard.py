@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.6"
+__version__ = "0.9.7"
 
 app = Flask(__name__)
 
@@ -3736,8 +3736,9 @@ function openDetailView(type) {
 }
 
 function showSessionsModal() {
-  fetch('/api/overview').then(r=>r.json()).then(function(d) {
-    var sessions = (d.sessions || {}).active || [];
+  fetch('/api/sessions').then(r=>r.json()).then(function(d) {
+    var sessions = d.sessions || d || [];
+    if (!Array.isArray(sessions)) sessions = [];
     var html = '<div style="max-height:60vh;overflow-y:auto;">';
     if (!sessions.length) {
       html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">No active sessions</div>';
@@ -3746,10 +3747,11 @@ function showSessionsModal() {
       html += '<tr style="border-bottom:1px solid var(--border-primary);color:var(--text-muted);text-transform:uppercase;font-size:10px;letter-spacing:0.5px;">';
       html += '<th style="padding:8px;text-align:left;">Session</th><th style="padding:8px;text-align:left;">Kind</th><th style="padding:8px;text-align:right;">Tokens</th><th style="padding:8px;text-align:right;">Age</th></tr>';
       sessions.forEach(function(s) {
-        var age = s.lastActivityAge || '';
-        var tokens = s.totalTokens ? (s.totalTokens > 1e6 ? (s.totalTokens/1e6).toFixed(1)+'M' : (s.totalTokens > 1e3 ? (s.totalTokens/1e3).toFixed(0)+'K' : s.totalTokens)) : '0';
-        var kind = s.kind || 'main';
-        var label = s.label || s.sessionKey || '—';
+        var age = s.lastActivityAge || s.age || '';
+        var tokens = s.totalTokens || s.tokens || 0;
+        tokens = tokens > 1e6 ? (tokens/1e6).toFixed(1)+'M' : (tokens > 1e3 ? (tokens/1e3).toFixed(0)+'K' : tokens);
+        var kind = s.kind || (s.sessionKey && s.sessionKey.includes('subagent') ? 'isolated' : 'main');
+        var label = s.label || s.sessionKey || s.name || '—';
         var kindColor = kind === 'main' ? 'var(--text-success)' : kind === 'isolated' ? '#a78bfa' : 'var(--text-muted)';
         html += '<tr style="border-bottom:1px solid var(--border-primary);">';
         html += '<td style="padding:8px;color:var(--text-primary);font-weight:600;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(label) + '</td>';
@@ -3761,8 +3763,7 @@ function showSessionsModal() {
       html += '</table>';
     }
     html += '</div>';
-    var total = (d.sessions || {}).total || sessions.length;
-    showGenericModal('💬 Active Sessions (' + total + ')', html);
+    showGenericModal('💬 Active Sessions (' + sessions.length + ')', html);
   });
 }
 
