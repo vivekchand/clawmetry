@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.8"
+__version__ = "0.9.9"
 
 app = Flask(__name__)
 
@@ -2299,7 +2299,7 @@ function clawmetryLogout(){
       </div>
       <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">—</span></span>
     </div>
-    <div class="stats-footer-item" onclick="openDetailView('sessions')">
+    <div class="stats-footer-item">
       <span class="stats-footer-icon">💬</span>
       <div>
         <div class="stats-footer-label">Sessions</div>
