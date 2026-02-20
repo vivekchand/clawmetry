@@ -556,10 +556,7 @@ function copyActiveCmd() {
         <label style="display:block;font-size:13px;color:var(--text-muted);margin-bottom:4px;">Company <span style="color:var(--text-dim);font-weight:400;">(optional)</span></label>
         <input type="text" id="managed-company" placeholder="Company name" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;font-family:inherit;outline:none;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
       </div>
-      <div style="margin-bottom:20px;">
-        <label style="display:block;font-size:13px;color:var(--text-muted);margin-bottom:4px;">What are you looking for? <span style="color:var(--text-dim);font-weight:400;">(optional)</span></label>
-        <textarea id="managed-usecase" rows="3" placeholder="e.g. Cloud-hosted dashboard for my team, multi-agent monitoring, don't want to self-host..." style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;font-family:inherit;outline:none;resize:vertical;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></textarea>
-      </div>
+      <div style="margin-bottom:20px;"></div>
       <button type="submit" id="managed-btn" style="width:100%;padding:12px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-weight:600;font-size:15px;cursor:pointer;transition:all 0.2s;box-shadow:0 0 20px rgba(229,68,58,0.2);">Submit Request</button>
       <p id="managed-msg" style="margin-top:12px;font-size:13px;text-align:center;display:none;"></p>
     </form>
@@ -587,7 +584,7 @@ document.getElementById('managed-form').addEventListener('submit', function(e) {
       name: document.getElementById('managed-name').value,
       email: document.getElementById('managed-email').value,
       company: document.getElementById('managed-company').value,
-      use_case: document.getElementById('managed-usecase').value
+      use_case: ''
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) {
       _setIdentity(document.getElementById('managed-name').value, document.getElementById('managed-email').value);
