@@ -532,6 +532,10 @@ function copyActiveCmd() {
     Don't want to self-host?
     <a href="#" onclick="openManagedModal();return false;" style="color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-weight:500;">Request a managed instance →</a>
   </p>
+  <p style="color:var(--text-muted);font-size:13px;margin-top:8px;">
+    Need help setting up?
+    <a href="#" onclick="openSupportModal();return false;" style="color:#60a5fa;text-decoration:underline;text-underline-offset:3px;font-weight:500;">Get free onboarding support →</a>
+  </p>
 </section>
 
 <!-- MANAGED MODAL -->
@@ -562,6 +566,34 @@ function copyActiveCmd() {
     </form>
   </div>
 </div>
+
+<!-- SUPPORT MODAL -->
+<div id="support-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:16px;" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:32px;max-width:480px;width:100%;position:relative;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+    <button onclick="document.getElementById('support-modal').style.display='none'" style="position:absolute;top:12px;right:16px;background:none;border:none;color:var(--text-dim);font-size:22px;cursor:pointer;padding:4px;">&times;</button>
+    <div style="text-align:center;margin-bottom:24px;">
+      <div style="font-size:32px;margin-bottom:8px;">🤝</div>
+      <h3 style="font-size:20px;font-weight:700;margin-bottom:6px;">Free Onboarding Support</h3>
+      <p style="font-size:14px;color:var(--text-muted);line-height:1.5;">We'll help you get ClawMetry running. No catch, no upsell. We want you to succeed.</p>
+    </div>
+    <form id="support-form" style="display:flex;flex-direction:column;gap:12px;">
+      <input name="name" placeholder="Name" required style="padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;">
+      <input name="email" type="email" placeholder="Email" required style="padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;">
+      <select name="help_type" style="padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;">
+        <option value="">What do you need help with?</option>
+        <option value="installation">Installation</option>
+        <option value="configuration">Configuration / Setup</option>
+        <option value="openclaw-integration">OpenClaw Integration</option>
+        <option value="troubleshooting">Troubleshooting</option>
+        <option value="other">Something else</option>
+      </select>
+      <textarea name="message" placeholder="Tell us more (optional)" rows="3" style="padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;resize:vertical;font-family:inherit;"></textarea>
+      <button type="submit" id="support-btn" style="width:100%;padding:12px;border-radius:8px;border:none;background:#3b82f6;color:#fff;font-weight:600;font-size:15px;cursor:pointer;transition:all 0.2s;box-shadow:0 0 20px rgba(59,130,246,0.2);">Get Help</button>
+      <p id="support-msg" style="margin-top:4px;font-size:13px;text-align:center;display:none;"></p>
+    </form>
+  </div>
+</div>
+
 <script>
 var _CLM_K='clm2026';
 function _clmEnc(s){var r='';for(var i=0;i<s.length;i++){r+=String.fromCharCode(s.charCodeAt(i)^_CLM_K.charCodeAt(i%_CLM_K.length));}return btoa(r);}
@@ -578,6 +610,27 @@ function openManagedModal() {
 if(new URLSearchParams(window.location.search).get('managed')==='1'){
   setTimeout(function(){openManagedModal();},500);
 }
+function openSupportModal() {
+  document.getElementById('support-modal').style.display='flex';
+  _encPost('/api/managed-click', {utm:window._utm||{},identity:_getIdentity(),source:'support'}).catch(function(){});
+}
+if(new URLSearchParams(window.location.search).get('support')==='1'){
+  setTimeout(function(){openSupportModal();},500);
+}
+document.getElementById('support-form').addEventListener('submit', function(e) {
+  e.preventDefault();
+  var btn = document.getElementById('support-btn');
+  var msg = document.getElementById('support-msg');
+  btn.textContent = 'Sending...'; btn.disabled = true;
+  var fd = new FormData(e.target);
+  var data = {name:fd.get('name'),email:fd.get('email'),help_type:fd.get('help_type'),message:fd.get('message'),utm:window._utm||{},identity:_getIdentity()};
+  _setIdentity(data.name, data.email);
+  _encPost('/api/support-request', data).then(function(r){
+    if(r.ok){
+      document.getElementById('support-form').innerHTML='<div style="text-align:center;padding:20px 0;"><div style="font-size:40px;margin-bottom:12px;">🤝</div><h3 style="font-size:18px;margin-bottom:8px;">We\'ll be in touch!</h3><p style="color:var(--text-muted);font-size:14px;">Expect a reply within a few hours. We\'re here to help.</p></div>';
+    } else { msg.textContent='Something went wrong. Try again.'; msg.style.display='block'; msg.style.color='#ef4444'; btn.textContent='Get Help'; btn.disabled=false; }
+  }).catch(function(){msg.textContent='Network error.'; msg.style.display='block'; msg.style.color='#ef4444'; btn.textContent='Get Help'; btn.disabled=false;});
+});
 document.getElementById('managed-form').addEventListener('submit', function(e) {
   e.preventDefault();
   var btn = document.getElementById('managed-btn');

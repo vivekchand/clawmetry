@@ -392,8 +392,10 @@ WELCOME_HTML = """\
     <p style="font-size:15px;color:#d1d5db;">Cheers,<br><strong style="color:#fff;">The ClawMetry Team</strong> 🦞</p>
   </div>
   <div style="border-top:1px solid #1f1f2e;padding:20px 28px;text-align:center;">
-    <p style="font-size:13px;color:#9ca3af;margin:0 0 8px;">Don't want to self-host?</p>
-    <a href="https://clawmetry.com/?managed=1" style="color:#3b82f6;font-weight:600;font-size:13px;text-decoration:none;">Request a managed instance →</a>
+    <p style="font-size:13px;color:#9ca3af;margin:0 0 8px;">Need help setting up?</p>
+    <a href="https://clawmetry.com/?support=1" style="color:#60a5fa;font-weight:600;font-size:13px;text-decoration:none;">Get free onboarding support →</a>
+    <span style="color:#4b5563;margin:0 8px;">·</span>
+    <a href="https://clawmetry.com/?managed=1" style="color:#9ca3af;font-size:13px;text-decoration:none;">or request a managed instance</a>
     <p style="font-size:11px;color:#6b7280;margin:12px 0 0;">We email on major releases only. No spam. Ever.</p>
   </div>
 </div>
@@ -616,6 +618,61 @@ def managed_request():
         log.error(f"[managed-request] confirmation email error: {e}")
 
     return jsonify({"ok": True, "message": "Request received! We'll be in touch."})
+
+
+@app.route("/api/support-request", methods=["POST"])
+def support_request():
+    """Handle free onboarding support requests."""
+    visitor = _get_visitor_info(request)
+    data = _decrypt_payload(request)
+    name = (data.get("name") or "").strip()
+    email = (data.get("email") or "").strip()
+    help_type = (data.get("help_type") or "").strip()
+    message = (data.get("message") or "").strip()
+    utm = data.get("utm", {})
+    source = _format_source(utm, visitor['referer'])
+
+    if not email:
+        return jsonify({"ok": False, "error": "Email required"}), 400
+
+    log.info(f"[support-request] {name} <{email}> type={help_type}")
+
+    # Store in Firestore
+    if _firestore_available:
+        try:
+            _firestore_db.collection("support_requests").add({
+                "name": name, "email": email, "help_type": help_type,
+                "message": message, "source": source,
+                "ip": visitor['ip'], "ua": visitor['ua'],
+                "utm": utm, "ts": _firestore_mod.SERVER_TIMESTAMP,
+            })
+        except Exception as e:
+            log.error(f"[support-request] DB error: {e}")
+
+    # Notify Vivek
+    try:
+        help_label = help_type.replace("-", " ").replace("_", " ").title() if help_type else "General"
+        requests.post("https://api.resend.com/emails", headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"
+        }, json={
+            "from": FROM_EMAIL, "to": VIVEK_EMAIL,
+            "subject": f"🤝 [Setup Help] {name or email} — {help_label}",
+            "html": f"""<div style="font-family:sans-serif;max-width:600px;">
+<h2>🤝 New Support Request</h2>
+<table style="border-collapse:collapse;width:100%;">
+<tr><td style="padding:8px;font-weight:bold;border-bottom:1px solid #eee;">Name</td><td style="padding:8px;border-bottom:1px solid #eee;">{name or '—'}</td></tr>
+<tr><td style="padding:8px;font-weight:bold;border-bottom:1px solid #eee;">Email</td><td style="padding:8px;border-bottom:1px solid #eee;"><a href="mailto:{email}">{email}</a></td></tr>
+<tr><td style="padding:8px;font-weight:bold;border-bottom:1px solid #eee;">Help Type</td><td style="padding:8px;border-bottom:1px solid #eee;">{help_label}</td></tr>
+<tr><td style="padding:8px;font-weight:bold;border-bottom:1px solid #eee;">Message</td><td style="padding:8px;border-bottom:1px solid #eee;">{message or '—'}</td></tr>
+<tr><td style="padding:8px;font-weight:bold;border-bottom:1px solid #eee;">Source</td><td style="padding:8px;border-bottom:1px solid #eee;">{source}</td></tr>
+</table>
+<p style="margin-top:16px;color:#666;">Reply directly to help them get set up.</p>
+</div>"""
+        }, timeout=10)
+    except Exception as e:
+        log.error(f"[support-request] notification email error: {e}")
+
+    return jsonify({"ok": True, "message": "We'll be in touch!"})
 
 
 @app.route("/api/managed-click", methods=["POST"])
