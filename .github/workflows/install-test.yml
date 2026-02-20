@@ -1,0 +1,35 @@
+name: Test Install Script
+on:
+  push:
+    paths: [install.sh]
+  pull_request:
+    paths: [install.sh]
+  workflow_dispatch:
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run install script
+        run: bash install.sh
+      - name: Verify clawmetry binary
+        run: clawmetry --version
+
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run install script
+        run: bash install.sh
+      - name: Add bin to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Verify clawmetry binary
+        run: clawmetry --version
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck
+        run: shellcheck install.sh
