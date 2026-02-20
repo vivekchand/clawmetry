@@ -32,6 +32,21 @@ UPDATES_EMAIL = "ClawMetry Updates <updates@clawmetry.com>"
 NOTIFY_SECRET = os.environ.get("NOTIFY_SECRET", "clawmetry-notify-2026")
 
 VIVEK_EMAIL = "vivekchand19@gmail.com"
+CLM_KEY = "clm2026"
+
+def _decrypt_payload(req):
+    """Decrypt XOR+base64 encoded request body. Falls back to plain JSON."""
+    data = req.get_json(silent=True) or {}
+    if "p" in data and len(data) == 1:
+        try:
+            import base64
+            decoded = base64.b64decode(data["p"])
+            decrypted = "".join(chr(b ^ ord(CLM_KEY[i % len(CLM_KEY)])) for i, b in enumerate(decoded))
+            return json.loads(decrypted)
+        except Exception as e:
+            log.error(f"[decrypt] failed: {e}")
+            return {}
+    return data
 RESEND_HEADERS = {"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"}
 
 # ─── Database ───────────────────────────────────────────────────────────────
@@ -308,7 +323,7 @@ def _render_admin(title, content_html, active=""):
 
 @app.route("/api/subscribe", methods=["POST"])
 def subscribe():
-    data = request.get_json(silent=True) or {}
+    data = _decrypt_payload(request)
     email = (data.get("email") or "").strip().lower()
     if not email or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return jsonify({"error": "Invalid email"}), 400
@@ -354,7 +369,7 @@ def subscribe():
 @app.route("/api/managed-request", methods=["POST"])
 def managed_request():
     """Lead capture for managed/cloud ClawMetry instances."""
-    data = request.get_json(silent=True) or {}
+    data = _decrypt_payload(request)
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip().lower()
     company = (data.get("company") or "").strip()
@@ -446,7 +461,7 @@ def managed_request():
 def managed_click():
     """Track when someone clicks the managed instance CTA."""
     visitor = _get_visitor_info(request)
-    data = request.get_json(silent=True) or {}
+    data = _decrypt_payload(request)
     utm = data.get("utm", {})
     source = _format_source(utm, visitor['referer'])
     try:
@@ -480,7 +495,7 @@ def managed_click():
 
 @app.route("/api/copy-track", methods=["POST"])
 def copy_track():
-    data = request.get_json(silent=True) or {}
+    data = _decrypt_payload(request)
     tab = data.get("tab", "unknown"); command = data.get("command", ""); utm = data.get("utm", {})
     visitor = _get_visitor_info(request)
     source = _format_source(utm, visitor['referer'])

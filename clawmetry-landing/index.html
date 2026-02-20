@@ -512,7 +512,7 @@ function copyActiveCmd() {
   var copyData={tab: activeTab, command: cmds[activeTab], identity:_getIdentity()};
   var utm=getUtmParams();
   if(Object.keys(utm).length>1)copyData.utm=utm;
-  fetch('/api/copy-track', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(copyData)}).catch(function(){});
+  _encPost('/api/copy-track', copyData).catch(function(){});
   var btn = document.getElementById('copy-btn');
   btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#28c840" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
   setTimeout(function(){ btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'; }, 1500);
@@ -569,14 +569,16 @@ function copyActiveCmd() {
   </div>
 </div>
 <script>
-function _clmEnc(s){var k='clm2026';var r='';for(var i=0;i<s.length;i++){r+=String.fromCharCode(s.charCodeAt(i)^k.charCodeAt(i%k.length));}return btoa(r);}
-function _clmDec(s){try{var d=atob(s);var k='clm2026';var r='';for(var i=0;i<d.length;i++){r+=String.fromCharCode(d.charCodeAt(i)^k.charCodeAt(i%k.length));}return r;}catch(e){return '';}}
+var _CLM_K='clm2026';
+function _clmEnc(s){var r='';for(var i=0;i<s.length;i++){r+=String.fromCharCode(s.charCodeAt(i)^_CLM_K.charCodeAt(i%_CLM_K.length));}return btoa(r);}
+function _clmDec(s){try{var d=atob(s);var r='';for(var i=0;i<d.length;i++){r+=String.fromCharCode(d.charCodeAt(i)^_CLM_K.charCodeAt(i%_CLM_K.length));}return r;}catch(e){return '';}}
+function _encPost(url,data){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p:_clmEnc(JSON.stringify(data))})});}
 function _getIdentity(){try{var e=localStorage.getItem('_clm_id');if(!e)return {};return JSON.parse(_clmDec(e));}catch(e){return {};}}
 function _setIdentity(name,email){try{localStorage.setItem('_clm_id',_clmEnc(JSON.stringify({name:name||'',email:email||'',ts:Date.now()})));}catch(e){}}
 function openManagedModal() {
   document.getElementById('managed-modal').style.display='flex';
   var id=_getIdentity();
-  fetch('/api/managed-click', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utm:window._utm||{},identity:id})}).catch(function(){});
+  _encPost('/api/managed-click', {utm:window._utm||{},identity:id}).catch(function(){});
 }
 document.getElementById('managed-form').addEventListener('submit', function(e) {
   e.preventDefault();
@@ -584,15 +586,12 @@ document.getElementById('managed-form').addEventListener('submit', function(e) {
   var msg = document.getElementById('managed-msg');
   btn.disabled = true; btn.textContent = 'Submitting...';
   msg.style.display = 'none';
-  fetch('/api/managed-request', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
+  _encPost('/api/managed-request', {
       name: document.getElementById('managed-name').value,
       email: document.getElementById('managed-email').value,
       company: document.getElementById('managed-company').value,
       instances: document.getElementById('managed-instances').value,
       use_case: document.getElementById('managed-usecase').value
-    })
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) {
       _setIdentity(document.getElementById('managed-name').value, document.getElementById('managed-email').value);
@@ -792,7 +791,7 @@ document.getElementById('subscribe-form').addEventListener('submit',function(e){
   var payload={email:email};
   var utm=getUtmParams();
   if(Object.keys(utm).length>1)payload.utm=utm;
-  fetch('/api/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.json();}).then(function(d){
+  _encPost('/api/subscribe',payload).then(function(r){return r.json();}).then(function(d){
     msg.textContent=d.ok?'Thanks! We\'ll keep you posted. \u{1F99E}':'Something went wrong. Try again.';
     msg.style.color=d.ok?'#28c840':'#E5443A';
     if(d.ok){_setIdentity('',email);document.getElementById('sub-email').value='';}
