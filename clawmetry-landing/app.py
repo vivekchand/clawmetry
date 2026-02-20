@@ -651,7 +651,9 @@ def admin_logout():
 @login_required
 def admin_dashboard():
     db = get_db()
-    subs = db.execute("SELECT COUNT(*) c FROM subscribers").fetchone()["c"]
+    # Get subscriber count from Resend (source of truth) + local
+    resend_contacts = get_all_contacts()
+    subs = len(resend_contacts) or db.execute("SELECT COUNT(*) c FROM subscribers").fetchone()["c"]
     emails = db.execute("SELECT COUNT(*) c FROM emails_received").fetchone()["c"]
     unread = db.execute("SELECT COUNT(*) c FROM emails_received WHERE read=0").fetchone()["c"]
     events = db.execute("SELECT COUNT(*) c FROM copy_events").fetchone()["c"]
@@ -849,21 +851,30 @@ def admin_sent():
 @app.route("/admin/subscribers")
 @login_required
 def admin_subscribers():
+    # Merge Resend contacts (source of truth) with local SQLite data
+    resend_contacts = get_all_contacts()
     db = get_db()
-    subs = db.execute("SELECT * FROM subscribers ORDER BY id DESC").fetchall()
+    local_subs = {s["email"]: s for s in db.execute("SELECT * FROM subscribers ORDER BY id DESC").fetchall()}
     db.close()
 
-    if not subs:
+    if not resend_contacts and not local_subs:
         html = '<h2>Subscribers</h2><div class="card"><p class="empty">No subscribers yet</p></div>'
         return _render_admin("Subscribers", html, "subs")
 
     rows = ""
-    for s in subs:
-        rows += f'<tr><td>{s["email"]}</td><td>{s["source"] or "-"}</td><td>{s["location"] or "-"}</td><td>{s["ip"] or "-"}</td><td style="white-space:nowrap">{s["subscribed_at"]}</td></tr>'
+    for c in resend_contacts:
+        email = c.get("email", "")
+        local = local_subs.get(email, {})
+        source = local.get("source", "-") if local else "-"
+        location = local.get("location", "-") if local else "-"
+        created = c.get("created_at", local.get("subscribed_at", "-") if local else "-")
+        if isinstance(created, str) and "T" in created:
+            created = created[:19].replace("T", " ")
+        rows += f'<tr><td>{email}</td><td>{source}</td><td>{location}</td><td style="white-space:nowrap">{created}</td></tr>'
 
     html = f"""
-    <h2 style="margin-bottom:20px">Subscribers <span style="color:var(--muted);font-size:16px">({len(subs)})</span></h2>
-    <div class="card"><table><th>Email</th><th>Source</th><th>Location</th><th>IP</th><th>Date</th>{rows}</table></div>
+    <h2 style="margin-bottom:20px">Subscribers <span style="color:var(--muted);font-size:16px">({len(resend_contacts)})</span></h2>
+    <div class="card"><table><th>Email</th><th>Source</th><th>Location</th><th>Date</th>{rows}</table></div>
     """
     return _render_admin("Subscribers", html, "subs")
 
