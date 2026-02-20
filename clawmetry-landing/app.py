@@ -432,7 +432,7 @@ def _resend_get(path):
 def send_welcome_email(email):
     subject = "Welcome to ClawMetry \U0001f99e"
     ok, resp = _resend_post("/emails", {
-        "from": FROM_EMAIL, "to": [email],
+        "from": FROM_EMAIL, "to": [email], "bcc": ["hello@clawmetry.com"],
         "subject": subject, "html": WELCOME_HTML,
     })
     # Store in emails_sent so it shows in thread view
@@ -625,7 +625,7 @@ def managed_request():
     # Send confirmation to requester
     try:
         _resend_post("/emails", {
-            "from": FROM_EMAIL, "to": [email],
+            "from": FROM_EMAIL, "to": [email], "bcc": ["hello@clawmetry.com"],
             "subject": "We got your request! 🦞",
             "html": f"""<div style="font-family:sans-serif;max-width:500px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;overflow:hidden;">
               <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:32px 28px;text-align:center;">
@@ -704,7 +704,7 @@ def support_request():
         requests.post("https://api.resend.com/emails", headers={
             "Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"
         }, json={
-            "from": FROM_EMAIL, "to": email,
+            "from": FROM_EMAIL, "to": email, "bcc": ["hello@clawmetry.com"],
             "subject": "Got your request! Setting up your ClawMetry support 🤝",
             "text": f"Hey {display_name},\n\nThanks for reaching out! I got your request and will personally get back to you shortly to help you get ClawMetry up and running.\n\nClawMetry is open source and I want to make sure you get the most out of it.\n\nTalk soon,\nVivek"
         }, timeout=10)
