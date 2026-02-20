@@ -427,10 +427,20 @@ def _resend_get(path):
 
 
 def send_welcome_email(email):
-    return _resend_post("/emails", {
+    subject = "Welcome to ClawMetry \U0001f99e"
+    ok, resp = _resend_post("/emails", {
         "from": FROM_EMAIL, "to": [email],
-        "subject": "Welcome to ClawMetry \U0001f99e", "html": WELCOME_HTML,
+        "subject": subject, "html": WELCOME_HTML,
     })
+    # Store in emails_sent so it shows in thread view
+    if ok:
+        sent_data = {
+            "to_email": email, "subject": subject,
+            "body_html": WELCOME_HTML, "sent_at": _now_iso(),
+            "in_reply_to": "", "resend_id": resp.get("id", ""),
+        }
+        _fs_add("emails_sent", sent_data)
+    return ok, resp
 
 
 def _get_visitor_info(req):
@@ -829,10 +839,19 @@ def webhook_email():
     # Extract Message-ID for threading
     message_id = payload.get("message_id", "") or payload.get("headers", {}).get("message-id", "")
 
+    # Extract attachments
+    attachments = []
+    for att in payload.get("attachments", []):
+        attachments.append({
+            "filename": att.get("filename", att.get("name", "attachment")),
+            "content_type": att.get("content_type", att.get("type", "")),
+            "url": att.get("url", ""),
+        })
+
     email_data = {
         "from_email": from_email, "from_name": from_name, "to_email": to_email,
         "subject": subject, "body_html": body_html, "body_text": body_text,
-        "message_id": message_id,
+        "message_id": message_id, "attachments": attachments,
         "received_at": _now_iso(), "read": 0, "replied": 0,
     }
     if not _fs_add("emails_received", email_data):
@@ -943,6 +962,97 @@ def admin_inbox():
     return _render_admin("Inbox", html, "inbox")
 
 
+def _normalize_subject(s):
+    """Strip Re:/Fwd: prefixes for thread matching."""
+    s = (s or "").strip()
+    while True:
+        lower = s.lower()
+        if lower.startswith("re:") or lower.startswith("fw:"):
+            s = s[3:].strip()
+        elif lower.startswith("fwd:"):
+            s = s[4:].strip()
+        else:
+            break
+    return s
+
+
+def _render_email_body(e):
+    """Render email body, handling empty bodies with attachments."""
+    body_html = e.get("body_html", "")
+    body_text = e.get("body_text", "")
+    attachments = e.get("attachments", [])
+
+    # Build body content
+    if body_html:
+        content = body_html
+    elif body_text:
+        content = f'<pre style="white-space:pre-wrap;color:var(--text)">{body_text}</pre>'
+    else:
+        content = ""
+
+    # Render attachments
+    att_html = ""
+    if attachments:
+        for att in attachments:
+            fname = att.get("filename", att.get("name", "attachment"))
+            content_type = att.get("content_type", att.get("type", ""))
+            url = att.get("url", "")
+            if content_type.startswith("image/") and url:
+                att_html += f'<div style="margin:8px 0"><img src="{url}" alt="{fname}" style="max-width:100%;max-height:400px;border-radius:8px;border:1px solid var(--border)"></div>'
+            elif url:
+                att_html += f'<div style="margin:4px 0">📎 <a href="{url}" target="_blank">{fname}</a></div>'
+            else:
+                att_html += f'<div style="margin:4px 0">📎 {fname}</div>'
+
+    if not content and not att_html:
+        content = '<p style="color:var(--muted);font-style:italic">(no content)</p>'
+
+    return content + att_html
+
+
+def _build_thread(e):
+    """Build full email thread: all sent+received emails for this contact, chronologically."""
+    contact_email = e.get("from_email", "")
+    base_subject = _normalize_subject(e.get("subject", ""))
+
+    # Get all sent emails to this contact
+    all_sent = _fs_get_all("emails_sent", order_by="sent_at", order_dir="ASCENDING") or []
+    # Get all received emails from this contact
+    all_received = _fs_get_all("emails_received", order_by="received_at", order_dir="ASCENDING") or []
+
+    thread = []
+
+    # Match by email address (primary) and optionally by subject
+    for s in all_sent:
+        to = (s.get("to_email", "") or "").lower()
+        subj = _normalize_subject(s.get("subject", ""))
+        if to == contact_email.lower() or (base_subject and subj == base_subject):
+            thread.append({
+                "type": "sent", "sender": "You (ClawMetry)",
+                "recipient": s.get("to_email", ""),
+                "subject": s.get("subject", ""),
+                "body": s, "timestamp": s.get("sent_at", ""),
+                "id": s.get("id", ""),
+            })
+
+    for r in all_received:
+        frm = (r.get("from_email", "") or "").lower()
+        subj = _normalize_subject(r.get("subject", ""))
+        if frm == contact_email.lower() or (base_subject and subj == base_subject):
+            thread.append({
+                "type": "received",
+                "sender": r.get("from_name") or r.get("from_email", ""),
+                "recipient": r.get("to_email", ""),
+                "subject": r.get("subject", ""),
+                "body": r, "timestamp": r.get("received_at", ""),
+                "id": r.get("id", ""),
+            })
+
+    # Sort chronologically
+    thread.sort(key=lambda x: x["timestamp"] or "")
+    return thread
+
+
 @app.route("/admin/inbox/<eid>")
 @login_required
 def admin_view_email(eid):
@@ -951,40 +1061,53 @@ def admin_view_email(eid):
         return redirect("/admin/inbox")
     if not e.get("read"):
         _fs_update("emails_received", eid, {"read": 1})
-    replies = _fs_query("emails_sent", "in_reply_to", "==", eid, order_by="sent_at", order_dir="ASCENDING") or []
 
-    body = e.get("body_html") or f'<pre style="white-space:pre-wrap;color:var(--text)">{e.get("body_text") or "(empty)"}</pre>'
+    thread = _build_thread(e)
 
-    # Build conversation thread
-    thread_html = f"""
-    <div class="card" style="border-left:3px solid var(--muted)">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <span style="background:var(--border);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:14px">📨</span>
-        <div><strong>{e.get("from_name","") or e.get("from_email","")}</strong>
-        <span style="color:var(--muted);font-size:12px;margin-left:8px">{e.get("received_at","")}</span></div>
+    # Build conversation thread HTML
+    thread_html = ""
+    for msg in thread:
+        is_sent = msg["type"] == "sent"
+        body_html = _render_email_body(msg["body"])
+
+        if is_sent:
+            # Right-aligned, accent colored — like a chat bubble from "you"
+            thread_html += f"""
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+      <div style="max-width:85%;background:rgba(229,68,58,0.08);border:1px solid rgba(229,68,58,0.25);border-radius:12px 12px 4px 12px;padding:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="background:var(--accent);border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff">✉️</span>
+          <div><strong style="color:var(--accent)">You</strong> → {msg["recipient"]}
+          <span style="color:var(--muted);font-size:11px;margin-left:8px">{msg["timestamp"]}</span></div>
+        </div>
+        <div class="email-body" style="background:transparent;border:none;padding:0;max-height:300px;overflow:auto">{body_html}</div>
       </div>
-      <div class="email-body">{body}</div>
+    </div>"""
+        else:
+            # Left-aligned — inbound message
+            thread_html += f"""
+    <div style="display:flex;justify-content:flex-start;margin-bottom:12px">
+      <div style="max-width:85%;background:var(--surface);border:1px solid var(--border);border-radius:12px 12px 12px 4px;padding:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="background:var(--border);border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:12px">📨</span>
+          <div><strong>{msg["sender"]}</strong>
+          <span style="color:var(--muted);font-size:11px;margin-left:8px">{msg["timestamp"]}</span></div>
+        </div>
+        <div class="email-body" style="background:transparent;border:none;padding:0;max-height:300px;overflow:auto">{body_html}</div>
+      </div>
     </div>"""
 
-    for r in replies:
-        thread_html += f"""
-    <div class="card" style="margin-top:8px;border-left:3px solid var(--accent)">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <span style="background:var(--accent);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff">↩</span>
-        <div><strong>You</strong> → {r.get("to_email","")}
-        <span style="color:var(--muted);font-size:12px;margin-left:8px">{r.get("sent_at","")}</span></div>
-      </div>
-      <div style="padding:0 8px">{r.get("body_html","")}</div>
-    </div>"""
+    if not thread:
+        thread_html = '<p class="empty">No messages found</p>'
 
     html = f"""
     <p><a href="/admin/inbox" class="btn btn-outline" style="margin-bottom:16px">← Back to Inbox</a></p>
     <div style="margin-bottom:16px">
-      <p style="color:var(--muted);font-size:13px">From: <strong style="color:var(--text)">{e.get("from_name","") or ""} &lt;{e.get("from_email","")}&gt;</strong> · To: {e.get("to_email","")}</p>
+      <p style="color:var(--muted);font-size:13px">Thread with: <strong style="color:var(--text)">{e.get("from_name","") or ""} &lt;{e.get("from_email","")}&gt;</strong></p>
       <h2 style="margin:8px 0">{e.get("subject","")}</h2>
     </div>
-    <h3 style="color:var(--muted);font-size:14px;margin-bottom:12px">Conversation ({1 + len(replies)} messages)</h3>
-    {thread_html}
+    <h3 style="color:var(--muted);font-size:14px;margin-bottom:12px">Conversation ({len(thread)} messages)</h3>
+    <div style="padding:8px 0">{thread_html}</div>
     <div class="card" style="margin-top:16px">
       <h3 style="margin-bottom:12px">↩ Quick Reply</h3>
       <form method="POST" action="/admin/inbox/{eid}/reply">
