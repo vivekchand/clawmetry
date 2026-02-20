@@ -391,8 +391,10 @@ WELCOME_HTML = """\
     </div>
     <p style="font-size:15px;color:#d1d5db;">Cheers,<br><strong style="color:#fff;">The ClawMetry Team</strong> 🦞</p>
   </div>
-  <div style="border-top:1px solid #1f1f2e;padding:16px 28px;text-align:center;">
-    <p style="font-size:11px;color:#6b7280;margin:0;">We email on major releases only. No spam. Ever.</p>
+  <div style="border-top:1px solid #1f1f2e;padding:20px 28px;text-align:center;">
+    <p style="font-size:13px;color:#9ca3af;margin:0 0 8px;">Don't want to self-host?</p>
+    <a href="https://clawmetry.com/?managed=1" style="color:#3b82f6;font-weight:600;font-size:13px;text-decoration:none;">Request a managed instance →</a>
+    <p style="font-size:11px;color:#6b7280;margin:12px 0 0;">We email on major releases only. No spam. Ever.</p>
   </div>
 </div>
 """

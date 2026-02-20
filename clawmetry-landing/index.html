@@ -574,6 +574,10 @@ function openManagedModal() {
   var id=_getIdentity();
   _encPost('/api/managed-click', {utm:window._utm||{},identity:id}).catch(function(){});
 }
+// Auto-open managed modal if ?managed=1 in URL
+if(new URLSearchParams(window.location.search).get('managed')==='1'){
+  setTimeout(function(){openManagedModal();},500);
+}
 document.getElementById('managed-form').addEventListener('submit', function(e) {
   e.preventDefault();
   var btn = document.getElementById('managed-btn');
