@@ -1,9 +1,9 @@
 name: Test Install Script
 on:
   push:
-    paths: [install.sh]
+    paths: [install.sh, install.ps1]
   pull_request:
-    paths: [install.sh]
+    paths: [install.sh, install.ps1]
   workflow_dispatch:
 
 jobs:
@@ -26,6 +26,23 @@ jobs:
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
       - name: Verify clawmetry binary
         run: clawmetry --version
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run install script
+        shell: pwsh
+        run: .\install.ps1
+      - name: Verify clawmetry binary
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:LOCALAPPDATA\clawmetry\Scripts;$env:PATH"
+          clawmetry --version
 
   shellcheck:
     runs-on: ubuntu-latest
