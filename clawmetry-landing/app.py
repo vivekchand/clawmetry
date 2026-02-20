@@ -239,12 +239,20 @@ WELCOME_HTML = """\
 """
 
 
-def _resend_post(path, payload):
-    try:
-        r = requests.post(f"https://api.resend.com{path}", headers=RESEND_HEADERS, json=payload, timeout=10)
-        return r.status_code in (200, 201), r.json() if r.content else {}
-    except Exception as e:
-        return False, {"error": str(e)}
+def _resend_post(path, payload, retries=3):
+    for attempt in range(retries):
+        try:
+            r = requests.post(f"https://api.resend.com{path}", headers=RESEND_HEADERS, json=payload, timeout=10)
+            if r.status_code == 429 and attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            return r.status_code in (200, 201), r.json() if r.content else {}
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(2)
+                continue
+            return False, {"error": str(e)}
+    return False, {"error": "max retries exceeded"}
 
 
 def _resend_get(path):
