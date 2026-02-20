@@ -523,7 +523,7 @@ function copyActiveCmd() {
 <section style="padding:20px 24px 40px;text-align:center;">
   <p style="color:var(--text-dim);font-size:15px;">
     Don't want to self-host?
-    <a href="#" onclick="document.getElementById('managed-modal').style.display='flex';return false;" style="color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-weight:500;">Request a managed instance →</a>
+    <a href="#" onclick="openManagedModal();return false;" style="color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-weight:500;">Request a managed instance →</a>
   </p>
 </section>
 
@@ -559,6 +559,10 @@ function copyActiveCmd() {
   </div>
 </div>
 <script>
+function openManagedModal() {
+  document.getElementById('managed-modal').style.display='flex';
+  fetch('/api/copy-track', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tab:'managed-cta',command:'Request a managed instance clicked',utm:window._utm||{}})}).catch(function(){});
+}
 document.getElementById('managed-form').addEventListener('submit', function(e) {
   e.preventDefault();
   var btn = document.getElementById('managed-btn');
@@ -799,6 +803,9 @@ document.getElementById('subscribe-form').addEventListener('submit',function(e){
       </a>
       <a href="https://github.com/vivekchand/clawmetry/blob/main/README.md" target="_blank" rel="noopener">
         Docs
+      </a>
+      <a href="#" onclick="openManagedModal();return false;">
+        Managed Instance
       </a>
     </div>
   </div>
