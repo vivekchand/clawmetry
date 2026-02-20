@@ -1,5 +1,6 @@
 """Minimal Flask backend for ClawMetry landing - serves static files + email subscribe via Resend.
-Includes admin panel for inbox, subscribers, copy events."""
+Includes admin panel for inbox, subscribers, copy events.
+Storage: Firestore (primary). SQLite only used as fallback for public API writes when Firestore is down."""
 import os
 import re
 import json
@@ -9,6 +10,7 @@ import logging
 import sys
 import time
 import secrets
+import threading
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -34,6 +36,31 @@ NOTIFY_SECRET = os.environ.get("NOTIFY_SECRET", "clawmetry-notify-2026")
 VIVEK_EMAIL = "vivekchand19@gmail.com"
 CLM_KEY = "clm2026"
 
+# ─── Firestore Setup ────────────────────────────────────────────────────────
+
+_firestore_db = None
+_firestore_available = False
+
+try:
+    from google.cloud import firestore as _firestore_mod
+    _firestore_db = _firestore_mod.Client()
+    # Quick connectivity check
+    _firestore_db.collection("_health").document("ping").set({"ts": _firestore_mod.SERVER_TIMESTAMP})
+    _firestore_available = True
+    log.info("[storage] Firestore connected ✓")
+except Exception as _fs_err:
+    log.warning(f"[storage] Firestore unavailable, falling back to SQLite: {_fs_err}")
+    _firestore_available = False
+
+
+def _fs():
+    """Return Firestore client or None."""
+    return _firestore_db if _firestore_available else None
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
 def _decrypt_payload(req):
     """Decrypt XOR+base64 encoded request body. Falls back to plain JSON."""
     data = req.get_json(silent=True) or {}
@@ -49,7 +76,7 @@ def _decrypt_payload(req):
     return data
 RESEND_HEADERS = {"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"}
 
-# ─── Database ───────────────────────────────────────────────────────────────
+# ─── Database (SQLite fallback) ─────────────────────────────────────────────
 
 def get_db():
     db = sqlite3.connect(DB_PATH, timeout=10)
@@ -62,43 +89,31 @@ def init_db():
     db.executescript("""
         CREATE TABLE IF NOT EXISTS emails_received (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            from_email TEXT,
-            from_name TEXT,
-            to_email TEXT,
-            subject TEXT,
-            body_html TEXT,
-            body_text TEXT,
+            from_email TEXT, from_name TEXT, to_email TEXT, subject TEXT,
+            body_html TEXT, body_text TEXT,
             received_at TEXT DEFAULT (datetime('now')),
-            read INTEGER DEFAULT 0,
-            replied INTEGER DEFAULT 0
+            read INTEGER DEFAULT 0, replied INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS emails_sent (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            to_email TEXT,
-            subject TEXT,
-            body_html TEXT,
+            to_email TEXT, subject TEXT, body_html TEXT,
             sent_at TEXT DEFAULT (datetime('now')),
-            in_reply_to INTEGER REFERENCES emails_received(id)
+            in_reply_to TEXT
         );
         CREATE TABLE IF NOT EXISTS subscribers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT,
-            source TEXT,
-            utm_data TEXT,
-            location TEXT,
-            ip TEXT,
-            browser TEXT,
+            email TEXT, source TEXT, utm_data TEXT, location TEXT, ip TEXT, browser TEXT,
             subscribed_at TEXT DEFAULT (datetime('now'))
         );
         CREATE TABLE IF NOT EXISTS copy_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tab TEXT,
-            command TEXT,
-            source TEXT,
-            utm_data TEXT,
-            location TEXT,
-            ip TEXT,
-            browser TEXT,
+            tab TEXT, command TEXT, source TEXT, utm_data TEXT, location TEXT, ip TEXT, browser TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS managed_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT, email TEXT, company TEXT, use_case TEXT,
+            location TEXT, ip TEXT, browser TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
     """)
@@ -106,6 +121,148 @@ def init_db():
     db.close()
 
 init_db()
+
+# ─── Firestore Storage Layer ────────────────────────────────────────────────
+
+def _fs_add(collection, data):
+    """Add a document to a Firestore collection. Returns doc id or None."""
+    fs = _fs()
+    if not fs:
+        return None
+    try:
+        _, ref = fs.collection(collection).add(data)
+        return ref.id
+    except Exception as e:
+        log.error(f"[firestore] add to {collection} failed: {e}")
+        return None
+
+
+def _fs_get_all(collection, order_by=None, order_dir="DESCENDING", limit=None):
+    """Get all docs from a collection, ordered. Returns list of dicts with 'id' key."""
+    fs = _fs()
+    if not fs:
+        return None  # Signal caller to use SQLite
+    try:
+        q = fs.collection(collection)
+        if order_by:
+            direction = _firestore_mod.Query.DESCENDING if order_dir == "DESCENDING" else _firestore_mod.Query.ASCENDING
+            q = q.order_by(order_by, direction=direction)
+        if limit:
+            q = q.limit(limit)
+        docs = q.stream()
+        results = []
+        for doc in docs:
+            d = doc.to_dict()
+            d["id"] = doc.id
+            results.append(d)
+        return results
+    except Exception as e:
+        log.error(f"[firestore] get_all {collection} failed: {e}")
+        return None
+
+
+def _fs_get(collection, doc_id):
+    """Get a single document by id. Returns dict or None."""
+    fs = _fs()
+    if not fs:
+        return None
+    try:
+        doc = fs.collection(collection).document(doc_id).get()
+        if doc.exists:
+            d = doc.to_dict()
+            d["id"] = doc.id
+            return d
+        return None
+    except Exception as e:
+        log.error(f"[firestore] get {collection}/{doc_id} failed: {e}")
+        return None
+
+
+def _fs_update(collection, doc_id, data):
+    """Update fields on a document."""
+    fs = _fs()
+    if not fs:
+        return False
+    try:
+        fs.collection(collection).document(doc_id).update(data)
+        return True
+    except Exception as e:
+        log.error(f"[firestore] update {collection}/{doc_id} failed: {e}")
+        return False
+
+
+def _fs_count(collection):
+    """Count docs in a collection."""
+    fs = _fs()
+    if not fs:
+        return None
+    try:
+        agg = fs.collection(collection).count().get()
+        return agg[0][0].value
+    except Exception as e:
+        log.error(f"[firestore] count {collection} failed: {e}")
+        return None
+
+
+def _fs_query(collection, field, op, value, order_by=None, order_dir="DESCENDING"):
+    """Query docs with a filter."""
+    fs = _fs()
+    if not fs:
+        return None
+    try:
+        q = fs.collection(collection).where(field, op, value)
+        if order_by:
+            direction = _firestore_mod.Query.DESCENDING if order_dir == "DESCENDING" else _firestore_mod.Query.ASCENDING
+            q = q.order_by(order_by, direction=direction)
+        return [dict(**doc.to_dict(), id=doc.id) for doc in q.stream()]
+    except Exception as e:
+        log.error(f"[firestore] query {collection} failed: {e}")
+        return None
+
+
+# ─── Resend → Firestore Sync (on startup) ───────────────────────────────────
+
+def _sync_resend_contacts():
+    """Sync Resend audience contacts into Firestore subscribers collection."""
+    fs = _fs()
+    if not fs:
+        return
+    try:
+        contacts = get_all_contacts()
+        if not contacts:
+            return
+        # Get existing emails in Firestore
+        existing = set()
+        for doc in fs.collection("subscribers").stream():
+            d = doc.to_dict()
+            if d.get("email"):
+                existing.add(d["email"].lower())
+        
+        added = 0
+        for c in contacts:
+            email = (c.get("email") or "").lower()
+            if email and email not in existing:
+                created = c.get("created_at", _now_iso())
+                if isinstance(created, str) and "T" in created:
+                    created = created[:19].replace("T", " ")
+                fs.collection("subscribers").add({
+                    "email": email,
+                    "source": "Resend (synced)",
+                    "utm_data": "",
+                    "location": "-",
+                    "ip": "-",
+                    "browser": "-",
+                    "subscribed_at": created,
+                })
+                added += 1
+        if added:
+            log.info(f"[sync] Added {added} contacts from Resend to Firestore")
+    except Exception as e:
+        log.error(f"[sync] Resend→Firestore sync failed: {e}")
+
+# Run sync in background thread on startup
+if _firestore_available:
+    threading.Thread(target=_sync_resend_contacts, daemon=True).start()
 
 # ─── Admin Auth ─────────────────────────────────────────────────────────────
 
@@ -349,11 +506,17 @@ def subscribe():
         utm = data.get("utm", {})
         source = _format_source(utm, visitor['referer'])
 
-        # Store in SQLite
-        db = get_db()
-        db.execute("INSERT INTO subscribers (email, source, utm_data, location, ip, browser) VALUES (?,?,?,?,?,?)",
-                   (email, source, json.dumps(utm), visitor['location'], visitor['ip'], visitor['user_agent'][:200]))
-        db.commit(); db.close()
+        sub_data = {
+            "email": email, "source": source, "utm_data": json.dumps(utm),
+            "location": visitor['location'], "ip": visitor['ip'],
+            "browser": visitor['user_agent'][:200], "subscribed_at": _now_iso(),
+        }
+        if not _fs_add("subscribers", sub_data):
+            # Fallback to SQLite
+            db = get_db()
+            db.execute("INSERT INTO subscribers (email, source, utm_data, location, ip, browser) VALUES (?,?,?,?,?,?)",
+                       (email, source, json.dumps(utm), visitor['location'], visitor['ip'], visitor['user_agent'][:200]))
+            db.commit(); db.close()
 
         notify_vivek(
             f"🎉 [New Subscriber] {email}",
@@ -393,34 +556,20 @@ def managed_request():
 
     visitor = _get_visitor_info(request)
 
-    # Store in SQLite
-    try:
-        db = get_db()
-        db.execute("""CREATE TABLE IF NOT EXISTS managed_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT, email TEXT, company TEXT, use_case TEXT,
-            location TEXT, ip TEXT, browser TEXT,
-            created_at TEXT DEFAULT (datetime('now'))
-        )""")
-        db.execute("INSERT INTO managed_requests (name, email, company, use_case, location, ip, browser) VALUES (?,?,?,?,?,?,?)",
-                   (name, email, company, use_case, visitor['location'], visitor['ip'], visitor['user_agent'][:200]))
-        db.commit(); db.close()
-    except Exception as e:
-        log.error(f"[managed-request] DB error: {e}")
-
-    # Also store to local JSON as backup
-    try:
-        json_path = "/tmp/managed_requests.json"
-        entries = []
-        if os.path.exists(json_path):
-            with open(json_path) as f:
-                entries = json.load(f)
-        entries.append({"name": name, "email": email, "company": company, "use_case": use_case,
-                        "location": visitor['location'], "ip": visitor['ip'], "timestamp": datetime.now(timezone.utc).isoformat()})
-        with open(json_path, "w") as f:
-            json.dump(entries, f, indent=2)
-    except Exception as e:
-        log.error(f"[managed-request] JSON backup error: {e}")
+    # Store in Firestore (or SQLite fallback)
+    req_data = {
+        "name": name, "email": email, "company": company, "use_case": use_case,
+        "location": visitor['location'], "ip": visitor['ip'],
+        "browser": visitor['user_agent'][:200], "created_at": _now_iso(),
+    }
+    if not _fs_add("managed_requests", req_data):
+        try:
+            db = get_db()
+            db.execute("INSERT INTO managed_requests (name, email, company, use_case, location, ip, browser) VALUES (?,?,?,?,?,?,?)",
+                       (name, email, company, use_case, visitor['location'], visitor['ip'], visitor['user_agent'][:200]))
+            db.commit(); db.close()
+        except Exception as e:
+            log.error(f"[managed-request] DB error: {e}")
 
     # Notify Vivek — celebratory!
     notify_vivek(
@@ -472,13 +621,20 @@ def managed_click():
     data = _decrypt_payload(request)
     utm = data.get("utm", {})
     source = _format_source(utm, visitor['referer'])
-    try:
-        db = get_db()
-        db.execute("INSERT INTO copy_events (tab, command, source, utm_data, location, ip, browser) VALUES (?,?,?,?,?,?,?)",
-                   ("managed-cta", "Managed instance CTA clicked", source, json.dumps(utm), visitor['location'], visitor['ip'], visitor['user_agent'][:200]))
-        db.commit(); db.close()
-    except Exception as e:
-        log.error(f"[managed-click] db error: {e}")
+    evt = {
+        "tab": "managed-cta", "command": "Managed instance CTA clicked",
+        "source": source, "utm_data": json.dumps(utm),
+        "location": visitor['location'], "ip": visitor['ip'],
+        "browser": visitor['user_agent'][:200], "created_at": _now_iso(),
+    }
+    if not _fs_add("copy_events", evt):
+        try:
+            db = get_db()
+            db.execute("INSERT INTO copy_events (tab, command, source, utm_data, location, ip, browser) VALUES (?,?,?,?,?,?,?)",
+                       ("managed-cta", "Managed instance CTA clicked", source, json.dumps(utm), visitor['location'], visitor['ip'], visitor['user_agent'][:200]))
+            db.commit(); db.close()
+        except Exception as e:
+            log.error(f"[managed-click] db error: {e}")
     identity = data.get("identity", {})
     id_name = identity.get("name", "")
     id_email = identity.get("email", "")
@@ -508,14 +664,19 @@ def copy_track():
     visitor = _get_visitor_info(request)
     source = _format_source(utm, visitor['referer'])
 
-    # Store in SQLite
-    try:
-        db = get_db()
-        db.execute("INSERT INTO copy_events (tab, command, source, utm_data, location, ip, browser) VALUES (?,?,?,?,?,?,?)",
-                   (tab, command, source, json.dumps(utm), visitor['location'], visitor['ip'], visitor['user_agent'][:200]))
-        db.commit(); db.close()
-    except Exception as e:
-        log.error(f"[copy-track] db error: {e}")
+    evt = {
+        "tab": tab, "command": command, "source": source, "utm_data": json.dumps(utm),
+        "location": visitor['location'], "ip": visitor['ip'],
+        "browser": visitor['user_agent'][:200], "created_at": _now_iso(),
+    }
+    if not _fs_add("copy_events", evt):
+        try:
+            db = get_db()
+            db.execute("INSERT INTO copy_events (tab, command, source, utm_data, location, ip, browser) VALUES (?,?,?,?,?,?,?)",
+                       (tab, command, source, json.dumps(utm), visitor['location'], visitor['ip'], visitor['user_agent'][:200]))
+            db.commit(); db.close()
+        except Exception as e:
+            log.error(f"[copy-track] db error: {e}")
 
     identity = data.get("identity", {})
     id_email = identity.get("email", "")
@@ -604,13 +765,19 @@ def webhook_email():
     body_html = payload.get("html", "")
     body_text = payload.get("text", payload.get("plain_text", ""))
 
-    try:
-        db = get_db()
-        db.execute("""INSERT INTO emails_received (from_email, from_name, to_email, subject, body_html, body_text)
-                      VALUES (?,?,?,?,?,?)""", (from_email, from_name, to_email, subject, body_html, body_text))
-        db.commit(); db.close()
-    except Exception as e:
-        log.error(f"[webhook/email] DB error: {e}")
+    email_data = {
+        "from_email": from_email, "from_name": from_name, "to_email": to_email,
+        "subject": subject, "body_html": body_html, "body_text": body_text,
+        "received_at": _now_iso(), "read": 0, "replied": 0,
+    }
+    if not _fs_add("emails_received", email_data):
+        try:
+            db = get_db()
+            db.execute("""INSERT INTO emails_received (from_email, from_name, to_email, subject, body_html, body_text)
+                          VALUES (?,?,?,?,?,?)""", (from_email, from_name, to_email, subject, body_html, body_text))
+            db.commit(); db.close()
+        except Exception as e:
+            log.error(f"[webhook/email] DB error: {e}")
 
     # Notify Vivek
     notify_vivek(
@@ -650,35 +817,44 @@ def admin_logout():
 @app.route("/admin")
 @login_required
 def admin_dashboard():
-    db = get_db()
-    # Get subscriber count from Resend (source of truth) + local
     resend_contacts = get_all_contacts()
-    subs = len(resend_contacts) or db.execute("SELECT COUNT(*) c FROM subscribers").fetchone()["c"]
-    emails = db.execute("SELECT COUNT(*) c FROM emails_received").fetchone()["c"]
-    unread = db.execute("SELECT COUNT(*) c FROM emails_received WHERE read=0").fetchone()["c"]
-    events = db.execute("SELECT COUNT(*) c FROM copy_events").fetchone()["c"]
-    sent = db.execute("SELECT COUNT(*) c FROM emails_sent").fetchone()["c"]
 
-    recent_emails = db.execute("SELECT id, from_email, from_name, subject, received_at, read FROM emails_received ORDER BY id DESC LIMIT 5").fetchall()
-    recent_subs = db.execute("SELECT email, source, location, subscribed_at FROM subscribers ORDER BY id DESC LIMIT 5").fetchall()
-    db.close()
+    if _firestore_available:
+        subs = len(resend_contacts) or (_fs_count("subscribers") or 0)
+        emails_count = _fs_count("emails_received") or 0
+        unread_list = _fs_query("emails_received", "read", "==", 0)
+        unread = len(unread_list) if unread_list else 0
+        events_count = _fs_count("copy_events") or 0
+        sent_count = _fs_count("emails_sent") or 0
+        recent_emails = _fs_get_all("emails_received", order_by="received_at", limit=5) or []
+        recent_subs = _fs_get_all("subscribers", order_by="subscribed_at", limit=5) or []
+    else:
+        db = get_db()
+        subs = len(resend_contacts) or db.execute("SELECT COUNT(*) c FROM subscribers").fetchone()["c"]
+        emails_count = db.execute("SELECT COUNT(*) c FROM emails_received").fetchone()["c"]
+        unread = db.execute("SELECT COUNT(*) c FROM emails_received WHERE read=0").fetchone()["c"]
+        events_count = db.execute("SELECT COUNT(*) c FROM copy_events").fetchone()["c"]
+        sent_count = db.execute("SELECT COUNT(*) c FROM emails_sent").fetchone()["c"]
+        recent_emails = [dict(r) for r in db.execute("SELECT id, from_email, from_name, subject, received_at, read FROM emails_received ORDER BY id DESC LIMIT 5").fetchall()]
+        recent_subs = [dict(r) for r in db.execute("SELECT email, source, location, subscribed_at FROM subscribers ORDER BY id DESC LIMIT 5").fetchall()]
+        db.close()
 
     rows_emails = ""
     for e in recent_emails:
-        badge = '<span class="badge badge-unread">NEW</span>' if not e["read"] else '<span class="badge badge-read">read</span>'
-        rows_emails += f'<tr><td><a href="/admin/inbox/{e["id"]}">{e["from_name"] or e["from_email"]}</a></td><td>{e["subject"]}</td><td>{badge}</td><td>{e["received_at"]}</td></tr>'
+        badge = '<span class="badge badge-unread">NEW</span>' if not e.get("read") else '<span class="badge badge-read">read</span>'
+        rows_emails += f'<tr><td><a href="/admin/inbox/{e["id"]}">{e.get("from_name") or e.get("from_email")}</a></td><td>{e.get("subject","")}</td><td>{badge}</td><td>{e.get("received_at","")}</td></tr>'
 
     rows_subs = ""
     for s in recent_subs:
-        rows_subs += f'<tr><td>{s["email"]}</td><td>{s["source"] or "-"}</td><td>{s["location"] or "-"}</td><td>{s["subscribed_at"]}</td></tr>'
+        rows_subs += f'<tr><td>{s.get("email","")}</td><td>{s.get("source") or "-"}</td><td>{s.get("location") or "-"}</td><td>{s.get("subscribed_at","")}</td></tr>'
 
     html = f"""
     <h2 style="margin-bottom:20px">Dashboard</h2>
     <div class="stat-grid">
       <div class="card stat"><h3>{subs}</h3><p>Subscribers</p></div>
-      <div class="card stat"><h3>{emails}</h3><p>Emails Received ({unread} unread)</p></div>
-      <div class="card stat"><h3>{sent}</h3><p>Emails Sent</p></div>
-      <div class="card stat"><h3>{events}</h3><p>Copy Events</p></div>
+      <div class="card stat"><h3>{emails_count}</h3><p>Emails Received ({unread} unread)</p></div>
+      <div class="card stat"><h3>{sent_count}</h3><p>Emails Sent</p></div>
+      <div class="card stat"><h3>{events_count}</h3><p>Copy Events</p></div>
     </div>
     <div class="card"><h3 style="margin-bottom:12px">Recent Emails</h3>
     {"<table><th>From</th><th>Subject</th><th>Status</th><th>Date</th>" + rows_emails + "</table>" if rows_emails else '<p class="empty">No emails yet</p>'}
@@ -693,9 +869,12 @@ def admin_dashboard():
 @app.route("/admin/inbox")
 @login_required
 def admin_inbox():
-    db = get_db()
-    emails = db.execute("SELECT id, from_email, from_name, subject, received_at, read, replied FROM emails_received ORDER BY id DESC").fetchall()
-    db.close()
+    if _firestore_available:
+        emails = _fs_get_all("emails_received", order_by="received_at") or []
+    else:
+        db = get_db()
+        emails = [dict(r) for r in db.execute("SELECT id, from_email, from_name, subject, received_at, read, replied FROM emails_received ORDER BY id DESC").fetchall()]
+        db.close()
 
     if not emails:
         html = '<h2 style="margin-bottom:20px">Inbox</h2><div class="card"><p class="empty">No emails received yet. Send one to hello@clawmetry.com!</p></div>'
@@ -703,10 +882,10 @@ def admin_inbox():
 
     rows = ""
     for e in emails:
-        badge = '<span class="badge badge-unread">NEW</span>' if not e["read"] else '<span class="badge badge-read">read</span>'
-        replied = ' 📨' if e["replied"] else ''
-        name = e["from_name"] or e["from_email"]
-        rows += f'<tr><td><a href="/admin/inbox/{e["id"]}"><strong>{name}</strong></a></td><td><a href="/admin/inbox/{e["id"]}">{e["subject"]}</a></td><td>{badge}{replied}</td><td style="white-space:nowrap">{e["received_at"]}</td></tr>'
+        badge = '<span class="badge badge-unread">NEW</span>' if not e.get("read") else '<span class="badge badge-read">read</span>'
+        replied = ' 📨' if e.get("replied") else ''
+        name = e.get("from_name") or e.get("from_email","")
+        rows += f'<tr><td><a href="/admin/inbox/{e["id"]}"><strong>{name}</strong></a></td><td><a href="/admin/inbox/{e["id"]}">{e.get("subject","")}</a></td><td>{badge}{replied}</td><td style="white-space:nowrap">{e.get("received_at","")}</td></tr>'
 
     html = f"""
     <h2 style="margin-bottom:20px">Inbox <span style="color:var(--muted);font-size:16px">({len(emails)} emails)</span></h2>
@@ -715,36 +894,44 @@ def admin_inbox():
     return _render_admin("Inbox", html, "inbox")
 
 
-@app.route("/admin/inbox/<int:eid>")
+@app.route("/admin/inbox/<eid>")
 @login_required
 def admin_view_email(eid):
-    db = get_db()
-    e = db.execute("SELECT * FROM emails_received WHERE id=?", (eid,)).fetchone()
-    if not e:
+    if _firestore_available:
+        e = _fs_get("emails_received", eid)
+        if not e:
+            return redirect("/admin/inbox")
+        if not e.get("read"):
+            _fs_update("emails_received", eid, {"read": 1})
+        # Get replies for this email
+        replies = _fs_query("emails_sent", "in_reply_to", "==", eid, order_by="sent_at", order_dir="ASCENDING") or []
+    else:
+        db = get_db()
+        row = db.execute("SELECT * FROM emails_received WHERE id=?", (eid,)).fetchone()
+        if not row:
+            db.close()
+            return redirect("/admin/inbox")
+        e = dict(row)
+        e["id"] = eid
+        if not e["read"]:
+            db.execute("UPDATE emails_received SET read=1 WHERE id=?", (eid,))
+            db.commit()
+        replies = [dict(r) for r in db.execute("SELECT * FROM emails_sent WHERE in_reply_to=? ORDER BY id", (str(eid),)).fetchall()]
         db.close()
-        return redirect("/admin/inbox")
-
-    # Mark as read
-    if not e["read"]:
-        db.execute("UPDATE emails_received SET read=1 WHERE id=?", (eid,))
-        db.commit()
-
-    replies = db.execute("SELECT * FROM emails_sent WHERE in_reply_to=? ORDER BY id", (eid,)).fetchall()
-    db.close()
 
     replies_html = ""
     for r in replies:
-        replies_html += f'<div class="card" style="margin-top:12px;border-left:3px solid var(--accent)"><p style="color:var(--muted);font-size:12px">Reply sent to {r["to_email"]} at {r["sent_at"]}</p><div style="margin-top:8px">{r["body_html"]}</div></div>'
+        replies_html += f'<div class="card" style="margin-top:12px;border-left:3px solid var(--accent)"><p style="color:var(--muted);font-size:12px">Reply sent to {r.get("to_email","")} at {r.get("sent_at","")}</p><div style="margin-top:8px">{r.get("body_html","")}</div></div>'
 
-    body = e["body_html"] or f'<pre style="white-space:pre-wrap;color:var(--text)">{e["body_text"] or "(empty)"}</pre>'
+    body = e.get("body_html") or f'<pre style="white-space:pre-wrap;color:var(--text)">{e.get("body_text") or "(empty)"}</pre>'
 
     html = f"""
     <p><a href="/admin/inbox" class="btn btn-outline" style="margin-bottom:16px">← Back to Inbox</a></p>
     <div class="card">
-      <p style="color:var(--muted);font-size:13px">From: <strong style="color:var(--text)">{e["from_name"] or ""} &lt;{e["from_email"]}&gt;</strong></p>
-      <p style="color:var(--muted);font-size:13px">To: {e["to_email"]}</p>
-      <p style="color:var(--muted);font-size:13px">Date: {e["received_at"]}</p>
-      <h2 style="margin:12px 0">{e["subject"]}</h2>
+      <p style="color:var(--muted);font-size:13px">From: <strong style="color:var(--text)">{e.get("from_name","") or ""} &lt;{e.get("from_email","")}&gt;</strong></p>
+      <p style="color:var(--muted);font-size:13px">To: {e.get("to_email","")}</p>
+      <p style="color:var(--muted);font-size:13px">Date: {e.get("received_at","")}</p>
+      <h2 style="margin:12px 0">{e.get("subject","")}</h2>
       <div class="email-body">{body}</div>
       <a href="/admin/inbox/{eid}/reply" class="btn btn-primary">↩ Reply</a>
     </div>
@@ -753,42 +940,55 @@ def admin_view_email(eid):
     return _render_admin(e["subject"], html, "inbox")
 
 
-@app.route("/admin/inbox/<int:eid>/reply", methods=["GET", "POST"])
+@app.route("/admin/inbox/<eid>/reply", methods=["GET", "POST"])
 @login_required
 def admin_reply_email(eid):
     from flask import flash
-    db = get_db()
-    e = db.execute("SELECT * FROM emails_received WHERE id=?", (eid,)).fetchone()
-    if not e:
+
+    if _firestore_available:
+        e = _fs_get("emails_received", eid)
+    else:
+        db = get_db()
+        row = db.execute("SELECT * FROM emails_received WHERE id=?", (eid,)).fetchone()
+        e = dict(row) if row else None
+        if e:
+            e["id"] = eid
         db.close()
+
+    if not e:
         return redirect("/admin/inbox")
 
     if request.method == "POST":
         body = request.form.get("body", "").strip()
         if body:
             body_html = body.replace("\n", "<br>")
-            subject = f"Re: {e['subject']}" if not e['subject'].startswith("Re:") else e['subject']
+            subj = e.get("subject", "")
+            subject = f"Re: {subj}" if not subj.startswith("Re:") else subj
             ok, resp = _resend_post("/emails", {
-                "from": FROM_EMAIL, "to": [e["from_email"]],
+                "from": FROM_EMAIL, "to": [e.get("from_email","")],
                 "subject": subject, "html": body_html,
             })
             if ok:
-                db.execute("INSERT INTO emails_sent (to_email, subject, body_html, in_reply_to) VALUES (?,?,?,?)",
-                           (e["from_email"], subject, body_html, eid))
-                db.execute("UPDATE emails_received SET replied=1 WHERE id=?", (eid,))
-                db.commit()
+                sent_data = {
+                    "to_email": e.get("from_email",""), "subject": subject,
+                    "body_html": body_html, "sent_at": _now_iso(), "in_reply_to": eid,
+                }
+                if not _fs_add("emails_sent", sent_data):
+                    db2 = get_db()
+                    db2.execute("INSERT INTO emails_sent (to_email, subject, body_html, in_reply_to) VALUES (?,?,?,?)",
+                               (e.get("from_email",""), subject, body_html, str(eid)))
+                    db2.commit(); db2.close()
+                _fs_update("emails_received", eid, {"replied": 1})
                 flash("Reply sent!", "success")
             else:
                 flash(f"Failed to send: {resp}", "error")
-        db.close()
         return redirect(f"/admin/inbox/{eid}")
 
-    db.close()
     html = f"""
     <p><a href="/admin/inbox/{eid}" class="btn btn-outline">← Back</a></p>
     <div class="card">
-      <h2 style="margin-bottom:4px">Reply to {e["from_name"] or e["from_email"]}</h2>
-      <p style="color:var(--muted);font-size:13px;margin-bottom:16px">Re: {e["subject"]}</p>
+      <h2 style="margin-bottom:4px">Reply to {e.get("from_name") or e.get("from_email","")}</h2>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:16px">Re: {e.get("subject","")}</p>
       <form method="POST">
         <label>Message</label>
         <textarea name="body" rows="10" placeholder="Type your reply..." required></textarea>
@@ -811,9 +1011,11 @@ def admin_compose():
             body_html = body.replace("\n", "<br>")
             ok, resp = _resend_post("/emails", {"from": FROM_EMAIL, "to": [to], "subject": subject, "html": body_html})
             if ok:
-                db = get_db()
-                db.execute("INSERT INTO emails_sent (to_email, subject, body_html) VALUES (?,?,?)", (to, subject, body_html))
-                db.commit(); db.close()
+                sent_data = {"to_email": to, "subject": subject, "body_html": body_html, "sent_at": _now_iso(), "in_reply_to": ""}
+                if not _fs_add("emails_sent", sent_data):
+                    db = get_db()
+                    db.execute("INSERT INTO emails_sent (to_email, subject, body_html) VALUES (?,?,?)", (to, subject, body_html))
+                    db.commit(); db.close()
                 flash("Email sent!", "success")
                 return redirect("/admin/compose")
             else:
@@ -836,11 +1038,15 @@ def admin_compose():
 @app.route("/admin/sent")
 @login_required
 def admin_sent():
-    db = get_db()
-    emails = db.execute("SELECT * FROM emails_sent ORDER BY id DESC").fetchall()
+    if _firestore_available:
+        emails = _fs_get_all("emails_sent", order_by="sent_at") or []
+    else:
+        db = get_db()
+        emails = [dict(r) for r in db.execute("SELECT * FROM emails_sent ORDER BY id DESC").fetchall()]
+        db.close()
     rows = ""
     for e in emails:
-        rows += f'<tr><td>{e["to_email"]}</td><td>{e["subject"]}</td><td>{e["sent_at"]}</td></tr>'
+        rows += f'<tr><td>{e.get("to_email","")}</td><td>{e.get("subject","")}</td><td>{e.get("sent_at","")}</td></tr>'
     html = f"""
     <h2 style="margin-bottom:16px">Sent Emails ({len(emails)})</h2>
     <table><thead><tr><th>To</th><th>Subject</th><th>Sent</th></tr></thead><tbody>{rows or '<tr><td colspan="3" style="text-align:center;color:var(--muted)">No sent emails yet</td></tr>'}</tbody></table>
@@ -851,11 +1057,15 @@ def admin_sent():
 @app.route("/admin/subscribers")
 @login_required
 def admin_subscribers():
-    # Merge Resend contacts (source of truth) with local SQLite data
     resend_contacts = get_all_contacts()
-    db = get_db()
-    local_subs = {s["email"]: s for s in db.execute("SELECT * FROM subscribers ORDER BY id DESC").fetchall()}
-    db.close()
+
+    if _firestore_available:
+        fs_subs = _fs_get_all("subscribers", order_by="subscribed_at") or []
+        local_subs = {s.get("email","").lower(): s for s in fs_subs}
+    else:
+        db = get_db()
+        local_subs = {s["email"]: dict(s) for s in db.execute("SELECT * FROM subscribers ORDER BY id DESC").fetchall()}
+        db.close()
 
     if not resend_contacts and not local_subs:
         html = '<h2>Subscribers</h2><div class="card"><p class="empty">No subscribers yet</p></div>'
@@ -864,7 +1074,7 @@ def admin_subscribers():
     rows = ""
     for c in resend_contacts:
         email = c.get("email", "")
-        local = local_subs.get(email, {})
+        local = local_subs.get(email.lower(), {})
         source = local.get("source", "-") if local else "-"
         location = local.get("location", "-") if local else "-"
         created = c.get("created_at", local.get("subscribed_at", "-") if local else "-")
@@ -882,9 +1092,12 @@ def admin_subscribers():
 @app.route("/admin/events")
 @login_required
 def admin_events():
-    db = get_db()
-    events = db.execute("SELECT * FROM copy_events ORDER BY id DESC").fetchall()
-    db.close()
+    if _firestore_available:
+        events = _fs_get_all("copy_events", order_by="created_at") or []
+    else:
+        db = get_db()
+        events = [dict(r) for r in db.execute("SELECT * FROM copy_events ORDER BY id DESC").fetchall()]
+        db.close()
 
     if not events:
         html = '<h2>Copy Events</h2><div class="card"><p class="empty">No events yet</p></div>'
@@ -892,7 +1105,8 @@ def admin_events():
 
     rows = ""
     for e in events:
-        rows += f'<tr><td>{e["tab"]}</td><td><code>{e["command"][:60] if e["command"] else "-"}</code></td><td>{e["source"] or "-"}</td><td>{e["location"] or "-"}</td><td style="white-space:nowrap">{e["created_at"]}</td></tr>'
+        cmd = e.get("command","") or ""
+        rows += f'<tr><td>{e.get("tab","")}</td><td><code>{cmd[:60] if cmd else "-"}</code></td><td>{e.get("source") or "-"}</td><td>{e.get("location") or "-"}</td><td style="white-space:nowrap">{e.get("created_at","")}</td></tr>'
 
     html = f"""
     <h2 style="margin-bottom:20px">Copy Events <span style="color:var(--muted);font-size:16px">({len(events)})</span></h2>
@@ -904,12 +1118,15 @@ def admin_events():
 @app.route("/admin/managed")
 @login_required
 def admin_managed():
-    db = get_db()
-    try:
-        reqs = db.execute("SELECT * FROM managed_requests ORDER BY id DESC").fetchall()
-    except Exception:
-        reqs = []
-    db.close()
+    if _firestore_available:
+        reqs = _fs_get_all("managed_requests", order_by="created_at") or []
+    else:
+        db = get_db()
+        try:
+            reqs = [dict(r) for r in db.execute("SELECT * FROM managed_requests ORDER BY id DESC").fetchall()]
+        except Exception:
+            reqs = []
+        db.close()
 
     if not reqs:
         html = '<h2>Managed Requests</h2><div class="card"><p class="empty">No managed instance requests yet</p></div>'
@@ -917,7 +1134,8 @@ def admin_managed():
 
     rows = ""
     for r in reqs:
-        rows += f'<tr><td>{r["name"]}</td><td>{r["email"]}</td><td>{r["company"] or "-"}</td><td title="{r["use_case"] or ""}">{(r["use_case"] or "-")[:60]}</td><td>{r["location"] or "-"}</td><td style="white-space:nowrap">{r["created_at"]}</td></tr>'
+        uc = r.get("use_case","") or ""
+        rows += f'<tr><td>{r.get("name","")}</td><td>{r.get("email","")}</td><td>{r.get("company") or "-"}</td><td title="{uc}">{(uc or "-")[:60]}</td><td>{r.get("location") or "-"}</td><td style="white-space:nowrap">{r.get("created_at","")}</td></tr>'
 
     html = f"""
     <h2 style="margin-bottom:20px">Managed Instance Requests <span style="color:var(--muted);font-size:16px">({len(reqs)})</span></h2>
