@@ -1401,11 +1401,15 @@ def _fetch_traction_data():
     data.setdefault("gh_forks", "...")
     data.setdefault("gh_issues", "...")
     
-    # Firestore counts
+    # Subscriber count from Resend (source of truth, includes pre-Firestore signups)
     try:
-        data["subscribers"] = str(_fs_count("subscribers") or 0)
+        resend_contacts = get_all_contacts()
+        data["subscribers"] = str(len(resend_contacts)) if resend_contacts else str(_fs_count("subscribers") or 0)
     except:
-        data["subscribers"] = "..."
+        try:
+            data["subscribers"] = str(_fs_count("subscribers") or 0)
+        except:
+            data["subscribers"] = "..."
     try:
         data["managed_requests"] = str(_fs_count("managed_requests") or 0)
     except:
