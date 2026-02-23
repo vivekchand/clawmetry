@@ -798,117 +798,149 @@ document.getElementById('managed-form').addEventListener('submit', function(e) {
 
 
 <!-- WHAT PEOPLE SAY -->
-<section style="padding:48px 24px 48px;overflow:hidden;">
-  <h2 class="section-title" style="display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:32px;">
+<section style="padding:60px 24px 60px;overflow:hidden;">
+  <h2 class="section-title" style="display:flex;align-items:center;gap:8px;justify-content:center;margin-bottom:8px;">
     <span style="color:#E5443A;">&#10095;</span> What People Say
   </h2>
+  <p style="text-align:center;color:#666;font-size:14px;margin-bottom:36px;">What the community is saying about ClawMetry</p>
   <style>
-    .testimonials-track { display:flex; gap:16px; animation: scroll-testimonials 40s linear infinite; width:max-content; }
-    .testimonials-track:hover { animation-play-state:paused; }
-    @keyframes scroll-testimonials { 0% { transform:translateX(0); } 100% { transform:translateX(-50%); } }
-    .testimonial-card {
-      background:#111; border:1px solid #1a1a1a; border-radius:12px; padding:20px;
-      min-width:320px; max-width:380px; flex-shrink:0; cursor:pointer;
-      transition:border-color 0.2s, transform 0.2s; text-decoration:none; display:block;
+    .tt-track { display:flex; gap:20px; animation: tt-scroll 45s linear infinite; width:max-content; }
+    .tt-track:hover { animation-play-state:paused; }
+    @keyframes tt-scroll { 0% { transform:translateX(0); } 100% { transform:translateX(-50%); } }
+    .tt-card {
+      min-width:340px; max-width:400px; flex-shrink:0; cursor:pointer;
+      text-decoration:none; display:block; position:relative;
+      background: linear-gradient(135deg, rgba(229,68,58,0.08) 0%, rgba(20,20,20,0.95) 40%, rgba(20,20,20,0.98) 100%);
+      border: 1px solid rgba(229,68,58,0.15);
+      border-radius:16px; padding:24px;
+      transition: border-color 0.3s, transform 0.2s, box-shadow 0.3s;
     }
-    .testimonial-card:hover { border-color:#E5443A; transform:translateY(-2px); }
-    .testimonial-top { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
-    .testimonial-avatar { width:36px; height:36px; border-radius:50%; object-fit:cover; }
-    .testimonial-handle { font-size:13px; color:#888; }
-    .testimonial-badge { font-size:11px; color:#E5443A; background:#1a0d0d; padding:2px 8px; border-radius:4px; margin-left:auto; }
-    .testimonial-quote { font-size:14px; color:#ccc; line-height:1.6; }
-    @media (max-width:600px) { .testimonial-card { min-width:280px; } }
+    .tt-card:hover {
+      border-color: rgba(229,68,58,0.4);
+      transform: translateY(-3px);
+      box-shadow: 0 8px 32px rgba(229,68,58,0.1);
+    }
+    .tt-avatar { width:44px; height:44px; border-radius:50%; object-fit:cover; border: 2px solid rgba(229,68,58,0.2); }
+    .tt-head { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
+    .tt-author { font-size:14px; color:#E5443A; font-weight:600; }
+    .tt-badge { font-size:11px; color:#E5443A; background:rgba(229,68,58,0.12); padding:3px 10px; border-radius:12px; margin-left:auto; }
+    .tt-quote { font-size:14px; color:#ccc; line-height:1.7; }
+    @media (max-width:600px) { .tt-card { min-width:290px; padding:20px; } }
   </style>
   <div style="overflow:hidden;">
-    <div class="testimonials-track">
-      <a href="https://x.com/jonah_lipsitt/status/2025695302007886255" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://unavatar.io/x/jonah_lipsitt" alt="jonah_lipsitt" class="testimonial-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=JL&background=E5443A&color=fff&size=72'">
-          <span class="testimonial-handle">@jonah_lipsitt</span>
-          <span class="testimonial-badge">&#9654; Video</span>
+    <div class="tt-track">
+      <a href="https://x.com/jonah_lipsitt/status/2025695302007886255" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/jonah_lipsitt" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=JL&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@jonah_lipsitt</div>
+          </div>
+          <span class="tt-badge">&#9654; Video</span>
         </div>
-        <div class="testimonial-quote">"I got tired of not knowing what my OpenClaw was doing. A Phillips Hue spotlight now shines on my Mac Mini based on what it is doing, further visualized by @clawmetry"</div>
+        <div class="tt-quote">"I got tired of not knowing what my OpenClaw was doing. A Phillips Hue spotlight now shines on my Mac Mini based on what it is doing, further visualized by @clawmetry"</div>
       </a>
-      <a href="https://x.com/Save_Delete/status/2024929958783824083" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://unavatar.io/x/Save_Delete" alt="Save_Delete" class="testimonial-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=SD&background=E5443A&color=fff&size=72'">
-          <span class="testimonial-handle">@Save_Delete</span>
+      <a href="https://x.com/Save_Delete/status/2024929958783824083" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/Save_Delete" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=SD&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@Save_Delete</div>
+          </div>
         </div>
-        <div class="testimonial-quote">"If you are building with OpenClaw, Clawmetry is the missing piece. Real-time visibility into every sub-agent, tool call, token cost, and session log."</div>
+        <div class="tt-quote">"If you are building with OpenClaw, Clawmetry is the missing piece. Real-time visibility into every sub-agent, tool call, token cost, and session log."</div>
       </a>
-      <a href="https://x.com/ricardotosatt" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://unavatar.io/x/ricardotosatt" alt="ricardotosatt" class="testimonial-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=RT&background=E5443A&color=fff&size=72'">
-          <span class="testimonial-handle">@ricardotosatt</span>
+      <a href="https://x.com/ricardotosatt" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/ricardotosatt" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=RT&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@ricardotosatt</div>
+          </div>
         </div>
-        <div class="testimonial-quote">"Love this for agent monitoring. Tracking tokens and memory in real time is a huge win for devs."</div>
+        <div class="tt-quote">"Love this for agent monitoring. Tracking tokens and memory in real time is a huge win for devs."</div>
       </a>
-      <a href="https://www.producthunt.com/products/clawmetry" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://ph-static.imgix.net/ph-logo-1.png" alt="Product Hunt" class="testimonial-avatar" loading="lazy" style="border-radius:8px;">
-          <span class="testimonial-handle">Product Hunt</span>
-          <span class="testimonial-badge">#5 Launch Day</span>
+      <a href="https://www.producthunt.com/products/clawmetry" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://ph-static.imgix.net/ph-logo-1.png" alt="" class="tt-avatar" loading="lazy" style="border-radius:8px;">
+          <div>
+            <div class="tt-author">Product Hunt</div>
+          </div>
+          <span class="tt-badge">#5 Launch Day</span>
         </div>
-        <div class="testimonial-quote">"ClawMetry launched alongside Claude Sonnet 4.6. Featured in the PH newsletter under 'Keep agents in line.' 198+ upvotes."</div>
+        <div class="tt-quote">"ClawMetry launched alongside Claude Sonnet 4.6 and held #5 all day. Featured in the PH newsletter under 'Keep agents in line.' 198+ upvotes."</div>
       </a>
-      <a href="https://x.com/nickvnturi" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://unavatar.io/x/nickvnturi" alt="nickvnturi" class="testimonial-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=NV&background=E5443A&color=fff&size=72'">
-          <span class="testimonial-handle">@nickvnturi</span>
+      <a href="https://x.com/nickvnturi" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/nickvnturi" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=NV&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@nickvnturi</div>
+          </div>
         </div>
-        <div class="testimonial-quote">"This looks like a very helpful tool for tracking agents. Thanks for sharing it."</div>
+        <div class="tt-quote">"This looks like a very helpful tool for tracking agents. Thanks for sharing it."</div>
       </a>
-      <a href="https://x.com/Asif2BD" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://unavatar.io/x/Asif2BD" alt="Asif2BD" class="testimonial-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=AB&background=E5443A&color=fff&size=72'">
-          <span class="testimonial-handle">@Asif2BD</span>
+      <a href="https://x.com/Asif2BD" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/Asif2BD" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=AB&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@Asif2BD</div>
+          </div>
         </div>
-        <div class="testimonial-quote">"Clawmetry and our JARVIS Mission Control complement each other. Observability and coordination are separate problems."</div>
+        <div class="tt-quote">"Clawmetry and our JARVIS Mission Control complement each other. Observability and coordination are separate problems."</div>
       </a>
       <!-- Duplicate for seamless loop -->
-      <a href="https://x.com/jonah_lipsitt/status/2025695302007886255" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://unavatar.io/x/jonah_lipsitt" alt="jonah_lipsitt" class="testimonial-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=JL&background=E5443A&color=fff&size=72'">
-          <span class="testimonial-handle">@jonah_lipsitt</span>
-          <span class="testimonial-badge">&#9654; Video</span>
+      <a href="https://x.com/jonah_lipsitt/status/2025695302007886255" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/jonah_lipsitt" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=JL&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@jonah_lipsitt</div>
+          </div>
+          <span class="tt-badge">&#9654; Video</span>
         </div>
-        <div class="testimonial-quote">"I got tired of not knowing what my OpenClaw was doing. A Phillips Hue spotlight now shines on my Mac Mini based on what it is doing, further visualized by @clawmetry"</div>
+        <div class="tt-quote">"I got tired of not knowing what my OpenClaw was doing. A Phillips Hue spotlight now shines on my Mac Mini based on what it is doing, further visualized by @clawmetry"</div>
       </a>
-      <a href="https://x.com/Save_Delete/status/2024929958783824083" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://unavatar.io/x/Save_Delete" alt="Save_Delete" class="testimonial-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=SD&background=E5443A&color=fff&size=72'">
-          <span class="testimonial-handle">@Save_Delete</span>
+      <a href="https://x.com/Save_Delete/status/2024929958783824083" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/Save_Delete" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=SD&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@Save_Delete</div>
+          </div>
         </div>
-        <div class="testimonial-quote">"If you are building with OpenClaw, Clawmetry is the missing piece. Real-time visibility into every sub-agent, tool call, token cost, and session log."</div>
+        <div class="tt-quote">"If you are building with OpenClaw, Clawmetry is the missing piece. Real-time visibility into every sub-agent, tool call, token cost, and session log."</div>
       </a>
-      <a href="https://x.com/ricardotosatt" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://unavatar.io/x/ricardotosatt" alt="ricardotosatt" class="testimonial-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=RT&background=E5443A&color=fff&size=72'">
-          <span class="testimonial-handle">@ricardotosatt</span>
+      <a href="https://x.com/ricardotosatt" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/ricardotosatt" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=RT&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@ricardotosatt</div>
+          </div>
         </div>
-        <div class="testimonial-quote">"Love this for agent monitoring. Tracking tokens and memory in real time is a huge win for devs."</div>
+        <div class="tt-quote">"Love this for agent monitoring. Tracking tokens and memory in real time is a huge win for devs."</div>
       </a>
-      <a href="https://www.producthunt.com/products/clawmetry" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://ph-static.imgix.net/ph-logo-1.png" alt="Product Hunt" class="testimonial-avatar" loading="lazy" style="border-radius:8px;">
-          <span class="testimonial-handle">Product Hunt</span>
-          <span class="testimonial-badge">#5 Launch Day</span>
+      <a href="https://www.producthunt.com/products/clawmetry" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://ph-static.imgix.net/ph-logo-1.png" alt="" class="tt-avatar" loading="lazy" style="border-radius:8px;">
+          <div>
+            <div class="tt-author">Product Hunt</div>
+          </div>
+          <span class="tt-badge">#5 Launch Day</span>
         </div>
-        <div class="testimonial-quote">"ClawMetry launched alongside Claude Sonnet 4.6. Featured in the PH newsletter under 'Keep agents in line.' 198+ upvotes."</div>
+        <div class="tt-quote">"ClawMetry launched alongside Claude Sonnet 4.6 and held #5 all day. Featured in the PH newsletter under 'Keep agents in line.' 198+ upvotes."</div>
       </a>
-      <a href="https://x.com/nickvnturi" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://unavatar.io/x/nickvnturi" alt="nickvnturi" class="testimonial-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=NV&background=E5443A&color=fff&size=72'">
-          <span class="testimonial-handle">@nickvnturi</span>
+      <a href="https://x.com/nickvnturi" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/nickvnturi" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=NV&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@nickvnturi</div>
+          </div>
         </div>
-        <div class="testimonial-quote">"This looks like a very helpful tool for tracking agents. Thanks for sharing it."</div>
+        <div class="tt-quote">"This looks like a very helpful tool for tracking agents. Thanks for sharing it."</div>
       </a>
-      <a href="https://x.com/Asif2BD" target="_blank" rel="noopener" class="testimonial-card">
-        <div class="testimonial-top">
-          <img src="https://unavatar.io/x/Asif2BD" alt="Asif2BD" class="testimonial-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=AB&background=E5443A&color=fff&size=72'">
-          <span class="testimonial-handle">@Asif2BD</span>
+      <a href="https://x.com/Asif2BD" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/Asif2BD" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=AB&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@Asif2BD</div>
+          </div>
         </div>
-        <div class="testimonial-quote">"Clawmetry and our JARVIS Mission Control complement each other. Observability and coordination are separate problems."</div>
+        <div class="tt-quote">"Clawmetry and our JARVIS Mission Control complement each other. Observability and coordination are separate problems."</div>
       </a>
     </div>
   </div>
