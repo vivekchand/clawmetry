@@ -2693,7 +2693,11 @@ function clawmetryLogout(){
         <text x="420" y="162" style="font-size:24px;text-anchor:middle;">&#x1F9E0;</text>
         <text x="420" y="186" style="font-size:18px;font-weight:800;fill:#FFD54F;text-anchor:middle;" id="brain-model-label">AI Model</text>
         <text x="420" y="203" style="font-size:10px;fill:#ffccbc;text-anchor:middle;" id="brain-model-text">unknown</text>
-        <text x="420" y="212" style="font-size:8px;fill:#a7f3d0;text-anchor:middle;" id="brain-billing-text">Auth: unknown</text>
+        <text x="420" y="214" style="font-size:8px;fill:#a7f3d0;text-anchor:middle;" id="brain-billing-text">Auth: unknown</text>
+        <circle cx="420" cy="225" r="4" fill="#FF8A65">
+          <animate attributeName="r" values="3;5;3" dur="1.1s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="0.5;1;0.5" dur="1.1s" repeatCount="indefinite"/>
+        </circle>
       </g>
 
       <!-- Tool Nodes -->
@@ -9002,8 +9006,10 @@ def _provider_has_api_key(provider):
         if os.environ.get(key, '').strip():
             return True
 
-    # 2) Config-based check (provider/apiKey or provider/apiKeyEnv)
+    # 2) Config-based check — try both legacy `providers` and OpenClaw `auth.profiles`
     cfg = _load_openclaw_config_cached()
+
+    # 2a) Legacy: top-level `providers.<name>.apiKey`
     providers = cfg.get('providers', {}) if isinstance(cfg, dict) else {}
     pconf = providers.get(provider, {}) if isinstance(providers, dict) else {}
     if isinstance(pconf, dict):
@@ -9012,6 +9018,16 @@ def _provider_has_api_key(provider):
         if api_key:
             return True
         if api_key_env and os.environ.get(api_key_env, '').strip():
+            return True
+
+    # 2b) OpenClaw style: `auth.profiles.<provider:*>.mode == "token"`
+    auth = cfg.get('auth', {}) if isinstance(cfg, dict) else {}
+    profiles = auth.get('profiles', {}) if isinstance(auth, dict) else {}
+    for profile_name, profile_cfg in (profiles.items() if isinstance(profiles, dict) else []):
+        if not isinstance(profile_cfg, dict):
+            continue
+        profile_provider = str(profile_cfg.get('provider', '')).lower()
+        if profile_provider == provider and profile_cfg.get('mode') == 'token':
             return True
 
     return False
