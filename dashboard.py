@@ -1000,7 +1000,8 @@ def _get_otel_usage_data():
 
     # Enhanced cost tracking for OTLP data
     trend_data = _analyze_usage_trends(daily_tokens) 
-    warnings = _generate_cost_warnings(today_cost_val, week_cost_val, month_cost_val, trend_data)
+    model_billing, billing_summary = _build_model_billing(model_usage)
+    warnings = _generate_cost_warnings(today_cost_val, week_cost_val, month_cost_val, trend_data, month_tok, billing_summary)
 
     return {
         'source': 'otlp',
@@ -1017,6 +1018,8 @@ def _get_otel_usage_data():
             {'model': k, 'tokens': v}
             for k, v in sorted(model_usage.items(), key=lambda x: -x[1])
         ],
+        'modelBilling': model_billing,
+        'billingSummary': billing_summary,
         'trend': trend_data,
         'warnings': warnings,
     }
@@ -1987,6 +1990,24 @@ DASHBOARD_HTML = r"""
   .stats-footer-item:hover { background: var(--bg-hover); }
   .stats-footer-icon { font-size: 14px; }
   .stats-footer-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .tooltip-info-icon {
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:14px;
+    height:14px;
+    margin-left:6px;
+    border-radius:999px;
+    border:1px solid var(--border-primary);
+    color:var(--text-muted);
+    font-size:10px;
+    font-weight:700;
+    line-height:1;
+    cursor:help;
+    opacity:0.9;
+    vertical-align:middle;
+  }
+  .tooltip-info-icon:hover { color: var(--text-primary); border-color: var(--text-accent); }
   .stats-footer-value { font-size: 14px; font-weight: 700; color: var(--text-primary); }
   .stats-footer-sub { font-size: 10px; color: var(--text-faint); }
   @media (max-width: 1024px) {
@@ -2277,14 +2298,15 @@ function clawmetryLogout(){
     <div class="stats-footer-item">
       <span class="stats-footer-icon">💰</span>
       <div>
-        <div class="stats-footer-label">Spending</div>
+        <div class="stats-footer-label">Spending <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
         <div class="stats-footer-value" id="cost-today">$0.00</div>
+        <div class="stats-footer-sub" id="cost-billing-badge" style="margin-top:2px;display:none;"></div>
       </div>
       <div style="margin-left:auto;text-align:right;">
         <div class="stats-footer-sub">wk: <span id="cost-week">—</span></div>
         <div class="stats-footer-sub">mo: <span id="cost-month">—</span></div>
       </div>
-      <span id="cost-trend" style="display:none;">Today's running total</span>
+      <span id="cost-trend" style="display:none;">Estimated from usage — may be $0 billed with OAuth auth</span>
     </div>
     <div class="stats-footer-item">
       <span class="stats-footer-icon">🤖</span>
@@ -2429,7 +2451,7 @@ function clawmetryLogout(){
   <div class="card">
     <div class="usage-chart" id="usage-chart">Loading...</div>
   </div>
-  <div class="section-title">💰 Cost Breakdown</div>
+  <div class="section-title">💰 Cost Breakdown <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
   <div class="card"><table class="usage-table" id="usage-cost-table"><tbody><tr><td colspan="3" style="color:#666;">Loading...</td></tr></tbody></table></div>
   <div id="otel-extra-sections" style="display:none;">
     <div class="grid" style="margin-top:16px;">
@@ -2671,10 +2693,7 @@ function clawmetryLogout(){
         <text x="420" y="162" style="font-size:24px;text-anchor:middle;">&#x1F9E0;</text>
         <text x="420" y="186" style="font-size:18px;font-weight:800;fill:#FFD54F;text-anchor:middle;" id="brain-model-label">AI Model</text>
         <text x="420" y="203" style="font-size:10px;fill:#ffccbc;text-anchor:middle;" id="brain-model-text">unknown</text>
-        <circle cx="420" cy="214" r="4" fill="#FF8A65">
-          <animate attributeName="r" values="3;5;3" dur="1.1s" repeatCount="indefinite"/>
-          <animate attributeName="opacity" values="0.5;1;0.5" dur="1.1s" repeatCount="indefinite"/>
-        </circle>
+        <text x="420" y="212" style="font-size:8px;fill:#a7f3d0;text-anchor:middle;" id="brain-billing-text">Auth: unknown</text>
       </g>
 
       <!-- Tool Nodes -->
@@ -3183,6 +3202,17 @@ function fitFlowLabel(text, maxLen) {
   return s.substring(0, Math.max(1, maxLen - 1)) + '…';
 }
 
+function applyBillingHintToFlow(billingSummary) {
+  var hint = 'Auth: ?';
+  if (billingSummary === 'likely_api_key') hint = 'Auth: API';
+  else if (billingSummary === 'likely_oauth_or_included') hint = 'Auth: OAuth';
+  else if (billingSummary === 'mixed') hint = 'Auth: mixed';
+
+  document.querySelectorAll('[id$="brain-billing-text"]').forEach(function(el) {
+    el.textContent = fitFlowLabel(hint, 14);
+  });
+}
+
 function setFlowTextAll(idSuffix, text, maxLen) {
   var fitted = fitFlowLabel(text, maxLen);
   document.querySelectorAll('[id$="' + idSuffix + '"]').forEach(function(el) {
@@ -3250,7 +3280,38 @@ async function loadMiniWidgets(overview, usage) {
     var trendIcon = usage.trend.trend === 'increasing' ? '📈' : usage.trend.trend === 'decreasing' ? '📉' : '➡️';
     trend = trendIcon + ' ' + usage.trend.trend;
   }
-  document.getElementById('cost-trend').textContent = trend || 'Today\'s running total';
+  var isOauthLikely = (usage.billingSummary === 'likely_oauth_or_included');
+  var isMixed = (usage.billingSummary === 'mixed');
+  var trendEl = document.getElementById('cost-trend');
+  var badgeEl = document.getElementById('cost-billing-badge');
+  var infoIcon = document.getElementById('cost-info-icon');
+
+  if (isOauthLikely) {
+    if (badgeEl) {
+      badgeEl.style.display = '';
+      badgeEl.textContent = 'est. equivalent if billed · OAuth likely';
+    }
+    trendEl.style.display = 'none';
+  } else {
+    if (badgeEl) {
+      badgeEl.style.display = 'none';
+      badgeEl.textContent = '';
+    }
+    trendEl.textContent = trend || 'Today\'s running total';
+    trendEl.style.display = trend ? '' : 'none';
+  }
+
+  if (infoIcon) {
+    if (isOauthLikely || isMixed) {
+      infoIcon.style.display = '';
+      infoIcon.title = 'Equivalent if billed from token usage. OAuth/included models may be billed $0 at provider level.';
+    } else {
+      infoIcon.style.display = 'none';
+      infoIcon.title = '';
+    }
+  }
+
+  applyBillingHintToFlow(usage.billingSummary || 'unknown');
   
   // ⚡ Tool Activity (load from logs)
   loadToolActivity();
@@ -4506,12 +4567,12 @@ async function loadUsage() {
     document.getElementById('usage-week-cost').textContent = '≈ ' + fmtCost(data.weekCost);
     document.getElementById('usage-month').textContent = fmtTokens(data.month);
     document.getElementById('usage-month-cost').textContent = '≈ ' + fmtCost(data.monthCost);
-    
+
     // Display cost warnings
     displayCostWarnings(data.warnings || []);
     
     // Display trend analysis
-    displayTrendAnalysis(data.trend || {});
+    displayTrendAnalysis(data.trend || {}, data);
     // Bar chart
     var maxTokens = Math.max.apply(null, data.days.map(function(d){return d.tokens;})) || 1;
     var chartHtml = '';
@@ -4523,7 +4584,18 @@ async function loadUsage() {
     });
     document.getElementById('usage-chart').innerHTML = chartHtml;
     // Cost table
-    var costLabel = data.source === 'otlp' ? 'Cost' : 'Est. Cost';
+    var usageInfoIcon = document.getElementById('usage-cost-info-icon');
+    if (usageInfoIcon) {
+      if (data.billingSummary === 'likely_oauth_or_included' || data.billingSummary === 'mixed') {
+        usageInfoIcon.style.display = '';
+        usageInfoIcon.title = 'Equivalent if billed from token usage. OAuth/included models may be billed $0 at provider level.';
+      } else {
+        usageInfoIcon.style.display = 'none';
+        usageInfoIcon.title = '';
+      }
+    }
+
+    var costLabel = data.source === 'otlp' ? 'Telemetry Cost' : 'Estimated Cost';
     var tableHtml = '<thead><tr><th>Period</th><th>Tokens</th><th>' + costLabel + '</th></tr></thead><tbody>';
     tableHtml += '<tr><td>Today</td><td>' + fmtTokens(data.today) + '</td><td>' + fmtCost(data.todayCost) + '</td></tr>';
     tableHtml += '<tr><td>This Week</td><td>' + fmtTokens(data.week) + '</td><td>' + fmtCost(data.weekCost) + '</td></tr>';
@@ -4540,9 +4612,13 @@ async function loadUsage() {
       if (msgEl) msgEl.textContent = data.messageCount || '0';
       // Model breakdown table
       if (data.modelBreakdown && data.modelBreakdown.length > 0) {
-        var mHtml = '<thead><tr><th>Model</th><th>Tokens</th></tr></thead><tbody>';
+        var billingMap = {};
+        (data.modelBilling || []).forEach(function(b) { billingMap[b.model] = b; });
+        var mHtml = '<thead><tr><th>Model</th><th>Tokens</th><th>Billing hint</th></tr></thead><tbody>';
         data.modelBreakdown.forEach(function(m) {
-          mHtml += '<tr><td><span class="badge model">' + escHtml(m.model) + '</span></td><td>' + fmtTokens(m.tokens) + '</td></tr>';
+          var b = billingMap[m.model] || {};
+          var hint = b.apiKeyConfigured ? 'API key configured' : 'OAuth/included likely';
+          mHtml += '<tr><td><span class="badge model">' + escHtml(m.model) + '</span></td><td>' + fmtTokens(m.tokens) + '</td><td>' + escHtml(hint) + '</td></tr>';
         });
         mHtml += '</tbody>';
         document.getElementById('usage-model-table').innerHTML = mHtml;
@@ -4575,7 +4651,7 @@ function displayCostWarnings(warnings) {
   container.style.display = 'block';
 }
 
-function displayTrendAnalysis(trend) {
+function displayTrendAnalysis(trend, usageData) {
   var card = document.getElementById('trend-card');
   if (!trend || trend.trend === 'insufficient_data') {
     card.style.display = 'none';
@@ -4592,7 +4668,22 @@ function displayTrendAnalysis(trend) {
     var dailyAvg = trend.dailyAvg >= 1000 ? (trend.dailyAvg/1000).toFixed(0) + 'K' : trend.dailyAvg;
     var monthlyPred = trend.monthlyPrediction >= 1000000 ? (trend.monthlyPrediction/1000000).toFixed(1) + 'M' : 
                       trend.monthlyPrediction >= 1000 ? (trend.monthlyPrediction/1000).toFixed(0) + 'K' : trend.monthlyPrediction;
-    predictionEl.textContent = dailyAvg + '/day avg, ~' + monthlyPred + '/month projected';
+
+    var line = dailyAvg + '/day avg, ~' + monthlyPred + '/month projected';
+
+    // Add projected monthly equivalent cost only when math is meaningful
+    if (usageData && usageData.month && usageData.month > 0 && usageData.monthCost && usageData.monthCost > 0) {
+      var costPerToken = usageData.monthCost / usageData.month;
+      var projectedEquivalent = trend.monthlyPrediction * costPerToken;
+      if (projectedEquivalent > 0.01) {
+        line += ' · ~$' + projectedEquivalent.toFixed(2) + '/mo equivalent if billed';
+        if (usageData.billingSummary === 'likely_oauth_or_included') {
+          line += ' (could be $0 with OAuth)';
+        }
+      }
+    }
+
+    predictionEl.textContent = line;
   } else {
     predictionEl.textContent = 'Analyzing usage patterns...';
   }
@@ -8861,6 +8952,104 @@ def api_history_stats():
     return jsonify(stats)
 
 
+# ── Billing Mode Heuristics (API key vs OAuth/included) ──────────────────
+
+_openclaw_cfg_cache = None
+
+def _load_openclaw_config_cached():
+    """Load OpenClaw config once (best effort)."""
+    global _openclaw_cfg_cache
+    if _openclaw_cfg_cache is not None:
+        return _openclaw_cfg_cache
+    for cf in [os.path.expanduser('~/.openclaw/openclaw.json'), os.path.expanduser('~/.clawdbot/openclaw.json')]:
+        try:
+            with open(cf) as f:
+                _openclaw_cfg_cache = json.load(f)
+                return _openclaw_cfg_cache
+        except Exception:
+            continue
+    _openclaw_cfg_cache = {}
+    return _openclaw_cfg_cache
+
+
+def _provider_from_model(model_name):
+    m = str(model_name or '').lower()
+    if m.startswith('openai/') or 'gpt' in m or 'codex' in m or m.startswith('o1'):
+        return 'openai'
+    if m.startswith('anthropic/') or 'claude' in m:
+        return 'anthropic'
+    if m.startswith('google/') or 'gemini' in m:
+        return 'google'
+    if m.startswith('openrouter/'):
+        return 'openrouter'
+    if m.startswith('xai/') or 'grok' in m:
+        return 'xai'
+    return 'unknown'
+
+
+def _provider_has_api_key(provider):
+    provider = str(provider or '').lower()
+    env_map = {
+        'openai': ['OPENAI_API_KEY'],
+        'anthropic': ['ANTHROPIC_API_KEY'],
+        'google': ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
+        'openrouter': ['OPENROUTER_API_KEY'],
+        'xai': ['XAI_API_KEY'],
+    }
+
+    # 1) Direct env check
+    for key in env_map.get(provider, []):
+        if os.environ.get(key, '').strip():
+            return True
+
+    # 2) Config-based check (provider/apiKey or provider/apiKeyEnv)
+    cfg = _load_openclaw_config_cached()
+    providers = cfg.get('providers', {}) if isinstance(cfg, dict) else {}
+    pconf = providers.get(provider, {}) if isinstance(providers, dict) else {}
+    if isinstance(pconf, dict):
+        api_key = str(pconf.get('apiKey', '')).strip()
+        api_key_env = str(pconf.get('apiKeyEnv', '')).strip()
+        if api_key:
+            return True
+        if api_key_env and os.environ.get(api_key_env, '').strip():
+            return True
+
+    return False
+
+
+def _build_model_billing(model_usage):
+    """Return per-model billing heuristics + summary for UI."""
+    model_billing = []
+    has_api_key_model = False
+    has_non_api_key_model = False
+
+    for model, tokens in sorted(model_usage.items(), key=lambda x: -x[1]):
+        provider = _provider_from_model(model)
+        api_key_configured = _provider_has_api_key(provider)
+        mode = 'likely_api_key' if api_key_configured else 'likely_oauth_or_included'
+        if api_key_configured:
+            has_api_key_model = True
+        else:
+            has_non_api_key_model = True
+
+        model_billing.append({
+            'model': model,
+            'provider': provider,
+            'tokens': tokens,
+            'apiKeyConfigured': api_key_configured,
+            'billingMode': mode,
+        })
+
+    if has_api_key_model and has_non_api_key_model:
+        summary = 'mixed'
+    elif has_api_key_model:
+        summary = 'likely_api_key'
+    else:
+        summary = 'likely_oauth_or_included'
+
+    return model_billing, summary
+
+
 # ── Enhanced Cost Tracking Utilities ─────────────────────────────────────
 
 def _get_model_pricing():
@@ -8935,7 +9124,7 @@ def _analyze_usage_trends(daily_tokens):
     
     return {'prediction': None, 'trend': 'stable'}
 
-def _generate_cost_warnings(today_cost, week_cost, month_cost, trend_data):
+def _generate_cost_warnings(today_cost, week_cost, month_cost, trend_data, month_tokens=0, billing_summary='unknown'):
     """Generate cost warnings based on thresholds."""
     warnings = []
     
@@ -8981,13 +9170,21 @@ def _generate_cost_warnings(today_cost, week_cost, month_cost, trend_data):
             'message': f'Elevated monthly cost: ${month_cost:.2f}',
         })
     
-    # Trend-based warnings
+    # Trend-based warnings (use observed effective rate, not hard-coded $/token)
     if trend_data.get('trend') == 'increasing' and trend_data.get('monthlyPrediction', 0) > 300:
-        warnings.append({
-            'type': 'trend_warning',
-            'level': 'warning',
-            'message': f'Usage trending up - projected monthly cost: ${(trend_data["monthlyPrediction"] * 0.00003):.2f}',
-        })
+        # If likely OAuth/included, avoid scary projected billing alerts.
+        if billing_summary != 'likely_oauth_or_included':
+            projected_cost = 0.0
+            if month_tokens and month_cost > 0:
+                effective_cost_per_token = month_cost / float(month_tokens)
+                projected_cost = trend_data.get('monthlyPrediction', 0) * effective_cost_per_token
+
+            if projected_cost > 0:
+                warnings.append({
+                    'type': 'trend_warning',
+                    'level': 'warning',
+                    'message': f'Usage trending up - projected monthly equivalent (if billed): ${projected_cost:.2f}',
+                })
     
     return warnings
 
@@ -9124,15 +9321,16 @@ def api_usage():
     # Trend analysis & predictions
     trend_data = _analyze_usage_trends(daily_tokens)
     
-    # Cost warnings
-    warnings = _generate_cost_warnings(today_cost, week_cost, month_cost, trend_data)
-    
     # Model breakdown for display
     model_breakdown = [
         {'model': k, 'tokens': v}
         for k, v in sorted(model_usage.items(), key=lambda x: -x[1])
     ]
-    
+    model_billing, billing_summary = _build_model_billing(model_usage)
+
+    # Cost warnings
+    warnings = _generate_cost_warnings(today_cost, week_cost, month_cost, trend_data, month_tok, billing_summary)
+
     result = {
         'source': 'transcripts',
         'days': days,
@@ -9143,6 +9341,8 @@ def api_usage():
         'weekCost': round(week_cost, 4),
         'monthCost': round(month_cost, 4),
         'modelBreakdown': model_breakdown,
+        'modelBilling': model_billing,
+        'billingSummary': billing_summary,
         'sessionCosts': session_costs,
         'trend': trend_data,
         'warnings': warnings,
