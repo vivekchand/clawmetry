@@ -19,15 +19,26 @@
     var callback = function () {
       if (typeof url === 'string') { window.location = url; }
     };
-    gtag('event', 'ads_conversion_Sign_Up_1', {
+    // Fire both: Google Ads conversion (with send_to) and custom event for GA4
+    gtag('event', 'conversion', {
+      'send_to': 'AW-11343567971/ads_conversion_Sign_Up_1',
       'event_callback': callback,
       'event_timeout': 2000,
     });
+    gtag('event', 'ads_conversion_Sign_Up_1');
     return false;
   }
-  // Track install.sh as conversion
+  function trackConversion(label) {
+    if (typeof gtag === 'function') {
+      gtag('event', 'conversion', {
+        'send_to': 'AW-11343567971/' + (label || 'ads_conversion_Sign_Up_1'),
+      });
+      gtag('event', label || 'ads_conversion_Sign_Up_1');
+    }
+  }
+  // Track install.sh page view as conversion (browser visits only)
   if (window.location.pathname === '/install.sh') {
-    gtag('event', 'ads_conversion_Sign_Up_1');
+    trackConversion('ads_conversion_Sign_Up_1');
   }
   </script>
   <!-- Microsoft Clarity -->
@@ -454,7 +465,7 @@
   </h2>
   <p style="text-align:center;color:#666;font-size:14px;margin-bottom:36px;">What the community is saying about ClawMetry</p>
   <style>
-    .tt-track { display:flex; gap:20px; animation: tt-scroll 45s linear infinite; width:max-content; }
+    .tt-track { display:flex; gap:20px; animation: tt-scroll 75s linear infinite; width:max-content; }
     .tt-track:hover { animation-play-state:paused; }
     @keyframes tt-scroll { 0% { transform:translateX(0); } 100% { transform:translateX(-50%); } }
     .tt-card {
@@ -509,7 +520,7 @@
       </a>
       <a href="https://www.producthunt.com/products/clawmetry" target="_blank" rel="noopener" class="tt-card">
         <div class="tt-head">
-          <img src="https://ph-static.imgix.net/ph-logo-1.png" alt="" class="tt-avatar" loading="lazy" style="border-radius:8px;">
+          <img src="data:image/png;base64,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" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://cdn.prod.website-files.com/6446b08b6e7d2f1e7bda2ae0/6446b08b6e7d2f1e7bda2b0b_ph-logo.svg'">
           <div>
             <div class="tt-author">Product Hunt</div>
           </div>
@@ -544,6 +555,75 @@
           <span class="tt-badge">Thread</span>
         </div>
         <div class="tt-quote">"Ask OpenClaw to do something. It starts working. And you just... wait. Hoping. Is it searching? Which websites? Where is it stuck right now? Zero visibility. ClawMetry fixes that."</div>
+      </a>
+      <a href="https://x.com/backboardioclip/status/2025703625306382542" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://unavatar.io/x/backboardioclip" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://ui-avatars.com/api/?name=MB&background=E5443A&color=fff&size=88'">
+          <div>
+            <div class="tt-author">@backboardioclip</div>
+          </div>
+        </div>
+        <div class="tt-quote">"This is such a cool idea! Love seeing people build real things with their agents."</div>
+      </a>
+      <a href="https://www.producthunt.com/posts/clawmetry#comment-4311191" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://ui-avatars.com/api/?name=MK&background=E5443A&color=fff&size=88" alt="" class="tt-avatar" loading="lazy">
+          <div>
+            <div class="tt-author">Mykola Kondratiuk</div>
+          </div>
+          <span class="tt-badge">Product Hunt</span>
+        </div>
+        <div class="tt-quote">"Oh this is exactly what I needed. The biggest pain point has been figuring out where my tokens are going. Especially with sub-agents spawning other sub-agents, costs spiral fast and you have zero visibility."</div>
+      </a>
+      <a href="https://www.producthunt.com/posts/clawmetry#comment-4311192" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://ui-avatars.com/api/?name=DS&background=E5443A&color=fff&size=88" alt="" class="tt-avatar" loading="lazy">
+          <div>
+            <div class="tt-author">Damian Saez</div>
+          </div>
+          <span class="tt-badge">Product Hunt</span>
+        </div>
+        <div class="tt-quote">"Observability for AI agents is something most builders overlook until things break in production. Love that you're tackling this early."</div>
+      </a>
+      <a href="https://www.producthunt.com/posts/clawmetry#comment-4311193" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://ui-avatars.com/api/?name=M&background=E5443A&color=fff&size=88" alt="" class="tt-avatar" loading="lazy">
+          <div>
+            <div class="tt-author">Mihail / HookWatch</div>
+          </div>
+          <span class="tt-badge">Product Hunt</span>
+        </div>
+        <div class="tt-quote">"This is exactly the kind of tooling the AI agent ecosystem needs right now. The per-session cost breakdown is a smart move. Most teams have no idea what their agents actually cost until the invoice hits."</div>
+      </a>
+      <a href="https://www.producthunt.com/posts/clawmetry#comment-4311194" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://ui-avatars.com/api/?name=HU&background=E5443A&color=fff&size=88" alt="" class="tt-avatar" loading="lazy">
+          <div>
+            <div class="tt-author">Harsh Upadhyay</div>
+          </div>
+          <span class="tt-badge">Product Hunt</span>
+        </div>
+        <div class="tt-quote">"Really like the clarity of 'Know what your agents are doing. Right now.' The core pain you're solving feels bigger than a single ecosystem. Very clean execution."</div>
+      </a>
+      <a href="https://www.instagram.com/reel/DU7Pse1k5bv/" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://ui-avatars.com/api/?name=CAT&background=C13584&color=fff&size=88" alt="" class="tt-avatar" loading="lazy" style="border-radius:8px;">
+          <div>
+            <div class="tt-author">@complete_ai_training</div>
+          </div>
+          <span class="tt-badge">Instagram</span>
+        </div>
+        <div class="tt-quote">"On the 19th of February, I discovered 5 exciting new AI tools you won't want to miss: ClawMetry for OpenClaw, Flixier, Your AI Clone, Baseline Core, and STUD."</div>
+      </a>
+      <a href="https://medium.com/@oadiaz/clawmetry-finally-seeing-what-my-ai-agents-are-actually-doing-3866505bcf96" target="_blank" rel="noopener" class="tt-card">
+        <div class="tt-head">
+          <img src="https://ui-avatars.com/api/?name=OD&background=1a8917&color=fff&size=88" alt="" class="tt-avatar" loading="lazy" style="border-radius:8px;">
+          <div>
+            <div class="tt-author">@oadiaz</div>
+          </div>
+          <span class="tt-badge">Medium</span>
+        </div>
+        <div class="tt-quote">"It's like going from 'I think my agents are working' to having a mission control center. The cost tracking alone was worth it. I discovered one agent was using 3x more tokens than necessary."</div>
       </a>
       <a href="https://www.linkedin.com/search/results/content/?keywords=clawmetry" target="_blank" rel="noopener" class="tt-card">
         <div class="tt-head">
@@ -586,7 +666,7 @@
       </a>
       <a href="https://www.producthunt.com/products/clawmetry" target="_blank" rel="noopener" class="tt-card">
         <div class="tt-head">
-          <img src="https://ph-static.imgix.net/ph-logo-1.png" alt="" class="tt-avatar" loading="lazy" style="border-radius:8px;">
+          <img src="data:image/png;base64,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" alt="" class="tt-avatar" loading="lazy" onerror="this.src='https://cdn.prod.website-files.com/6446b08b6e7d2f1e7bda2ae0/6446b08b6e7d2f1e7bda2b0b_ph-logo.svg'">
           <div>
             <div class="tt-author">Product Hunt</div>
           </div>
@@ -613,6 +693,11 @@
         <div class="tt-quote">"Clawmetry and our JARVIS Mission Control complement each other. Observability and coordination are separate problems."</div>
       </a>
     </div>
+  </div>
+  <div style="text-align:center;margin-top:28px;">
+    <a href="https://www.producthunt.com/posts/clawmetry" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;color:#E5443A;font-size:14px;font-weight:600;text-decoration:none;padding:10px 24px;border:1px solid rgba(229,68,58,0.3);border-radius:8px;transition:all 0.2s;" onmouseover="this.style.background='rgba(229,68,58,0.1)';this.style.borderColor='rgba(229,68,58,0.5)'" onmouseout="this.style.background='transparent';this.style.borderColor='rgba(229,68,58,0.3)'">
+      View all comments on Product Hunt &#8599;
+    </a>
   </div>
 </section>
 
@@ -684,12 +769,35 @@ function showTab(id) {
 }
 function copyActiveCmd() {
   navigator.clipboard.writeText(cmds[activeTab]);
-  if (typeof gtag === 'function') { gtag('event', 'ads_conversion_Sign_Up_1'); }
+  if (typeof trackConversion === 'function') { trackConversion('ads_conversion_Sign_Up_1'); }
   // Notify backend about copy event
   var copyData={tab: activeTab, command: cmds[activeTab], identity:_getIdentity()};
   var utm=getUtmParams();
   if(Object.keys(utm).length>1)copyData.utm=utm;
   _encPost('/api/copy-track', copyData).catch(function(){});
+
+// Social testimonial click tracking
+document.addEventListener('click', function(e) {
+  var card = e.target.closest('.tt-card');
+  if (!card) return;
+  var url = card.getAttribute('href') || '';
+  var authorEl = card.querySelector('.tt-author');
+  var author = authorEl ? authorEl.textContent.trim() : 'unknown';
+  var badgeEl = card.querySelector('.tt-badge');
+  var badge = badgeEl ? badgeEl.textContent.trim().toLowerCase() : '';
+  var platform = 'unknown';
+  if (url.includes('x.com') || url.includes('twitter.com')) platform = 'twitter';
+  else if (url.includes('producthunt.com')) platform = 'producthunt';
+  else if (url.includes('medium.com')) platform = 'medium';
+  else if (url.includes('linkedin.com')) platform = 'linkedin';
+  else if (url.includes('instagram.com')) platform = 'instagram';
+  else if (badge) platform = badge;
+  _encPost('/api/social-click', {
+    url: url, author: author, platform: platform,
+    utm: window._utm || {}, identity: typeof _getIdentity === 'function' ? _getIdentity() : {}
+  }).catch(function(){});
+});
+
   var btn = document.getElementById('copy-btn');
   btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#28c840" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
   setTimeout(function(){ btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'; }, 1500);
@@ -1020,6 +1128,8 @@ document.getElementById('subscribe-form').addEventListener('submit',function(e){
   _encPost('/api/subscribe',payload).then(function(r){return r.json();}).then(function(d){
     if(d.ok){
       _setIdentity('',email);
+      // Fire Google Ads conversion on successful subscribe
+      if (typeof trackConversion === 'function') { trackConversion('ads_conversion_Sign_Up_1'); }
       document.getElementById('subscribe-form').style.display='none';
       msg.textContent='You\'re subscribed! We\'ll keep you posted. \u{1F99E}';
       msg.style.color='#28c840';
