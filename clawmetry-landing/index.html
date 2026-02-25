@@ -811,29 +811,7 @@ document.addEventListener('click', function(e) {
 });
 </script>
 
-<!-- MANAGED + APPS CTA -->
-<section style="padding:60px 24px;text-align:center;border-top:1px solid rgba(255,255,255,0.06);">
-  <h2 style="font-size:32px;font-weight:800;color:#fff;margin:0 0 12px;line-height:1.2;">Your agents, wherever you are.</h2>
-  <p style="font-size:16px;color:rgba(255,255,255,0.5);max-width:480px;margin:0 auto 40px;line-height:1.6;">We handle the setup. You get full control on every device.</p>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;max-width:720px;margin:0 auto 36px;">
-    <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:20px 16px;text-align:left;">
-      <div style="font-size:22px;margin-bottom:10px;">&#128421;</div>
-      <div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:4px;">Managed hosting</div>
-      <div style="font-size:13px;color:rgba(255,255,255,0.45);line-height:1.5;">We set it up. We keep it running. You get full visibility from day one.</div>
-    </div>
-    <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:20px 16px;text-align:left;">
-      <div style="font-size:22px;margin-bottom:10px;">&#63743;</div>
-      <div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:4px;">Mac app <span style="font-size:11px;background:rgba(229,68,58,0.15);color:#E5443A;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle;">Early access</span></div>
-      <div style="font-size:13px;color:rgba(255,255,255,0.45);line-height:1.5;">A small icon in your menu bar. Click to see every agent across every node.</div>
-    </div>
-    <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:20px 16px;text-align:left;">
-      <div style="font-size:22px;margin-bottom:10px;">&#128241;</div>
-      <div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:4px;">iOS &amp; Android <span style="font-size:11px;background:rgba(229,68,58,0.15);color:#E5443A;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle;">Early access</span></div>
-      <div style="font-size:13px;color:rgba(255,255,255,0.45);line-height:1.5;">Approve requests. Check spend. Manage nodes. From your pocket.</div>
-    </div>
-  </div>
-  <a href="#" onclick="openManagedModal();return false;" style="display:inline-block;background:#E5443A;color:#fff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:10px;text-decoration:none;box-shadow:0 0 30px rgba(229,68,58,0.25);transition:all 150ms ease;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">Request early access &rarr;</a>
-</section>
+
 <!-- MANAGED MODAL -->
 <div id="managed-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:16px;" onclick="if(event.target===this)this.style.display='none'">
   <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:32px;max-width:480px;width:100%;position:relative;box-shadow:0 20px 60px rgba(0,0,0,0.5);max-height:90vh;overflow-y:auto;">
@@ -1108,6 +1086,30 @@ document.getElementById('managed-form').addEventListener('submit', function(e) {
     <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">GCP</span>
     <span style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 18px;font-size:14px;color:var(--text-muted);">Windows WSL</span>
   </div>
+</section>
+
+<!-- MANAGED + APPS CTA -->
+<section style="padding:60px 24px;text-align:center;border-top:1px solid rgba(255,255,255,0.06);">
+  <h2 style="font-size:32px;font-weight:800;color:#fff;margin:0 0 12px;line-height:1.2;">Want us to run it for you?</h2>
+  <p style="font-size:16px;color:rgba(255,255,255,0.5);max-width:480px;margin:0 auto 40px;line-height:1.6;">Skip the setup. We host it, you just watch.</p>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;max-width:720px;margin:0 auto 36px;">
+    <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:20px 16px;text-align:left;">
+      <div style="font-size:22px;margin-bottom:10px;">&#128421;</div>
+      <div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:4px;">Managed hosting</div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.45);line-height:1.5;">We set it up. We keep it running. You get full visibility from day one.</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:20px 16px;text-align:left;">
+      <div style="font-size:22px;margin-bottom:10px;">&#63743;</div>
+      <div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:4px;">Mac app <span style="font-size:11px;background:rgba(229,68,58,0.15);color:#E5443A;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle;">Early access</span></div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.45);line-height:1.5;">A small icon in your menu bar. Click to see every agent across every node.</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:20px 16px;text-align:left;">
+      <div style="font-size:22px;margin-bottom:10px;">&#128241;</div>
+      <div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:4px;">iOS &amp; Android <span style="font-size:11px;background:rgba(229,68,58,0.15);color:#E5443A;padding:2px 7px;border-radius:10px;font-weight:600;vertical-align:middle;">Early access</span></div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.45);line-height:1.5;">Approve requests. Check spend. Manage nodes. From your pocket.</div>
+    </div>
+  </div>
+  <a href="#" onclick="openManagedModal();return false;" style="display:inline-block;background:#E5443A;color:#fff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:10px;text-decoration:none;box-shadow:0 0 30px rgba(229,68,58,0.25);transition:all 150ms ease;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">Request early access &rarr;</a>
 </section>
 
 <!-- SUBSCRIBE -->
