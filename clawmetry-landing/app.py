@@ -1578,7 +1578,7 @@ if __name__ == "__main__":
 import time as _time
 
 _traction_cache = {"data": None, "ts": 0}
-_last_known = {"pypi_day": "38", "pypi_week": "268", "pypi_month": "3,837"}  # seeded fallbacks; updated on each successful API call
+_last_known = {"pypi_day": "206", "pypi_week": "2,862", "pypi_month": "4,043"}  # seeded fallbacks; updated on each successful API call
 
 def _fetch_traction_data():
     now = _time.time()
@@ -1653,7 +1653,7 @@ def traction_page():
     data = _fetch_traction_data()
     with open(os.path.join(os.path.dirname(__file__), "traction.html")) as f:
         html = f.read()
-    data["days_since_launch"] = str((datetime.now() - datetime(2026, 2, 17)).days)
+    data["days_since_launch"] = str((datetime.now() - datetime(2026, 2, 18)).days)
     for key, val in data.items():
         html = html.replace("{{" + key + "}}", val)
     return html
