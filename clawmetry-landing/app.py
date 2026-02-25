@@ -744,26 +744,40 @@ def managed_request():
         _ai_result_managed = _ai_personalize_reply(name, use_case, "managed")
         ai_question_managed = _ai_result_managed.get("question") if _ai_result_managed else None
         ai_subject_managed = _ai_result_managed.get("subject") if _ai_result_managed else None
-        # Build plain text body
-        uc_line = f"You mentioned: {use_case}\n\n" if use_case else ""
-        if ai_question_managed:
-            questions = ai_question_managed
-        else:
-            questions = "A few quick questions:\n1. How are you running OpenClaw right now? (Mac mini, old laptop, VPS?)\n2. What is the biggest pain you face managing it?\n3. Would you be open to trying our beta very soon?"
-        body = (
-            f"Hi {name},\n\n"
-            f"Thanks for your interest in a managed ClawMetry setup.\n\n"
-            f"{uc_line}"
-            f"{questions}\n\n"
-            f"Just reply here, takes 2 minutes.\n\n"
-            f"Vivek\nFounder, ClawMetry\nclawmetry.com"
+        # Build confirmation email HTML
+        uc_block = (
+            f'<div style="background:#111827;border-left:3px solid #555;border-radius:4px;padding:10px 16px;margin:14px 0;font-size:14px;color:#9ca3af;font-style:italic;">You mentioned: {use_case}</div>'
+            if use_case else ""
         )
+        if ai_question_managed:
+            q_html = f'<p style="font-size:15px;line-height:1.7;color:#d1d5db;">{ai_question_managed}</p>'
+        else:
+            q_html = (
+                '<p style="font-size:15px;line-height:1.6;color:#d1d5db;">A few quick questions:</p>' +
+                '<p style="font-size:14px;line-height:1.8;color:#9ca3af;margin:0;">' +
+                '<strong style="color:#d1d5db;">1.</strong> How are you running OpenClaw right now? (Mac mini, old laptop, VPS?)<br>' +
+                '<strong style="color:#d1d5db;">2.</strong> What is the biggest pain you face managing it?<br>' +
+                '<strong style="color:#d1d5db;">3.</strong> Would you be open to trying our beta very soon?</p>'
+            )
+        email_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;overflow:hidden;">
+  <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:28px;text-align:center;">
+    <div style="font-size:26px;margin-bottom:8px;">🦞</div>
+    <h1 style="color:#fff;font-size:20px;font-weight:700;margin:0;">Thanks, {name}!</h1>
+  </div>
+  <div style="padding:28px;">
+    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Thanks for your interest in a managed ClawMetry setup.</p>
+    {uc_block}
+    {q_html}
+    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Just reply here, takes 2 minutes.</p>
+    <p style="font-size:15px;color:#d1d5db;margin-top:24px;">Vivek<br><span style="font-size:13px;color:#9ca3af;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#E5443A;text-decoration:none;">clawmetry.com</a></span></p>
+  </div>
+</div>"""
         try:
             _resend_post("/emails", {
                 "from": FROM_EMAIL, "to": [email], "bcc": ["vivek@clawmetry.com"],
                 "reply_to": ["vivek@clawmetry.com"],
                 "subject": ai_subject_managed or "Quick question about your OpenClaw setup",
-                "text": body
+                "html": email_html
             })
         except Exception as e:
             log.error(f"[managed-request] confirmation email error: {e}")
@@ -829,26 +843,34 @@ def support_request():
         _ai_result = _ai_personalize_reply(name, message, help_type)
         ai_question = _ai_result.get("question") if _ai_result else None
         ai_subject = _ai_result.get("subject") if _ai_result else None
-        # Send confirmation email to requester (plain text — reads like a personal email)
+        # Send confirmation email to requester
         try:
             display_name = name or "there"
-            msg_line = ('You said: "' + message + '"' + "\n\n" if message else "")
-            question = ai_question or "Quick question first: where are you running OpenClaw? Mac mini, old laptop, a VPS like Hostinger or Railway, or still planning to try it?"
-            body = (
-                f"Hi {display_name},\n\n"
-                f"Thanks for reaching out! I got your request and will personally get back to you shortly to help you get ClawMetry set up.\n\n"
-                f"{msg_line}"
-                f"{question}\n\n"
-                f"Either way I can help, just want to make sure the setup guide I send actually fits your situation.\n\n"
-                f"Vivek\nFounder, ClawMetry\nclawmetry.com"
+            msg_block = (
+                f'<div style="background:#111827;border-left:3px solid #555;border-radius:4px;padding:10px 16px;margin:14px 0;font-size:14px;color:#9ca3af;font-style:italic;">You said: {message}</div>'
+                if message else ""
             )
+            question = ai_question or "Quick question first: where are you running OpenClaw? Mac mini, old laptop, a VPS like Hostinger or Railway, or still planning to try it?"
+            email_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;overflow:hidden;">
+  <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:28px;text-align:center;">
+    <div style="font-size:26px;margin-bottom:8px;">🦞</div>
+    <h1 style="color:#fff;font-size:20px;font-weight:700;margin:0;">Got your request, {display_name}!</h1>
+  </div>
+  <div style="padding:28px;">
+    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Thanks for reaching out! I got your request and will personally get back to you shortly to help you get ClawMetry set up.</p>
+    {msg_block}
+    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">{question}</p>
+    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Either way I can help, just want to make sure the setup guide I send actually fits your situation.</p>
+    <p style="font-size:15px;color:#d1d5db;margin-top:24px;">Vivek<br><span style="font-size:13px;color:#9ca3af;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#E5443A;text-decoration:none;">clawmetry.com</a></span></p>
+  </div>
+</div>"""
             requests.post("https://api.resend.com/emails", headers={
                 "Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"
             }, json={
                 "from": FROM_EMAIL, "to": email, "bcc": ["vivek@clawmetry.com"],
                 "reply_to": ["vivek@clawmetry.com"],
                 "subject": ai_subject or "Quick question before I set up ClawMetry for you",
-                "text": body
+                "html": email_html
             }, timeout=10)
         except Exception as e:
             log.error(f"[support-request] confirmation email error: {e}")
