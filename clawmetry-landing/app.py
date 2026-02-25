@@ -633,17 +633,20 @@ def managed_request():
     try:
         _resend_post("/emails", {
             "from": FROM_EMAIL, "to": [email], "bcc": ["hello@clawmetry.com"],
-            "subject": "We got your request! 🦞",
+            "reply_to": ["vivek@clawmetry.com"],
+            "subject": "A few quick questions about your managed ClawMetry setup",
             "html": f"""<div style="font-family:sans-serif;max-width:500px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;overflow:hidden;">
               <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:32px 28px;text-align:center;">
                 <div style="font-size:28px;margin-bottom:8px;">🦞</div>
                 <h1 style="color:#fff;font-size:20px;margin:0;">Thanks, {name}!</h1>
               </div>
               <div style="padding:28px;">
-                <p style="font-size:15px;line-height:1.7;color:#d1d5db;">We received your request for a managed ClawMetry instance. We'll review it and get back to you within 24-48 hours.</p>
-                <p style="font-size:15px;line-height:1.7;color:#d1d5db;">In the meantime, you can always self-host ClawMetry for free:</p>
-                <div style="background:#111827;border:1px solid #2d2d44;border-radius:8px;padding:14px 18px;font-family:monospace;font-size:13px;color:#10b981;margin:12px 0;">pip install clawmetry</div>
-                <p style="font-size:15px;color:#d1d5db;">Cheers,<br><strong style="color:#fff;">Vivek @ ClawMetry</strong></p>
+                <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Really glad you reached out &mdash; I look at every managed request personally.</p>
+                <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Quick question before I follow up: where are you currently running OpenClaw? (Mac mini, old laptop, a VPS like Hostinger or Railway &mdash; or still evaluating?)</p>
+                <div style="background:#111827;border-left:3px solid #E5443A;border-radius:4px;padding:14px 18px;margin:16px 0;">
+                  <p style="margin:0;font-size:13px;color:#9ca3af;">Just reply to this email &mdash; takes 30 seconds and helps me scope the right setup for you.</p>
+                </div>
+                <p style="font-size:15px;color:#d1d5db;">Vivek<br><span style="color:#9ca3af;font-size:13px;">Founder, ClawMetry</span></p>
               </div>
             </div>"""
         })
@@ -712,8 +715,17 @@ def support_request():
             "Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"
         }, json={
             "from": FROM_EMAIL, "to": email, "bcc": ["hello@clawmetry.com"],
-            "subject": "Got your request! Setting up your ClawMetry support 🤝",
-            "text": f"Hey {display_name},\n\nThanks for reaching out! I got your request and will personally get back to you shortly to help you get ClawMetry up and running.\n\nClawMetry is open source and I want to make sure you get the most out of it.\n\nTalk soon,\nVivek"
+            "reply_to": ["vivek@clawmetry.com"],
+            "subject": "Quick question before I set you up — ClawMetry",
+            "html": (
+                f'<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:520px;margin:0 auto;">' +
+                f'<p style="font-size:15px;color:#111;line-height:1.7;">Hey {display_name},</p>' +
+                f'<p style="font-size:15px;color:#111;line-height:1.7;">Really glad you reached out &mdash; happy to help you get set up personally.</p>' +
+                f'<p style="font-size:15px;color:#111;line-height:1.7;">Quick question first: where are you running OpenClaw? For example: Mac mini, old laptop, a VPS like Hostinger or Railway &mdash; or are you still planning to try it?</p>' +
+                f'<p style="font-size:15px;color:#111;line-height:1.7;">Either way I can help &mdash; just want to make sure the setup guide I send actually fits your situation.</p>' +
+                f'<p style="font-size:15px;color:#111;margin-top:20px;">Vivek<br><span style="color:#888;font-size:13px;">Founder, ClawMetry &middot; <a href=&quot;https://clawmetry.com&quot; style=&quot;color:#E5443A;text-decoration:none;&quot;>clawmetry.com</a></span></p>' +
+                f'</div>'
+            )
         }, timeout=10)
     except Exception as e:
         log.error(f"[support-request] confirmation email error: {e}")
