@@ -641,11 +641,13 @@ def managed_request():
                 <h1 style="color:#fff;font-size:20px;margin:0;">Thanks, {name}!</h1>
               </div>
               <div style="padding:28px;">
-                <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Really glad you reached out &mdash; I look at every managed request personally.</p>
-                <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Quick question before I follow up: where are you currently running OpenClaw? (Mac mini, old laptop, a VPS like Hostinger or Railway &mdash; or still evaluating?)</p>
+                <p style="font-size:15px;line-height:1.7;color:#d1d5db;">I look at every managed request personally. Three quick questions so I can come back with a concrete proposal rather than a generic pitch:</p>
                 <div style="background:#111827;border-left:3px solid #E5443A;border-radius:4px;padding:14px 18px;margin:16px 0;">
-                  <p style="margin:0;font-size:13px;color:#9ca3af;">Just reply to this email &mdash; takes 30 seconds and helps me scope the right setup for you.</p>
+                  <p style="margin:0 0 10px;font-size:14px;color:#f3f4f6;"><strong>1.</strong> How many people or agents will you be monitoring?</p>
+                  <p style="margin:0 0 10px;font-size:14px;color:#f3f4f6;"><strong>2.</strong> What is your rough monthly AI spend right now?</p>
+                  <p style="margin:0;font-size:14px;color:#f3f4f6;"><strong>3.</strong> When are you looking to get started?</p>
                 </div>
+                <p style="margin:0;font-size:13px;color:#9ca3af;">Just reply here &mdash; takes 60 seconds.</p>
                 <p style="font-size:15px;color:#d1d5db;">Vivek<br><span style="color:#9ca3af;font-size:13px;">Founder, ClawMetry</span></p>
               </div>
             </div>"""
