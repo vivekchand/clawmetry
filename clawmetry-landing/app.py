@@ -1418,6 +1418,11 @@ def static_files(path):
     return send_from_directory(".", path)
 
 
+
+@app.route("/docs")
+def docs_redirect():
+    return redirect("/docs.html", code=301)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
 
@@ -1426,7 +1431,7 @@ if __name__ == "__main__":
 import time as _time
 
 _traction_cache = {"data": None, "ts": 0}
-_last_known = {}  # persists last successful API values across cache misses
+_last_known = {"pypi_day": "38", "pypi_week": "268", "pypi_month": "3,837"}  # seeded fallbacks; updated on each successful API call
 
 def _fetch_traction_data():
     now = _time.time()
