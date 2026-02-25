@@ -746,31 +746,25 @@ def managed_request():
         ai_subject_managed = _ai_result_managed.get("subject") if _ai_result_managed else None
         # Build confirmation email HTML
         uc_block = (
-            f'<div style="background:#111827;border-left:3px solid #555;border-radius:4px;padding:10px 16px;margin:14px 0;font-size:14px;color:#9ca3af;font-style:italic;">You mentioned: {use_case}</div>'
+            f'<div style="background:#f5f5f5;border-left:3px solid #ccc;border-radius:4px;padding:10px 16px;margin:14px 0;font-size:14px;color:#555;font-style:italic;">You mentioned: {use_case}</div>'
             if use_case else ""
         )
         if ai_question_managed:
-            q_html = f'<p style="font-size:15px;line-height:1.7;color:#d1d5db;">{ai_question_managed}</p>'
+            q_html = f'<p style="font-size:15px;line-height:1.7;color:#111;">{ai_question_managed}</p>'
         else:
             q_html = (
-                '<p style="font-size:15px;line-height:1.6;color:#d1d5db;">A few quick questions:</p>' +
-                '<p style="font-size:14px;line-height:1.8;color:#9ca3af;margin:0;">' +
-                '<strong style="color:#d1d5db;">1.</strong> How are you running OpenClaw right now? (Mac mini, old laptop, VPS?)<br>' +
-                '<strong style="color:#d1d5db;">2.</strong> What is the biggest pain you face managing it?<br>' +
-                '<strong style="color:#d1d5db;">3.</strong> Would you be open to trying our beta very soon?</p>'
+                '<p style="font-size:15px;line-height:1.6;color:#111;">A few quick questions:</p>' +
+                '<p style="font-size:14px;line-height:1.8;color:#333;margin:0;">' +
+                '<strong>1.</strong> How are you running OpenClaw right now? (Mac mini, old laptop, VPS?)<br>' +
+                '<strong>2.</strong> What is the biggest pain you face managing it?<br>' +
+                '<strong>3.</strong> Would you be open to trying our beta very soon?</p>'
             )
-        email_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;overflow:hidden;">
-  <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:28px;text-align:center;">
-    <div style="font-size:26px;margin-bottom:8px;">🦞</div>
-    <h1 style="color:#fff;font-size:20px;font-weight:700;margin:0;">Thanks, {name}!</h1>
-  </div>
-  <div style="padding:28px;">
-    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Thanks for your interest in a managed ClawMetry setup.</p>
+        email_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#ffffff;color:#111111;">
+    <p style="font-size:15px;line-height:1.7;margin:0 0 12px;">Hi {name},</p>
+    <p style="font-size:15px;line-height:1.7;margin:0 0 12px;">Thanks for your interest in a managed ClawMetry setup.</p>
     {uc_block}
     {q_html}
-    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Just reply here, takes 2 minutes.</p>
-    <p style="font-size:15px;color:#d1d5db;margin-top:24px;">Vivek<br><span style="font-size:13px;color:#9ca3af;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#E5443A;text-decoration:none;">clawmetry.com</a></span></p>
-  </div>
+    <p style="font-size:15px;color:#111;margin-top:24px;line-height:1.7;">Vivek<br><span style="font-size:13px;color:#666;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#E5443A;text-decoration:none;">clawmetry.com</a></span></p>
 </div>"""
         try:
             _resend_post("/emails", {
@@ -847,22 +841,17 @@ def support_request():
         try:
             display_name = name or "there"
             msg_block = (
-                f'<div style="background:#111827;border-left:3px solid #555;border-radius:4px;padding:10px 16px;margin:14px 0;font-size:14px;color:#9ca3af;font-style:italic;">You said: {message}</div>'
+                f'<div style="background:#f5f5f5;border-left:3px solid #ccc;border-radius:4px;padding:10px 16px;margin:14px 0;font-size:14px;color:#555;font-style:italic;">You said: {message}</div>'
                 if message else ""
             )
             question = ai_question or "Quick question first: where are you running OpenClaw? Mac mini, old laptop, a VPS like Hostinger or Railway, or still planning to try it?"
-            email_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;overflow:hidden;">
-  <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:28px;text-align:center;">
-    <div style="font-size:26px;margin-bottom:8px;">🦞</div>
-    <h1 style="color:#fff;font-size:20px;font-weight:700;margin:0;">Got your request, {display_name}!</h1>
-  </div>
-  <div style="padding:28px;">
-    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Thanks for reaching out! I got your request and will personally get back to you shortly to help you get ClawMetry set up.</p>
+            email_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#ffffff;color:#111111;">
+    <p style="font-size:15px;line-height:1.7;margin:0 0 12px;">Hi {display_name},</p>
+    <p style="font-size:15px;line-height:1.7;margin:0 0 12px;">Thanks for reaching out! I got your request and will personally get back to you shortly to help you get ClawMetry set up.</p>
     {msg_block}
-    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">{question}</p>
-    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Either way I can help, just want to make sure the setup guide I send actually fits your situation.</p>
-    <p style="font-size:15px;color:#d1d5db;margin-top:24px;">Vivek<br><span style="font-size:13px;color:#9ca3af;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#E5443A;text-decoration:none;">clawmetry.com</a></span></p>
-  </div>
+    <p style="font-size:15px;line-height:1.7;color:#111;margin:12px 0;">{question}</p>
+    <p style="font-size:15px;line-height:1.7;color:#111;margin:0 0 24px;">Either way I can help, just want to make sure the setup guide I send actually fits your situation.</p>
+    <p style="font-size:15px;color:#111;margin:0;line-height:1.7;">Vivek<br><span style="font-size:13px;color:#666;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#E5443A;text-decoration:none;">clawmetry.com</a></span></p>
 </div>"""
             requests.post("https://api.resend.com/emails", headers={
                 "Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"
