@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How ClawMetry Works — Real-time AI Agent Observability</title>
+  <meta name="description" content="ClawMetry sits alongside OpenClaw and gives you full visibility into every tool call, sub-agent, memory read, and cost. See how it works in 3 steps.">
+  <link rel="canonical" href="https://clawmetry.com/how-it-works-v2">
+  <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-XDF9MFD8FJ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-XDF9MFD8FJ');
+    gtag('config', 'G-6H5W9Y2B79');
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg: #0B0F1A;
+      --bg-card: #111827;
+      --bg-card-hover: #1a2236;
+      --border: rgba(255,255,255,0.08);
+      --border-hover: rgba(229,68,58,0.3);
+      --text: #F1F5F9;
+      --text-muted: #94A3B8;
+      --text-dim: #64748B;
+      --accent: #E5443A;
+      --accent-glow: rgba(229,68,58,0.15);
+      --green: #22c55e;
+      --green-glow: rgba(34,197,94,0.12);
+      --blue: #3b82f6;
+      --blue-glow: rgba(59,130,246,0.12);
+      --orange: #f97316;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+
+    /* ── Nav ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px; height: 60px;
+      background: rgba(11,15,26,0.85); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-logo { display: flex; align-items: center; gap: 8px; }
+    .nav-logo-emoji { font-size: 22px; line-height: 1; }
+    .nav-logo-text { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
+    .nav-logo-text span:first-child { color: var(--text); }
+    .nav-logo-text span:last-child { color: var(--accent); }
+    .nav-links { display: flex; align-items: center; gap: 20px; }
+    .nav-links a { color: var(--text-muted); font-size: 14px; font-weight: 500; transition: color 0.2s; }
+    .nav-links a:hover, .nav-links a.active { color: var(--text); }
+    .nav-gh {
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 14px; display: flex; align-items: center; gap: 6px;
+      color: var(--text-muted); font-size: 14px; font-weight: 500; transition: all 0.2s;
+    }
+    .nav-gh:hover { border-color: var(--border-hover); color: var(--text); }
+
+    /* ── Hero ── */
+    .hero {
+      text-align: center; padding: 80px 24px 56px;
+      position: relative; overflow: hidden;
+    }
+    .hero::before {
+      content: ''; position: absolute; top: -80px; left: 50%; transform: translateX(-50%);
+      width: 700px; height: 400px;
+      background: radial-gradient(ellipse at center, rgba(229,68,58,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--accent-glow); border: 1px solid rgba(229,68,58,0.2);
+      border-radius: 100px; padding: 4px 14px; margin-bottom: 24px;
+      font-size: 12px; font-weight: 600; color: var(--accent); letter-spacing: 0.04em; text-transform: uppercase;
+    }
+    .hero h1 {
+      font-size: clamp(32px, 5vw, 52px); font-weight: 800; letter-spacing: -0.03em;
+      line-height: 1.1; margin-bottom: 20px; color: var(--text);
+    }
+    .hero h1 span { color: var(--accent); }
+    .hero p {
+      font-size: 18px; color: var(--text-muted); max-width: 560px;
+      margin: 0 auto 36px; line-height: 1.6;
+    }
+    .hero-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--accent); color: #fff;
+      padding: 12px 24px; border-radius: 10px;
+      font-size: 15px; font-weight: 600; transition: opacity 0.2s;
+    }
+    .btn-primary:hover { opacity: 0.88; }
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      border: 1px solid var(--border); color: var(--text-muted);
+      padding: 12px 24px; border-radius: 10px;
+      font-size: 15px; font-weight: 500; transition: all 0.2s;
+    }
+    .btn-secondary:hover { border-color: var(--border-hover); color: var(--accent); }
+
+    /* ── Section commons ── */
+    section { padding: 72px 24px; }
+    .section-inner { max-width: 960px; margin: 0 auto; }
+    .section-label {
+      font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--accent); margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: clamp(24px, 3.5vw, 36px); font-weight: 800;
+      letter-spacing: -0.02em; line-height: 1.2; margin-bottom: 16px;
+    }
+    .section-sub {
+      font-size: 16px; color: var(--text-muted); max-width: 600px; line-height: 1.65;
+    }
+
+    /* ── Architecture diagram ── */
+    .arch-section { background: transparent; }
+    .arch-wrap {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 20px; padding: 48px 40px; margin-top: 48px;
+      position: relative; overflow: hidden;
+    }
+    .arch-wrap::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(229,68,58,0.3), transparent);
+    }
+    .arch-diagram {
+      display: flex; align-items: center; justify-content: center;
+      gap: 0; flex-wrap: wrap; row-gap: 32px;
+    }
+    .arch-node {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 14px; padding: 20px 24px; min-width: 180px;
+      text-align: center; position: relative;
+    }
+    .arch-node.main {
+      border-color: rgba(229,68,58,0.35); background: rgba(229,68,58,0.06);
+      box-shadow: 0 0 24px rgba(229,68,58,0.1);
+    }
+    .arch-node-icon { font-size: 28px; margin-bottom: 10px; }
+    .arch-node-title { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+    .arch-node-sub { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+    .arch-arrow {
+      display: flex; flex-direction: column; align-items: center;
+      padding: 0 20px; gap: 4px; color: var(--text-dim);
+    }
+    .arch-arrow svg { opacity: 0.6; }
+    .arch-arrow-label { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+    .arch-outputs {
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .arch-output-node {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 16px;
+      display: flex; align-items: center; gap: 10px; min-width: 160px;
+    }
+    .arch-output-node-icon { font-size: 18px; }
+    .arch-output-node-text { font-size: 12px; font-weight: 600; }
+
+    /* ── 3-step flow ── */
+    .steps-section { border-top: 1px solid var(--border); }
+    .steps-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px; margin-top: 48px;
+    }
+    .step-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 32px; position: relative;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .step-card:hover { border-color: var(--border-hover); transform: translateY(-2px); }
+    .step-num {
+      width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 800; margin-bottom: 20px;
+    }
+    .step-num.n1 { background: rgba(59,130,246,0.15); color: #60a5fa; }
+    .step-num.n2 { background: rgba(229,68,58,0.15); color: var(--accent); }
+    .step-num.n3 { background: rgba(34,197,94,0.15); color: var(--green); }
+    .step-card h3 { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+    .step-card p { font-size: 14px; color: var(--text-muted); line-height: 1.65; margin-bottom: 20px; }
+    .step-terminal {
+      background: #0a0d14; border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px; padding: 14px 16px;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #94A3B8;
+    }
+    .step-terminal .cmd { color: var(--green); }
+    .step-terminal .comment { color: var(--text-dim); }
+    .step-pill-list { display: flex; flex-direction: column; gap: 8px; }
+    .step-pill {
+      display: flex; align-items: center; gap: 10px;
+      background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 12px; font-size: 13px; color: var(--text-muted);
+    }
+    .step-pill-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .dot-blue { background: #60a5fa; }
+    .dot-red { background: var(--accent); }
+    .dot-green { background: var(--green); }
+    .step-act-list { display: flex; flex-direction: column; gap: 8px; }
+    .step-act-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      font-size: 13px; color: var(--text-muted); line-height: 1.5;
+    }
+    .step-act-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+
+    /* ── What it captures ── */
+    .captures-section { border-top: 1px solid var(--border); }
+    .captures-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 20px; margin-top: 48px;
+    }
+    .capture-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 24px; transition: all 0.2s;
+    }
+    .capture-card:hover { border-color: var(--border-hover); transform: translateY(-2px); }
+    .capture-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; margin-bottom: 16px;
+    }
+    .ci-red { background: rgba(229,68,58,0.12); }
+    .ci-blue { background: rgba(59,130,246,0.12); }
+    .ci-green { background: rgba(34,197,94,0.12); }
+    .ci-orange { background: rgba(249,115,22,0.12); }
+    .ci-purple { background: rgba(168,85,247,0.12); }
+    .ci-yellow { background: rgba(234,179,8,0.12); }
+    .capture-card h4 { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+    .capture-card p { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+
+    /* ── Alerting ── */
+    .alert-section { border-top: 1px solid var(--border); }
+    .alert-layout {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 48px; margin-top: 48px; align-items: center;
+    }
+    @media (max-width: 700px) { .alert-layout { grid-template-columns: 1fr; } }
+    .alert-left h2 { font-size: clamp(24px, 3vw, 32px); font-weight: 800; letter-spacing: -0.02em; margin-bottom: 16px; }
+    .alert-left p { font-size: 15px; color: var(--text-muted); line-height: 1.7; margin-bottom: 24px; }
+    .alert-channels { display: flex; flex-direction: column; gap: 10px; }
+    .alert-channel {
+      display: flex; align-items: center; gap: 14px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 18px; transition: border-color 0.2s;
+    }
+    .alert-channel:hover { border-color: var(--border-hover); }
+    .alert-channel-icon { font-size: 22px; width: 36px; text-align: center; }
+    .alert-channel-name { font-size: 14px; font-weight: 600; }
+    .alert-channel-desc { font-size: 12px; color: var(--text-muted); }
+    .alert-right { display: flex; flex-direction: column; gap: 16px; }
+    .alert-condition {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px 18px;
+    }
+    .alert-condition-header {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+    }
+    .alert-condition-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }
+    .ad-red { background: var(--accent); box-shadow: 0 0 6px rgba(229,68,58,0.5); }
+    .ad-orange { background: var(--orange); box-shadow: 0 0 6px rgba(249,115,22,0.4); }
+    .ad-yellow { background: #eab308; box-shadow: 0 0 6px rgba(234,179,8,0.4); }
+    .alert-condition-title { font-size: 13px; font-weight: 600; }
+    .alert-condition-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; padding-left: 18px; }
+
+    /* ── Control section ── */
+    .control-section { border-top: 1px solid var(--border); }
+    .control-layout {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 48px; margin-top: 48px; align-items: center;
+    }
+    @media (max-width: 700px) { .control-layout { grid-template-columns: 1fr; } }
+    .control-right h2 { font-size: clamp(24px, 3vw, 32px); font-weight: 800; letter-spacing: -0.02em; margin-bottom: 16px; }
+    .control-right p { font-size: 15px; color: var(--text-muted); line-height: 1.7; }
+    .control-features { display: flex; flex-direction: column; gap: 12px; margin-top: 24px; }
+    .control-feature {
+      display: flex; align-items: flex-start; gap: 14px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 16px 18px;
+    }
+    .control-feature-icon {
+      width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center; font-size: 16px;
+    }
+    .cf-red { background: rgba(229,68,58,0.12); }
+    .cf-blue { background: rgba(59,130,246,0.12); }
+    .cf-green { background: rgba(34,197,94,0.12); }
+    .control-feature-body h4 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .control-feature-body p { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+    .hitl-visual {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 28px; display: flex; flex-direction: column; gap: 12px;
+    }
+    .hitl-event {
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 12px 14px;
+      border-radius: 10px; border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .hitl-event.warn { border-color: rgba(249,115,22,0.25); background: rgba(249,115,22,0.04); }
+    .hitl-event.approval { border-color: rgba(229,68,58,0.25); background: rgba(229,68,58,0.05); }
+    .hitl-event.ok { border-color: rgba(34,197,94,0.25); background: rgba(34,197,94,0.04); }
+    .hitl-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+    .hitl-body { flex: 1; }
+    .hitl-title { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+    .hitl-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+    .hitl-actions { display: flex; gap: 8px; margin-top: 8px; }
+    .hitl-btn {
+      font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 6px;
+      border: 1px solid; cursor: default;
+    }
+    .hitl-btn.approve { border-color: rgba(34,197,94,0.4); color: var(--green); background: rgba(34,197,94,0.08); }
+    .hitl-btn.deny { border-color: rgba(229,68,58,0.4); color: var(--accent); background: rgba(229,68,58,0.08); }
+
+    /* ── CTA ── */
+    .cta-section { border-top: 1px solid var(--border); }
+    .cta-box {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 20px; padding: 56px 40px; text-align: center;
+      position: relative; overflow: hidden;
+    }
+    .cta-box::before {
+      content: ''; position: absolute; inset: 0;
+      background: radial-gradient(ellipse at 50% 0%, rgba(229,68,58,0.07) 0%, transparent 65%);
+      pointer-events: none;
+    }
+    .cta-box h2 { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 12px; }
+    .cta-box p { font-size: 16px; color: var(--text-muted); margin-bottom: 32px; max-width: 480px; margin-left: auto; margin-right: auto; }
+    .cta-terminal {
+      background: #0a0d14; border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 10px; padding: 16px 20px; display: inline-block;
+      font-family: 'JetBrains Mono', monospace; font-size: 14px;
+      color: var(--green); margin-bottom: 28px; text-align: left;
+    }
+    .cta-btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border); padding: 24px;
+    }
+    .footer-inner {
+      max-width: 960px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;
+    }
+    .footer-text { font-size: 13px; color: var(--text-dim); }
+    .footer-text a { color: var(--text-muted); transition: color 0.2s; }
+    .footer-text a:hover { color: var(--accent); }
+    .footer-links { display: flex; align-items: center; gap: 20px; }
+    .footer-links a { font-size: 13px; color: var(--text-dim); transition: color 0.2s; display: flex; align-items: center; gap: 5px; }
+    .footer-links a:hover { color: var(--text-muted); }
+
+    @media (max-width: 600px) {
+      .steps-grid { grid-template-columns: 1fr; }
+      .arch-wrap { padding: 32px 20px; }
+      .cta-box { padding: 40px 24px; }
+      .arch-diagram { flex-direction: column; }
+      .arch-arrow { transform: rotate(90deg); padding: 10px 0; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav>
+  <a href="/" class="nav-logo">
+    <span class="nav-logo-emoji">🦞</span>
+    <div class="nav-logo-text"><span>Claw</span><span>metry</span></div>
+  </a>
+  <div class="nav-links">
+    <a href="/">Home</a>
+    <a href="/showcase">Showcase</a>
+    <a href="/how-it-works" class="active">How it works</a>
+    <a href="/docs.html">Docs</a>
+    <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener" class="nav-gh">
+      <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<div class="hero">
+  <div class="hero-badge">How it works</div>
+  <h1>Full visibility into<br><span>every AI agent action</span></h1>
+  <p>ClawMetry sits alongside OpenClaw and continuously monitors every tool call, sub-agent, memory read, and token spent. When something goes wrong, you know immediately.</p>
+  <div class="hero-cta">
+    <a href="/#get-started" class="btn-primary">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="15" height="15"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Install ClawMetry
+    </a>
+    <a href="/showcase" class="btn-secondary">See it in action</a>
+  </div>
+</div>
+
+<!-- Architecture -->
+<section class="arch-section">
+  <div class="section-inner">
+    <div class="section-label">Architecture</div>
+    <h2 class="section-title">Where ClawMetry fits</h2>
+    <p class="section-sub">No proxy. No code changes. ClawMetry reads OpenClaw's output stream and maps it into a live dashboard with zero overhead on your agents.</p>
+
+    <div class="arch-wrap">
+      <div class="arch-diagram">
+
+        <!-- OpenClaw box -->
+        <div class="arch-node">
+          <div class="arch-node-icon">🤖</div>
+          <div class="arch-node-title">Your AI Agents</div>
+          <div class="arch-node-sub">Running on OpenClaw<br>Any model, any tools</div>
+        </div>
+
+        <!-- Arrow 1 -->
+        <div class="arch-arrow">
+          <svg viewBox="0 0 40 16" width="40" height="16" fill="none">
+            <path d="M0 8 H34 M28 2 L40 8 L28 14" stroke="#E5443A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="arch-arrow-label">tool calls<br>+ events</div>
+        </div>
+
+        <!-- ClawMetry box (main) -->
+        <div class="arch-node main">
+          <div class="arch-node-icon">🦞</div>
+          <div class="arch-node-title">ClawMetry</div>
+          <div class="arch-node-sub">Real-time monitoring<br>Alerts + dashboard</div>
+        </div>
+
+        <!-- Arrow 2 -->
+        <div class="arch-arrow">
+          <svg viewBox="0 0 40 16" width="40" height="16" fill="none">
+            <path d="M0 8 H34 M28 2 L40 8 L28 14" stroke="#E5443A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="arch-arrow-label">alerts<br>+ control</div>
+        </div>
+
+        <!-- Output channels -->
+        <div class="arch-outputs">
+          <div class="arch-output-node">
+            <div class="arch-output-node-icon">📊</div>
+            <div class="arch-output-node-text">Live Dashboard</div>
+          </div>
+          <div class="arch-output-node">
+            <div class="arch-output-node-icon">🔔</div>
+            <div class="arch-output-node-text">Slack / PagerDuty</div>
+          </div>
+          <div class="arch-output-node">
+            <div class="arch-output-node-icon">✋</div>
+            <div class="arch-output-node-text">Human Approval</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 3-step flow -->
+<section class="steps-section">
+  <div class="section-inner">
+    <div class="section-label">Setup</div>
+    <h2 class="section-title">Up and running in 3 steps</h2>
+    <p class="section-sub">From zero to full observability in under a minute.</p>
+
+    <div class="steps-grid">
+
+      <!-- Step 1: Install -->
+      <div class="step-card">
+        <div class="step-num n1">1</div>
+        <h3>Install</h3>
+        <p>One pip install, one command to connect. ClawMetry auto-discovers your OpenClaw gateway and starts listening immediately.</p>
+        <div class="step-terminal">
+          <div class="comment"># Install</div>
+          <div class="cmd">pip install clawmetry</div>
+          <div style="margin-top:8px" class="comment"># Connect to OpenClaw</div>
+          <div class="cmd">clawmetry connect</div>
+          <div style="margin-top:8px; color: var(--green);">✓ Connected to OpenClaw gateway</div>
+          <div style="color: var(--green);">✓ Dashboard at localhost:8900</div>
+        </div>
+      </div>
+
+      <!-- Step 2: Monitor -->
+      <div class="step-card">
+        <div class="step-num n2">2</div>
+        <h3>Monitor</h3>
+        <p>ClawMetry tails every event your agents produce. No instrumentation required. Works with your existing setup, unmodified.</p>
+        <div class="step-pill-list">
+          <div class="step-pill"><div class="step-pill-dot dot-red"></div>Every tool call (name, input, output, duration)</div>
+          <div class="step-pill"><div class="step-pill-dot dot-red"></div>Sub-agent lifecycle (spawned, running, done/failed)</div>
+          <div class="step-pill"><div class="step-pill-dot dot-red"></div>Memory reads and writes</div>
+          <div class="step-pill"><div class="step-pill-dot dot-red"></div>Token usage and cost per session</div>
+          <div class="step-pill"><div class="step-pill-dot dot-red"></div>Cron jobs: scheduled, fired, missed</div>
+          <div class="step-pill"><div class="step-pill-dot dot-red"></div>Error patterns and unusual loops</div>
+        </div>
+      </div>
+
+      <!-- Step 3: Act -->
+      <div class="step-card">
+        <div class="step-num n3">3</div>
+        <h3>Act</h3>
+        <p>When something looks wrong, you have full control. Don't just observe — intervene.</p>
+        <div class="step-act-list">
+          <div class="step-act-item"><div class="step-act-icon">🔔</div><div>Get alerted via Slack, PagerDuty, Telegram, or email the moment something fails</div></div>
+          <div class="step-act-item"><div class="step-act-icon">⏸️</div><div>Pause a running agent mid-task to inspect its state</div></div>
+          <div class="step-act-item"><div class="step-act-icon">✅</div><div>Approve or deny sensitive actions before they execute</div></div>
+          <div class="step-act-item"><div class="step-act-icon">🔁</div><div>Resume or redirect an agent once you've reviewed</div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- What it captures -->
+<section class="captures-section">
+  <div class="section-inner">
+    <div class="section-label">Coverage</div>
+    <h2 class="section-title">Everything your agents do, visible</h2>
+    <p class="section-sub">ClawMetry tracks the full lifecycle of every agent session — from first tool call to final output.</p>
+
+    <div class="captures-grid">
+      <div class="capture-card">
+        <div class="capture-icon ci-red">🔧</div>
+        <h4>Tool calls</h4>
+        <p>Every tool invocation: name, inputs, outputs, latency, and whether it succeeded or failed. Search and filter by tool type or session.</p>
+      </div>
+      <div class="capture-card">
+        <div class="capture-icon ci-blue">🤖</div>
+        <h4>Sub-agent lifecycle</h4>
+        <p>When sub-agents are spawned, what tasks they run, how long they take, and how they exit. No more blind spots in multi-agent chains.</p>
+      </div>
+      <div class="capture-card">
+        <div class="capture-icon ci-green">💰</div>
+        <h4>Token usage and cost</h4>
+        <p>Per-session, per-model, per-tool cost breakdown in real time. Know exactly which agents are burning your budget before the invoice lands.</p>
+      </div>
+      <div class="capture-card">
+        <div class="capture-icon ci-orange">⚠️</div>
+        <h4>Errors and failures</h4>
+        <p>Tool errors, retries, stuck loops, and silent failures surface immediately in the dashboard — and trigger alerts to your team.</p>
+      </div>
+      <div class="capture-card">
+        <div class="capture-icon ci-purple">🧠</div>
+        <h4>Memory activity</h4>
+        <p>Every memory file read and write, with before/after diffs. See exactly how your agents' long-term context changes over time.</p>
+      </div>
+      <div class="capture-card">
+        <div class="capture-icon ci-yellow">⏰</div>
+        <h4>Cron jobs</h4>
+        <p>Scheduled agent tasks with run history, success rates, and last-fired timestamps. Catch missed runs before they become incidents.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Alerting -->
+<section class="alert-section">
+  <div class="section-inner">
+    <div class="alert-layout">
+      <div class="alert-left">
+        <div class="section-label">Alerting</div>
+        <h2>When things go wrong,<br>you'll know immediately</h2>
+        <p>Not 3 hours later when you check your email. ClawMetry fires alerts the moment something goes wrong — to wherever your team already lives.</p>
+
+        <div class="alert-channels">
+          <div class="alert-channel">
+            <div class="alert-channel-icon">🔔</div>
+            <div>
+              <div class="alert-channel-name">PagerDuty &amp; OpsGenie</div>
+              <div class="alert-channel-desc">Page your on-call. Works with your existing runbooks.</div>
+            </div>
+          </div>
+          <div class="alert-channel">
+            <div class="alert-channel-icon">💬</div>
+            <div>
+              <div class="alert-channel-name">Slack &amp; Discord</div>
+              <div class="alert-channel-desc">Post to a channel, tag the right person.</div>
+            </div>
+          </div>
+          <div class="alert-channel">
+            <div class="alert-channel-icon">✈️</div>
+            <div>
+              <div class="alert-channel-name">Telegram</div>
+              <div class="alert-channel-desc">Native via OpenClaw. Zero extra config.</div>
+            </div>
+          </div>
+          <div class="alert-channel">
+            <div class="alert-channel-icon">📧</div>
+            <div>
+              <div class="alert-channel-name">Email</div>
+              <div class="alert-channel-desc">For when async is fine and a page isn't needed.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="alert-right">
+        <div class="alert-condition">
+          <div class="alert-condition-header">
+            <div class="alert-condition-dot ad-red"></div>
+            <div class="alert-condition-title">Agent silent for &gt;10 minutes</div>
+          </div>
+          <div class="alert-condition-desc">No tool calls or responses. Could be stuck waiting, blocked on I/O, or silently crashed.</div>
+        </div>
+        <div class="alert-condition">
+          <div class="alert-condition-header">
+            <div class="alert-condition-dot ad-red"></div>
+            <div class="alert-condition-title">Sub-agent never completed</div>
+          </div>
+          <div class="alert-condition-desc">Spawned but no exit event after a configurable timeout. Common in broken tool chains.</div>
+        </div>
+        <div class="alert-condition">
+          <div class="alert-condition-header">
+            <div class="alert-condition-dot ad-orange"></div>
+            <div class="alert-condition-title">Tool call failure rate above threshold</div>
+          </div>
+          <div class="alert-condition-desc">More than N% of tool calls erroring in the last rolling window. Often signals a broken API or bad input.</div>
+        </div>
+        <div class="alert-condition">
+          <div class="alert-condition-header">
+            <div class="alert-condition-dot ad-orange"></div>
+            <div class="alert-condition-title">Cost spike detected</div>
+          </div>
+          <div class="alert-condition-desc">Token usage exceeds your defined budget per session or per time window. Catch runaway loops before they drain your API credits.</div>
+        </div>
+        <div class="alert-condition">
+          <div class="alert-condition-header">
+            <div class="alert-condition-dot ad-yellow"></div>
+            <div class="alert-condition-title">Unusual loop pattern</div>
+          </div>
+          <div class="alert-condition-desc">Same tool called more than N times in a row, or an identical input/output pair repeating. Agent is probably stuck.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Control / HITL -->
+<section class="control-section">
+  <div class="section-inner">
+    <div class="control-layout">
+
+      <!-- Left: visual -->
+      <div class="hitl-visual">
+        <div style="font-size:13px; font-weight:600; color:var(--text-muted); margin-bottom:4px;">Agent: file-processor</div>
+
+        <div class="hitl-event warn">
+          <div class="hitl-icon">⚠️</div>
+          <div class="hitl-body">
+            <div class="hitl-title">Sensitive action detected</div>
+            <div class="hitl-desc">Agent is about to call <code style="font-family:monospace;color:var(--accent)">exec()</code> with command: <code style="font-family:monospace;color:var(--text-muted)">rm -rf /tmp/cache/*</code></div>
+          </div>
+        </div>
+
+        <div class="hitl-event approval">
+          <div class="hitl-icon">✋</div>
+          <div class="hitl-body">
+            <div class="hitl-title">Waiting for approval</div>
+            <div class="hitl-desc">Agent is paused. Review the action and approve or deny before it proceeds.</div>
+            <div class="hitl-actions">
+              <div class="hitl-btn approve">Approve</div>
+              <div class="hitl-btn deny">Deny</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hitl-event ok">
+          <div class="hitl-icon">✅</div>
+          <div class="hitl-body">
+            <div class="hitl-title">Approved — agent resumed</div>
+            <div class="hitl-desc">Command executed. Agent continuing with next step.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: text -->
+      <div class="control-right">
+        <div class="section-label">Control</div>
+        <h2>You stay in the loop</h2>
+        <p>Observability without control is just logging. ClawMetry lets you pause, inspect, and approve what your agents do — before it's too late to reverse.</p>
+
+        <div class="control-features">
+          <div class="control-feature">
+            <div class="control-feature-icon cf-red">⏸️</div>
+            <div class="control-feature-body">
+              <h4>Pause any running agent</h4>
+              <p>Interrupt a live session mid-task. The agent holds its state until you're ready to continue.</p>
+            </div>
+          </div>
+          <div class="control-feature">
+            <div class="control-feature-icon cf-blue">🔍</div>
+            <div class="control-feature-body">
+              <h4>Inspect before acting</h4>
+              <p>See the exact tool call, inputs, and context the agent was about to use. Make the call with full information.</p>
+            </div>
+          </div>
+          <div class="control-feature">
+            <div class="control-feature-icon cf-green">✅</div>
+            <div class="control-feature-body">
+              <h4>Approve sensitive actions</h4>
+              <p>Flag specific tools or patterns that require human sign-off. Agents wait. You decide.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+  <div class="section-inner">
+    <div class="cta-box">
+      <h2>Ready to see what's happening?</h2>
+      <p>Free, open source, and running in under a minute. No account required.</p>
+      <div class="cta-terminal">pip install clawmetry &amp;&amp; clawmetry connect</div>
+      <div class="cta-btns">
+        <a href="/#get-started" class="btn-primary">
+          Get started free
+        </a>
+        <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener" class="btn-secondary">
+          <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-text">
+      &copy; 2026 ClawMetry &middot; Made with 🦞 by <a href="https://github.com/vivekchand" target="_blank">Vivek</a>
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <a href="https://pypi.org/project/clawmetry/" target="_blank" rel="noopener">PyPI</a>
+      <a href="/showcase">Showcase</a>
+      <a href="/docs.html">Docs</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

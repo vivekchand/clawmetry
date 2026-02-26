@@ -1548,6 +1548,10 @@ def admin_managed():
 # ─── Static Routes ───────────────────────────────────────────────────────────
 
 
+@app.route("/how-it-works-v2")
+def how_it_works_v2():
+    return send_from_directory(".", "how-it-works-v2.html")
+
 @app.route("/how-it-works")
 def how_it_works():
     return send_from_directory(".", "how-it-works.html")

@@ -17,6 +17,12 @@
   </url>
   <url>
     <loc>https://clawmetry.com/how-it-works</loc>
+  </url>
+  <url>
+    <loc>https://clawmetry.com/how-it-works-v2</loc>
+    <lastmod>2026-02-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
     <lastmod>2026-02-26</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
