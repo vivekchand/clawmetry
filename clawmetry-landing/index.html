@@ -407,6 +407,22 @@
       .nav-links .nav-link-text { display: none; }
       .footer-inner { flex-direction: column; text-align: center; }
     }
+    .mobile-subnav { display: none; }
+    @media (max-width: 640px) {
+      .mobile-subnav {
+        display: flex; gap: 0; overflow-x: auto; padding: 8px 12px;
+        border-bottom: 1px solid var(--border); background: var(--bg);
+        -webkit-overflow-scrolling: touch; scrollbar-width: none;
+      }
+      .mobile-subnav::-webkit-scrollbar { display: none; }
+      .mobile-subnav a {
+        white-space: nowrap; padding: 5px 14px; font-size: 12px;
+        color: var(--text-muted); text-decoration: none; flex-shrink: 0;
+        border-right: 1px solid var(--border);
+      }
+      .mobile-subnav a:last-child { border-right: none; }
+      .mobile-subnav a:hover { color: var(--text); }
+    }
     @media (max-width: 480px) {
       .hero h1 { font-size: 2rem; }
       .section-title { font-size: 1.5rem; }
@@ -434,6 +450,13 @@
     </div>
   </div>
 </nav>
+<div class="mobile-subnav">
+  <a href="/how-it-works">How it works</a>
+  <a href="/roadmap">Roadmap</a>
+  <a href="/traction">Traction</a>
+  <a href="/showcase">Showcase</a>
+  <a href="#get-started">Install</a>
+</div>
 
 <!-- HERO -->
 <section class="hero">
