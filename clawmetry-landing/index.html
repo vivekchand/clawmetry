@@ -408,18 +408,18 @@
       .footer-inner { flex-direction: column; text-align: center; }
     }
     .mobile-subnav {
-      display: flex; gap: 0; overflow-x: auto; padding: 6px 16px;
-      border-bottom: 1px solid var(--border); background: var(--bg);
+      display: flex; gap: 0; overflow-x: auto; padding: 0 4px;
+      border-bottom: 1px solid rgba(255,255,255,0.1); background: #111827;
       -webkit-overflow-scrolling: touch; scrollbar-width: none;
     }
     .mobile-subnav::-webkit-scrollbar { display: none; }
     .mobile-subnav a {
-      white-space: nowrap; padding: 5px 14px; font-size: 12px;
-      color: var(--text-muted); text-decoration: none; flex-shrink: 0;
-      border-right: 1px solid var(--border);
+      white-space: nowrap; padding: 10px 16px; font-size: 13px; font-weight: 500;
+      color: rgba(255,255,255,0.6); text-decoration: none; flex-shrink: 0;
+      border-right: 1px solid rgba(255,255,255,0.08);
     }
     .mobile-subnav a:last-child { border-right: none; }
-    .mobile-subnav a:hover { color: var(--text); }
+    .mobile-subnav a:hover, .mobile-subnav a:active { color: #fff; }
     @media (min-width: 769px) { .mobile-subnav { display: none; } }
     .help-boxes { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px; max-width:520px; margin-left:auto; margin-right:auto; }
     @media (max-width: 480px) {
