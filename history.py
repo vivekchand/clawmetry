@@ -12,7 +12,7 @@ import json
 import time
 import sqlite3
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
 __all__ = ['HistoryDB', 'HistoryCollector']
 
@@ -331,7 +331,6 @@ class HistoryCollector:
                 tokens_out = s.get('outputTokens', s.get('tokensOut', 0)) or 0
                 cost = s.get('totalCost', s.get('cost', 0)) or 0
                 model = s.get('model', '')
-                total = tokens_in + tokens_out
 
                 total_tokens_in += tokens_in
                 total_tokens_out += tokens_out
