@@ -53,45 +53,115 @@ except ImportError:
 
 __version__ = "0.9.16"
 
-# ── Supabase Cloud Sync (optional) ─────────────────────────────────────
+# ── Turso Cloud Sync (optional) ─────────────────────────────────────────
 try:
     import requests as _requests_mod
 except ImportError:
     _requests_mod = None
 
-SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
-SUPABASE_KEY = os.environ.get('SUPABASE_ANON_KEY', '')
+TURSO_URL = os.environ.get('TURSO_URL', '')
+TURSO_TOKEN = os.environ.get('TURSO_TOKEN', '')
+_sb_enabled = bool(TURSO_URL and TURSO_TOKEN)
 
-if not SUPABASE_URL:
+# Load from ~/.clawmetry/config.json if env vars not set
+if not TURSO_URL:
     try:
         _cfg_path = os.path.expanduser('~/.clawmetry/config.json')
         if os.path.exists(_cfg_path):
             with open(_cfg_path) as _f:
                 _cfg = json.load(_f)
-            SUPABASE_URL = _cfg.get('supabase_url', '')
-            SUPABASE_KEY = _cfg.get('supabase_anon_key', '')
+            TURSO_URL = _cfg.get('turso_url', '')
+            TURSO_TOKEN = _cfg.get('turso_token', '')
+            _sb_enabled = bool(TURSO_URL and TURSO_TOKEN)
     except Exception:
         pass
 
-_sb_enabled = bool(SUPABASE_URL and SUPABASE_KEY and _requests_mod)
 _sb_queue = []
 _sb_queue_lock = threading.Lock()
 _sb_last_sync = 0
 
-def _sb_upsert(table, rows, on_conflict=None):
-    if not _sb_enabled or not rows:
+_TURSO_SQL = {
+    'nodes': 'INSERT OR REPLACE INTO nodes (node_id, name, hostname, version, tags, status, last_seen_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'metrics': 'INSERT INTO metrics (node_id, metric_name, value, attributes, ts) VALUES (?, ?, ?, ?, ?)',
+    'events': 'INSERT INTO events (node_id, event_type, session_id, data, ts) VALUES (?, ?, ?, ?, ?)',
+    'sessions': 'INSERT OR REPLACE INTO sessions (node_id, session_id, display_name, status, model, total_tokens, cost_usd, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+}
+
+def _turso_arg(value, typ="text"):
+    """Build a single Turso pipeline arg dict."""
+    if typ == "float":
+        return {"type": "float", "value": float(value)}
+    if typ == "integer":
+        return {"type": "integer", "value": int(value)}
+    return {"type": "text", "value": str(value)}
+
+def _turso_row_args(table, row):
+    """Convert a queue row dict into a list of Turso arg dicts for the given table."""
+    now = datetime.utcnow().isoformat() + 'Z'
+    if table == 'nodes':
+        return [
+            _turso_arg(row.get('node_id', '')),
+            _turso_arg(row.get('name', '')),
+            _turso_arg(row.get('hostname', '')),
+            _turso_arg(row.get('version', '')),
+            _turso_arg(json.dumps(row.get('tags', []))),
+            _turso_arg(row.get('status', 'online')),
+            _turso_arg(row.get('last_seen_at', now)),
+            _turso_arg(json.dumps(row.get('metadata', {}))),
+        ]
+    if table == 'metrics':
+        return [
+            _turso_arg(row.get('node_id', '')),
+            _turso_arg(row.get('metric_name', '')),
+            _turso_arg(row.get('value', 0), "float"),
+            _turso_arg(json.dumps(row.get('attributes', {}))),
+            _turso_arg(row.get('ts', now)),
+        ]
+    if table == 'events':
+        return [
+            _turso_arg(row.get('node_id', '')),
+            _turso_arg(row.get('event_type', '')),
+            _turso_arg(row.get('session_id', '')),
+            _turso_arg(json.dumps(row.get('data', {}))),
+            _turso_arg(row.get('ts', now)),
+        ]
+    if table == 'sessions':
+        return [
+            _turso_arg(row.get('node_id', '')),
+            _turso_arg(row.get('session_id', '')),
+            _turso_arg(row.get('display_name', '')),
+            _turso_arg(row.get('status', '')),
+            _turso_arg(row.get('model', '')),
+            _turso_arg(row.get('total_tokens', 0), "integer"),
+            _turso_arg(row.get('cost_usd', 0), "float"),
+            _turso_arg(row.get('updated_at', now)),
+        ]
+    return []
+
+def _turso_execute(statements):
+    """Execute one or more SQL statements against Turso.
+    statements is a list of (sql, args) tuples.
+    args is a list of dicts like {"type": "text", "value": "..."}.
+    """
+    if not _sb_enabled or not statements:
         return
     try:
-        hdrs = {
-            'apikey': SUPABASE_KEY,
-            'Authorization': f'Bearer {SUPABASE_KEY}',
-            'Content-Type': 'application/json',
-            'Prefer': 'resolution=merge-duplicates,return=minimal'
-        }
-        if on_conflict:
-            hdrs['Prefer'] = f'resolution=merge-duplicates,return=minimal,on_conflict={on_conflict}'
-        url = f'{SUPABASE_URL.rstrip("/")}/rest/v1/{table}'
-        _requests_mod.post(url, json=rows if isinstance(rows, list) else [rows], headers=hdrs, timeout=5)
+        requests_list = []
+        for sql, args in statements:
+            requests_list.append({
+                "type": "execute",
+                "stmt": {"sql": sql, "args": args}
+            })
+        requests_list.append({"type": "close"})
+        _requests_mod.post(
+            f"{TURSO_URL.rstrip('/')}/v2/pipeline",
+            json={"requests": requests_list},
+            headers={
+                "Authorization": f"Bearer {TURSO_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            timeout=5
+        )
     except Exception:
         pass  # never block on sync failures
 
@@ -112,11 +182,15 @@ def _sb_flush():
             _sb_queue.clear()
         if not batch:
             continue
-        by_table = {}
+        statements = []
         for table, row in batch:
-            by_table.setdefault(table, []).append(row)
-        for table, rows in by_table.items():
-            _sb_upsert(table, rows)
+            sql = _TURSO_SQL.get(table)
+            if not sql:
+                continue
+            args = _turso_row_args(table, row)
+            statements.append((sql, args))
+        if statements:
+            _turso_execute(statements)
         _sb_last_sync = time.time()
 
 # Start flush thread
@@ -8659,8 +8733,8 @@ def api_cloud_status():
         qd = len(_sb_queue)
     return jsonify({
         'enabled': _sb_enabled,
-        'supabase_url': (SUPABASE_URL[:30] + '...') if SUPABASE_URL else '',
-        'byos': bool(SUPABASE_URL),
+        'turso_url': (TURSO_URL[:30] + '...') if TURSO_URL else '',
+        'byos': bool(TURSO_URL),
         'last_sync': _sb_last_sync,
         'queue_depth': qd,
     })
@@ -11832,19 +11906,22 @@ BANNER = r"""
 
 
 def _run_setup_wizard():
-    """Interactive setup wizard for Supabase cloud sync."""
+    """Interactive setup wizard for Turso cloud sync."""
     print()
     print("  ╔══════════════════════════════════════╗")
     print("  ║   🦞 ClawMetry Cloud Setup           ║")
     print("  ╚══════════════════════════════════════╝")
     print()
-    url = input("  Supabase URL: ").strip()
+    print("  Turso is a SQLite-compatible cloud database.")
+    print("  Get your credentials at https://turso.tech")
+    print()
+    url = input("  Turso database URL (e.g. https://dbname-orgname.turso.io): ").strip()
     if not url:
         print("  ❌ No URL provided. Aborting.")
         sys.exit(1)
-    key = input("  Supabase anon key: ").strip()
-    if not key:
-        print("  ❌ No key provided. Aborting.")
+    token = input("  Turso auth token: ").strip()
+    if not token:
+        print("  ❌ No token provided. Aborting.")
         sys.exit(1)
 
     # Test connection
@@ -11853,9 +11930,13 @@ def _run_setup_wizard():
         if not _requests_mod:
             print("❌ 'requests' library not installed (pip install requests)")
             sys.exit(1)
-        resp = _requests_mod.head(
-            f'{url.rstrip("/")}/rest/v1/',
-            headers={'apikey': key, 'Authorization': f'Bearer {key}'},
+        resp = _requests_mod.post(
+            f'{url.rstrip("/")}/v2/pipeline',
+            json={"requests": [{"type": "execute", "stmt": {"sql": "SELECT 1"}}, {"type": "close"}]},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            },
             timeout=10
         )
         if resp.status_code < 400:
@@ -11863,7 +11944,7 @@ def _run_setup_wizard():
         else:
             print(f"⚠️  Got HTTP {resp.status_code} (may still work)")
     except Exception as e:
-        print(f"⚠️  Could not reach Supabase: {e}")
+        print(f"⚠️  Could not reach Turso: {e}")
         print("  Saving config anyway — you can fix the URL later.")
 
     # Save config
@@ -11877,8 +11958,8 @@ def _run_setup_wizard():
                 cfg = json.load(f)
         except Exception:
             pass
-    cfg['supabase_url'] = url
-    cfg['supabase_anon_key'] = key
+    cfg['turso_url'] = url
+    cfg['turso_token'] = token
     with open(cfg_path, 'w') as f:
         json.dump(cfg, f, indent=2)
     print(f"  ✅ Saved to {cfg_path}")
@@ -11920,7 +12001,7 @@ def main():
     parser.add_argument('--base-path', type=str, default='',
                         help='Base URL path prefix for reverse proxy (e.g. /clawmetry). Also via CLAWMETRY_BASE_PATH env.')
     parser.add_argument('setup', nargs='?', default=None,
-                        help='Run "clawmetry setup" to configure Supabase cloud sync.')
+                        help='Run "clawmetry setup" to configure Turso cloud sync.')
 
     args = parser.parse_args()
 
@@ -12011,7 +12092,7 @@ def main():
     print(f"  Logs:       {LOG_DIR}")
     print(f"  Metrics:    {_metrics_file_path()}")
     print(f"  OTLP:       {'✅ Ready (opentelemetry-proto installed)' if _HAS_OTEL_PROTO else '❌ Not available (pip install clawmetry[otel])'}")
-    print(f'  Supabase:   {"✓ Connected (" + SUPABASE_URL[:25] + "...)" if _sb_enabled else "❌ Not configured (set SUPABASE_URL + SUPABASE_ANON_KEY)"}')
+    print(f'  Turso:      {"✓ Connected (" + TURSO_URL[:25] + "...)" if _sb_enabled else "❌ Not configured (set TURSO_URL + TURSO_TOKEN)"}')
     print(f"  User:       {USER_NAME}")
     print(f"  Mode:       {'🛠️  Dev (auto-reload ON)' if args.debug else '🚀 Prod (auto-reload OFF)'}")
     print(f"  SSE Limits: {SSE_MAX_SECONDS}s max duration · logs {MAX_LOG_STREAM_CLIENTS} clients · health {MAX_HEALTH_STREAM_CLIENTS} clients")
