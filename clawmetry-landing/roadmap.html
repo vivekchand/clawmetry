@@ -258,10 +258,11 @@
   <div class="hero-badge">Roadmap</div>
   <h1>What's <span>coming next</span></h1>
   <p>ClawMetry is just getting started. Here's what we're building - cloud hosting, alerting, mobile apps, and full human-in-the-loop control.</p>
-  <div class="subscribe-row">
+  <div class="subscribe-row" id="roadmap-row">
     <input class="subscribe-input" type="email" placeholder="your@email.com" id="roadmap-email">
-    <button class="btn-primary" onclick="subscribeRoadmap()">Get notified</button>
+    <button class="btn-primary" id="roadmap-btn" onclick="subscribeRoadmap()">Get notified</button>
   </div>
+  <p id="roadmap-confirm" style="font-size:13px;color:var(--green);margin-top:12px;display:none;">You're on the list. We'll let you know when things ship.</p>
   <p style="font-size:12px;color:var(--text-dim);margin-top:12px;">No spam. One email when something ships.</p>
 </div>
 
@@ -477,9 +478,9 @@
   <div class="sub-box">
     <h2>Want to know when things ship?</h2>
     <p>Drop your email. We'll send one message when something on this list goes live. No marketing, no sequences.</p>
-    <div class="sub-form">
-      <input class="subscribe-input" type="email" placeholder="your@email.com" id="roadmap-email-2">
-      <button class="btn-primary" onclick="subscribeRoadmap2()">Notify me</button>
+    <div class="sub-form" id="roadmap-row-2">
+      <input class="subscribe-input" type="email" placeholder="your@email.com" id="roadmap-email-2" style="flex:1;min-width:220px;">
+      <button class="btn-primary" id="roadmap-btn-2" onclick="subscribeRoadmap2()">Notify me</button>
     </div>
     <p id="sub-confirm" style="font-size:13px;color:var(--green);margin-top:12px;display:none;">You're on the list.</p>
   </div>
@@ -505,29 +506,36 @@
 </footer>
 
 <script>
-function subscribeRoadmap() {
-  const email = document.getElementById('roadmap-email').value.trim();
-  if (!email || !email.includes('@')) return;
-  fetch('/subscribe', {
+function _doSubscribe(emailId, btnId, confirmId, rowId) {
+  var emailEl = document.getElementById(emailId);
+  var btn = document.getElementById(btnId);
+  var confirm = document.getElementById(confirmId);
+  var row = document.getElementById(rowId);
+  if (!emailEl) return;
+  var email = emailEl.value.trim();
+  if (!email || !email.includes('@')) {
+    emailEl.style.borderColor = 'rgba(229,68,58,0.6)';
+    emailEl.focus();
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
+  fetch('/api/subscribe', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email, source: 'roadmap'})
-  }).then(() => {
-    document.getElementById('roadmap-email').value = '';
-    document.getElementById('roadmap-email').placeholder = "You're on the list.";
-  }).catch(() => {});
+    body: JSON.stringify({email: email, source: 'roadmap'})
+  }).then(function(r) { return r.json(); }).then(function() {
+    if (row) row.style.display = 'none';
+    if (confirm) { confirm.style.display = 'block'; }
+  }).catch(function() {
+    if (btn) { btn.disabled = false; btn.textContent = 'Get notified'; }
+    if (confirm) { confirm.textContent = 'Something went wrong. Try again.'; confirm.style.display = 'block'; }
+  });
+}
+function subscribeRoadmap() {
+  _doSubscribe('roadmap-email', 'roadmap-btn', 'roadmap-confirm', 'roadmap-row');
 }
 function subscribeRoadmap2() {
-  const email = document.getElementById('roadmap-email-2').value.trim();
-  if (!email || !email.includes('@')) return;
-  fetch('/subscribe', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email, source: 'roadmap'})
-  }).then(() => {
-    document.getElementById('roadmap-email-2').value = '';
-    document.getElementById('sub-confirm').style.display = 'block';
-  }).catch(() => {});
+  _doSubscribe('roadmap-email-2', 'roadmap-btn-2', 'sub-confirm', 'roadmap-row-2');
 }
 </script>
 
