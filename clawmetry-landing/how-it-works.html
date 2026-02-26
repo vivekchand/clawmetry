@@ -552,6 +552,49 @@
   </div>
 </section>
 
+<!-- Subscribe -->
+<section style="padding:60px 24px 72px;text-align:center;border-top:1px solid var(--border);">
+  <div style="max-width:520px;margin:0 auto;">
+    <h2 style="font-size:28px;font-weight:800;letter-spacing:-0.02em;margin-bottom:12px;">Stay in the loop</h2>
+    <p style="font-size:15px;color:var(--text-muted);line-height:1.65;margin-bottom:28px;">Get notified about new features, alerting integrations, the Mac app, and everything else coming to ClawMetry.</p>
+    <form id="hiw-sub-form" style="display:flex;gap:10px;max-width:440px;margin:0 auto;flex-wrap:wrap;justify-content:center;">
+      <input type="email" id="hiw-sub-email" placeholder="you@example.com" required
+        style="flex:1;min-width:220px;padding:12px 16px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);font-size:15px;outline:none;font-family:inherit;">
+      <button type="submit"
+        style="padding:12px 28px;border-radius:8px;border:none;background:#28c840;color:#000;font-weight:600;font-size:15px;cursor:pointer;transition:opacity .2s;font-family:inherit;">
+        Subscribe
+      </button>
+    </form>
+    <p id="hiw-sub-msg" style="margin-top:12px;font-size:13px;color:var(--text-muted);display:none;"></p>
+  </div>
+</section>
+<script>
+(function(){
+  var form = document.getElementById('hiw-sub-form');
+  if (!form) return;
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    var email = document.getElementById('hiw-sub-email').value.trim();
+    if (!email) return;
+    fetch('/api/subscribe', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email: email, source: 'how-it-works'})
+    }).then(function(r){ return r.json(); }).then(function(d) {
+      form.style.display = 'none';
+      var msg = document.getElementById('hiw-sub-msg');
+      msg.textContent = 'You'\''re subscribed! We'\''ll keep you posted. 🦞';
+      msg.style.display = 'block';
+    }).catch(function() {
+      var msg = document.getElementById('hiw-sub-msg');
+      msg.textContent = 'Something went wrong. Try again.';
+      msg.style.display = 'block';
+    });
+  });
+})();
+</script>
+
+
 <!-- Footer -->
 <footer>
   <div class="footer-inner">
