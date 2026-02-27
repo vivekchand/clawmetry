@@ -1663,6 +1663,7 @@ DASHBOARD_HTML = r"""
   #node-human circle:first-child { fill: #6d5ce8 !important; stroke: #5b4bd4 !important; }
   #node-human text { fill: #6d5ce8 !important; }
   #node-telegram rect { fill: #2f6feb !important; stroke: #1f4fb8 !important; }
+  #node-discord rect { fill: #5865f2 !important; stroke: #4752c4 !important; }
   #node-signal rect { fill: #0f766e !important; stroke: #115e59 !important; }
   #node-whatsapp rect { fill: #2f9e44 !important; stroke: #237738 !important; }
   #node-gateway rect { fill: #334155 !important; stroke: #1f2937 !important; }
@@ -2635,11 +2636,13 @@ function clawmetryLogout(){
       <path class="flow-path" id="path-human-tg"  d="M 60 56 C 60 70, 65 85, 75 100"/>
       <path class="flow-path" id="path-human-sig" d="M 60 56 C 55 90, 60 140, 75 170"/>
       <path class="flow-path" id="path-human-wa"  d="M 60 56 C 50 110, 55 200, 75 240"/>
+      <path class="flow-path" id="path-human-discord" d="M 60 56 C 45 130, 50 260, 75 310"/>
 
       <!-- Channel → Gateway paths -->
       <path class="flow-path" id="path-tg-gw"  d="M 130 120 C 150 120, 160 165, 180 170"/>
       <path class="flow-path" id="path-sig-gw" d="M 130 190 C 150 190, 160 185, 180 183"/>
       <path class="flow-path" id="path-wa-gw"  d="M 130 260 C 150 260, 160 200, 180 195"/>
+      <path class="flow-path" id="path-discord-gw" d="M 130 330 C 150 330, 160 215, 180 205"/>
 
       <!-- Gateway → Brain -->
       <path class="flow-path" id="path-gw-brain" d="M 290 183 C 305 183, 315 175, 330 175"/>
@@ -2679,6 +2682,10 @@ function clawmetryLogout(){
       <g class="flow-node flow-node-channel" id="node-whatsapp">
         <rect x="20" y="240" width="110" height="40" rx="10" ry="10" fill="#43A047" stroke="#2E7D32" stroke-width="2" filter="url(#dropShadow)"/>
         <text x="75" y="265" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 WA</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-discord">
+        <rect x="20" y="310" width="110" height="40" rx="10" ry="10" fill="#5865F2" stroke="#4752C4" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="335" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Discord</text>
       </g>
 
       <!-- Gateway -->
@@ -4927,11 +4934,12 @@ function hideUnconfiguredChannels(svgRoot) {
   var channelMap = {
     'telegram': { node: 'node-telegram', paths: ['path-human-tg', 'path-tg-gw'] },
     'signal':   { node: 'node-signal',   paths: ['path-human-sig', 'path-sig-gw'] },
-    'whatsapp': { node: 'node-whatsapp', paths: ['path-human-wa', 'path-wa-gw'] }
+    'whatsapp': { node: 'node-whatsapp', paths: ['path-human-wa', 'path-wa-gw'] },
+    'discord':  { node: 'node-discord',  paths: ['path-human-discord', 'path-discord-gw'] }
   };
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
-    var active = d.channels || ['telegram', 'signal', 'whatsapp'];
-    var allChannels = ['telegram', 'signal', 'whatsapp'];
+    var active = d.channels || ['telegram', 'signal', 'whatsapp', 'discord'];
+    var allChannels = ['telegram', 'signal', 'whatsapp', 'discord'];
     var hiddenCount = 0;
     allChannels.forEach(function(ch) {
       if (active.indexOf(ch) === -1) {
@@ -4948,9 +4956,10 @@ function hideUnconfiguredChannels(svgRoot) {
     // Shift remaining visible channel nodes up to fill gaps
     if (hiddenCount > 0) {
       var visibleChannels = allChannels.filter(function(ch) { return active.indexOf(ch) !== -1; });
-      var yPositions = [120, 175, 230]; // Evenly spaced positions for 1-3 channels
+      var yPositions = [100, 155, 210, 265]; // Evenly spaced positions for 1-4 channels
       if (visibleChannels.length === 1) yPositions = [175];
       else if (visibleChannels.length === 2) yPositions = [130, 210];
+      else if (visibleChannels.length === 3) yPositions = [120, 175, 230];
       visibleChannels.forEach(function(ch, i) {
         var info = channelMap[ch];
         var node = svgRoot.getElementById ? svgRoot.getElementById(info.node) : svgRoot.querySelector('#' + info.node);
@@ -5176,7 +5185,7 @@ function highlightNode(nodeId, dur) {
 
 function triggerInbound(ch) {
   ch = ch || 'tg';
-  var chNodeId = ch === 'tg' ? 'node-telegram' : ch === 'sig' ? 'node-signal' : 'node-whatsapp';
+  var chNodeId = ch === 'tg' ? 'node-telegram' : ch === 'sig' ? 'node-signal' : ch === 'discord' ? 'node-discord' : 'node-whatsapp';
   highlightNode(chNodeId, 3000);
   animateParticle('path-human-' + ch, '#c0a0ff', 550, false);
   highlightNode('node-human', 2200);
@@ -5432,13 +5441,14 @@ function initOverviewFlow() {
   // Hide unconfigured channels in the overview clone too
   // Clone has IDs prefixed with 'ov-', so we use a wrapper approach
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
-    var active = d.channels || ['telegram', 'signal', 'whatsapp'];
+    var active = d.channels || ['telegram', 'signal', 'whatsapp', 'discord'];
     var channelMap = {
       'telegram': { node: 'ov-node-telegram', paths: ['ov-path-human-tg', 'ov-path-tg-gw'] },
       'signal':   { node: 'ov-node-signal',   paths: ['ov-path-human-sig', 'ov-path-sig-gw'] },
-      'whatsapp': { node: 'ov-node-whatsapp', paths: ['ov-path-human-wa', 'ov-path-wa-gw'] }
+      'whatsapp': { node: 'ov-node-whatsapp', paths: ['ov-path-human-wa', 'ov-path-wa-gw'] },
+      'discord':  { node: 'ov-node-discord',  paths: ['ov-path-human-discord', 'ov-path-discord-gw'] }
     };
-    var allChannels = ['telegram', 'signal', 'whatsapp'];
+    var allChannels = ['telegram', 'signal', 'whatsapp', 'discord'];
     var hiddenCount = 0;
     allChannels.forEach(function(ch) {
       if (active.indexOf(ch) === -1) {
@@ -5454,7 +5464,7 @@ function initOverviewFlow() {
     });
     if (hiddenCount > 0) {
       var visibleChannels = allChannels.filter(function(ch) { return active.indexOf(ch) !== -1; });
-      var yPositions = visibleChannels.length === 1 ? [175] : visibleChannels.length === 2 ? [130, 210] : [120, 175, 230];
+      var yPositions = visibleChannels.length === 1 ? [175] : visibleChannels.length === 2 ? [130, 210] : visibleChannels.length === 3 ? [120, 175, 230] : [100, 155, 210, 265];
       visibleChannels.forEach(function(ch, i) {
         var info = channelMap[ch];
         var node = document.getElementById(info.node);
@@ -5630,6 +5640,7 @@ var COMP_MAP = {
   'node-telegram': {type:'channel', name:'Telegram', icon:'📱'},
   'node-signal': {type:'channel', name:'Signal', icon:'💬'},
   'node-whatsapp': {type:'channel', name:'WhatsApp', icon:'📲'},
+  'node-discord': {type:'channel', name:'Discord', icon:'🎮'},
   'node-gateway': {type:'gateway', name:'Gateway', icon:'🌐'},
   'node-brain': {type:'brain', name:'AI Model', icon:'🧠'},
   'node-session': {type:'tool', name:'Sessions', icon:'📋'},
@@ -5684,6 +5695,7 @@ function initOverviewCompClickHandlers() {
 var _tgRefreshTimer = null;
 var _tgOffset = 0;
 var _tgAllMessages = [];
+var _discordRefreshTimer = null;
 
 function isCompModalActive(nodeId) {
   var overlay = document.getElementById('comp-modal-overlay');
@@ -5696,6 +5708,7 @@ function openCompModal(nodeId) {
   
   // Clear ALL existing refresh timers to prevent stale data overwriting new modal
   if (_tgRefreshTimer) { clearInterval(_tgRefreshTimer); _tgRefreshTimer = null; }
+  if (_discordRefreshTimer) { clearInterval(_discordRefreshTimer); _discordRefreshTimer = null; }
   if (_gwRefreshTimer) { clearInterval(_gwRefreshTimer); _gwRefreshTimer = null; }
   if (_brainRefreshTimer) { clearInterval(_brainRefreshTimer); _brainRefreshTimer = null; }
   if (_toolRefreshTimer) { clearInterval(_toolRefreshTimer); _toolRefreshTimer = null; }
@@ -5719,6 +5732,14 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadTelegramMessages(false);
     _tgRefreshTimer = setInterval(function() { loadTelegramMessages(true); }, 10000);
+    return;
+  }
+
+  if (nodeId === 'node-discord') {
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Discord messages...</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    loadDiscordMessages(false);
+    _discordRefreshTimer = setInterval(function() { loadDiscordMessages(true); }, 10000);
     return;
   }
 
@@ -5834,6 +5855,67 @@ function loadMoreTelegram() {
   fetch('/api/channel/telegram?limit=200&offset=0').then(function(r) { return r.json(); }).then(function(data) {
     if (!isCompModalActive('node-telegram')) return;
     // Re-render with all data
+    var msgs = data.messages || [];
+    var body = document.getElementById('comp-modal-body');
+    var html = '<div class="tg-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    html += '<div class="tg-chat">';
+    msgs.forEach(function(m) {
+      var dir = m.direction === 'in' ? 'in' : 'out';
+      var ts = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+      var date = m.timestamp ? new Date(m.timestamp).toLocaleDateString([], {month:'short',day:'numeric'}) : '';
+      var text = m.text || (m.direction === 'in' ? '(message received)' : '(reply sent)');
+      html += '<div class="tg-bubble ' + dir + '">';
+      html += '<div class="tg-sender">' + escapeHtml(m.sender || (dir === 'in' ? 'User' : 'Clawd')) + '</div>';
+      html += '<div class="tg-text md-rendered">' + renderMarkdown(text) + '</div>';
+      html += '<div class="tg-time">' + date + ' ' + ts + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+    body.innerHTML = html;
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' · ' + data.total + ' total messages';
+  });
+}
+
+function loadDiscordMessages(isRefresh) {
+  var expectedNodeId = 'node-discord';
+  var url = '/api/channel/discord?limit=50&offset=0';
+  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    if (!isCompModalActive(expectedNodeId)) return;
+    var msgs = data.messages || [];
+    var body = document.getElementById('comp-modal-body');
+    var html = '<div class="tg-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    html += '<div class="tg-chat">';
+    if (msgs.length === 0) {
+      html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No messages found</div>';
+    }
+    msgs.forEach(function(m) {
+      var dir = m.direction === 'in' ? 'in' : 'out';
+      var ts = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+      var date = m.timestamp ? new Date(m.timestamp).toLocaleDateString([], {month:'short',day:'numeric'}) : '';
+      var text = m.text || (m.direction === 'in' ? '(message received)' : '(reply sent)');
+      html += '<div class="tg-bubble ' + dir + '">';
+      html += '<div class="tg-sender">' + escapeHtml(m.sender || (dir === 'in' ? 'User' : 'Clawd')) + '</div>';
+      html += '<div class="tg-text md-rendered">' + renderMarkdown(text) + '</div>';
+      html += '<div class="tg-time">' + date + ' ' + ts + '</div>';
+      html += '</div>';
+    });
+    if (data.total > msgs.length) {
+      html += '<div class="tg-load-more"><button onclick="loadMoreDiscord()">Load more (' + (data.total - msgs.length) + ' remaining)</button></div>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' · ' + data.total + ' total messages';
+  }).catch(function(e) {
+    if (!isCompModalActive(expectedNodeId)) return;
+    if (!isRefresh) {
+      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load Discord messages</div>';
+    }
+  });
+}
+
+function loadMoreDiscord() {
+  fetch('/api/channel/discord?limit=200&offset=0').then(function(r) { return r.json(); }).then(function(data) {
+    if (!isCompModalActive('node-discord')) return;
     var msgs = data.messages || [];
     var body = document.getElementById('comp-modal-body');
     var html = '<div class="tg-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
@@ -7873,8 +7955,11 @@ def api_channels():
                 # Also check channels key
                 channels = data.get('channels', {})
                 if isinstance(channels, dict):
-                    for name in channels:
-                        _add(name)
+                    for name, cconf in channels.items():
+                        if isinstance(cconf, dict) and cconf.get('enabled', True):
+                            _add(name)
+                        elif isinstance(cconf, bool) and cconf:
+                            _add(name)
                 elif isinstance(channels, list):
                     for name in channels:
                         _add(str(name))
@@ -7882,18 +7967,6 @@ def api_channels():
                     break
             except Exception:
                 continue
-
-    # Filter to channels that actually have data directories (proof of real usage)
-    if configured:
-        active_channels = []
-        oc_dir = os.path.expanduser('~/.openclaw')
-        cb_dir = os.path.expanduser('~/.clawdbot')
-        for ch in configured:
-            # Check for channel-specific directories that indicate real setup
-            if any(os.path.isdir(os.path.join(d, ch)) for d in [oc_dir, cb_dir]):
-                active_channels.append(ch)
-        if active_channels:
-            configured = active_channels
 
     # Fallback: show all if nothing found
     if not configured:
@@ -10122,6 +10195,186 @@ def api_channel_telegram():
                             'sender': sender,
                             'text': txt[:300],
                             'chatId': chat_id,
+                            'sessionId': uuid,
+                        })
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Deduplicate by timestamp+direction, sort newest first
+    seen = set()
+    unique = []
+    for m in messages:
+        key = (m['timestamp'], m['direction'], m['text'][:50])
+        if key not in seen:
+            seen.add(key)
+            unique.append(m)
+    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+
+    # Stats
+    today_in = sum(1 for m in unique if m['direction'] == 'in' and today in m.get('timestamp', ''))
+    today_out = sum(1 for m in unique if m['direction'] == 'out' and today in m.get('timestamp', ''))
+
+    total = len(unique)
+    page = unique[offset:offset + limit]
+    return jsonify({'messages': page, 'total': total, 'todayIn': today_in, 'todayOut': today_out})
+
+
+@app.route('/api/channel/discord')
+def api_channel_discord():
+    """Parse session transcripts for Discord message activity."""
+    import re
+    limit = request.args.get('limit', 50, type=int)
+    offset = request.args.get('offset', 0, type=int)
+
+    messages = []
+    today = datetime.now().strftime('%Y-%m-%d')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.clawdbot/agents/main/sessions')
+
+    # 1. Parse log files for discord events
+    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_files = []
+    for ld in log_dirs:
+        if os.path.isdir(ld):
+            for f in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True):
+                log_files.append(f)
+    log_files = log_files[:2]
+
+    for lf in log_files:
+        try:
+            result = subprocess.run(
+                ['grep', '-i', 'messageChannel=discord\\|discord.*deliver\\|discord message failed', lf],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg1 = obj.get('1', '') or obj.get('0', '')
+                ts = obj.get('time', '') or (obj.get('_meta', {}) or {}).get('date', '')
+
+                if 'messageChannel=discord' in msg1 and 'run start' in msg1:
+                    sid_match = re.search(r'sessionId=([a-f0-9-]+)', msg1)
+                    sid = sid_match.group(1) if sid_match else ''
+                    messages.append({
+                        'timestamp': ts, 'direction': 'in', 'sender': 'User',
+                        'text': '', 'channelId': '', 'sessionId': sid,
+                    })
+
+                msg0 = obj.get('0', '')
+                if 'discord' in msg0.lower() and 'deliver' in msg0.lower():
+                    failed = 'failed' in msg0.lower()
+                    messages.append({
+                        'timestamp': ts, 'direction': 'out', 'sender': 'Clawd',
+                        'text': '(delivery failed)' if failed else '(message sent)',
+                        'channelId': '', 'sessionId': '',
+                    })
+        except Exception:
+            pass
+
+    # 2. Try to enrich incoming messages with text from session transcripts
+    for msg in messages:
+        if msg['direction'] == 'in' and msg['sessionId'] and not msg['text']:
+            sf = os.path.join(sessions_dir, msg['sessionId'] + '.jsonl')
+            if os.path.exists(sf):
+                try:
+                    with open(sf, 'r', errors='replace') as f:
+                        for sline in f:
+                            sline = sline.strip()
+                            if not sline:
+                                continue
+                            try:
+                                sd = json.loads(sline)
+                            except json.JSONDecodeError:
+                                continue
+                            sm = sd.get('message', {})
+                            if sm.get('role') == 'user':
+                                content = sm.get('content', '')
+                                if isinstance(content, list):
+                                    for c in content:
+                                        if isinstance(c, dict) and c.get('type') == 'text':
+                                            txt = c.get('text', '')
+                                            if txt and not txt.startswith('System:') and 'HEARTBEAT' not in txt:
+                                                msg['text'] = txt[:300]
+                                                # Extract sender from [Discord Name id:...] pattern
+                                                dc_name = re.search(r'\[Discord\s+(.+?)\s+id:', txt)
+                                                if dc_name:
+                                                    msg['sender'] = dc_name.group(1)
+                                                break
+                                elif isinstance(content, str) and content:
+                                    if not content.startswith('System:') and 'HEARTBEAT' not in content:
+                                        msg['text'] = content[:300]
+                                        dc_name = re.search(r'\[Discord\s+(.+?)\s+id:', content)
+                                        if dc_name:
+                                            msg['sender'] = dc_name.group(1)
+                                if msg['text']:
+                                    break
+                except Exception:
+                    pass
+
+    # 3. Scan discord session files for recent messages
+    try:
+        with open(os.path.join(sessions_dir, 'sessions.json'), 'r') as f:
+            sess_data = json.load(f)
+        discord_sessions = [(sid, s) for sid, s in sess_data.items()
+                            if 'discord' in sid and 'sessionId' in s]
+        discord_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+
+        seen_sids = {m['sessionId'] for m in messages if m.get('sessionId')}
+        for sid_key, sinfo in discord_sessions[:5]:
+            uuid = sinfo['sessionId']
+            if uuid in seen_sids:
+                continue
+            sf = os.path.join(sessions_dir, uuid + '.jsonl')
+            if not os.path.exists(sf):
+                continue
+            try:
+                fsize = os.path.getsize(sf)
+                with open(sf, 'r', errors='replace') as f:
+                    if fsize > 65536:
+                        f.seek(fsize - 65536)
+                        f.readline()  # skip partial line
+                    for sline in f:
+                        sline = sline.strip()
+                        if not sline:
+                            continue
+                        try:
+                            sd = json.loads(sline)
+                        except json.JSONDecodeError:
+                            continue
+                        sm = sd.get('message', {})
+                        ts = sd.get('timestamp', '')
+                        role = sm.get('role', '')
+                        if role not in ('user', 'assistant'):
+                            continue
+                        content = sm.get('content', '')
+                        txt = ''
+                        if isinstance(content, list):
+                            for c in content:
+                                if isinstance(c, dict) and c.get('type') == 'text':
+                                    txt = c.get('text', '')
+                                    break
+                        elif isinstance(content, str):
+                            txt = content
+                        if not txt or txt.startswith('System:') or 'HEARTBEAT' in txt:
+                            continue
+                        direction = 'in' if role == 'user' else 'out'
+                        sender = 'User' if role == 'user' else 'Clawd'
+                        if direction == 'in':
+                            dc_name = re.search(r'\[Discord\s+(.+?)\s+id:', txt)
+                            if dc_name:
+                                sender = dc_name.group(1)
+                        messages.append({
+                            'timestamp': ts,
+                            'direction': direction,
+                            'sender': sender,
+                            'text': txt[:300],
+                            'channelId': '',
                             'sessionId': uuid,
                         })
             except Exception:
