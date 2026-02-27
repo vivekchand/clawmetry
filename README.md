@@ -37,7 +37,7 @@ Opens at **http://localhost:8900** and you're done.
 
 | Summary | Crons | Memory |
 |---------|-------|--------|
-| ![Summary](https://clawmetry.com/screenshots/summary.png) | ![Crons](https://clawmetry.com/screenshots/crons.png) | ![Memory](https://clawmetry.com/screenshots/memory.png) |
+| ![Summary](https://clawmetry.com/screenshots/summary.png) | ![Crons](https://clawmetry.com/screenshots/crons.png?v=2) | ![Memory](https://clawmetry.com/screenshots/memory.png) |
 
 ## Install
 
