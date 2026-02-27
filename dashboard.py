@@ -55,6 +55,49 @@ __version__ = "0.9.17"
 
 app = Flask(__name__)
 
+# ── Cross-platform helpers ──────────────────────────────────────────────
+import re as _re
+import tempfile as _tempfile
+import platform as _platform
+
+def _grep_log_file(filepath, pattern):
+    """Cross-platform grep: return list of lines matching pattern (case-insensitive)."""
+    results = []
+    try:
+        with open(filepath, 'r', errors='replace') as _f:
+            for _line in _f:
+                if _re.search(pattern, _line, _re.IGNORECASE):
+                    results.append(_line.rstrip('\n'))
+    except (OSError, IOError):
+        pass
+    return results
+
+def _tail_lines(filepath, n=200):
+    """Cross-platform tail: return last n lines of a file as a list of strings."""
+    try:
+        fsize = os.path.getsize(filepath)
+        with open(filepath, 'rb') as _f:
+            try:
+                _f.seek(-min(n * 500, fsize), 2)
+            except OSError:
+                _f.seek(0)
+            return _f.read().decode('utf-8', errors='replace').splitlines()[-n:]
+    except (OSError, IOError):
+        return []
+
+def _get_log_dirs():
+    """Return platform-appropriate candidate log directories."""
+    if sys.platform == 'win32':
+        return [
+            os.path.join(os.environ.get('APPDATA', ''), 'openclaw', 'logs'),
+            os.path.join(_tempfile.gettempdir(), 'openclaw'),
+            os.path.join(_tempfile.gettempdir(), 'moltbot'),
+        ]
+    return ['/tmp/openclaw', '/tmp/moltbot']
+
+_CURRENT_PLATFORM = _platform.system().lower()
+# ── End cross-platform helpers ──────────────────────────────────────────
+
 # ── Configuration (auto-detected, overridable via CLI/env) ──────────────
 MC_URL = os.environ.get("MC_URL", "")  # Optional Mission Control URL, empty = disabled
 WORKSPACE = None
@@ -512,17 +555,18 @@ def _pause_gateway():
         return
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
-    # Fallback: SIGSTOP to gateway process
-    try:
-        result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
-                                capture_output=True, text=True, timeout=3)
-        for pid in result.stdout.strip().split('\n'):
-            pid = pid.strip()
-            if pid:
-                os.kill(int(pid), 19)  # SIGSTOP
-                return
-    except Exception:
-        pass
+    # Fallback: SIGSTOP to gateway process (Unix only)
+    if sys.platform != 'win32':
+        try:
+            result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
+                                    capture_output=True, text=True, timeout=3)
+            for pid in result.stdout.strip().split('\n'):
+                pid = pid.strip()
+                if pid:
+                    os.kill(int(pid), 19)  # SIGSTOP
+                    return
+        except Exception:
+            pass
 
 
 def _resume_gateway():
@@ -534,16 +578,17 @@ def _resume_gateway():
                        capture_output=True)
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
-    # Also try SIGCONT
-    try:
-        result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
-                                capture_output=True, text=True, timeout=3)
-        for pid in result.stdout.strip().split('\n'):
-            pid = pid.strip()
-            if pid:
-                os.kill(int(pid), 18)  # SIGCONT
-    except Exception:
-        pass
+    # Also try SIGCONT (Unix only)
+    if sys.platform != 'win32':
+        try:
+            result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
+                                    capture_output=True, text=True, timeout=3)
+            for pid in result.stdout.strip().split('\n'):
+                pid = pid.strip()
+                if pid:
+                    os.kill(int(pid), 18)  # SIGCONT
+        except Exception:
+            pass
     _budget_paused = False
     _budget_paused_at = 0
     _budget_paused_reason = ''
@@ -1203,8 +1248,8 @@ def detect_config(args=None):
     elif os.environ.get("OPENCLAW_LOG_DIR"):
         LOG_DIR = os.path.expanduser(os.environ["OPENCLAW_LOG_DIR"])
     else:
-        candidates = ["/tmp/moltbot", "/tmp/openclaw", os.path.expanduser("~/.clawdbot/logs")]
-        LOG_DIR = next((d for d in candidates if os.path.isdir(d)), "/tmp/openclaw")
+        candidates = _get_log_dirs() + [os.path.expanduser("~/.clawdbot/logs")]
+        LOG_DIR = next((d for d in candidates if os.path.isdir(d)), _get_log_dirs()[0])
 
     # 3. Sessions directory (transcript .jsonl files)
     if args and getattr(args, 'sessions_dir', None):
@@ -8461,7 +8506,7 @@ def _gw_ws_connect(url=None, token=None):
             'type': 'req', 'id': 'clawmetry-connect', 'method': 'connect',
             'params': {
                 'minProtocol': 3, 'maxProtocol': 3,
-                'client': {'id': 'cli', 'version': __version__, 'platform': 'linux',
+                'client': {'id': 'cli', 'version': __version__, 'platform': _CURRENT_PLATFORM,
                            'mode': 'cli', 'instanceId': f'clawmetry-{_uuid.uuid4().hex[:8]}'},
                 'role': 'operator', 'scopes': ['operator.admin'],
                 'auth': {'token': tok},
@@ -8636,7 +8681,7 @@ def api_gw_config():
                     'type': 'req', 'id': 'validate', 'method': 'connect',
                     'params': {
                         'minProtocol': 3, 'maxProtocol': 3,
-                        'client': {'id': 'cli', 'version': __version__, 'platform': 'linux',
+                        'client': {'id': 'cli', 'version': __version__, 'platform': _CURRENT_PLATFORM,
                                    'mode': 'cli', 'instanceId': 'clawmetry-validate'},
                         'role': 'operator', 'scopes': ['operator.admin'],
                         'auth': {'token': token},
@@ -8766,7 +8811,7 @@ def _auto_discover_gateway(token):
                 'type': 'req', 'id': 'discover', 'method': 'connect',
                 'params': {
                     'minProtocol': 3, 'maxProtocol': 3,
-                    'client': {'id': 'cli', 'version': __version__, 'platform': 'linux',
+                    'client': {'id': 'cli', 'version': __version__, 'platform': _CURRENT_PLATFORM,
                                'mode': 'cli', 'instanceId': 'clawmetry-discover'},
                     'role': 'operator', 'scopes': ['operator.admin'],
                     'auth': {'token': token},
@@ -8998,9 +9043,13 @@ def api_overview():
     except Exception:
         system.append(['Uptime', '—', ''])
 
-    gw = subprocess.run(['pgrep', '-f', 'moltbot'], capture_output=True, text=True)
-    system.append(['Gateway', 'Running' if gw.returncode == 0 else 'Stopped',
-                    'green' if gw.returncode == 0 else 'red'])
+    if sys.platform != 'win32':
+        gw = subprocess.run(['pgrep', '-f', 'moltbot'], capture_output=True, text=True)
+        gw_running = gw.returncode == 0
+    else:
+        gw_running = False
+    system.append(['Gateway', 'Running' if gw_running else 'Stopped',
+                    'green' if gw_running else 'red'])
 
     # Infrastructure details for Flow tab
     infra = {
@@ -9280,7 +9329,7 @@ def api_cron_runs(job_id):
 
 def _find_log_file(ds):
     """Find log file for a given date string, trying multiple prefixes and dirs."""
-    dirs = [LOG_DIR, '/tmp/openclaw', '/tmp/moltbot']
+    dirs = [LOG_DIR] + _get_log_dirs()
     prefixes = ['openclaw-', 'moltbot-']
     for d in dirs:
         if not d or not os.path.isdir(d):
@@ -9380,8 +9429,7 @@ def api_logs():
             except Exception:
                 pass
         else:
-            result = subprocess.run(['tail', f'-{lines_count}', log_file], capture_output=True, text=True)
-            lines = result.stdout.strip().split('\n') if result.stdout.strip() else []
+            lines = _tail_lines(log_file, lines_count)
     return jsonify({'lines': lines, 'date': date_str})
 
 
@@ -11015,7 +11063,7 @@ def api_channel_telegram():
     today = datetime.now().strftime('%Y-%m-%d')
 
     # 1. Parse log files for telegram events using grep for speed
-    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_dirs = _get_log_dirs()
     log_files = []
     for ld in log_dirs:
         if os.path.isdir(ld):
@@ -11027,11 +11075,8 @@ def api_channel_telegram():
     for lf in log_files:
         try:
             # Use grep to pre-filter telegram-relevant lines
-            result = subprocess.run(
-                ['grep', '-i', 'messageChannel=telegram\\|telegram.*deliver\\|telegram message failed', lf],
-                capture_output=True, text=True, timeout=5
-            )
-            for line in result.stdout.splitlines():
+            _grep_lines = _grep_log_file(lf, 'messageChannel=telegram\\|telegram.*deliver\\|telegram message failed')
+            for line in _grep_lines:
                 line = line.strip()
                 if not line:
                     continue
@@ -11203,6 +11248,9 @@ def api_channel_telegram():
 @app.route('/api/channel/imessage')
 def api_channel_imessage():
     """Read iMessage history from ~/Library/Messages/chat.db."""
+    if sys.platform != 'darwin':
+        return jsonify({'messages': [], 'todayIn': 0, 'todayOut': 0,
+                        'note': 'iMessage is only available on macOS'})
     import sqlite3
     limit = request.args.get('limit', 50, type=int)
 
@@ -11254,17 +11302,14 @@ def api_channel_imessage():
 
     # Fallback: scan OpenClaw logs for imessage delivery events
     if not db_ok or len(messages) == 0:
-        log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+        log_dirs = _get_log_dirs()
         for ld in log_dirs:
             if not os.path.isdir(ld):
                 continue
             for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:2]:
                 try:
-                    result = subprocess.run(
-                        ['grep', '-i', 'imessage\\|iMessage\\|messageChannel=imessage', lf],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    for line in result.stdout.splitlines():
+                    _grep_lines = _grep_log_file(lf, 'imessage\\|iMessage\\|messageChannel=imessage')
+                    for line in _grep_lines:
                         line = line.strip()
                         if not line:
                             continue
@@ -11309,7 +11354,7 @@ def api_channel_whatsapp():
     messages = []
     today = datetime.now().strftime('%Y-%m-%d')
 
-    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_dirs = _get_log_dirs()
     log_files = []
     for ld in log_dirs:
         if os.path.isdir(ld):
@@ -11320,11 +11365,8 @@ def api_channel_whatsapp():
 
     for lf in log_files:
         try:
-            result = subprocess.run(
-                ['grep', '-i', 'messageChannel=whatsapp\\|whatsapp.*deliver', lf],
-                capture_output=True, text=True, timeout=5
-            )
-            for line in result.stdout.splitlines():
+            _grep_lines = _grep_log_file(lf, 'messageChannel=whatsapp\\|whatsapp.*deliver')
+            for line in _grep_lines:
                 line = line.strip()
                 if not line:
                     continue
@@ -11397,7 +11439,7 @@ def api_channel_signal():
     messages = []
     today = datetime.now().strftime('%Y-%m-%d')
 
-    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_dirs = _get_log_dirs()
     log_files = []
     for ld in log_dirs:
         if os.path.isdir(ld):
@@ -11408,11 +11450,8 @@ def api_channel_signal():
 
     for lf in log_files:
         try:
-            result = subprocess.run(
-                ['grep', '-i', 'messageChannel=signal\\|signal.*deliver', lf],
-                capture_output=True, text=True, timeout=5
-            )
-            for line in result.stdout.splitlines():
+            _grep_lines = _grep_log_file(lf, 'messageChannel=signal\\|signal.*deliver')
+            for line in _grep_lines:
                 line = line.strip()
                 if not line:
                     continue
@@ -11488,17 +11527,14 @@ def _generic_channel_data(channel_key):
     today_out = 0
 
     # Scan log files for channel events
-    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_dirs = _get_log_dirs()
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
         for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:2]:
             try:
-                result = subprocess.run(
-                    ['grep', '-i', f'messageChannel={channel_key}', lf],
-                    capture_output=True, text=True, timeout=5
-                )
-                for line in result.stdout.splitlines():
+                _grep_lines = _grep_log_file(lf, f'messageChannel={channel_key}')
+                for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
@@ -11618,17 +11654,14 @@ def api_channel_discord():
     today_out = 0
 
     # Scan log files for Discord events
-    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_dirs = _get_log_dirs()
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
         for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
             try:
-                result = subprocess.run(
-                    ['grep', '-iE', 'messageChannel=discord|discord.*deliver', lf],
-                    capture_output=True, text=True, timeout=5
-                )
-                for line in result.stdout.splitlines():
+                _grep_lines = _grep_log_file(lf, 'messageChannel=discord|discord.*deliver')
+                for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
@@ -11746,17 +11779,14 @@ def api_channel_slack():
     today_out = 0
 
     # Scan log files for Slack events
-    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_dirs = _get_log_dirs()
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
         for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
             try:
-                result = subprocess.run(
-                    ['grep', '-iE', 'messageChannel=slack|slack.*deliver', lf],
-                    capture_output=True, text=True, timeout=5
-                )
-                for line in result.stdout.splitlines():
+                _grep_lines = _grep_log_file(lf, 'messageChannel=slack|slack.*deliver')
+                for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
@@ -11877,17 +11907,14 @@ def api_channel_irc():
     channels = set()
     nicks = set()
 
-    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_dirs = _get_log_dirs()
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
         for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
             try:
-                result = subprocess.run(
-                    ['grep', '-i', 'messageChannel=irc', lf],
-                    capture_output=True, text=True, timeout=5
-                )
-                for line in result.stdout.splitlines():
+                _grep_lines = _grep_log_file(lf, 'messageChannel=irc')
+                for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
@@ -11992,17 +12019,14 @@ def api_channel_webchat():
     active_sessions = set()
     last_active = None
 
-    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_dirs = _get_log_dirs()
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
         for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
             try:
-                result = subprocess.run(
-                    ['grep', '-i', 'messageChannel=webchat', lf],
-                    capture_output=True, text=True, timeout=5
-                )
-                for line in result.stdout.splitlines():
+                _grep_lines = _grep_log_file(lf, 'messageChannel=webchat')
+                for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
@@ -12163,17 +12187,14 @@ def api_channel_bluebubbles():
             pass
 
     # Fallback: parse logs
-    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_dirs = _get_log_dirs()
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
         for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
             try:
-                result = subprocess.run(
-                    ['grep', '-i', 'messageChannel=bluebubbles', lf],
-                    capture_output=True, text=True, timeout=5
-                )
-                for line in result.stdout.splitlines():
+                _grep_lines = _grep_log_file(lf, 'messageChannel=bluebubbles')
+                for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
@@ -12666,12 +12687,13 @@ def api_component_gateway():
     offset = int(request.args.get('offset', 0))
     today = datetime.now().strftime('%Y-%m-%d')
     # Try both openclaw and moltbot log dirs/naming
-    candidates = [
-        os.path.join(LOG_DIR, f'openclaw-{today}.log'),
-        os.path.join(LOG_DIR, f'moltbot-{today}.log'),
-        f'/tmp/openclaw/openclaw-{today}.log',
-        f'/tmp/moltbot/moltbot-{today}.log',
-    ]
+    candidates = (
+        [os.path.join(LOG_DIR, f'openclaw-{today}.log'),
+         os.path.join(LOG_DIR, f'moltbot-{today}.log')] +
+        [os.path.join(d, f'openclaw-{today}.log') for d in _get_log_dirs()] +
+        [os.path.join(d, f'moltbot-{today}.log') for d in _get_log_dirs()]
+    )
+    candidates = list(dict.fromkeys(candidates))  # deduplicate preserving order
     log_path = next((p for p in candidates if os.path.exists(p)), None)
 
     routes = []
@@ -12792,7 +12814,7 @@ def api_component_gateway():
             uptime_str = ts_line.split('=', 1)[1].strip()
     except Exception:
         pass
-    if not uptime_str:
+    if not uptime_str and sys.platform != 'win32':
         try:
             r = subprocess.run(['pgrep', '-a', 'openclaw'], capture_output=True, text=True, timeout=3)
             if r.stdout.strip():
@@ -12806,9 +12828,8 @@ def api_component_gateway():
     restarts = []
     if log_path:
         try:
-            r = subprocess.run(['grep', '-i', 'gateway.*start\\|listening on\\|server started', log_path],
-                              capture_output=True, text=True, timeout=5)
-            for line in r.stdout.splitlines()[-5:]:  # last 5 restarts
+            _restart_lines = _grep_log_file(log_path, r'gateway.*start|listening on|server started')
+            for line in _restart_lines[-5:]:  # last 5 restarts
                 try:
                     obj = json.loads(line.strip())
                     restarts.append(obj.get('time', ''))
@@ -13173,9 +13194,11 @@ def api_health():
         if result == 0:
             checks.append({'id': 'gateway', 'status': 'healthy', 'color': 'green', 'detail': f'Port {gw_port} responding'})
         else:
-            # Fallback: check process
-            gw = subprocess.run(['pgrep', '-f', 'moltbot'], capture_output=True, text=True)
-            if gw.returncode == 0:
+            # Fallback: check process (Unix only)
+            gw_proc = None
+            if sys.platform != 'win32':
+                gw_proc = subprocess.run(['pgrep', '-f', 'moltbot'], capture_output=True, text=True)
+            if gw_proc and gw_proc.returncode == 0:
                 checks.append({'id': 'gateway', 'status': 'warning', 'color': 'yellow', 'detail': 'Process running, port not responding'})
             else:
                 checks.append({'id': 'gateway', 'status': 'critical', 'color': 'red', 'detail': 'Not running'})
