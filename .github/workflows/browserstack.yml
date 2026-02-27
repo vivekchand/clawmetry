@@ -51,7 +51,7 @@ jobs:
           CLAWMETRY_URL: http://localhost:8900
           CLAWMETRY_TOKEN: ci-test-token
         run: |
-          browserstack-sdk python3 -m pytest tests/test_e2e_browserstack.py -v --tb=short
+          BUILD_NUMBER=${{ github.run_number }} browserstack-sdk python3 -m pytest tests/test_e2e_browserstack.py -v --tb=short
 
       - name: Stop BrowserStack Local Tunnel
         if: always()
