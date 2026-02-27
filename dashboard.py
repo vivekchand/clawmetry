@@ -1326,6 +1326,7 @@ def _detect_gateway_token():
         pass
     # 3. Config files
     json_paths = [
+        os.path.expanduser('~/.openclaw/openclaw.json'),
         os.path.expanduser('~/.openclaw/moltbot.json'),
         os.path.expanduser('~/.openclaw/clawdbot.json'),
         os.path.expanduser('~/.clawdbot/clawdbot.json'),
@@ -7210,6 +7211,9 @@ function loadComponentWithTimeContext(nodeId) {
   if (_brainRefreshTimer) { clearInterval(_brainRefreshTimer); _brainRefreshTimer = null; }
   if (_toolRefreshTimer) { clearInterval(_toolRefreshTimer); _toolRefreshTimer = null; }
   if (_costOptimizerRefreshTimer) { clearInterval(_costOptimizerRefreshTimer); _costOptimizerRefreshTimer = null; }
+  if (_webchatRefreshTimer) { clearInterval(_webchatRefreshTimer); _webchatRefreshTimer = null; }
+  if (_ircRefreshTimer) { clearInterval(_ircRefreshTimer); _ircRefreshTimer = null; }
+  if (_bbRefreshTimer) { clearInterval(_bbRefreshTimer); _bbRefreshTimer = null; }
   
   // Load data based on component type
   if (nodeId === 'node-telegram') {
@@ -7675,6 +7679,9 @@ function closeCompModal() {
   if (_brainRefreshTimer) { clearInterval(_brainRefreshTimer); _brainRefreshTimer = null; }
   if (_toolRefreshTimer) { clearInterval(_toolRefreshTimer); _toolRefreshTimer = null; }
   if (_costOptimizerRefreshTimer) { clearInterval(_costOptimizerRefreshTimer); _costOptimizerRefreshTimer = null; }
+  if (_webchatRefreshTimer) { clearInterval(_webchatRefreshTimer); _webchatRefreshTimer = null; }
+  if (_ircRefreshTimer) { clearInterval(_ircRefreshTimer); _ircRefreshTimer = null; }
+  if (_bbRefreshTimer) { clearInterval(_bbRefreshTimer); _bbRefreshTimer = null; }
   
   // Reset time travel state
   _timeTravelMode = false;
