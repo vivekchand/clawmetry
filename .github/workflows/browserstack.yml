@@ -39,6 +39,12 @@ jobs:
             sleep 1
           done
 
+      - name: Set up BrowserStack env
+        uses: browserstack/github-actions/setup-env@master
+        with:
+          username: ${{ secrets.BROWSERSTACK_USERNAME }}
+          access-key: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
       - name: Start BrowserStack Local Tunnel
         uses: browserstack/github-actions/setup-local@master
         with:
@@ -62,3 +68,5 @@ jobs:
         with:
           local-testing: stop
           local-identifier: clawmetry-${{ github.run_id }}-${{ matrix.browser }}
+          username: ${{ secrets.BROWSERSTACK_USERNAME }}
+          access-key: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
