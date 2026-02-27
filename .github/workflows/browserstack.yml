@@ -1,8 +1,9 @@
 name: BrowserStack
 
 on:
-  pull_request:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger only
+  push:
+    branches: [main]  # Run on merge to main
 
 jobs:
   cross-browser:
