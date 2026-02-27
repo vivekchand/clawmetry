@@ -2,6 +2,7 @@
 Shared fixtures for ClawMetry test suite.
 """
 import os
+import sys
 import json
 import subprocess
 import time
@@ -85,7 +86,7 @@ def server(base_url, token):
     except Exception:
         port = "8900"
     proc = subprocess.Popen(
-        ["python3", dashboard, "--port", port, "--no-debug"],
+        [sys.executable, dashboard, "--port", port, "--no-debug"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         env=env,

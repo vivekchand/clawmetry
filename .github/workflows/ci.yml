@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  # ── Fast syntax check (runs in ~10s, blocks everything else) ──────────────
+  lint:
+    name: Syntax & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check Python syntax
+        run: python3 -c "import ast; ast.parse(open('dashboard.py').read()); print('✅ Syntax OK')"
+      - name: Install ruff (fast linter)
+        run: pip install ruff
+      - name: Lint (warnings only, don't fail)
+        run: ruff check dashboard.py --select E,W --ignore E501,W503 || true
+
+  # ── API tests across all 3 platforms ─────────────────────────────────────
+  api-tests:
+    name: API Tests (${{ matrix.os }})
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.9", "3.11"]
+        exclude:
+          # Only test py3.9 on Linux to keep matrix manageable
+          - os: macos-latest
+            python-version: "3.9"
+          - os: windows-latest
+            python-version: "3.9"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: pip install flask pytest requests
+
+      - name: Start server (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          OPENCLAW_GATEWAY_TOKEN=ci-test-token python3 dashboard.py --port 8900 --no-debug &
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer ci-test-token" http://localhost:8900/api/health && echo "Ready" && break
+            sleep 1
+          done
+        shell: bash
+
+      - name: Start server (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $env:OPENCLAW_GATEWAY_TOKEN = "ci-test-token"
+          Start-Process python -ArgumentList "dashboard.py --port 8900 --no-debug" -NoNewWindow
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://localhost:8900/api/health" -Headers @{"Authorization"="Bearer ci-test-token"} -UseBasicParsing -ErrorAction Stop
+              if ($r.StatusCode -eq 200) { $ready = $true; break }
+            } catch {}
+            Start-Sleep 1
+          }
+          if (-not $ready) { Write-Error "Server failed to start"; exit 1 }
+        shell: pwsh
+
+      - name: Run API tests
+        env:
+          CLAWMETRY_URL: http://localhost:8900
+          CLAWMETRY_TOKEN: ci-test-token
+        run: python3 -m pytest tests/test_api.py -v --tb=short
+
+  # ── E2E Playwright tests (Linux only for speed, allowed to fail) ──────────
+  e2e-tests:
+    name: E2E Browser Tests
+    needs: lint
+    runs-on: ubuntu-latest
+    continue-on-error: true  # Remove once tests are fully stable
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install flask pytest pytest-playwright requests
+      - name: Install Playwright browsers
+        run: python3 -m playwright install chromium --with-deps
+      - name: Start server
+        run: |
+          OPENCLAW_GATEWAY_TOKEN=ci-test-token python3 dashboard.py --port 8900 --no-debug &
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer ci-test-token" http://localhost:8900/api/health && break
+            sleep 1
+          done
+      - name: Run E2E tests
+        env:
+          CLAWMETRY_URL: http://localhost:8900
+          CLAWMETRY_TOKEN: ci-test-token
+        run: python3 -m pytest tests/test_e2e.py -v --tb=short
+
+  # ── pip install smoke test across platforms ───────────────────────────────
+  pip-install:
+    name: pip install (${{ matrix.os }})
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install from source
+        run: pip install flask .
+      - name: Smoke test - help works
+        run: python3 dashboard.py --help
+      - name: Smoke test - syntax valid
+        run: python3 -c "import dashboard; print('✅ Import OK')"
+        continue-on-error: true  # May fail if dashboard has top-level side effects
