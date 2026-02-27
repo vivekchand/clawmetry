@@ -2007,6 +2007,47 @@ DASHBOARD_HTML = r"""
   .imsg-bubble .imsg-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
   .imsg-bubble .imsg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
   .imsg-bubble .imsg-text { white-space: pre-wrap; }
+  /* WebChat styles - neutral/white browser-style bubbles */
+  .wc-stats { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  [data-theme="dark"] .wc-stats { background: #1e2533; border-color: #2d3748; }
+  .wc-stat-item { color: #374151; }
+  [data-theme="dark"] .wc-stat-item { color: #9ca3af; }
+  .wc-messages { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; }
+  .wc-msg-row { display: flex; }
+  .wc-msg-row.wc-row-out { justify-content: flex-end; }
+  .wc-bubble { max-width: 80%; padding: 9px 13px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-wrap: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+  .wc-bubble.wc-msg-in { background: #f1f5f9; color: #1e293b; border-bottom-left-radius: 4px; border: 1px solid #e2e8f0; }
+  .wc-bubble.wc-msg-out { background: #0ea5e9; color: #fff; border-bottom-right-radius: 4px; }
+  [data-theme="dark"] .wc-bubble.wc-msg-in { background: #1e2a3f; color: #cbd5e1; border-color: #2d3748; }
+  [data-theme="dark"] .wc-bubble.wc-msg-out { background: #0369a1; color: #e0f2fe; }
+  .wc-bubble-text { white-space: pre-wrap; }
+  .wc-bubble-time { font-size: 10px; margin-top: 3px; text-align: right; opacity: 0.65; }
+  /* IRC styles - dark terminal theme */
+  .irc-loading { background: #1a1a2e; color: #9ca3af; font-family: 'Courier New', monospace; padding: 40px; text-align: center; font-size: 13px; }
+  .irc-header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #0f0f1a; border-bottom: 1px solid #2d2d4a; font-family: 'Courier New', monospace; font-size: 12px; flex-wrap: wrap; }
+  .irc-stat { color: #6b7280; }
+  .irc-channels { color: #60a5fa; font-weight: 700; }
+  .irc-nick { color: #a78bfa; margin-left: auto; }
+  .irc-log { background: #0d0d1a; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; font-family: 'Courier New', monospace; font-size: 12px; overflow-y: auto; max-height: 500px; }
+  .irc-line { line-height: 1.6; word-wrap: break-word; }
+  .irc-ts { color: #4b5563; }
+  .irc-nick-tag { color: #60a5fa; font-weight: 600; }
+  .irc-text { color: #d1d5db; }
+  /* BlueBubbles styles - Apple green */
+  .bb-stats { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #0a1f0a; border: 1px solid #166534; border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  [data-theme="light"] .bb-stats { background: #f0fdf4; border-color: #bbf7d0; }
+  .bb-stat-item { color: #4ade80; }
+  [data-theme="light"] .bb-stat-item { color: #166534; }
+  .bb-messages { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; }
+  .bb-msg-row { display: flex; }
+  .bb-msg-row.bb-row-out { justify-content: flex-end; }
+  .bb-bubble { max-width: 80%; padding: 9px 13px; border-radius: 18px; font-size: 13px; line-height: 1.5; word-wrap: break-word; }
+  .bb-bubble.bb-msg-in { background: #1a2a1a; color: #86efac; border-bottom-left-radius: 4px; border: 1px solid #166534; }
+  .bb-bubble.bb-msg-out { background: #34C759; color: #fff; border-bottom-right-radius: 4px; }
+  [data-theme="light"] .bb-bubble.bb-msg-in { background: #dcfce7; color: #14532d; border-color: #86efac; }
+  [data-theme="light"] .bb-bubble.bb-msg-out { background: #34C759; color: #fff; }
+  .bb-bubble-text { white-space: pre-wrap; }
+  .bb-bubble-time { font-size: 10px; margin-top: 3px; text-align: right; opacity: 0.65; }
   /* Google Chat styles */
   .gc-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
   .gc-stats .in { color: #1a73e8; } .gc-stats .out { color: #34a853; }
@@ -7627,6 +7668,9 @@ function closeCompModal() {
   if (_slackRefreshTimer) { clearInterval(_slackRefreshTimer); _slackRefreshTimer = null; }
   if (_waRefreshTimer) { clearInterval(_waRefreshTimer); _waRefreshTimer = null; }
   if (_sigRefreshTimer) { clearInterval(_sigRefreshTimer); _sigRefreshTimer = null; }
+  if (_gcRefreshTimer) { clearInterval(_gcRefreshTimer); _gcRefreshTimer = null; }
+  if (_mstRefreshTimer) { clearInterval(_mstRefreshTimer); _mstRefreshTimer = null; }
+  if (_mmRefreshTimer) { clearInterval(_mmRefreshTimer); _mmRefreshTimer = null; }
   if (_gwRefreshTimer) { clearInterval(_gwRefreshTimer); _gwRefreshTimer = null; }
   if (_brainRefreshTimer) { clearInterval(_brainRefreshTimer); _brainRefreshTimer = null; }
   if (_toolRefreshTimer) { clearInterval(_toolRefreshTimer); _toolRefreshTimer = null; }
@@ -11954,7 +11998,10 @@ def api_channel_webchat():
 
 @app.route('/api/channel/googlechat')
 def api_channel_googlechat():
-    return _generic_channel_data('googlechat')
+    result = _generic_channel_data('googlechat')
+    data = result.get_json()
+    data['spaces'] = []
+    return jsonify(data)
 
 @app.route('/api/channel/bluebubbles')
 def api_channel_bluebubbles():
@@ -12101,7 +12148,10 @@ def api_channel_bluebubbles():
 
 @app.route('/api/channel/msteams')
 def api_channel_msteams():
-    return _generic_channel_data('msteams')
+    result = _generic_channel_data('msteams')
+    data = result.get_json()
+    data['teams'] = []
+    return jsonify(data)
 
 @app.route('/api/channel/matrix')
 def api_channel_matrix():
@@ -12109,7 +12159,10 @@ def api_channel_matrix():
 
 @app.route('/api/channel/mattermost')
 def api_channel_mattermost():
-    return _generic_channel_data('mattermost')
+    result = _generic_channel_data('mattermost')
+    data = result.get_json()
+    data['channels'] = []
+    return jsonify(data)
 
 @app.route('/api/channel/line')
 def api_channel_line():
