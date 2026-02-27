@@ -196,3 +196,50 @@ You'll get: Usage tab (tokens, costs, model breakdown), health checks, and the F
 | Empty tabs on Cloud Run | Expected - mount a volume or use OTLP-only mode |
 | Port already in use | `--port 9000` or `OPENCLAW_DASHBOARD_PORT=9000` |
 | High memory on long runs | Metrics auto-cap at ~10K entries per category. Use `--metrics-file` to persist across restarts |
+
+---
+
+## Local Development Testing
+
+### Quick iteration with `make test-fast`
+
+The fastest way to test before pushing:
+
+```bash
+# Terminal 1: start the server
+make dev
+
+# Terminal 2: run API tests against it
+make test-fast
+```
+
+This skips E2E Playwright tests and runs only the API suite — typically completes in a few seconds.
+
+### Full local test run
+
+```bash
+make test        # runs test-api + test-e2e
+make test-api    # API tests only
+make test-e2e    # E2E browser tests only (requires Playwright)
+make lint        # syntax check + ruff warnings
+```
+
+### How the CI matrix works
+
+Every PR triggers a 4-job pipeline:
+
+1. **lint** — Python syntax check + ruff (runs in ~10s, must pass before anything else)
+2. **api-tests** — API test suite on a 4-runner matrix:
+   - `ubuntu-latest` × Python 3.9 and 3.11
+   - `macos-latest` × Python 3.11
+   - `windows-latest` × Python 3.11
+3. **e2e-tests** — Playwright browser tests on Linux only (`continue-on-error: true` while stabilising)
+4. **pip-install** — Smoke test that `pip install .` works and `--help` runs on all 3 OS platforms
+
+The matrix uses `fail-fast: false` so a failure on one platform doesn't cancel others — you get the full picture in one CI run.
+
+### Platform notes
+
+- **iMessage** tests gracefully skip on Linux/Windows (the endpoint returns `{"note": "iMessage is only available on macOS"}`)
+- **Windows** server startup uses PowerShell (`pwsh`) with `Invoke-WebRequest` for health-check polling
+- `conftest.py` uses `sys.executable` instead of hardcoded `python3` for cross-platform subprocess launch

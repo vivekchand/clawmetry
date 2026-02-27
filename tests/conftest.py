@@ -2,6 +2,7 @@
 Shared fixtures for ClawMetry test suite.
 """
 import os
+import sys
 import json
 import subprocess
 import time
@@ -75,20 +76,31 @@ def server(base_url, token):
     # Start the server
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     dashboard = os.path.join(repo_root, "dashboard.py")
+    env = os.environ.copy()
+    # Propagate the CI test token so the server accepts our requests
+    if token:
+        env["OPENCLAW_GATEWAY_TOKEN"] = token
+    # Derive port from base_url
+    try:
+        port = base_url.split(":")[-1].rstrip("/")
+    except Exception:
+        port = "8900"
     proc = subprocess.Popen(
-        ["python3", dashboard, "--port", "8900"],
+        [sys.executable, dashboard, "--port", port, "--no-debug"],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env=env,
     )
 
-    # Wait up to 10 seconds
-    for _ in range(20):
+    # Wait up to 20 seconds for the server to be ready
+    for _ in range(40):
         time.sleep(0.5)
         if _is_server_running(base_url, token):
             break
     else:
+        stderr_out = proc.stderr.read(2000) if proc.stderr else b""
         proc.terminate()
-        pytest.fail("ClawMetry server failed to start")
+        pytest.fail(f"ClawMetry server failed to start. stderr: {stderr_out.decode(errors='replace')}")
 
     yield base_url
 

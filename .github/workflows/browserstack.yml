@@ -1,0 +1,61 @@
+name: BrowserStack
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cross-browser:
+    name: Cross-Browser Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install flask pytest pytest-playwright requests browserstack-sdk
+
+      - name: Install Playwright browsers
+        run: python3 -m playwright install chromium
+
+      - name: Start ClawMetry server
+        run: |
+          OPENCLAW_GATEWAY_TOKEN=ci-test-token python3 dashboard.py --port 8900 --no-debug &
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer ci-test-token" http://localhost:8900/api/health && echo "Server ready" && break
+            sleep 1
+          done
+
+      - name: Set up BrowserStack env
+        uses: browserstack/github-actions/setup-env@master
+        with:
+          username: ${{ secrets.BROWSERSTACK_USERNAME }}
+          access-key: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+      - name: Start BrowserStack Local Tunnel
+        uses: browserstack/github-actions/setup-local@master
+        with:
+          local-testing: start
+          local-identifier: clawmetry-${{ github.run_id }}
+
+      - name: Run tests via BrowserStack SDK
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          BROWSERSTACK_LOCAL_IDENTIFIER: clawmetry-${{ github.run_id }}
+          CLAWMETRY_URL: http://localhost:8900
+          CLAWMETRY_TOKEN: ci-test-token
+        run: |
+          BUILD_NUMBER=${{ github.run_number }} browserstack-sdk python3 -m pytest tests/test_e2e_browserstack.py -v --tb=short
+
+      - name: Stop BrowserStack Local Tunnel
+        if: always()
+        uses: browserstack/github-actions/setup-local@master
+        with:
+          local-testing: stop
+          local-identifier: clawmetry-${{ github.run_id }}

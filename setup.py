@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as f:
     long_description = f.read()
 
 # Single source of truth: __version__ in dashboard.py
-with open("dashboard.py", "r") as f:
+with open("dashboard.py", "r", encoding="utf-8") as f:
     version = re.search(r'__version__\s*=\s*"(.+?)"', f.read()).group(1)
 
 setup(

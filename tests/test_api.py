@@ -189,10 +189,18 @@ class TestChannelEndpoints:
 
     def test_required_keys(self, api, base_url, channel, required_keys):
         d = assert_ok(get(api, base_url, f"/api/channel/{channel}"))
+        # iMessage may return a note on non-macOS platforms instead of full data
+        if channel == "imessage" and "note" in d:
+            assert isinstance(d["note"], str)
+            return
         assert_keys(d, *required_keys)
 
     def test_messages_is_list(self, api, base_url, channel, required_keys):
         d = assert_ok(get(api, base_url, f"/api/channel/{channel}"))
+        # iMessage may return a note on non-macOS platforms
+        if channel == "imessage" and "note" in d:
+            assert isinstance(d["note"], str)
+            return
         assert isinstance(d["messages"], list), (
             f"channel/{channel}: 'messages' should be a list"
         )
@@ -201,5 +209,8 @@ class TestChannelEndpoints:
         if "todayIn" not in required_keys:
             pytest.skip(f"channel/{channel} does not expose todayIn/todayOut")
         d = assert_ok(get(api, base_url, f"/api/channel/{channel}"))
+        # iMessage may return a note on non-macOS platforms
+        if channel == "imessage" and "note" in d:
+            pytest.skip("iMessage not available on this platform")
         assert isinstance(d["todayIn"], (int, float))
         assert isinstance(d["todayOut"], (int, float))
