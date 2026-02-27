@@ -16,7 +16,6 @@ MIT License
 """
 
 import os
-import sys
 import glob
 import json
 import socket
@@ -112,7 +111,7 @@ def _metrics_file_path():
 
 def _load_metrics_from_disk():
     """Load persisted metrics on startup."""
-    global metrics_store, _otel_last_received
+    global _otel_last_received
     path = _metrics_file_path()
     if not os.path.exists(path):
         return
@@ -223,7 +222,6 @@ def _has_otel_data():
 
 # ── Multi-Node Fleet Database ───────────────────────────────────────────
 import sqlite3 as _sqlite3
-import hashlib as _hashlib
 
 _fleet_db_lock = threading.Lock()
 
@@ -416,9 +414,7 @@ def _set_budget_config(updates):
 
 def _get_budget_status():
     """Calculate current spending vs budget limits."""
-    global _budget_paused, _budget_paused_at, _budget_paused_reason
     config = _get_budget_config()
-    now = time.time()
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     week_start = (datetime.now() - timedelta(days=datetime.now().weekday())).replace(
         hour=0, minute=0, second=0, microsecond=0).timestamp()
@@ -551,7 +547,6 @@ def _resume_gateway():
 
 def _fire_alert(rule_id, alert_type, message, channels=None):
     """Fire an alert with cooldown check."""
-    global _budget_alert_cooldowns
     now = time.time()
 
     # Check cooldown (default 30 min for budget alerts)
@@ -677,7 +672,6 @@ def _get_active_alerts():
 
 def _budget_monitor_loop():
     """Background thread: check for anomalies, agent-down, and custom alert rules."""
-    global _budget_alert_cooldowns
     while True:
         time.sleep(60)
         try:
@@ -946,7 +940,6 @@ def _process_otlp_traces(pb_data):
 def _get_otel_usage_data():
     """Aggregate OTLP metrics into usage data for the Usage tab."""
     today = datetime.now()
-    today_start = today.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     week_start = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
 
@@ -1381,7 +1374,7 @@ def get_local_ip():
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except (socket.error, OSError) as e:
+    except (socket.error, OSError):
         # Network unavailable or socket error - common in offline/restricted environments
         return "127.0.0.1"
     except Exception as e:
@@ -7387,7 +7380,6 @@ def _release_stream_slot(kind):
 
 # ── Gateway API proxy (WebSocket JSON-RPC + HTTP fallback) ──────────────
 import urllib.request as _urllib_req
-import urllib.error as _urllib_err
 import uuid as _uuid
 
 _GW_CONFIG_FILE = os.path.expanduser('~/.clawmetry-gateway.json')
@@ -7991,7 +7983,6 @@ def api_overview():
 @app.route('/api/main-activity')
 def api_main_activity():
     """Return recent tool calls from the main (most recently modified) session."""
-    import glob as _glob
     sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
     if not os.path.isdir(sessions_dir):
         return jsonify({'calls': [], 'error': 'sessions dir not found'})
@@ -9427,9 +9418,6 @@ def api_usage_export():
                         pass
             
             today = datetime.now()
-            today_str = today.strftime('%Y-%m-%d')
-            week_start = (today - timedelta(days=today.weekday())).strftime('%Y-%m-%d')
-            month_start = today.strftime('%Y-%m-01')
             
             # Build data structure similar to OTLP
             days = []
@@ -10587,7 +10575,6 @@ def api_component_gateway():
     page = routes[offset:offset + limit]
 
     # --- Enhanced: active sessions, config summary, uptime, restart history ---
-    import re as _re
 
     # Active sessions
     active_sessions = 0
@@ -11038,8 +11025,6 @@ def api_health():
 
     # 3. Memory usage (RSS of this process + overall)
     try:
-        import resource
-        rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024  # KB -> MB on Linux
         mem = subprocess.run(['free', '-m'], capture_output=True, text=True)
         mem_parts = mem.stdout.strip().split('\n')[1].split()
         used_mb = int(mem_parts[2])
@@ -11242,8 +11227,6 @@ def _get_sessions_from_files():
             try:
                 mtime = os.path.getmtime(fpath)
                 size = os.path.getsize(fpath)
-                with open(fpath) as f:
-                    first = json.loads(f.readline())
                 sid = fname.replace('.jsonl', '')
                 sessions.append({
                     'sessionId': sid,
@@ -11765,7 +11748,7 @@ def main():
     detect_config(args)
 
     # Parse --monitor-service flags
-    global EXTRA_SERVICES, MC_URL
+    global MC_URL
     for svc_spec in args.monitor_service:
         if ':' in svc_spec:
             name, port_str = svc_spec.rsplit(':', 1)
@@ -11842,7 +11825,7 @@ def main():
     if _HAS_HISTORY and _history_db:
         print(f"  History DB: {_history_db.db_path}")
     else:
-        print(f"  History:    Disabled (history.py not found)")
+        print("  History:    Disabled (history.py not found)")
     print()
 
     # Validate configuration and show warnings/tips for new users
