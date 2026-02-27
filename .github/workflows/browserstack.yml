@@ -6,20 +6,9 @@ on:
 
 jobs:
   cross-browser:
-    name: Cross-Browser (${{ matrix.browser }} on ${{ matrix.os }})
+    name: Cross-Browser Tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - browser: chrome
-            os: Windows 11
-          - browser: firefox
-            os: Windows 11
-          - browser: edge
-            os: Windows 11
-          - browser: safari
-            os: OS X Ventura
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +18,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install flask pytest requests pytest-playwright
+        run: pip install flask pytest pytest-playwright requests browserstack-sdk
+
+      - name: Install Playwright browsers
+        run: python3 -m playwright install chromium
 
       - name: Start ClawMetry server
         run: |
@@ -49,24 +41,21 @@ jobs:
         uses: browserstack/github-actions/setup-local@master
         with:
           local-testing: start
-          local-identifier: clawmetry-${{ github.run_id }}-${{ matrix.browser }}
+          local-identifier: clawmetry-${{ github.run_id }}
 
-      - name: Run E2E tests on BrowserStack
+      - name: Run tests via BrowserStack SDK
         env:
           BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
-          BROWSERSTACK_LOCAL_IDENTIFIER: clawmetry-${{ github.run_id }}-${{ matrix.browser }}
-          BS_BROWSER: ${{ matrix.browser }}
-          BS_OS: ${{ matrix.os }}
+          BROWSERSTACK_LOCAL_IDENTIFIER: clawmetry-${{ github.run_id }}
           CLAWMETRY_URL: http://localhost:8900
           CLAWMETRY_TOKEN: ci-test-token
-        run: python3 -m pytest tests/test_e2e_browserstack.py -v --tb=short
+        run: |
+          browserstack-sdk python3 -m pytest tests/test_e2e_browserstack.py -v --tb=short
 
       - name: Stop BrowserStack Local Tunnel
         if: always()
         uses: browserstack/github-actions/setup-local@master
         with:
           local-testing: stop
-          local-identifier: clawmetry-${{ github.run_id }}-${{ matrix.browser }}
-          username: ${{ secrets.BROWSERSTACK_USERNAME }}
-          access-key: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          local-identifier: clawmetry-${{ github.run_id }}

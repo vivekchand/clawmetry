@@ -1,0 +1,36 @@
+userName: ${BROWSERSTACK_USERNAME}
+accessKey: ${BROWSERSTACK_ACCESS_KEY}
+
+buildName: "ClawMetry PR Tests"
+projectName: "ClawMetry"
+
+# Local testing - allows BrowserStack to reach localhost:8900
+browserstackLocal: true
+
+platforms:
+  - browserName: chrome
+    browserVersion: latest
+    os: Windows
+    osVersion: 11
+  - browserName: firefox
+    browserVersion: latest
+    os: Windows
+    osVersion: 11
+  - browserName: edge
+    browserVersion: latest
+    os: Windows
+    osVersion: 11
+  - browserName: playwright-webkit
+    browserVersion: latest
+    os: OS X
+    osVersion: Ventura
+
+parallelsPerPlatform: 1
+
+# Test timeouts
+testTimeout: 30000
+
+# BrowserStack session settings
+debug: false
+networkLogs: false
+consoleLogs: errors
