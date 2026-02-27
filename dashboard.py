@@ -14218,6 +14218,9 @@ def main():
     args = parser.parse_args()
     detect_config(args)
 
+    # Load gateway config early so auth works from startup
+    _load_gw_config()
+
     # Parse --monitor-service flags
     global EXTRA_SERVICES, MC_URL
     for svc_spec in args.monitor_service:
