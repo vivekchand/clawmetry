@@ -2007,6 +2007,101 @@ DASHBOARD_HTML = r"""
   .imsg-bubble .imsg-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
   .imsg-bubble .imsg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
   .imsg-bubble .imsg-text { white-space: pre-wrap; }
+  /* Google Chat styles */
+  .gc-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .gc-stats .in { color: #1a73e8; } .gc-stats .out { color: #34a853; }
+  .gc-chat { display: flex; flex-direction: column; gap: 8px; }
+  .gc-bubble { max-width: 85%; padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .gc-bubble.in { background: #1a2a4a; border: 1px solid #1a73e8; color: #c0d8ff; align-self: flex-start; border-bottom-left-radius: 2px; }
+  .gc-bubble.out { background: #1a3a2a; border: 1px solid #34a853; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 2px; }
+  [data-theme="light"] .gc-bubble.in { background: #e8f0fe; border-color: #1a73e8; color: #1a237e; }
+  [data-theme="light"] .gc-bubble.out { background: #e6f4ea; border-color: #34a853; color: #1b5e20; }
+  .gc-bubble .gc-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #1a73e8; }
+  .gc-bubble .gc-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .gc-bubble .gc-text { white-space: pre-wrap; }
+  /* MS Teams styles */
+  .mst-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .mst-stats .in { color: #6264A7; } .mst-stats .out { color: #33b55b; }
+  .mst-chat { display: flex; flex-direction: column; gap: 8px; }
+  .mst-bubble { max-width: 85%; padding: 10px 14px; border-radius: 6px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .mst-bubble.in { background: #1e1e3a; border: 1px solid #6264A7; color: #c8c8ff; align-self: flex-start; border-bottom-left-radius: 2px; }
+  .mst-bubble.out { background: #1a3a2a; border: 1px solid #33b55b; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 2px; }
+  [data-theme="light"] .mst-bubble.in { background: #f0f0ff; border-color: #6264A7; color: #2d2d7a; }
+  [data-theme="light"] .mst-bubble.out { background: #e6f4ea; border-color: #33b55b; color: #1b5e20; }
+  .mst-bubble .mst-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #6264A7; }
+  .mst-bubble .mst-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .mst-bubble .mst-text { white-space: pre-wrap; }
+  /* Mattermost styles */
+  .mm-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .mm-stats .in { color: #0058CC; } .mm-stats .out { color: #3db887; }
+  .mm-chat { display: flex; flex-direction: column; gap: 8px; }
+  .mm-bubble { max-width: 85%; padding: 10px 14px; border-radius: 4px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .mm-bubble.in { background: #0a1a3a; border-left: 3px solid #0058CC; color: #b0ccff; align-self: flex-start; }
+  .mm-bubble.out { background: #0a2a1a; border-left: 3px solid #3db887; color: #b0ffe0; align-self: flex-end; }
+  [data-theme="light"] .mm-bubble.in { background: #e8f0ff; border-color: #0058CC; color: #003399; }
+  [data-theme="light"] .mm-bubble.out { background: #e6faf3; border-color: #3db887; color: #005a3c; }
+  .mm-bubble .mm-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #0058CC; }
+  .mm-bubble .mm-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .mm-bubble .mm-text { white-space: pre-wrap; }
+
+  /* === WhatsApp Channel === */
+  .wa-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .wa-stats .in { color: #25D366; } .wa-stats .out { color: #128C7E; }
+  .wa-chat { display: flex; flex-direction: column; gap: 8px; }
+  .wa-bubble { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .wa-bubble.in { background: #1a2f1a; border: 1px solid #25D366; color: #b0ffc0; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .wa-bubble.out { background: #0d2b1f; border: 1px solid #128C7E; color: #90e8d0; align-self: flex-end; border-bottom-right-radius: 4px; }
+  [data-theme="light"] .wa-bubble.in { background: #dcfce7; border-color: #25D366; color: #14532d; }
+  [data-theme="light"] .wa-bubble.out { background: #d1faf0; border-color: #128C7E; color: #0d4a36; }
+  .wa-bubble .wa-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
+  .wa-bubble .wa-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .wa-bubble .wa-text { white-space: pre-wrap; }
+
+  /* === Signal Channel === */
+  .sig-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .sig-stats .in { color: #3A76F0; } .sig-stats .out { color: #5b4fe8; }
+  .sig-chat { display: flex; flex-direction: column; gap: 8px; }
+  .sig-bubble { max-width: 85%; padding: 10px 14px; border-radius: 18px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .sig-bubble.in { background: #1a2040; border: 1px solid #3A76F0; color: #b0ccff; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .sig-bubble.out { background: #1e1a40; border: 1px solid #5b4fe8; color: #d0c8ff; align-self: flex-end; border-bottom-right-radius: 4px; }
+  [data-theme="light"] .sig-bubble.in { background: #dbeafe; border-color: #3A76F0; color: #1e3a5f; }
+  [data-theme="light"] .sig-bubble.out { background: #ede9fe; border-color: #5b4fe8; color: #3b0764; }
+  .sig-bubble .sig-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
+  .sig-bubble .sig-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .sig-bubble .sig-text { white-space: pre-wrap; }
+
+  /* === Discord Channel === */
+  .discord-stats { display: flex; gap: 16px; padding: 10px 14px; background: #2f3136; border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .discord-stats .in { color: #5865F2; } .discord-stats .out { color: #57F287; }
+  .discord-server-info { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #36393f; border-radius: 6px; margin-bottom: 10px; font-size: 12px; color: #b9bbbe; }
+  .discord-server-info .guild-name { color: #5865F2; font-weight: 700; } .discord-server-info .ch-name { color: #8a8f95; }
+  .discord-chat { display: flex; flex-direction: column; gap: 8px; }
+  .discord-bubble { max-width: 85%; padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .discord-bubble.in { background: #36393f; border: 1px solid #5865F2; color: #dcddde; align-self: flex-start; border-bottom-left-radius: 2px; }
+  .discord-bubble.out { background: #2f3136; border: 1px solid #57F287; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 2px; }
+  [data-theme="light"] .discord-bubble.in { background: #eef0ff; border-color: #5865F2; color: #2c2f33; }
+  [data-theme="light"] .discord-bubble.out { background: #f0fff4; border-color: #3ba55d; color: #1a3a24; }
+  .discord-bubble .discord-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #5865F2; }
+  .discord-bubble.out .discord-sender { color: #57F287; }
+  .discord-bubble .discord-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .discord-bubble .discord-text { white-space: pre-wrap; }
+
+  /* === Slack Channel === */
+  .slack-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .slack-stats .in { color: #E01E5A; } .slack-stats .out { color: #2EB67D; }
+  .slack-workspace-info { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #4A154B; border-radius: 6px; margin-bottom: 10px; font-size: 12px; color: #cfc3cf; }
+  .slack-workspace-info .ws-name { color: #ECB22E; font-weight: 700; } .slack-workspace-info .ch-name { color: #36C5F0; }
+  .slack-chat { display: flex; flex-direction: column; gap: 8px; }
+  .slack-bubble { max-width: 85%; padding: 10px 14px; border-radius: 6px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .slack-bubble.in { background: #1a1a2e; border: 1px solid #E01E5A; color: #f0c0d0; align-self: flex-start; border-bottom-left-radius: 2px; }
+  .slack-bubble.out { background: #0d1f18; border: 1px solid #2EB67D; color: #b0f0d8; align-self: flex-end; border-bottom-right-radius: 2px; }
+  [data-theme="light"] .slack-bubble.in { background: #fce8f0; border-color: #E01E5A; color: #4A154B; }
+  [data-theme="light"] .slack-bubble.out { background: #e8f8f0; border-color: #2EB67D; color: #0a3a25; }
+  .slack-bubble .slack-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #E01E5A; }
+  .slack-bubble.out .slack-sender { color: #2EB67D; }
+  .slack-bubble .slack-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .slack-bubble .slack-text { white-space: pre-wrap; }
+
   .tg-load-more button { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; padding: 6px 20px; color: var(--text-secondary); cursor: pointer; font-size: 13px; }
   .tg-load-more button:hover { background: var(--button-hover); }
   .comp-modal-footer { border-top: 1px solid var(--border-primary); padding: 10px 20px; font-size: 11px; color: var(--text-muted); }
@@ -5041,47 +5136,43 @@ function hideUnconfiguredChannels(svgRoot) {
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
     var active = d.channels || ['telegram', 'signal', 'whatsapp'];
     // Build display list: up to 3 channels, prioritized by SLOT_ORDER
-    var allChannels = SLOT_ORDER.filter(function(ch) { return active.indexOf(ch) !== -1; }).slice(0, 3);
-    var hiddenCount = 0;
-    allChannels.forEach(function(ch) {
+    var visibleChannels = SLOT_ORDER.filter(function(ch) { return active.indexOf(ch) !== -1; }).slice(0, 3);
+    // First: hide ALL known channel nodes
+    Object.keys(channelMap).forEach(function(ch) {
       var info = channelMap[ch];
-      if (!info) return;
       var node = svgRoot.getElementById ? svgRoot.getElementById(info.node) : svgRoot.querySelector('#' + info.node);
-      if (active.indexOf(ch) === -1) {
-        hiddenCount++;
-        if (node) node.style.display = 'none';
-        info.paths.forEach(function(pid) {
-          var p = svgRoot.getElementById ? svgRoot.getElementById(pid) : svgRoot.querySelector('#' + pid);
-          if (p) p.style.display = 'none';
-        });
-      } else {
-        // Explicitly show active channel nodes
-        if (node) node.style.display = '';
-      }
+      if (node) node.style.display = 'none';
     });
-    // Always reposition visible channel nodes for clean spacing
-    var visibleChannels = allChannels.filter(function(ch) { return active.indexOf(ch) !== -1; });
-    var yPositions = [120, 175, 230]; // default 3-channel positions
-    if (visibleChannels.length === 1) yPositions = [175];
+    // Hide all channel paths too
+    ['path-human-tg','path-tg-gw','path-human-sig','path-sig-gw','path-human-wa','path-wa-gw'].forEach(function(pid) {
+      var p = svgRoot.getElementById ? svgRoot.getElementById(pid) : svgRoot.querySelector('#' + pid);
+      if (p) p.style.display = 'none';
+    });
+    // Then: show only the active ones and reposition with clean spacing
+    var yPositions = [120, 183, 246]; // default 3-channel positions (63px gap)
+    if (visibleChannels.length === 1) yPositions = [183];
     else if (visibleChannels.length === 2) yPositions = [145, 225];
     visibleChannels.forEach(function(ch, i) {
       var info = channelMap[ch];
       if (!info) return;
       var node = svgRoot.getElementById ? svgRoot.getElementById(info.node) : svgRoot.querySelector('#' + info.node);
       if (!node) return;
+      node.style.display = ''; // show it
       var rect = node.querySelector('rect');
       var text = node.querySelector('text');
       var targetY = yPositions[i];
       if (rect) { rect.setAttribute('y', targetY - 20); }
       if (text) { text.setAttribute('y', targetY + 5); }
-      // Update paths from human to channel and channel to gateway
+      // Show and update paths
       var humanPath = svgRoot.getElementById ? svgRoot.getElementById(info.paths[0]) : svgRoot.querySelector('#' + info.paths[0]);
       if (humanPath) {
+        humanPath.style.display = '';
         humanPath.setAttribute('d', 'M 60 56 C 60 ' + (targetY - 30) + ', 65 ' + (targetY - 15) + ', 75 ' + (targetY - 20));
       }
       var gwPath = svgRoot.getElementById ? svgRoot.getElementById(info.paths[1]) : svgRoot.querySelector('#' + info.paths[1]);
       if (gwPath) {
-        gwPath.setAttribute('d', 'M 130 ' + targetY + ' C 150 ' + targetY + ', 160 183, 180 183');
+        gwPath.style.display = '';
+        gwPath.setAttribute('d', 'M 130 ' + targetY + ' C 150 ' + targetY + ', 160 ' + (183) + ', 180 ' + (183));
       }
     });
   }).catch(function(){});
@@ -5569,25 +5660,18 @@ function initOverviewFlow() {
     var OV_SLOT_ORDER = ['telegram', 'whatsapp', 'imessage', 'signal', 'discord', 'slack',
                          'irc', 'webchat', 'googlechat', 'bluebubbles', 'msteams', 'matrix',
                          'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo'];
-    var allChannels = OV_SLOT_ORDER.filter(function(ch) { return active.indexOf(ch) !== -1; }).slice(0, 3);
-    var hiddenCount = 0;
-    allChannels.forEach(function(ch) {
+    var visibleChannels = OV_SLOT_ORDER.filter(function(ch) { return active.indexOf(ch) !== -1; }).slice(0, 3);
+    // Hide ALL channel nodes first, then show only active ones
+    Object.keys(channelMap).forEach(function(ch) {
       var info = channelMap[ch];
-      if (!info) return;
       var node = document.getElementById(info.node);
-      if (active.indexOf(ch) === -1) {
-        hiddenCount++;
-        if (node) node.style.display = 'none';
-        info.paths.forEach(function(pid) {
-          var p = document.getElementById(pid);
-          if (p) p.style.display = 'none';
-        });
-      } else {
-        if (node) node.style.display = '';
-      }
+      if (node) node.style.display = 'none';
     });
-    var visibleChannels = allChannels.filter(function(ch) { return active.indexOf(ch) !== -1; });
-    var yPositions = visibleChannels.length === 1 ? [175] : visibleChannels.length === 2 ? [145, 225] : [120, 175, 230];
+    ['ov-path-human-tg','ov-path-tg-gw','ov-path-human-sig','ov-path-sig-gw','ov-path-human-wa','ov-path-wa-gw'].forEach(function(pid) {
+      var p = document.getElementById(pid);
+      if (p) p.style.display = 'none';
+    });
+    var yPositions = visibleChannels.length === 1 ? [183] : visibleChannels.length === 2 ? [145, 225] : [120, 183, 246];
     visibleChannels.forEach(function(ch, i) {
       var info = channelMap[ch];
       if (!info) return;
@@ -5831,6 +5915,13 @@ function initOverviewCompClickHandlers() {
 }
 var _tgRefreshTimer = null;
 var _imsgRefreshTimer = null;
+var _discordRefreshTimer = null;
+var _slackRefreshTimer = null;
+var _waRefreshTimer = null;
+var _sigRefreshTimer = null;
+var _gcRefreshTimer = null;
+var _mstRefreshTimer = null;
+var _mmRefreshTimer = null;
 var _tgOffset = 0;
 var _tgAllMessages = [];
 
@@ -5846,6 +5937,11 @@ function openCompModal(nodeId) {
   // Clear ALL existing refresh timers to prevent stale data overwriting new modal
   if (_tgRefreshTimer) { clearInterval(_tgRefreshTimer); _tgRefreshTimer = null; }
   if (_imsgRefreshTimer) { clearInterval(_imsgRefreshTimer); _imsgRefreshTimer = null; }
+  if (_waRefreshTimer) { clearInterval(_waRefreshTimer); _waRefreshTimer = null; }
+  if (_sigRefreshTimer) { clearInterval(_sigRefreshTimer); _sigRefreshTimer = null; }
+  if (_gcRefreshTimer) { clearInterval(_gcRefreshTimer); _gcRefreshTimer = null; }
+  if (_mstRefreshTimer) { clearInterval(_mstRefreshTimer); _mstRefreshTimer = null; }
+  if (_mmRefreshTimer) { clearInterval(_mmRefreshTimer); _mmRefreshTimer = null; }
   if (_gwRefreshTimer) { clearInterval(_gwRefreshTimer); _gwRefreshTimer = null; }
   if (_brainRefreshTimer) { clearInterval(_brainRefreshTimer); _brainRefreshTimer = null; }
   if (_toolRefreshTimer) { clearInterval(_toolRefreshTimer); _toolRefreshTimer = null; }
@@ -5881,8 +5977,64 @@ function openCompModal(nodeId) {
     return;
   }
 
+  if (nodeId === 'node-whatsapp') {
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading WhatsApp messages...</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    loadWhatsAppMessages(false);
+    _waRefreshTimer = setInterval(function() { loadWhatsAppMessages(true); }, 10000);
+    return;
+  }
+
+  if (nodeId === 'node-signal') {
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Signal messages...</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    loadSignalMessages(false);
+    _sigRefreshTimer = setInterval(function() { loadSignalMessages(true); }, 10000);
+    return;
+  }
+
+  if (nodeId === 'node-discord') {
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Discord messages...</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    loadDiscordMessages(false);
+    _discordRefreshTimer = setInterval(function() { loadDiscordMessages(true); }, 10000);
+    return;
+  }
+
+  if (nodeId === 'node-slack') {
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Slack messages...</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    loadSlackMessages(false);
+    _slackRefreshTimer = setInterval(function() { loadSlackMessages(true); }, 10000);
+    return;
+  }
+
+  if (nodeId === 'node-googlechat') {
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Google Chat messages...</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    loadGoogleChatMessages(false);
+    _gcRefreshTimer = setInterval(function() { loadGoogleChatMessages(true); }, 10000);
+    return;
+  }
+
+  if (nodeId === 'node-msteams') {
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading MS Teams messages...</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    loadMSTeamsMessages(false);
+    _mstRefreshTimer = setInterval(function() { loadMSTeamsMessages(true); }, 10000);
+    return;
+  }
+
+  if (nodeId === 'node-mattermost') {
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Mattermost messages...</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    loadMattermostMessages(false);
+    _mmRefreshTimer = setInterval(function() { loadMattermostMessages(true); }, 10000);
+    return;
+  }
+
   // Generic channel handler for all other channel types
-  var GENERIC_CHANNELS = ['node-discord','node-slack','node-irc','node-webchat','node-googlechat',
+  var GENERIC_CHANNELS = ['node-irc','node-webchat','node-googlechat',
     'node-bluebubbles','node-msteams','node-matrix','node-mattermost','node-line',
     'node-nostr','node-twitch','node-feishu','node-zalo'];
   if (GENERIC_CHANNELS.indexOf(nodeId) !== -1 && c.chKey) {
@@ -6060,6 +6212,74 @@ function loadIMessageMessages(isRefresh) {
   });
 }
 
+function loadWhatsAppMessages(isRefresh) {
+  var expectedNodeId = 'node-whatsapp';
+  var url = '/api/channel/whatsapp?limit=50';
+  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    if (!isCompModalActive(expectedNodeId)) return;
+    var msgs = data.messages || [];
+    var body = document.getElementById('comp-modal-body');
+    var html = '<div class="wa-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    html += '<div class="wa-chat">';
+    if (msgs.length === 0) {
+      html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No WhatsApp messages found</div>';
+    }
+    msgs.forEach(function(m) {
+      var dir = m.direction === 'in' ? 'in' : 'out';
+      var ts = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+      var date = m.timestamp ? new Date(m.timestamp).toLocaleDateString([], {month:'short',day:'numeric'}) : '';
+      var text = m.text || (m.direction === 'in' ? '(message received)' : '(reply sent)');
+      html += '<div class="wa-bubble ' + dir + '">';
+      html += '<div class="wa-sender">' + escapeHtml(m.sender || (dir === 'in' ? 'User' : 'Clawd')) + '</div>';
+      html += '<div class="wa-text md-rendered">' + renderMarkdown(text) + '</div>';
+      html += '<div class="wa-time">' + date + ' ' + ts + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+    body.innerHTML = html;
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total || msgs.length) + ' total messages';
+  }).catch(function(e) {
+    if (!isCompModalActive(expectedNodeId)) return;
+    if (!isRefresh) {
+      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load WhatsApp messages</div>';
+    }
+  });
+}
+
+function loadSignalMessages(isRefresh) {
+  var expectedNodeId = 'node-signal';
+  var url = '/api/channel/signal?limit=50';
+  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    if (!isCompModalActive(expectedNodeId)) return;
+    var msgs = data.messages || [];
+    var body = document.getElementById('comp-modal-body');
+    var html = '<div class="sig-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    html += '<div class="sig-chat">';
+    if (msgs.length === 0) {
+      html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No Signal messages found</div>';
+    }
+    msgs.forEach(function(m) {
+      var dir = m.direction === 'in' ? 'in' : 'out';
+      var ts = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+      var date = m.timestamp ? new Date(m.timestamp).toLocaleDateString([], {month:'short',day:'numeric'}) : '';
+      var text = m.text || (m.direction === 'in' ? '(message received)' : '(reply sent)');
+      html += '<div class="sig-bubble ' + dir + '">';
+      html += '<div class="sig-sender">' + escapeHtml(m.sender || (dir === 'in' ? 'User' : 'Clawd')) + '</div>';
+      html += '<div class="sig-text md-rendered">' + renderMarkdown(text) + '</div>';
+      html += '<div class="sig-time">' + date + ' ' + ts + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+    body.innerHTML = html;
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total || msgs.length) + ' total messages';
+  }).catch(function(e) {
+    if (!isCompModalActive(expectedNodeId)) return;
+    if (!isRefresh) {
+      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load Signal messages</div>';
+    }
+  });
+}
+
 function escapeHtml(s) {
   var d = document.createElement('div'); d.textContent = s; return d.innerHTML;
 }
@@ -6103,6 +6323,93 @@ function renderMarkdown(text) {
   s = s.replace(/<p>(<blockquote>)/g, '$1');
   s = s.replace(/(<\/blockquote>)<\/p>/g, '$1');
   return s;
+}
+
+function loadDiscordMessages(isRefresh) {
+  var expectedNodeId = 'node-discord';
+  if (!isCompModalActive(expectedNodeId) && isRefresh) return;
+  fetch('/api/channel/discord?limit=50').then(function(r) { return r.json(); }).then(function(data) {
+    if (!isCompModalActive(expectedNodeId)) return;
+    var msgs = data.messages || [];
+    var body = document.getElementById('comp-modal-body');
+    var html = '<div class="discord-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    // Show guild/channel info if available
+    var guilds = data.guilds || [];
+    var channels = data.channels || [];
+    if (guilds.length || channels.length) {
+      html += '<div class="discord-server-info">';
+      html += '<span style="opacity:0.6;">🏠</span>';
+      if (guilds.length) html += '<span class="guild-name">' + escapeHtml(guilds[0]) + '</span>';
+      if (channels.length) html += '<span class="ch-name">#' + escapeHtml(channels[0]) + '</span>';
+      html += '</div>';
+    }
+    html += '<div class="discord-chat" style="max-height:60vh;overflow-y:auto;">';
+    if (msgs.length === 0) {
+      html += '<div style="text-align:center;padding:40px;color:var(--text-muted);">No Discord messages found</div>';
+    }
+    msgs.slice().reverse().forEach(function(m) {
+      var dir = m.direction === 'in' ? 'in' : 'out';
+      var sender = escapeHtml(m.sender || (dir === 'in' ? 'User' : 'Bot'));
+      var ts = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+      var date = m.timestamp ? new Date(m.timestamp).toLocaleDateString([], {month:'short',day:'numeric'}) : '';
+      var text = escapeHtml((m.text || '').substring(0, 500));
+      html += '<div style="display:flex;flex-direction:column;align-items:' + (dir==='out'?'flex-end':'flex-start') + ';">';
+      html += '<div class="discord-bubble ' + dir + '">';
+      html += '<div class="discord-sender">' + sender + '</div>';
+      html += '<div class="discord-text">' + text + '</div>';
+      html += '<div class="discord-time">' + (date ? date + ' · ' : '') + ts + '</div>';
+      html += '</div></div>';
+    });
+    html += '</div>';
+    body.innerHTML = html;
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+  }).catch(function(e) {
+    if (!isCompModalActive(expectedNodeId)) return;
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load Discord: ' + escapeHtml(e.message) + '</div>';
+  });
+}
+
+function loadSlackMessages(isRefresh) {
+  var expectedNodeId = 'node-slack';
+  if (!isCompModalActive(expectedNodeId) && isRefresh) return;
+  fetch('/api/channel/slack?limit=50').then(function(r) { return r.json(); }).then(function(data) {
+    if (!isCompModalActive(expectedNodeId)) return;
+    var msgs = data.messages || [];
+    var body = document.getElementById('comp-modal-body');
+    var html = '<div class="slack-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    var workspaces = data.workspaces || [];
+    var channels = data.channels || [];
+    if (workspaces.length || channels.length) {
+      html += '<div class="slack-workspace-info">';
+      html += '<span style="opacity:0.6;">💼</span>';
+      if (workspaces.length) html += '<span class="ws-name">' + escapeHtml(workspaces[0]) + '</span>';
+      if (channels.length) html += '<span class="ch-name">#' + escapeHtml(channels[0]) + '</span>';
+      html += '</div>';
+    }
+    html += '<div class="slack-chat" style="max-height:60vh;overflow-y:auto;">';
+    if (msgs.length === 0) {
+      html += '<div style="text-align:center;padding:40px;color:var(--text-muted);">No Slack messages found</div>';
+    }
+    msgs.slice().reverse().forEach(function(m) {
+      var dir = m.direction === 'in' ? 'in' : 'out';
+      var sender = escapeHtml(m.sender || (dir === 'in' ? 'User' : 'Bot'));
+      var ts = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+      var date = m.timestamp ? new Date(m.timestamp).toLocaleDateString([], {month:'short',day:'numeric'}) : '';
+      var text = escapeHtml((m.text || '').substring(0, 500));
+      html += '<div style="display:flex;flex-direction:column;align-items:' + (dir==='out'?'flex-end':'flex-start') + ';">';
+      html += '<div class="slack-bubble ' + dir + '">';
+      html += '<div class="slack-sender">' + sender + '</div>';
+      html += '<div class="slack-text">' + text + '</div>';
+      html += '<div class="slack-time">' + (date ? date + ' · ' : '') + ts + '</div>';
+      html += '</div></div>';
+    });
+    html += '</div>';
+    body.innerHTML = html;
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+  }).catch(function(e) {
+    if (!isCompModalActive(expectedNodeId)) return;
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load Slack: ' + escapeHtml(e.message) + '</div>';
+  });
 }
 
 function loadGenericChannelData(nodeId, chKey, comp, isRefresh) {
@@ -6540,6 +6847,8 @@ function loadComponentWithTimeContext(nodeId) {
   // Clear existing refresh timers
   if (_tgRefreshTimer) { clearInterval(_tgRefreshTimer); _tgRefreshTimer = null; }
   if (_imsgRefreshTimer) { clearInterval(_imsgRefreshTimer); _imsgRefreshTimer = null; }
+  if (_discordRefreshTimer) { clearInterval(_discordRefreshTimer); _discordRefreshTimer = null; }
+  if (_slackRefreshTimer) { clearInterval(_slackRefreshTimer); _slackRefreshTimer = null; }
   if (_gwRefreshTimer) { clearInterval(_gwRefreshTimer); _gwRefreshTimer = null; }
   if (_brainRefreshTimer) { clearInterval(_brainRefreshTimer); _brainRefreshTimer = null; }
   if (_toolRefreshTimer) { clearInterval(_toolRefreshTimer); _toolRefreshTimer = null; }
@@ -6998,6 +7307,10 @@ function _renderEventList(events, toolKey, color) {
 function closeCompModal() {
   if (_tgRefreshTimer) { clearInterval(_tgRefreshTimer); _tgRefreshTimer = null; }
   if (_imsgRefreshTimer) { clearInterval(_imsgRefreshTimer); _imsgRefreshTimer = null; }
+  if (_discordRefreshTimer) { clearInterval(_discordRefreshTimer); _discordRefreshTimer = null; }
+  if (_slackRefreshTimer) { clearInterval(_slackRefreshTimer); _slackRefreshTimer = null; }
+  if (_waRefreshTimer) { clearInterval(_waRefreshTimer); _waRefreshTimer = null; }
+  if (_sigRefreshTimer) { clearInterval(_sigRefreshTimer); _sigRefreshTimer = null; }
   if (_gwRefreshTimer) { clearInterval(_gwRefreshTimer); _gwRefreshTimer = null; }
   if (_brainRefreshTimer) { clearInterval(_brainRefreshTimer); _brainRefreshTimer = null; }
   if (_toolRefreshTimer) { clearInterval(_toolRefreshTimer); _toolRefreshTimer = null; }
@@ -10516,6 +10829,182 @@ def api_channel_imessage():
     return jsonify({'messages': page, 'total': total, 'todayIn': today_in, 'todayOut': today_out})
 
 
+@app.route('/api/channel/whatsapp')
+def api_channel_whatsapp():
+    """Parse logs and session transcripts for WhatsApp message activity."""
+    import re
+    limit = request.args.get('limit', 50, type=int)
+    messages = []
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_files = []
+    for ld in log_dirs:
+        if os.path.isdir(ld):
+            for f in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:2]:
+                log_files.append(f)
+
+    sessions_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
+
+    for lf in log_files:
+        try:
+            result = subprocess.run(
+                ['grep', '-i', 'messageChannel=whatsapp\\|whatsapp.*deliver', lf],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg1 = obj.get('1', '') or obj.get('0', '')
+                msg0 = obj.get('0', '')
+                ts = obj.get('time', '') or (obj.get('_meta', {}) or {}).get('date', '')
+
+                if 'messageChannel=whatsapp' in msg1 and 'run start' in msg1:
+                    sid_match = re.search(r'sessionId=([a-f0-9-]+)', msg1)
+                    sid = sid_match.group(1) if sid_match else ''
+                    text = ''
+                    if sid:
+                        sf = os.path.join(sessions_dir, sid + '.jsonl')
+                        if os.path.exists(sf):
+                            try:
+                                with open(sf, 'r', errors='replace') as f:
+                                    for sline in f:
+                                        try:
+                                            sd = json.loads(sline.strip())
+                                        except Exception:
+                                            continue
+                                        sm = sd.get('message', {})
+                                        if sm.get('role') == 'user':
+                                            content = sm.get('content', '')
+                                            if isinstance(content, list):
+                                                for c in content:
+                                                    if isinstance(c, dict) and c.get('type') == 'text':
+                                                        txt = c.get('text', '')
+                                                        if txt and 'HEARTBEAT' not in txt:
+                                                            text = txt[:300]
+                                                            break
+                                            elif isinstance(content, str) and 'HEARTBEAT' not in content:
+                                                text = content[:300]
+                                            if text:
+                                                break
+                            except Exception:
+                                pass
+                    messages.append({'timestamp': ts, 'direction': 'in', 'sender': 'User', 'text': text, 'sessionId': sid})
+
+                if 'whatsapp' in msg0.lower() and 'deliver' in msg0.lower():
+                    messages.append({'timestamp': ts, 'direction': 'out', 'sender': 'Clawd', 'text': '(message sent)', 'sessionId': ''})
+        except Exception:
+            pass
+
+    # Deduplicate and sort
+    seen = set()
+    unique = []
+    for m in messages:
+        key = (m['timestamp'], m['direction'], m['text'][:50])
+        if key not in seen:
+            seen.add(key)
+            unique.append(m)
+    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+
+    today_in = sum(1 for m in unique if m['direction'] == 'in' and today in m.get('timestamp', ''))
+    today_out = sum(1 for m in unique if m['direction'] == 'out' and today in m.get('timestamp', ''))
+    total = len(unique)
+    return jsonify({'messages': unique[:limit], 'total': total, 'todayIn': today_in, 'todayOut': today_out})
+
+
+@app.route('/api/channel/signal')
+def api_channel_signal():
+    """Parse logs and session transcripts for Signal message activity."""
+    import re
+    limit = request.args.get('limit', 50, type=int)
+    messages = []
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    log_files = []
+    for ld in log_dirs:
+        if os.path.isdir(ld):
+            for f in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:2]:
+                log_files.append(f)
+
+    sessions_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
+
+    for lf in log_files:
+        try:
+            result = subprocess.run(
+                ['grep', '-i', 'messageChannel=signal\\|signal.*deliver', lf],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg1 = obj.get('1', '') or obj.get('0', '')
+                msg0 = obj.get('0', '')
+                ts = obj.get('time', '') or (obj.get('_meta', {}) or {}).get('date', '')
+
+                if 'messageChannel=signal' in msg1 and 'run start' in msg1:
+                    sid_match = re.search(r'sessionId=([a-f0-9-]+)', msg1)
+                    sid = sid_match.group(1) if sid_match else ''
+                    text = ''
+                    if sid:
+                        sf = os.path.join(sessions_dir, sid + '.jsonl')
+                        if os.path.exists(sf):
+                            try:
+                                with open(sf, 'r', errors='replace') as f:
+                                    for sline in f:
+                                        try:
+                                            sd = json.loads(sline.strip())
+                                        except Exception:
+                                            continue
+                                        sm = sd.get('message', {})
+                                        if sm.get('role') == 'user':
+                                            content = sm.get('content', '')
+                                            if isinstance(content, list):
+                                                for c in content:
+                                                    if isinstance(c, dict) and c.get('type') == 'text':
+                                                        txt = c.get('text', '')
+                                                        if txt and 'HEARTBEAT' not in txt:
+                                                            text = txt[:300]
+                                                            break
+                                            elif isinstance(content, str) and 'HEARTBEAT' not in content:
+                                                text = content[:300]
+                                            if text:
+                                                break
+                            except Exception:
+                                pass
+                    messages.append({'timestamp': ts, 'direction': 'in', 'sender': 'User', 'text': text, 'sessionId': sid})
+
+                if 'signal' in msg0.lower() and 'deliver' in msg0.lower():
+                    messages.append({'timestamp': ts, 'direction': 'out', 'sender': 'Clawd', 'text': '(message sent)', 'sessionId': ''})
+        except Exception:
+            pass
+
+    # Deduplicate and sort
+    seen = set()
+    unique = []
+    for m in messages:
+        key = (m['timestamp'], m['direction'], m['text'][:50])
+        if key not in seen:
+            seen.add(key)
+            unique.append(m)
+    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+
+    today_in = sum(1 for m in unique if m['direction'] == 'in' and today in m.get('timestamp', ''))
+    today_out = sum(1 for m in unique if m['direction'] == 'out' and today in m.get('timestamp', ''))
+    total = len(unique)
+    return jsonify({'messages': unique[:limit], 'total': total, 'todayIn': today_in, 'todayOut': today_out})
+
+
 def _generic_channel_data(channel_key):
     """Generic channel data fetcher: scans session transcripts for channel metadata."""
     import re
@@ -10654,11 +11143,248 @@ def api_channel_slack():
 
 @app.route('/api/channel/irc')
 def api_channel_irc():
-    return _generic_channel_data('irc')
+    """IRC channel data: log-based, extracts channel names and nicks."""
+    import re
+    limit = request.args.get('limit', 50, type=int)
+    today = datetime.now().strftime('%Y-%m-%d')
+    base = _generic_channel_data.__wrapped__('irc') if hasattr(_generic_channel_data, '__wrapped__') else None
+
+    messages = []
+    today_in = 0
+    today_out = 0
+    channels = set()
+    nicks = set()
+
+    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    for ld in log_dirs:
+        if not os.path.isdir(ld):
+            continue
+        for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
+            try:
+                result = subprocess.run(
+                    ['grep', '-i', 'messageChannel=irc', lf],
+                    capture_output=True, text=True, timeout=5
+                )
+                for line in result.stdout.splitlines():
+                    try:
+                        obj = json.loads(line.strip())
+                    except Exception:
+                        continue
+                    msg1 = obj.get('1', '') or obj.get('0', '')
+                    ts = obj.get('time', '')
+                    direction = 'out' if 'deliver' in msg1.lower() else 'in'
+                    messages.append({'timestamp': ts, 'direction': direction,
+                                     'sender': 'User' if direction == 'in' else 'Clawd',
+                                     'text': msg1[:200]})
+                    if today and today in ts:
+                        if direction == 'in': today_in += 1
+                        else: today_out += 1
+                    # Extract IRC channels/nicks from log
+                    for ch in re.findall(r'#\w+', msg1): channels.add(ch)
+                    for nick in re.findall(r'nick[=:](\w+)', msg1, re.I): nicks.add(nick)
+            except Exception:
+                pass
+
+    # Also scan session transcripts
+    for sessions_dir in [
+        os.path.expanduser('~/.openclaw/agents/main/sessions'),
+        os.path.expanduser('~/.clawdbot/agents/main/sessions'),
+    ]:
+        sessions_file = os.path.join(sessions_dir, 'sessions.json')
+        if not os.path.exists(sessions_file):
+            continue
+        try:
+            with open(sessions_file) as f:
+                sess_data = json.load(f)
+            ch_sessions = [(sid, s) for sid, s in sess_data.items()
+                           if 'irc' in sid.lower() and 'sessionId' in s]
+            ch_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+            for sid_key, sinfo in ch_sessions[:5]:
+                uuid = sinfo['sessionId']
+                sf = os.path.join(sessions_dir, uuid + '.jsonl')
+                if not os.path.exists(sf): continue
+                try:
+                    with open(sf, 'r', errors='replace') as f:
+                        for sline in f:
+                            sline = sline.strip()
+                            if not sline: continue
+                            try: sd = json.loads(sline)
+                            except Exception: continue
+                            sm = sd.get('message', {})
+                            ts = sd.get('timestamp', '')
+                            role = sm.get('role', '')
+                            if role not in ('user', 'assistant'): continue
+                            content = sm.get('content', '')
+                            txt = ''
+                            if isinstance(content, list):
+                                for c in content:
+                                    if isinstance(c, dict) and c.get('type') == 'text':
+                                        txt = c.get('text', ''); break
+                            elif isinstance(content, str):
+                                txt = content
+                            if not txt or 'HEARTBEAT' in txt: continue
+                            for ch in re.findall(r'\[IRC\s+(#\w+)', txt): channels.add(ch)
+                            for nick in re.findall(r'\[IRC\s+#\w+\s+(\w+)\]', txt): nicks.add(nick)
+                            direction = 'in' if role == 'user' else 'out'
+                            messages.append({'timestamp': ts, 'direction': direction,
+                                             'sender': 'User' if direction == 'in' else 'Clawd',
+                                             'text': txt[:300]})
+                            if today and today in ts:
+                                if direction == 'in': today_in += 1
+                                else: today_out += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    seen = set()
+    unique = []
+    for m in messages:
+        key = (m['timestamp'], m['direction'], m['text'][:50])
+        if key not in seen:
+            seen.add(key)
+            unique.append(m)
+    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+
+    return jsonify({
+        'messages': unique[:limit],
+        'total': len(unique),
+        'todayIn': today_in,
+        'todayOut': today_out,
+        'channels': sorted(channels),
+        'nicks': sorted(nicks),
+        'status': 'connected' if unique else 'configured',
+    })
+
 
 @app.route('/api/channel/webchat')
 def api_channel_webchat():
-    return _generic_channel_data('webchat')
+    """Webchat channel data: parse logs + sessions, return active session info."""
+    import re
+    limit = request.args.get('limit', 50, type=int)
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    messages = []
+    today_in = 0
+    today_out = 0
+    active_sessions = set()
+    last_active = None
+
+    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    for ld in log_dirs:
+        if not os.path.isdir(ld):
+            continue
+        for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
+            try:
+                result = subprocess.run(
+                    ['grep', '-i', 'messageChannel=webchat', lf],
+                    capture_output=True, text=True, timeout=5
+                )
+                for line in result.stdout.splitlines():
+                    try:
+                        obj = json.loads(line.strip())
+                    except Exception:
+                        continue
+                    msg1 = obj.get('1', '') or obj.get('0', '')
+                    ts = obj.get('time', '')
+                    direction = 'out' if 'deliver' in msg1.lower() else 'in'
+                    messages.append({'timestamp': ts, 'direction': direction,
+                                     'sender': 'User' if direction == 'in' else 'Clawd',
+                                     'text': msg1[:200]})
+                    if today and today in ts:
+                        if direction == 'in': today_in += 1
+                        else: today_out += 1
+                    # Extract session IDs
+                    for sid in re.findall(r'sessionId=([a-f0-9\-]+)', msg1): active_sessions.add(sid)
+                    if ts and (last_active is None or ts > last_active): last_active = ts
+            except Exception:
+                pass
+
+    # Scan sessions for webchat sessions
+    for sessions_dir in [
+        os.path.expanduser('~/.openclaw/agents/main/sessions'),
+        os.path.expanduser('~/.clawdbot/agents/main/sessions'),
+    ]:
+        sessions_file = os.path.join(sessions_dir, 'sessions.json')
+        if not os.path.exists(sessions_file):
+            continue
+        try:
+            with open(sessions_file) as f:
+                sess_data = json.load(f)
+            wc_sessions = [(sid, s) for sid, s in sess_data.items()
+                           if 'webchat' in sid.lower() and 'sessionId' in s]
+            wc_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+            for sid_key, sinfo in wc_sessions[:10]:
+                active_sessions.add(sinfo['sessionId'])
+                upd = sinfo.get('updatedAt', 0)
+                if upd:
+                    ts_str = datetime.fromtimestamp(upd / 1000 if upd > 1e10 else upd).isoformat()
+                    if last_active is None or ts_str > last_active: last_active = ts_str
+            # Load messages from recent webchat sessions
+            for sid_key, sinfo in wc_sessions[:3]:
+                uuid = sinfo['sessionId']
+                sf = os.path.join(sessions_dir, uuid + '.jsonl')
+                if not os.path.exists(sf): continue
+                try:
+                    fsize = os.path.getsize(sf)
+                    with open(sf, 'r', errors='replace') as f:
+                        if fsize > 65536:
+                            f.seek(fsize - 65536); f.readline()
+                        for sline in f:
+                            sline = sline.strip()
+                            if not sline: continue
+                            try: sd = json.loads(sline)
+                            except Exception: continue
+                            sm = sd.get('message', {})
+                            ts = sd.get('timestamp', '')
+                            role = sm.get('role', '')
+                            if role not in ('user', 'assistant'): continue
+                            content = sm.get('content', '')
+                            txt = ''
+                            if isinstance(content, list):
+                                for c in content:
+                                    if isinstance(c, dict) and c.get('type') == 'text':
+                                        txt = c.get('text', ''); break
+                            elif isinstance(content, str):
+                                txt = content
+                            if not txt or 'HEARTBEAT' in txt: continue
+                            direction = 'in' if role == 'user' else 'out'
+                            messages.append({'timestamp': ts, 'direction': direction,
+                                             'sender': 'User' if direction == 'in' else 'Clawd',
+                                             'text': txt[:300]})
+                            if today and today in ts:
+                                if direction == 'in': today_in += 1
+                                else: today_out += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Also check ~/.openclaw/webchat/ dir
+    wc_dir = os.path.expanduser('~/.openclaw/webchat')
+    if os.path.isdir(wc_dir):
+        for f in glob.glob(os.path.join(wc_dir, '*.json'))[:5]:
+            active_sessions.add(os.path.basename(f).replace('.json', ''))
+
+    seen = set()
+    unique = []
+    for m in messages:
+        key = (m['timestamp'], m['direction'], m['text'][:50])
+        if key not in seen:
+            seen.add(key)
+            unique.append(m)
+    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+
+    return jsonify({
+        'messages': unique[:limit],
+        'total': len(unique),
+        'todayIn': today_in,
+        'todayOut': today_out,
+        'activeSessions': len(active_sessions),
+        'lastActive': last_active,
+        'status': 'connected' if unique else 'configured',
+    })
+
 
 @app.route('/api/channel/googlechat')
 def api_channel_googlechat():
@@ -10666,7 +11392,146 @@ def api_channel_googlechat():
 
 @app.route('/api/channel/bluebubbles')
 def api_channel_bluebubbles():
-    return _generic_channel_data('bluebubbles')
+    """BlueBubbles channel: try REST API first, fallback to logs."""
+    import re
+    limit = request.args.get('limit', 50, type=int)
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    messages = []
+    today_in = 0
+    today_out = 0
+    chat_count = None
+    bb_status = 'configured'
+
+    # Check for BlueBubbles config
+    cfg_path = os.path.expanduser('~/.openclaw/openclaw.json')
+    bb_url = None
+    bb_pass = None
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+            bb_cfg = cfg.get('channels', {}).get('bluebubbles', {})
+            bb_url = bb_cfg.get('serverUrl', '').rstrip('/')
+            bb_pass = bb_cfg.get('password', '')
+        except Exception:
+            pass
+
+    # Try BlueBubbles REST API
+    if bb_url:
+        try:
+            import urllib.request
+            api_url = f'{bb_url}/api/v1/chat/count'
+            req = urllib.request.Request(api_url,
+                headers={'Authorization': f'Bearer {bb_pass}'} if bb_pass else {})
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                bb_data = json.loads(resp.read().decode())
+                chat_count = bb_data.get('data', {}).get('total', bb_data.get('total', 0))
+                bb_status = 'connected'
+            # Try to get recent messages
+            msgs_url = f'{bb_url}/api/v1/message/count/me?limit=50'
+            req2 = urllib.request.Request(msgs_url,
+                headers={'Authorization': f'Bearer {bb_pass}'} if bb_pass else {})
+            with urllib.request.urlopen(req2, timeout=3) as resp2:
+                pass  # just count endpoint
+        except Exception:
+            pass
+
+    # Fallback: parse logs
+    log_dirs = ['/tmp/openclaw', '/tmp/moltbot']
+    for ld in log_dirs:
+        if not os.path.isdir(ld):
+            continue
+        for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
+            try:
+                result = subprocess.run(
+                    ['grep', '-i', 'messageChannel=bluebubbles', lf],
+                    capture_output=True, text=True, timeout=5
+                )
+                for line in result.stdout.splitlines():
+                    try:
+                        obj = json.loads(line.strip())
+                    except Exception:
+                        continue
+                    msg1 = obj.get('1', '') or obj.get('0', '')
+                    ts = obj.get('time', '')
+                    direction = 'out' if 'deliver' in msg1.lower() else 'in'
+                    messages.append({'timestamp': ts, 'direction': direction,
+                                     'sender': 'User' if direction == 'in' else 'Clawd',
+                                     'text': msg1[:200]})
+                    if today and today in ts:
+                        if direction == 'in': today_in += 1
+                        else: today_out += 1
+                    if bb_status == 'configured': bb_status = 'log-only'
+            except Exception:
+                pass
+
+    # Scan sessions
+    for sessions_dir in [
+        os.path.expanduser('~/.openclaw/agents/main/sessions'),
+        os.path.expanduser('~/.clawdbot/agents/main/sessions'),
+    ]:
+        sessions_file = os.path.join(sessions_dir, 'sessions.json')
+        if not os.path.exists(sessions_file): continue
+        try:
+            with open(sessions_file) as f:
+                sess_data = json.load(f)
+            ch_sessions = [(sid, s) for sid, s in sess_data.items()
+                           if 'bluebubbles' in sid.lower() and 'sessionId' in s]
+            ch_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+            for sid_key, sinfo in ch_sessions[:3]:
+                uuid = sinfo['sessionId']
+                sf = os.path.join(sessions_dir, uuid + '.jsonl')
+                if not os.path.exists(sf): continue
+                try:
+                    with open(sf, 'r', errors='replace') as f:
+                        for sline in f:
+                            sline = sline.strip()
+                            if not sline: continue
+                            try: sd = json.loads(sline)
+                            except Exception: continue
+                            sm = sd.get('message', {})
+                            ts = sd.get('timestamp', '')
+                            role = sm.get('role', '')
+                            if role not in ('user', 'assistant'): continue
+                            content = sm.get('content', '')
+                            txt = ''
+                            if isinstance(content, list):
+                                for c in content:
+                                    if isinstance(c, dict) and c.get('type') == 'text':
+                                        txt = c.get('text', ''); break
+                            elif isinstance(content, str):
+                                txt = content
+                            if not txt or 'HEARTBEAT' in txt: continue
+                            direction = 'in' if role == 'user' else 'out'
+                            messages.append({'timestamp': ts, 'direction': direction,
+                                             'sender': 'User' if direction == 'in' else 'Clawd',
+                                             'text': txt[:300]})
+                            if today and today in ts:
+                                if direction == 'in': today_in += 1
+                                else: today_out += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    seen = set()
+    unique = []
+    for m in messages:
+        key = (m['timestamp'], m['direction'], m['text'][:50])
+        if key not in seen:
+            seen.add(key)
+            unique.append(m)
+    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+
+    return jsonify({
+        'messages': unique[:limit],
+        'total': len(unique),
+        'todayIn': today_in,
+        'todayOut': today_out,
+        'chatCount': chat_count,
+        'status': bb_status,
+    })
 
 @app.route('/api/channel/msteams')
 def api_channel_msteams():
