@@ -58,7 +58,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.17"
+__version__ = "0.10.0"
 
 app = Flask(__name__)
 

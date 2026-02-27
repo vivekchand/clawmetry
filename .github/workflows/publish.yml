@@ -1,0 +1,47 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on v0.10.0, v1.2.3, etc.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 0.10.0)'
+        required: true
+
+jobs:
+  publish:
+    name: Build & Publish to PyPI
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Verify version matches tag
+        if: github.event_name == 'push'
+        run: |
+          TAG=${GITHUB_REF#refs/tags/v}
+          VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
+          echo "Tag: $TAG | dashboard.py version: $VERSION"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "❌ Version mismatch! Tag=$TAG but dashboard.py=$VERSION"
+            exit 1
+          fi
+          echo "✅ Versions match: $VERSION"
+
+      - name: Build package
+        run: python3 -m build
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
