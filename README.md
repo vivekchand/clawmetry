@@ -113,6 +113,12 @@ Click any channel node in the Flow to see a live chat bubble view with incoming/
 
 See the **[Cloud Testing Guide](docs/CLOUD_TESTING.md)** for SSH tunnels, reverse proxy, and Docker.
 
+## Testing
+
+This project is tested with BrowserStack.
+
+[![BrowserStack](https://automate.browserstack.com/badge.svg)](https://browserstack.com)
+
 ## License
 
 MIT
