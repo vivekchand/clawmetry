@@ -14320,7 +14320,8 @@ def main():
     print(f"  Sessions:   {SESSIONS_DIR}")
     print(f"  Logs:       {LOG_DIR}")
     print(f"  Metrics:    {_metrics_file_path()}")
-    print(f"  OTLP:       {'✅ Ready (opentelemetry-proto installed)' if _HAS_OTEL_PROTO else '❌ Not available (pip install clawmetry[otel])'}")
+    if _HAS_OTEL_PROTO:
+        print(f"  OTLP:       ✅ Ready (opentelemetry-proto installed)")
     print(f"  User:       {USER_NAME}")
     print(f"  Mode:       {'🛠️  Dev (auto-reload ON)' if args.debug else '🚀 Prod (auto-reload OFF)'}")
     print(f"  SSE Limits: {SSE_MAX_SECONDS}s max duration · logs {MAX_LOG_STREAM_CLIENTS} clients · health {MAX_HEALTH_STREAM_CLIENTS} clients")
