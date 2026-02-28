@@ -3176,11 +3176,25 @@ function clawmetryLogout(){
     </div>
   </div>
 
-  <!-- Split: list + detail -->
-  <div style="display:flex;gap:16px;min-height:400px;">
-    <!-- Left: sub-agents list -->
-    <div class="card" style="flex:0 0 380px;overflow-y:auto;padding:0;" id="subagents-list">
-      <div style="padding:40px;text-align:center;color:#666;">Loading...</div>
+  <!-- Status Legend -->
+  <div class="card" style="padding:10px 16px;margin-bottom:12px;display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+    <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;">Legend</span>
+    <span title="Currently running" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:default;color:var(--text-secondary);"><span style="width:10px;height:10px;border-radius:50%;background:#4ade80;display:inline-block;flex-shrink:0;"></span>Active &#8212; currently running</span>
+    <span title="Completed successfully" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:default;color:var(--text-secondary);"><span style="width:10px;height:10px;border-radius:50%;background:#60a0ff;display:inline-block;flex-shrink:0;"></span>Idle &#8212; finished OK</span>
+    <span title="No activity for more than 10 minutes, may be stuck" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:default;color:var(--text-secondary);"><span style="width:10px;height:10px;border-radius:50%;background:#fb923c;display:inline-block;flex-shrink:0;"></span>Stale &#8212; silent &gt;10 min</span>
+    <span title="Errored out" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:default;color:var(--text-secondary);"><span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>Failed &#8212; errored</span>
+    <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">Bars = time span &nbsp;&#183;&nbsp; Dashed lines = parent &#8594; child &nbsp;&#183;&nbsp; Click a bar for details</span>
+  </div>
+
+  <!-- Gantt Timeline (primary view) -->
+  <div class="card" style="padding:16px 16px 8px;margin-bottom:12px;overflow-x:auto;" id="sa-gantt">
+    <div style="padding:40px;text-align:center;color:#666;">Loading...</div>
+  </div>
+
+  <!-- Split: list + detail (secondary) -->
+  <div style="display:flex;gap:16px;min-height:260px;">
+    <!-- Left: sub-agents tree list -->
+    <div class="card" style="flex:0 0 360px;overflow-y:auto;padding:0;" id="subagents-list">
     </div>
     <!-- Right: activity panel -->
     <div id="sa-activity-panel" class="card" style="flex:1;display:none;flex-direction:column;padding:0;overflow:hidden;">
@@ -4027,84 +4041,215 @@ function toggleSAAutoRefresh() {
 
 async function loadSubAgentsPage(silent) {
   try {
-    var data = await fetch('/api/subagents').then(r => r.json());
+    var data = await fetch('/api/subagents').then(function(r){return r.json();});
     var counts = data.counts;
     var subagents = data.subagents;
+    var now = Date.now();
 
-    // Update stats
     document.getElementById('subagents-active-count').textContent = counts.active;
     document.getElementById('subagents-idle-count').textContent = counts.idle;
     document.getElementById('subagents-stale-count').textContent = counts.stale;
     document.getElementById('subagents-total-count').textContent = counts.total;
     document.getElementById('sa-refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
-    var listHtml = '';
     if (subagents.length === 0) {
-      listHtml = '<div style="padding:40px;text-align:center;color:#666;">'
-        + '<div style="font-size:48px;margin-bottom:16px;">🐝</div>'
-        + '<div style="font-size:16px;margin-bottom:8px;">No Sub-Agents Yet</div>'
-        + '<div style="font-size:12px;max-width:400px;margin:0 auto;">Sub-agents are spawned by the main AI to handle complex tasks in parallel. They\'ll appear here when active.</div>'
-        + '</div>';
-    } else {
-      subagents.forEach(function(agent) {
-        var isSelected = _saSelectedId === agent.sessionId;
-        var statusIcon = agent.status === 'active' ? '🟢' : agent.status === 'idle' ? '🟡' : '⬜';
-        var statusLabel = agent.status === 'active' ? 'Working...' : agent.status === 'idle' ? 'Recently finished' : 'Completed';
+      var emptyHtml = '<div style="padding:40px;text-align:center;color:#666;"><div style="font-size:48px;margin-bottom:16px;">🐝</div><div style="font-size:16px;">No Sub-Agents Yet</div><div style="font-size:12px;margin-top:8px;max-width:360px;margin-left:auto;margin-right:auto;">Sub-agents are spawned by the main AI to handle complex tasks. They\'ll appear here when active.</div></div>';
+      document.getElementById('sa-gantt').innerHTML = emptyHtml;
+      document.getElementById('subagents-list').innerHTML = '';
+      return;
+    }
 
-        listHtml += '<div class="subagent-row" style="cursor:pointer;' + (isSelected ? 'background:var(--bg-hover,#1a1a3a);border-left:3px solid #60a0ff;' : '') + '" onclick="openSAActivity(\'' + agent.sessionId + '\',\'' + escHtml(agent.displayName) + '\',\'' + agent.status + '\')">';
-        listHtml += '<div class="subagent-indicator ' + agent.status + '"></div>';
-        listHtml += '<div class="subagent-info" style="flex:1;">';
+    // Compute timing
+    subagents.forEach(function(a) {
+      a._start = a.updatedAt - a.runtimeMs;
+      a._end = (a.status === 'active') ? now : a.updatedAt;
+    });
+    var tMin = Math.min.apply(null, subagents.map(function(a){return a._start;}));
+    var tMax = Math.max.apply(null, subagents.map(function(a){return a._end;}));
+    var tRange = tMax - tMin;
+    if (tRange < 2000) tRange = 2000;
 
-        // Header line: name + status badge + time
-        listHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
-        listHtml += '<span class="subagent-id">' + statusIcon + ' ' + escHtml(agent.displayName) + '</span>';
-        listHtml += '<div style="display:flex;gap:8px;align-items:center;">';
-        listHtml += '<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:' + (agent.status === 'active' ? '#1a3a2a' : '#1a1a2a') + ';color:' + (agent.status === 'active' ? '#60ff80' : '#888') + ';">' + statusLabel + '</span>';
-        listHtml += '<span style="font-size:11px;color:#666;">' + agent.runtime + '</span>';
-        listHtml += '</div></div>';
+    // Build parent-child tree using spawnedBy field
+    var byKey = {};
+    subagents.forEach(function(a) { byKey[a.key] = a; });
+    var children = {};
+    var roots = [];
+    subagents.forEach(function(a) {
+      var parent = byKey[a.spawnedBy];
+      if (parent) {
+        if (!children[parent.key]) children[parent.key] = [];
+        children[parent.key].push(a);
+      } else {
+        roots.push(a);
+      }
+    });
 
-        // Recent tool calls (live activity preview)
-        if (agent.recentTools && agent.recentTools.length > 0) {
-          listHtml += '<div style="margin-top:4px;display:flex;flex-direction:column;gap:2px;">';
-          var showTools = agent.recentTools.slice(-3);  // Show last 3 tools
-          showTools.forEach(function(tool) {
-            var toolColor = tool.name === 'exec' ? '#f0c040' : tool.name.match(/Read|Write|Edit/) ? '#60a0ff' : tool.name === 'web_search' ? '#c0a0ff' : '#50e080';
-            listHtml += '<div style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;font-family:monospace;">';
-            listHtml += '<span style="color:' + toolColor + ';font-weight:600;min-width:70px;">' + escHtml(tool.name) + '</span>';
-            listHtml += '<span style="color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(tool.summary) + '</span>';
-            listHtml += '</div>';
-          });
-          listHtml += '</div>';
-        }
+    // Flatten in tree order (DFS, sorted by start time)
+    var ordered = [];
+    function flatten(agent, depth) {
+      ordered.push({agent: agent, depth: depth});
+      var kids = (children[agent.key] || []).slice().sort(function(a,b){return a._start - b._start;});
+      kids.forEach(function(c) { flatten(c, depth + 1); });
+    }
+    roots.slice().sort(function(a,b){return a._start - b._start;}).forEach(function(r){ flatten(r, 0); });
 
-        // Last assistant text (what it's thinking/saying)
-        if (agent.lastText) {
-          listHtml += '<div style="margin-top:4px;font-size:11px;color:#777;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">💭 ' + escHtml(agent.lastText.substring(0, 120)) + '</div>';
-        }
+    var statusColor = {active:'#4ade80', idle:'#60a0ff', stale:'#fb923c', failed:'#f87171'};
 
-        listHtml += '</div></div>';
+    // ===== GANTT SVG =====
+    var svgW = 900;
+    var rowH = 40;
+    var labelW = 185;
+    var axisH = 28;
+    var padTop = 8;
+    var svgH = ordered.length * rowH + axisH + padTop;
+
+    var svg = '<svg width="100%" viewBox="0 0 ' + svgW + ' ' + svgH + '" xmlns="http://www.w3.org/2000/svg" style="display:block;">';
+
+    // Time axis gridlines + labels
+    var tickCount = 7;
+    for (var ti = 0; ti <= tickCount; ti++) {
+      var tx = labelW + (svgW - labelW - 10) * ti / tickCount;
+      var tMs = tMin + tRange * ti / tickCount;
+      var tSec = Math.round((tMs - tMin) / 1000);
+      var tLabel = tSec === 0 ? '0s' : tSec < 60 ? tSec + 's' : (Math.floor(tSec/60)) + 'm' + (tSec % 60 > 0 ? (tSec % 60) + 's' : '');
+      svg += '<line x1="' + tx.toFixed(1) + '" y1="' + padTop + '" x2="' + tx.toFixed(1) + '" y2="' + (svgH - axisH) + '" stroke="#2a2a2a" stroke-width="1"/>';
+      svg += '<text x="' + tx.toFixed(1) + '" y="' + (svgH - axisH + 16) + '" text-anchor="middle" font-size="10" fill="#555">' + tLabel + '</text>';
+    }
+    // Axis baseline
+    svg += '<line x1="' + labelW + '" y1="' + (svgH - axisH) + '" x2="' + (svgW - 10) + '" y2="' + (svgH - axisH) + '" stroke="#333" stroke-width="1"/>';
+
+    // "Now" marker if any agent is active
+    if (counts.active > 0) {
+      var nowX = labelW + (now - tMin) / tRange * (svgW - labelW - 10);
+      if (nowX > labelW && nowX < svgW - 10) {
+        svg += '<line x1="' + nowX.toFixed(1) + '" y1="' + padTop + '" x2="' + nowX.toFixed(1) + '" y2="' + (svgH - axisH) + '" stroke="#4ade80" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>';
+        svg += '<text x="' + nowX.toFixed(1) + '" y="' + (padTop - 2) + '" text-anchor="middle" font-size="9" fill="#4ade80" opacity="0.7">now</text>';
+      }
+    }
+
+    // Parent-child connector lines
+    ordered.forEach(function(item, i) {
+      var agent = item.agent;
+      var kids = children[agent.key] || [];
+      if (kids.length === 0) return;
+      kids.forEach(function(child) {
+        var ci = -1;
+        for (var x = 0; x < ordered.length; x++) { if (ordered[x].agent.key === child.key) { ci = x; break; } }
+        if (ci < 0) return;
+        var spawnX = labelW + (child._start - tMin) / tRange * (svgW - labelW - 10);
+        var parentY = padTop + i * rowH + rowH / 2;
+        var childY = padTop + ci * rowH + rowH / 2;
+        svg += '<line x1="' + spawnX.toFixed(1) + '" y1="' + parentY.toFixed(1) + '" x2="' + spawnX.toFixed(1) + '" y2="' + childY.toFixed(1) + '" stroke="#505080" stroke-width="1.5" stroke-dasharray="4,3"/>';
+        svg += '<circle cx="' + spawnX.toFixed(1) + '" cy="' + parentY.toFixed(1) + '" r="3" fill="#505080"/>';
+        svg += '<circle cx="' + spawnX.toFixed(1) + '" cy="' + childY.toFixed(1) + '" r="2.5" fill="#505080"/>';
       });
-    }
+    });
 
-    document.getElementById('subagents-list').innerHTML = listHtml;
+    // Agent rows
+    ordered.forEach(function(item, i) {
+      var agent = item.agent;
+      var color = statusColor[agent.status] || '#888';
+      var y = padTop + i * rowH;
+      var isRoot = item.depth === 0;
+      var barThick = isRoot ? 18 : 14;
+      var barY = y + (rowH - barThick) / 2;
+      var barX = labelW + (agent._start - tMin) / tRange * (svgW - labelW - 10);
+      var barW = Math.max(6, (agent._end - agent._start) / tRange * (svgW - labelW - 10));
+      var isSelected = _saSelectedId === agent.sessionId;
 
-    // If we have a selected sub-agent, refresh its activity panel too
-    if (_saSelectedId && !silent) {
-      loadSAActivity(_saSelectedId);
-    }
+      // Row bg (alternating + selected highlight)
+      var rowBg = isSelected ? 'rgba(96,160,255,0.08)' : (i % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'transparent');
+      svg += '<rect x="0" y="' + y + '" width="' + svgW + '" height="' + rowH + '" fill="' + rowBg + '"/>';
 
-    // Start auto-refresh if enabled
+      // Depth indent guide
+      if (item.depth > 0) {
+        var indentX = 4 + item.depth * 10;
+        svg += '<line x1="' + indentX + '" y1="' + (y + 4) + '" x2="' + indentX + '" y2="' + (y + rowH - 4) + '" stroke="#333" stroke-width="1"/>';
+      }
+
+      // Label (truncated)
+      var labelIndent = 4 + item.depth * 10;
+      var maxLabelChars = isRoot ? 22 : 20;
+      var label = agent.displayName || agent.sessionId || 'agent';
+      var displayLabel = label.length > maxLabelChars ? label.substring(0, maxLabelChars - 1) + '\u2026' : label;
+      svg += '<text x="' + (labelIndent + (isRoot ? 0 : 8)) + '" y="' + (y + rowH/2 + 4) + '" font-size="' + (isRoot ? '12' : '11') + '" font-weight="' + (isRoot ? '600' : '400') + '" fill="' + (agent.status === 'active' ? '#ddd' : '#999') + '">';
+      svg += '<title>' + escHtml(agent.displayName) + ' (' + agent.status + ') ' + agent.runtime + (agent.lastText ? ' | ' + escHtml(agent.lastText.substring(0,100)) : '') + '</title>';
+      svg += escHtml(displayLabel);
+      svg += '</text>';
+
+      // Gantt bar (clickable)
+      var kidCount = (children[agent.key] || []).length;
+      var escapedName = agent.displayName.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      svg += '<rect x="' + barX.toFixed(1) + '" y="' + barY.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + barThick + '" rx="3" fill="' + color + '" opacity="' + (agent.status === 'active' ? '0.85' : '0.55') + '" style="cursor:pointer;" onclick="openSAActivity(\'' + agent.sessionId + '\',\'' + escapedName + '\',\'' + agent.status + '\')">';
+      svg += '<title>' + escHtml(agent.displayName) + ' | ' + agent.status + ' | ' + agent.runtime + (agent.lastText ? '\n' + escHtml(agent.lastText.substring(0,120)) : '') + '</title>';
+      svg += '</rect>';
+
+      // Selected border
+      if (isSelected) {
+        svg += '<rect x="' + barX.toFixed(1) + '" y="' + barY.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + barThick + '" rx="3" fill="none" stroke="#60a0ff" stroke-width="1.5"/>';
+      }
+
+      // Active pulse dot
+      if (agent.status === 'active') {
+        var dotX = barX + barW - 5;
+        svg += '<circle cx="' + dotX.toFixed(1) + '" cy="' + (barY + barThick/2).toFixed(1) + '" r="3" fill="white" opacity="0.9"/>';
+      }
+
+      // Children badge
+      if (kidCount > 0) {
+        var bdgX = barX + barW + 6;
+        if (bdgX + 28 < svgW - 5) {
+          svg += '<rect x="' + bdgX.toFixed(1) + '" y="' + (barY + barThick/2 - 7).toFixed(1) + '" width="28" height="14" rx="7" fill="#1e2048"/>';
+          svg += '<text x="' + (bdgX + 14).toFixed(1) + '" y="' + (barY + barThick/2 + 4).toFixed(1) + '" text-anchor="middle" font-size="9" fill="#8888ff">' + kidCount + ' \u25be</text>';
+        }
+      }
+
+      // Bar label (if bar is wide enough)
+      if (barW > 60) {
+        var shortLabel = label.length > 16 ? label.substring(0,14)+'\u2026' : label;
+        svg += '<text x="' + (barX + 5).toFixed(1) + '" y="' + (barY + barThick/2 + 4).toFixed(1) + '" font-size="10" fill="rgba(0,0,0,0.7)" style="pointer-events:none;">' + escHtml(shortLabel) + '</text>';
+      }
+    });
+
+    svg += '</svg>';
+    document.getElementById('sa-gantt').innerHTML = svg;
+
+    // ===== TREE LIST (secondary) =====
+    var listHtml = '';
+    ordered.forEach(function(item) {
+      var agent = item.agent;
+      var isSelected = _saSelectedId === agent.sessionId;
+      var color = statusColor[agent.status] || '#888';
+      var kidCount = (children[agent.key] || []).length;
+      var durationSec = Math.round((agent._end - agent._start) / 1000);
+      var durStr = durationSec < 60 ? durationSec + 's' : Math.floor(durationSec/60) + 'm' + (durationSec%60>0?(durationSec%60)+'s':'');
+      listHtml += '<div class="subagent-row" style="cursor:pointer;padding-left:' + (10 + item.depth * 18) + 'px;' + (isSelected ? 'background:rgba(96,160,255,0.1);border-left:3px solid #60a0ff;' : '') + '" onclick="openSAActivity(\'' + agent.sessionId + '\',\'' + agent.displayName.replace(/'/g,"\\'") + '\',\'' + agent.status + '\')">';
+      listHtml += '<div class="subagent-indicator ' + agent.status + '"></div>';
+      listHtml += '<div class="subagent-info" style="flex:1;min-width:0;">';
+      listHtml += '<div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">';
+      listHtml += '<span style="font-size:' + (item.depth===0?'12':'11') + 'px;font-weight:' + (item.depth===0?'600':'400') + ';color:' + (agent.status==='active'?'#e0e0e0':'#aaa') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">';
+      listHtml += '<span style="color:' + color + ';margin-right:4px;">&#9679;</span>' + escHtml(agent.displayName);
+      if (kidCount > 0) listHtml += ' <span style="font-size:9px;color:#8888ff;background:#1e2048;padding:1px 5px;border-radius:8px;">' + kidCount + '</span>';
+      listHtml += '</span>';
+      listHtml += '<span style="font-size:10px;color:#666;white-space:nowrap;flex-shrink:0;">' + agent.runtime + ' &nbsp;' + durStr + '</span>';
+      listHtml += '</div>';
+      if (agent.lastText) {
+        listHtml += '<div style="font-size:10px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px;">&#128172; ' + escHtml(agent.lastText.substring(0,80)) + '</div>';
+      }
+      listHtml += '</div></div>';
+    });
+    document.getElementById('subagents-list').innerHTML = listHtml || '<div style="padding:20px;text-align:center;color:#666;font-size:12px;">No agents</div>';
+
+    if (_saSelectedId && !silent) { loadSAActivity(_saSelectedId); }
     if (!_saAutoRefreshTimer && document.getElementById('sa-auto-refresh').checked) {
       _saAutoRefreshTimer = setInterval(function() { loadSubAgentsPage(true); }, 5000);
     }
-
   } catch(e) {
     if (!silent) {
-      document.getElementById('subagents-list').innerHTML = '<div style="padding:20px;color:#e74c3c;text-align:center;">Failed to load: ' + e.message + '</div>';
+      document.getElementById('sa-gantt').innerHTML = '<div style="padding:20px;color:#e74c3c;text-align:center;">Failed to load: ' + e.message + '</div>';
     }
   }
 }
-
 function openSAActivity(sessionId, name, status) {
   _saSelectedId = sessionId;
   document.getElementById('sa-activity-panel').style.display = 'block';
