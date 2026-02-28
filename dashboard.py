@@ -14218,11 +14218,11 @@ ARCHITECTURE_OVERVIEW = """\
 
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
   │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
-  │  Your OpenClaw      │ ──────────→  │  ClawMetry          │ ──────────→  │  Your browser       │
-  │  agents             │              │  Parses logs +      │              │  localhost:{port}   │
-  │                     │              │  sessions.          │              │  Live dashboard     │
-  │  Running normally.  │              │  Serves dashboard.  │              │                     │
-  │  Nothing changes.   │              │                     │              │                     │
+  │  Your OpenClaw      │ ──────────→  │                     │ ──────────→  │                     │
+  │  agents             │              │  ClawMetry          │              │  Your browser       │
+  │                     │              │  Parses logs +      │              │  localhost:{port}   │
+  │  Running normally.  │              │  sessions.          │              │  Live dashboard     │
+  │  Nothing changes.   │              │  Serves dashboard.  │              │                     │
   └─────────────────────┘              └─────────────────────┘              └─────────────────────┘
 
   Runs locally on the same machine as OpenClaw. Your data never leaves your box.
