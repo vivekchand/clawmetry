@@ -1,3 +1,10 @@
+## [0.10.5] — 2026-02-28
+
+### Fixed
+- Installer now auto-starts daemon immediately after install via full binary path (works with curl|bash)
+
+---
+
 ## [0.10.4] — 2026-02-28
 
 ### Fixed
