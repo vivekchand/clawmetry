@@ -4140,7 +4140,4140 @@ function scrollBrainToTop() {
 function renderBrainFilterChips(sources) {
   var container = document.getElementById('brain-filter-chips');
   if (!container || !sources) return;
-  var html = '<button class="brain-chip' + (_brainFilter === 'all' ? ' active' : '') + '" data-source="all" onclick="setBrainFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:' + (_brainFilter === 'all' ? 'rgba(168,85,247,0.2)' : 'transparent') + ';color:#a855f7;font-size:11px;cursor:pointer;font-weight:' + (_brainFilter === 'all' ? '600' : '400') + ';">All</button>';
+  var html = '<button class="brain-chip' + (_brainFilter === 'all' ? ' active' : '') + '" data-source="all" onclick="setBrainFilter(&apos;all&apos;,this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:' + (_brainFilter === 'all' ? 'rgba(168,85,247,0.2)' : 'transparent') + ';color:#a855f7;font-size:11px;cursor:pointer;font-weight:' + (_brainFilter === 'all' ? '600' : '400') + ';">All</button>';
+    clawmetry --workspace ~/bot           # Custom workspace
+    OPENCLAW_HOME=~/bot clawmetry
+
+https://github.com/vivekchand/clawmetry
+MIT License
+"""
+
+import os
+import sys
+
+# Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252)
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+import glob
+import json
+import socket
+from collections import deque
+import argparse
+import subprocess
+import time
+import threading
+import select
+from datetime import datetime, timezone, timedelta
+from flask import Flask, render_template_string, request, jsonify, Response, make_response
+
+# History / time-series module
+try:
+    from history import HistoryDB, HistoryCollector
+    _HAS_HISTORY = True
+except ImportError:
+    _HAS_HISTORY = False
+    HistoryDB = None
+    HistoryCollector = None
+
+_history_db = None
+_history_collector = None
+
+# Optional: OpenTelemetry protobuf support for OTLP receiver
+_HAS_OTEL_PROTO = False
+try:
+    from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2
+    from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
+    _HAS_OTEL_PROTO = True
+except ImportError:
+    metrics_service_pb2 = None
+    trace_service_pb2 = None
+
+__version__ = "0.10.10"
+
+app = Flask(__name__)
+
+# ── Cross-platform helpers ──────────────────────────────────────────────
+import re as _re
+import tempfile as _tempfile
+import platform as _platform
+
+def _grep_log_file(filepath, pattern):
+    """Cross-platform grep: return list of lines matching pattern (case-insensitive)."""
+    results = []
+    try:
+        with open(filepath, 'r', errors='replace') as _f:
+            for _line in _f:
+                if _re.search(pattern, _line, _re.IGNORECASE):
+                    results.append(_line.rstrip('\n'))
+    except (OSError, IOError):
+        pass
+    return results
+
+def _tail_lines(filepath, n=200):
+    """Cross-platform tail: return last n lines of a file as a list of strings."""
+    try:
+        fsize = os.path.getsize(filepath)
+        with open(filepath, 'rb') as _f:
+            try:
+                _f.seek(-min(n * 500, fsize), 2)
+            except OSError:
+                _f.seek(0)
+            return _f.read().decode('utf-8', errors='replace').splitlines()[-n:]
+    except (OSError, IOError):
+        return []
+
+def _get_log_dirs():
+    """Return platform-appropriate candidate log directories."""
+    if sys.platform == 'win32':
+        return [
+            os.path.join(os.environ.get('APPDATA', ''), 'openclaw', 'logs'),
+            os.path.join(_tempfile.gettempdir(), 'openclaw'),
+            os.path.join(_tempfile.gettempdir(), 'moltbot'),
+        ]
+    return ['/tmp/openclaw', '/tmp/moltbot']
+
+_CURRENT_PLATFORM = _platform.system().lower()
+# ── End cross-platform helpers ──────────────────────────────────────────
+
+# ── Configuration (auto-detected, overridable via CLI/env) ──────────────
+MC_URL = os.environ.get("MC_URL", "")  # Optional Mission Control URL, empty = disabled
+WORKSPACE = None
+MEMORY_DIR = None
+LOG_DIR = None
+SESSIONS_DIR = None
+USER_NAME = None
+GATEWAY_URL = None  # e.g. http://localhost:18789
+GATEWAY_TOKEN = None  # Bearer token for /tools/invoke
+CET = timezone(timedelta(hours=1))
+SSE_MAX_SECONDS = 300
+MAX_LOG_STREAM_CLIENTS = 10
+MAX_HEALTH_STREAM_CLIENTS = 10
+_stream_clients_lock = threading.Lock()
+_active_log_stream_clients = 0
+_active_health_stream_clients = 0
+EXTRA_SERVICES = []  # List of {'name': str, 'port': int} from --monitor-service flags
+
+# ── Multi-Node Fleet Configuration ─────────────────────────────────────
+FLEET_API_KEY = os.environ.get("CLAWMETRY_FLEET_KEY", "")
+FLEET_DB_PATH = None  # Set via CLI or auto-detected
+FLEET_NODE_TIMEOUT = 300  # seconds before node is considered offline
+
+# ── Budget & Alert Configuration ───────────────────────────────────────
+_budget_paused = False
+_budget_paused_at = 0
+_budget_paused_reason = ''
+_budget_alert_cooldowns = {}  # rule_id -> last_fired_timestamp
+_AGENT_DOWN_SECONDS = 300  # 5 min with no OTLP data = agent down alert
+
+# ── OTLP Metrics Store ─────────────────────────────────────────────────
+METRICS_FILE = None  # Set via CLI/env, defaults to {WORKSPACE}/.clawmetry-metrics.json
+_metrics_lock = threading.Lock()
+_otel_last_received = 0  # timestamp of last OTLP data received
+
+metrics_store = {
+    "tokens": [],       # [{timestamp, input, output, total, model, channel, provider}]
+    "cost": [],         # [{timestamp, usd, model, channel, provider}]
+    "runs": [],         # [{timestamp, duration_ms, model, channel}]
+    "messages": [],     # [{timestamp, channel, outcome, duration_ms}]
+    "webhooks": [],     # [{timestamp, channel, type}]
+}
+MAX_STORE_ENTRIES = 10_000
+STORE_RETENTION_DAYS = 14
+
+
+def _metrics_file_path():
+    """Get the path to the metrics persistence file."""
+    if METRICS_FILE:
+        return METRICS_FILE
+    if WORKSPACE:
+        return os.path.join(WORKSPACE, '.clawmetry-metrics.json')
+    return os.path.expanduser('~/.clawmetry-metrics.json')
+
+
+def _load_metrics_from_disk():
+    """Load persisted metrics on startup."""
+    global metrics_store, _otel_last_received
+    path = _metrics_file_path()
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            for key in metrics_store:
+                if key in data and isinstance(data[key], list):
+                    metrics_store[key] = data[key][-MAX_STORE_ENTRIES:]
+            _otel_last_received = data.get('_last_received', 0)
+        _expire_old_entries()
+    except json.JSONDecodeError as e:
+        print(f"⚠️  Warning: Failed to parse metrics file {path}: {e}")
+        # Create backup of corrupted file
+        backup_path = f"{path}.corrupted.{int(time.time())}"
+        try:
+            os.rename(path, backup_path)
+            print(f"💾 Corrupted file backed up to {backup_path}")
+        except OSError:
+            pass
+    except (IOError, OSError) as e:
+        print(f"⚠️  Warning: Failed to read metrics file {path}: {e}")
+    except Exception as e:
+        print(f"⚠️  Warning: Unexpected error loading metrics: {e}")
+
+
+def _save_metrics_to_disk():
+    """Persist metrics store to JSON file."""
+    path = _metrics_file_path()
+    try:
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        data = {}
+        with _metrics_lock:
+            for k in metrics_store:
+                data[k] = list(metrics_store[k])
+        data['_last_received'] = _otel_last_received
+        data['_saved_at'] = time.time()
+        tmp = path + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"⚠️  Warning: Failed to save metrics to {path}: {e}")
+        if "No space left on device" in str(e):
+            print("💾 Disk full! Consider cleaning up old files or expanding storage.")
+    except json.JSONEncodeError as e:
+        print(f"⚠️  Warning: Failed to serialize metrics data: {e}")
+    except Exception as e:
+        print(f"⚠️  Warning: Unexpected error saving metrics: {e}")
+
+
+def _expire_old_entries():
+    """Remove entries older than STORE_RETENTION_DAYS."""
+    cutoff = time.time() - (STORE_RETENTION_DAYS * 86400)
+    with _metrics_lock:
+        for key in metrics_store:
+            metrics_store[key] = [
+                e for e in metrics_store[key]
+                if e.get('timestamp', 0) > cutoff
+            ][-MAX_STORE_ENTRIES:]
+
+
+def _add_metric(category, entry):
+    """Add an entry to the metrics store (thread-safe)."""
+    global _otel_last_received
+    with _metrics_lock:
+        metrics_store[category].append(entry)
+        if len(metrics_store[category]) > MAX_STORE_ENTRIES:
+            metrics_store[category] = metrics_store[category][-MAX_STORE_ENTRIES:]
+        _otel_last_received = time.time()
+    # Check budget on cost entries
+    if category == 'cost':
+        try:
+            _budget_check()
+        except Exception:
+            pass
+
+
+
+def _metrics_flush_loop():
+    """Background thread: save metrics to disk every 60 seconds."""
+    while True:
+        time.sleep(60)
+        try:
+            _expire_old_entries()
+            _save_metrics_to_disk()
+        except KeyboardInterrupt:
+            print("📊 Metrics flush loop shutting down...")
+            break
+        except Exception as e:
+            print(f"⚠️  Warning: Error in metrics flush loop: {e}")
+            # Continue running despite errors
+
+
+def _start_metrics_flush_thread():
+    """Start the background metrics flush thread."""
+    t = threading.Thread(target=_metrics_flush_loop, daemon=True)
+    t.start()
+
+
+def _has_otel_data():
+    """Check if we have any OTLP metrics data."""
+    return any(len(metrics_store[k]) > 0 for k in metrics_store)
+
+
+# ── Multi-Node Fleet Database ───────────────────────────────────────────
+import sqlite3 as _sqlite3
+import hashlib as _hashlib
+
+_fleet_db_lock = threading.Lock()
+
+
+def _fleet_db_path():
+    """Get path to the fleet SQLite database."""
+    if FLEET_DB_PATH:
+        return FLEET_DB_PATH
+    if WORKSPACE:
+        return os.path.join(WORKSPACE, '.clawmetry-fleet.db')
+    return os.path.expanduser('~/.clawmetry-fleet.db')
+
+
+def _fleet_db():
+    """Get a SQLite connection to the fleet database."""
+    db = _sqlite3.connect(_fleet_db_path(), timeout=10)
+    db.row_factory = _sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    return db
+
+
+def _fleet_init_db():
+    """Initialize fleet database tables."""
+    path = _fleet_db_path()
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    db = _fleet_db()
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS nodes (
+            node_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            hostname TEXT,
+            tags TEXT,
+            api_key_hash TEXT,
+            version TEXT,
+            registered_at REAL,
+            last_seen_at REAL,
+            status TEXT DEFAULT 'unknown'
+        );
+        CREATE TABLE IF NOT EXISTS node_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_id TEXT NOT NULL,
+            timestamp REAL NOT NULL,
+            metrics_json TEXT NOT NULL,
+            FOREIGN KEY (node_id) REFERENCES nodes(node_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_node_metrics_node_ts
+            ON node_metrics(node_id, timestamp DESC);
+    """)
+    db.close()
+
+
+def _fleet_check_key(req):
+    """Validate fleet API key from request header. Returns True if valid."""
+    if not FLEET_API_KEY:
+        return True  # No key configured = open (for dev/testing)
+    key = req.headers.get('X-Fleet-Key', '')
+    return key == FLEET_API_KEY
+
+
+def _fleet_update_statuses():
+    """Update node statuses based on last_seen_at."""
+    cutoff = time.time() - FLEET_NODE_TIMEOUT
+    with _fleet_db_lock:
+        db = _fleet_db()
+        db.execute(
+            "UPDATE nodes SET status = 'offline' WHERE last_seen_at < ? AND status != 'offline'",
+            (cutoff,)
+        )
+        db.commit()
+        db.close()
+
+
+def _fleet_prune_metrics():
+    """Remove metrics older than 7 days."""
+    cutoff = time.time() - (7 * 86400)
+    with _fleet_db_lock:
+        db = _fleet_db()
+        db.execute("DELETE FROM node_metrics WHERE timestamp < ?", (cutoff,))
+        db.commit()
+        db.close()
+
+
+def _fleet_maintenance_loop():
+    """Background thread: update statuses and prune old metrics."""
+    while True:
+        time.sleep(300)  # every 5 minutes
+        try:
+            _fleet_update_statuses()
+            _fleet_prune_metrics()
+        except Exception as e:
+            print(f"Warning: Fleet maintenance error: {e}")
+
+
+def _start_fleet_maintenance_thread():
+    """Start the background fleet maintenance thread."""
+    t = threading.Thread(target=_fleet_maintenance_loop, daemon=True)
+    t.start()
+
+
+# ── Budget & Alert Database ────────────────────────────────────────────
+
+def _budget_init_db():
+    """Initialize budget and alert tables in the fleet database."""
+    db = _fleet_db()
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS budget_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS alert_rules (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            threshold REAL NOT NULL,
+            channels TEXT NOT NULL,
+            cooldown_min INTEGER DEFAULT 30,
+            enabled INTEGER DEFAULT 1,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS alert_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id TEXT,
+            type TEXT NOT NULL,
+            message TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            fired_at REAL NOT NULL,
+            acknowledged INTEGER DEFAULT 0,
+            ack_at REAL,
+            FOREIGN KEY (rule_id) REFERENCES alert_rules(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_alert_history_fired
+            ON alert_history(fired_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_alert_history_rule
+            ON alert_history(rule_id, fired_at DESC);
+    """)
+    db.close()
+
+
+def _get_budget_config():
+    """Get all budget config as a dict."""
+    defaults = {
+        'daily_limit': 0,
+        'weekly_limit': 0,
+        'monthly_limit': 0,
+        'auto_pause_enabled': False,
+        'auto_pause_threshold_pct': 100,
+        'warning_threshold_pct': 80,
+        'telegram_bot_token': '',
+        'telegram_chat_id': '',
+    }
+    try:
+        with _fleet_db_lock:
+            db = _fleet_db()
+            rows = db.execute("SELECT key, value FROM budget_config").fetchall()
+            db.close()
+        for row in rows:
+            k = row['key']
+            v = row['value']
+            if k in defaults:
+                if isinstance(defaults[k], bool):
+                    defaults[k] = v.lower() in ('true', '1', 'yes')
+                elif isinstance(defaults[k], (int, float)):
+                    try:
+                        defaults[k] = float(v)
+                    except ValueError:
+                        pass
+                else:
+                    defaults[k] = v
+    except Exception:
+        pass
+    return defaults
+
+
+def _set_budget_config(updates):
+    """Update budget config keys."""
+    now = time.time()
+    with _fleet_db_lock:
+        db = _fleet_db()
+        for k, v in updates.items():
+            db.execute(
+                "INSERT OR REPLACE INTO budget_config (key, value, updated_at) VALUES (?, ?, ?)",
+                (k, str(v), now)
+            )
+        db.commit()
+        db.close()
+
+
+def _get_budget_status():
+    """Calculate current spending vs budget limits."""
+    global _budget_paused, _budget_paused_at, _budget_paused_reason
+    config = _get_budget_config()
+    now = time.time()
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    week_start = (datetime.now() - timedelta(days=datetime.now().weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0).timestamp()
+    month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+    daily_spent = 0.0
+    weekly_spent = 0.0
+    monthly_spent = 0.0
+
+    with _metrics_lock:
+        for entry in metrics_store['cost']:
+            ts = entry.get('timestamp', 0)
+            usd = entry.get('usd', 0)
+            if ts >= month_start:
+                monthly_spent += usd
+                if ts >= week_start:
+                    weekly_spent += usd
+                    if ts >= today_start:
+                        daily_spent += usd
+
+    daily_limit = config['daily_limit']
+    weekly_limit = config['weekly_limit']
+    monthly_limit = config['monthly_limit']
+
+    return {
+        'daily_spent': round(daily_spent, 4),
+        'weekly_spent': round(weekly_spent, 4),
+        'monthly_spent': round(monthly_spent, 4),
+        'daily_limit': daily_limit,
+        'weekly_limit': weekly_limit,
+        'monthly_limit': monthly_limit,
+        'daily_pct': round((daily_spent / daily_limit * 100) if daily_limit > 0 else 0, 1),
+        'weekly_pct': round((weekly_spent / weekly_limit * 100) if weekly_limit > 0 else 0, 1),
+        'monthly_pct': round((monthly_spent / monthly_limit * 100) if monthly_limit > 0 else 0, 1),
+        'paused': _budget_paused,
+        'paused_at': _budget_paused_at,
+        'paused_reason': _budget_paused_reason,
+        'auto_pause_enabled': config['auto_pause_enabled'],
+        'warning_threshold_pct': config['warning_threshold_pct'],
+    }
+
+
+def _budget_check():
+    """Check budget limits and fire alerts/auto-pause if needed."""
+    global _budget_paused, _budget_paused_at, _budget_paused_reason
+    if _budget_paused:
+        return
+    config = _get_budget_config()
+    status = _get_budget_status()
+    warning_pct = config['warning_threshold_pct']
+    pause_pct = config['auto_pause_threshold_pct']
+
+    # Check each period
+    for period in ['daily', 'weekly', 'monthly']:
+        limit = config[f'{period}_limit']
+        if limit <= 0:
+            continue
+        spent = status[f'{period}_spent']
+        pct = (spent / limit * 100) if limit > 0 else 0
+
+        # Warning alert
+        if pct >= warning_pct and pct < pause_pct:
+            _fire_alert(
+                rule_id=f'budget_{period}_warning',
+                alert_type='threshold',
+                message=f'Budget warning: {period} spending ${spent:.2f} is {pct:.0f}% of ${limit:.2f} limit',
+                channels=['banner', 'telegram'],
+            )
+
+        # Auto-pause
+        if pct >= pause_pct and config['auto_pause_enabled']:
+            _budget_paused = True
+            _budget_paused_at = time.time()
+            _budget_paused_reason = f'{period.capitalize()} budget exceeded: ${spent:.2f} / ${limit:.2f}'
+            _fire_alert(
+                rule_id=f'budget_{period}_exceeded',
+                alert_type='threshold',
+                message=f'BUDGET EXCEEDED: {period} spending ${spent:.2f} exceeds ${limit:.2f} limit. Gateway paused.',
+                channels=['banner', 'telegram'],
+            )
+            _pause_gateway()
+            return
+
+
+def _pause_gateway():
+    """Attempt to pause the OpenClaw gateway."""
+    # Try gateway stop command
+    try:
+        subprocess.run(['openclaw', 'gateway', 'stop'], timeout=10,
+                       capture_output=True)
+        return
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
+        pass
+    # Fallback: SIGSTOP to gateway process (Unix only)
+    if sys.platform != 'win32':
+        try:
+            result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
+                                    capture_output=True, text=True, timeout=3)
+            for pid in result.stdout.strip().split('\n'):
+                pid = pid.strip()
+                if pid:
+                    os.kill(int(pid), 19)  # SIGSTOP
+                    return
+        except Exception:
+            pass
+
+
+def _resume_gateway():
+    """Resume the OpenClaw gateway after budget pause."""
+    global _budget_paused, _budget_paused_at, _budget_paused_reason
+    # Try gateway start command
+    try:
+        subprocess.run(['openclaw', 'gateway', 'start'], timeout=10,
+                       capture_output=True)
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
+        pass
+    # Also try SIGCONT (Unix only)
+    if sys.platform != 'win32':
+        try:
+            result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
+                                    capture_output=True, text=True, timeout=3)
+            for pid in result.stdout.strip().split('\n'):
+                pid = pid.strip()
+                if pid:
+                    os.kill(int(pid), 18)  # SIGCONT
+        except Exception:
+            pass
+    _budget_paused = False
+    _budget_paused_at = 0
+    _budget_paused_reason = ''
+
+
+def _fire_alert(rule_id, alert_type, message, channels=None):
+    """Fire an alert with cooldown check."""
+    global _budget_alert_cooldowns
+    now = time.time()
+
+    # Check cooldown (default 30 min for budget alerts)
+    cooldown_sec = 1800
+    last_fired = _budget_alert_cooldowns.get(rule_id, 0)
+    if now - last_fired < cooldown_sec:
+        return
+
+    _budget_alert_cooldowns[rule_id] = now
+
+    # Save to alert history
+    if channels is None:
+        channels = ['banner']
+    try:
+        with _fleet_db_lock:
+            db = _fleet_db()
+            for ch in channels:
+                db.execute(
+                    "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (rule_id, alert_type, message, ch, now)
+                )
+            db.commit()
+            db.close()
+    except Exception as e:
+        print(f"Warning: Failed to save alert history: {e}")
+
+    # Send to channels
+    for ch in channels:
+        if ch == 'telegram':
+            _send_telegram_alert(message)
+        elif ch == 'webhook':
+            pass  # webhook sending handled by custom alert rules
+
+
+def _send_telegram_alert(message):
+    """Send alert via direct Telegram API (preferred) or gateway fallback."""
+    # Try direct Telegram API first (using budget config)
+    try:
+        cfg = _get_budget_config()
+        token = str(cfg.get('telegram_bot_token', '')).strip()
+        chat_id = str(cfg.get('telegram_chat_id', '')).strip()
+        if token and chat_id:
+            import urllib.request
+            url = f'https://api.telegram.org/bot{token}/sendMessage'
+            payload = json.dumps({
+                'chat_id': chat_id,
+                'text': f'[ClawMetry Alert] {message}',
+                'parse_mode': 'Markdown',
+            }).encode()
+            req = urllib.request.Request(
+                url, data=payload,
+                headers={'Content-Type': 'application/json'},
+            )
+            urllib.request.urlopen(req, timeout=10)
+            return
+    except Exception as e:
+        print(f"Warning: Direct Telegram alert failed: {e}")
+    # Fallback: send through gateway
+    try:
+        _gw_invoke('message', {
+            'action': 'send',
+            'message': f'[ClawMetry Alert] {message}',
+        })
+    except Exception:
+        pass
+
+
+def _send_webhook_alert(url, alert_data):
+    """Send alert to a webhook URL."""
+    try:
+        import urllib.request as _ur
+        payload = json.dumps(alert_data).encode()
+        req = _ur.Request(url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        _ur.urlopen(req, timeout=10)
+    except Exception:
+        pass
+
+
+def _get_alert_rules():
+    """Get all alert rules."""
+    try:
+        with _fleet_db_lock:
+            db = _fleet_db()
+            rows = db.execute("SELECT * FROM alert_rules ORDER BY created_at DESC").fetchall()
+            db.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def _get_alert_history(limit=50):
+    """Get recent alert history."""
+    try:
+        with _fleet_db_lock:
+            db = _fleet_db()
+            rows = db.execute(
+                "SELECT * FROM alert_history ORDER BY fired_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            db.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def _get_active_alerts():
+    """Get unacknowledged alerts from last 24h."""
+    cutoff = time.time() - 86400
+    try:
+        with _fleet_db_lock:
+            db = _fleet_db()
+            rows = db.execute(
+                "SELECT * FROM alert_history WHERE acknowledged = 0 AND fired_at > ? "
+                "ORDER BY fired_at DESC LIMIT 20",
+                (cutoff,)
+            ).fetchall()
+            db.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def _budget_monitor_loop():
+    """Background thread: check for anomalies, agent-down, and custom alert rules."""
+    global _budget_alert_cooldowns
+    while True:
+        time.sleep(60)
+        try:
+            now = time.time()
+
+            # Agent-down check
+            if _otel_last_received > 0 and (now - _otel_last_received) > _AGENT_DOWN_SECONDS:
+                _fire_alert(
+                    rule_id='agent_down',
+                    alert_type='agent_down',
+                    message=f'Agent appears down: no OTLP data for {int((now - _otel_last_received) / 60)} minutes',
+                    channels=['banner', 'telegram'],
+                )
+
+            # Anomaly check: today's cost > 2x 7-day average
+            status = _get_budget_status()
+            daily_spent = status['daily_spent']
+            if daily_spent > 0:
+                week_avg = status['weekly_spent'] / 7 if status['weekly_spent'] > 0 else 0
+                if week_avg > 0 and daily_spent > week_avg * 2:
+                    _fire_alert(
+                        rule_id='anomaly_daily',
+                        alert_type='anomaly',
+                        message=f'Spending anomaly: today ${daily_spent:.2f} is {(daily_spent/week_avg):.1f}x the 7-day average (${week_avg:.2f}/day)',
+                        channels=['banner', 'telegram'],
+                    )
+
+            # Custom alert rules
+            rules = _get_alert_rules()
+            for rule in rules:
+                if not rule.get('enabled'):
+                    continue
+                rule_id = rule['id']
+                rtype = rule['type']
+                threshold = rule['threshold']
+                channels = json.loads(rule.get('channels', '["banner"]'))
+                cooldown = rule.get('cooldown_min', 30) * 60
+
+                last_fired = _budget_alert_cooldowns.get(rule_id, 0)
+                if now - last_fired < cooldown:
+                    continue
+
+                fired = False
+                msg = ''
+
+                if rtype == 'threshold':
+                    if status['daily_spent'] >= threshold:
+                        msg = f'Daily spending ${status["daily_spent"]:.2f} exceeded threshold ${threshold:.2f}'
+                        fired = True
+                elif rtype == 'spike':
+                    # Spike: cost in last hour > threshold x average hourly rate
+                    hour_ago = now - 3600
+                    hour_cost = 0
+                    with _metrics_lock:
+                        for e in metrics_store['cost']:
+                            if e.get('timestamp', 0) >= hour_ago:
+                                hour_cost += e.get('usd', 0)
+                    avg_hourly = status['daily_spent'] / max(1, (now - datetime.now().replace(
+                        hour=0, minute=0, second=0, microsecond=0).timestamp()) / 3600)
+                    if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
+                        msg = f'Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost/avg_hourly):.1f}x average)'
+                        fired = True
+
+                if fired:
+                    _budget_alert_cooldowns[rule_id] = now
+                    try:
+                        with _fleet_db_lock:
+                            db = _fleet_db()
+                            for ch in channels:
+                                db.execute(
+                                    "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
+                                    "VALUES (?, ?, ?, ?, ?)",
+                                    (rule_id, rtype, msg, ch, now)
+                                )
+                            db.commit()
+                            db.close()
+                    except Exception:
+                        pass
+                    for ch in channels:
+                        if ch == 'telegram':
+                            _send_telegram_alert(msg)
+                        elif ch == 'webhook':
+                            webhook_url = rule.get('webhook_url', '')
+                            if webhook_url:
+                                _send_webhook_alert(webhook_url, {
+                                    'type': rtype, 'message': msg, 'timestamp': now
+                                })
+
+        except Exception as e:
+            print(f"Warning: Budget monitor error: {e}")
+
+
+def _start_budget_monitor_thread():
+    """Start the background budget monitor thread."""
+    t = threading.Thread(target=_budget_monitor_loop, daemon=True)
+    t.start()
+
+
+# ── OTLP Protobuf Helpers ──────────────────────────────────────────────
+
+def _otel_attr_value(val):
+    """Convert an OTel AnyValue to a Python value."""
+    if val.HasField('string_value'):
+        return val.string_value
+    if val.HasField('int_value'):
+        return val.int_value
+    if val.HasField('double_value'):
+        return val.double_value
+    if val.HasField('bool_value'):
+        return val.bool_value
+    return str(val)
+
+
+def _get_data_points(metric):
+    """Extract data points from a metric regardless of type."""
+    if metric.HasField('sum'):
+        return metric.sum.data_points
+    elif metric.HasField('gauge'):
+        return metric.gauge.data_points
+    elif metric.HasField('histogram'):
+        return metric.histogram.data_points
+    elif metric.HasField('summary'):
+        return metric.summary.data_points
+    return []
+
+
+def _get_dp_value(dp):
+    """Extract the numeric value from a data point."""
+    if hasattr(dp, 'as_double') and dp.as_double:
+        return dp.as_double
+    if hasattr(dp, 'as_int') and dp.as_int:
+        return dp.as_int
+    if hasattr(dp, 'sum') and dp.sum:
+        return dp.sum
+    if hasattr(dp, 'count') and dp.count:
+        return dp.count
+    return 0
+
+
+def _get_dp_attrs(dp):
+    """Extract attributes from a data point."""
+    attrs = {}
+    for attr in dp.attributes:
+        attrs[attr.key] = _otel_attr_value(attr.value)
+    return attrs
+
+
+def _process_otlp_metrics(pb_data):
+    """Decode OTLP metrics protobuf and store relevant data."""
+    req = metrics_service_pb2.ExportMetricsServiceRequest()
+    req.ParseFromString(pb_data)
+
+    for resource_metrics in req.resource_metrics:
+        resource_attrs = {}
+        if resource_metrics.resource:
+            for attr in resource_metrics.resource.attributes:
+                resource_attrs[attr.key] = _otel_attr_value(attr.value)
+
+        for scope_metrics in resource_metrics.scope_metrics:
+            for metric in scope_metrics.metrics:
+                name = metric.name
+                ts = time.time()
+
+                if name == 'openclaw.tokens':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('tokens', {
+                            'timestamp': ts,
+                            'input': attrs.get('input_tokens', 0),
+                            'output': attrs.get('output_tokens', 0),
+                            'total': _get_dp_value(dp),
+                            'model': attrs.get('model', resource_attrs.get('model', '')),
+                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
+                            'provider': attrs.get('provider', resource_attrs.get('provider', '')),
+                        })
+                elif name == 'openclaw.cost.usd':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('cost', {
+                            'timestamp': ts,
+                            'usd': _get_dp_value(dp),
+                            'model': attrs.get('model', resource_attrs.get('model', '')),
+                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
+                            'provider': attrs.get('provider', resource_attrs.get('provider', '')),
+                        })
+                elif name == 'openclaw.run.duration_ms':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('runs', {
+                            'timestamp': ts,
+                            'duration_ms': _get_dp_value(dp),
+                            'model': attrs.get('model', resource_attrs.get('model', '')),
+                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
+                        })
+                elif name == 'openclaw.context.tokens':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('tokens', {
+                            'timestamp': ts,
+                            'input': _get_dp_value(dp),
+                            'output': 0,
+                            'total': _get_dp_value(dp),
+                            'model': attrs.get('model', resource_attrs.get('model', '')),
+                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
+                            'provider': attrs.get('provider', resource_attrs.get('provider', '')),
+                        })
+                elif name in ('openclaw.message.processed', 'openclaw.message.queued', 'openclaw.message.duration_ms'):
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        outcome = 'processed' if 'processed' in name else ('queued' if 'queued' in name else 'duration')
+                        _add_metric('messages', {
+                            'timestamp': ts,
+                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
+                            'outcome': outcome,
+                            'duration_ms': _get_dp_value(dp) if 'duration' in name else 0,
+                        })
+                elif name in ('openclaw.webhook.received', 'openclaw.webhook.error', 'openclaw.webhook.duration_ms'):
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        wtype = 'received' if 'received' in name else ('error' if 'error' in name else 'duration')
+                        _add_metric('webhooks', {
+                            'timestamp': ts,
+                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
+                            'type': wtype,
+                        })
+
+
+def _process_otlp_traces(pb_data):
+    """Decode OTLP traces protobuf and extract relevant span data."""
+    req = trace_service_pb2.ExportTraceServiceRequest()
+    req.ParseFromString(pb_data)
+
+    for resource_spans in req.resource_spans:
+        resource_attrs = {}
+        if resource_spans.resource:
+            for attr in resource_spans.resource.attributes:
+                resource_attrs[attr.key] = _otel_attr_value(attr.value)
+
+        for scope_spans in resource_spans.scope_spans:
+            for span in scope_spans.spans:
+                attrs = {}
+                for attr in span.attributes:
+                    attrs[attr.key] = _otel_attr_value(attr.value)
+
+                ts = time.time()
+                duration_ns = span.end_time_unix_nano - span.start_time_unix_nano
+                duration_ms = duration_ns / 1_000_000
+
+                span_name = span.name.lower()
+                if 'run' in span_name or 'completion' in span_name:
+                    _add_metric('runs', {
+                        'timestamp': ts,
+                        'duration_ms': duration_ms,
+                        'model': attrs.get('model', resource_attrs.get('model', '')),
+                        'channel': attrs.get('channel', resource_attrs.get('channel', '')),
+                    })
+                elif 'message' in span_name:
+                    _add_metric('messages', {
+                        'timestamp': ts,
+                        'channel': attrs.get('channel', resource_attrs.get('channel', '')),
+                        'outcome': 'processed',
+                        'duration_ms': duration_ms,
+                    })
+
+
+def _get_otel_usage_data():
+    """Aggregate OTLP metrics into usage data for the Usage tab."""
+    today = datetime.now()
+    today_start = today.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    week_start = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+    daily_tokens = {}
+    daily_cost = {}
+    model_usage = {}
+
+    with _metrics_lock:
+        for entry in metrics_store['tokens']:
+            ts = entry.get('timestamp', 0)
+            day = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
+            total = entry.get('total', 0)
+            daily_tokens[day] = daily_tokens.get(day, 0) + total
+            model = entry.get('model', 'unknown') or 'unknown'
+            model_usage[model] = model_usage.get(model, 0) + total
+
+        for entry in metrics_store['cost']:
+            ts = entry.get('timestamp', 0)
+            day = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
+            daily_cost[day] = daily_cost.get(day, 0) + entry.get('usd', 0)
+
+    days = []
+    for i in range(13, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime('%Y-%m-%d')
+        days.append({
+            'date': ds,
+            'tokens': daily_tokens.get(ds, 0),
+            'cost': daily_cost.get(ds, 0),
+        })
+
+    today_str = today.strftime('%Y-%m-%d')
+    today_tok = daily_tokens.get(today_str, 0)
+    week_tok = sum(v for k, v in daily_tokens.items()
+                   if _safe_date_ts(k) >= week_start)
+    month_tok = sum(v for k, v in daily_tokens.items()
+                    if _safe_date_ts(k) >= month_start)
+    today_cost_val = daily_cost.get(today_str, 0)
+    week_cost_val = sum(v for k, v in daily_cost.items()
+                        if _safe_date_ts(k) >= week_start)
+    month_cost_val = sum(v for k, v in daily_cost.items()
+                         if _safe_date_ts(k) >= month_start)
+
+    run_durations = []
+    with _metrics_lock:
+        for entry in metrics_store['runs']:
+            run_durations.append(entry.get('duration_ms', 0))
+    avg_run_ms = sum(run_durations) / len(run_durations) if run_durations else 0
+
+    msg_count = len(metrics_store['messages'])
+
+    # Enhanced cost tracking for OTLP data
+    trend_data = _analyze_usage_trends(daily_tokens) 
+    model_billing, billing_summary = _build_model_billing(model_usage)
+    warnings = _generate_cost_warnings(today_cost_val, week_cost_val, month_cost_val, trend_data, month_tok, billing_summary)
+
+    return {
+        'source': 'otlp',
+        'days': days,
+        'today': today_tok,
+        'week': week_tok,
+        'month': month_tok,
+        'todayCost': round(today_cost_val, 4),
+        'weekCost': round(week_cost_val, 4),
+        'monthCost': round(month_cost_val, 4),
+        'avgRunMs': round(avg_run_ms, 1),
+        'messageCount': msg_count,
+        'modelBreakdown': [
+            {'model': k, 'tokens': v}
+            for k, v in sorted(model_usage.items(), key=lambda x: -x[1])
+        ],
+        'modelBilling': model_billing,
+        'billingSummary': billing_summary,
+        'trend': trend_data,
+        'warnings': warnings,
+    }
+
+
+def _safe_date_ts(date_str):
+    """Parse a YYYY-MM-DD date string to a timestamp, returning 0 on failure."""
+    if not date_str or not isinstance(date_str, str):
+        return 0
+    try:
+        return datetime.strptime(date_str, '%Y-%m-%d').timestamp()
+    except ValueError:
+        # Invalid date format - expected but handled gracefully
+        return 0
+    except Exception as e:
+        print(f"⚠️  Warning: Unexpected error parsing date '{date_str}': {e}")
+        return 0
+
+
+def validate_configuration():
+    """Validate the detected configuration and provide helpful feedback for new users."""
+    warnings = []
+    tips = []
+    
+    # Check if workspace looks like a real OpenClaw setup
+    workspace_files = ['SOUL.md', 'AGENTS.md', 'MEMORY.md', 'memory']
+    found_files = []
+    for f in workspace_files:
+        path = os.path.join(WORKSPACE, f)
+        if os.path.exists(path):
+            found_files.append(f)
+    
+    if not found_files:
+        warnings.append(f"⚠️  No OpenClaw workspace files found in {WORKSPACE}")
+        tips.append("💡 Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
+    
+    # Check if log directory exists and has recent logs
+    if not os.path.exists(LOG_DIR):
+        warnings.append(f"⚠️  Log directory doesn't exist: {LOG_DIR}")
+        tips.append("💡 Make sure OpenClaw/Moltbot is running to generate logs")
+    else:
+        # Check for recent log files
+        log_pattern = os.path.join(LOG_DIR, "*claw*.log")
+        recent_logs = [f for f in glob.glob(log_pattern) 
+                      if os.path.getmtime(f) > time.time() - 86400]  # Last 24h
+        if not recent_logs:
+            warnings.append(f"⚠️  No recent log files found in {LOG_DIR}")
+            tips.append("💡 Start your OpenClaw agent to see real-time data")
+    
+    # Check if sessions directory exists
+    if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
+        warnings.append(f"⚠️  Sessions directory not found: {SESSIONS_DIR}")
+        tips.append("💡 Sessions will appear when your agent starts conversations")
+    
+    # Check if OpenClaw binary is available
+    try:
+        subprocess.run(['openclaw', '--version'], capture_output=True, timeout=10)
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+        warnings.append("⚠️  OpenClaw binary not found in PATH")
+        tips.append("💡 Install OpenClaw: https://github.com/openclaw/openclaw")
+    
+    return warnings, tips
+
+
+def _auto_detect_data_dir():
+    """Auto-detect OpenClaw data directory, including Docker volume mounts."""
+    # Standard locations
+    candidates = [
+        os.path.expanduser('~/.openclaw'),
+        os.path.expanduser('~/.clawdbot'),
+    ]
+    # Docker volume mounts (Hostinger pattern: /docker/*/data/.openclaw)
+    try:
+        import glob as _glob
+        for pattern in ['/docker/*/data/.openclaw', '/docker/*/.openclaw',
+                        '/var/lib/docker/volumes/*/_data/.openclaw']:
+            candidates.extend(_glob.glob(pattern))
+    except Exception:
+        pass
+    # Check Docker inspect for mount points
+    try:
+        import subprocess as _sp
+        container_ids = _sp.check_output(
+            ['docker', 'ps', '-q', '--filter', 'ancestor=*openclaw*'],
+            timeout=3, stderr=_sp.DEVNULL
+        ).decode().strip().split()
+        if not container_ids:
+            # Try all containers
+            container_ids = _sp.check_output(
+                ['docker', 'ps', '-q'], timeout=3, stderr=_sp.DEVNULL
+            ).decode().strip().split()
+        for cid in container_ids[:3]:
+            try:
+                mounts = _sp.check_output(
+                    ['docker', 'inspect', cid, '--format',
+                     '{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}'],
+                    timeout=3, stderr=_sp.DEVNULL
+                ).decode().strip().split()
+                for mount in mounts:
+                    parts = mount.split(':')
+                    if len(parts) >= 1:
+                        src = parts[0]
+                        oc_path = os.path.join(src, '.openclaw')
+                        if os.path.isdir(oc_path) and oc_path not in candidates:
+                            candidates.insert(0, oc_path)
+                        # Also check if the mount itself is the .openclaw dir
+                        if src.endswith('.openclaw') and os.path.isdir(src):
+                            candidates.insert(0, src)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    for c in candidates:
+        if c and os.path.isdir(c) and (
+            os.path.isdir(os.path.join(c, 'agents')) or
+            os.path.isdir(os.path.join(c, 'workspace')) or
+            os.path.exists(os.path.join(c, 'cron', 'jobs.json'))
+        ):
+            return c
+    return None
+
+def detect_config(args=None):
+    """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
+    global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
+
+    # 0. --data-dir: set defaults from OpenClaw data directory (e.g. /path/.openclaw)
+    data_dir = None
+    if args and getattr(args, 'data_dir', None):
+        data_dir = os.path.expanduser(args.data_dir)
+    elif os.environ.get("OPENCLAW_DATA_DIR"):
+        data_dir = os.path.expanduser(os.environ["OPENCLAW_DATA_DIR"])
+    else:
+        # Auto-detect: check common locations including Docker volumes
+        data_dir = _auto_detect_data_dir()
+    
+    if data_dir and os.path.isdir(data_dir):
+        # Auto-set workspace, sessions, crons from data dir
+        ws = os.path.join(data_dir, 'workspace')
+        if os.path.isdir(ws) and not (args and args.workspace):
+            if not args:
+                import argparse; args = argparse.Namespace()
+            args.workspace = ws
+        sess = os.path.join(data_dir, 'agents', 'main', 'sessions')
+        if os.path.isdir(sess) and not (args and getattr(args, 'sessions_dir', None)):
+            args.sessions_dir = sess
+
+    # 1. Workspace - where agent files live (SOUL.md, MEMORY.md, memory/, etc.)
+    if args and args.workspace:
+        WORKSPACE = os.path.expanduser(args.workspace)
+    elif os.environ.get("OPENCLAW_HOME"):
+        WORKSPACE = os.path.expanduser(os.environ["OPENCLAW_HOME"])
+    elif os.environ.get("OPENCLAW_WORKSPACE"):
+        WORKSPACE = os.path.expanduser(os.environ["OPENCLAW_WORKSPACE"])
+    else:
+        # Auto-detect: check common locations
+        candidates = [
+            _detect_workspace_from_config(),
+            os.path.expanduser("~/.openclaw/workspace"),
+            os.path.expanduser("~/.clawdbot/workspace"),
+            os.path.expanduser("~/clawd"),
+            os.path.expanduser("~/openclaw"),
+            os.getcwd(),
+        ]
+        for c in candidates:
+            if c and os.path.isdir(c) and (
+                os.path.exists(os.path.join(c, "SOUL.md")) or
+                os.path.exists(os.path.join(c, "AGENTS.md")) or
+                os.path.exists(os.path.join(c, "MEMORY.md")) or
+                os.path.isdir(os.path.join(c, "memory"))
+            ):
+                WORKSPACE = c
+                break
+        if not WORKSPACE:
+            WORKSPACE = os.getcwd()
+
+    MEMORY_DIR = os.path.join(WORKSPACE, "memory")
+
+    # 2. Log directory
+    if args and args.log_dir:
+        LOG_DIR = os.path.expanduser(args.log_dir)
+    elif os.environ.get("OPENCLAW_LOG_DIR"):
+        LOG_DIR = os.path.expanduser(os.environ["OPENCLAW_LOG_DIR"])
+    else:
+        candidates = _get_log_dirs() + [os.path.expanduser("~/.clawdbot/logs")]
+        LOG_DIR = next((d for d in candidates if os.path.isdir(d)), _get_log_dirs()[0])
+
+    # 3. Sessions directory (transcript .jsonl files)
+    if args and getattr(args, 'sessions_dir', None):
+        SESSIONS_DIR = os.path.expanduser(args.sessions_dir)
+    elif os.environ.get("OPENCLAW_SESSIONS_DIR"):
+        SESSIONS_DIR = os.path.expanduser(os.environ["OPENCLAW_SESSIONS_DIR"])
+    else:
+        candidates = [
+            os.path.expanduser('~/.openclaw/agents/main/sessions'),
+            os.path.expanduser('~/.clawdbot/agents/main/sessions'),
+            os.path.join(WORKSPACE, 'sessions') if WORKSPACE else None,
+            os.path.expanduser('~/.openclaw/sessions'),
+            os.path.expanduser('~/.clawdbot/sessions'),
+        ]
+        # Also scan agents dirs
+        for agents_base in [os.path.expanduser('~/.openclaw/agents'), os.path.expanduser('~/.clawdbot/agents')]:
+            if os.path.isdir(agents_base):
+                for agent in os.listdir(agents_base):
+                    p = os.path.join(agents_base, agent, 'sessions')
+                    if p not in candidates:
+                        candidates.append(p)
+        SESSIONS_DIR = next((d for d in candidates if d and os.path.isdir(d)), candidates[0] if candidates else None)
+
+    # 4. User name (shown in Flow visualization)
+    if args and args.name:
+        USER_NAME = args.name
+    elif os.environ.get("OPENCLAW_USER"):
+        USER_NAME = os.environ["OPENCLAW_USER"]
+    else:
+        USER_NAME = "You"
+
+
+def _detect_workspace_from_config():
+    """Try to read workspace from Moltbot/OpenClaw agent config."""
+    config_paths = [
+        os.path.expanduser("~/.clawdbot/agents/main/config.json"),
+        os.path.expanduser("~/.clawdbot/config.json"),
+    ]
+    for cp in config_paths:
+        try:
+            with open(cp) as f:
+                data = json.load(f)
+                ws = data.get("workspace") or data.get("workspaceDir")
+                if ws:
+                    return os.path.expanduser(ws)
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            pass
+    return None
+
+
+def _detect_gateway_port():
+    """Detect the OpenClaw gateway port from config files or environment."""
+    # Check environment variable first
+    env_port = os.environ.get('OPENCLAW_GATEWAY_PORT', '').strip()
+    if env_port:
+        try:
+            return int(env_port)
+        except ValueError:
+            pass
+    # Try reading from gateway config
+    # Try JSON configs first (openclaw.json / moltbot.json / clawdbot.json)
+    json_paths = [
+        os.path.expanduser('~/.openclaw/openclaw.json'),
+        os.path.expanduser('~/.openclaw/moltbot.json'),
+        os.path.expanduser('~/.openclaw/clawdbot.json'),
+        os.path.expanduser('~/.clawdbot/clawdbot.json'),
+    ]
+    for jp in json_paths:
+        try:
+            import json as _json
+            with open(jp) as f:
+                cfg = _json.load(f)
+            gw = cfg.get('gateway', {})
+            if isinstance(gw, dict) and 'port' in gw:
+                return int(gw['port'])
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            pass
+    # Try YAML configs
+    yaml_paths = [
+        os.path.expanduser('~/.openclaw/gateway.yaml'),
+        os.path.expanduser('~/.openclaw/gateway.yml'),
+        os.path.expanduser('~/.clawdbot/gateway.yaml'),
+        os.path.expanduser('~/.clawdbot/gateway.yml'),
+    ]
+    for cp in yaml_paths:
+        try:
+            with open(cp) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('port:'):
+                        port_val = line.split(':', 1)[1].strip()
+                        return int(port_val)
+        except (FileNotFoundError, ValueError, IndexError):
+            pass
+    return 18789  # Default OpenClaw gateway port
+
+
+def _detect_gateway_token():
+    """Detect the OpenClaw gateway auth token from env, config files, or running process."""
+    # 1. Environment variable (most reliable - matches running gateway)
+    env_token = os.environ.get('OPENCLAW_GATEWAY_TOKEN', '').strip()
+    if env_token:
+        return env_token
+    # 2. Try reading from running gateway process env (Linux only)
+    try:
+        import subprocess as _sp
+        result = _sp.run(['pgrep', '-f', 'openclaw-gatewa'], capture_output=True, text=True, timeout=3)
+        for pid in result.stdout.strip().split('\n'):
+            pid = pid.strip()
+            if pid:
+                try:
+                    with open(f'/proc/{pid}/environ', 'r') as f:
+                        env_data = f.read()
+                    for entry in env_data.split('\0'):
+                        if entry.startswith('OPENCLAW_GATEWAY_TOKEN='):
+                            return entry.split('=', 1)[1]
+                except (PermissionError, FileNotFoundError):
+                    pass
+    except Exception:
+        pass
+    # 3. Config files
+    json_paths = [
+        os.path.expanduser('~/.openclaw/openclaw.json'),
+        os.path.expanduser('~/.openclaw/moltbot.json'),
+        os.path.expanduser('~/.openclaw/clawdbot.json'),
+        os.path.expanduser('~/.clawdbot/clawdbot.json'),
+    ]
+    for jp in json_paths:
+        try:
+            import json as _json
+            with open(jp) as f:
+                cfg = _json.load(f)
+            gw = cfg.get('gateway', {})
+            auth = gw.get('auth', {})
+            if isinstance(auth, dict) and 'token' in auth:
+                return auth['token']
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            pass
+    return None
+
+
+def _detect_disk_mounts():
+    """Detect mounted filesystems to monitor (root + any large data drives)."""
+    mounts = ['/']
+    try:
+        with open('/proc/mounts') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    mount_point = parts[1]
+                    fs_type = parts[2] if len(parts) > 2 else ''
+                    # Include additional data mounts (skip virtual/special filesystems)
+                    if (mount_point.startswith('/mnt/') or mount_point.startswith('/data')) and \
+                       fs_type not in ('tmpfs', 'devtmpfs', 'proc', 'sysfs', 'cgroup', 'cgroup2'):
+                        mounts.append(mount_point)
+    except (IOError, OSError):
+        pass
+    return mounts
+
+
+def get_public_ip():
+    """Get the machine's public IP address (useful for cloud/VPS users)."""
+    try:
+        import urllib.request
+        return urllib.request.urlopen("https://api.ipify.org", timeout=2).read().decode().strip()
+    except Exception:
+        return None
+
+
+def get_local_ip():
+    """Get the machine's LAN IP address."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.2)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except (socket.error, OSError) as e:
+        # Network unavailable or socket error - common in offline/restricted environments
+        return "127.0.0.1"
+    except Exception as e:
+        print(f"⚠️  Warning: Unexpected error getting local IP: {e}")
+        return "127.0.0.1"
+
+
+# ── HTML Template ───────────────────────────────────────────────────────
+
+DASHBOARD_HTML = r"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawMetry 🦞</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Light theme (default) */
+    --bg-primary: #f5f7fb;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #ffffff;
+    --bg-hover: #f3f5f8;
+    --bg-accent: #0f6fff;
+    --border-primary: #e4e8ee;
+    --border-secondary: #edf1f5;
+    --text-primary: #101828;
+    --text-secondary: #344054;
+    --text-tertiary: #475467;
+    --text-muted: #667085;
+    --text-faint: #98a2b3;
+    --text-accent: #0f6fff;
+    --text-link: #0f6fff;
+    --text-success: #15803d;
+    --text-warning: #b45309;
+    --text-error: #b42318;
+    --bg-success: #ecfdf3;
+    --bg-warning: #fffaeb;
+    --bg-error: #fef3f2;
+    --log-bg: #f7f9fc;
+    --file-viewer-bg: #ffffff;
+    --button-bg: #f3f5f8;
+    --button-hover: #e9eef5;
+    --card-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.1);
+    --card-shadow-hover: 0 10px 18px rgba(16, 24, 40, 0.08), 0 2px 6px rgba(16, 24, 40, 0.06);
+  }
+
+  [data-theme="dark"] {
+    /* Dark theme */
+    --bg-primary: #0b0f14;
+    --bg-secondary: #121820;
+    --bg-tertiary: #151d28;
+    --bg-hover: #1b2430;
+    --bg-accent: #3b82f6;
+    --border-primary: #273243;
+    --border-secondary: #1f2937;
+    --text-primary: #e6edf5;
+    --text-secondary: #c1cad6;
+    --text-tertiary: #98a2b3;
+    --text-muted: #7c8a9d;
+    --text-faint: #667085;
+    --text-accent: #60a5fa;
+    --text-link: #7dd3fc;
+    --text-success: #4ade80;
+    --text-warning: #fbbf24;
+    --text-error: #f87171;
+    --bg-success: #10291c;
+    --bg-warning: #2a2314;
+    --bg-error: #341717;
+    --log-bg: #0f141c;
+    --file-viewer-bg: #111722;
+    --button-bg: #1d2632;
+    --button-hover: #263344;
+    --card-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    --card-shadow-hover: 0 8px 18px rgba(0,0,0,0.45);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
+  body { font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif; background: radial-gradient(1200px 600px at 70% -20%, rgba(15,111,255,0.06), transparent 55%), var(--bg-primary); color: var(--text-primary); min-height: 100vh; font-size: 14px; font-weight: 500; line-height: 1.5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+  .nav { background: color-mix(in srgb, var(--bg-secondary) 90%, transparent); border-bottom: 1px solid var(--border-primary); padding: 8px 16px; display: flex; align-items: center; gap: 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; box-shadow: 0 1px 2px rgba(16,24,40,0.06); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
+  .nav h1 { font-size: 18px; font-weight: 700; color: var(--text-primary); white-space: nowrap; letter-spacing: -0.3px; }
+  .nav h1 span { color: var(--text-accent); }
+  .theme-toggle { background: var(--button-bg); border: none; border-radius: 8px; padding: 8px 12px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; margin-left: 12px; transition: all 0.15s; box-shadow: var(--card-shadow); }
+  .theme-toggle:hover { background: var(--button-hover); color: var(--text-secondary); }
+  .theme-toggle:active { transform: scale(0.98); }
+  
+  /* === Zoom Controls === */
+  .zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: 12px; }
+  .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
+  .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
+  .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
+  .nav-tabs { display: flex; gap: 4px; margin-left: auto; }
+  /* Brain tab */
+  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; }
+  .brain-time { color:var(--text-muted); min-width:70px; }
+  .brain-source { min-width:120px; max-width:200px; font-weight:600; word-break:break-all; flex-shrink:0; }
+  .brain-type { padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; min-width:60px; text-align:center; display:inline-block; }
+  .badge-spawn { background:rgba(168,85,247,0.2); color:#a855f7; }
+  .badge-shell { background:rgba(234,179,8,0.2); color:#eab308; }
+  .badge-read { background:rgba(59,130,246,0.2); color:#3b82f6; }
+  .badge-write { background:rgba(249,115,22,0.2); color:#f97316; }
+  .badge-browser { background:rgba(6,182,212,0.2); color:#06b6d4; }
+  .badge-msg { background:rgba(236,72,153,0.2); color:#ec4899; }
+  .badge-search { background:rgba(20,184,166,0.2); color:#14b8a6; }
+  .badge-done { background:rgba(34,197,94,0.2); color:#22c55e; }
+  .badge-error { background:rgba(239,68,68,0.2); color:#ef4444; }
+  .badge-tool { background:rgba(148,163,184,0.2); color:#94a3b8; }
+  .brain-detail { color:var(--text-secondary); white-space:pre-wrap; word-break:break-all; flex:1; min-width:0; }
+    .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
+  .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
+  .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
+  .nav-tab:active { transform: scale(0.98); }
+  .time-btn { padding: 4px 12px; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-primary); color: var(--text-tertiary); cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.2s; }
+  .time-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
+  .time-btn.active { background: var(--bg-accent); color: #fff; border-color: var(--bg-accent); }
+
+  .page { display: none; padding: 16px 20px; max-width: 1200px; margin: 0 auto; }
+  #page-overview { max-width: 1600px; padding: 8px 12px; }
+  .page.active { display: block; }
+  body.booting #zoom-wrapper { opacity: 0; pointer-events: none; transform: translateY(4px); }
+  #zoom-wrapper { opacity: 1; transition: opacity 0.28s ease, transform 0.28s ease; }
+  .boot-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(1000px 540px at 70% -20%, rgba(15,111,255,0.18), transparent 60%), var(--bg-primary);
+    transition: opacity 0.28s ease;
+  }
+  .boot-overlay.hide { opacity: 0; pointer-events: none; }
+  .boot-card {
+    width: min(540px, calc(100vw - 32px));
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+    border: 1px solid var(--border-primary);
+    box-shadow: var(--card-shadow-hover);
+    padding: 18px 18px 14px;
+  }
+  .boot-title { font-size: 20px; font-weight: 800; color: var(--text-primary); margin-bottom: 4px; }
+  .boot-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
+  .boot-spinner {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 2px solid var(--border-primary); border-top-color: var(--bg-accent);
+    animation: spin 0.8s linear infinite; margin-bottom: 10px;
+  }
+  .boot-steps { display: grid; gap: 8px; }
+  .boot-step {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    border: 1px solid var(--border-secondary); border-radius: 10px; background: var(--bg-tertiary);
+    font-size: 12px; color: var(--text-secondary);
+  }
+  .boot-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; }
+  .boot-step.loading .boot-dot { background: #f59e0b; box-shadow: 0 0 0 4px rgba(245,158,11,0.18); }
+  .boot-step.done .boot-dot { background: #22c55e; box-shadow: 0 0 0 4px rgba(34,197,94,0.16); }
+  .boot-step.fail .boot-dot { background: #ef4444; box-shadow: 0 0 0 4px rgba(239,68,68,0.16); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 20px; box-shadow: var(--card-shadow); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+  .card-title { font-size: 12px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .card-title .icon { font-size: 16px; }
+  .card-value { font-size: 32px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.5px; }
+  .card-sub { font-size: 12px; color: var(--text-faint); margin-top: 4px; }
+
+  .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-secondary); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { color: var(--text-tertiary); font-size: 13px; }
+  .stat-val { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+  .stat-val.green { color: var(--text-success); }
+  .stat-val.yellow { color: var(--text-warning); }
+  .stat-val.red { color: var(--text-error); }
+
+  .session-item { padding: 12px; border-bottom: 1px solid var(--border-secondary); }
+  .session-item:last-child { border-bottom: none; }
+  .session-name { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+  .session-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .session-meta span { display: flex; align-items: center; gap: 4px; }
+
+  .cron-item { padding: 12px; border-bottom: 1px solid var(--border-secondary); }
+  .cron-item:last-child { border-bottom: none; }
+  .cron-name { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+  .cron-schedule { font-size: 12px; color: var(--text-accent); margin-top: 2px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .cron-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  .cron-status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .cron-status.ok { background: var(--bg-success); color: var(--text-success); }
+  .cron-status.error { background: var(--bg-error); color: var(--text-error); }
+  .cron-status.pending { background: var(--bg-warning); color: var(--text-warning); }
+
+  /* Cron error info & fix */
+  .cron-error-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; vertical-align: middle; }
+  .cron-info-icon { cursor: pointer; font-size: 14px; color: var(--text-muted); transition: color 0.15s; user-select: none; }
+  .cron-info-icon:hover { color: var(--text-accent); }
+  .cron-fix-btn { background: #f59e0b; color: #fff; border: none; border-radius: 6px; padding: 2px 10px; font-size: 11px; font-weight: 600; cursor: pointer; transition: background 0.15s; white-space: nowrap; }
+  .cron-fix-btn:hover { background: #d97706; }
+  .cron-error-popover { position: fixed; z-index: 1000; background: #1a1a2e; color: #e0e0e0; border: 1px solid #333; border-radius: 10px; padding: 14px 18px; max-width: 400px; font-size: 12px; line-height: 1.6; box-shadow: 0 8px 30px rgba(0,0,0,0.5); pointer-events: auto; }
+  .cron-error-popover .ep-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 2px; }
+  .cron-error-popover .ep-value { color: #fca5a5; margin-bottom: 10px; word-break: break-word; }
+  .cron-error-popover .ep-value.ts { color: #93c5fd; }
+  .cron-error-popover .ep-close { position: absolute; top: 8px; right: 12px; cursor: pointer; color: #888; font-size: 16px; }
+  .cron-error-popover .ep-close:hover { color: #fff; }
+  .cron-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #16a34a; color: #fff; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600; z-index: 2000; box-shadow: 0 4px 16px rgba(0,0,0,0.3); transition: opacity 0.3s; }
+  .cron-confirm-modal { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
+  .cron-confirm-box { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 24px; max-width: 360px; text-align: center; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
+  .cron-confirm-box p { margin-bottom: 16px; font-size: 14px; color: var(--text-primary); }
+  .cron-confirm-box button { padding: 8px 20px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; margin: 0 6px; }
+  .cron-confirm-box .confirm-yes { background: #f59e0b; color: #fff; }
+  .cron-confirm-box .confirm-yes:hover { background: #d97706; }
+  .cron-confirm-box .confirm-no { background: var(--button-bg); color: var(--text-secondary); }
+  .cron-confirm-box .confirm-no:hover { background: var(--button-hover); }
+  .cron-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .cron-actions button { padding: 4px 12px; border-radius: 6px; border: none; font-size: 11px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+  .cron-btn-run { background: #10b981; color: #fff; }
+  .cron-btn-run:hover { background: #059669; }
+  .cron-btn-toggle { background: #6366f1; color: #fff; }
+  .cron-btn-toggle:hover { background: #4f46e5; }
+  .cron-btn-edit { background: #3b82f6; color: #fff; }
+  .cron-btn-edit:hover { background: #2563eb; }
+  .cron-btn-delete { background: #ef4444; color: #fff; }
+  .cron-btn-delete:hover { background: #dc2626; }
+  .cron-disabled { opacity: 0.5; }
+  .cron-expand { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-secondary); font-size: 12px; color: var(--text-muted); }
+  .cron-expand .run-entry { padding: 4px 0; display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .cron-expand .run-status-ok { color: var(--text-success); }
+  .cron-expand .run-status-error { color: var(--text-error); }
+  .cron-item { cursor: pointer; }
+  .cron-config-detail { margin-top: 8px; padding: 8px; background: var(--bg-secondary); border-radius: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
+
+  .log-viewer { background: var(--log-bg); border: 1px solid var(--border-primary); border-radius: 8px; font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.6; padding: 12px; max-height: 500px; overflow-y: auto; -webkit-overflow-scrolling: touch; white-space: pre-wrap; word-break: break-all; }
+  .log-line { padding: 1px 0; }
+  .log-line .ts { color: var(--text-muted); }
+  .log-line .info { color: var(--text-link); }
+  .log-line .warn { color: var(--text-warning); }
+  .log-line .err { color: var(--text-error); }
+  .log-line .msg { color: var(--text-secondary); }
+
+  .memory-item { padding: 10px 12px; border-bottom: 1px solid var(--border-secondary); display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.15s; }
+  .memory-item:hover { background: var(--bg-hover); }
+  .memory-item:last-child { border-bottom: none; }
+  .file-viewer { background: var(--file-viewer-bg); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; margin-top: 16px; display: none; }
+  .file-viewer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .file-viewer-title { font-size: 14px; font-weight: 600; color: var(--text-accent); }
+  .file-viewer-close { background: var(--button-bg); border: none; color: var(--text-secondary); padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .file-viewer-close:hover { background: var(--button-hover); }
+  .file-viewer-content { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; max-height: 60vh; overflow-y: auto; line-height: 1.5; }
+  .memory-name { font-weight: 600; font-size: 14px; color: var(--text-link); cursor: pointer; }
+  .memory-name:hover { text-decoration: underline; }
+  .memory-size { font-size: 12px; color: var(--text-faint); }
+
+  .refresh-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .refresh-btn { padding: 8px 16px; background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s ease; }
+  .refresh-btn:hover { background: var(--button-hover); }
+  .refresh-btn:active { transform: scale(0.98); }
+  .refresh-time { font-size: 12px; color: var(--text-muted); }
+  .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #16a34a; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; box-shadow: 0 0 4px #16a34a; } 50% { opacity: 0.3; box-shadow: none; } }
+  .live-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; background: var(--bg-success); color: var(--text-success); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; animation: pulse 1.5s infinite; }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge.model { background: var(--bg-hover); color: var(--text-accent); }
+  .badge.channel { background: var(--bg-hover); color: #7c3aed; }
+  .badge.tokens { background: var(--bg-success); color: var(--text-success); }
+
+  /* Cost Optimizer Styles */
+  .cost-optimizer-summary { margin-bottom: 20px; }
+  .cost-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+  .cost-stat { background: var(--bg-hover); border-radius: 8px; padding: 12px; text-align: center; border: 1px solid var(--border-primary); }
+  .cost-label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; margin-bottom: 4px; }
+  .cost-value { font-size: 20px; font-weight: 700; color: var(--text-primary); }
+  .local-status-good { padding: 8px 12px; background: var(--bg-success); color: var(--text-success); border-radius: 6px; font-size: 13px; font-weight: 600; }
+  .local-status-warning { padding: 8px 12px; background: var(--bg-warning); color: var(--text-warning); border-radius: 6px; font-size: 13px; font-weight: 600; }
+  .model-list { display: flex; flex-wrap: wrap; gap: 6px; }
+  .model-badge { background: var(--bg-accent); color: #ffffff; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .recommendation { border-left: 3px solid var(--text-accent); }
+
+  /* Cost Optimizer Enhanced Cards */
+  .co-section { margin-top: 20px; }
+  .co-section h3 { color: var(--text-accent); margin-bottom: 12px; font-size: 15px; font-weight: 700; }
+  .co-model-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  .co-model-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px; transition: border-color 0.2s, transform 0.15s; cursor: default; }
+  .co-model-card:hover { border-color: var(--text-accent); transform: translateY(-2px); }
+  .co-model-name { font-weight: 700; font-size: 13px; color: var(--text-primary); margin-bottom: 6px; word-break: break-all; }
+  .co-model-provider { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+  .co-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .co-badge.chat { background: #1e3a5f; color: #60a5fa; }
+  .co-badge.coding { background: #14532d; color: #4ade80; }
+  .co-model-stats { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; display: flex; flex-direction: column; gap: 2px; }
+  .co-model-stat { display: flex; justify-content: space-between; }
+  .co-model-stat span:last-child { font-weight: 600; color: var(--text-primary); }
+  .co-speed-note { font-size: 10px; color: #4ade80; margin-top: 4px; }
+  .co-action-btn { display: inline-block; margin-top: 8px; padding: 4px 10px; background: var(--bg-accent); color: #fff; border: none; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer; width: 100%; text-align: center; transition: opacity 0.15s; }
+  .co-action-btn:hover { opacity: 0.8; }
+  .co-action-btn.secondary { background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-primary); }
+  .co-savings-row { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; background: var(--bg-hover); border-radius: 8px; border-left: 3px solid #fbbf24; margin-bottom: 8px; }
+  .co-savings-title { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+  .co-savings-detail { font-size: 12px; color: var(--text-secondary); }
+  .co-savings-amount { font-size: 12px; color: #4ade80; font-weight: 600; }
+  .co-sys-info { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .co-sys-item { display: flex; align-items: center; gap: 5px; }
+  .co-sys-item strong { color: var(--text-primary); }
+  .co-ollama-prompt { background: #1c1c2e; border: 1px dashed #7c3aed; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+  .co-ollama-cmd { font-family: monospace; font-size: 12px; background: var(--bg-tertiary); padding: 6px 10px; border-radius: 5px; margin-top: 6px; color: #a78bfa; }
+
+  /* Cost Optimizer v2 — llmfit-powered */
+  .cost-overview { background: linear-gradient(135deg, #1a2a1a, #1a1a2a); border: 1px solid #2d4a2d; border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; }
+  .cost-overview-header { font-size: 14px; font-weight: 700; color: #4ade80; margin-bottom: 10px; letter-spacing: 0.3px; }
+  .cost-overview-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
+  .cost-overview-item { display: flex; flex-direction: column; }
+  .cost-overview-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b7280; margin-bottom: 2px; }
+  .cost-overview-value { font-size: 20px; font-weight: 700; color: #fbbf24; }
+  .cost-overview-value.green { color: #4ade80; }
+  .savings-highlight { background: #0f2d0f; border: 1px solid #14532d; border-radius: 8px; padding: 8px 12px; font-size: 12px; color: #4ade80; font-weight: 600; margin-top: 8px; }
+  .hw-card { background: var(--bg-tertiary); border: 1px solid #2d3748; border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .hw-card-chip { background: #1e3a5f; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; color: #60a5fa; }
+  .hw-card-chip.green { background: #14532d; color: #4ade80; }
+  .hw-card-chip.amber { background: #451a03; color: #fbbf24; }
+  .hw-metal-notice { background: #1c1500; border: 1px solid #92400e; border-radius: 8px; padding: 8px 12px; font-size: 11px; color: #fbbf24; margin-bottom: 12px; }
+  .model-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px; margin-bottom: 10px; transition: border-color 0.2s, transform 0.15s; }
+  .model-card:hover { border-color: #4ade80; transform: translateY(-1px); }
+  .model-card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
+  .model-card-name { font-weight: 700; font-size: 13px; color: var(--text-primary); }
+  .model-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
+  .model-badge.coding { background: #14532d; color: #4ade80; }
+  .model-badge.chat { background: #1e3a5f; color: #60a5fa; }
+  .model-card-stats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+  .model-card-stat { display: flex; flex-direction: column; }
+  .model-card-stat-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1px; }
+  .model-card-stat-value { font-weight: 600; color: var(--text-primary); }
+  .model-install-cmd { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; font-family: monospace; font-size: 11px; color: #e6edf3; margin-top: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+  .model-install-cmd:hover { border-color: #4ade80; }
+  .task-rec { background: var(--bg-hover); border-left: 3px solid #fbbf24; border-radius: 0 8px 8px 0; padding: 10px 14px; margin-bottom: 8px; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: start; }
+  .task-rec-title { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+  .task-rec-savings { font-size: 12px; font-weight: 700; color: #4ade80; white-space: nowrap; }
+  .task-rec-arrow { font-size: 11px; color: var(--text-muted); grid-column: 1; }
+  .task-rec-reason { font-size: 11px; color: var(--text-muted); grid-column: 1 / -1; }
+
+  .full-width { grid-column: 1 / -1; }
+  .section-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 24px 0 12px; display: flex; align-items: center; gap: 8px; }
+
+  /* === Flow Visualization === */
+  .flow-container { width: 100%; overflow: visible; position: relative; }
+  .flow-stats { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .flow-stat { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 8px 14px; flex: 1; min-width: 100px; box-shadow: var(--card-shadow); }
+  .flow-stat-label { font-size: 10px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; display: block; }
+  .flow-stat-value { font-size: 20px; font-weight: 700; color: var(--text-primary); display: block; margin-top: 2px; }
+  #flow-svg { width: 100%; height: auto; display: block; overflow: visible; }
+  #flow-svg text { font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; font-weight: 700; text-anchor: middle; dominant-baseline: central; pointer-events: none; letter-spacing: -0.1px; }
+  .flow-node-channel text, .flow-node-gateway text, .flow-node-session text, .flow-node-tool text { fill: #ffffff !important; }
+  .flow-node-optimizer text { fill: #ffffff !important; }
+  .flow-node-infra > text { fill: #ffffff !important; }
+  /* Refined palette: lower saturation, clearer hierarchy */
+  #node-human circle:first-child { fill: #6d5ce8 !important; stroke: #5b4bd4 !important; }
+  #node-human text { fill: #6d5ce8 !important; }
+  #node-telegram rect { fill: #2f6feb !important; stroke: #1f4fb8 !important; }
+  #node-signal rect { fill: #0f766e !important; stroke: #115e59 !important; }
+  #node-whatsapp rect { fill: #2f9e44 !important; stroke: #237738 !important; }
+  #node-imessage rect { fill: #34C759 !important; stroke: #248A3D !important; }
+  #node-discord rect { fill: #5865F2 !important; stroke: #4752C4 !important; }
+  #node-slack rect { fill: #4A154B !important; stroke: #350e36 !important; }
+  #node-irc rect { fill: #6B7280 !important; stroke: #4B5563 !important; }
+  #node-webchat rect { fill: #0EA5E9 !important; stroke: #0369A1 !important; }
+  #node-googlechat rect { fill: #1A73E8 !important; stroke: #1557B0 !important; }
+  #node-bluebubbles rect { fill: #1C6EF3 !important; stroke: #1558C0 !important; }
+  #node-msteams rect { fill: #6264A7 !important; stroke: #464775 !important; }
+  #node-matrix rect { fill: #0DBD8B !important; stroke: #0A9E74 !important; }
+  #node-mattermost rect { fill: #0058CC !important; stroke: #0047A3 !important; }
+  #node-line rect { fill: #00B900 !important; stroke: #009900 !important; }
+  #node-nostr rect { fill: #8B5CF6 !important; stroke: #6D28D9 !important; }
+  #node-twitch rect { fill: #9146FF !important; stroke: #772CE8 !important; }
+  #node-feishu rect { fill: #3370FF !important; stroke: #2050CC !important; }
+  #node-zalo rect { fill: #0068FF !important; stroke: #0050CC !important; }
+  #node-gateway rect { fill: #334155 !important; stroke: #1f2937 !important; }
+  #node-brain rect { fill: #a63a16 !important; stroke: #7c2d12 !important; }
+  #brain-model-label { fill: #fde68a !important; }
+  #brain-model-text { fill: #fed7aa !important; }
+  #node-session rect { fill: #3158d4 !important; stroke: #2648b6 !important; }
+  #node-exec rect { fill: #d97706 !important; stroke: #b45309 !important; }
+  #node-browser rect { fill: #5b39c6 !important; stroke: #4629a1 !important; }
+  #node-search rect { fill: #0f766e !important; stroke: #115e59 !important; }
+  #node-cron rect { fill: #4b5563 !important; stroke: #374151 !important; }
+  #node-tts rect { fill: #a16207 !important; stroke: #854d0e !important; }
+  #node-memory rect { fill: #1e3a8a !important; stroke: #172554 !important; }
+  #node-cost-optimizer rect { fill: #166534 !important; stroke: #14532d !important; }
+  #node-automation-advisor rect { fill: #4338ca !important; stroke: #3730a3 !important; }
+  #node-runtime rect { fill: #334155 !important; stroke: #475569 !important; }
+  #node-machine rect { fill: #424b57 !important; stroke: #2f3945 !important; }
+  #node-storage rect { fill: #52525b !important; stroke: #3f3f46 !important; }
+  #node-network rect { fill: #0f766e !important; stroke: #115e59 !important; }
+  .flow-node-clickable { cursor: pointer; }
+  .flow-node-clickable:hover rect, .flow-node-clickable:hover circle { filter: brightness(1.08); }
+  .flow-node rect { rx: 12; ry: 12; stroke-width: 1.6; transition: all 0.25s ease; }
+  .flow-node-brain rect { stroke-width: 2.5; }
+  @keyframes pulse-dot { 0%,100% { opacity:1; box-shadow:0 0 4px #2ecc71; } 50% { opacity:0.4; box-shadow:none; } }
+  @keyframes dashFlow { to { stroke-dashoffset: -24; } }
+  .flow-path { stroke-dasharray: 8 4; animation: dashFlow 1.2s linear infinite; }
+  .flow-path.flow-path-infra { stroke-dasharray: 6 3; animation: dashFlow 2s linear infinite; }
+  .flow-node-channel.active rect { filter: drop-shadow(0 0 8px rgba(59,130,246,0.38)); stroke-width: 2.2; }
+  .flow-node-gateway.active rect { filter: drop-shadow(0 0 8px rgba(71,85,105,0.38)); stroke-width: 2.2; }
+  .flow-node-session.active rect { filter: drop-shadow(0 0 8px rgba(49,88,212,0.35)); stroke-width: 2.2; }
+  .flow-node-tool.active rect { filter: drop-shadow(0 0 7px rgba(217,119,6,0.32)); stroke-width: 2.2; }
+  .flow-node-optimizer.active rect { filter: drop-shadow(0 0 7px rgba(22,101,52,0.35)); stroke-width: 2.2; }
+  .flow-path { fill: none; stroke: var(--text-muted); stroke-width: 1.8; stroke-linecap: round; transition: stroke 0.35s, opacity 0.35s; opacity: 0.45; }
+  .flow-path.glow-blue { stroke: #4080e0; filter: drop-shadow(0 0 6px rgba(64,128,224,0.6)); }
+  .flow-path.glow-yellow { stroke: #f0c040; filter: drop-shadow(0 0 6px rgba(240,192,64,0.6)); }
+  .flow-path.glow-green { stroke: #50e080; filter: drop-shadow(0 0 6px rgba(80,224,128,0.6)); }
+  .flow-path.glow-red { stroke: #e04040; filter: drop-shadow(0 0 6px rgba(224,64,64,0.6)); }
+  @keyframes brainPulse { 0%,100% { filter: drop-shadow(0 0 6px rgba(240,192,64,0.25)); } 50% { filter: drop-shadow(0 0 22px rgba(240,192,64,0.7)); } }
+  .brain-group { animation: brainPulse 2.2s ease-in-out infinite; }
+  .tool-indicator { opacity: 0.2; transition: opacity 0.3s ease; }
+  .tool-indicator.active { opacity: 1; }
+  .flow-label { font-size: 10px !important; fill: var(--text-muted) !important; font-weight: 500 !important; }
+  .flow-node-human circle { transition: all 0.3s ease; }
+  .flow-node-human.active circle { filter: drop-shadow(0 0 12px rgba(176,128,255,0.7)); }
+  @keyframes humanGlow { 0%,100% { filter: drop-shadow(0 0 3px rgba(160,112,224,0.15)); } 50% { filter: drop-shadow(0 0 10px rgba(160,112,224,0.45)); } }
+  .flow-node-human { animation: humanGlow 3.5s ease-in-out infinite; }
+  .flow-ground { stroke: var(--border-primary); stroke-width: 1; stroke-dasharray: 8 4; }
+  .flow-ground-label { font-size: 10px !important; fill: var(--text-muted) !important; font-weight: 700 !important; letter-spacing: 3px; }
+  .flow-node-infra rect { rx: 6; ry: 6; stroke-width: 2; stroke-dasharray: 5 2; transition: all 0.3s ease; }
+  .flow-node-infra text { font-size: 12px !important; }
+  .flow-node-infra .infra-sub { font-size: 8px !important; fill: var(--text-muted) !important; font-weight: 500 !important; opacity: 0.9; }
+  .flow-node-runtime rect { stroke: #4a7090; }
+  .flow-node-machine rect { stroke: #606880; }
+  .flow-node-storage rect { stroke: #806a30; }
+  .flow-node-network rect { stroke: #308080; }
+  [data-theme="dark"] .flow-node-runtime rect { fill: #10182a; }
+  [data-theme="dark"] .flow-node-machine rect { fill: #141420; }
+  [data-theme="dark"] .flow-node-storage rect { fill: #1a1810; }
+  [data-theme="dark"] .flow-node-network rect { fill: #0e1c20; }
+  .flow-node-runtime.active rect { filter: drop-shadow(0 0 10px rgba(74,112,144,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
+  .flow-node-machine.active rect { filter: drop-shadow(0 0 10px rgba(96,104,128,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
+  .flow-node-storage.active rect { filter: drop-shadow(0 0 10px rgba(128,106,48,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
+  .flow-node-network.active rect { filter: drop-shadow(0 0 10px rgba(48,128,128,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
+  .flow-path-infra { stroke-dasharray: 6 3; opacity: 0.3; }
+  .flow-path.glow-cyan { stroke: #40a0b0; filter: drop-shadow(0 0 6px rgba(64,160,176,0.6)); stroke-dasharray: none; opacity: 1; }
+  .flow-path.glow-purple { stroke: #b080ff; filter: drop-shadow(0 0 6px rgba(176,128,255,0.6)); }
+
+  /* === Activity Heatmap === */
+  .heatmap-wrap { overflow-x: auto; padding: 8px 0; }
+  .heatmap-grid { display: grid; grid-template-columns: 60px repeat(24, 1fr); gap: 2px; min-width: 650px; }
+  .heatmap-label { font-size: 11px; color: #666; display: flex; align-items: center; padding-right: 8px; justify-content: flex-end; }
+  .heatmap-hour-label { font-size: 10px; color: #555; text-align: center; padding-bottom: 4px; }
+  .heatmap-cell { aspect-ratio: 1; border-radius: 3px; min-height: 16px; transition: all 0.15s; cursor: default; position: relative; }
+  .heatmap-cell:hover { transform: scale(1.3); z-index: 2; outline: 1px solid #f0c040; }
+  .heatmap-cell[title]:hover::after { content: attr(title); position: absolute; bottom: 120%; left: 50%; transform: translateX(-50%); background: #222; color: #eee; padding: 3px 8px; border-radius: 4px; font-size: 10px; white-space: nowrap; z-index: 10; pointer-events: none; }
+  .heatmap-legend { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 11px; color: #666; }
+  .heatmap-legend-cell { width: 14px; height: 14px; border-radius: 3px; }
+
+  /* === Health Checks === */
+  .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .health-item { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; transition: border-color 0.3s; box-shadow: var(--card-shadow); }
+  .health-item.healthy { border-left: 3px solid #16a34a; }
+  .health-item.warning { border-left: 3px solid #d97706; }
+  .health-item.critical { border-left: 3px solid #dc2626; }
+  .health-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .health-dot.green { background: #16a34a; box-shadow: 0 0 8px rgba(22,163,74,0.5); }
+  .health-dot.yellow { background: #d97706; box-shadow: 0 0 8px rgba(217,119,6,0.5); }
+  .health-dot.red { background: #dc2626; box-shadow: 0 0 8px rgba(220,38,38,0.5); }
+  .health-info { flex: 1; }
+  .health-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .health-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  /* === Usage/Token Charts === */
+  .usage-chart { display: flex; align-items: flex-end; gap: 6px; height: 200px; padding: 16px 8px 32px; position: relative; }
+  .usage-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; position: relative; }
+  .usage-bar { width: 100%; min-width: 20px; max-width: 48px; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, var(--bg-accent), #1d4ed8); transition: height 0.4s ease; position: relative; cursor: default; }
+  .usage-bar:hover { filter: brightness(1.25); }
+  .usage-bar-label { font-size: 9px; color: var(--text-muted); margin-top: 6px; text-align: center; white-space: nowrap; }
+  .usage-bar-value { font-size: 9px; color: var(--text-tertiary); text-align: center; position: absolute; top: -16px; width: 100%; white-space: nowrap; }
+  .usage-grid-line { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border-secondary); }
+  .usage-grid-label { position: absolute; right: 100%; padding-right: 8px; font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+  .usage-table { width: 100%; border-collapse: collapse; }
+  .usage-table th { text-align: left; font-size: 12px; color: var(--text-muted); padding: 8px 12px; border-bottom: 1px solid var(--border-primary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .usage-table td { padding: 8px 12px; font-size: 13px; color: var(--text-secondary); border-bottom: 1px solid var(--border-secondary); }
+  .usage-table tr:last-child td { border-bottom: none; font-weight: 700; color: var(--text-accent); }
+  
+  /* === Cost Warnings === */
+  .cost-warning { padding: 12px 16px; border-radius: 8px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  /* === Markdown Rendered Content === */
+  .md-rendered h1,.md-rendered h2,.md-rendered h3,.md-rendered h4 { margin: 8px 0 4px; color: var(--text-primary); }
+  .md-rendered h1 { font-size: 18px; } .md-rendered h2 { font-size: 16px; } .md-rendered h3 { font-size: 14px; }
+  .md-rendered p { margin: 4px 0; }
+  .md-rendered code { background: var(--bg-secondary); padding: 1px 5px; border-radius: 4px; font-size: 12px; font-family: 'SF Mono','JetBrains Mono',monospace; }
+  .md-rendered pre { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 10px 14px; overflow-x: auto; margin: 6px 0; }
+  .md-rendered pre code { background: none; padding: 0; }
+  .md-rendered ul,.md-rendered ol { padding-left: 20px; margin: 4px 0; }
+  .md-rendered blockquote { border-left: 3px solid var(--text-accent); padding-left: 12px; margin: 6px 0; color: var(--text-secondary); }
+  .md-rendered strong { color: var(--text-primary); }
+  .md-rendered a { color: var(--text-link); }
+  .md-rendered table { border-collapse: collapse; margin: 6px 0; }
+  .md-rendered th,.md-rendered td { border: 1px solid var(--border-primary); padding: 4px 8px; font-size: 12px; }
+
+  .cost-warning.error { background: var(--bg-error); border: 1px solid var(--text-error); color: var(--text-error); }
+  .cost-warning.warning { background: var(--bg-warning); border: 1px solid var(--text-warning); color: var(--text-warning); }
+  .cost-warning-icon { font-size: 16px; }
+  .cost-warning-message { flex: 1; }
+
+  /* === Transcript Viewer === */
+  .transcript-item { padding: 12px 16px; border-bottom: 1px solid var(--border-secondary); cursor: pointer; transition: background 0.15s; display: flex; justify-content: space-between; align-items: center; }
+  .transcript-item:hover { background: var(--bg-hover); }
+  .transcript-item:last-child { border-bottom: none; }
+  .transcript-name { font-weight: 600; font-size: 14px; color: var(--text-link); }
+  .transcript-meta-row { font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .transcript-viewer-meta { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .transcript-viewer-meta .stat-row { padding: 6px 0; }
+  .chat-messages { display: flex; flex-direction: column; gap: 10px; padding: 8px 0; }
+  .chat-msg { max-width: 85%; padding: 12px 16px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .chat-msg.user { background: #1a2a4a; border: 1px solid #2a4a7a; color: #c0d8ff; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .chat-msg.assistant { background: #1a3a2a; border: 1px solid #2a5a3a; color: #c0ffc0; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .chat-msg.system { background: #2a2a1a; border: 1px solid #4a4a2a; color: #f0e0a0; align-self: center; font-size: 12px; font-style: italic; max-width: 90%; }
+  .chat-msg.tool { background: #1a1a24; border: 1px solid #2a2a3a; color: #a0a0b0; align-self: flex-start; font-family: 'SF Mono', monospace; font-size: 12px; border-left: 3px solid #555; }
+  .chat-role { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.7; }
+  .chat-ts { font-size: 10px; color: #555; margin-top: 6px; text-align: right; }
+  .chat-expand { display: inline-block; color: #f0c040; font-size: 11px; cursor: pointer; margin-top: 4px; }
+  .chat-expand:hover { text-decoration: underline; }
+  .chat-content-truncated { max-height: 200px; overflow: hidden; position: relative; }
+  .chat-content-truncated::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 40px; background: linear-gradient(transparent, rgba(26,42,74,0.9)); pointer-events: none; }
+  .chat-msg.assistant .chat-content-truncated::after { background: linear-gradient(transparent, rgba(26,58,42,0.9)); }
+  .chat-msg.tool .chat-content-truncated::after { background: linear-gradient(transparent, rgba(26,26,36,0.9)); }
+
+  /* === Mini Dashboard Widgets === */
+  .tool-spark { font-size: 11px; color: var(--text-muted); padding: 3px 8px; background: var(--bg-secondary); border-radius: 6px; border: 1px solid var(--border-secondary); }
+  .tool-spark span { color: var(--text-accent); font-weight: 600; }
+  .card:hover { transform: translateY(-1px); box-shadow: var(--card-shadow-hover); }
+  .card[onclick] { cursor: pointer; }
+
+  /* === Sub-Agent Worker Bees === */
+  .subagent-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 10px; }
+  .subagent-status { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .subagent-status.active { background: #16a34a; box-shadow: 0 0 4px rgba(22,163,74,0.5); }
+  .subagent-status.idle { background: #d97706; box-shadow: 0 0 4px rgba(217,119,6,0.5); }
+  .subagent-status.stale { background: #dc2626; box-shadow: 0 0 4px rgba(220,38,38,0.5); }
+  .subagent-name { font-weight: 600; color: var(--text-secondary); }
+  .subagent-task { color: var(--text-muted); font-size: 9px; }
+  .subagent-runtime { color: var(--text-faint); font-size: 9px; margin-left: auto; }
+
+  /* === Sub-Agent Detailed View === */
+  .subagent-row { padding: 12px 16px; border-bottom: 1px solid var(--border-secondary); display: flex; align-items: center; gap: 12px; }
+  .subagent-row:last-child { border-bottom: none; }
+  .subagent-row:hover { background: var(--bg-hover); }
+  .subagent-indicator { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .subagent-indicator.active { background: #16a34a; box-shadow: 0 0 8px rgba(22,163,74,0.6); animation: pulse 2s infinite; }
+  .subagent-indicator.idle { background: #d97706; box-shadow: 0 0 8px rgba(217,119,6,0.6); }
+  .subagent-indicator.stale { background: #dc2626; box-shadow: 0 0 8px rgba(220,38,38,0.6); opacity: 0.7; }
+  .subagent-info { flex: 1; }
+  .subagent-header { display: flex; justify-content: between; align-items: center; margin-bottom: 4px; }
+  .subagent-id { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+  .subagent-runtime-badge { background: var(--bg-accent); color: var(--bg-primary); padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .subagent-meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 16px; flex-wrap: wrap; }
+  .subagent-meta span { display: flex; align-items: center; gap: 4px; }
+  .subagent-description { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  /* === Active Tasks Cards === */
+  .task-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; box-shadow: var(--card-shadow); position: relative; overflow: hidden; }
+  .task-card.running { border-left: 4px solid #16a34a; }
+  .task-card.complete { border-left: 4px solid #2563eb; opacity: 0.7; }
+  .task-card.failed { border-left: 4px solid #dc2626; }
+  .task-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+  .task-card-name { font-weight: 700; font-size: 14px; color: var(--text-primary); line-height: 1.3; }
+  .task-card-badge { padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .task-card-badge.running { background: #dcfce7; color: #166534; }
+  .task-card-badge.complete { background: #dbeafe; color: #1e40af; }
+  .task-card-badge.failed { background: #fef2f2; color: #991b1b; }
+  [data-theme="dark"] .task-card-badge.running { background: #14532d; color: #86efac; }
+  [data-theme="dark"] .task-card-badge.complete { background: #1e3a5f; color: #93c5fd; }
+  [data-theme="dark"] .task-card-badge.failed { background: #450a0a; color: #fca5a5; }
+  .task-card-duration { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+  .task-card-action { font-size: 12px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; background: var(--bg-secondary); padding: 6px 10px; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task-card-pulse { position: absolute; top: 12px; right: 12px; width: 10px; height: 10px; border-radius: 50%; background: #22c55e; }
+  .task-card-pulse.active { animation: taskPulse 1.5s ease-in-out infinite; }
+  @keyframes taskPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); } 50% { box-shadow: 0 0 0 8px rgba(34,197,94,0); } }
+
+  /* === Enhanced Active Tasks Panel === */
+  .tasks-panel-scroll { max-height: 70vh; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--border-primary) transparent; }
+  .tasks-panel-scroll::-webkit-scrollbar { width: 6px; }
+  .tasks-panel-scroll::-webkit-scrollbar-track { background: transparent; }
+  .tasks-panel-scroll::-webkit-scrollbar-thumb { background: var(--border-primary); border-radius: 3px; }
+  .task-group-header { font-size: 13px; font-weight: 700; color: var(--text-secondary); padding: 8px 4px 6px; margin-top: 4px; letter-spacing: 0.3px; }
+  .task-group-header:first-child { margin-top: 0; }
+  @keyframes idleBreathe { 0%,100% { opacity: 0.5; transform: scale(1); } 50% { opacity: 1; transform: scale(1.05); } }
+  .tasks-empty-icon { animation: idleBreathe 3s ease-in-out infinite; display: inline-block; }
+  @keyframes statusPulseGreen { 0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.5); } 50% { box-shadow: 0 0 0 6px rgba(34,197,94,0); } }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .status-dot.running { background: #22c55e; animation: statusPulseGreen 1.5s ease-in-out infinite; }
+  .status-dot.complete { background: #3b82f6; }
+  .status-dot.failed { background: #ef4444; }
+
+  /* === Zoom Wrapper === */
+  .zoom-wrapper { transform-origin: top left; transition: transform 0.3s ease; }
+
+  /* === Split-Screen Overview === */
+  .overview-split { display: grid; grid-template-columns: 60fr 1px 40fr; gap: 0; margin-bottom: 0; height: calc(100vh - 175px); }
+  .overview-flow-pane { position: relative; border: 1px solid var(--border-primary); border-radius: 8px 0 0 8px; overflow: hidden; background: var(--bg-secondary); padding: 4px; }
+  .overview-flow-pane .flow-container { height: 100%; }
+  .overview-flow-pane svg { width: 100%; height: 100%; min-width: 0 !important; }
+  .overview-divider { background: var(--border-primary); width: 1px; }
+  .overview-tasks-pane { overflow-y: auto; border: 1px solid var(--border-primary); border-left: none; border-radius: 0 8px 8px 0; padding: 10px 12px; }
+  /* Scanline overlay */
+  .scanline-overlay { pointer-events: none; position: absolute; inset: 0; z-index: 2; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,65,0.015) 2px, rgba(0,255,65,0.015) 4px); }
+  .grid-overlay { pointer-events: none; position: absolute; inset: 0; z-index: 1; background-image: linear-gradient(var(--border-secondary) 1px, transparent 1px), linear-gradient(90deg, var(--border-secondary) 1px, transparent 1px); background-size: 40px 40px; opacity: 0.3; }
+  /* Task cards in overview */
+  .ov-task-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: var(--card-shadow); position: relative; transition: box-shadow 0.2s; }
+  .ov-task-card:hover { box-shadow: var(--card-shadow-hover); }
+  .ov-task-card.running { border-left: 4px solid #16a34a; }
+  .ov-task-card.complete { border-left: 4px solid #2563eb; opacity: 0.75; }
+  .ov-task-card.failed { border-left: 4px solid #dc2626; }
+  .ov-task-pulse { width: 10px; height: 10px; border-radius: 50%; background: #22c55e; display: inline-block; animation: taskPulse 1.5s ease-in-out infinite; }
+  .ov-details { display: none; margin-top: 10px; padding: 10px; background: var(--bg-secondary); border: 1px solid var(--border-secondary); border-radius: 8px; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 11px; line-height: 1.7; color: var(--text-tertiary); }
+  .ov-details.open { display: block; }
+  .ov-toggle-btn { background: none; border: 1px solid var(--border-primary); border-radius: 6px; padding: 3px 10px; font-size: 11px; color: var(--text-tertiary); cursor: pointer; transition: all 0.15s; }
+  .ov-toggle-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
+
+  /* === Task Detail Modal === */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+  .modal-overlay.open { display: flex; }
+  .modal-card { background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 16px; width: 95%; max-width: 900px; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 25px 50px rgba(0,0,0,0.25); }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border-primary); flex-shrink: 0; }
+  .modal-header-left { flex: 1; min-width: 0; }
+  .modal-title { font-size: 16px; font-weight: 700; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .modal-session-key { font-size: 11px; color: var(--text-muted); font-family: monospace; margin-top: 2px; }
+  .modal-header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .modal-auto-refresh { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-tertiary); cursor: pointer; }
+  .modal-auto-refresh input { cursor: pointer; }
+  .modal-close { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 18px; color: var(--text-tertiary); transition: all 0.15s; }
+  .modal-close:hover { background: var(--bg-error); color: var(--text-error); }
+  .modal-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border-primary); padding: 0 20px; flex-shrink: 0; }
+  .modal-tab { padding: 10px 18px; font-size: 13px; font-weight: 600; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
+  .modal-tab:hover { color: var(--text-secondary); }
+  .modal-tab.active { color: var(--text-accent); border-bottom-color: var(--text-accent); }
+  .modal-content { flex: 1; overflow-y: auto; padding: 20px; -webkit-overflow-scrolling: touch; }
+  .modal-footer { border-top: 1px solid var(--border-primary); padding: 10px 20px; display: flex; gap: 16px; font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+  /* Modal event items */
+  .evt-item { border: 1px solid var(--border-secondary); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+  .evt-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; transition: background 0.15s; }
+  .evt-header:hover { background: var(--bg-hover); }
+  .evt-icon { font-size: 16px; flex-shrink: 0; }
+  .evt-summary { flex: 1; font-size: 13px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .evt-summary strong { color: var(--text-primary); }
+  .evt-ts { font-size: 11px; color: var(--text-muted); flex-shrink: 0; font-family: monospace; }
+  .evt-body { display: none; padding: 0 14px 12px; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 12px; line-height: 1.6; color: var(--text-tertiary); white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto; }
+  .evt-body.open { display: block; }
+  .evt-item.type-agent { border-left: 3px solid #3b82f6; }
+  .evt-item.type-exec { border-left: 3px solid #16a34a; }
+  .evt-item.type-read { border-left: 3px solid #8b5cf6; }
+  .evt-item.type-result { border-left: 3px solid #ea580c; }
+  .evt-item.type-thinking { border-left: 3px solid #6b7280; }
+  .evt-item.type-user { border-left: 3px solid #7c3aed; }
+  /* === Component Detail Modal === */
+  .comp-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1100; justify-content: center; align-items: center; }
+  .comp-modal-overlay.open { display: flex; }
+  .comp-modal-card { background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 16px; width: 90%; max-width: 560px; display: flex; flex-direction: column; box-shadow: 0 25px 50px rgba(0,0,0,0.25); max-height: 90vh; }
+  .comp-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border-primary); }
+  .comp-modal-title { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+  .comp-modal-close { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 18px; color: var(--text-tertiary); transition: all 0.15s; }
+  .comp-modal-close:hover { background: var(--bg-error); color: var(--text-error); }
+  
+  /* Time Travel Controls */
+  .time-travel-bar { display: none; padding: 12px 20px; border-bottom: 1px solid var(--border-primary); background: var(--bg-secondary); }
+  .time-travel-bar.active { display: block; }
+  .time-travel-controls { display: flex; align-items: center; gap: 12px; }
+  .time-travel-toggle { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; padding: 4px 8px; color: var(--text-tertiary); cursor: pointer; font-size: 12px; transition: all 0.15s; }
+  .time-travel-toggle:hover { background: var(--button-hover); }
+  .time-travel-toggle.active { background: var(--bg-accent); color: white; }
+  .time-scrubber { flex: 1; display: flex; align-items: center; gap: 8px; }
+  .time-slider { flex: 1; height: 4px; background: var(--border-primary); border-radius: 2px; cursor: pointer; position: relative; }
+  .time-slider-thumb { width: 16px; height: 16px; background: var(--bg-accent); border-radius: 50%; position: absolute; top: -6px; margin-left: -8px; box-shadow: var(--card-shadow); transition: all 0.15s; }
+  .time-slider-thumb:hover { transform: scale(1.2); }
+  .time-display { font-size: 12px; color: var(--text-secondary); font-weight: 600; min-width: 120px; }
+  .time-nav-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 4px; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 12px; color: var(--text-tertiary); }
+  .time-nav-btn:hover { background: var(--button-hover); }
+  .time-nav-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .comp-modal-body { padding: 24px 20px; font-size: 14px; color: var(--text-secondary); line-height: 1.6; max-height: 70vh; overflow-y: auto; }
+
+  /* Telegram Chat Bubbles */
+  .tg-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .tg-stats .in { color: #3b82f6; } .tg-stats .out { color: #22c55e; }
+  .tg-chat { display: flex; flex-direction: column; gap: 8px; }
+  .tg-bubble { max-width: 85%; padding: 10px 14px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .tg-bubble.in { background: #1e3a5f; border: 1px solid #2a5a8a; color: #c0d8ff; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .tg-bubble.out { background: #1a3a2a; border: 1px solid #2a5a3a; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 4px; }
+  [data-theme="light"] .tg-bubble.in { background: #dbeafe; border-color: #93c5fd; color: #1e3a5f; }
+  [data-theme="light"] .tg-bubble.out { background: #dcfce7; border-color: #86efac; color: #14532d; }
+  .tg-bubble .tg-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
+  .tg-bubble .tg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .tg-bubble .tg-text { white-space: pre-wrap; }
+  .tg-load-more { text-align: center; padding: 10px; }
+  /* iMessage styles */
+  .imsg-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .imsg-stats .in { color: #007AFF; } .imsg-stats .out { color: #34C759; }
+  .imsg-chat { display: flex; flex-direction: column; gap: 8px; }
+  .imsg-bubble { max-width: 85%; padding: 10px 14px; border-radius: 18px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .imsg-bubble.in { background: #1e2a3f; border: 1px solid #2a4a7a; color: #b0d0ff; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .imsg-bubble.out { background: #1a3a2a; border: 1px solid #2a6a3a; color: #b0ffb0; align-self: flex-end; border-bottom-right-radius: 4px; }
+  [data-theme="light"] .imsg-bubble.in { background: #e1e8f5; border-color: #93c5fd; color: #1e3a5f; }
+  [data-theme="light"] .imsg-bubble.out { background: #d4f5d4; border-color: #86efac; color: #14532d; }
+  .imsg-bubble .imsg-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
+  .imsg-bubble .imsg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .imsg-bubble .imsg-text { white-space: pre-wrap; }
+  /* WebChat styles - neutral/white browser-style bubbles */
+  .wc-stats { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  [data-theme="dark"] .wc-stats { background: #1e2533; border-color: #2d3748; }
+  .wc-stat-item { color: #374151; }
+  [data-theme="dark"] .wc-stat-item { color: #9ca3af; }
+  .wc-messages { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; }
+  .wc-msg-row { display: flex; }
+  .wc-msg-row.wc-row-out { justify-content: flex-end; }
+  .wc-bubble { max-width: 80%; padding: 9px 13px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-wrap: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+  .wc-bubble.wc-msg-in { background: #f1f5f9; color: #1e293b; border-bottom-left-radius: 4px; border: 1px solid #e2e8f0; }
+  .wc-bubble.wc-msg-out { background: #0ea5e9; color: #fff; border-bottom-right-radius: 4px; }
+  [data-theme="dark"] .wc-bubble.wc-msg-in { background: #1e2a3f; color: #cbd5e1; border-color: #2d3748; }
+  [data-theme="dark"] .wc-bubble.wc-msg-out { background: #0369a1; color: #e0f2fe; }
+  .wc-bubble-text { white-space: pre-wrap; }
+  .wc-bubble-time { font-size: 10px; margin-top: 3px; text-align: right; opacity: 0.65; }
+  /* IRC styles - dark terminal theme */
+  .irc-loading { background: #1a1a2e; color: #9ca3af; font-family: 'Courier New', monospace; padding: 40px; text-align: center; font-size: 13px; }
+  .irc-header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #0f0f1a; border-bottom: 1px solid #2d2d4a; font-family: 'Courier New', monospace; font-size: 12px; flex-wrap: wrap; }
+  .irc-stat { color: #6b7280; }
+  .irc-channels { color: #60a5fa; font-weight: 700; }
+  .irc-nick { color: #a78bfa; margin-left: auto; }
+  .irc-log { background: #0d0d1a; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; font-family: 'Courier New', monospace; font-size: 12px; overflow-y: auto; max-height: 500px; }
+  .irc-line { line-height: 1.6; word-wrap: break-word; }
+  .irc-ts { color: #4b5563; }
+  .irc-nick-tag { color: #60a5fa; font-weight: 600; }
+  .irc-text { color: #d1d5db; }
+  /* BlueBubbles styles - Apple green */
+  .bb-stats { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #0a1f0a; border: 1px solid #166534; border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  [data-theme="light"] .bb-stats { background: #f0fdf4; border-color: #bbf7d0; }
+  .bb-stat-item { color: #4ade80; }
+  [data-theme="light"] .bb-stat-item { color: #166534; }
+  .bb-messages { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; }
+  .bb-msg-row { display: flex; }
+  .bb-msg-row.bb-row-out { justify-content: flex-end; }
+  .bb-bubble { max-width: 80%; padding: 9px 13px; border-radius: 18px; font-size: 13px; line-height: 1.5; word-wrap: break-word; }
+  .bb-bubble.bb-msg-in { background: #1a2a1a; color: #86efac; border-bottom-left-radius: 4px; border: 1px solid #166534; }
+  .bb-bubble.bb-msg-out { background: #34C759; color: #fff; border-bottom-right-radius: 4px; }
+  [data-theme="light"] .bb-bubble.bb-msg-in { background: #dcfce7; color: #14532d; border-color: #86efac; }
+  [data-theme="light"] .bb-bubble.bb-msg-out { background: #34C759; color: #fff; }
+  .bb-bubble-text { white-space: pre-wrap; }
+  .bb-bubble-time { font-size: 10px; margin-top: 3px; text-align: right; opacity: 0.65; }
+  /* Google Chat styles */
+  .gc-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .gc-stats .in { color: #1a73e8; } .gc-stats .out { color: #34a853; }
+  .gc-chat { display: flex; flex-direction: column; gap: 8px; }
+  .gc-bubble { max-width: 85%; padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .gc-bubble.in { background: #1a2a4a; border: 1px solid #1a73e8; color: #c0d8ff; align-self: flex-start; border-bottom-left-radius: 2px; }
+  .gc-bubble.out { background: #1a3a2a; border: 1px solid #34a853; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 2px; }
+  [data-theme="light"] .gc-bubble.in { background: #e8f0fe; border-color: #1a73e8; color: #1a237e; }
+  [data-theme="light"] .gc-bubble.out { background: #e6f4ea; border-color: #34a853; color: #1b5e20; }
+  .gc-bubble .gc-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #1a73e8; }
+  .gc-bubble .gc-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .gc-bubble .gc-text { white-space: pre-wrap; }
+  /* MS Teams styles */
+  .mst-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .mst-stats .in { color: #6264A7; } .mst-stats .out { color: #33b55b; }
+  .mst-chat { display: flex; flex-direction: column; gap: 8px; }
+  .mst-bubble { max-width: 85%; padding: 10px 14px; border-radius: 6px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .mst-bubble.in { background: #1e1e3a; border: 1px solid #6264A7; color: #c8c8ff; align-self: flex-start; border-bottom-left-radius: 2px; }
+  .mst-bubble.out { background: #1a3a2a; border: 1px solid #33b55b; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 2px; }
+  [data-theme="light"] .mst-bubble.in { background: #f0f0ff; border-color: #6264A7; color: #2d2d7a; }
+  [data-theme="light"] .mst-bubble.out { background: #e6f4ea; border-color: #33b55b; color: #1b5e20; }
+  .mst-bubble .mst-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #6264A7; }
+  .mst-bubble .mst-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .mst-bubble .mst-text { white-space: pre-wrap; }
+  /* Mattermost styles */
+  .mm-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .mm-stats .in { color: #0058CC; } .mm-stats .out { color: #3db887; }
+  .mm-chat { display: flex; flex-direction: column; gap: 8px; }
+  .mm-bubble { max-width: 85%; padding: 10px 14px; border-radius: 4px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .mm-bubble.in { background: #0a1a3a; border-left: 3px solid #0058CC; color: #b0ccff; align-self: flex-start; }
+  .mm-bubble.out { background: #0a2a1a; border-left: 3px solid #3db887; color: #b0ffe0; align-self: flex-end; }
+  [data-theme="light"] .mm-bubble.in { background: #e8f0ff; border-color: #0058CC; color: #003399; }
+  [data-theme="light"] .mm-bubble.out { background: #e6faf3; border-color: #3db887; color: #005a3c; }
+  .mm-bubble .mm-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #0058CC; }
+  .mm-bubble .mm-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .mm-bubble .mm-text { white-space: pre-wrap; }
+
+  /* === WhatsApp Channel === */
+  .wa-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .wa-stats .in { color: #25D366; } .wa-stats .out { color: #128C7E; }
+  .wa-chat { display: flex; flex-direction: column; gap: 8px; }
+  .wa-bubble { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .wa-bubble.in { background: #1a2f1a; border: 1px solid #25D366; color: #b0ffc0; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .wa-bubble.out { background: #0d2b1f; border: 1px solid #128C7E; color: #90e8d0; align-self: flex-end; border-bottom-right-radius: 4px; }
+  [data-theme="light"] .wa-bubble.in { background: #dcfce7; border-color: #25D366; color: #14532d; }
+  [data-theme="light"] .wa-bubble.out { background: #d1faf0; border-color: #128C7E; color: #0d4a36; }
+  .wa-bubble .wa-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
+  .wa-bubble .wa-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .wa-bubble .wa-text { white-space: pre-wrap; }
+
+  /* === Signal Channel === */
+  .sig-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .sig-stats .in { color: #3A76F0; } .sig-stats .out { color: #5b4fe8; }
+  .sig-chat { display: flex; flex-direction: column; gap: 8px; }
+  .sig-bubble { max-width: 85%; padding: 10px 14px; border-radius: 18px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .sig-bubble.in { background: #1a2040; border: 1px solid #3A76F0; color: #b0ccff; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .sig-bubble.out { background: #1e1a40; border: 1px solid #5b4fe8; color: #d0c8ff; align-self: flex-end; border-bottom-right-radius: 4px; }
+  [data-theme="light"] .sig-bubble.in { background: #dbeafe; border-color: #3A76F0; color: #1e3a5f; }
+  [data-theme="light"] .sig-bubble.out { background: #ede9fe; border-color: #5b4fe8; color: #3b0764; }
+  .sig-bubble .sig-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
+  .sig-bubble .sig-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .sig-bubble .sig-text { white-space: pre-wrap; }
+
+  /* === Discord Channel === */
+  .discord-stats { display: flex; gap: 16px; padding: 10px 14px; background: #2f3136; border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .discord-stats .in { color: #5865F2; } .discord-stats .out { color: #57F287; }
+  .discord-server-info { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #36393f; border-radius: 6px; margin-bottom: 10px; font-size: 12px; color: #b9bbbe; }
+  .discord-server-info .guild-name { color: #5865F2; font-weight: 700; } .discord-server-info .ch-name { color: #8a8f95; }
+  .discord-chat { display: flex; flex-direction: column; gap: 8px; }
+  .discord-bubble { max-width: 85%; padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .discord-bubble.in { background: #36393f; border: 1px solid #5865F2; color: #dcddde; align-self: flex-start; border-bottom-left-radius: 2px; }
+  .discord-bubble.out { background: #2f3136; border: 1px solid #57F287; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 2px; }
+  [data-theme="light"] .discord-bubble.in { background: #eef0ff; border-color: #5865F2; color: #2c2f33; }
+  [data-theme="light"] .discord-bubble.out { background: #f0fff4; border-color: #3ba55d; color: #1a3a24; }
+  .discord-bubble .discord-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #5865F2; }
+  .discord-bubble.out .discord-sender { color: #57F287; }
+  .discord-bubble .discord-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .discord-bubble .discord-text { white-space: pre-wrap; }
+
+  /* === Slack Channel === */
+  .slack-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+  .slack-stats .in { color: #E01E5A; } .slack-stats .out { color: #2EB67D; }
+  .slack-workspace-info { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #4A154B; border-radius: 6px; margin-bottom: 10px; font-size: 12px; color: #cfc3cf; }
+  .slack-workspace-info .ws-name { color: #ECB22E; font-weight: 700; } .slack-workspace-info .ch-name { color: #36C5F0; }
+  .slack-chat { display: flex; flex-direction: column; gap: 8px; }
+  .slack-bubble { max-width: 85%; padding: 10px 14px; border-radius: 6px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
+  .slack-bubble.in { background: #1a1a2e; border: 1px solid #E01E5A; color: #f0c0d0; align-self: flex-start; border-bottom-left-radius: 2px; }
+  .slack-bubble.out { background: #0d1f18; border: 1px solid #2EB67D; color: #b0f0d8; align-self: flex-end; border-bottom-right-radius: 2px; }
+  [data-theme="light"] .slack-bubble.in { background: #fce8f0; border-color: #E01E5A; color: #4A154B; }
+  [data-theme="light"] .slack-bubble.out { background: #e8f8f0; border-color: #2EB67D; color: #0a3a25; }
+  .slack-bubble .slack-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #E01E5A; }
+  .slack-bubble.out .slack-sender { color: #2EB67D; }
+  .slack-bubble .slack-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+  .slack-bubble .slack-text { white-space: pre-wrap; }
+
+  .tg-load-more button { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; padding: 6px 20px; color: var(--text-secondary); cursor: pointer; font-size: 13px; }
+  .tg-load-more button:hover { background: var(--button-hover); }
+  .comp-modal-footer { border-top: 1px solid var(--border-primary); padding: 10px 20px; font-size: 11px; color: var(--text-muted); }
+  /* === Compact Stats Footer Bar === */
+  .stats-footer { display: flex; gap: 0; border: 1px solid var(--border-primary); border-radius: 8px; margin-bottom: 6px; background: var(--bg-tertiary); overflow: hidden; }
+  .stats-footer-item { flex: 1; padding: 6px 12px; display: flex; align-items: center; gap: 8px; border-right: 1px solid var(--border-primary); cursor: pointer; transition: background 0.15s; }
+  .stats-footer-item:last-child { border-right: none; }
+  .stats-footer-item:hover { background: var(--bg-hover); }
+  .stats-footer-icon { font-size: 14px; }
+  .stats-footer-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .tooltip-info-icon {
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:14px;
+    height:14px;
+    margin-left:6px;
+    border-radius:999px;
+    border:1px solid var(--border-primary);
+    color:var(--text-muted);
+    font-size:10px;
+    font-weight:700;
+    line-height:1;
+    cursor:help;
+    opacity:0.9;
+    vertical-align:middle;
+  }
+  .tooltip-info-icon:hover { color: var(--text-primary); border-color: var(--text-accent); }
+  .stats-footer-value { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+  .stats-footer-sub { font-size: 10px; color: var(--text-faint); }
+  @media (max-width: 1024px) {
+    .stats-footer { flex-wrap: wrap; }
+    .stats-footer-item { flex: 1 1 45%; min-width: 0; }
+  }
+
+  /* Narrative view */
+  .narrative-item { padding: 10px 0; border-bottom: 1px solid var(--border-secondary); font-size: 13px; line-height: 1.6; color: var(--text-secondary); }
+  .narrative-item:last-child { border-bottom: none; }
+  .narrative-item .narr-icon { margin-right: 8px; }
+  .narrative-item code { background: var(--bg-secondary); padding: 1px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+  /* Summary view */
+  .summary-section { margin-bottom: 16px; }
+  .summary-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 6px; }
+  .summary-text { font-size: 14px; color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; }
+
+  @media (max-width: 1024px) {
+    .overview-split { grid-template-columns: 1fr; height: auto; }
+    .overview-flow-pane { height: 40vh; min-height: 250px; border-radius: 8px 8px 0 0; }
+    .overview-divider { width: auto; height: 1px; }
+    .overview-tasks-pane { height: 60vh; border-radius: 0 0 8px 8px; border-left: 1px solid var(--border-primary); border-top: none; }
+  }
+
+  @media (max-width: 768px) {
+    .nav { padding: 10px 12px; gap: 8px; }
+    .nav h1 { font-size: 16px; }
+    .nav-tab { padding: 6px 12px; font-size: 12px; }
+    .page { padding: 12px; }
+    .grid { grid-template-columns: 1fr; gap: 12px; }
+    .card-value { font-size: 22px; }
+    .flow-stats { gap: 8px; }
+    .flow-stat { min-width: 70px; padding: 6px 10px; }
+    .flow-stat-value { font-size: 16px; }
+    #flow-svg { min-width: 0; }
+    .heatmap-grid { min-width: 500px; }
+    .chat-msg { max-width: 95%; }
+    .usage-chart { height: 150px; }
+    
+    /* Enhanced Flow mobile optimizations */
+    .flow-container { 
+      padding-bottom: 20px; 
+      overflow: visible; 
+    }
+    #flow-svg text { font-size: 11px !important; }
+    .flow-label { font-size: 7px !important; }
+    .flow-node rect { stroke-width: 1 !important; }
+    .flow-node.active rect { stroke-width: 1.5 !important; }
+    .brain-group { animation-duration: 1.8s; } /* Faster on mobile */
+    
+    /* Mobile zoom controls */
+    .zoom-controls { margin-left: 8px; gap: 2px; }
+    .zoom-btn { width: 24px; height: 24px; font-size: 14px; }
+    .zoom-level { min-width: 32px; font-size: 10px; }
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body data-theme="dark" class="booting">
+<!-- Login overlay -->
+<div id="login-overlay" style="display:none;position:fixed;inset:0;z-index:99999;background:var(--bg-primary,#0f172a);align-items:center;justify-content:center;flex-direction:column;">
+  <div style="background:var(--card-bg,#1e293b);border-radius:16px;padding:40px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);text-align:center;">
+    <div style="font-size:48px;margin-bottom:16px;">🦞</div>
+    <h2 style="color:#e2e8f0;margin:0 0 8px;">ClawMetry</h2>
+    <p style="color:#94a3b8;margin:0 0 24px;font-size:14px;">Enter your OpenClaw Gateway Token</p>
+    <input id="login-token" type="password" placeholder="Gateway token..." style="width:100%;box-sizing:border-box;padding:12px 16px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:15px;margin-bottom:16px;outline:none;" onkeydown="if(event.key==='Enter')clawmetryLogin()">
+    <button onclick="clawmetryLogin()" style="width:100%;padding:12px;border-radius:8px;border:none;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer;">Login</button>
+    <p id="login-error" style="color:#f87171;margin:12px 0 0;font-size:13px;display:none;">Invalid token</p>
+  </div>
+</div>
+<script>
+(function(){
+  var stored = localStorage.getItem('clawmetry-token');
+  fetch('/api/auth/check' + (stored ? '?token=' + encodeURIComponent(stored) : ''))
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.needsSetup){
+        // No gateway token configured — show mandatory gateway setup wizard
+        document.getElementById('login-overlay').style.display='none';
+        var overlay=document.getElementById('gw-setup-overlay');
+        overlay.dataset.mandatory='true';
+        document.getElementById('gw-setup-close').style.display='none';
+        overlay.style.display='flex';
+        return;
+      }
+      if(!d.authRequired){
+        document.getElementById('login-overlay').style.display='none';
+        return;
+      }
+      if(d.valid){
+        document.getElementById('login-overlay').style.display='none';
+        var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
+        return;
+      }
+      document.getElementById('login-overlay').style.display='flex';
+    })
+    .catch(function(){document.getElementById('login-overlay').style.display='none';});
+})();
+function clawmetryLogin(){
+  var tok=document.getElementById('login-token').value.trim();
+  if(!tok)return;
+  fetch('/api/auth/check?token='+encodeURIComponent(tok))
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.valid){
+        localStorage.setItem('clawmetry-token',tok);
+        document.getElementById('login-overlay').style.display='none';
+        var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
+        location.reload();
+      } else {
+        document.getElementById('login-error').style.display='block';
+      }
+    });
+}
+function clawmetryLogout(){
+  localStorage.removeItem('clawmetry-token');
+  location.reload();
+}
+// Inject auth header into all fetch calls
+(function(){
+  var _origFetch=window.fetch;
+  window.fetch=function(url,opts){
+    var tok=localStorage.getItem('clawmetry-token');
+    if(tok && typeof url==='string' && url.startsWith('/api/')){
+      opts=opts||{};
+      opts.headers=opts.headers||{};
+      if(opts.headers instanceof Headers){opts.headers.set('Authorization','Bearer '+tok);}
+      else{opts.headers['Authorization']='Bearer '+tok;}
+    }
+    return _origFetch.call(this,url,opts);
+  };
+})();
+</script>
+<div class="boot-overlay" id="boot-overlay">
+  <div class="boot-card">
+    <div class="boot-spinner"></div>
+    <div class="boot-title">Initializing ClawMetry</div>
+    <div class="boot-sub" id="boot-sub">Loading model, tasks, system health, and live streams…</div>
+    <div class="boot-steps">
+      <div class="boot-step loading" id="boot-step-overview"><span class="boot-dot"></span><span>Loading overview + model context</span></div>
+      <div class="boot-step" id="boot-step-tasks"><span class="boot-dot"></span><span>Loading active tasks</span></div>
+      <div class="boot-step" id="boot-step-health"><span class="boot-dot"></span><span>Loading system health</span></div>
+      <div class="boot-step" id="boot-step-streams"><span class="boot-dot"></span><span>Connecting live streams</span></div>
+    </div>
+  </div>
+</div>
+<div class="zoom-wrapper" id="zoom-wrapper">
+<div class="nav">
+  <h1><span>🦞</span> ClawMetry</h1>
+  <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+  <!-- Budget & Alerts hidden until mature -->
+  <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
+
+  <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
+  <div class="zoom-controls">
+    <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
+    <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
+    <button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl/Cmd + +)">+</button>
+  </div>
+  <div class="nav-tabs">
+    <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
+    <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
+    <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
+    <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
+    <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
+    <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('subagents')">Sub-Agents</div>
+    <!-- History tab hidden until mature -->
+    <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
+  </div>
+</div>
+
+<!-- Alert Banner -->
+<div id="alert-banner" style="display:none;padding:10px 16px;background:var(--bg-error);border-bottom:2px solid var(--text-error);color:var(--text-error);font-size:13px;font-weight:600;display:none;align-items:center;gap:10px;">
+  <span style="font-size:18px;">&#9888;&#65039;</span>
+  <span id="alert-banner-msg" style="flex:1;"></span>
+  <button onclick="ackAllAlerts()" style="background:var(--text-error);color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+  <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
+</div>
+
+<!-- Budget Settings Modal -->
+<div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
+  <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <h3 style="font-size:18px;font-weight:700;color:var(--text-primary);">&#128176; Budget & Alerts</h3>
+      <button onclick="document.getElementById('budget-modal').style.display='none'" style="background:var(--button-bg);border:1px solid var(--border-primary);border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:var(--text-tertiary);">&times;</button>
+    </div>
+    <div id="budget-modal-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-primary);margin-bottom:16px;">
+      <div class="modal-tab active" onclick="switchBudgetTab('limits',this)">Budget Limits</div>
+      <div class="modal-tab" onclick="switchBudgetTab('alerts',this)">Alert Rules</div>
+      <div class="modal-tab" onclick="switchBudgetTab('telegram',this)">Telegram</div>
+      <div class="modal-tab" onclick="switchBudgetTab('history',this)">History</div>
+    </div>
+    <!-- Budget Limits Tab -->
+    <div id="budget-tab-limits">
+      <div style="display:grid;gap:12px;">
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Daily Limit (USD, 0 = no limit)</label>
+          <input id="budget-daily" type="number" step="0.01" min="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Weekly Limit (USD)</label>
+          <input id="budget-weekly" type="number" step="0.01" min="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Monthly Limit (USD)</label>
+          <input id="budget-monthly" type="number" step="0.01" min="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Warning at (%)</label>
+          <input id="budget-warn-pct" type="number" step="1" min="1" max="100" value="80" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input id="budget-autopause" type="checkbox" style="cursor:pointer;">
+          <label for="budget-autopause" style="font-size:13px;color:var(--text-secondary);cursor:pointer;">Auto-pause gateway when budget exceeded</label>
+        </div>
+        <button onclick="saveBudgetConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:10px;font-size:14px;font-weight:600;cursor:pointer;">Save Budget Settings</button>
+      </div>
+      <div id="budget-status-display" style="margin-top:16px;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Current Spending</div>
+        <div id="budget-status-content" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
+      </div>
+    </div>
+    <!-- Alert Rules Tab -->
+    <div id="budget-tab-alerts" style="display:none;">
+      <div style="margin-bottom:12px;">
+        <button onclick="showAddAlertForm()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;">+ Add Alert Rule</button>
+      </div>
+      <div id="add-alert-form" style="display:none;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
+        <div style="display:grid;gap:8px;">
+          <select id="alert-type" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <option value="threshold">Threshold (daily $ amount)</option>
+            <option value="spike">Spike (hourly rate multiplier)</option>
+          </select>
+          <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-ch-banner" checked> Banner</label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-ch-telegram"> Telegram</label>
+          </div>
+          <input id="alert-cooldown" type="number" value="30" min="1" placeholder="Cooldown (min)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <div style="display:flex;gap:8px;">
+            <button onclick="createAlertRule()" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:13px;cursor:pointer;">Create</button>
+            <button onclick="document.getElementById('add-alert-form').style.display='none'" style="background:var(--button-bg);color:var(--text-secondary);border:none;border-radius:6px;padding:6px 16px;font-size:13px;cursor:pointer;">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <div id="alert-rules-list" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
+    </div>
+    <!-- Telegram Tab -->
+    <div id="budget-tab-telegram" style="display:none;">
+      <div style="display:grid;gap:12px;">
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">
+          Configure direct Telegram notifications for budget alerts. Create a bot via <a href="https://t.me/BotFather" target="_blank" style="color:var(--text-accent);">@BotFather</a> and get your chat ID.
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Bot Token</label>
+          <input id="tg-bot-token" type="password" placeholder="123456:ABC-DEF..." style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Chat ID</label>
+          <input id="tg-chat-id" type="text" placeholder="-100123456789" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button onclick="saveTelegramConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;">Save</button>
+          <button onclick="testTelegram()" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;">Send Test</button>
+        </div>
+        <div id="tg-status" style="font-size:12px;color:var(--text-muted);"></div>
+      </div>
+    </div>
+    <!-- History Tab -->
+    <div id="budget-tab-history" style="display:none;">
+      <div id="alert-history-list" style="font-size:13px;color:var(--text-secondary);max-height:400px;overflow-y:auto;">Loading...</div>
+    </div>
+  </div>
+</div>
+
+<!-- OVERVIEW (Split-Screen Hacker Dashboard) -->
+<div class="page active" id="page-overview">
+  <div class="refresh-bar" style="margin-bottom:6px;">
+    <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
+    <span class="pulse"></span>
+    <span class="live-badge">LIVE</span>
+    <span class="refresh-time" id="refresh-time" style="font-size:11px;">Loading...</span>
+  </div>
+
+  <!-- Stats Bar (top) -->
+  <div class="stats-footer">
+    <div class="stats-footer-item">
+      <span class="stats-footer-icon">💰</span>
+      <div>
+        <div class="stats-footer-label">Spending <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
+        <div class="stats-footer-value" id="cost-today">$0.00</div>
+        <div class="stats-footer-sub" id="cost-billing-badge" style="margin-top:2px;display:none;"></div>
+      </div>
+      <div style="margin-left:auto;text-align:right;">
+        <div class="stats-footer-sub">wk: <span id="cost-week">—</span></div>
+        <div class="stats-footer-sub">mo: <span id="cost-month">—</span></div>
+      </div>
+      <span id="cost-trend" style="display:none;">Estimated from usage — may be $0 billed with OAuth auth</span>
+    </div>
+    <div class="stats-footer-item">
+      <span class="stats-footer-icon">🤖</span>
+      <div>
+        <div class="stats-footer-label">Model</div>
+        <div class="stats-footer-value" id="model-primary">—</div>
+      </div>
+      <div id="model-breakdown" style="display:none;">Loading...</div>
+    </div>
+    <div class="stats-footer-item">
+      <span class="stats-footer-icon">📊</span>
+      <div>
+        <div class="stats-footer-label">Tokens</div>
+        <div class="stats-footer-value" id="token-rate">—</div>
+      </div>
+      <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">—</span></span>
+    </div>
+    <div class="stats-footer-item">
+      <span class="stats-footer-icon">💬</span>
+      <div>
+        <div class="stats-footer-label">Sessions</div>
+        <div class="stats-footer-value" id="hot-sessions-count">—</div>
+      </div>
+      <div id="hot-sessions-list" style="display:none;">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Split Screen: Flow Left | Tasks Right -->
+  <div class="overview-split">
+    <!-- LEFT: Flow + Brain stacked -->
+    <div style="display:flex;flex-direction:column;">
+      <div class="overview-flow-pane" style="border-radius:8px 0 0 0;flex:3;min-height:0;">
+        <div class="grid-overlay"></div>
+        <div class="scanline-overlay"></div>
+        <div class="flow-container" id="overview-flow-container">
+          <!-- Flow SVG cloned here by JS -->
+          <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:13px;">Loading flow...</div>
+        </div>
+      </div>
+
+      <!-- 🧠 Brain Panel: Main Agent Activity -->
+      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-top:1px solid var(--border-secondary);padding:10px 14px 8px;min-height:80px;flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span id="main-activity-dot" style="width:8px;height:8px;border-radius:50%;background:#888;display:inline-block;"></span>
+            <span style="font-size:13px;font-weight:700;color:var(--text-primary);">🧠 <span id="main-activity-model">Claude Opus</span></span>
+            <span id="main-activity-status" style="font-size:10px;color:var(--text-muted);">
+              <span id="main-activity-label">...</span>
+            </span>
+          </div>
+        </div>
+        <div id="main-activity-list" style="overflow-y:auto;flex:1;font-size:11px;font-family:'JetBrains Mono','Fira Code',monospace;line-height:1.6;">
+          <div style="text-align:center;padding:8px;color:var(--text-muted);font-size:11px;">Waiting for activity...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DIVIDER -->
+    <div class="overview-divider"></div>
+
+    <!-- RIGHT: Active Tasks Panel -->
+    <div class="overview-tasks-pane">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
+          <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
+        </div>
+        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
+      </div>
+      <div class="tasks-panel-scroll" id="overview-tasks-list">
+        <div style="text-align:center;padding:32px;color:var(--text-muted);">
+          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
+          <div style="font-size:13px;">Loading tasks...</div>
+        </div>
+      </div>
+      <!-- System Health Panel (inside tasks pane) -->
+      <div id="system-health-panel" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:16px;margin-top:14px;box-shadow:var(--card-shadow);">
+        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
+        <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
+        <div id="sh-disks" style="margin-bottom:14px;"></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Cron Jobs</div>
+        <div id="sh-crons" style="margin-bottom:14px;"></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
+        <div id="sh-subagents" style="margin-bottom:14px;"></div>
+        <!-- Token Usage removed, now has dedicated Tokens tab -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden elements referenced by existing JS -->
+  <div style="display:none;">
+    <span id="tokens-peak">—</span>
+    <span id="subagents-count">—</span>
+    <span id="subagents-status">—</span>
+    <span id="subagents-preview"></span>
+    <span id="tools-active">—</span>
+    <span id="tools-recent">—</span>
+    <div id="tools-sparklines"><div class="tool-spark"><span>—</span></div><div class="tool-spark"><span>—</span></div><div class="tool-spark"><span>—</span></div></div>
+    <div id="active-tasks-grid"></div>
+    <div id="activity-stream"></div>
+  </div>
+
+  <!-- old system health removed, now inside tasks pane -->
+</div>
+
+<!-- USAGE -->
+<div class="page" id="page-usage">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadUsage()">↻ Refresh</button>
+    <button class="refresh-btn" onclick="exportUsageData()" style="margin-left: 8px;">📥 Export CSV</button>
+  </div>
+  
+  <!-- Cost Warnings -->
+  <div id="cost-warnings" style="display:none; margin-bottom: 16px;"></div>
+  
+  <!-- Main Usage Stats -->
+  <div class="grid">
+    <div class="card">
+      <div class="card-title"><span class="icon">📊</span> Today</div>
+      <div class="card-value" id="usage-today">—</div>
+      <div class="card-sub" id="usage-today-cost"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">📅</span> This Week</div>
+      <div class="card-value" id="usage-week">—</div>
+      <div class="card-sub" id="usage-week-cost"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">📆</span> This Month</div>
+      <div class="card-value" id="usage-month">—</div>
+      <div class="card-sub" id="usage-month-cost"></div>
+    </div>
+    <div class="card" id="trend-card" style="display:none;">
+      <div class="card-title"><span class="icon">📈</span> Trend</div>
+      <div class="card-value" id="trend-direction">—</div>
+      <div class="card-sub" id="trend-prediction"></div>
+    </div>
+  </div>
+  <div class="section-title">📊 Token Usage (14 days)</div>
+  <div class="card">
+    <div class="usage-chart" id="usage-chart">Loading...</div>
+  </div>
+  <div class="section-title">💰 Cost Breakdown <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
+  <div class="card"><table class="usage-table" id="usage-cost-table"><tbody><tr><td colspan="3" style="color:#666;">Loading...</td></tr></tbody></table></div>
+  <div id="otel-extra-sections" style="display:none;">
+    <div class="grid" style="margin-top:16px;">
+      <div class="card">
+        <div class="card-title"><span class="icon">⏱️</span> Avg Run Duration</div>
+        <div class="card-value" id="usage-avg-run">—</div>
+        <div class="card-sub">from OTLP openclaw.run.duration_ms</div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="icon">💬</span> Messages Processed</div>
+        <div class="card-value" id="usage-msg-count">—</div>
+        <div class="card-sub">from OTLP openclaw.message.processed</div>
+      </div>
+    </div>
+    <div class="section-title">🤖 Model Breakdown</div>
+    <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
+    <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
+  </div>
+</div>
+
+<!-- CRONS -->
+<div class="page" id="page-crons">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
+    <!-- New Cron Job button disabled until gateway CRUD is properly tested -->
+  </div>
+  <div class="card" id="crons-list">Loading...</div>
+</div>
+
+<!-- Cron Edit/Create Modal -->
+<div id="cron-edit-modal" style="display:none;position:fixed;inset:0;z-index:1500;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+  <div style="background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:12px;padding:24px;width:480px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,0.4);max-height:80vh;overflow-y:auto;margin:auto;">
+    <h3 id="cron-modal-title" style="margin:0 0 16px;color:var(--text-primary);font-size:16px;">Edit Cron Job</h3>
+    <input type="hidden" id="cron-edit-id">
+    <input type="hidden" id="cron-edit-mode" value="edit">
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Name</label>
+      <input id="cron-edit-name" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="my-health-check">
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Schedule (cron expression or interval like "every 30min")</label>
+      <input id="cron-edit-schedule" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;font-family:'SF Mono','Fira Code',monospace;box-sizing:border-box;" placeholder="*/30 * * * *  or  every 30min">
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Timezone (for cron expressions)</label>
+      <input id="cron-edit-tz" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. Europe/Amsterdam">
+    </div>
+    <div id="cron-edit-prompt-section" style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Prompt / Message</label>
+      <textarea id="cron-edit-prompt" rows="3" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;" placeholder="What should the agent do when this cron fires?"></textarea>
+    </div>
+    <div id="cron-edit-channel-section" style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Channel (optional)</label>
+      <input id="cron-edit-channel" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. discord, telegram">
+    </div>
+    <div id="cron-edit-model-section" style="margin-bottom:12px;">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Model (optional)</label>
+      <input id="cron-edit-model" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. anthropic/claude-sonnet-4-20250514">
+    </div>
+    <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px;">
+      <input type="checkbox" id="cron-edit-enabled" style="accent-color:#6366f1;" checked>
+      <label for="cron-edit-enabled" style="font-size:13px;color:var(--text-primary);">Enabled</label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="closeCronEditModal()" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:var(--button-bg);color:var(--text-secondary);">Cancel</button>
+      <button onclick="saveCronEdit()" id="cron-save-btn" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:#6366f1;color:#fff;">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- MEMORY -->
+<div class="page" id="page-memory">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadMemory()">↻ Refresh</button>
+  </div>
+  <div class="card" id="memory-list">Loading...</div>
+  <div class="file-viewer" id="file-viewer">
+    <div class="file-viewer-header">
+      <span class="file-viewer-title" id="file-viewer-title"></span>
+      <button class="file-viewer-close" onclick="closeFileViewer()">✕ Close</button>
+    </div>
+    <div class="file-viewer-content" id="file-viewer-content"></div>
+  </div>
+</div>
+
+<!-- TRANSCRIPTS -->
+<div class="page" id="page-transcripts">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadTranscripts()">↻ Refresh</button>
+    <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← Back to list</button>
+  </div>
+  <div class="card" id="transcript-list">Loading...</div>
+  <div id="transcript-viewer" style="display:none">
+    <div class="transcript-viewer-meta" id="transcript-meta"></div>
+    <div class="chat-messages" id="transcript-messages"></div>
+  </div>
+</div>
+
+<!-- HISTORY -->
+<div class="page" id="page-history">
+  <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
+    <h2 style="font-size:18px;font-weight:700;color:var(--text-primary);margin:0;">&#128202; History</h2>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;" id="time-range-picker">
+      <button class="time-btn active" onclick="setTimeRange(3600,this)">1h</button>
+      <button class="time-btn" onclick="setTimeRange(21600,this)">6h</button>
+      <button class="time-btn" onclick="setTimeRange(86400,this)">24h</button>
+      <button class="time-btn" onclick="setTimeRange(604800,this)">7d</button>
+      <button class="time-btn" onclick="setTimeRange(2592000,this)">30d</button>
+      <button class="time-btn" onclick="showCustomRange()">Custom</button>
+    </div>
+    <div id="custom-range-picker" style="display:none;gap:8px;align-items:center;">
+      <input type="datetime-local" id="history-from" style="padding:4px 8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">
+      <span style="color:var(--text-muted);">to</span>
+      <input type="datetime-local" id="history-to" style="padding:4px 8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">
+      <button class="time-btn" onclick="applyCustomRange()">Apply</button>
+    </div>
+    <div id="history-status" style="font-size:12px;color:var(--text-muted);margin-left:auto;"></div>
+  </div>
+
+  <!-- Token Usage Chart -->
+  <div class="card" style="margin-bottom:16px;padding:16px;">
+    <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 12px 0;">Token Usage Over Time</h3>
+    <canvas id="history-tokens-chart" height="200"></canvas>
+  </div>
+
+  <!-- Cost Chart -->
+  <div class="card" style="margin-bottom:16px;padding:16px;">
+    <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 12px 0;">Cost Over Time</h3>
+    <canvas id="history-cost-chart" height="180"></canvas>
+  </div>
+
+  <!-- Sessions & Crons side by side -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+    <div class="card" style="padding:16px;">
+      <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 12px 0;">Active Sessions</h3>
+      <canvas id="history-sessions-chart" height="160"></canvas>
+    </div>
+    <div class="card" style="padding:16px;">
+      <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 12px 0;">Cron Runs</h3>
+      <div id="history-cron-table" style="max-height:300px;overflow-y:auto;font-size:13px;color:var(--text-secondary);">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Snapshot drilldown modal -->
+  <div id="snapshot-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
+    <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:800px;max-height:80vh;padding:24px;overflow-y:auto;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;" id="snapshot-title">Snapshot</h3>
+        <button onclick="document.getElementById('snapshot-modal').style.display='none'" style="background:var(--button-bg);border:1px solid var(--border-primary);border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:var(--text-tertiary);">&times;</button>
+      </div>
+      <pre id="snapshot-content" style="font-size:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:16px;overflow-x:auto;white-space:pre-wrap;color:var(--text-secondary);max-height:60vh;"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- FLOW -->
+<div class="page" id="page-flow">
+  <div class="flow-stats">
+    <div class="flow-stat"><span class="flow-stat-label">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
+    <div class="flow-stat"><span class="flow-stat-label">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
+    <div class="flow-stat"><span class="flow-stat-label">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
+    <div class="flow-stat"><span class="flow-stat-label">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
+  </div>
+  <div class="flow-container">
+    <svg id="flow-svg" viewBox="0 0 980 550" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <pattern id="flow-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="var(--border-secondary)" stroke-width="0.5"/>
+        </pattern>
+        <filter id="dropShadow" x="-10%" y="-10%" width="130%" height="130%">
+          <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.25)" flood-opacity="0.4"/>
+        </filter>
+        <filter id="dropShadowLight" x="-10%" y="-10%" width="130%" height="130%">
+          <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="rgba(0,0,0,0.15)" flood-opacity="0.3"/>
+        </filter>
+      </defs>
+      <rect width="980" height="550" fill="var(--bg-primary)" rx="12"/>
+      <rect width="980" height="550" fill="url(#flow-grid)"/>
+
+      <!-- Human → Channel paths -->
+      <path class="flow-path" id="path-human-tg"  d="M 60 56 C 60 70, 65 85, 75 100"/>
+      <path class="flow-path" id="path-human-sig" d="M 60 56 C 55 90, 60 140, 75 170"/>
+      <path class="flow-path" id="path-human-wa"  d="M 60 56 C 50 110, 55 200, 75 240"/>
+
+      <!-- Channel → Gateway paths -->
+      <path class="flow-path" id="path-tg-gw"  d="M 130 120 C 150 120, 160 165, 180 170"/>
+      <path class="flow-path" id="path-sig-gw" d="M 130 190 C 150 190, 160 185, 180 183"/>
+      <path class="flow-path" id="path-wa-gw"  d="M 130 260 C 150 260, 160 200, 180 195"/>
+
+      <!-- Gateway → Brain -->
+      <path class="flow-path" id="path-gw-brain" d="M 290 183 C 305 183, 315 175, 330 175"/>
+
+      <!-- Brain → Tools -->
+      <path class="flow-path" id="path-brain-session" d="M 510 155 C 530 130, 545 95, 560 89"/>
+      <path class="flow-path" id="path-brain-exec"    d="M 510 160 C 530 150, 545 143, 560 139"/>
+      <path class="flow-path" id="path-brain-browser" d="M 510 175 C 530 175, 545 189, 560 189"/>
+      <path class="flow-path" id="path-brain-search"  d="M 510 185 C 530 200, 545 230, 560 239"/>
+      <path class="flow-path" id="path-brain-cron"    d="M 510 195 C 530 230, 545 275, 560 289"/>
+      <path class="flow-path" id="path-brain-tts"     d="M 510 205 C 530 260, 545 325, 560 339"/>
+      <path class="flow-path" id="path-brain-memory"  d="M 510 215 C 530 290, 545 370, 560 389"/>
+
+      <!-- Infrastructure paths (dashed) -->
+      <path class="flow-path flow-path-infra" id="path-gw-network"    d="M 235 205 C 235 350, 500 400, 590 450"/>
+      <path class="flow-path flow-path-infra" id="path-brain-runtime" d="M 380 220 C 300 350, 150 400, 95 450"/>
+      <path class="flow-path flow-path-infra" id="path-brain-machine" d="M 420 220 C 380 350, 300 400, 260 450"/>
+      <path class="flow-path flow-path-infra" id="path-memory-storage" d="M 615 408 C 550 420, 470 435, 425 450"/>
+
+      <!-- Human Origin -->
+      <g class="flow-node flow-node-human" id="node-human">
+        <circle cx="60" cy="30" r="22" fill="#7c3aed" stroke="#6a2ec0" stroke-width="2" filter="url(#dropShadow)"/>
+        <circle cx="60" cy="24" r="5" fill="#ffffff" opacity="0.6"/>
+        <path d="M 50 38 Q 50 45 60 45 Q 70 45 70 38" fill="#ffffff" opacity="0.4"/>
+        <text x="60" y="68" style="font-size:13px;fill:#7c3aed;font-weight:800;text-anchor:middle;" id="flow-human-name">You</text>
+      </g>
+
+      <!-- Channel Nodes -->
+      <g class="flow-node flow-node-channel" id="node-telegram">
+        <rect x="20" y="100" width="110" height="40" rx="10" ry="10" fill="#2196F3" stroke="#1565C0" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📱 TG</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-signal">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#2E8B7A" stroke="#1B6B5A" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📡 Signal</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-imessage" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#34C759" stroke="#248A3D" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 iMessage</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-whatsapp">
+        <rect x="20" y="240" width="110" height="40" rx="10" ry="10" fill="#43A047" stroke="#2E7D32" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="265" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 WA</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-discord" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#5865F2" stroke="#4752C4" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Discord</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-slack" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#4A154B" stroke="#350e36" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💼 Slack</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-irc" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#6B7280" stroke="#4B5563" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;"># IRC</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-webchat" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0EA5E9" stroke="#0369A1" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌐 WebChat</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-googlechat" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#1A73E8" stroke="#1557B0" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 GChat</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-bluebubbles" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#1C6EF3" stroke="#1558C0" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🍎 BB</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-msteams" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#6264A7" stroke="#464775" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">👔 Teams</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-matrix" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0DBD8B" stroke="#0A9E74" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[M] Matrix</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-mattermost" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0058CC" stroke="#0047A3" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚓ MM</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-line" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#00B900" stroke="#009900" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💚 LINE</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-nostr" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#8B5CF6" stroke="#6D28D9" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚡ Nostr</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-twitch" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#9146FF" stroke="#772CE8" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Twitch</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-feishu" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#3370FF" stroke="#2050CC" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌸 Feishu</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-zalo" style="display:none;">
+        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0068FF" stroke="#0050CC" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 Zalo</text>
+      </g>
+
+      <!-- Gateway -->
+      <g class="flow-node flow-node-gateway" id="node-gateway">
+        <rect x="180" y="160" width="110" height="45" rx="10" ry="10" fill="#37474F" stroke="#263238" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="235" y="188" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🔀 Gateway</text>
+      </g>
+
+      <!-- Brain -->
+      <g class="flow-node flow-node-brain brain-group" id="node-brain">
+        <rect x="330" y="130" width="180" height="90" rx="12" ry="12" fill="#C62828" stroke="#B71C1C" stroke-width="3" filter="url(#dropShadow)"/>
+        <text x="420" y="162" style="font-size:24px;text-anchor:middle;">&#x1F9E0;</text>
+        <text x="420" y="186" style="font-size:18px;font-weight:800;fill:#FFD54F;text-anchor:middle;" id="brain-model-label">AI Model</text>
+        <text x="420" y="203" style="font-size:10px;fill:#ffccbc;text-anchor:middle;" id="brain-model-text">unknown</text>
+        <text x="420" y="214" style="font-size:8px;fill:#a7f3d0;text-anchor:middle;" id="brain-billing-text">Auth: unknown</text>
+        <circle cx="420" cy="225" r="4" fill="#FF8A65">
+          <animate attributeName="r" values="3;5;3" dur="1.1s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="0.5;1;0.5" dur="1.1s" repeatCount="indefinite"/>
+        </circle>
+      </g>
+
+      <!-- Tool Nodes -->
+      <g class="flow-node flow-node-session" id="node-session">
+        <rect x="560" y="70" width="110" height="38" rx="10" ry="10" fill="#1565C0" stroke="#0D47A1" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="615" y="94" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📋 Sessions</text>
+        <circle class="tool-indicator" id="ind-session" cx="665" cy="78" r="5" fill="#42A5F5"/>
+      </g>
+      <g class="flow-node flow-node-tool" id="node-exec">
+        <rect x="560" y="120" width="110" height="38" rx="10" ry="10" fill="#E65100" stroke="#BF360C" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="615" y="144" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚡ Exec</text>
+        <circle class="tool-indicator" id="ind-exec" cx="665" cy="128" r="5" fill="#FF6E40"/>
+      </g>
+      <g class="flow-node flow-node-tool" id="node-browser">
+        <rect x="560" y="170" width="110" height="38" rx="10" ry="10" fill="#6A1B9A" stroke="#4A148C" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="615" y="194" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌐 Web</text>
+        <circle class="tool-indicator" id="ind-browser" cx="665" cy="178" r="5" fill="#CE93D8"/>
+      </g>
+      <g class="flow-node flow-node-tool" id="node-search">
+        <rect x="560" y="220" width="110" height="38" rx="10" ry="10" fill="#00695C" stroke="#004D40" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="615" y="244" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">&#x1F50D; Search</text>
+        <circle class="tool-indicator" id="ind-search" cx="665" cy="228" r="5" fill="#4DB6AC"/>
+      </g>
+      <g class="flow-node flow-node-tool" id="node-cron">
+        <rect x="560" y="270" width="110" height="38" rx="10" ry="10" fill="#546E7A" stroke="#37474F" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="615" y="294" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📅 Cron</text>
+        <circle class="tool-indicator" id="ind-cron" cx="665" cy="278" r="5" fill="#90A4AE"/>
+      </g>
+      <g class="flow-node flow-node-tool" id="node-tts">
+        <rect x="560" y="320" width="110" height="38" rx="10" ry="10" fill="#F9A825" stroke="#F57F17" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="615" y="344" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">&#x1F5E3;&#xFE0F; TTS</text>
+        <circle class="tool-indicator" id="ind-tts" cx="665" cy="328" r="5" fill="#FFF176"/>
+      </g>
+      <g class="flow-node flow-node-tool" id="node-memory">
+        <rect x="560" y="370" width="110" height="38" rx="10" ry="10" fill="#283593" stroke="#1A237E" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="615" y="394" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">&#x1F4BE; Memory</text>
+        <circle class="tool-indicator" id="ind-memory" cx="665" cy="378" r="5" fill="#7986CB"/>
+      </g>
+
+      <!-- Cost Optimizer -->
+      <g class="flow-node flow-node-optimizer" id="node-cost-optimizer">
+        <rect x="680" y="370" width="145" height="44" rx="12" ry="12" fill="#2E7D32" stroke="#1B5E20" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="752" y="389" style="font-size:12px;font-weight:700;fill:#ffffff;text-anchor:middle;">
+          <tspan x="752" dy="-5">&#x1F4B0; Cost</tspan>
+          <tspan x="752" dy="13">Optimizer</tspan>
+        </text>
+        <circle class="tool-indicator" id="ind-cost-optimizer" cx="817" cy="378" r="5" fill="#66BB6A"/>
+      </g>
+
+      <!-- Automation Advisor -->
+      <g class="flow-node flow-node-advisor" id="node-automation-advisor">
+        <rect x="835" y="370" width="145" height="44" rx="12" ry="12" fill="#7B1FA2" stroke="#4A148C" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="907" y="389" style="font-size:12px;font-weight:700;fill:#ffffff;text-anchor:middle;">
+          <tspan x="907" dy="-5">&#x1F9E0; Automation</tspan>
+          <tspan x="907" dy="13">Advisor</tspan>
+        </text>
+        <circle class="tool-indicator" id="ind-automation-advisor" cx="972" cy="378" r="5" fill="#BA68C8"/>
+      </g>
+
+      <!-- Infrastructure Layer -->
+      <line class="flow-ground" x1="20" y1="440" x2="970" y2="440"/>
+      <text class="flow-ground-label" x="400" y="438" style="text-anchor:middle;font-size:10px;">I N F R A S T R U C T U R E</text>
+
+      <g class="flow-node flow-node-infra flow-node-runtime" id="node-runtime">
+        <rect x="30" y="450" width="130" height="40" rx="8" ry="8" fill="#455A64" stroke="#37474F" filter="url(#dropShadowLight)"/>
+        <text x="95" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x2699;&#xFE0F; Runtime</text>
+        <text class="infra-sub" x="95" y="480" style="fill:#B0BEC5;font-size:8px;text-anchor:middle;" id="infra-runtime-text">Node.js · Linux</text>
+      </g>
+      <g class="flow-node flow-node-infra flow-node-machine" id="node-machine">
+        <rect x="195" y="450" width="130" height="40" rx="8" ry="8" fill="#4E342E" stroke="#3E2723" filter="url(#dropShadowLight)"/>
+        <text x="260" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F5A5;&#xFE0F; Machine</text>
+        <text class="infra-sub" x="260" y="480" style="fill:#BCAAA4;font-size:8px;text-anchor:middle;" id="infra-machine-text">Host</text>
+      </g>
+      <g class="flow-node flow-node-infra flow-node-storage" id="node-storage">
+        <rect x="360" y="450" width="130" height="40" rx="8" ry="8" fill="#5D4037" stroke="#4E342E" filter="url(#dropShadowLight)"/>
+        <text x="425" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F4BF; Storage</text>
+        <text class="infra-sub" x="425" y="480" style="fill:#BCAAA4;font-size:8px;text-anchor:middle;" id="infra-storage-text">Disk</text>
+      </g>
+      <g class="flow-node flow-node-infra flow-node-network" id="node-network">
+        <rect x="525" y="450" width="130" height="40" rx="8" ry="8" fill="#004D40" stroke="#00332E" filter="url(#dropShadowLight)"/>
+        <text x="590" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F310; Network</text>
+        <text class="infra-sub" x="590" y="480" style="fill:#80CBC4;font-size:8px;text-anchor:middle;" id="infra-network-text">LAN</text>
+      </g>
+
+      <!-- Legend -->
+      <g transform="translate(140, 510)">
+        <rect x="0" y="0" width="700" height="28" rx="14" ry="14" fill="var(--bg-tertiary)" stroke="var(--border-primary)" stroke-width="1" opacity="0.9"/>
+        <text x="350" y="18" style="font-size:12px;font-weight:600;fill:var(--text-secondary);letter-spacing:1px;text-anchor:middle;">&#x1F4E8; Channels  &#x27A1;&#xFE0F;  🔀 Gateway  &#x27A1;&#xFE0F;  &#x1F9E0; AI Brain  &#x27A1;&#xFE0F;  &#x1F6E0;&#xFE0F; Tools</text>
+      </g>
+
+      <!-- Flow direction labels -->
+      <text class="flow-label" x="120" y="155" style="font-size:9px;">messages in</text>
+      <text class="flow-label" x="300" y="155" style="font-size:9px;">routes to AI</text>
+      <text class="flow-label" x="520" y="155" style="font-size:9px;">uses tools</text>
+    </svg>
+  </div>
+
+  <!-- Live activity feed under the flow diagram -->
+  <div style="margin-top:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:12px 16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <span style="font-size:13px;font-weight:600;color:#aaa;">📡 Live Activity Feed</span>
+      <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
+    </div>
+    <div id="flow-live-feed" style="max-height:120px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.5;color:#777;">
+      <div style="color:#555;">Waiting for activity...</div>
+    </div>
+  </div>
+</div><!-- end page-flow -->
+
+<!-- BRAIN -->
+<div class="page" id="page-brain">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain — Unified Activity Stream</span>
+      <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+    </div>
+    <!-- Activity density chart -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Activity density — last 60 min (30s buckets)</div>
+      <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
+    </div>
+    <!-- Source filter chips -->
+    <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+      <button class="brain-chip active" data-source="all" onclick="setBrainFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
+    </div>
+    <!-- Event stream -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-size:11px;color:var(--text-muted);">Live event stream (newest first)</span>
+        <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">↑ new events</span>
+      </div>
+      <div id="brain-stream" style="max-height:600px;overflow-y:auto;">
+        <div style="color:var(--text-muted);padding:20px">Loading...</div>
+      </div>
+    </div>
+  </div>
+</div><!-- end page-brain -->
+
+<!-- SUB-AGENTS -->
+<div class="page" id="page-subagents">
+  <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <button class="refresh-btn" onclick="loadSubAgentsPage(false)">&#8635; Refresh</button>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+      <input type="checkbox" id="sa-auto-refresh" onchange="toggleSAAutoRefresh()"> Auto-refresh (5s)
+    </label>
+    <span id="sa-refresh-time" style="font-size:11px;color:var(--text-muted);margin-left:auto;"></span>
+  </div>
+
+  <!-- Stats row -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="subagents-active-count">-</div>
+      <div style="font-size:11px;color:#60ff80;margin-top:4px;">Active</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="subagents-idle-count">-</div>
+      <div style="font-size:11px;color:#f0c040;margin-top:4px;">Idle</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="subagents-stale-count">-</div>
+      <div style="font-size:11px;color:#888;margin-top:4px;">Stale</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="subagents-total-count">-</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Total</div>
+    </div>
+  </div>
+
+  <!-- Status Legend -->
+  <div class="card" style="padding:10px 16px;margin-bottom:12px;display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+    <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;">Legend</span>
+    <span title="Currently running" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:default;color:var(--text-secondary);"><span style="width:10px;height:10px;border-radius:50%;background:#4ade80;display:inline-block;flex-shrink:0;"></span>Active &#8212; currently running</span>
+    <span title="Completed successfully" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:default;color:var(--text-secondary);"><span style="width:10px;height:10px;border-radius:50%;background:#60a0ff;display:inline-block;flex-shrink:0;"></span>Idle &#8212; finished OK</span>
+    <span title="No activity for more than 10 minutes, may be stuck" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:default;color:var(--text-secondary);"><span style="width:10px;height:10px;border-radius:50%;background:#fb923c;display:inline-block;flex-shrink:0;"></span>Stale &#8212; silent &gt;10 min</span>
+    <span title="Errored out" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:default;color:var(--text-secondary);"><span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>Failed &#8212; errored</span>
+    <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">Bars = time span &nbsp;&#183;&nbsp; Dashed lines = parent &#8594; child &nbsp;&#183;&nbsp; Click a bar for details</span>
+  </div>
+
+  <!-- Gantt Timeline (primary view) -->
+  <div class="card" style="padding:16px 16px 8px;margin-bottom:12px;overflow-x:auto;" id="sa-gantt">
+    <div style="padding:40px;text-align:center;color:#666;">Loading...</div>
+  </div>
+
+  <!-- Split: list + detail (secondary) -->
+  <div style="display:flex;gap:16px;min-height:260px;">
+    <!-- Left: sub-agents tree list -->
+    <div class="card" style="flex:0 0 360px;overflow-y:auto;padding:0;" id="subagents-list">
+    </div>
+    <!-- Right: activity panel -->
+    <div id="sa-activity-panel" class="card" style="flex:1;display:none;flex-direction:column;padding:0;overflow:hidden;">
+      <div style="padding:16px;border-bottom:1px solid var(--border-primary);display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:15px;font-weight:700;color:var(--text-primary);" id="sa-panel-title">Sub-Agent</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;" id="sa-panel-status"></div>
+        </div>
+        <button onclick="closeSAPanel()" style="background:var(--button-bg);border:1px solid var(--border-primary);border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:var(--text-tertiary);">&times;</button>
+      </div>
+      <div id="sa-activity-timeline" style="flex:1;overflow-y:auto;padding:16px;font-size:12px;font-family:monospace;color:var(--text-secondary);">
+        <div style="padding:20px;text-align:center;color:#666;">Select a sub-agent to see its activity</div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+// === Budget & Alert Functions ===
+function openBudgetModal() {
+  document.getElementById('budget-modal').style.display = 'flex';
+  loadBudgetConfig();
+  loadBudgetStatus();
+}
+
+function switchBudgetTab(tab, el) {
+  document.querySelectorAll('#budget-modal-tabs .modal-tab').forEach(function(t){t.classList.remove('active');});
+  if(el) el.classList.add('active');
+  ['limits','alerts','telegram','history'].forEach(function(t){
+    var d = document.getElementById('budget-tab-'+t);
+    if(d) d.style.display = t===tab ? 'block' : 'none';
+  });
+  if(tab==='alerts') loadAlertRules();
+  if(tab==='telegram') loadTelegramConfig();
+  if(tab==='history') loadAlertHistory();
+}
+
+async function loadBudgetConfig() {
+  try {
+    var cfg = await fetch('/api/budget/config').then(function(r){return r.json();});
+    document.getElementById('budget-daily').value = cfg.daily_limit || 0;
+    document.getElementById('budget-weekly').value = cfg.weekly_limit || 0;
+    document.getElementById('budget-monthly').value = cfg.monthly_limit || 0;
+    document.getElementById('budget-warn-pct').value = cfg.warning_threshold_pct || 80;
+    document.getElementById('budget-autopause').checked = cfg.auto_pause_enabled || false;
+  } catch(e) {}
+}
+
+async function loadBudgetStatus() {
+  try {
+    var s = await fetch('/api/budget/status').then(function(r){return r.json();});
+    var html = '';
+    function row(label, spent, limit, pct) {
+      var color = pct > 90 ? 'var(--text-error)' : pct > 70 ? 'var(--text-warning)' : 'var(--text-success)';
+      html += '<div style="display:flex;justify-content:space-between;padding:4px 0;">';
+      html += '<span>' + label + '</span>';
+      html += '<span style="font-weight:600;color:' + color + ';">$' + spent.toFixed(2);
+      if(limit > 0) html += ' / $' + limit.toFixed(2) + ' (' + pct.toFixed(0) + '%)';
+      html += '</span></div>';
+    }
+    row('Today', s.daily_spent, s.daily_limit, s.daily_pct);
+    row('This Week', s.weekly_spent, s.weekly_limit, s.weekly_pct);
+    row('This Month', s.monthly_spent, s.monthly_limit, s.monthly_pct);
+    if(s.paused) {
+      html += '<div style="margin-top:8px;padding:8px;background:var(--bg-error);border-radius:6px;color:var(--text-error);font-weight:600;">&#9888;&#65039; Gateway PAUSED: ' + escHtml(s.paused_reason) + '</div>';
+    }
+    document.getElementById('budget-status-content').innerHTML = html;
+  } catch(e) {
+    document.getElementById('budget-status-content').textContent = 'Failed to load';
+  }
+}
+
+async function saveBudgetConfig() {
+  var data = {
+    daily_limit: parseFloat(document.getElementById('budget-daily').value) || 0,
+    weekly_limit: parseFloat(document.getElementById('budget-weekly').value) || 0,
+    monthly_limit: parseFloat(document.getElementById('budget-monthly').value) || 0,
+    warning_threshold_pct: parseInt(document.getElementById('budget-warn-pct').value) || 80,
+    auto_pause_enabled: document.getElementById('budget-autopause').checked,
+  };
+  await fetch('/api/budget/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  loadBudgetStatus();
+}
+
+async function resumeGateway() {
+  await fetch('/api/budget/resume', {method:'POST'});
+  document.getElementById('alert-banner').style.display = 'none';
+  document.getElementById('alert-resume-btn').style.display = 'none';
+  loadBudgetStatus();
+}
+
+function showAddAlertForm() {
+  document.getElementById('add-alert-form').style.display = 'block';
+}
+
+async function createAlertRule() {
+  var channels = [];
+  if(document.getElementById('alert-ch-banner').checked) channels.push('banner');
+  if(document.getElementById('alert-ch-telegram').checked) channels.push('telegram');
+  var data = {
+    type: document.getElementById('alert-type').value,
+    threshold: parseFloat(document.getElementById('alert-threshold').value) || 0,
+    channels: channels,
+    cooldown_min: parseInt(document.getElementById('alert-cooldown').value) || 30,
+  };
+  await fetch('/api/alerts/rules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  document.getElementById('add-alert-form').style.display = 'none';
+  loadAlertRules();
+}
+
+async function loadAlertRules() {
+  try {
+    var data = await fetch('/api/alerts/rules').then(function(r){return r.json();});
+    var rules = data.rules || [];
+    if(rules.length === 0) {
+      document.getElementById('alert-rules-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">No alert rules configured</div>';
+      return;
+    }
+    var html = '';
+    rules.forEach(function(r) {
+      var channels = [];
+      try { channels = JSON.parse(r.channels); } catch(e) { channels = [r.channels]; }
+      html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;">';
+      html += '<span style="font-weight:600;">' + escHtml(r.type) + '</span>';
+      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : '$'+r.threshold) + '</span>';
+      html += '<span style="color:var(--text-muted);font-size:11px;">' + channels.join(', ') + '</span>';
+      html += '<span style="color:var(--text-muted);font-size:11px;">' + r.cooldown_min + 'min cooldown</span>';
+      html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-error);font-size:16px;" onclick="deleteAlertRule(\''+r.id+'\')" title="Delete">&#x1f5d1;</span>';
+      html += '</div>';
+    });
+    document.getElementById('alert-rules-list').innerHTML = html;
+  } catch(e) {
+    document.getElementById('alert-rules-list').textContent = 'Failed to load';
+  }
+}
+
+async function deleteAlertRule(id) {
+  await fetch('/api/alerts/rules/'+id, {method:'DELETE'});
+  loadAlertRules();
+}
+
+async function loadAlertHistory() {
+  try {
+    var data = await fetch('/api/alerts/history?limit=50').then(function(r){return r.json();});
+    var alerts = data.alerts || [];
+    if(alerts.length === 0) {
+      document.getElementById('alert-history-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">No alerts fired yet</div>';
+      return;
+    }
+    var html = '';
+    alerts.forEach(function(a) {
+      var ts = new Date(a.fired_at * 1000).toLocaleString();
+      var ack = a.acknowledged ? '<span style="color:var(--text-success);">&#10003;</span>' : '<span style="color:var(--text-warning);">&#x25cf;</span>';
+      html += '<div style="padding:8px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+      html += ack + ' <span style="color:var(--text-muted);">' + ts + '</span> ';
+      html += '<span style="font-weight:600;">[' + escHtml(a.type) + ']</span> ';
+      html += escHtml(a.message);
+      html += '</div>';
+    });
+    document.getElementById('alert-history-list').innerHTML = html;
+  } catch(e) {
+    document.getElementById('alert-history-list').textContent = 'Failed to load';
+  }
+}
+
+async function checkActiveAlerts() {
+  try {
+    var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
+    var alerts = data.alerts || [];
+    var banner = document.getElementById('alert-banner');
+    if(alerts.length === 0) {
+      banner.style.display = 'none';
+      return;
+    }
+    // Show most recent alert
+    var latest = alerts[0];
+    document.getElementById('alert-banner-msg').textContent = latest.message;
+    banner.style.display = 'flex';
+    // Show resume button if gateway is paused
+    var status = await fetch('/api/budget/status').then(function(r){return r.json();});
+    document.getElementById('alert-resume-btn').style.display = status.paused ? '' : 'none';
+  } catch(e) {}
+}
+
+async function ackAllAlerts() {
+  try {
+    var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
+    var alerts = data.alerts || [];
+    for(var i=0; i<alerts.length; i++) {
+      await fetch('/api/alerts/history/'+alerts[i].id+'/ack', {method:'POST'});
+    }
+    document.getElementById('alert-banner').style.display = 'none';
+  } catch(e) {}
+}
+
+// Check alerts every 30s
+setInterval(checkActiveAlerts, 30000);
+setTimeout(checkActiveAlerts, 3000);
+
+// === Telegram Config Functions ===
+async function loadTelegramConfig() {
+  try {
+    var cfg = await fetch('/api/budget/config').then(function(r){return r.json();});
+    var tokenEl = document.getElementById('tg-bot-token');
+    var chatEl = document.getElementById('tg-chat-id');
+    if(cfg.telegram_bot_token) tokenEl.value = cfg.telegram_bot_token;
+    if(cfg.telegram_chat_id) chatEl.value = cfg.telegram_chat_id;
+    var statusEl = document.getElementById('tg-status');
+    if(cfg.telegram_bot_token && cfg.telegram_chat_id) {
+      statusEl.innerHTML = '<span style="color:var(--text-success);">Configured</span>';
+    } else {
+      statusEl.innerHTML = '<span style="color:var(--text-muted);">Not configured</span>';
+    }
+  } catch(e) {}
+}
+
+async function saveTelegramConfig() {
+  var token = document.getElementById('tg-bot-token').value.trim();
+  var chatId = document.getElementById('tg-chat-id').value.trim();
+  await fetch('/api/budget/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({telegram_bot_token: token, telegram_chat_id: chatId})
+  });
+  document.getElementById('tg-status').innerHTML = '<span style="color:var(--text-success);">Saved!</span>';
+}
+
+async function testTelegram() {
+  var statusEl = document.getElementById('tg-status');
+  statusEl.innerHTML = '<span style="color:var(--text-muted);">Sending...</span>';
+  try {
+    var r = await fetch('/api/budget/test-telegram', {method: 'POST'});
+    var data = await r.json();
+    if(data.ok) {
+      statusEl.innerHTML = '<span style="color:var(--text-success);">Test sent!</span>';
+    } else {
+      statusEl.innerHTML = '<span style="color:var(--text-error);">' + escHtml(data.error || 'Failed') + '</span>';
+    }
+  } catch(e) {
+    statusEl.innerHTML = '<span style="color:var(--text-error);">Request failed</span>';
+  }
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  var page = document.getElementById('page-' + name);
+  if (page) page.classList.add('active');
+  var tabs = document.querySelectorAll('.nav-tab');
+  tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
+  if (!document.querySelector('.nav-tab.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+  if (name === 'overview') loadAll();
+  if (name === 'usage') loadUsage();
+  if (name === 'crons') loadCrons();
+  if (name === 'memory') loadMemory();
+  if (name === 'transcripts') loadTranscripts();
+  if (name === 'flow') initFlow();
+  if (name === 'history') loadHistory();
+  if (name === 'subagents') loadSubAgentsPage(false);
+  if (name === 'brain') loadBrainPage();
+  if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+}
+
+function exportUsageData() {
+  window.location.href = '/api/usage/export';
+}
+
+var _sunSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+var _moonSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+
+function toggleTheme() {
+  const body = document.body;
+  const toggle = document.getElementById('theme-toggle-btn');
+  const isLight = !body.hasAttribute('data-theme') || body.getAttribute('data-theme') !== 'dark';
+  
+  if (isLight) {
+    body.setAttribute('data-theme', 'dark');
+    toggle.innerHTML = _sunSVG;
+    toggle.title = 'Switch to light theme';
+    localStorage.setItem('openclaw-theme', 'dark');
+  } else {
+    body.removeAttribute('data-theme');
+    toggle.innerHTML = _moonSVG;
+    toggle.title = 'Switch to dark theme';
+    localStorage.setItem('openclaw-theme', 'light');
+  }
+}
+
+function initTheme() {
+  const savedTheme = 'dark'; localStorage.setItem('openclaw-theme', 'dark');
+  const body = document.body;
+  const toggle = document.getElementById('theme-toggle-btn');
+  
+  if (savedTheme === 'dark') {
+    body.setAttribute('data-theme', 'dark');
+    if (toggle) { toggle.innerHTML = _sunSVG; toggle.title = 'Switch to light theme'; }
+  } else {
+    body.removeAttribute('data-theme');
+    if (toggle) { toggle.innerHTML = _moonSVG; toggle.title = 'Switch to dark theme'; }
+  }
+}
+
+// === Zoom Controls ===
+let currentZoom = 1.0;
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 2.0;
+const ZOOM_STEP = 0.1;
+
+function initZoom() {
+  const savedZoom = localStorage.getItem('openclaw-zoom');
+  if (savedZoom) {
+    currentZoom = parseFloat(savedZoom);
+  }
+  applyZoom();
+}
+
+function applyZoom() {
+  const wrapper = document.getElementById('zoom-wrapper');
+  const levelDisplay = document.getElementById('zoom-level');
+  
+  if (wrapper) {
+    wrapper.style.transform = `scale(${currentZoom})`;
+  }
+  if (levelDisplay) {
+    levelDisplay.textContent = Math.round(currentZoom * 100) + '%';
+  }
+  
+  // Save to localStorage
+  localStorage.setItem('openclaw-zoom', currentZoom.toString());
+}
+
+function zoomIn() {
+  if (currentZoom < MAX_ZOOM) {
+    currentZoom = Math.min(MAX_ZOOM, currentZoom + ZOOM_STEP);
+    applyZoom();
+  }
+}
+
+function zoomOut() {
+  if (currentZoom > MIN_ZOOM) {
+    currentZoom = Math.max(MIN_ZOOM, currentZoom - ZOOM_STEP);
+    applyZoom();
+  }
+}
+
+function resetZoom() {
+  currentZoom = 1.0;
+  applyZoom();
+}
+
+// Keyboard shortcuts for zoom
+document.addEventListener('keydown', function(e) {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+    if (e.key === '=' || e.key === '+') {
+      e.preventDefault();
+      zoomIn();
+    } else if (e.key === '-') {
+      e.preventDefault();
+      zoomOut();
+    } else if (e.key === '0') {
+      e.preventDefault();
+      resetZoom();
+    }
+  }
+});
+
+function timeAgo(ms) {
+  if (!ms) return 'never';
+  var diff = Date.now() - ms;
+  if (diff < 60000) return Math.floor(diff/1000) + 's ago';
+  if (diff < 3600000) return Math.floor(diff/60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
+  return Math.floor(diff/86400000) + 'd ago';
+}
+
+function formatTime(ms) {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleString('en-GB', {hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'});
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs) {
+  var ctrl = new AbortController();
+  var to = setTimeout(function() { ctrl.abort('timeout'); }, timeoutMs);
+  try {
+    var r = await fetch(url, {signal: ctrl.signal});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(to);
+  }
+}
+
+async function resolvePrimaryModelFallback() {
+  try {
+    var data = await fetchJsonWithTimeout('/api/component/brain?limit=25', 4000);
+    var model = (((data || {}).stats || {}).model || '').trim();
+    return model || 'unknown';
+  } catch (e) {
+    return 'unknown';
+  }
+}
+
+function applyBrainModelToAll(modelName) {
+  if (!modelName) return;
+  var modelText = fitFlowLabel(modelName, 20);
+  document.querySelectorAll('[id$="brain-model-text"]').forEach(function(el) {
+    el.textContent = modelText;
+  });
+  document.querySelectorAll('[id$="brain-model-label"]').forEach(function(label) {
+    var short = modelName.split('/').pop().split('-').slice(0, 2).join(' ');
+    if (!short) short = 'AI Model';
+    label.textContent = fitFlowLabel(short.charAt(0).toUpperCase() + short.slice(1), 14);
+  });
+}
+
+function fitFlowLabel(text, maxLen) {
+  var s = String(text || '').trim();
+  if (!s) return '';
+  if (s.length <= maxLen) return s;
+  return s.substring(0, Math.max(1, maxLen - 1)) + '…';
+}
+
+function applyBillingHintToFlow(billingSummary) {
+  var hint = 'Auth: ?';
+  if (billingSummary === 'likely_api_key') hint = 'Auth: API';
+  else if (billingSummary === 'likely_oauth_or_included') hint = 'Auth: OAuth';
+  else if (billingSummary === 'mixed') hint = 'Auth: mixed';
+
+  document.querySelectorAll('[id$="brain-billing-text"]').forEach(function(el) {
+    el.textContent = fitFlowLabel(hint, 14);
+  });
+}
+
+function setFlowTextAll(idSuffix, text, maxLen) {
+  var fitted = fitFlowLabel(text, maxLen);
+  document.querySelectorAll('[id$="' + idSuffix + '"]').forEach(function(el) {
+    el.textContent = fitted;
+  });
+}
+
+async function loadAll() {
+  try {
+    // Render overview quickly; do not block on heavy usage aggregation.
+    var overview = await fetchJsonWithTimeout('/api/overview', 3000);
+
+    // Start secondary panels immediately.
+    startActiveTasksRefresh();
+    loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
+    loadHealth().catch(function(e){console.warn('health failed',e)});
+    loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+    if (overview.infra) {
+      var i = overview.infra;
+      if (i.runtime) setFlowTextAll('infra-runtime-text', i.runtime, 18);
+      if (i.machine) setFlowTextAll('infra-machine-text', i.machine, 18);
+      if (i.storage) setFlowTextAll('infra-storage-text', i.storage, 16);
+      if (i.network) setFlowTextAll('infra-network-text', 'LAN ' + i.network, 18);
+      if (i.userName) setFlowTextAll('flow-human-name', i.userName, 10);
+    }
+
+    // If overview cannot determine model yet, use brain endpoint fallback immediately.
+    if (!overview.model || overview.model === 'unknown') {
+      var fallbackModel = await resolvePrimaryModelFallback();
+      if (fallbackModel && fallbackModel !== 'unknown') {
+        overview.model = fallbackModel;
+      }
+    }
+    if (overview.model && overview.model !== 'unknown') {
+      applyBrainModelToAll(overview.model);
+    }
+
+    // Usage may be slow on first run; keep trying in background with timeout.
+    try {
+      var usage = await fetchJsonWithTimeout('/api/usage', 5000);
+      loadMiniWidgets(overview, usage);
+    } catch (e) {
+      // Keep UI responsive with placeholder values until next refresh.
+      loadMiniWidgets(overview, {todayCost:0, weekCost:0, monthCost:0, month:0, today:0});
+    }
+    return true;
+  } catch (e) {
+    console.error('Initial load failed', e);
+    document.getElementById('refresh-time').textContent = 'Load failed - retrying...';
+    return false;
+  }
+}
+
+async function loadMiniWidgets(overview, usage) {
+  // 💰 Cost Ticker 
+  function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+  document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
+  document.getElementById('cost-week').textContent = fmtCost(usage.weekCost || 0);
+  document.getElementById('cost-month').textContent = fmtCost(usage.monthCost || 0);
+  
+  var trend = '';
+  if (usage.trend && usage.trend.trend) {
+    var trendIcon = usage.trend.trend === 'increasing' ? '📈' : usage.trend.trend === 'decreasing' ? '📉' : '➡️';
+    trend = trendIcon + ' ' + usage.trend.trend;
+  }
+  var isOauthLikely = (usage.billingSummary === 'likely_oauth_or_included');
+  var isMixed = (usage.billingSummary === 'mixed');
+  var trendEl = document.getElementById('cost-trend');
+  var badgeEl = document.getElementById('cost-billing-badge');
+  var infoIcon = document.getElementById('cost-info-icon');
+
+  if (isOauthLikely) {
+    if (badgeEl) {
+      badgeEl.style.display = '';
+      badgeEl.textContent = 'est. equivalent if billed · OAuth likely';
+    }
+    trendEl.style.display = 'none';
+  } else {
+    if (badgeEl) {
+      badgeEl.style.display = 'none';
+      badgeEl.textContent = '';
+    }
+    trendEl.textContent = trend || 'Today\'s running total';
+    trendEl.style.display = trend ? '' : 'none';
+  }
+
+  if (infoIcon) {
+    if (isOauthLikely || isMixed) {
+      infoIcon.style.display = '';
+      infoIcon.title = 'Equivalent if billed from token usage. OAuth/included models may be billed $0 at provider level.';
+    } else {
+      infoIcon.style.display = 'none';
+      infoIcon.title = '';
+    }
+  }
+
+  applyBillingHintToFlow(usage.billingSummary || 'unknown');
+  
+  // ⚡ Tool Activity (load from logs)
+  loadToolActivity();
+  
+  // 📊 Token Burn Rate
+  function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
+  document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
+  document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
+  
+  // 🔥 Hot Sessions — use /api/sessions for consistency with modal
+  fetch('/api/sessions').then(function(r){return r.json()}).then(function(sd) {
+    var sl = sd.sessions || sd || [];
+    if (!Array.isArray(sl)) sl = [];
+    document.getElementById('hot-sessions-count').textContent = sl.length;
+  }).catch(function() {
+    document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
+  });
+  
+  // 📈 Model Mix
+  document.getElementById('model-primary').textContent = overview.model || 'unknown';
+  var modelLabel = document.getElementById('main-activity-model');
+  if (modelLabel && overview.model) {
+    var m = overview.model;
+    if (m.indexOf('/') !== -1) m = m.split('/').pop();
+    m = m.replace(/-/g, ' ').replace(/\b\w/g, function(c){return c.toUpperCase();});
+    modelLabel.textContent = m;
+  }
+  var modelBreakdown = '';
+  if (usage.modelBreakdown && usage.modelBreakdown.length > 0) {
+    var primary = usage.modelBreakdown[0];
+    var others = usage.modelBreakdown.slice(1, 3);
+    modelBreakdown = fmtTokens(primary.tokens) + ' tokens';
+    if (others.length > 0) {
+      modelBreakdown += ' (+' + others.length + ' others)';
+    }
+  } else {
+    modelBreakdown = 'Primary model';
+  }
+  document.getElementById('model-breakdown').textContent = modelBreakdown;
+  
+  // 🐝 Worker Bees (Sub-Agents)
+  loadSubAgents();
+  
+}
+
+async function loadSubAgents() {
+  try {
+    var data = await fetch('/api/subagents').then(r => r.json());
+    var counts = data.counts;
+    var subagents = data.subagents;
+    
+    // Update main counter
+    document.getElementById('subagents-count').textContent = counts.total;
+    
+    // Update status text
+    var statusText = '';
+    if (counts.active > 0) {
+      statusText = counts.active + ' active';
+      if (counts.idle > 0) statusText += ', ' + counts.idle + ' idle';
+      if (counts.stale > 0) statusText += ', ' + counts.stale + ' stale';
+    } else if (counts.total === 0) {
+      statusText = 'No sub-agents spawned';
+    } else {
+      statusText = 'All idle/stale';
+    }
+    document.getElementById('subagents-status').textContent = statusText;
+    
+    // Update preview with top sub-agents (human-readable)
+    var previewHtml = '';
+    if (subagents.length === 0) {
+      previewHtml = '<div style="font-size:11px;color:#666;">No active tasks</div>';
+    } else {
+      // Show active ones first
+      var activeFirst = subagents.filter(function(a){return a.status==='active';}).concat(subagents.filter(function(a){return a.status!=='active';}));
+      var topAgents = activeFirst.slice(0, 3);
+      topAgents.forEach(function(agent) {
+        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
+        var name = cleanTaskName(agent.displayName);
+        if (name.length > 40) name = name.substring(0, 37) + '…';
+        previewHtml += '<div class="subagent-item">';
+        previewHtml += '<span style="font-size:10px;">' + icon + '</span>';
+        previewHtml += '<span class="subagent-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(name) + '</span>';
+        previewHtml += '<span class="subagent-runtime">' + agent.runtime + '</span>';
+        previewHtml += '</div>';
+      });
+      
+      if (subagents.length > 3) {
+        previewHtml += '<div style="font-size:9px;color:#555;margin-top:4px;">+' + (subagents.length - 3) + ' more</div>';
+      }
+    }
+    
+    document.getElementById('subagents-preview').innerHTML = previewHtml;
+    
+  } catch(e) {
+    document.getElementById('subagents-count').textContent = '?';
+    document.getElementById('subagents-status').textContent = 'Error loading sub-agents';
+    document.getElementById('subagents-preview').innerHTML = '<div style="color:#e74c3c;font-size:11px;">Failed to load workforce</div>';
+  }
+}
+
+// === Active Tasks for Overview ===
+var _activeTasksTimer = null;
+function cleanTaskName(raw) {
+  // Strip timestamp prefixes like "[Sun 2026-02-08 18:22 GMT+1] "
+  var name = (raw || '').replace(/^\[.*?\]\s*/, '');
+  // Truncate to first sentence or 80 chars
+  var dot = name.indexOf('. ');
+  if (dot > 10 && dot < 80) name = name.substring(0, dot + 1);
+  if (name.length > 80) name = name.substring(0, 77) + '…';
+  return name || 'Background task';
+}
+
+function detectProjectBadge(text) {
+  var projects = {
+    'mockround': { label: 'MockRound', color: '#7c3aed' },
+    'vedicvoice': { label: 'VedicVoice', color: '#d97706' },
+    'openclaw': { label: 'OpenClaw', color: '#2563eb' },
+    'dashboard': { label: 'Dashboard', color: '#0891b2' },
+    'shopify': { label: 'Shopify', color: '#16a34a' },
+    'sanskrit': { label: 'Sanskrit', color: '#ea580c' },
+    'telegram': { label: 'Telegram', color: '#0088cc' },
+    'discord': { label: 'Discord', color: '#5865f2' },
+  };
+  var lower = (text || '').toLowerCase();
+  for (var key in projects) {
+    if (lower.includes(key)) return projects[key];
+  }
+  return null;
+}
+
+function humanTime(runtimeMs) {
+  if (!runtimeMs || runtimeMs === Infinity) return '';
+  var sec = Math.floor(runtimeMs / 1000);
+  if (sec < 60) return 'Started ' + sec + 's ago';
+  var min = Math.floor(sec / 60);
+  if (min < 60) return 'Started ' + min + ' min ago';
+  var hr = Math.floor(min / 60);
+  if (hr < 24) return 'Started ' + hr + 'h ago';
+  return 'Started ' + Math.floor(hr / 24) + 'd ago';
+}
+
+function humanTimeDone(runtimeMs) {
+  if (!runtimeMs || runtimeMs === Infinity) return '';
+  var sec = Math.floor(runtimeMs / 1000);
+  if (sec < 60) return 'Finished ' + sec + 's ago';
+  var min = Math.floor(sec / 60);
+  if (min < 60) return 'Finished ' + min + ' min ago';
+  var hr = Math.floor(min / 60);
+  if (hr < 24) return 'Finished ' + hr + 'h ago';
+  return 'Finished ' + Math.floor(hr / 24) + 'd ago';
+}
+
+async function loadActiveTasks() {
+  try {
+    var grid = document.getElementById('overview-tasks-list') || document.getElementById('active-tasks-grid');
+    if (!grid) return;
+
+    // Fetch active sub-agents
+    var saData = await fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; });
+
+    var agents = (saData.subagents || []).filter(function(a) {
+      return a.status === 'active';
+    });
+
+    if (agents.length === 0) {
+      grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
+        + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
+        + '<div style="font-size:13px;">No active tasks - all quiet</div></div>';
+      var badge = document.getElementById('overview-tasks-count-badge');
+      if (badge) badge.textContent = '';
+      return;
+    }
+
+    var html = '';
+    var badge = document.getElementById('overview-tasks-count-badge');
+    if (badge) badge.textContent = agents.length + ' active';
+
+    // Render active sub-agents
+    agents.forEach(function(agent) {
+      var taskName = cleanTaskName(agent.displayName);
+      var badge2 = detectProjectBadge(agent.displayName);
+      var mins = Math.max(1, Math.floor((agent.runtimeMs || 0) / 60000));
+
+      html += '<div class="task-card running" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
+      html += '<div class="task-card-pulse active"></div>';
+      html += '<div class="task-card-header">';
+      html += '<div class="task-card-name">' + escHtml(taskName) + '</div>';
+      html += '<span class="task-card-badge running" style="font-size:10px;">🤖 ' + mins + ' min</span>';
+      html += '</div>';
+      html += '<div style="display:flex;align-items:center;gap:8px;">';
+      if (badge2) {
+        html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:' + badge2.color + '22;color:' + badge2.color + ';border:1px solid ' + badge2.color + '44;">' + badge2.label + '</span>';
+      }
+      html += '<span style="font-size:11px;color:var(--text-muted);">' + escHtml(humanTime(agent.runtimeMs)) + '</span>';
+      html += '</div>';
+      html += '</div>';
+    });
+
+    grid.innerHTML = html;
+  } catch(e) {
+    // silently fail
+  }
+}
+// Auto-refresh active tasks every 30s
+function startActiveTasksRefresh() {
+  loadActiveTasks();
+  if (_activeTasksTimer) clearInterval(_activeTasksTimer);
+  _activeTasksTimer = setInterval(loadActiveTasks, 30000);
+}
+
+async function loadToolActivity() {
+  try {
+    var logs = await fetch('/api/logs?lines=100').then(r => r.json());
+    var toolCounts = { exec: 0, browser: 0, search: 0, other: 0 };
+    var recentTools = [];
+    
+    logs.lines.forEach(function(line) {
+      var msg = line.toLowerCase();
+      if (msg.includes('tool') || msg.includes('invoke')) {
+        if (msg.includes('exec') || msg.includes('shell')) { 
+          toolCounts.exec++; recentTools.push('exec'); 
+        } else if (msg.includes('browser') || msg.includes('screenshot')) { 
+          toolCounts.browser++; recentTools.push('browser'); 
+        } else if (msg.includes('web_search') || msg.includes('web_fetch')) { 
+          toolCounts.search++; recentTools.push('search'); 
+        } else {
+          toolCounts.other++;
+        }
+      }
+    });
+    
+    document.getElementById('tools-active').textContent = recentTools.slice(0, 3).join(', ') || 'Idle';
+    document.getElementById('tools-recent').textContent = 'Last ' + Math.min(logs.lines.length, 100) + ' log entries';
+    
+    var sparks = document.querySelectorAll('.tool-spark span');
+    sparks[0].textContent = toolCounts.exec;
+    sparks[1].textContent = toolCounts.browser;  
+    sparks[2].textContent = toolCounts.search;
+  } catch(e) {
+    document.getElementById('tools-active').textContent = '—';
+  }
+}
+
+async function loadActivityStream() {
+  try {
+    var transcripts = await fetchJsonWithTimeout('/api/transcripts', 4000);
+    var activities = [];
+    
+    // Get the most recent transcript to parse for activity
+    if (transcripts.transcripts && transcripts.transcripts.length > 0) {
+      var recent = transcripts.transcripts[0];
+      try {
+        var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
+        var recentMessages = transcript.messages.slice(-10); // Last 10 messages
+        
+        recentMessages.forEach(function(msg) {
+          if (msg.role === 'assistant' && msg.content) {
+            var content = msg.content.toLowerCase();
+            var activity = '';
+            var time = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
+            
+            if (content.includes('searching') || content.includes('search')) {
+              activity = time + ' 🔍 Searching web for information';
+            } else if (content.includes('reading') || content.includes('file')) {
+              activity = time + ' 📖 Reading files';
+            } else if (content.includes('writing') || content.includes('edit')) {
+              activity = time + ' ✏️ Editing files'; 
+            } else if (content.includes('exec') || content.includes('command')) {
+              activity = time + ' ⚡ Running commands';
+            } else if (content.includes('browser') || content.includes('screenshot')) {
+              activity = time + ' 🌐 Browser automation';
+            } else if (msg.content.length > 50) {
+              var preview = msg.content.substring(0, 80).replace(/[^\w\s]/g, ' ').trim();
+              activity = time + ' 💭 ' + preview + '...';
+            }
+            
+            if (activity) activities.push(activity);
+          }
+        });
+      } catch(e) {}
+    }
+    
+    if (activities.length === 0) {
+      activities = [
+        new Date().toLocaleTimeString() + ' 🤖 AI agent initialized',
+        new Date().toLocaleTimeString() + ' 📡 Monitoring for activity...'
+      ];
+    }
+    
+    var html = activities.slice(-8).map(function(a) {
+      return '<div style="padding:4px 0; border-bottom:1px solid #1a1a30; color:#ccc;">' + escHtml(a) + '</div>';
+    }).join('');
+    
+    document.getElementById('activity-stream').innerHTML = html;
+  } catch(e) {
+    document.getElementById('activity-stream').innerHTML = '<div style="color:#666;">Error loading activity stream</div>';
+  }
+}
+
+// ===== Sub-Agent Live Activity System =====
+var _saAutoRefreshTimer = null;
+var _saSelectedId = null;
+
+function toggleSAAutoRefresh() {
+  if (document.getElementById('sa-auto-refresh').checked) {
+    _saAutoRefreshTimer = setInterval(function() { loadSubAgentsPage(true); }, 5000);
+  } else {
+    clearInterval(_saAutoRefreshTimer);
+    _saAutoRefreshTimer = null;
+  }
+}
+
+// ── Brain tab ─────────────────────────────────────────────────────────
+var _brainRefreshTimer = null;
+var _brainSourceColors = {};
+var _brainColorPalette = ['#2dd4bf','#f97316','#eab308','#ec4899','#3b82f6','#a78bfa','#f43f5e','#10b981'];
+var _brainColorIdx = 0;
+
+function brainSourceColor(source) {
+  if (source === 'main') return '#a855f7';
+  if (!_brainSourceColors[source]) {
+    _brainSourceColors[source] = _brainColorPalette[_brainColorIdx % _brainColorPalette.length];
+    _brainColorIdx++;
+  }
+  return _brainSourceColors[source];
+}
+
+function formatBrainTime(isoStr) {
+  try {
+    var d = new Date(isoStr);
+    return d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  } catch(e) { return isoStr || ''; }
+}
+
+var _brainFilter = 'all';
+var _brainAllEvents = [];
+
+var _brainTypeIcons = {
+  'EXEC': '⚙️', 'SHELL': '⚙️', 'READ': '📖', 'WRITE': '✏️',
+  'BROWSER': '🌐', 'MSG': '📨', 'SEARCH': '🔍', 'SPAWN': '🚀',
+  'DONE': '✅', 'ERROR': '❌', 'TOOL': '🔧'
+};
+
+function setBrainFilter(source, btn) {
+  _brainFilter = source;
+  document.querySelectorAll('.brain-chip').forEach(function(b) {
+    b.classList.remove('active');
+    b.style.background = 'transparent';
+    b.style.fontWeight = '400';
+  });
+  btn.classList.add('active');
+  btn.style.background = 'rgba(168,85,247,0.2)';
+  btn.style.fontWeight = '600';
+  renderBrainStream(_brainAllEvents);
+}
+
+function scrollBrainToTop() {
+  var el = document.getElementById('brain-stream');
+  if (el) el.scrollTop = 0;
+  var pill = document.getElementById('brain-new-pill');
+  if (pill) pill.style.display = 'none';
+}
+
+function renderBrainFilterChips(sources) {
+  var container = document.getElementById('brain-filter-chips');
+  if (!container || !sources) return;
+  var html = '<button class="brain-chip' + (_brainFilter === 'all' ? ' active' : '') + '" data-source="all" onclick="setBrainFilter(\'all\',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:' + (_brainFilter === 'all' ? 'rgba(168,85,247,0.2)' : 'transparent') + ';color:#a855f7;font-size:11px;cursor:pointer;font-weight:' + (_brainFilter === 'all' ? '600' : '400') + ';">All</button>';
   sources.forEach(function(s) {
     var isActive = _brainFilter === s.id;
     var emoji = s.id === 'main' ? '🧠' : '🤖';
@@ -8049,7 +12182,7 @@ function loadToolData(toolKey, comp, isRefresh) {
           var acColor = actionColors[ac] || '#6b7280';
           html += '<div style="padding:6px 10px;background:var(--bg-secondary);border-radius:6px;display:flex;align-items:center;gap:8px;font-size:12px;">';
           html += '<span style="background:'+acColor+'22;color:'+acColor+';padding:1px 8px;border-radius:4px;font-size:10px;font-weight:600;min-width:60px;text-align:center;">' + escapeHtml(ac) + '</span>';
-          html += '<span style="color:var(--text-secondary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml((evt.detail||'').substring(0,100)) + '</span>';
+          html += '<span style="color:var(--text-secondary);flex:1;white-space:pre-wrap;word-break:break-all;">' + escapeHtml(evt.detail||'') + '</span>';
           html += '<span style="color:var(--text-muted);font-size:10px;white-space:nowrap;">' + ts + '</span>';
           html += '</div>';
         });
@@ -8185,7 +12318,7 @@ function loadToolData(toolKey, comp, isRefresh) {
           var badge = isWrite ? '<span style="background:#f59e0b33;color:#f59e0b;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">WRITE</span>' : '<span style="background:#3b82f633;color:#3b82f6;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;">READ</span>';
           html += '<div style="padding:6px 10px;background:var(--bg-secondary);border-radius:6px;display:flex;align-items:center;gap:8px;font-size:12px;">';
           html += badge;
-          html += '<code style="color:var(--text-secondary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(evt.detail || '') + '</code>';
+          html += '<code style="color:var(--text-secondary);flex:1;white-space:pre-wrap;word-break:break-all;">' + escapeHtml(evt.detail || '') + '</code>';
           html += '<span style="color:var(--text-muted);font-size:10px;white-space:nowrap;">' + ts + '</span>';
           html += '</div>';
         });
