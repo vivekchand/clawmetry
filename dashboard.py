@@ -8061,6 +8061,27 @@ function finishBootOverlay() {
 }
 
 async function bootDashboard() {
+  // Check auth first — if not valid, show login and abort boot
+  try {
+    var stored = localStorage.getItem('clawmetry-token');
+    var authRes = await fetch('/api/auth/check' + (stored ? '?token=' + encodeURIComponent(stored) : ''));
+    var authData = await authRes.json();
+    if (authData.needsSetup) {
+      document.getElementById('login-overlay').style.display = 'none';
+      var gwo = document.getElementById('gw-setup-overlay');
+      gwo.dataset.mandatory = 'true';
+      document.getElementById('gw-setup-close').style.display = 'none';
+      gwo.style.display = 'flex';
+      finishBootOverlay();
+      return;
+    }
+    if (authData.authRequired && !authData.valid) {
+      document.getElementById('login-overlay').style.display = 'flex';
+      finishBootOverlay();
+      return;
+    }
+  } catch(e) {}
+
   setBootStep('overview', 'loading', 'Loading overview + model context');
   var okOverview = await loadAll();
   setBootStep('overview', okOverview ? 'done' : 'fail', okOverview ? 'Overview ready' : 'Overview delayed');
