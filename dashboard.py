@@ -3429,10 +3429,9 @@ function switchTab(name) {
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   var page = document.getElementById('page-' + name);
   if (page) page.classList.add('active');
-  var tab = document.querySelector('.nav-tab[onclick*="switchTab(\'"+name+"\')"]') ||
-            document.querySelector('.nav-tab[onclick*='switchTab("'+name+'")']');
-  if (tab) tab.classList.add('active');
-  else if (typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+  var tabs = document.querySelectorAll('.nav-tab');
+  tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
+  if (!document.querySelector('.nav-tab.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
@@ -3628,9 +3627,9 @@ async function loadAll() {
 
     // Start secondary panels immediately.
     startActiveTasksRefresh();
-    loadActivityStream();
-    loadHealth();
-    loadMCTasks();
+    loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
+    loadHealth().catch(function(e){console.warn('health failed',e)});
+    loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -3958,14 +3957,14 @@ async function loadToolActivity() {
 
 async function loadActivityStream() {
   try {
-    var transcripts = await fetch('/api/transcripts').then(r => r.json());
+    var transcripts = await fetchJsonWithTimeout('/api/transcripts', 4000);
     var activities = [];
     
     // Get the most recent transcript to parse for activity
     if (transcripts.transcripts && transcripts.transcripts.length > 0) {
       var recent = transcripts.transcripts[0];
       try {
-        var transcript = await fetch('/api/transcript/' + recent.id).then(r => r.json());
+        var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
         var recentMessages = transcript.messages.slice(-10); // Last 10 messages
         
         recentMessages.forEach(function(msg) {
