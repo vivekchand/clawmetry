@@ -3393,8 +3393,14 @@ async function testTelegram() {
 function switchTab(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
-  event.target.classList.add('active');
+  var page = document.getElementById('page-' + name);
+  if (page) page.classList.add('active');
+  var tab = null;
+  document.querySelectorAll('.nav-tab').forEach(function(t) {
+    if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) tab = t;
+  });
+  if (tab) tab.classList.add('active');
+  else if (typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
@@ -8066,8 +8072,8 @@ function renderModalFull(el) {
     } else if (evt.type === 'thinking') {
       icon = '💭'; typeClass = 'type-thinking';
       var tokenCount = evt.tokens || (evt.text ? Math.round(evt.text.length / 4) : 0);
-      var tokenBadge = '<span class='thinking-token-badge'>~' + tokenCount + ' tokens</span>';
-      var collapsedHint = '<span class='thinking-collapsed-hint'>(click to expand)</span>';
+      var tokenBadge = '<span class="thinking-token-badge">~' + tokenCount + ' tokens</span>';
+      var collapsedHint = '<span class="thinking-collapsed-hint">(click to expand)</span>';
       summary = '<strong>Thinking</strong> ' + tokenBadge + collapsedHint;
       body = evt.text || '';
       // hide thinking blocks by default; show-reasoning toggle controls visibility
