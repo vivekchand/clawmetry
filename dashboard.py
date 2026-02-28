@@ -1535,6 +1535,8 @@ DASHBOARD_HTML = r"""
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
   .nav-tab:active { transform: scale(0.98); }
+  .log-chip { display:inline-block; padding:3px 10px; border-radius:12px; font-size:11px; font-weight:600; cursor:pointer; border:1px solid var(--border); background:var(--bg-hover); color:var(--text-secondary); user-select:none; }
+  .log-chip.active { background:var(--bg-accent); color:#fff; border-color:var(--bg-accent); }
   .time-btn { padding: 4px 12px; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-primary); color: var(--text-tertiary); cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.2s; }
   .time-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .time-btn.active { background: var(--bg-accent); color: #fff; border-color: var(--bg-accent); }
@@ -2453,6 +2455,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('logs')">Logs</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -2882,6 +2885,43 @@ function clawmetryLogout(){
       </div>
       <pre id="snapshot-content" style="font-size:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:16px;overflow-x:auto;white-space:pre-wrap;color:var(--text-secondary);max-height:60vh;"></pre>
     </div>
+  </div>
+</div>
+
+<!-- LOGS -->
+<div class="page" id="page-logs">
+  <div style="display:flex;flex-direction:column;height:100%;gap:10px;padding:12px 0;">
+    <!-- Filter bar -->
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <label style="font-size:12px;color:var(--text-secondary);font-weight:600;">Level:</label>
+      <select id="log-level-filter" onchange="filterLogs()" style="font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);">
+        <option value="all">All</option>
+        <option value="debug">Debug</option>
+        <option value="info">Info</option>
+        <option value="warn">Warn</option>
+        <option value="error">Error</option>
+      </select>
+      <input id="log-search" type="text" placeholder="Search logs…" oninput="filterLogs()" style="font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);min-width:180px;" />
+      <span style="font-size:12px;color:var(--text-secondary);font-weight:600;">Subsystem:</span>
+      <span class="log-chip active" onclick="toggleChip(this,'tool')" data-sub="tool">tool</span>
+      <span class="log-chip active" onclick="toggleChip(this,'session')" data-sub="session">session</span>
+      <span class="log-chip active" onclick="toggleChip(this,'webhook')" data-sub="webhook">webhook</span>
+      <span class="log-chip active" onclick="toggleChip(this,'api')" data-sub="api">api</span>
+      <span style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+        <label style="font-size:12px;color:var(--text-secondary);">Lines:</label>
+        <select id="log-lines" style="font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);">
+          <option value="100">100</option>
+          <option value="500" selected>500</option>
+          <option value="1000">1000</option>
+        </select>
+        <button onclick="loadLogs()" style="font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);cursor:pointer;">Load historical</button>
+        <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" id="log-autoscroll" checked /> Auto-scroll
+        </label>
+      </span>
+    </div>
+    <!-- Log feed -->
+    <div id="logs-full" style="flex:1;overflow-y:auto;background:var(--bg-card);border-radius:10px;border:1px solid var(--border);padding:10px;font-family:monospace;font-size:12px;line-height:1.6;min-height:0;"></div>
   </div>
 </div>
 
@@ -3374,8 +3414,14 @@ async function testTelegram() {
 function switchTab(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
-  event.target.classList.add('active');
+  var page = document.getElementById('page-' + name);
+  if (page) page.classList.add('active');
+  var tab = null;
+  document.querySelectorAll('.nav-tab').forEach(function(t) {
+    if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) tab = t;
+  });
+  if (tab) tab.classList.add('active');
+  else if (typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
@@ -3383,6 +3429,7 @@ function switchTab(name) {
   if (name === 'transcripts') loadTranscripts();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
+  if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
 function exportUsageData() {
@@ -3569,9 +3616,9 @@ async function loadAll() {
 
     // Start secondary panels immediately.
     startActiveTasksRefresh();
-    loadActivityStream();
-    loadHealth();
-    loadMCTasks();
+    loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
+    loadHealth().catch(function(e){console.warn('health failed',e)});
+    loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -3899,14 +3946,14 @@ async function loadToolActivity() {
 
 async function loadActivityStream() {
   try {
-    var transcripts = await fetch('/api/transcripts').then(r => r.json());
+    var transcripts = await fetchJsonWithTimeout('/api/transcripts', 4000);
     var activities = [];
     
     // Get the most recent transcript to parse for activity
     if (transcripts.transcripts && transcripts.transcripts.length > 0) {
       var recent = transcripts.transcripts[0];
       try {
-        var transcript = await fetch('/api/transcript/' + recent.id).then(r => r.json());
+        var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
         var recentMessages = transcript.messages.slice(-10); // Last 10 messages
         
         recentMessages.forEach(function(msg) {
@@ -4197,7 +4244,7 @@ function renderLogs(elId, lines) {
         var d = new Date(obj.time || obj._meta.date);
         ts = d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
       }
-      var level = (obj.logLevelName || obj.level || 'info').toLowerCase();
+      var level = (obj.logLevelName || obj.level || (obj._meta && obj._meta.logLevelName) || 'info').toLowerCase();
       if (level === 'error' || level === 'fatal') cls = 'err';
       else if (level === 'warn' || level === 'warning') cls = 'warn';
       else if (level === 'debug') cls = 'msg';
@@ -4226,6 +4273,7 @@ function renderLogs(elId, lines) {
       if (msg && extras.length) display = prefix + msg + ' ' + extras.join(' ');
       else if (extras.length) display = prefix + extras.join(' ');
       else if (msg) display = prefix + msg;
+      else if (subsystem) display = subsystem;
       else display = l.substring(0, 200);
       if (ts) display = '<span class="ts">' + ts + '</span> ' + escHtml(display);
       else display = escHtml(display);
@@ -5221,7 +5269,7 @@ function parseLogLine(line) {
       var d = new Date(obj.time || obj._meta.date);
       ts = d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
     }
-    var level = (obj.logLevelName || obj.level || 'info').toLowerCase();
+    var level = (obj.logLevelName || obj.level || (obj._meta && obj._meta.logLevelName) || 'info').toLowerCase();
     var cls = 'info';
     if (level === 'error' || level === 'fatal') cls = 'err';
     else if (level === 'warn' || level === 'warning') cls = 'warn';
@@ -5235,8 +5283,9 @@ function parseLogLine(line) {
     else if (extras.length) display = extras.join(' ');
     else if (!msg) display = line.substring(0, 200);
     else display = msg;
-    if (ts) display = '<span class="ts">' + ts + '</span> ' + escHtml(display);
-    else display = escHtml(display);
+    var levelBadge = level !== 'info' ? '[' + level.toUpperCase() + '] ' : '';
+    if (ts) display = '<span class="ts">' + ts + '</span> ' + levelBadge + escHtml(display);
+    else display = levelBadge + escHtml(display);
     return {cls: cls, html: display};
   } catch(e) {
     var cls = 'msg';
@@ -5247,18 +5296,75 @@ function parseLogLine(line) {
   }
 }
 
+function _eventBadge(evtType) {
+  if (!evtType) return '';
+  var colors = {
+    'tool.call': '#3b82f6',
+    'tool.error': '#ef4444',
+    'session.stuck': '#f97316',
+    'webhook.error': '#ef4444'
+  };
+  var col = colors[evtType] || '#6b7280';
+  return '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;background:' + col + ';color:#fff;margin-right:5px;">' + escHtml(evtType) + '</span>';
+}
+
 function appendLogLine(elId, line) {
   var el = document.getElementById(elId);
   if (!el) return;
   var parsed = parseLogLine(line);
+  // Parse structured data from stream if available
+  var evtBadge = '';
+  try {
+    var obj = JSON.parse(line);
+    if (obj.event) evtBadge = _eventBadge(obj.event);
+  } catch(e) {}
   var div = document.createElement('div');
   div.className = 'log-line';
-  div.innerHTML = '<span class="' + parsed.cls + '">' + parsed.html + '</span>';
+  div.setAttribute('data-raw', line);
+  div.innerHTML = evtBadge + '<span class="' + parsed.cls + '">' + parsed.html + '</span>';
   el.appendChild(div);
   while (el.children.length > MAX_STREAM_LINES) el.removeChild(el.firstChild);
-  if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+  var autoScroll = elId !== 'logs-full' || (document.getElementById('log-autoscroll') && document.getElementById('log-autoscroll').checked);
+  if (autoScroll && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
     el.scrollTop = el.scrollHeight;
   }
+  if (elId === 'logs-full') _applyLogLineVisibility(div);
+}
+
+function _activeChips() {
+  var chips = [];
+  document.querySelectorAll('.log-chip.active').forEach(function(c){ chips.push(c.getAttribute('data-sub')); });
+  return chips;
+}
+
+function _applyLogLineVisibility(div) {
+  var raw = div.getAttribute('data-raw') || '';
+  var levelSel = (document.getElementById('log-level-filter') || {}).value || 'all';
+  var search = ((document.getElementById('log-search') || {}).value || '').toLowerCase();
+  var chips = _activeChips();
+  var show = true;
+  if (levelSel !== 'all') {
+    var parsed = parseLogLine(raw);
+    var clsMap = {debug:'msg', info:'info', warn:'warn', error:'err'};
+    if (parsed.cls !== clsMap[levelSel]) show = false;
+  }
+  if (show && search && raw.toLowerCase().indexOf(search) < 0) show = false;
+  if (show && chips.length < 4) {
+    var matches = chips.some(function(sub){ return raw.toLowerCase().indexOf(sub) >= 0; });
+    if (!matches) show = false;
+  }
+  div.style.display = show ? '' : 'none';
+}
+
+function filterLogs() {
+  var el = document.getElementById('logs-full');
+  if (!el) return;
+  Array.from(el.children).forEach(function(div){ _applyLogLineVisibility(div); });
+}
+
+function toggleChip(el, sub) {
+  el.classList.toggle('active');
+  filterLogs();
 }
 
 // ===== Flow Visualization Engine =====
@@ -8061,6 +8167,13 @@ function finishBootOverlay() {
 }
 
 async function bootDashboard() {
+  // Safety: always finish boot within 10s no matter what
+  var _bootSafetyTimer = setTimeout(function() {
+    ["overview","tasks","health","streams"].forEach(function(s) { setBootStep(s, "done", ""); });
+    finishBootOverlay();
+  }, 10000);
+  var _origFinish = finishBootOverlay;
+  finishBootOverlay = function() { clearTimeout(_bootSafetyTimer); finishBootOverlay = _origFinish; _origFinish(); };
   // Check auth first — if not valid, show login and abort boot
   try {
     var stored = localStorage.getItem('clawmetry-token');
@@ -9495,7 +9608,16 @@ def api_logs_stream():
                     continue
                 line = proc.stdout.readline()
                 if line:
-                    yield f'data: {json.dumps({"line": line.rstrip()})}\n\n'
+                    _raw = line.rstrip()
+                    _payload = {"line": _raw}
+                    try:
+                        _obj = json.loads(_raw)
+                        _payload["event"] = _obj.get("event") or _obj.get("type") or _obj.get("name")
+                        _payload["level"] = (_obj.get("logLevelName") or _obj.get("level") or "info").lower()
+                        _payload["session_id"] = _obj.get("session_id") or _obj.get("sessionId") or (_obj.get("_meta") or {}).get("session_id")
+                    except Exception:
+                        pass
+                    yield f'data: {json.dumps(_payload)}\n\n'
         except GeneratorExit:
             pass
         finally:
