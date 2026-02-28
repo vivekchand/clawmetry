@@ -14809,8 +14809,24 @@ def _run_server(args):
     if _HAS_OTEL_PROTO:
         print(f"  → OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
     print()
+    if not args.debug:
+        print(f"  Tip: run as background service with: clawmetry start")
+        print()
 
-    app.run(host=args.host, port=args.port, debug=args.debug, use_reloader=args.debug, threaded=True)
+    if args.debug:
+        # Dev mode — use Flask's reloader
+        app.run(host=args.host, port=args.port, debug=True, use_reloader=True, threaded=True)
+    else:
+        # Prod mode — use Waitress (no WSGI warning, multi-threaded)
+        try:
+            from waitress import serve
+            serve(app, host=args.host, port=args.port, threads=8)
+        except ImportError:
+            # Waitress not installed — fall back to Flask with warning suppressed
+            import logging
+            log = logging.getLogger('werkzeug')
+            log.setLevel(logging.ERROR)
+            app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=True)
 
 
 def main():
