@@ -117,20 +117,10 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Start the daemon automatically (skip with --no-start)
-if [[ " $* " != *" --no-start "* ]]; then
-  echo ""
-  echo "  Starting ClawMetry as a background service..."
-  echo ""
-  "$CLAWMETRY_BIN" start
-else
-  echo ""
-  echo "  Run anytime with:"
-  echo "    clawmetry start    ← run as background service (recommended)"
-  echo "    clawmetry          ← run in foreground"
-  echo ""
-  echo "  Docs: https://clawmetry.com/how-it-works"
-fi
+# Auto-start daemon using the full path (PATH may not include BIN_DIR yet in piped shell)
+echo "  Starting ClawMetry as a background service..."
+echo ""
+"$CLAWMETRY_BIN" start
 
 echo ""
 echo "🦞 Happy observing!"
