@@ -4273,6 +4273,7 @@ function renderLogs(elId, lines) {
       if (msg && extras.length) display = prefix + msg + ' ' + extras.join(' ');
       else if (extras.length) display = prefix + extras.join(' ');
       else if (msg) display = prefix + msg;
+      else if (subsystem) display = subsystem;
       else display = l.substring(0, 200);
       if (ts) display = '<span class="ts">' + ts + '</span> ' + escHtml(display);
       else display = escHtml(display);
@@ -8166,6 +8167,13 @@ function finishBootOverlay() {
 }
 
 async function bootDashboard() {
+  // Safety: always finish boot within 10s no matter what
+  var _bootSafetyTimer = setTimeout(function() {
+    ["overview","tasks","health","streams"].forEach(function(s) { setBootStep(s, "done", ""); });
+    finishBootOverlay();
+  }, 10000);
+  var _origFinish = finishBootOverlay;
+  finishBootOverlay = function() { clearTimeout(_bootSafetyTimer); finishBootOverlay = _origFinish; _origFinish(); };
   // Check auth first — if not valid, show login and abort boot
   try {
     var stored = localStorage.getItem('clawmetry-token');
