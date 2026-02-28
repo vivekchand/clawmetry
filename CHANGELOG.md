@@ -1,3 +1,10 @@
+## [0.10.9] — 2026-02-28
+
+### Changed
+- Dark mode is now the permanent default — removed theme toggle button
+
+---
+
 ## [0.10.8] — 2026-02-28
 
 ### Fixed
