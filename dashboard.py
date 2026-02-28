@@ -14779,27 +14779,40 @@ def _run_server(args):
         print(f"  → OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
     print()
 
-    # Kill any stale process on the port before binding
+    # If our own PID file exists, kill that stale clawmetry process before binding
     import socket as _socket
     _s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
     _port_busy = _s.connect_ex(('127.0.0.1', args.port)) == 0
     _s.close()
     if _port_busy:
-        # Try to kill it gracefully via PID file first
+        _killed = False
         try:
             with open(PID_FILE) as _pf:
                 _old_pid = int(_pf.read().strip())
-            import signal as _signal
-            os.kill(_old_pid, _signal.SIGTERM)
-            import time as _time; _time.sleep(1)
+            # Only kill if it's actually a clawmetry process
+            with open(f'/proc/{_old_pid}/cmdline', 'rb') as _cf:
+                _cmd = _cf.read().decode('utf-8', errors='ignore')
         except Exception:
-            pass
-        # Force-kill anything still on the port
-        try:
-            import subprocess as _sp
-            _sp.run(['fuser', '-k', f'{args.port}/tcp'], capture_output=True)
-        except Exception:
-            pass
+            # /proc not available (macOS) — check via ps
+            try:
+                import subprocess as _sp
+                _r = _sp.run(['ps', '-p', str(_old_pid), '-o', 'command='],
+                             capture_output=True, text=True)
+                _cmd = _r.stdout
+            except Exception:
+                _cmd = ''
+        if 'clawmetry' in _cmd or 'dashboard.py' in _cmd:
+            try:
+                import signal as _signal
+                os.kill(_old_pid, _signal.SIGTERM)
+                import time as _time; _time.sleep(1)
+                _killed = True
+            except Exception:
+                pass
+        if not _killed and _port_busy:
+            print(f"❌ Port {args.port} is already in use by another application.")
+            print(f"   Choose a different port with --port, or stop the other app first.")
+            sys.exit(1)
 
     app.run(host=args.host, port=args.port, debug=args.debug, use_reloader=args.debug, threaded=True)
 
