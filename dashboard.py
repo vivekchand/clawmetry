@@ -3588,9 +3588,9 @@ async function loadAll() {
 
     // Start secondary panels immediately.
     startActiveTasksRefresh();
-    loadActivityStream();
-    loadHealth();
-    loadMCTasks();
+    loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
+    loadHealth().catch(function(e){console.warn('health failed',e)});
+    loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -3918,14 +3918,14 @@ async function loadToolActivity() {
 
 async function loadActivityStream() {
   try {
-    var transcripts = await fetch('/api/transcripts').then(r => r.json());
+    var transcripts = await fetchJsonWithTimeout('/api/transcripts', 4000);
     var activities = [];
     
     // Get the most recent transcript to parse for activity
     if (transcripts.transcripts && transcripts.transcripts.length > 0) {
       var recent = transcripts.transcripts[0];
       try {
-        var transcript = await fetch('/api/transcript/' + recent.id).then(r => r.json());
+        var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
         var recentMessages = transcript.messages.slice(-10); // Last 10 messages
         
         recentMessages.forEach(function(msg) {
