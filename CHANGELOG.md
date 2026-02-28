@@ -1,3 +1,10 @@
+## [0.10.11] — 2026-02-28
+
+### Fixed
+- Dark mode now correctly forced on load — initTheme() was overriding body dark mode with localStorage light default
+
+---
+
 ## [0.10.10] — 2026-02-28
 
 ### Changed
