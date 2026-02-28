@@ -3427,8 +3427,12 @@ async function testTelegram() {
 function switchTab(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
-  event.target.classList.add('active');
+  var page = document.getElementById('page-' + name);
+  if (page) page.classList.add('active');
+  var tab = document.querySelector('.nav-tab[onclick*="switchTab(\'"+name+"\')"]') ||
+            document.querySelector('.nav-tab[onclick*='switchTab("'+name+'")']');
+  if (tab) tab.classList.add('active');
+  else if (typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
@@ -3437,6 +3441,7 @@ function switchTab(name) {
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
   if (name === 'subagents') loadSubAgentsPage(false);
+  if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
 function exportUsageData() {
