@@ -96,21 +96,53 @@ elif [ -d "/root/.openclaw" ]; then
   WORKSPACE="/root/.openclaw"
 fi
 
+CLAWMETRY_BIN="$BIN_DIR/clawmetry"
+if ! command -v clawmetry &>/dev/null; then
+  CLAWMETRY_BIN="$INSTALL_DIR/bin/clawmetry"
+fi
+
+VERSION=$("$CLAWMETRY_BIN" --version 2>/dev/null || echo 'installed')
+
 echo ""
-echo "✅ Clawmetry installed successfully!"
+echo "✅ ClawMetry $VERSION installed successfully!"
 echo ""
-echo "  Version: $("$BIN_DIR/clawmetry" --version 2>/dev/null || "$INSTALL_DIR/bin/clawmetry" --version 2>/dev/null || echo 'installed')"
-echo ""
-echo "  Start with:"
-echo "    clawmetry --host 0.0.0.0 --port 8900"
-echo ""
+
 if [ -n "$WORKSPACE" ]; then
   echo "  OpenClaw workspace detected: $WORKSPACE"
-  echo ""
+else
+  echo "  ⚠️  No OpenClaw workspace found. Make sure OpenClaw is installed and running."
 fi
-echo "  Then open http://YOUR_IP:8900 in your browser"
+
 echo ""
-echo "  To run in background:"
-echo "    nohup clawmetry --host 0.0.0.0 --port 8900 &"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "🔭 Happy observing!"
+
+# Ask if user wants to start now
+if [ -t 0 ]; then
+  # Interactive terminal — prompt and start daemon
+  printf "  Start ClawMetry as a background service now? [Y/n] "
+  read -r REPLY
+  REPLY="${REPLY:-Y}"
+  if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+    echo ""
+    "$CLAWMETRY_BIN" start
+  else
+    echo ""
+    echo "  Run anytime with:"
+    echo "    clawmetry start    ← run as background service (recommended)"
+    echo "    clawmetry          ← run in foreground"
+    echo ""
+    echo "  Docs: https://clawmetry.com/how-it-works"
+  fi
+else
+  # Non-interactive (piped) — just show instructions
+  echo "  To start ClawMetry:"
+  echo ""
+  echo "    clawmetry start    ← run as background service (recommended)"
+  echo "    clawmetry          ← run in foreground"
+  echo ""
+  echo "  Docs: https://clawmetry.com/how-it-works"
+fi
+
+echo ""
+echo "🦞 Happy observing!"
