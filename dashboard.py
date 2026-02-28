@@ -14216,18 +14216,16 @@ BANNER = r"""
 ARCHITECTURE_OVERVIEW = """\
 🦞 ClawMetry {version} — See your agent think.
 
-How it works:
+  ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
+  │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
+  │  Your OpenClaw      │ ──────────→  │  ClawMetry          │ ──────────→  │  Your browser       │
+  │  agents             │              │  Parses logs +      │              │  localhost:{port}   │
+  │                     │              │  sessions.          │              │  Live dashboard     │
+  │  Running normally.  │              │  Serves dashboard.  │              │                     │
+  │  Nothing changes.   │              │                     │              │                     │
+  └─────────────────────┘              └─────────────────────┘              └─────────────────────┘
 
-  💬 Telegram  ╮
-  💬 iMessage  ├─→  🤖 OpenClaw  →  📁 logs / sessions / workspace
-  💬 WhatsApp  ╯                            ↑
-                                      reads silently
-                                            ↓
-                                      🦞 ClawMetry
-                                            ↓
-                                      📊 localhost:{port}
-
-  No proxy. No code changes. Your data never leaves your machine.
+  Runs locally on the same machine as OpenClaw. Your data never leaves your box.
   Docs: https://clawmetry.com/how-it-works
 """
 
