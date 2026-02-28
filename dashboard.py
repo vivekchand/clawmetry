@@ -3423,7 +3423,7 @@ function switchTab(name) {
   if (name === 'transcripts') loadTranscripts();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
-  if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); }
+  if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
 function exportUsageData() {
