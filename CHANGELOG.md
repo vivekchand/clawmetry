@@ -1,3 +1,12 @@
+## [0.10.8] — 2026-02-28
+
+### Fixed
+- Auth check runs before boot sequence — login overlay shows immediately if token invalid/missing
+- Boot overlay no longer covers the login prompt on stale token
+- Overview request storm on boot: removed duplicate loadAll() call, added in-flight guard
+
+---
+
 ## [0.10.7] — 2026-02-28
 
 ### Fixed
