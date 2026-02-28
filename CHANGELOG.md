@@ -1,3 +1,10 @@
+## [0.10.4] — 2026-02-28
+
+### Fixed
+- Hide `clawmetry connect` command from help (cloud integration not yet production ready)
+
+---
+
 ## [0.10.3] — 2026-02-28
 
 ### Fixed
