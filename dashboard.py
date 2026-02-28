@@ -3414,8 +3414,14 @@ async function testTelegram() {
 function switchTab(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
-  event.target.classList.add('active');
+  var page = document.getElementById('page-' + name);
+  if (page) page.classList.add('active');
+  var tab = null;
+  document.querySelectorAll('.nav-tab').forEach(function(t) {
+    if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) tab = t;
+  });
+  if (tab) tab.classList.add('active');
+  else if (typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
@@ -3610,9 +3616,9 @@ async function loadAll() {
 
     // Start secondary panels immediately.
     startActiveTasksRefresh();
-    loadActivityStream();
-    loadHealth();
-    loadMCTasks();
+    loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
+    loadHealth().catch(function(e){console.warn('health failed',e)});
+    loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -3940,14 +3946,14 @@ async function loadToolActivity() {
 
 async function loadActivityStream() {
   try {
-    var transcripts = await fetch('/api/transcripts').then(r => r.json());
+    var transcripts = await fetchJsonWithTimeout('/api/transcripts', 4000);
     var activities = [];
     
     // Get the most recent transcript to parse for activity
     if (transcripts.transcripts && transcripts.transcripts.length > 0) {
       var recent = transcripts.transcripts[0];
       try {
-        var transcript = await fetch('/api/transcript/' + recent.id).then(r => r.json());
+        var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
         var recentMessages = transcript.messages.slice(-10); // Last 10 messages
         
         recentMessages.forEach(function(msg) {
@@ -4238,7 +4244,7 @@ function renderLogs(elId, lines) {
         var d = new Date(obj.time || obj._meta.date);
         ts = d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
       }
-      var level = (obj.logLevelName || obj.level || 'info').toLowerCase();
+      var level = (obj.logLevelName || obj.level || (obj._meta && obj._meta.logLevelName) || 'info').toLowerCase();
       if (level === 'error' || level === 'fatal') cls = 'err';
       else if (level === 'warn' || level === 'warning') cls = 'warn';
       else if (level === 'debug') cls = 'msg';
@@ -5262,7 +5268,7 @@ function parseLogLine(line) {
       var d = new Date(obj.time || obj._meta.date);
       ts = d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
     }
-    var level = (obj.logLevelName || obj.level || 'info').toLowerCase();
+    var level = (obj.logLevelName || obj.level || (obj._meta && obj._meta.logLevelName) || 'info').toLowerCase();
     var cls = 'info';
     if (level === 'error' || level === 'fatal') cls = 'err';
     else if (level === 'warn' || level === 'warning') cls = 'warn';
@@ -5276,8 +5282,9 @@ function parseLogLine(line) {
     else if (extras.length) display = extras.join(' ');
     else if (!msg) display = line.substring(0, 200);
     else display = msg;
-    if (ts) display = '<span class="ts">' + ts + '</span> ' + escHtml(display);
-    else display = escHtml(display);
+    var levelBadge = level !== 'info' ? '[' + level.toUpperCase() + '] ' : '';
+    if (ts) display = '<span class="ts">' + ts + '</span> ' + levelBadge + escHtml(display);
+    else display = levelBadge + escHtml(display);
     return {cls: cls, html: display};
   } catch(e) {
     var cls = 'msg';
