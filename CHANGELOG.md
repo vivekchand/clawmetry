@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [0.10.1] — 2026-02-28
+
+### Fixed
+- Hide OTLP "not available" error from startup banner — only shows when otel is actually installed
+
+---
+
 ## [0.10.0] — 2026-02-28
 
 ### Added
