@@ -2069,7 +2069,19 @@ DASHBOARD_HTML = r"""
   .evt-item.type-exec { border-left: 3px solid #16a34a; }
   .evt-item.type-read { border-left: 3px solid #8b5cf6; }
   .evt-item.type-result { border-left: 3px solid #ea580c; }
-  .evt-item.type-thinking { border-left: 3px solid #6b7280; }
+  .evt-item.type-thinking { border-left: 3px solid #a855f7; background: rgba(168,85,247,0.04); }
+  .evt-item.type-thinking .evt-header { cursor: pointer; }
+  .thinking-token-badge { font-size: 10px; background: rgba(168,85,247,0.15); color: #a855f7; border: 1px solid rgba(168,85,247,0.3); border-radius: 10px; padding: 1px 7px; margin-left: 8px; font-family: monospace; flex-shrink: 0; }
+  .evt-item.type-thinking .evt-body { border-top: 1px dashed rgba(168,85,247,0.2); font-style: italic; color: #a855f7; }
+  .evt-item.type-thinking.reasoning-hidden { display: none; }
+  .thinking-collapsed-hint { font-size: 11px; color: var(--text-muted); margin-left: 6px; }
+  /* Stuck session banner */
+  #stuck-banner { display: none; padding: 10px 16px; background: #ea580c; border-bottom: 2px solid #c2410c; color: #fff; font-size: 13px; font-weight: 600; align-items: center; gap: 10px; }
+  #stuck-banner.visible { display: flex; }
+  #stuck-banner-msg { flex: 1; }
+  /* Show-reasoning toggle */
+  .show-reasoning-toggle { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; padding: 4px 10px; color: var(--text-tertiary); cursor: pointer; font-size: 12px; font-weight: 600; margin-left: auto; transition: all 0.15s; user-select: none; }
+  .show-reasoning-toggle.active { background: rgba(168,85,247,0.15); color: #a855f7; border-color: rgba(168,85,247,0.4); }
   .evt-item.type-user { border-left: 3px solid #7c3aed; }
   /* === Component Detail Modal === */
   .comp-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1100; justify-content: center; align-items: center; }
@@ -2456,6 +2468,13 @@ function clawmetryLogout(){
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
+</div>
+
+<!-- Stuck Session Banner -->
+<div id="stuck-banner">
+  <span style="font-size:18px;">&#9888;&#65039;</span>
+  <span id="stuck-banner-msg" style="flex:1;"></span>
+  <button onclick="dismissStuckBanner()" style="background:rgba(255,255,255,0.2);color:#fff;border:1px solid rgba(255,255,255,0.4);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
 </div>
 
 <!-- Alert Banner -->
@@ -3374,8 +3393,14 @@ async function testTelegram() {
 function switchTab(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
-  event.target.classList.add('active');
+  var page = document.getElementById('page-' + name);
+  if (page) page.classList.add('active');
+  var tab = null;
+  document.querySelectorAll('.nav-tab').forEach(function(t) {
+    if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) tab = t;
+  });
+  if (tab) tab.classList.add('active');
+  else if (typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
@@ -3569,9 +3594,9 @@ async function loadAll() {
 
     // Start secondary panels immediately.
     startActiveTasksRefresh();
-    loadActivityStream();
-    loadHealth();
-    loadMCTasks();
+    loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
+    loadHealth().catch(function(e){console.warn('health failed',e)});
+    loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -3899,14 +3924,14 @@ async function loadToolActivity() {
 
 async function loadActivityStream() {
   try {
-    var transcripts = await fetch('/api/transcripts').then(r => r.json());
+    var transcripts = await fetchJsonWithTimeout('/api/transcripts', 4000);
     var activities = [];
     
     // Get the most recent transcript to parse for activity
     if (transcripts.transcripts && transcripts.transcripts.length > 0) {
       var recent = transcripts.transcripts[0];
       try {
-        var transcript = await fetch('/api/transcript/' + recent.id).then(r => r.json());
+        var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
         var recentMessages = transcript.messages.slice(-10); // Last 10 messages
         
         recentMessages.forEach(function(msg) {
@@ -5195,6 +5220,26 @@ var logStream = null;
 var streamBuffer = [];
 var MAX_STREAM_LINES = 500;
 
+function showStuckBanner(sessionId, duration) {
+  var banner = document.getElementById('stuck-banner');
+  var msg = document.getElementById('stuck-banner-msg');
+  if (!banner || !msg) return;
+  var text = '⚠️ Session stuck';
+  if (sessionId) text += ': ' + sessionId;
+  if (duration) text += ' — ' + duration;
+  msg.textContent = text;
+  banner.classList.add('visible');
+}
+
+function dismissStuckBanner() {
+  hideStuckBanner();
+}
+
+function hideStuckBanner() {
+  var banner = document.getElementById('stuck-banner');
+  if (banner) banner.classList.remove('visible');
+}
+
 function startLogStream() {
   if (logStream) logStream.close();
   streamBuffer = [];
@@ -5207,6 +5252,23 @@ function startLogStream() {
     appendLogLine('logs-full', data.line);
     processFlowEvent(data.line);
     document.getElementById('refresh-time').textContent = 'Live • ' + new Date().toLocaleTimeString();
+    // Stuck session detection
+    try {
+      var obj = JSON.parse(data.line);
+      var evtName = obj.event || obj.name || obj.msg || obj.message || '';
+      if (evtName === 'session.stuck' || (typeof evtName === 'string' && evtName.indexOf('session.stuck') >= 0)) {
+        var sid = obj.sessionId || obj.session_id || obj.id || '';
+        var dur = obj.duration || obj.stuck_for || '';
+        showStuckBanner(sid, dur);
+      }
+      // Clear banner when session finishes
+      if (evtName === 'session.state' || (typeof evtName === 'string' && evtName.indexOf('session.state') >= 0)) {
+        var st = obj.state || '';
+        if (st === 'done' || st === 'finished' || st === 'idle' || st === 'error') {
+          hideStuckBanner();
+        }
+      }
+    } catch(ex) {}
   };
   logStream.onerror = function() {
     setTimeout(startLogStream, 5000);
@@ -6003,6 +6065,7 @@ function startOverviewTasksRefresh() {
 // === Task Detail Modal ===
 var _modalSessionId = null;
 var _modalTab = 'summary';
+var _showReasoning = false;
 var _modalAutoRefresh = true;
 var _modalRefreshTimer = null;
 var _modalEvents = [];
@@ -7986,6 +8049,16 @@ function renderModalNarrative(el) {
   el.innerHTML = html || '<div style="padding:20px;color:var(--text-muted);">No events yet</div>';
 }
 
+function toggleShowReasoning() {
+  _showReasoning = !_showReasoning;
+  var btn = document.getElementById('show-reasoning-btn');
+  if (btn) btn.classList.toggle('active', _showReasoning);
+  document.querySelectorAll('.evt-item.type-thinking').forEach(function(el) {
+    if (_showReasoning) el.classList.remove('reasoning-hidden');
+    else el.classList.add('reasoning-hidden');
+  });
+}
+
 function renderModalFull(el) {
   var events = _modalEvents;
   var html = '';
@@ -7998,8 +8071,15 @@ function renderModalFull(el) {
       body = evt.text || '';
     } else if (evt.type === 'thinking') {
       icon = '💭'; typeClass = 'type-thinking';
-      summary = '<strong>Thinking</strong> - ' + escHtml((evt.text||'').substring(0, 120));
+      var tokenCount = evt.tokens || (evt.text ? Math.round(evt.text.length / 4) : 0);
+      var tokenBadge = '<span class="thinking-token-badge">~' + tokenCount + ' tokens</span>';
+      var collapsedHint = '<span class="thinking-collapsed-hint">(click to expand)</span>';
+      summary = '<strong>Thinking</strong> ' + tokenBadge + collapsedHint;
       body = evt.text || '';
+      // hide thinking blocks by default; show-reasoning toggle controls visibility
+      if (typeof _showReasoning === 'undefined' || !_showReasoning) {
+        typeClass += ' reasoning-hidden';
+      }
     } else if (evt.type === 'user') {
       icon = '👤'; typeClass = 'type-user';
       summary = '<strong>User</strong> - ' + escHtml((evt.text||'').substring(0, 120));
@@ -8061,6 +8141,16 @@ function finishBootOverlay() {
 }
 
 async function bootDashboard() {
+  // Hard 10s timeout guard — forces boot completion if any step hangs
+  var _bootDone = false;
+  var _bootGuard = setTimeout(function() {
+    if (!_bootDone) {
+      console.warn('[ClawMetry] Boot guard triggered — forcing completion');
+      ['overview','tasks','health','streams'].forEach(function(s) { setBootStep(s, 'done', s + ' ready'); });
+      finishBootOverlay();
+    }
+  }, 10000);
+  try {
   // Check auth first — if not valid, show login and abort boot
   try {
     var stored = localStorage.getItem('clawmetry-token');
@@ -8111,6 +8201,10 @@ async function bootDashboard() {
   var sub = document.getElementById('boot-sub');
   if (sub) sub.textContent = 'Dashboard ready';
   setTimeout(finishBootOverlay, 180);
+  } finally {
+    _bootDone = true;
+    clearTimeout(_bootGuard);
+  }
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -8354,6 +8448,7 @@ async function showSnapshot(ts) {
       <div class="modal-tab active" onclick="switchModalTab('summary')">Summary</div>
       <div class="modal-tab" onclick="switchModalTab('narrative')">Narrative</div>
       <div class="modal-tab" onclick="switchModalTab('full')">Full Logs</div>
+      <button class="show-reasoning-toggle" id="show-reasoning-btn" onclick="toggleShowReasoning()" title="Show/hide reasoning traces">💭 Show reasoning</button>
     </div>
     <div class="modal-content" id="modal-content">Loading...</div>
     <div class="modal-footer">
