@@ -1,3 +1,10 @@
+## [0.10.10] — 2026-02-28
+
+### Changed
+- Dark mode always on, remove theme toggle (merged via PR #37)
+
+---
+
 ## [0.10.9] — 2026-02-28
 
 ### Changed
