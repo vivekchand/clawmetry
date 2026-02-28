@@ -14239,7 +14239,6 @@ Commands:
   stop           Stop the background service
   restart        Restart the background service
   status         Show service status, port, and uptime
-  connect        Connect to ClawMetry Cloud (app.clawmetry.com)
   uninstall      Remove the background service
 
 Options:
@@ -14255,7 +14254,6 @@ Examples:
   clawmetry start              Start as background service on port 8900
   clawmetry start --port 9000  Start on custom port
   clawmetry status             Check if running
-  clawmetry connect            Connect to ClawMetry Cloud
 
 Docs: https://docs.clawmetry.com
 """
@@ -14610,7 +14608,7 @@ def cmd_status(args):
         svc_type = 'process'
 
     status_icon = '✅ Running' if running else '❌ Stopped'
-    cloud_status = f'✅ Connected' if token else '❌ Not connected (run: clawmetry connect)'
+    cloud_status = f'✅ Connected' if token else '❌ Not connected'
 
     print(f"""
 🦞 ClawMetry Status
@@ -14839,7 +14837,7 @@ def main():
 
     # clawmetry connect
     p_connect = subparsers.add_parser('connect', parents=[shared], add_help=True,
-                                      help='Connect to ClawMetry Cloud (app.clawmetry.com)')
+                                      help=argparse.SUPPRESS)
 
     # clawmetry uninstall
     p_uninstall = subparsers.add_parser('uninstall', parents=[shared], add_help=True,
