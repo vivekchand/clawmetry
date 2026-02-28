@@ -14779,6 +14779,28 @@ def _run_server(args):
         print(f"  → OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
     print()
 
+    # Kill any stale process on the port before binding
+    import socket as _socket
+    _s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    _port_busy = _s.connect_ex(('127.0.0.1', args.port)) == 0
+    _s.close()
+    if _port_busy:
+        # Try to kill it gracefully via PID file first
+        try:
+            with open(PID_FILE) as _pf:
+                _old_pid = int(_pf.read().strip())
+            import signal as _signal
+            os.kill(_old_pid, _signal.SIGTERM)
+            import time as _time; _time.sleep(1)
+        except Exception:
+            pass
+        # Force-kill anything still on the port
+        try:
+            import subprocess as _sp
+            _sp.run(['fuser', '-k', f'{args.port}/tcp'], capture_output=True)
+        except Exception:
+            pass
+
     app.run(host=args.host, port=args.port, debug=args.debug, use_reloader=args.debug, threaded=True)
 
 
