@@ -14483,6 +14483,37 @@ def cmd_start(args):
     print(ARCHITECTURE_OVERVIEW.format(version=__version__, port=port))
     print("Starting dashboard...")
 
+    # Before loading daemon: if port is busy, only kill if it's our own stale process
+    import socket as _socket
+    _s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    _port_busy = _s.connect_ex(('127.0.0.1', port)) == 0
+    _s.close()
+    if _port_busy:
+        _old_pid = None
+        try:
+            with open(PID_FILE) as _pf:
+                _old_pid = int(_pf.read().strip())
+        except Exception:
+            pass
+        if _old_pid:
+            try:
+                import subprocess as _sp
+                _r = _sp.run(['ps', '-p', str(_old_pid), '-o', 'command='],
+                             capture_output=True, text=True)
+                _cmd = _r.stdout
+                if 'clawmetry' in _cmd or 'dashboard.py' in _cmd:
+                    import signal as _signal
+                    os.kill(_old_pid, _signal.SIGTERM)
+                    import time as _time; _time.sleep(1)
+                else:
+                    print(f"❌ Port {port} is in use by another application. Choose a different port with --port.")
+                    sys.exit(1)
+            except Exception:
+                pass
+        else:
+            print(f"❌ Port {port} is in use by another application. Choose a different port with --port.")
+            sys.exit(1)
+
     if _is_macos():
         # Write plist
         plist_content = _build_plist(python_exe, script_path, port, host)
@@ -14778,41 +14809,6 @@ def _run_server(args):
     if _HAS_OTEL_PROTO:
         print(f"  → OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
     print()
-
-    # If our own PID file exists, kill that stale clawmetry process before binding
-    import socket as _socket
-    _s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-    _port_busy = _s.connect_ex(('127.0.0.1', args.port)) == 0
-    _s.close()
-    if _port_busy:
-        _killed = False
-        try:
-            with open(PID_FILE) as _pf:
-                _old_pid = int(_pf.read().strip())
-            # Only kill if it's actually a clawmetry process
-            with open(f'/proc/{_old_pid}/cmdline', 'rb') as _cf:
-                _cmd = _cf.read().decode('utf-8', errors='ignore')
-        except Exception:
-            # /proc not available (macOS) — check via ps
-            try:
-                import subprocess as _sp
-                _r = _sp.run(['ps', '-p', str(_old_pid), '-o', 'command='],
-                             capture_output=True, text=True)
-                _cmd = _r.stdout
-            except Exception:
-                _cmd = ''
-        if 'clawmetry' in _cmd or 'dashboard.py' in _cmd:
-            try:
-                import signal as _signal
-                os.kill(_old_pid, _signal.SIGTERM)
-                import time as _time; _time.sleep(1)
-                _killed = True
-            except Exception:
-                pass
-        if not _killed and _port_busy:
-            print(f"❌ Port {args.port} is already in use by another application.")
-            print(f"   Choose a different port with --port, or stop the other app first.")
-            sys.exit(1)
 
     app.run(host=args.host, port=args.port, debug=args.debug, use_reloader=args.debug, threaded=True)
 
