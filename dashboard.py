@@ -2453,6 +2453,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('subagents')">Sub-Agents</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3143,6 +3144,58 @@ function clawmetryLogout(){
       <div style="color:#555;">Waiting for activity...</div>
     </div>
   </div>
+
+<!-- SUB-AGENTS -->
+<div class="page" id="page-subagents">
+  <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <button class="refresh-btn" onclick="loadSubAgentsPage(false)">&#8635; Refresh</button>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;">
+      <input type="checkbox" id="sa-auto-refresh" onchange="toggleSAAutoRefresh()"> Auto-refresh (5s)
+    </label>
+    <span id="sa-refresh-time" style="font-size:11px;color:var(--text-muted);margin-left:auto;"></span>
+  </div>
+
+  <!-- Stats row -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="subagents-active-count">-</div>
+      <div style="font-size:11px;color:#60ff80;margin-top:4px;">Active</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="subagents-idle-count">-</div>
+      <div style="font-size:11px;color:#f0c040;margin-top:4px;">Idle</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="subagents-stale-count">-</div>
+      <div style="font-size:11px;color:#888;margin-top:4px;">Stale</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="subagents-total-count">-</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Total</div>
+    </div>
+  </div>
+
+  <!-- Split: list + detail -->
+  <div style="display:flex;gap:16px;min-height:400px;">
+    <!-- Left: sub-agents list -->
+    <div class="card" style="flex:0 0 380px;overflow-y:auto;padding:0;" id="subagents-list">
+      <div style="padding:40px;text-align:center;color:#666;">Loading...</div>
+    </div>
+    <!-- Right: activity panel -->
+    <div id="sa-activity-panel" class="card" style="flex:1;display:none;flex-direction:column;padding:0;overflow:hidden;">
+      <div style="padding:16px;border-bottom:1px solid var(--border-primary);display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:15px;font-weight:700;color:var(--text-primary);" id="sa-panel-title">Sub-Agent</div>
+          <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;" id="sa-panel-status"></div>
+        </div>
+        <button onclick="closeSAPanel()" style="background:var(--button-bg);border:1px solid var(--border-primary);border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:var(--text-tertiary);">&times;</button>
+      </div>
+      <div id="sa-activity-timeline" style="flex:1;overflow-y:auto;padding:16px;font-size:12px;font-family:monospace;color:var(--text-secondary);">
+        <div style="padding:20px;text-align:center;color:#666;">Select a sub-agent to see its activity</div>
+      </div>
+    </div>
+  </div>
+</div>
 </div>
 
 <script>
@@ -3383,6 +3436,7 @@ function switchTab(name) {
   if (name === 'transcripts') loadTranscripts();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
+  if (name === 'subagents') loadSubAgentsPage(false);
 }
 
 function exportUsageData() {
