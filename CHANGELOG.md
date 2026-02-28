@@ -59,3 +59,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Sub-agent tracking
 - Cost tracking and budget alerts
 - OTLP receiver (experimental)
+
+## [0.10.2] — 2026-02-28
+
+### Added
+- Full CLI with subcommands: `clawmetry start/stop/restart/status/connect/uninstall`
+- Daemon support: launchd (macOS) + systemd (Linux) — auto-starts on login
+- Architecture overview on startup matching clawmetry.com/how-it-works
+- `clawmetry --help` and `clawmetry help` 
