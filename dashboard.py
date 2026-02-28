@@ -1531,7 +1531,23 @@ DASHBOARD_HTML = r"""
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; }
-  .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
+  /* Brain tab */
+  .brain-event { display:flex; align-items:baseline; gap:10px; padding:4px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; }
+  .brain-time { color:var(--text-muted); min-width:70px; }
+  .brain-source { min-width:140px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .brain-type { padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; min-width:60px; text-align:center; display:inline-block; }
+  .badge-spawn { background:rgba(168,85,247,0.2); color:#a855f7; }
+  .badge-shell { background:rgba(234,179,8,0.2); color:#eab308; }
+  .badge-read { background:rgba(59,130,246,0.2); color:#3b82f6; }
+  .badge-write { background:rgba(249,115,22,0.2); color:#f97316; }
+  .badge-browser { background:rgba(6,182,212,0.2); color:#06b6d4; }
+  .badge-msg { background:rgba(236,72,153,0.2); color:#ec4899; }
+  .badge-search { background:rgba(20,184,166,0.2); color:#14b8a6; }
+  .badge-done { background:rgba(34,197,94,0.2); color:#22c55e; }
+  .badge-error { background:rgba(239,68,68,0.2); color:#ef4444; }
+  .badge-tool { background:rgba(148,163,184,0.2); color:#94a3b8; }
+  .brain-detail { color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:600px; }
+    .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
   .nav-tab:active { transform: scale(0.98); }
@@ -2449,6 +2465,7 @@ function clawmetryLogout(){
   </div>
   <div class="nav-tabs">
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
+    <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
@@ -3146,6 +3163,28 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-flow -->
 
+<!-- BRAIN -->
+<div class="page" id="page-brain">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain — Unified Activity Stream</span>
+      <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+    </div>
+    <!-- Activity density chart -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Activity density — last 60 min (30s buckets)</div>
+      <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
+    </div>
+    <!-- Event stream -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Live event stream (newest first)</div>
+      <div id="brain-stream" style="max-height:600px;overflow-y:auto;">
+        <div style="color:var(--text-muted);padding:20px">Loading...</div>
+      </div>
+    </div>
+  </div>
+</div><!-- end page-brain -->
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -3455,6 +3494,7 @@ function switchTab(name) {
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
   if (name === 'subagents') loadSubAgentsPage(false);
+  if (name === 'brain') loadBrainPage();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -4036,6 +4076,105 @@ function toggleSAAutoRefresh() {
   } else {
     clearInterval(_saAutoRefreshTimer);
     _saAutoRefreshTimer = null;
+  }
+}
+
+// ── Brain tab ─────────────────────────────────────────────────────────
+var _brainRefreshTimer = null;
+var _brainSourceColors = {};
+var _brainColorPalette = ['#2dd4bf','#f97316','#eab308','#ec4899','#3b82f6','#a78bfa','#f43f5e','#10b981'];
+var _brainColorIdx = 0;
+
+function brainSourceColor(source) {
+  if (source === 'main') return '#a855f7';
+  if (!_brainSourceColors[source]) {
+    _brainSourceColors[source] = _brainColorPalette[_brainColorIdx % _brainColorPalette.length];
+    _brainColorIdx++;
+  }
+  return _brainSourceColors[source];
+}
+
+function formatBrainTime(isoStr) {
+  try {
+    var d = new Date(isoStr);
+    return d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  } catch(e) { return isoStr || ''; }
+}
+
+function renderBrainStream(events) {
+  var el = document.getElementById('brain-stream');
+  if (!el) return;
+  if (!events || events.length === 0) {
+    el.innerHTML = '<div style="color:var(--text-muted);padding:20px">No activity yet</div>';
+    return;
+  }
+  var html = '';
+  events.forEach(function(ev) {
+    var color = ev.color || brainSourceColor(ev.source || 'main');
+    var typeClass = 'badge-' + (ev.type || 'tool').toLowerCase();
+    html += '<div class="brain-event">';
+    html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
+    html += '<span class="brain-source" style="color:' + color + '">' + escHtml(ev.sourceLabel || ev.source || 'main') + '</span>';
+    html += '<span class="brain-type ' + typeClass + '">' + escHtml(ev.type || 'TOOL') + '</span>';
+    html += '<span class="brain-detail">' + escHtml(ev.detail || '') + '</span>';
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function renderBrainChart(events) {
+  var canvas = document.getElementById('brain-density-chart');
+  if (!canvas || !canvas.getContext) return;
+  var ctx = canvas.getContext('2d');
+  var W = canvas.offsetWidth || 800;
+  canvas.width = W;
+  canvas.height = 60;
+  ctx.clearRect(0, 0, W, 60);
+
+  // 60 min / 30s = 120 buckets
+  var now = Date.now();
+  var bucketMs = 30000;
+  var numBuckets = 120;
+  var buckets = new Array(numBuckets).fill(0);
+  var bucketColors = new Array(numBuckets).fill(null);
+  events.forEach(function(ev) {
+    try {
+      var t = new Date(ev.time).getTime();
+      var age = now - t;
+      if (age < 0 || age > numBuckets * bucketMs) return;
+      var idx = numBuckets - 1 - Math.floor(age / bucketMs);
+      if (idx >= 0 && idx < numBuckets) {
+        buckets[idx]++;
+        var col = ev.color || brainSourceColor(ev.source || 'main');
+        if (!bucketColors[idx]) bucketColors[idx] = col;
+      }
+    } catch(e) {}
+  });
+
+  var maxVal = Math.max(1, Math.max.apply(null, buckets));
+  var barW = W / numBuckets;
+  for (var i = 0; i < numBuckets; i++) {
+    if (buckets[i] === 0) continue;
+    var h = Math.max(2, (buckets[i] / maxVal) * 50);
+    ctx.fillStyle = bucketColors[i] || '#a855f7';
+    ctx.globalAlpha = 0.7;
+    ctx.fillRect(i * barW, 60 - h, Math.max(1, barW - 1), h);
+  }
+  ctx.globalAlpha = 1;
+}
+
+async function loadBrainPage() {
+  try {
+    var data = await fetchJsonWithTimeout('/api/brain-history', 8000);
+    renderBrainChart(data.events || []);
+    renderBrainStream(data.events || []);
+  } catch(e) {
+    var el = document.getElementById('brain-stream');
+    if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px">Failed to load: ' + escHtml(String(e)) + '</div>';
+  }
+  if (_brainRefreshTimer) clearTimeout(_brainRefreshTimer);
+  if (document.getElementById('page-brain') && document.getElementById('page-brain').classList.contains('active')) {
+    _brainRefreshTimer = setTimeout(loadBrainPage, 10000);
   }
 }
 
@@ -9668,6 +9807,206 @@ def api_logs():
         else:
             lines = _tail_lines(log_file, lines_count)
     return jsonify({'lines': lines, 'date': date_str})
+
+
+@app.route('/api/brain-history')
+def api_brain_history():
+    """Return unified event stream from main agent + sub-agents."""
+    events = []
+
+    # ── Source 1: OpenClaw log files (main agent tool calls) ─────────────
+    log_dirs = _get_log_dirs()
+    log_files = []
+    for d in log_dirs:
+        log_files += sorted(glob.glob(os.path.join(d, 'openclaw-*.log')))
+    # Also try /tmp/openclaw
+    log_files += sorted(glob.glob('/tmp/openclaw/openclaw-*.log'))
+    log_files = list(dict.fromkeys(log_files))  # dedupe, preserve order
+
+    tool_keywords = {
+        'exec': 'SHELL', 'shell': 'SHELL', 'browser': 'BROWSER',
+        'web_fetch': 'SEARCH', 'web_search': 'SEARCH', 'read': 'READ',
+        'write': 'WRITE', 'edit': 'WRITE', 'message': 'MSG',
+        'spawn': 'SPAWN', 'subagents': 'SPAWN', 'tts': 'MSG',
+        'image': 'BROWSER', 'nodes': 'SHELL', 'canvas': 'BROWSER',
+    }
+
+    for lf in log_files[-3:]:  # last 3 log files
+        try:
+            lines = _tail_lines(lf, 2000)
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                ts = obj.get('time') or obj.get('timestamp')
+                if not ts:
+                    continue
+                # Look for tool call indicators in message content
+                msg = obj.get('0') or obj.get('message') or ''
+                if isinstance(msg, dict):
+                    msg = json.dumps(msg)
+                msg_lower = msg.lower()
+                ev_type = None
+                detail = ''
+                for kw, ev in tool_keywords.items():
+                    if kw in msg_lower:
+                        ev_type = ev
+                        # Try to extract some detail
+                        try:
+                            start = msg_lower.index(kw)
+                            detail = msg[start:start+120].split('\n')[0][:120].strip()
+                        except Exception:
+                            detail = ''
+                        break
+                if ev_type:
+                    events.append({
+                        'time': ts,
+                        'source': 'main',
+                        'sourceLabel': 'main',
+                        'type': ev_type,
+                        'detail': detail[:120],
+                        'color': '#a855f7',
+                    })
+        except Exception:
+            pass
+
+    # ── Source 2: Session JSONL files (sub-agent activity) ───────────────
+    session_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
+    session_files = glob.glob(os.path.join(session_dir, '*.jsonl'))
+    agent_colors = {}
+    color_palette = ['#2dd4bf', '#f97316', '#eab308', '#ec4899', '#3b82f6', '#a78bfa', '#f43f5e', '#10b981']
+    color_idx = [0]
+
+    def get_agent_color(label):
+        if label == 'main':
+            return '#a855f7'
+        if label not in agent_colors:
+            agent_colors[label] = color_palette[color_idx[0] % len(color_palette)]
+            color_idx[0] += 1
+        return agent_colors[label]
+
+    for sf in session_files:
+        try:
+            # Infer label from filename
+            fname = os.path.basename(sf).replace('.jsonl', '')
+            # Try to get agent label from file
+            with open(sf, 'r', errors='replace') as fh:
+                raw_lines = fh.readlines()[-500:]  # last 500 lines
+            session_label = fname  # default
+            for raw in raw_lines[:10]:
+                try:
+                    obj = json.loads(raw)
+                    lbl = obj.get('label') or obj.get('sessionLabel') or obj.get('agentLabel')
+                    if lbl:
+                        session_label = lbl
+                        break
+                except Exception:
+                    pass
+            # Check if this is a subagent (not main)
+            is_main = 'main' in fname.lower() and 'subagent' not in fname.lower()
+            source = 'main' if is_main else session_label
+            color = get_agent_color(source)
+
+            for raw in raw_lines:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except Exception:
+                    continue
+                ts = obj.get('timestamp') or obj.get('time')
+                role = obj.get('role', '')
+                content_obj = obj.get('content', '')
+
+                # Look for tool_use blocks
+                # Also handle type=message wrapper format
+                if obj.get('type') == 'message':
+                    inner_msg = obj.get('message', {})
+                    role = inner_msg.get('role', '')
+                    content_obj = inner_msg.get('content', [])
+
+                if role == 'assistant' and isinstance(content_obj, list):
+                    for block in content_obj:
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get('type', '')
+                        # Handle both tool_use and toolCall formats
+                        if btype == 'tool_use':
+                            tool_name = block.get('name', '')
+                            inp = block.get('input', {})
+                        elif btype == 'toolCall':
+                            tool_name = block.get('name', '')
+                            inp = block.get('arguments', {})
+                        else:
+                            continue
+                        # Map tool name to event type
+                        tn = tool_name.lower()
+                        if 'exec' in tn or 'shell' in tn or 'bash' in tn:
+                            ev_type = 'SHELL'
+                            detail = (inp.get('command') or '')[:120]
+                        elif 'read' in tn:
+                            ev_type = 'READ'
+                            detail = inp.get('path') or inp.get('file_path') or ''
+                        elif 'write' in tn or 'edit' in tn:
+                            ev_type = 'WRITE'
+                            detail = inp.get('path') or inp.get('file_path') or ''
+                        elif 'browser' in tn:
+                            ev_type = 'BROWSER'
+                            detail = inp.get('url') or inp.get('action') or ''
+                        elif 'message' in tn:
+                            ev_type = 'MSG'
+                            detail = (inp.get('message') or '')[:80]
+                        elif 'web_search' in tn or 'search' in tn:
+                            ev_type = 'SEARCH'
+                            detail = inp.get('query') or ''
+                        elif 'subagent' in tn or 'spawn' in tn:
+                            ev_type = 'SPAWN'
+                            detail = inp.get('label') or inp.get('message', '')[:60]
+                        elif 'process' in tn:
+                            ev_type = 'SHELL'
+                            detail = inp.get('action') or ''
+                        else:
+                            ev_type = 'TOOL'
+                            detail = tool_name
+                        if ts:
+                            events.append({
+                                'time': ts,
+                                'source': source,
+                                'sourceLabel': source[:20],
+                                'type': ev_type,
+                                'detail': str(detail)[:120],
+                                'color': color,
+                            })
+                # Look for done/error markers
+                elif role == 'system' or (role == 'assistant' and isinstance(content_obj, str)):
+                    text = content_obj if isinstance(content_obj, str) else ''
+                    if 'done' in text.lower() or 'completed' in text.lower():
+                        if ts:
+                            events.append({
+                                'time': ts,
+                                'source': source,
+                                'sourceLabel': source[:20],
+                                'type': 'DONE',
+                                'detail': text[:80],
+                                'color': color,
+                            })
+        except Exception:
+            pass
+
+    # Sort by time descending, return last 200
+    def parse_ts(ev):
+        try:
+            return ev['time']
+        except Exception:
+            return ''
+    events.sort(key=parse_ts, reverse=True)
+    events = events[:200]
+    return jsonify({'events': events, 'total': len(events)})
 
 
 @app.route('/api/logs-stream')
