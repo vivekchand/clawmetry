@@ -117,27 +117,15 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Ask if user wants to start now
-if [ -t 0 ]; then
-  # Interactive terminal — prompt and start daemon
-  printf "  Start ClawMetry as a background service now? [Y/n] "
-  read -r REPLY
-  REPLY="${REPLY:-Y}"
-  if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-    echo ""
-    "$CLAWMETRY_BIN" start
-  else
-    echo ""
-    echo "  Run anytime with:"
-    echo "    clawmetry start    ← run as background service (recommended)"
-    echo "    clawmetry          ← run in foreground"
-    echo ""
-    echo "  Docs: https://clawmetry.com/how-it-works"
-  fi
-else
-  # Non-interactive (piped) — just show instructions
-  echo "  To start ClawMetry:"
+# Start the daemon automatically (skip with --no-start)
+if [[ " $* " != *" --no-start "* ]]; then
   echo ""
+  echo "  Starting ClawMetry as a background service..."
+  echo ""
+  "$CLAWMETRY_BIN" start
+else
+  echo ""
+  echo "  Run anytime with:"
   echo "    clawmetry start    ← run as background service (recommended)"
   echo "    clawmetry          ← run in foreground"
   echo ""
