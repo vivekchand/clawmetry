@@ -2453,6 +2453,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3145,6 +3146,37 @@ function clawmetryLogout(){
   </div>
 </div>
 
+<div class="page" id="page-brain">
+  <!-- Legend -->
+  <div style="display:flex;align-items:center;gap:16px;padding:8px 0 12px;flex-wrap:wrap;">
+    <span style="font-size:13px;font-weight:700;color:var(--text-primary);">&#x1F9E0; Brain Activity</span>
+    <div style="display:flex;gap:10px;font-size:11px;margin-left:auto;">
+      <span><span style="color:#22c55e;">&#9679;</span> Main Agent</span>
+      <span><span style="color:#60a5fa;">&#9679;</span> Sub-Agents</span>
+      <span><span style="color:#f59e0b;">&#9679;</span> Stale</span>
+      <span><span style="color:#ef4444;">&#9679;</span> Error</span>
+    </div>
+  </div>
+  <!-- Activity density mini-chart -->
+  <div id="brain-density-chart" style="height:48px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;margin-bottom:12px;padding:4px 8px;display:flex;align-items:flex-end;gap:2px;overflow:hidden;"></div>
+  <!-- Unified event stream -->
+  <div id="brain-stream" style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:12px;line-height:1.8;max-height:65vh;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--bg-card);">
+    <div style="color:var(--text-muted);text-align:center;padding:20px;">Connecting to brain stream...</div>
+  </div>
+  <!-- Controls -->
+  <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+    <button onclick="loadBrainHistory()" style="font-size:11px;padding:4px 10px;border-radius:5px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);cursor:pointer;">&#8634; Load history</button>
+    <label style="font-size:11px;display:flex;align-items:center;gap:4px;color:var(--text-secondary);cursor:pointer;">
+      <input type="checkbox" id="brain-autoscroll" checked> Auto-scroll
+    </label>
+    <select id="brain-filter" onchange="filterBrainEvents()" style="font-size:11px;padding:3px 6px;border-radius:5px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-primary);">
+      <option value="all">All sources</option>
+      <option value="main">Main only</option>
+      <option value="subagents">Sub-agents only</option>
+    </select>
+  </div>
+</div>
+
 <script>
 // === Budget & Alert Functions ===
 function openBudgetModal() {
@@ -3383,6 +3415,100 @@ function switchTab(name) {
   if (name === 'transcripts') loadTranscripts();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
+  if (name === 'brain') { startBrainStream(); loadBrainHistory(); }
+}
+
+var _brainStream = null;
+var _brainEvents = [];
+var _brainDensityBuckets = {};
+
+function getBrainSourceColor(source, type) {
+  if (type === 'ERROR' || type === 'error') return '#ef4444';
+  if (source === 'main') return '#22c55e';
+  var colors = ['#60a5fa','#a78bfa','#34d399','#f472b6','#fb923c','#38bdf8'];
+  var hash = source.split('').reduce(function(h,c){ return h + c.charCodeAt(0); }, 0);
+  return colors[hash % colors.length];
+}
+
+function formatBrainTime(isoStr) {
+  if (!isoStr) return '--:--:--';
+  try { return new Date(isoStr).toLocaleTimeString(); } catch(e) { return isoStr.slice(11,19) || '--:--:--'; }
+}
+
+function appendBrainEvent(ev) {
+  _brainEvents.push(ev);
+  if (_brainEvents.length > 500) _brainEvents.shift();
+  var filter = document.getElementById('brain-filter');
+  var filterVal = filter ? filter.value : 'all';
+  if (filterVal === 'main' && ev.source !== 'main') return;
+  if (filterVal === 'subagents' && ev.source === 'main') return;
+  var container = document.getElementById('brain-stream');
+  if (!container) return;
+  var color = getBrainSourceColor(ev.source, ev.type);
+  var sourceLabel = ev.source === 'main' ? '\u{1F9E0} main' : '\u{1F916} ' + ev.source;
+  var row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;padding:1px 0;border-bottom:1px solid rgba(255,255,255,0.03);';
+  row.innerHTML =
+    '<span style="color:var(--text-muted);flex-shrink:0;width:70px;">' + formatBrainTime(ev.time) + '</span>' +
+    '<span style="color:' + color + ';flex-shrink:0;width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(sourceLabel) + '</span>' +
+    '<span style="color:#94a3b8;flex-shrink:0;width:80px;">' + escHtml(ev.type || 'LOG') + '</span>' +
+    '<span style="color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(ev.detail || '') + '</span>';
+  var placeholder = container.querySelector('[style*="Connecting"]');
+  if (placeholder) placeholder.remove();
+  container.appendChild(row);
+  var autoScroll = document.getElementById('brain-autoscroll');
+  if (autoScroll && autoScroll.checked) { container.scrollTop = container.scrollHeight; }
+  updateBrainDensity(ev.time);
+}
+
+function updateBrainDensity(isoTime) {
+  var bucket = isoTime ? Math.floor(new Date(isoTime).getTime() / 30000) * 30000 : Math.floor(Date.now() / 30000) * 30000;
+  _brainDensityBuckets[bucket] = (_brainDensityBuckets[bucket] || 0) + 1;
+  renderBrainDensity();
+}
+
+function renderBrainDensity() {
+  var chart = document.getElementById('brain-density-chart');
+  if (!chart) return;
+  var keys = Object.keys(_brainDensityBuckets).map(Number).sort().slice(-40);
+  if (!keys.length) return;
+  var max = Math.max.apply(null, keys.map(function(k){ return _brainDensityBuckets[k]; }));
+  chart.innerHTML = keys.map(function(k) {
+    var h = Math.max(4, Math.round((_brainDensityBuckets[k] / max) * 40));
+    return '<div title="' + new Date(k).toLocaleTimeString() + ': ' + _brainDensityBuckets[k] + ' events" style="flex:1;min-width:3px;height:' + h + 'px;background:#3b82f6;border-radius:2px 2px 0 0;opacity:0.7;"></div>';
+  }).join('');
+}
+
+function filterBrainEvents() {
+  var container = document.getElementById('brain-stream');
+  if (!container) return;
+  container.innerHTML = '';
+  _brainEvents.forEach(function(ev) { appendBrainEvent(ev); });
+}
+
+async function loadBrainHistory() {
+  try {
+    var tok = localStorage.getItem('clawmetry-token') || '';
+    var r = await fetch('/api/brain-history?minutes=30', {headers:{'Authorization':'Bearer '+tok}});
+    var d = await r.json();
+    if (d.events) {
+      var container = document.getElementById('brain-stream');
+      if (container) container.innerHTML = '';
+      d.events.forEach(function(ev) { appendBrainEvent(ev); });
+    }
+  } catch(e) { console.warn('brain history failed', e); }
+}
+
+function startBrainStream() {
+  if (_brainStream && _brainStream.readyState !== EventSource.CLOSED) return;
+  var tok = localStorage.getItem('clawmetry-token') || '';
+  _brainStream = new EventSource('/api/brain-stream' + (tok ? '?token=' + encodeURIComponent(tok) : ''));
+  _brainStream.onmessage = function(e) {
+    try { appendBrainEvent(JSON.parse(e.data)); } catch(err) {}
+  };
+  _brainStream.onerror = function() {
+    setTimeout(startBrainStream, 5000);
+  };
 }
 
 function exportUsageData() {
@@ -9464,6 +9590,120 @@ def api_logs():
         else:
             lines = _tail_lines(log_file, lines_count)
     return jsonify({'lines': lines, 'date': date_str})
+
+
+@app.route('/api/brain-stream')
+def api_brain_stream():
+    """SSE stream merging main agent logs + sub-agent activity"""
+    auth_result = _check_auth()
+    if auth_result is not None:
+        return auth_result
+
+    def generate():
+        import glob, time as _time
+        seen_positions = {}
+        while True:
+            events = []
+            # 1. Read main agent logs
+            log_files = sorted(glob.glob('/tmp/openclaw/openclaw-*.log'))
+            if log_files:
+                log_file = log_files[-1]
+                try:
+                    pos = seen_positions.get(log_file, 0)
+                    with open(log_file, 'r', errors='replace') as f:
+                        f.seek(pos)
+                        new_lines = f.readlines()
+                        seen_positions[log_file] = f.tell()
+                    for line in new_lines[-20:]:
+                        line = line.strip()
+                        if not line: continue
+                        try:
+                            obj = json.loads(line)
+                            msg = obj.get('0') or obj.get('message') or obj.get('msg') or ''
+                            t = obj.get('time', '')
+                            level = (obj.get('_meta') or {}).get('logLevelName', 'INFO')
+                            events.append({'time': t, 'source': 'main', 'type': level, 'detail': str(msg)[:100]})
+                        except:
+                            if line: events.append({'time': '', 'source': 'main', 'type': 'LOG', 'detail': line[:100]})
+                except: pass
+            # 2. Read sub-agent sessions
+            try:
+                session_files = sorted(glob.glob(os.path.expanduser('~/.openclaw/agents/main/sessions/*.jsonl')),
+                                       key=os.path.getmtime, reverse=True)[:10]
+                for sf in session_files:
+                    label = os.path.basename(sf).replace('.jsonl','')[:20]
+                    try:
+                        pos = seen_positions.get(sf, max(0, os.path.getsize(sf) - 2000))
+                        with open(sf, 'r', errors='replace') as f:
+                            f.seek(pos)
+                            lines = f.readlines()
+                            seen_positions[sf] = f.tell()
+                        for line in lines[-10:]:
+                            try:
+                                obj = json.loads(line.strip())
+                                role = obj.get('role','')
+                                if role == 'tool_use' or (role == 'assistant' and obj.get('type') == 'tool_use'):
+                                    tool = obj.get('name', obj.get('tool',''))
+                                    inp = str(obj.get('input', obj.get('content','')))[:80]
+                                    events.append({'time': obj.get('timestamp',''), 'source': label, 'type': tool.upper(), 'detail': inp})
+                            except: pass
+                    except: pass
+            except: pass
+            for ev in events[-5:]:
+                yield f"data: {json.dumps(ev)}\n\n"
+            _time.sleep(1)
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/brain-history')
+def api_brain_history():
+    """Last N minutes of brain activity from logs + sessions"""
+    auth_result = _check_auth()
+    if auth_result is not None:
+        return auth_result
+    minutes = int(request.args.get('minutes', 30))
+    events = []
+    import glob
+    log_files = sorted(glob.glob('/tmp/openclaw/openclaw-*.log'))
+    if log_files:
+        try:
+            lines = subprocess.check_output(['tail', '-n', '200', log_files[-1]],
+                                            stderr=subprocess.DEVNULL).decode(errors='replace').splitlines()
+            for line in lines:
+                try:
+                    obj = json.loads(line)
+                    msg = obj.get('0') or obj.get('message') or obj.get('msg') or ''
+                    events.append({'time': obj.get('time',''), 'source': 'main',
+                                   'type': (obj.get('_meta') or {}).get('logLevelName','INFO'),
+                                   'detail': str(msg)[:100]})
+                except:
+                    if line.strip():
+                        events.append({'time': '', 'source': 'main', 'type': 'LOG', 'detail': line[:100]})
+        except: pass
+    # Also read recent session JSONL files
+    try:
+        session_files = sorted(glob.glob(os.path.expanduser('~/.openclaw/agents/main/sessions/*.jsonl')),
+                               key=os.path.getmtime, reverse=True)[:10]
+        for sf in session_files:
+            label = os.path.basename(sf).replace('.jsonl','')[:20]
+            try:
+                lines_raw = subprocess.check_output(['tail', '-n', '50', sf],
+                                                    stderr=subprocess.DEVNULL).decode(errors='replace').splitlines()
+                for line in lines_raw:
+                    try:
+                        obj = json.loads(line.strip())
+                        role = obj.get('role','')
+                        if role == 'tool_use' or (role == 'assistant' and obj.get('type') == 'tool_use'):
+                            tool = obj.get('name', obj.get('tool',''))
+                            inp = str(obj.get('input', obj.get('content','')))[:80]
+                            events.append({'time': obj.get('timestamp',''), 'source': label,
+                                           'type': tool.upper(), 'detail': inp})
+                    except: pass
+            except: pass
+    except: pass
+    return jsonify({'events': events[-300:]})
 
 
 @app.route('/api/logs-stream')
