@@ -3144,6 +3144,7 @@ function clawmetryLogout(){
       <div style="color:#555;">Waiting for activity...</div>
     </div>
   </div>
+</div><!-- end page-flow -->
 
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
