@@ -8141,6 +8141,16 @@ function finishBootOverlay() {
 }
 
 async function bootDashboard() {
+  // Hard 10s timeout guard — forces boot completion if any step hangs
+  var _bootDone = false;
+  var _bootGuard = setTimeout(function() {
+    if (!_bootDone) {
+      console.warn('[ClawMetry] Boot guard triggered — forcing completion');
+      ['overview','tasks','health','streams'].forEach(function(s) { setBootStep(s, 'done', s + ' ready'); });
+      finishBootOverlay();
+    }
+  }, 10000);
+  try {
   // Check auth first — if not valid, show login and abort boot
   try {
     var stored = localStorage.getItem('clawmetry-token');
@@ -8191,6 +8201,10 @@ async function bootDashboard() {
   var sub = document.getElementById('boot-sub');
   if (sub) sub.textContent = 'Dashboard ready';
   setTimeout(finishBootOverlay, 180);
+  } finally {
+    _bootDone = true;
+    clearTimeout(_bootGuard);
+  }
 }
 
 document.addEventListener('DOMContentLoaded', function() {
