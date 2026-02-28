@@ -5123,10 +5123,15 @@ function toggleMsg(idx) {
   }
 }
 
+var _overviewRefreshRunning = false;
 function startOverviewRefresh() {
-  loadAll();
+  // Don't fire loadAll() immediately — bootDashboard already called it
   if (window._overviewTimer) clearInterval(window._overviewTimer);
-  window._overviewTimer = setInterval(loadAll, 10000);
+  window._overviewTimer = setInterval(async function() {
+    if (_overviewRefreshRunning) return;
+    _overviewRefreshRunning = true;
+    try { await loadAll(); } finally { _overviewRefreshRunning = false; }
+  }, 10000);
   loadMainActivity();
   if (window._mainActivityTimer) clearInterval(window._mainActivityTimer);
   window._mainActivityTimer = setInterval(loadMainActivity, 5000);
