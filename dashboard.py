@@ -14213,42 +14213,476 @@ BANNER = r"""
   Flow: Click nodes: 🧠 Automation Advisor · 💰 Cost Optimizer · 🕰️ Time Travel
 """
 
+ARCHITECTURE_OVERVIEW = """\
+🦞 ClawMetry {version} — See your agent think.
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="ClawMetry - Real-time observability for your AI agent",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Environment variables:\n"
-               "  OPENCLAW_HOME         Agent workspace directory\n"
-               "  OPENCLAW_LOG_DIR      Log directory (default: auto-detected)\n"
-               "  OPENCLAW_METRICS_FILE Path to metrics persistence JSON file\n"
-               "  OPENCLAW_USER         Your name in the Flow visualization\n"
-               "  OPENCLAW_SSE_MAX_SECONDS  Max duration for each SSE stream (default: 300)\n"
-    )
-    parser.add_argument('--port', '-p', type=int, default=8900, help='Port (default: 8900)')
-    parser.add_argument('--host', '-H', type=str, default='127.0.0.1', help='Host (default: 127.0.0.1)')
-    parser.add_argument('--workspace', '-w', type=str, help='Agent workspace directory')
-    parser.add_argument('--data-dir', '-d', type=str, help='OpenClaw data directory (e.g. ~/.openclaw). Auto-sets sessions, crons, workspace if not specified.')
-    parser.add_argument('--log-dir', '-l', type=str, help='Log directory')
-    parser.add_argument('--sessions-dir', '-s', type=str, help='Sessions directory (transcript .jsonl files)')
-    parser.add_argument('--metrics-file', '-m', type=str, help='Path to metrics persistence JSON file')
-    parser.add_argument('--name', '-n', type=str, help='Your name (shown in Flow tab)')
-    parser.add_argument('--debug', dest='debug', action='store_true', default=True, help='Enable debug mode with auto-reload (default: enabled)')
-    parser.add_argument('--no-debug', dest='debug', action='store_false', help='Disable debug mode and auto-reload')
-    parser.add_argument('--sse-max-seconds', type=int, default=None, help='Max seconds per SSE connection (default: 300)')
-    parser.add_argument('--max-log-stream-clients', type=int, default=10, help='Max concurrent /api/logs-stream clients')
-    parser.add_argument('--max-health-stream-clients', type=int, default=10, help='Max concurrent /api/health-stream clients')
-    parser.add_argument('--monitor-service', action='append', default=[], metavar='NAME:PORT',
-                        help='Additional service to monitor (e.g. "My App:8080"). Can be repeated.')
-    parser.add_argument('--mc-url', type=str, help='Mission Control URL (e.g. http://localhost:3002). Disabled by default.')
-    parser.add_argument('--fleet-api-key', type=str, help='API key for multi-node fleet authentication. Also via CLAWMETRY_FLEET_KEY env.')
-    parser.add_argument('--fleet-db', type=str, help='Path to fleet SQLite database file.')
-    parser.add_argument('--version', '-v', action='version', version=f'clawmetry {__version__}')
+How it works:
 
-    args = parser.parse_args()
+  💬 Telegram  ╮
+  💬 iMessage  ├─→  🤖 OpenClaw  →  📁 logs / sessions / workspace
+  💬 WhatsApp  ╯                            ↑
+                                      reads silently
+                                            ↓
+                                      🦞 ClawMetry
+                                            ↓
+                                      📊 localhost:{port}
+
+  No proxy. No code changes. Your data never leaves your machine.
+  Docs: https://clawmetry.com/how-it-works
+"""
+
+HELP_TEXT = """\
+🦞 ClawMetry {version} — See your agent think.
+
+Usage: clawmetry [command] [options]
+
+Commands:
+  start          Start ClawMetry as a background service (auto-starts on login)
+  stop           Stop the background service
+  restart        Restart the background service
+  status         Show service status, port, and uptime
+  connect        Connect to ClawMetry Cloud (app.clawmetry.com)
+  uninstall      Remove the background service
+
+Options:
+  --port <port>        Port to listen on (default: 8900)
+  --host <host>        Host to bind to (default: 127.0.0.1)
+  --workspace <path>   OpenClaw workspace path (auto-detected)
+  --name <name>        Your name in Flow visualization
+  --no-debug           Disable Flask debug/auto-reload
+  -v, --version        Show version
+  -h, --help           Show this help
+
+Examples:
+  clawmetry start              Start as background service on port 8900
+  clawmetry start --port 9000  Start on custom port
+  clawmetry status             Check if running
+  clawmetry connect            Connect to ClawMetry Cloud
+
+Docs: https://docs.clawmetry.com
+"""
+
+PID_FILE = '/tmp/clawmetry.pid'
+LAUNCHD_LABEL = 'com.clawmetry'
+LAUNCHD_PLIST = os.path.expanduser(f'~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist')
+SYSTEMD_SERVICE = os.path.expanduser('~/.config/systemd/user/clawmetry.service')
+
+
+# ---------------------------------------------------------------------------
+# Daemon helpers
+# ---------------------------------------------------------------------------
+
+def _get_script_path():
+    """Return absolute path to the clawmetry executable / this script."""
+    import shutil
+    exe = shutil.which('clawmetry')
+    if exe:
+        return os.path.realpath(exe)
+    return os.path.realpath(sys.argv[0])
+
+
+def _write_pid(pid):
+    with open(PID_FILE, 'w') as f:
+        f.write(str(pid))
+
+
+def _read_pid():
+    try:
+        with open(PID_FILE) as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
+def _is_pid_running(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def _is_macos():
+    return sys.platform == 'darwin'
+
+
+def _is_linux():
+    return sys.platform.startswith('linux')
+
+
+def _launchd_running():
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['launchctl', 'list', LAUNCHD_LABEL],
+            capture_output=True, text=True
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _systemd_running():
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['systemctl', '--user', 'is-active', '--quiet', 'clawmetry'],
+            capture_output=True
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _service_running():
+    if _is_macos():
+        return _launchd_running()
+    elif _is_linux():
+        return _systemd_running()
+    # Fallback: check PID file
+    pid = _read_pid()
+    return pid is not None and _is_pid_running(pid)
+
+
+def _get_service_pid():
+    """Try to get running PID from launchd/systemd/pid file."""
+    if _is_macos():
+        import subprocess
+        try:
+            result = subprocess.run(
+                ['launchctl', 'list', LAUNCHD_LABEL],
+                capture_output=True, text=True
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line and not line.startswith('"') and '\t' in line:
+                    parts = line.split('\t')
+                    if len(parts) >= 1:
+                        try:
+                            return int(parts[0])
+                        except ValueError:
+                            pass
+        except Exception:
+            pass
+    elif _is_linux():
+        import subprocess
+        try:
+            result = subprocess.run(
+                ['systemctl', '--user', 'show', 'clawmetry', '--property=MainPID'],
+                capture_output=True, text=True
+            )
+            for line in result.stdout.splitlines():
+                if line.startswith('MainPID='):
+                    pid = int(line.split('=', 1)[1].strip())
+                    return pid if pid > 0 else None
+        except Exception:
+            pass
+    return _read_pid()
+
+
+def _get_uptime_str(pid):
+    try:
+        import subprocess
+        if _is_macos():
+            result = subprocess.run(
+                ['ps', '-o', 'etime=', '-p', str(pid)],
+                capture_output=True, text=True
+            )
+            return result.stdout.strip() or '?'
+        else:
+            result = subprocess.run(
+                ['ps', '-o', 'etime=', '-p', str(pid)],
+                capture_output=True, text=True
+            )
+            return result.stdout.strip() or '?'
+    except Exception:
+        return '?'
+
+
+def _read_cloud_token():
+    cfg_path = os.path.expanduser('~/.openclaw/openclaw.json')
+    try:
+        with open(cfg_path) as f:
+            data = json.load(f)
+        return data.get('clawmetry', {}).get('cloudToken')
+    except Exception:
+        return None
+
+
+def _write_cloud_token(token):
+    cfg_path = os.path.expanduser('~/.openclaw/openclaw.json')
+    try:
+        with open(cfg_path) as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    if 'clawmetry' not in data:
+        data['clawmetry'] = {}
+    data['clawmetry']['cloudToken'] = token
+    os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+    with open(cfg_path, 'w') as f:
+        json.dump(data, f, indent=2)
+
+
+def _build_plist(python_exe, script_path, port, host, log_path='/tmp/clawmetry.log'):
+    extra = []
+    if host != '127.0.0.1':
+        extra += ['<string>--host</string>', f'<string>{host}</string>']
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{LAUNCHD_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{python_exe}</string>
+        <string>{script_path}</string>
+        <string>--no-debug</string>
+        <string>--port</string>
+        <string>{port}</string>
+        {''.join(extra)}
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_path}</string>
+</dict>
+</plist>
+"""
+
+
+def _build_systemd_unit(python_exe, script_path, port, host):
+    extra = f' --host {host}' if host != '127.0.0.1' else ''
+    return f"""[Unit]
+Description=ClawMetry Dashboard
+After=network.target
+
+[Service]
+ExecStart={python_exe} {script_path} --no-debug --port {port}{extra}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"""
+
+
+# ---------------------------------------------------------------------------
+# CLI subcommands
+# ---------------------------------------------------------------------------
+
+def cmd_start(args):
+    """Start ClawMetry as a background daemon."""
+    import subprocess
+    port = args.port
+    host = args.host
+    python_exe = sys.executable
+    script_path = _get_script_path()
+
+    print(ARCHITECTURE_OVERVIEW.format(version=__version__, port=port))
+    print("Starting dashboard...")
+
+    if _is_macos():
+        # Write plist
+        plist_content = _build_plist(python_exe, script_path, port, host)
+        os.makedirs(os.path.dirname(LAUNCHD_PLIST), exist_ok=True)
+        with open(LAUNCHD_PLIST, 'w') as f:
+            f.write(plist_content)
+
+        # Unload if already loaded (ignore errors)
+        subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST],
+                       capture_output=True)
+        result = subprocess.run(['launchctl', 'load', LAUNCHD_PLIST],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"❌ Failed to load service: {result.stderr.strip()}")
+            sys.exit(1)
+
+        import time
+        time.sleep(1)
+        if _launchd_running():
+            print(f"✅ ClawMetry started  →  http://localhost:{port}")
+            print(f"   Auto-starts on login · logs: /tmp/clawmetry.log")
+            print(f"   Stop with: clawmetry stop")
+        else:
+            print("⚠️  Service loaded but may still be starting. Check: clawmetry status")
+
+    elif _is_linux():
+        unit_content = _build_systemd_unit(python_exe, script_path, port, host)
+        os.makedirs(os.path.dirname(SYSTEMD_SERVICE), exist_ok=True)
+        with open(SYSTEMD_SERVICE, 'w') as f:
+            f.write(unit_content)
+
+        subprocess.run(['systemctl', '--user', 'daemon-reload'], capture_output=True)
+        subprocess.run(['systemctl', '--user', 'enable', 'clawmetry'], capture_output=True)
+        result = subprocess.run(['systemctl', '--user', 'restart', 'clawmetry'],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"❌ Failed to start service: {result.stderr.strip()}")
+            sys.exit(1)
+
+        import time
+        time.sleep(1)
+        if _systemd_running():
+            print(f"✅ ClawMetry started  →  http://localhost:{port}")
+            print(f"   Auto-starts on login · logs: journalctl --user -u clawmetry -f")
+            print(f"   Stop with: clawmetry stop")
+        else:
+            print("⚠️  Service started but may still be initialising. Check: clawmetry status")
+    else:
+        print("⚠️  Daemon mode not supported on this OS. Running in foreground instead.")
+        _run_server(args)
+
+
+def cmd_stop(args):
+    """Stop the ClawMetry daemon."""
+    import subprocess
+    if _is_macos():
+        if not os.path.exists(LAUNCHD_PLIST):
+            print("ℹ️  No service file found. ClawMetry may not be installed as a service.")
+            sys.exit(0)
+        result = subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            print("✅ ClawMetry stopped.")
+        else:
+            print(f"⚠️  {result.stderr.strip() or 'Service may already be stopped.'}")
+    elif _is_linux():
+        result = subprocess.run(['systemctl', '--user', 'stop', 'clawmetry'],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            print("✅ ClawMetry stopped.")
+        else:
+            print(f"⚠️  {result.stderr.strip() or 'Service may already be stopped.'}")
+    else:
+        # Fallback: kill via PID file
+        pid = _read_pid()
+        if pid and _is_pid_running(pid):
+            os.kill(pid, 15)  # SIGTERM
+            print(f"✅ Sent SIGTERM to PID {pid}.")
+        else:
+            print("ℹ️  No running ClawMetry process found.")
+
+
+def cmd_restart(args):
+    """Restart the ClawMetry daemon."""
+    import subprocess
+    if _is_macos():
+        if not os.path.exists(LAUNCHD_PLIST):
+            print("ℹ️  No service installed. Use: clawmetry start")
+            sys.exit(1)
+        subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST], capture_output=True)
+        result = subprocess.run(['launchctl', 'load', LAUNCHD_PLIST],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            print("✅ ClawMetry restarted.")
+        else:
+            print(f"❌ {result.stderr.strip()}")
+            sys.exit(1)
+    elif _is_linux():
+        result = subprocess.run(['systemctl', '--user', 'restart', 'clawmetry'],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            print("✅ ClawMetry restarted.")
+        else:
+            print(f"❌ {result.stderr.strip()}")
+            sys.exit(1)
+    else:
+        print("⚠️  Daemon mode not supported on this OS.")
+
+
+def cmd_status(args):
+    """Show ClawMetry service status."""
+    running = _service_running()
+    pid = _get_service_pid() if running else None
+    uptime = _get_uptime_str(pid) if pid else '—'
+    token = _read_cloud_token()
+    port = args.port
+
+    if _is_macos():
+        svc_type = 'launchd'
+    elif _is_linux():
+        svc_type = 'systemd'
+    else:
+        svc_type = 'process'
+
+    status_icon = '✅ Running' if running else '❌ Stopped'
+    cloud_status = f'✅ Connected' if token else '❌ Not connected (run: clawmetry connect)'
+
+    print(f"""
+🦞 ClawMetry Status
+
+  Service:   {status_icon} ({svc_type})
+  Port:      {port}
+  PID:       {pid or '—'}
+  Uptime:    {uptime}
+  URL:       http://localhost:{port}
+  Version:   {__version__}
+  Cloud:     {cloud_status}
+""")
+
+
+def cmd_connect(args):
+    """Connect to ClawMetry Cloud."""
+    print()
+    print("🦞 ClawMetry Cloud Connect")
+    print()
+    print("  1. Go to: https://clawmetry.com/connect")
+    print("  2. Sign in and copy your API key (starts with cm_)")
+    print()
+    try:
+        token = input("  Paste your API key: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print("\nCancelled.")
+        sys.exit(0)
+
+    if not token.startswith('cm_'):
+        print("❌ Invalid key — must start with cm_")
+        sys.exit(1)
+
+    _write_cloud_token(token)
+    print()
+    print("✅ Connected! View your agent at: https://app.clawmetry.com")
+    print()
+
+
+def cmd_uninstall(args):
+    """Stop and remove the ClawMetry service."""
+    import subprocess
+    print("🗑️  Uninstalling ClawMetry service...")
+
+    if _is_macos():
+        if os.path.exists(LAUNCHD_PLIST):
+            subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST], capture_output=True)
+            os.remove(LAUNCHD_PLIST)
+            print(f"  Removed: {LAUNCHD_PLIST}")
+        else:
+            print("  No launchd service found.")
+    elif _is_linux():
+        subprocess.run(['systemctl', '--user', 'stop', 'clawmetry'], capture_output=True)
+        subprocess.run(['systemctl', '--user', 'disable', 'clawmetry'], capture_output=True)
+        if os.path.exists(SYSTEMD_SERVICE):
+            os.remove(SYSTEMD_SERVICE)
+            print(f"  Removed: {SYSTEMD_SERVICE}")
+        subprocess.run(['systemctl', '--user', 'daemon-reload'], capture_output=True)
+    else:
+        print("  Daemon mode not supported on this OS.")
+
+    # Remove PID file if present
+    if os.path.exists(PID_FILE):
+        os.remove(PID_FILE)
+
+    print("✅ ClawMetry service removed.")
+
+
+def _run_server(args):
+    """Start the Flask server (foreground). Called by foreground mode and cmd_start on unsupported OS."""
     detect_config(args)
-
-    # Load gateway config early so auth works from startup
     _load_gw_config()
 
     # Parse --monitor-service flags
@@ -14263,20 +14697,17 @@ def main():
         else:
             print(f"⚠️  Invalid --monitor-service format: {svc_spec} (expected NAME:PORT)")
 
-    # Mission Control URL
     if args.mc_url:
         MC_URL = args.mc_url
     elif not MC_URL:
         MC_URL = os.environ.get("MC_URL", "")
 
-    # Metrics file config
     global METRICS_FILE
     if args.metrics_file:
         METRICS_FILE = os.path.expanduser(args.metrics_file)
     elif os.environ.get('OPENCLAW_METRICS_FILE'):
         METRICS_FILE = os.path.expanduser(os.environ['OPENCLAW_METRICS_FILE'])
 
-    # Stream limits
     global SSE_MAX_SECONDS, MAX_LOG_STREAM_CLIENTS, MAX_HEALTH_STREAM_CLIENTS
     sse_max = args.sse_max_seconds
     if sse_max is None:
@@ -14291,11 +14722,9 @@ def main():
     MAX_LOG_STREAM_CLIENTS = max(1, args.max_log_stream_clients)
     MAX_HEALTH_STREAM_CLIENTS = max(1, args.max_health_stream_clients)
 
-    # Load persisted metrics and start flush thread
     _load_metrics_from_disk()
     _start_metrics_flush_thread()
 
-    # Initialize history/time-series system
     global _history_db, _history_collector
     if _HAS_HISTORY:
         history_db_path = os.environ.get('CLAWMETRY_HISTORY_DB', None)
@@ -14303,7 +14732,6 @@ def main():
         _history_collector = HistoryCollector(_history_db, _gw_invoke)
         _history_collector.start()
 
-    # Fleet multi-node setup
     global FLEET_API_KEY, FLEET_DB_PATH
     if args.fleet_api_key:
         FLEET_API_KEY = args.fleet_api_key
@@ -14314,7 +14742,6 @@ def main():
     _start_fleet_maintenance_thread()
     _start_budget_monitor_thread()
 
-    # Print banner
     print(BANNER.format(version=__version__))
     print(f"  Workspace:  {WORKSPACE}")
     print(f"  Sessions:   {SESSIONS_DIR}")
@@ -14333,7 +14760,6 @@ def main():
         print(f"  History:    Disabled (history.py not found)")
     print()
 
-    # Validate configuration and show warnings/tips for new users
     warnings, tips = validate_configuration()
     if warnings or tips:
         print("🔍 Configuration Check:")
@@ -14358,6 +14784,98 @@ def main():
     print()
 
     app.run(host=args.host, port=args.port, debug=args.debug, use_reloader=args.debug, threaded=True)
+
+
+def main():
+    # -----------------------------------------------------------------------
+    # Build a shared parent parser for options that apply to all subcommands
+    # (and to foreground mode when no subcommand is given).
+    # -----------------------------------------------------------------------
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument('--port', '-p', type=int, default=8900, help='Port (default: 8900)')
+    shared.add_argument('--host', '-H', type=str, default='127.0.0.1', help='Host (default: 127.0.0.1)')
+    shared.add_argument('--workspace', '-w', type=str, help='Agent workspace directory')
+    shared.add_argument('--data-dir', '-d', type=str, help='OpenClaw data directory (e.g. ~/.openclaw).')
+    shared.add_argument('--log-dir', '-l', type=str, help='Log directory')
+    shared.add_argument('--sessions-dir', '-s', type=str, help='Sessions directory (transcript .jsonl files)')
+    shared.add_argument('--metrics-file', '-m', type=str, help='Path to metrics persistence JSON file')
+    shared.add_argument('--name', '-n', type=str, help='Your name (shown in Flow tab)')
+    shared.add_argument('--debug', dest='debug', action='store_true', default=True)
+    shared.add_argument('--no-debug', dest='debug', action='store_false', help='Disable debug mode and auto-reload')
+    shared.add_argument('--sse-max-seconds', type=int, default=None)
+    shared.add_argument('--max-log-stream-clients', type=int, default=10)
+    shared.add_argument('--max-health-stream-clients', type=int, default=10)
+    shared.add_argument('--monitor-service', action='append', default=[], metavar='NAME:PORT')
+    shared.add_argument('--mc-url', type=str)
+    shared.add_argument('--fleet-api-key', type=str)
+    shared.add_argument('--fleet-db', type=str)
+
+    # -----------------------------------------------------------------------
+    # Top-level parser
+    # -----------------------------------------------------------------------
+    parser = argparse.ArgumentParser(
+        prog='clawmetry',
+        description=HELP_TEXT.format(version=__version__),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[shared],
+    )
+    parser.add_argument('--version', '-v', action='version', version=f'clawmetry {__version__}')
+
+    subparsers = parser.add_subparsers(dest='command', metavar='command')
+
+    # clawmetry start
+    p_start = subparsers.add_parser('start', parents=[shared], add_help=True,
+                                    help='Start ClawMetry as a background service')
+
+    # clawmetry stop
+    p_stop = subparsers.add_parser('stop', parents=[shared], add_help=True,
+                                   help='Stop the background service')
+
+    # clawmetry restart
+    p_restart = subparsers.add_parser('restart', parents=[shared], add_help=True,
+                                      help='Restart the background service')
+
+    # clawmetry status
+    p_status = subparsers.add_parser('status', parents=[shared], add_help=True,
+                                     help='Show service status, port, and uptime')
+
+    # clawmetry connect
+    p_connect = subparsers.add_parser('connect', parents=[shared], add_help=True,
+                                      help='Connect to ClawMetry Cloud (app.clawmetry.com)')
+
+    # clawmetry uninstall
+    p_uninstall = subparsers.add_parser('uninstall', parents=[shared], add_help=True,
+                                        help='Remove the background service')
+
+    # clawmetry help (alias)
+    subparsers.add_parser('help', add_help=True, help='Show this help message')
+
+    args = parser.parse_args()
+
+    # "clawmetry help" → print help and exit
+    if args.command == 'help':
+        parser.print_help()
+        sys.exit(0)
+
+    # Dispatch to subcommand handlers
+    if args.command == 'start':
+        cmd_start(args)
+    elif args.command == 'stop':
+        cmd_stop(args)
+    elif args.command == 'restart':
+        cmd_restart(args)
+    elif args.command == 'status':
+        cmd_status(args)
+    elif args.command == 'connect':
+        cmd_connect(args)
+    elif args.command == 'uninstall':
+        cmd_uninstall(args)
+    else:
+        # No subcommand → foreground server (original behaviour)
+        print(ARCHITECTURE_OVERVIEW.format(version=__version__, port=args.port))
+        print("Starting dashboard...")
+        print()
+        _run_server(args)
 
 
 if __name__ == '__main__':
