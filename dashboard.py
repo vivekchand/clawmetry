@@ -19233,7 +19233,10 @@ def cmd_start(args):
     python_exe = sys.executable
     script_path = _get_script_path()
 
-    print(ARCHITECTURE_OVERVIEW.format(version=__version__, port=port))
+    try:
+        print(ARCHITECTURE_OVERVIEW.format(version=__version__, port=port))
+    except (ValueError, OSError):
+        pass
     print("Starting dashboard...")
 
     # Before loading daemon: if port is busy, only kill if it's our own stale process
@@ -19671,7 +19674,10 @@ def main():
         cmd_uninstall(args)
     else:
         # No subcommand → foreground server (original behaviour)
-        print(ARCHITECTURE_OVERVIEW.format(version=__version__, port=args.port))
+        try:
+            print(ARCHITECTURE_OVERVIEW.format(version=__version__, port=args.port))
+        except (ValueError, OSError):
+            pass
         print("Starting dashboard...")
         print()
         _run_server(args)
