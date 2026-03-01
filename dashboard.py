@@ -19658,7 +19658,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[shared],
     )
-    parser.add_argument('--version', '-v', action='version', version=f'clawmetry {__version__}')
+    class _SafeVersion(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            try:
+                import sys
+                sys.stdout.write(f'clawmetry {__version__}\n')
+                sys.stdout.flush()
+            except Exception:
+                pass
+            parser.exit()
+    parser.add_argument('--version', '-v', nargs=0, action=_SafeVersion, help='Show version')
 
     subparsers = parser.add_subparsers(dest='command', metavar='command')
 
