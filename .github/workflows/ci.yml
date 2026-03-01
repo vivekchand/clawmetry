@@ -63,7 +63,8 @@ jobs:
         run: |
           $env:OPENCLAW_GATEWAY_TOKEN = "ci-test-token"
           $env:PYTHONIOENCODING = "utf-8"
-          Start-Process python -ArgumentList "dashboard.py --port 8900 --no-debug" -NoNewWindow -RedirectStandardOutput "server_out.txt" -RedirectStandardError "server_err.txt"
+          $env:PYTHONUTF8 = "1"
+          Start-Process python -ArgumentList "-u -X utf8 dashboard.py --port 8900 --no-debug" -NoNewWindow -RedirectStandardOutput "server_out.txt" -RedirectStandardError "server_err.txt"
           $ready = $false
           for ($i = 0; $i -lt 30; $i++) {
             try {
