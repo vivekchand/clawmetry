@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ClawMetry - See your agent think [lobster]
+ClawMetry - See your agent think 🦞
 
 Real-time observability dashboard for OpenClaw AI agents.
 Single-file Flask app with zero config - auto-detects your setup.
@@ -62,7 +62,7 @@ __version__ = "0.10.10"
 
 app = Flask(__name__)
 
-# -- Cross-platform helpers ----------------------------------------------
+# ── Cross-platform helpers ──────────────────────────────────────────────
 import re as _re
 import tempfile as _tempfile
 import platform as _platform
@@ -103,9 +103,9 @@ def _get_log_dirs():
     return ['/tmp/openclaw', '/tmp/moltbot']
 
 _CURRENT_PLATFORM = _platform.system().lower()
-# -- End cross-platform helpers ------------------------------------------
+# ── End cross-platform helpers ──────────────────────────────────────────
 
-# -- Configuration (auto-detected, overridable via CLI/env) --------------
+# ── Configuration (auto-detected, overridable via CLI/env) ──────────────
 MC_URL = os.environ.get("MC_URL", "")  # Optional Mission Control URL, empty = disabled
 WORKSPACE = None
 MEMORY_DIR = None
@@ -123,19 +123,19 @@ _active_log_stream_clients = 0
 _active_health_stream_clients = 0
 EXTRA_SERVICES = []  # List of {'name': str, 'port': int} from --monitor-service flags
 
-# -- Multi-Node Fleet Configuration -------------------------------------
+# ── Multi-Node Fleet Configuration ─────────────────────────────────────
 FLEET_API_KEY = os.environ.get("CLAWMETRY_FLEET_KEY", "")
 FLEET_DB_PATH = None  # Set via CLI or auto-detected
 FLEET_NODE_TIMEOUT = 300  # seconds before node is considered offline
 
-# -- Budget & Alert Configuration ---------------------------------------
+# ── Budget & Alert Configuration ───────────────────────────────────────
 _budget_paused = False
 _budget_paused_at = 0
 _budget_paused_reason = ''
 _budget_alert_cooldowns = {}  # rule_id -> last_fired_timestamp
 _AGENT_DOWN_SECONDS = 300  # 5 min with no OTLP data = agent down alert
 
-# -- OTLP Metrics Store -------------------------------------------------
+# ── OTLP Metrics Store ─────────────────────────────────────────────────
 METRICS_FILE = None  # Set via CLI/env, defaults to {WORKSPACE}/.clawmetry-metrics.json
 _metrics_lock = threading.Lock()
 _otel_last_received = 0  # timestamp of last OTLP data received
@@ -181,7 +181,7 @@ def _load_metrics_from_disk():
         backup_path = f"{path}.corrupted.{int(time.time())}"
         try:
             os.rename(path, backup_path)
-            print(f"[save] Corrupted file backed up to {backup_path}")
+            print(f"💾 Corrupted file backed up to {backup_path}")
         except OSError:
             pass
     except (IOError, OSError) as e:
@@ -210,7 +210,7 @@ def _save_metrics_to_disk():
     except OSError as e:
         print(f"[warn]  Warning: Failed to save metrics to {path}: {e}")
         if "No space left on device" in str(e):
-            print("[save] Disk full! Consider cleaning up old files or expanding storage.")
+            print("💾 Disk full! Consider cleaning up old files or expanding storage.")
     except json.JSONEncodeError as e:
         print(f"[warn]  Warning: Failed to serialize metrics data: {e}")
     except Exception as e:
@@ -253,7 +253,7 @@ def _metrics_flush_loop():
             _expire_old_entries()
             _save_metrics_to_disk()
         except KeyboardInterrupt:
-            print("[chart] Metrics flush loop shutting down...")
+            print("📊 Metrics flush loop shutting down...")
             break
         except Exception as e:
             print(f"[warn]  Warning: Error in metrics flush loop: {e}")
@@ -271,7 +271,7 @@ def _has_otel_data():
     return any(len(metrics_store[k]) > 0 for k in metrics_store)
 
 
-# -- Multi-Node Fleet Database -------------------------------------------
+# ── Multi-Node Fleet Database ───────────────────────────────────────────
 import sqlite3 as _sqlite3
 import hashlib as _hashlib
 
@@ -375,7 +375,7 @@ def _start_fleet_maintenance_thread():
     t.start()
 
 
-# -- Budget & Alert Database --------------------------------------------
+# ── Budget & Alert Database ────────────────────────────────────────────
 
 def _budget_init_db():
     """Initialize budget and alert tables in the fleet database."""
@@ -828,7 +828,7 @@ def _start_budget_monitor_thread():
     t.start()
 
 
-# -- OTLP Protobuf Helpers ----------------------------------------------
+# ── OTLP Protobuf Helpers ──────────────────────────────────────────────
 
 def _otel_attr_value(val):
     """Convert an OTel AnyValue to a Python value."""
@@ -1443,7 +1443,7 @@ def get_local_ip():
         return "127.0.0.1"
 
 
-# -- HTML Template -------------------------------------------------------
+# ── HTML Template ───────────────────────────────────────────────────────
 
 DASHBOARD_HTML = r"""
 <!DOCTYPE html>
@@ -1451,7 +1451,7 @@ DASHBOARD_HTML = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ClawMetry [lobster]</title>
+<title>ClawMetry 🦞</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -2366,7 +2366,7 @@ DASHBOARD_HTML = r"""
 <!-- Login overlay -->
 <div id="login-overlay" style="display:none;position:fixed;inset:0;z-index:99999;background:var(--bg-primary,#0f172a);align-items:center;justify-content:center;flex-direction:column;">
   <div style="background:var(--card-bg,#1e293b);border-radius:16px;padding:40px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);text-align:center;">
-    <div style="font-size:48px;margin-bottom:16px;">[lobster]</div>
+    <div style="font-size:48px;margin-bottom:16px;">🦞</div>
     <h2 style="color:#e2e8f0;margin:0 0 8px;">ClawMetry</h2>
     <p style="color:#94a3b8;margin:0 0 24px;font-size:14px;">Enter your OpenClaw Gateway Token</p>
     <input id="login-token" type="password" placeholder="Gateway token..." style="width:100%;box-sizing:border-box;padding:12px 16px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:15px;margin-bottom:16px;outline:none;" onkeydown="if(event.key==='Enter')clawmetryLogin()">
@@ -2441,7 +2441,7 @@ function clawmetryLogout(){
   <div class="boot-card">
     <div class="boot-spinner"></div>
     <div class="boot-title">Initializing ClawMetry</div>
-    <div class="boot-sub" id="boot-sub">Loading model, tasks, system health, and live streams...</div>
+    <div class="boot-sub" id="boot-sub">Loading model, tasks, system health, and live streams…</div>
     <div class="boot-steps">
       <div class="boot-step loading" id="boot-step-overview"><span class="boot-dot"></span><span>Loading overview + model context</span></div>
       <div class="boot-step" id="boot-step-tasks"><span class="boot-dot"></span><span>Loading active tasks</span></div>
@@ -2452,14 +2452,14 @@ function clawmetryLogout(){
 </div>
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
-  <h1><span>[lobster]</span> ClawMetry</h1>
+  <h1><span>🦞</span> ClawMetry</h1>
   <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
   <!-- Budget & Alerts hidden until mature -->
   <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="zoom-controls">
-    <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">-</button>
+    <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
     <button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl/Cmd + +)">+</button>
   </div>
@@ -2583,7 +2583,7 @@ function clawmetryLogout(){
 <!-- OVERVIEW (Split-Screen Hacker Dashboard) -->
 <div class="page active" id="page-overview">
   <div class="refresh-bar" style="margin-bottom:6px;">
-    <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;"><></button>
+    <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>
     <span class="live-badge">LIVE</span>
     <span class="refresh-time" id="refresh-time" style="font-size:11px;">Loading...</span>
@@ -2592,7 +2592,7 @@ function clawmetryLogout(){
   <!-- Stats Bar (top) -->
   <div class="stats-footer">
     <div class="stats-footer-item">
-      <span class="stats-footer-icon">[$]</span>
+      <span class="stats-footer-icon">💰</span>
       <div>
         <div class="stats-footer-label">Spending <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
         <div class="stats-footer-value" id="cost-today">$0.00</div>
@@ -2605,7 +2605,7 @@ function clawmetryLogout(){
       <span id="cost-trend" style="display:none;">Estimated from usage -- may be $0 billed with OAuth auth</span>
     </div>
     <div class="stats-footer-item">
-      <span class="stats-footer-icon">[bot]</span>
+      <span class="stats-footer-icon">🤖</span>
       <div>
         <div class="stats-footer-label">Model</div>
         <div class="stats-footer-value" id="model-primary">--</div>
@@ -2613,7 +2613,7 @@ function clawmetryLogout(){
       <div id="model-breakdown" style="display:none;">Loading...</div>
     </div>
     <div class="stats-footer-item">
-      <span class="stats-footer-icon">[chart]</span>
+      <span class="stats-footer-icon">📊</span>
       <div>
         <div class="stats-footer-label">Tokens</div>
         <div class="stats-footer-value" id="token-rate">--</div>
@@ -2621,7 +2621,7 @@ function clawmetryLogout(){
       <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">--</span></span>
     </div>
     <div class="stats-footer-item">
-      <span class="stats-footer-icon">[msg]</span>
+      <span class="stats-footer-icon">💬</span>
       <div>
         <div class="stats-footer-label">Sessions</div>
         <div class="stats-footer-value" id="hot-sessions-count">--</div>
@@ -2643,12 +2643,12 @@ function clawmetryLogout(){
         </div>
       </div>
 
-      <!-- [brain] Brain Panel: Main Agent Activity -->
+      <!-- 🧠 Brain Panel: Main Agent Activity -->
       <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-top:1px solid var(--border-secondary);padding:10px 14px 8px;min-height:80px;flex:1;display:flex;flex-direction:column;overflow:hidden;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
           <div style="display:flex;align-items:center;gap:6px;">
             <span id="main-activity-dot" style="width:8px;height:8px;border-radius:50%;background:#888;display:inline-block;"></span>
-            <span style="font-size:13px;font-weight:700;color:var(--text-primary);">[brain] <span id="main-activity-model">Claude Opus</span></span>
+            <span style="font-size:13px;font-weight:700;color:var(--text-primary);">🧠 <span id="main-activity-model">Claude Opus</span></span>
             <span id="main-activity-status" style="font-size:10px;color:var(--text-muted);">
               <span id="main-activity-label">...</span>
             </span>
@@ -2667,20 +2667,20 @@ function clawmetryLogout(){
     <div class="overview-tasks-pane">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">[bee] Active Tasks</span>
+          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
           <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
         </div>
-        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;"><> 30s</span>
+        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
       </div>
       <div class="tasks-panel-scroll" id="overview-tasks-list">
         <div style="text-align:center;padding:32px;color:var(--text-muted);">
-          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">[bee]</div>
+          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
           <div style="font-size:13px;">Loading tasks...</div>
         </div>
       </div>
       <!-- System Health Panel (inside tasks pane) -->
       <div id="system-health-panel" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:16px;margin-top:14px;box-shadow:var(--card-shadow);">
-        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">[health] System Health</div>
+        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
         <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
@@ -2713,8 +2713,8 @@ function clawmetryLogout(){
 <!-- USAGE -->
 <div class="page" id="page-usage">
   <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadUsage()"><> Refresh</button>
-    <button class="refresh-btn" onclick="exportUsageData()" style="margin-left: 8px;">[in] Export CSV</button>
+    <button class="refresh-btn" onclick="loadUsage()">↻ Refresh</button>
+    <button class="refresh-btn" onclick="exportUsageData()" style="margin-left: 8px;">📥 Export CSV</button>
   </div>
   
   <!-- Cost Warnings -->
@@ -2723,48 +2723,48 @@ function clawmetryLogout(){
   <!-- Main Usage Stats -->
   <div class="grid">
     <div class="card">
-      <div class="card-title"><span class="icon">[chart]</span> Today</div>
+      <div class="card-title"><span class="icon">📊</span> Today</div>
       <div class="card-value" id="usage-today">--</div>
       <div class="card-sub" id="usage-today-cost"></div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">[cal]</span> This Week</div>
+      <div class="card-title"><span class="icon">📅</span> This Week</div>
       <div class="card-value" id="usage-week">--</div>
       <div class="card-sub" id="usage-week-cost"></div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">[cal]</span> This Month</div>
+      <div class="card-title"><span class="icon">📆</span> This Month</div>
       <div class="card-value" id="usage-month">--</div>
       <div class="card-sub" id="usage-month-cost"></div>
     </div>
     <div class="card" id="trend-card" style="display:none;">
-      <div class="card-title"><span class="icon">[up]</span> Trend</div>
+      <div class="card-title"><span class="icon">📈</span> Trend</div>
       <div class="card-value" id="trend-direction">--</div>
       <div class="card-sub" id="trend-prediction"></div>
     </div>
   </div>
-  <div class="section-title">[chart] Token Usage (14 days)</div>
+  <div class="section-title">📊 Token Usage (14 days)</div>
   <div class="card">
     <div class="usage-chart" id="usage-chart">Loading...</div>
   </div>
-  <div class="section-title">[$] Cost Breakdown <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
+  <div class="section-title">💰 Cost Breakdown <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
   <div class="card"><table class="usage-table" id="usage-cost-table"><tbody><tr><td colspan="3" style="color:#666;">Loading...</td></tr></tbody></table></div>
   <div id="otel-extra-sections" style="display:none;">
     <div class="grid" style="margin-top:16px;">
       <div class="card">
-        <div class="card-title"><span class="icon">[timer]</span> Avg Run Duration</div>
+        <div class="card-title"><span class="icon">⏱️</span> Avg Run Duration</div>
         <div class="card-value" id="usage-avg-run">--</div>
         <div class="card-sub">from OTLP openclaw.run.duration_ms</div>
       </div>
       <div class="card">
-        <div class="card-title"><span class="icon">[msg]</span> Messages Processed</div>
+        <div class="card-title"><span class="icon">💬</span> Messages Processed</div>
         <div class="card-value" id="usage-msg-count">--</div>
         <div class="card-sub">from OTLP openclaw.message.processed</div>
       </div>
     </div>
-    <div class="section-title">[bot] Model Breakdown</div>
+    <div class="section-title">🤖 Model Breakdown</div>
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
-    <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">[signal] Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
+    <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
   </div>
 </div>
 
@@ -2821,13 +2821,13 @@ function clawmetryLogout(){
 <!-- MEMORY -->
 <div class="page" id="page-memory">
   <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadMemory()"><> Refresh</button>
+    <button class="refresh-btn" onclick="loadMemory()">↻ Refresh</button>
   </div>
   <div class="card" id="memory-list">Loading...</div>
   <div class="file-viewer" id="file-viewer">
     <div class="file-viewer-header">
       <span class="file-viewer-title" id="file-viewer-title"></span>
-      <button class="file-viewer-close" onclick="closeFileViewer()">x Close</button>
+      <button class="file-viewer-close" onclick="closeFileViewer()">✕ Close</button>
     </div>
     <div class="file-viewer-content" id="file-viewer-content"></div>
   </div>
@@ -2836,8 +2836,8 @@ function clawmetryLogout(){
 <!-- TRANSCRIPTS -->
 <div class="page" id="page-transcripts">
   <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadTranscripts()"><> Refresh</button>
-    <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()"><- Back to list</button>
+    <button class="refresh-btn" onclick="loadTranscripts()">↻ Refresh</button>
+    <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← Back to list</button>
   </div>
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
@@ -2966,27 +2966,27 @@ function clawmetryLogout(){
       <!-- Channel Nodes -->
       <g class="flow-node flow-node-channel" id="node-telegram">
         <rect x="20" y="100" width="110" height="40" rx="10" ry="10" fill="#2196F3" stroke="#1565C0" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[phone] TG</text>
+        <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📱 TG</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-signal">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#2E8B7A" stroke="#1B6B5A" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[signal] Signal</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📡 Signal</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-imessage" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#34C759" stroke="#248A3D" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[msg] iMessage</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 iMessage</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-whatsapp">
         <rect x="20" y="240" width="110" height="40" rx="10" ry="10" fill="#43A047" stroke="#2E7D32" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="265" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[msg] WA</text>
+        <text x="75" y="265" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 WA</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-discord" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#5865F2" stroke="#4752C4" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[game] Discord</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Discord</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-slack" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#4A154B" stroke="#350e36" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[briefcase] Slack</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💼 Slack</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-irc" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#6B7280" stroke="#4B5563" stroke-width="2" filter="url(#dropShadow)"/>
@@ -2994,19 +2994,19 @@ function clawmetryLogout(){
       </g>
       <g class="flow-node flow-node-channel" id="node-webchat" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0EA5E9" stroke="#0369A1" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[web] WebChat</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌐 WebChat</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-googlechat" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#1A73E8" stroke="#1557B0" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[msg] GChat</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 GChat</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-bluebubbles" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#1C6EF3" stroke="#1558C0" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[apple] BB</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🍎 BB</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-msteams" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#6264A7" stroke="#464775" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[tie] Teams</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">👔 Teams</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-matrix" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0DBD8B" stroke="#0A9E74" stroke-width="2" filter="url(#dropShadow)"/>
@@ -3014,33 +3014,33 @@ function clawmetryLogout(){
       </g>
       <g class="flow-node flow-node-channel" id="node-mattermost" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0058CC" stroke="#0047A3" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[anchor] MM</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚓ MM</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-line" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#00B900" stroke="#009900" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[green-heart] LINE</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💚 LINE</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-nostr" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#8B5CF6" stroke="#6D28D9" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[*] Nostr</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚡ Nostr</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-twitch" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#9146FF" stroke="#772CE8" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[game] Twitch</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Twitch</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-feishu" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#3370FF" stroke="#2050CC" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[flower] Feishu</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌸 Feishu</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-zalo" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0068FF" stroke="#0050CC" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[msg] Zalo</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 Zalo</text>
       </g>
 
       <!-- Gateway -->
       <g class="flow-node flow-node-gateway" id="node-gateway">
         <rect x="180" y="160" width="110" height="45" rx="10" ry="10" fill="#37474F" stroke="#263238" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="235" y="188" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[shuffle] Gateway</text>
+        <text x="235" y="188" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🔀 Gateway</text>
       </g>
 
       <!-- Brain -->
@@ -3059,17 +3059,17 @@ function clawmetryLogout(){
       <!-- Tool Nodes -->
       <g class="flow-node flow-node-session" id="node-session">
         <rect x="560" y="70" width="110" height="38" rx="10" ry="10" fill="#1565C0" stroke="#0D47A1" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="94" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[list] Sessions</text>
+        <text x="615" y="94" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📋 Sessions</text>
         <circle class="tool-indicator" id="ind-session" cx="665" cy="78" r="5" fill="#42A5F5"/>
       </g>
       <g class="flow-node flow-node-tool" id="node-exec">
         <rect x="560" y="120" width="110" height="38" rx="10" ry="10" fill="#E65100" stroke="#BF360C" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="144" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[*] Exec</text>
+        <text x="615" y="144" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚡ Exec</text>
         <circle class="tool-indicator" id="ind-exec" cx="665" cy="128" r="5" fill="#FF6E40"/>
       </g>
       <g class="flow-node flow-node-tool" id="node-browser">
         <rect x="560" y="170" width="110" height="38" rx="10" ry="10" fill="#6A1B9A" stroke="#4A148C" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="194" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[web] Web</text>
+        <text x="615" y="194" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌐 Web</text>
         <circle class="tool-indicator" id="ind-browser" cx="665" cy="178" r="5" fill="#CE93D8"/>
       </g>
       <g class="flow-node flow-node-tool" id="node-search">
@@ -3079,7 +3079,7 @@ function clawmetryLogout(){
       </g>
       <g class="flow-node flow-node-tool" id="node-cron">
         <rect x="560" y="270" width="110" height="38" rx="10" ry="10" fill="#546E7A" stroke="#37474F" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="294" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[cal] Cron</text>
+        <text x="615" y="294" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📅 Cron</text>
         <circle class="tool-indicator" id="ind-cron" cx="665" cy="278" r="5" fill="#90A4AE"/>
       </g>
       <g class="flow-node flow-node-tool" id="node-tts">
@@ -3141,7 +3141,7 @@ function clawmetryLogout(){
       <!-- Legend -->
       <g transform="translate(140, 510)">
         <rect x="0" y="0" width="700" height="28" rx="14" ry="14" fill="var(--bg-tertiary)" stroke="var(--border-primary)" stroke-width="1" opacity="0.9"/>
-        <text x="350" y="18" style="font-size:12px;font-weight:600;fill:var(--text-secondary);letter-spacing:1px;text-anchor:middle;">&#x1F4E8; Channels  &#x27A1;&#xFE0F;  [shuffle] Gateway  &#x27A1;&#xFE0F;  &#x1F9E0; AI Brain  &#x27A1;&#xFE0F;  &#x1F6E0;&#xFE0F; Tools</text>
+        <text x="350" y="18" style="font-size:12px;font-weight:600;fill:var(--text-secondary);letter-spacing:1px;text-anchor:middle;">&#x1F4E8; Channels  &#x27A1;&#xFE0F;  🔀 Gateway  &#x27A1;&#xFE0F;  &#x1F9E0; AI Brain  &#x27A1;&#xFE0F;  &#x1F6E0;&#xFE0F; Tools</text>
       </g>
 
       <!-- Flow direction labels -->
@@ -3154,7 +3154,7 @@ function clawmetryLogout(){
   <!-- Live activity feed under the flow diagram -->
   <div style="margin-top:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:12px 16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <span style="font-size:13px;font-weight:600;color:#aaa;">[signal] Live Activity Feed</span>
+      <span style="font-size:13px;font-weight:600;color:#aaa;">📡 Live Activity Feed</span>
       <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
     </div>
     <div id="flow-live-feed" style="max-height:120px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.5;color:#777;">
@@ -3167,8 +3167,8 @@ function clawmetryLogout(){
 <div class="page" id="page-brain">
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">[brain] Brain -- Unified Activity Stream</span>
-      <button class="refresh-btn" onclick="loadBrainPage()"><> Refresh</button>
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
+      <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
     </div>
     <!-- Activity density chart -->
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
@@ -3183,7 +3183,7 @@ function clawmetryLogout(){
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
         <span style="font-size:11px;color:var(--text-muted);">Live event stream (newest first)</span>
-        <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">^ new events</span>
+        <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">↑ new events</span>
       </div>
       <div id="brain-stream" style="max-height:600px;overflow-y:auto;">
         <div style="color:var(--text-muted);padding:20px">Loading...</div>
@@ -3661,7 +3661,7 @@ function fitFlowLabel(text, maxLen) {
   var s = String(text || '').trim();
   if (!s) return '';
   if (s.length <= maxLen) return s;
-  return s.substring(0, Math.max(1, maxLen - 1)) + '...';
+  return s.substring(0, Math.max(1, maxLen - 1)) + '…';
 }
 
 function applyBillingHintToFlow(billingSummary) {
@@ -3731,7 +3731,7 @@ async function loadAll() {
 }
 
 async function loadMiniWidgets(overview, usage) {
-  // [$] Cost Ticker 
+  // 💰 Cost Ticker 
   function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
   document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
   document.getElementById('cost-week').textContent = fmtCost(usage.weekCost || 0);
@@ -3739,7 +3739,7 @@ async function loadMiniWidgets(overview, usage) {
   
   var trend = '';
   if (usage.trend && usage.trend.trend) {
-    var trendIcon = usage.trend.trend === 'increasing' ? '[up]' : usage.trend.trend === 'decreasing' ? '[down]' : '->';
+    var trendIcon = usage.trend.trend === 'increasing' ? '📈' : usage.trend.trend === 'decreasing' ? '📉' : '➡️';
     trend = trendIcon + ' ' + usage.trend.trend;
   }
   var isOauthLikely = (usage.billingSummary === 'likely_oauth_or_included');
@@ -3775,15 +3775,15 @@ async function loadMiniWidgets(overview, usage) {
 
   applyBillingHintToFlow(usage.billingSummary || 'unknown');
   
-  // [*] Tool Activity (load from logs)
+  // ⚡ Tool Activity (load from logs)
   loadToolActivity();
   
-  // [chart] Token Burn Rate
+  // 📊 Token Burn Rate
   function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
   document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
   document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
   
-  // [fire] Hot Sessions -- use /api/sessions for consistency with modal
+  // 🔥 Hot Sessions -- use /api/sessions for consistency with modal
   fetch('/api/sessions').then(function(r){return r.json()}).then(function(sd) {
     var sl = sd.sessions || sd || [];
     if (!Array.isArray(sl)) sl = [];
@@ -3792,7 +3792,7 @@ async function loadMiniWidgets(overview, usage) {
     document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
   });
   
-  // [up] Model Mix
+  // 📈 Model Mix
   document.getElementById('model-primary').textContent = overview.model || 'unknown';
   var modelLabel = document.getElementById('main-activity-model');
   if (modelLabel && overview.model) {
@@ -3814,7 +3814,7 @@ async function loadMiniWidgets(overview, usage) {
   }
   document.getElementById('model-breakdown').textContent = modelBreakdown;
   
-  // [bee] Worker Bees (Sub-Agents)
+  // 🐝 Worker Bees (Sub-Agents)
   loadSubAgents();
   
 }
@@ -3850,9 +3850,9 @@ async function loadSubAgents() {
       var activeFirst = subagents.filter(function(a){return a.status==='active';}).concat(subagents.filter(function(a){return a.status!=='active';}));
       var topAgents = activeFirst.slice(0, 3);
       topAgents.forEach(function(agent) {
-        var icon = agent.status === 'active' ? '[sync]' : agent.status === 'idle' ? '[ok]' : '[ ]';
+        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '[ok]' : '⬜';
         var name = cleanTaskName(agent.displayName);
-        if (name.length > 40) name = name.substring(0, 37) + '...';
+        if (name.length > 40) name = name.substring(0, 37) + '…';
         previewHtml += '<div class="subagent-item">';
         previewHtml += '<span style="font-size:10px;">' + icon + '</span>';
         previewHtml += '<span class="subagent-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(name) + '</span>';
@@ -3882,7 +3882,7 @@ function cleanTaskName(raw) {
   // Truncate to first sentence or 80 chars
   var dot = name.indexOf('. ');
   if (dot > 10 && dot < 80) name = name.substring(0, dot + 1);
-  if (name.length > 80) name = name.substring(0, 77) + '...';
+  if (name.length > 80) name = name.substring(0, 77) + '…';
   return name || 'Background task';
 }
 
@@ -3940,7 +3940,7 @@ async function loadActiveTasks() {
 
     if (agents.length === 0) {
       grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
-        + '<div style="font-size:24px;margin-bottom:8px;">[sparkle]</div>'
+        + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
         + '<div style="font-size:13px;">No active tasks - all quiet</div></div>';
       var badge = document.getElementById('overview-tasks-count-badge');
       if (badge) badge.textContent = '';
@@ -3961,7 +3961,7 @@ async function loadActiveTasks() {
       html += '<div class="task-card-pulse active"></div>';
       html += '<div class="task-card-header">';
       html += '<div class="task-card-name">' + escHtml(taskName) + '</div>';
-      html += '<span class="task-card-badge running" style="font-size:10px;">[bot] ' + mins + ' min</span>';
+      html += '<span class="task-card-badge running" style="font-size:10px;">🤖 ' + mins + ' min</span>';
       html += '</div>';
       html += '<div style="display:flex;align-items:center;gap:8px;">';
       if (badge2) {
@@ -4038,16 +4038,16 @@ async function loadActivityStream() {
             if (content.includes('searching') || content.includes('search')) {
               activity = time + ' [check] Searching web for information';
             } else if (content.includes('reading') || content.includes('file')) {
-              activity = time + ' [book] Reading files';
+              activity = time + ' 📖 Reading files';
             } else if (content.includes('writing') || content.includes('edit')) {
-              activity = time + ' [pencil] Editing files'; 
+              activity = time + ' ✏️ Editing files'; 
             } else if (content.includes('exec') || content.includes('command')) {
-              activity = time + ' [*] Running commands';
+              activity = time + ' ⚡ Running commands';
             } else if (content.includes('browser') || content.includes('screenshot')) {
-              activity = time + ' [web] Browser automation';
+              activity = time + ' 🌐 Browser automation';
             } else if (msg.content.length > 50) {
               var preview = msg.content.substring(0, 80).replace(/[^\w\s]/g, ' ').trim();
-              activity = time + ' [think] ' + preview + '...';
+              activity = time + ' 💭 ' + preview + '...';
             }
             
             if (activity) activities.push(activity);
@@ -4058,8 +4058,8 @@ async function loadActivityStream() {
     
     if (activities.length === 0) {
       activities = [
-        new Date().toLocaleTimeString() + ' [bot] AI agent initialized',
-        new Date().toLocaleTimeString() + ' [signal] Monitoring for activity...'
+        new Date().toLocaleTimeString() + ' 🤖 AI agent initialized',
+        new Date().toLocaleTimeString() + ' 📡 Monitoring for activity...'
       ];
     }
     
@@ -4086,7 +4086,7 @@ function toggleSAAutoRefresh() {
   }
 }
 
-// -- Brain tab ---------------------------------------------------------
+// ── Brain tab ─────────────────────────────────────────────────────────
 var _brainRefreshTimer = null;
 var _brainSourceColors = {};
 var _brainColorPalette = ['#2dd4bf','#f97316','#eab308','#ec4899','#3b82f6','#a78bfa','#f43f5e','#10b981'];
@@ -4112,9 +4112,9 @@ var _brainFilter = 'all';
 var _brainAllEvents = [];
 
 var _brainTypeIcons = {
-  'EXEC': '[gear]', 'SHELL': '[gear]', 'READ': '[book]', 'WRITE': '[pencil]',
-  'BROWSER': '[web]', 'MSG': '[msg]', 'SEARCH': '[check]', 'SPAWN': '[prod]',
-  'DONE': '[ok]', 'ERROR': '[ERR]', 'TOOL': '[tool]'
+  'EXEC': '⚙️', 'SHELL': '⚙️', 'READ': '📖', 'WRITE': '✏️',
+  'BROWSER': '🌐', 'MSG': '📨', 'SEARCH': '[check]', 'SPAWN': '[prod]',
+  'DONE': '[ok]', 'ERROR': '❌', 'TOOL': '🔧'
 };
 
 function setBrainFilter(source, btn) {
@@ -4195,7 +4195,7 @@ __version__ = "0.10.10"
 
 app = Flask(__name__)
 
-# -- Cross-platform helpers ----------------------------------------------
+# ── Cross-platform helpers ──────────────────────────────────────────────
 import re as _re
 import tempfile as _tempfile
 import platform as _platform
@@ -4236,9 +4236,9 @@ def _get_log_dirs():
     return ['/tmp/openclaw', '/tmp/moltbot']
 
 _CURRENT_PLATFORM = _platform.system().lower()
-# -- End cross-platform helpers ------------------------------------------
+# ── End cross-platform helpers ──────────────────────────────────────────
 
-# -- Configuration (auto-detected, overridable via CLI/env) --------------
+# ── Configuration (auto-detected, overridable via CLI/env) ──────────────
 MC_URL = os.environ.get("MC_URL", "")  # Optional Mission Control URL, empty = disabled
 WORKSPACE = None
 MEMORY_DIR = None
@@ -4256,19 +4256,19 @@ _active_log_stream_clients = 0
 _active_health_stream_clients = 0
 EXTRA_SERVICES = []  # List of {'name': str, 'port': int} from --monitor-service flags
 
-# -- Multi-Node Fleet Configuration -------------------------------------
+# ── Multi-Node Fleet Configuration ─────────────────────────────────────
 FLEET_API_KEY = os.environ.get("CLAWMETRY_FLEET_KEY", "")
 FLEET_DB_PATH = None  # Set via CLI or auto-detected
 FLEET_NODE_TIMEOUT = 300  # seconds before node is considered offline
 
-# -- Budget & Alert Configuration ---------------------------------------
+# ── Budget & Alert Configuration ───────────────────────────────────────
 _budget_paused = False
 _budget_paused_at = 0
 _budget_paused_reason = ''
 _budget_alert_cooldowns = {}  # rule_id -> last_fired_timestamp
 _AGENT_DOWN_SECONDS = 300  # 5 min with no OTLP data = agent down alert
 
-# -- OTLP Metrics Store -------------------------------------------------
+# ── OTLP Metrics Store ─────────────────────────────────────────────────
 METRICS_FILE = None  # Set via CLI/env, defaults to {WORKSPACE}/.clawmetry-metrics.json
 _metrics_lock = threading.Lock()
 _otel_last_received = 0  # timestamp of last OTLP data received
@@ -4314,7 +4314,7 @@ def _load_metrics_from_disk():
         backup_path = f"{path}.corrupted.{int(time.time())}"
         try:
             os.rename(path, backup_path)
-            print(f"[save] Corrupted file backed up to {backup_path}")
+            print(f"💾 Corrupted file backed up to {backup_path}")
         except OSError:
             pass
     except (IOError, OSError) as e:
@@ -4343,7 +4343,7 @@ def _save_metrics_to_disk():
     except OSError as e:
         print(f"[warn]  Warning: Failed to save metrics to {path}: {e}")
         if "No space left on device" in str(e):
-            print("[save] Disk full! Consider cleaning up old files or expanding storage.")
+            print("💾 Disk full! Consider cleaning up old files or expanding storage.")
     except json.JSONEncodeError as e:
         print(f"[warn]  Warning: Failed to serialize metrics data: {e}")
     except Exception as e:
@@ -4386,7 +4386,7 @@ def _metrics_flush_loop():
             _expire_old_entries()
             _save_metrics_to_disk()
         except KeyboardInterrupt:
-            print("[chart] Metrics flush loop shutting down...")
+            print("📊 Metrics flush loop shutting down...")
             break
         except Exception as e:
             print(f"[warn]  Warning: Error in metrics flush loop: {e}")
@@ -4404,7 +4404,7 @@ def _has_otel_data():
     return any(len(metrics_store[k]) > 0 for k in metrics_store)
 
 
-# -- Multi-Node Fleet Database -------------------------------------------
+# ── Multi-Node Fleet Database ───────────────────────────────────────────
 import sqlite3 as _sqlite3
 import hashlib as _hashlib
 
@@ -4508,7 +4508,7 @@ def _start_fleet_maintenance_thread():
     t.start()
 
 
-# -- Budget & Alert Database --------------------------------------------
+# ── Budget & Alert Database ────────────────────────────────────────────
 
 def _budget_init_db():
     """Initialize budget and alert tables in the fleet database."""
@@ -4961,7 +4961,7 @@ def _start_budget_monitor_thread():
     t.start()
 
 
-# -- OTLP Protobuf Helpers ----------------------------------------------
+# ── OTLP Protobuf Helpers ──────────────────────────────────────────────
 
 def _otel_attr_value(val):
     """Convert an OTel AnyValue to a Python value."""
@@ -5576,7 +5576,7 @@ def get_local_ip():
         return "127.0.0.1"
 
 
-# -- HTML Template -------------------------------------------------------
+# ── HTML Template ───────────────────────────────────────────────────────
 
 DASHBOARD_HTML = r"""
 <!DOCTYPE html>
@@ -5584,7 +5584,7 @@ DASHBOARD_HTML = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ClawMetry [lobster]</title>
+<title>ClawMetry 🦞</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -6499,7 +6499,7 @@ DASHBOARD_HTML = r"""
 <!-- Login overlay -->
 <div id="login-overlay" style="display:none;position:fixed;inset:0;z-index:99999;background:var(--bg-primary,#0f172a);align-items:center;justify-content:center;flex-direction:column;">
   <div style="background:var(--card-bg,#1e293b);border-radius:16px;padding:40px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);text-align:center;">
-    <div style="font-size:48px;margin-bottom:16px;">[lobster]</div>
+    <div style="font-size:48px;margin-bottom:16px;">🦞</div>
     <h2 style="color:#e2e8f0;margin:0 0 8px;">ClawMetry</h2>
     <p style="color:#94a3b8;margin:0 0 24px;font-size:14px;">Enter your OpenClaw Gateway Token</p>
     <input id="login-token" type="password" placeholder="Gateway token..." style="width:100%;box-sizing:border-box;padding:12px 16px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:15px;margin-bottom:16px;outline:none;" onkeydown="if(event.key==='Enter')clawmetryLogin()">
@@ -6574,7 +6574,7 @@ function clawmetryLogout(){
   <div class="boot-card">
     <div class="boot-spinner"></div>
     <div class="boot-title">Initializing ClawMetry</div>
-    <div class="boot-sub" id="boot-sub">Loading model, tasks, system health, and live streams...</div>
+    <div class="boot-sub" id="boot-sub">Loading model, tasks, system health, and live streams…</div>
     <div class="boot-steps">
       <div class="boot-step loading" id="boot-step-overview"><span class="boot-dot"></span><span>Loading overview + model context</span></div>
       <div class="boot-step" id="boot-step-tasks"><span class="boot-dot"></span><span>Loading active tasks</span></div>
@@ -6585,14 +6585,14 @@ function clawmetryLogout(){
 </div>
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
-  <h1><span>[lobster]</span> ClawMetry</h1>
+  <h1><span>🦞</span> ClawMetry</h1>
   <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
   <!-- Budget & Alerts hidden until mature -->
   <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="zoom-controls">
-    <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">-</button>
+    <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
     <button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl/Cmd + +)">+</button>
   </div>
@@ -6716,7 +6716,7 @@ function clawmetryLogout(){
 <!-- OVERVIEW (Split-Screen Hacker Dashboard) -->
 <div class="page active" id="page-overview">
   <div class="refresh-bar" style="margin-bottom:6px;">
-    <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;"><></button>
+    <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>
     <span class="live-badge">LIVE</span>
     <span class="refresh-time" id="refresh-time" style="font-size:11px;">Loading...</span>
@@ -6725,7 +6725,7 @@ function clawmetryLogout(){
   <!-- Stats Bar (top) -->
   <div class="stats-footer">
     <div class="stats-footer-item">
-      <span class="stats-footer-icon">[$]</span>
+      <span class="stats-footer-icon">💰</span>
       <div>
         <div class="stats-footer-label">Spending <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
         <div class="stats-footer-value" id="cost-today">$0.00</div>
@@ -6738,7 +6738,7 @@ function clawmetryLogout(){
       <span id="cost-trend" style="display:none;">Estimated from usage -- may be $0 billed with OAuth auth</span>
     </div>
     <div class="stats-footer-item">
-      <span class="stats-footer-icon">[bot]</span>
+      <span class="stats-footer-icon">🤖</span>
       <div>
         <div class="stats-footer-label">Model</div>
         <div class="stats-footer-value" id="model-primary">--</div>
@@ -6746,7 +6746,7 @@ function clawmetryLogout(){
       <div id="model-breakdown" style="display:none;">Loading...</div>
     </div>
     <div class="stats-footer-item">
-      <span class="stats-footer-icon">[chart]</span>
+      <span class="stats-footer-icon">📊</span>
       <div>
         <div class="stats-footer-label">Tokens</div>
         <div class="stats-footer-value" id="token-rate">--</div>
@@ -6754,7 +6754,7 @@ function clawmetryLogout(){
       <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">--</span></span>
     </div>
     <div class="stats-footer-item">
-      <span class="stats-footer-icon">[msg]</span>
+      <span class="stats-footer-icon">💬</span>
       <div>
         <div class="stats-footer-label">Sessions</div>
         <div class="stats-footer-value" id="hot-sessions-count">--</div>
@@ -6776,12 +6776,12 @@ function clawmetryLogout(){
         </div>
       </div>
 
-      <!-- [brain] Brain Panel: Main Agent Activity -->
+      <!-- 🧠 Brain Panel: Main Agent Activity -->
       <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-top:1px solid var(--border-secondary);padding:10px 14px 8px;min-height:80px;flex:1;display:flex;flex-direction:column;overflow:hidden;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
           <div style="display:flex;align-items:center;gap:6px;">
             <span id="main-activity-dot" style="width:8px;height:8px;border-radius:50%;background:#888;display:inline-block;"></span>
-            <span style="font-size:13px;font-weight:700;color:var(--text-primary);">[brain] <span id="main-activity-model">Claude Opus</span></span>
+            <span style="font-size:13px;font-weight:700;color:var(--text-primary);">🧠 <span id="main-activity-model">Claude Opus</span></span>
             <span id="main-activity-status" style="font-size:10px;color:var(--text-muted);">
               <span id="main-activity-label">...</span>
             </span>
@@ -6800,20 +6800,20 @@ function clawmetryLogout(){
     <div class="overview-tasks-pane">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">[bee] Active Tasks</span>
+          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
           <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
         </div>
-        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;"><> 30s</span>
+        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
       </div>
       <div class="tasks-panel-scroll" id="overview-tasks-list">
         <div style="text-align:center;padding:32px;color:var(--text-muted);">
-          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">[bee]</div>
+          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
           <div style="font-size:13px;">Loading tasks...</div>
         </div>
       </div>
       <!-- System Health Panel (inside tasks pane) -->
       <div id="system-health-panel" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:16px;margin-top:14px;box-shadow:var(--card-shadow);">
-        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">[health] System Health</div>
+        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
         <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
@@ -6846,8 +6846,8 @@ function clawmetryLogout(){
 <!-- USAGE -->
 <div class="page" id="page-usage">
   <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadUsage()"><> Refresh</button>
-    <button class="refresh-btn" onclick="exportUsageData()" style="margin-left: 8px;">[in] Export CSV</button>
+    <button class="refresh-btn" onclick="loadUsage()">↻ Refresh</button>
+    <button class="refresh-btn" onclick="exportUsageData()" style="margin-left: 8px;">📥 Export CSV</button>
   </div>
   
   <!-- Cost Warnings -->
@@ -6856,48 +6856,48 @@ function clawmetryLogout(){
   <!-- Main Usage Stats -->
   <div class="grid">
     <div class="card">
-      <div class="card-title"><span class="icon">[chart]</span> Today</div>
+      <div class="card-title"><span class="icon">📊</span> Today</div>
       <div class="card-value" id="usage-today">--</div>
       <div class="card-sub" id="usage-today-cost"></div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">[cal]</span> This Week</div>
+      <div class="card-title"><span class="icon">📅</span> This Week</div>
       <div class="card-value" id="usage-week">--</div>
       <div class="card-sub" id="usage-week-cost"></div>
     </div>
     <div class="card">
-      <div class="card-title"><span class="icon">[cal]</span> This Month</div>
+      <div class="card-title"><span class="icon">📆</span> This Month</div>
       <div class="card-value" id="usage-month">--</div>
       <div class="card-sub" id="usage-month-cost"></div>
     </div>
     <div class="card" id="trend-card" style="display:none;">
-      <div class="card-title"><span class="icon">[up]</span> Trend</div>
+      <div class="card-title"><span class="icon">📈</span> Trend</div>
       <div class="card-value" id="trend-direction">--</div>
       <div class="card-sub" id="trend-prediction"></div>
     </div>
   </div>
-  <div class="section-title">[chart] Token Usage (14 days)</div>
+  <div class="section-title">📊 Token Usage (14 days)</div>
   <div class="card">
     <div class="usage-chart" id="usage-chart">Loading...</div>
   </div>
-  <div class="section-title">[$] Cost Breakdown <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
+  <div class="section-title">💰 Cost Breakdown <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
   <div class="card"><table class="usage-table" id="usage-cost-table"><tbody><tr><td colspan="3" style="color:#666;">Loading...</td></tr></tbody></table></div>
   <div id="otel-extra-sections" style="display:none;">
     <div class="grid" style="margin-top:16px;">
       <div class="card">
-        <div class="card-title"><span class="icon">[timer]</span> Avg Run Duration</div>
+        <div class="card-title"><span class="icon">⏱️</span> Avg Run Duration</div>
         <div class="card-value" id="usage-avg-run">--</div>
         <div class="card-sub">from OTLP openclaw.run.duration_ms</div>
       </div>
       <div class="card">
-        <div class="card-title"><span class="icon">[msg]</span> Messages Processed</div>
+        <div class="card-title"><span class="icon">💬</span> Messages Processed</div>
         <div class="card-value" id="usage-msg-count">--</div>
         <div class="card-sub">from OTLP openclaw.message.processed</div>
       </div>
     </div>
-    <div class="section-title">[bot] Model Breakdown</div>
+    <div class="section-title">🤖 Model Breakdown</div>
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
-    <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">[signal] Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
+    <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
   </div>
 </div>
 
@@ -6954,13 +6954,13 @@ function clawmetryLogout(){
 <!-- MEMORY -->
 <div class="page" id="page-memory">
   <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadMemory()"><> Refresh</button>
+    <button class="refresh-btn" onclick="loadMemory()">↻ Refresh</button>
   </div>
   <div class="card" id="memory-list">Loading...</div>
   <div class="file-viewer" id="file-viewer">
     <div class="file-viewer-header">
       <span class="file-viewer-title" id="file-viewer-title"></span>
-      <button class="file-viewer-close" onclick="closeFileViewer()">x Close</button>
+      <button class="file-viewer-close" onclick="closeFileViewer()">✕ Close</button>
     </div>
     <div class="file-viewer-content" id="file-viewer-content"></div>
   </div>
@@ -6969,8 +6969,8 @@ function clawmetryLogout(){
 <!-- TRANSCRIPTS -->
 <div class="page" id="page-transcripts">
   <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadTranscripts()"><> Refresh</button>
-    <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()"><- Back to list</button>
+    <button class="refresh-btn" onclick="loadTranscripts()">↻ Refresh</button>
+    <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← Back to list</button>
   </div>
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
@@ -7099,27 +7099,27 @@ function clawmetryLogout(){
       <!-- Channel Nodes -->
       <g class="flow-node flow-node-channel" id="node-telegram">
         <rect x="20" y="100" width="110" height="40" rx="10" ry="10" fill="#2196F3" stroke="#1565C0" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[phone] TG</text>
+        <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📱 TG</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-signal">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#2E8B7A" stroke="#1B6B5A" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[signal] Signal</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📡 Signal</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-imessage" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#34C759" stroke="#248A3D" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[msg] iMessage</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 iMessage</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-whatsapp">
         <rect x="20" y="240" width="110" height="40" rx="10" ry="10" fill="#43A047" stroke="#2E7D32" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="265" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[msg] WA</text>
+        <text x="75" y="265" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 WA</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-discord" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#5865F2" stroke="#4752C4" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[game] Discord</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Discord</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-slack" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#4A154B" stroke="#350e36" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[briefcase] Slack</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💼 Slack</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-irc" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#6B7280" stroke="#4B5563" stroke-width="2" filter="url(#dropShadow)"/>
@@ -7127,19 +7127,19 @@ function clawmetryLogout(){
       </g>
       <g class="flow-node flow-node-channel" id="node-webchat" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0EA5E9" stroke="#0369A1" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[web] WebChat</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌐 WebChat</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-googlechat" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#1A73E8" stroke="#1557B0" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[msg] GChat</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 GChat</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-bluebubbles" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#1C6EF3" stroke="#1558C0" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[apple] BB</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🍎 BB</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-msteams" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#6264A7" stroke="#464775" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[tie] Teams</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">👔 Teams</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-matrix" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0DBD8B" stroke="#0A9E74" stroke-width="2" filter="url(#dropShadow)"/>
@@ -7147,33 +7147,33 @@ function clawmetryLogout(){
       </g>
       <g class="flow-node flow-node-channel" id="node-mattermost" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0058CC" stroke="#0047A3" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[anchor] MM</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚓ MM</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-line" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#00B900" stroke="#009900" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[green-heart] LINE</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💚 LINE</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-nostr" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#8B5CF6" stroke="#6D28D9" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[*] Nostr</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚡ Nostr</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-twitch" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#9146FF" stroke="#772CE8" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[game] Twitch</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Twitch</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-feishu" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#3370FF" stroke="#2050CC" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[flower] Feishu</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌸 Feishu</text>
       </g>
       <g class="flow-node flow-node-channel" id="node-zalo" style="display:none;">
         <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0068FF" stroke="#0050CC" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[msg] Zalo</text>
+        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 Zalo</text>
       </g>
 
       <!-- Gateway -->
       <g class="flow-node flow-node-gateway" id="node-gateway">
         <rect x="180" y="160" width="110" height="45" rx="10" ry="10" fill="#37474F" stroke="#263238" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="235" y="188" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[shuffle] Gateway</text>
+        <text x="235" y="188" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🔀 Gateway</text>
       </g>
 
       <!-- Brain -->
@@ -7192,17 +7192,17 @@ function clawmetryLogout(){
       <!-- Tool Nodes -->
       <g class="flow-node flow-node-session" id="node-session">
         <rect x="560" y="70" width="110" height="38" rx="10" ry="10" fill="#1565C0" stroke="#0D47A1" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="94" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[list] Sessions</text>
+        <text x="615" y="94" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📋 Sessions</text>
         <circle class="tool-indicator" id="ind-session" cx="665" cy="78" r="5" fill="#42A5F5"/>
       </g>
       <g class="flow-node flow-node-tool" id="node-exec">
         <rect x="560" y="120" width="110" height="38" rx="10" ry="10" fill="#E65100" stroke="#BF360C" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="144" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[*] Exec</text>
+        <text x="615" y="144" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚡ Exec</text>
         <circle class="tool-indicator" id="ind-exec" cx="665" cy="128" r="5" fill="#FF6E40"/>
       </g>
       <g class="flow-node flow-node-tool" id="node-browser">
         <rect x="560" y="170" width="110" height="38" rx="10" ry="10" fill="#6A1B9A" stroke="#4A148C" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="194" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[web] Web</text>
+        <text x="615" y="194" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌐 Web</text>
         <circle class="tool-indicator" id="ind-browser" cx="665" cy="178" r="5" fill="#CE93D8"/>
       </g>
       <g class="flow-node flow-node-tool" id="node-search">
@@ -7212,7 +7212,7 @@ function clawmetryLogout(){
       </g>
       <g class="flow-node flow-node-tool" id="node-cron">
         <rect x="560" y="270" width="110" height="38" rx="10" ry="10" fill="#546E7A" stroke="#37474F" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="294" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[cal] Cron</text>
+        <text x="615" y="294" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📅 Cron</text>
         <circle class="tool-indicator" id="ind-cron" cx="665" cy="278" r="5" fill="#90A4AE"/>
       </g>
       <g class="flow-node flow-node-tool" id="node-tts">
@@ -7274,7 +7274,7 @@ function clawmetryLogout(){
       <!-- Legend -->
       <g transform="translate(140, 510)">
         <rect x="0" y="0" width="700" height="28" rx="14" ry="14" fill="var(--bg-tertiary)" stroke="var(--border-primary)" stroke-width="1" opacity="0.9"/>
-        <text x="350" y="18" style="font-size:12px;font-weight:600;fill:var(--text-secondary);letter-spacing:1px;text-anchor:middle;">&#x1F4E8; Channels  &#x27A1;&#xFE0F;  [shuffle] Gateway  &#x27A1;&#xFE0F;  &#x1F9E0; AI Brain  &#x27A1;&#xFE0F;  &#x1F6E0;&#xFE0F; Tools</text>
+        <text x="350" y="18" style="font-size:12px;font-weight:600;fill:var(--text-secondary);letter-spacing:1px;text-anchor:middle;">&#x1F4E8; Channels  &#x27A1;&#xFE0F;  🔀 Gateway  &#x27A1;&#xFE0F;  &#x1F9E0; AI Brain  &#x27A1;&#xFE0F;  &#x1F6E0;&#xFE0F; Tools</text>
       </g>
 
       <!-- Flow direction labels -->
@@ -7287,7 +7287,7 @@ function clawmetryLogout(){
   <!-- Live activity feed under the flow diagram -->
   <div style="margin-top:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:12px 16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <span style="font-size:13px;font-weight:600;color:#aaa;">[signal] Live Activity Feed</span>
+      <span style="font-size:13px;font-weight:600;color:#aaa;">📡 Live Activity Feed</span>
       <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
     </div>
     <div id="flow-live-feed" style="max-height:120px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.5;color:#777;">
@@ -7300,8 +7300,8 @@ function clawmetryLogout(){
 <div class="page" id="page-brain">
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">[brain] Brain -- Unified Activity Stream</span>
-      <button class="refresh-btn" onclick="loadBrainPage()"><> Refresh</button>
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
+      <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
     </div>
     <!-- Activity density chart -->
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
@@ -7316,7 +7316,7 @@ function clawmetryLogout(){
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
         <span style="font-size:11px;color:var(--text-muted);">Live event stream (newest first)</span>
-        <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">^ new events</span>
+        <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">↑ new events</span>
       </div>
       <div id="brain-stream" style="max-height:600px;overflow-y:auto;">
         <div style="color:var(--text-muted);padding:20px">Loading...</div>
@@ -7794,7 +7794,7 @@ function fitFlowLabel(text, maxLen) {
   var s = String(text || '').trim();
   if (!s) return '';
   if (s.length <= maxLen) return s;
-  return s.substring(0, Math.max(1, maxLen - 1)) + '...';
+  return s.substring(0, Math.max(1, maxLen - 1)) + '…';
 }
 
 function applyBillingHintToFlow(billingSummary) {
@@ -7864,7 +7864,7 @@ async function loadAll() {
 }
 
 async function loadMiniWidgets(overview, usage) {
-  // [$] Cost Ticker 
+  // 💰 Cost Ticker 
   function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
   document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
   document.getElementById('cost-week').textContent = fmtCost(usage.weekCost || 0);
@@ -7872,7 +7872,7 @@ async function loadMiniWidgets(overview, usage) {
   
   var trend = '';
   if (usage.trend && usage.trend.trend) {
-    var trendIcon = usage.trend.trend === 'increasing' ? '[up]' : usage.trend.trend === 'decreasing' ? '[down]' : '->';
+    var trendIcon = usage.trend.trend === 'increasing' ? '📈' : usage.trend.trend === 'decreasing' ? '📉' : '➡️';
     trend = trendIcon + ' ' + usage.trend.trend;
   }
   var isOauthLikely = (usage.billingSummary === 'likely_oauth_or_included');
@@ -7908,15 +7908,15 @@ async function loadMiniWidgets(overview, usage) {
 
   applyBillingHintToFlow(usage.billingSummary || 'unknown');
   
-  // [*] Tool Activity (load from logs)
+  // ⚡ Tool Activity (load from logs)
   loadToolActivity();
   
-  // [chart] Token Burn Rate
+  // 📊 Token Burn Rate
   function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
   document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
   document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
   
-  // [fire] Hot Sessions -- use /api/sessions for consistency with modal
+  // 🔥 Hot Sessions -- use /api/sessions for consistency with modal
   fetch('/api/sessions').then(function(r){return r.json()}).then(function(sd) {
     var sl = sd.sessions || sd || [];
     if (!Array.isArray(sl)) sl = [];
@@ -7925,7 +7925,7 @@ async function loadMiniWidgets(overview, usage) {
     document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
   });
   
-  // [up] Model Mix
+  // 📈 Model Mix
   document.getElementById('model-primary').textContent = overview.model || 'unknown';
   var modelLabel = document.getElementById('main-activity-model');
   if (modelLabel && overview.model) {
@@ -7947,7 +7947,7 @@ async function loadMiniWidgets(overview, usage) {
   }
   document.getElementById('model-breakdown').textContent = modelBreakdown;
   
-  // [bee] Worker Bees (Sub-Agents)
+  // 🐝 Worker Bees (Sub-Agents)
   loadSubAgents();
   
 }
@@ -7983,9 +7983,9 @@ async function loadSubAgents() {
       var activeFirst = subagents.filter(function(a){return a.status==='active';}).concat(subagents.filter(function(a){return a.status!=='active';}));
       var topAgents = activeFirst.slice(0, 3);
       topAgents.forEach(function(agent) {
-        var icon = agent.status === 'active' ? '[sync]' : agent.status === 'idle' ? '[ok]' : '[ ]';
+        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '[ok]' : '⬜';
         var name = cleanTaskName(agent.displayName);
-        if (name.length > 40) name = name.substring(0, 37) + '...';
+        if (name.length > 40) name = name.substring(0, 37) + '…';
         previewHtml += '<div class="subagent-item">';
         previewHtml += '<span style="font-size:10px;">' + icon + '</span>';
         previewHtml += '<span class="subagent-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(name) + '</span>';
@@ -8015,7 +8015,7 @@ function cleanTaskName(raw) {
   // Truncate to first sentence or 80 chars
   var dot = name.indexOf('. ');
   if (dot > 10 && dot < 80) name = name.substring(0, dot + 1);
-  if (name.length > 80) name = name.substring(0, 77) + '...';
+  if (name.length > 80) name = name.substring(0, 77) + '…';
   return name || 'Background task';
 }
 
@@ -8073,7 +8073,7 @@ async function loadActiveTasks() {
 
     if (agents.length === 0) {
       grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
-        + '<div style="font-size:24px;margin-bottom:8px;">[sparkle]</div>'
+        + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
         + '<div style="font-size:13px;">No active tasks - all quiet</div></div>';
       var badge = document.getElementById('overview-tasks-count-badge');
       if (badge) badge.textContent = '';
@@ -8094,7 +8094,7 @@ async function loadActiveTasks() {
       html += '<div class="task-card-pulse active"></div>';
       html += '<div class="task-card-header">';
       html += '<div class="task-card-name">' + escHtml(taskName) + '</div>';
-      html += '<span class="task-card-badge running" style="font-size:10px;">[bot] ' + mins + ' min</span>';
+      html += '<span class="task-card-badge running" style="font-size:10px;">🤖 ' + mins + ' min</span>';
       html += '</div>';
       html += '<div style="display:flex;align-items:center;gap:8px;">';
       if (badge2) {
@@ -8171,16 +8171,16 @@ async function loadActivityStream() {
             if (content.includes('searching') || content.includes('search')) {
               activity = time + ' [check] Searching web for information';
             } else if (content.includes('reading') || content.includes('file')) {
-              activity = time + ' [book] Reading files';
+              activity = time + ' 📖 Reading files';
             } else if (content.includes('writing') || content.includes('edit')) {
-              activity = time + ' [pencil] Editing files'; 
+              activity = time + ' ✏️ Editing files'; 
             } else if (content.includes('exec') || content.includes('command')) {
-              activity = time + ' [*] Running commands';
+              activity = time + ' ⚡ Running commands';
             } else if (content.includes('browser') || content.includes('screenshot')) {
-              activity = time + ' [web] Browser automation';
+              activity = time + ' 🌐 Browser automation';
             } else if (msg.content.length > 50) {
               var preview = msg.content.substring(0, 80).replace(/[^\w\s]/g, ' ').trim();
-              activity = time + ' [think] ' + preview + '...';
+              activity = time + ' 💭 ' + preview + '...';
             }
             
             if (activity) activities.push(activity);
@@ -8191,8 +8191,8 @@ async function loadActivityStream() {
     
     if (activities.length === 0) {
       activities = [
-        new Date().toLocaleTimeString() + ' [bot] AI agent initialized',
-        new Date().toLocaleTimeString() + ' [signal] Monitoring for activity...'
+        new Date().toLocaleTimeString() + ' 🤖 AI agent initialized',
+        new Date().toLocaleTimeString() + ' 📡 Monitoring for activity...'
       ];
     }
     
@@ -8219,7 +8219,7 @@ function toggleSAAutoRefresh() {
   }
 }
 
-// -- Brain tab ---------------------------------------------------------
+// ── Brain tab ─────────────────────────────────────────────────────────
 var _brainRefreshTimer = null;
 var _brainSourceColors = {};
 var _brainColorPalette = ['#2dd4bf','#f97316','#eab308','#ec4899','#3b82f6','#a78bfa','#f43f5e','#10b981'];
@@ -8245,9 +8245,9 @@ var _brainFilter = 'all';
 var _brainAllEvents = [];
 
 var _brainTypeIcons = {
-  'EXEC': '[gear]', 'SHELL': '[gear]', 'READ': '[book]', 'WRITE': '[pencil]',
-  'BROWSER': '[web]', 'MSG': '[msg]', 'SEARCH': '[check]', 'SPAWN': '[prod]',
-  'DONE': '[ok]', 'ERROR': '[ERR]', 'TOOL': '[tool]'
+  'EXEC': '⚙️', 'SHELL': '⚙️', 'READ': '📖', 'WRITE': '✏️',
+  'BROWSER': '🌐', 'MSG': '📨', 'SEARCH': '[check]', 'SPAWN': '[prod]',
+  'DONE': '[ok]', 'ERROR': '❌', 'TOOL': '🔧'
 };
 
 function setBrainFilter(source, btn) {
@@ -8276,7 +8276,7 @@ function renderBrainFilterChips(sources) {
   var html = '<button class="brain-chip' + (_brainFilter === 'all' ? ' active' : '') + '" data-source="all" onclick="setBrainFilter(\'all\',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:' + (_brainFilter === 'all' ? 'rgba(168,85,247,0.2)' : 'transparent') + ';color:#a855f7;font-size:11px;cursor:pointer;font-weight:' + (_brainFilter === 'all' ? '600' : '400') + ';">All</button>';
   sources.forEach(function(s) {
     var isActive = _brainFilter === s.id;
-    var emoji = s.id === 'main' ? '[brain]' : '[bot]';
+    var emoji = s.id === 'main' ? '🧠' : '🤖';
     html += '<button class="brain-chip' + (isActive ? ' active' : '') + '" data-source="' + escHtml(s.id) + '" onclick="setBrainFilter('' + escHtml(s.id).replace(/'/g,"\'") + '',this)" style="padding:3px 10px;border-radius:12px;border:1px solid ' + s.color + ';background:' + (isActive ? 'rgba(100,100,100,0.2)' : 'transparent') + ';color:' + s.color + ';font-size:11px;cursor:pointer;font-weight:' + (isActive ? '600' : '400') + ';">' + emoji + ' ' + escHtml(s.label) + '</button>';
   });
   container.innerHTML = html;
@@ -8294,7 +8294,7 @@ function renderBrainStream(events) {
   filtered.forEach(function(ev) {
     var color = ev.color || brainSourceColor(ev.source || 'main');
     var evType = ev.type || 'TOOL';
-    var icon = _brainTypeIcons[evType] || '[tool]';
+    var icon = _brainTypeIcons[evType] || '🔧';
     html += '<div class="brain-event">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
     html += '<span class="brain-source" style="color:' + color + ';flex-shrink:0;">' + escHtml(ev.sourceLabel || ev.source || 'main') + '</span>';
@@ -8384,7 +8384,7 @@ async function loadSubAgentsPage(silent) {
     document.getElementById('sa-refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (subagents.length === 0) {
-      var emptyHtml = '<div style="padding:40px;text-align:center;color:#666;"><div style="font-size:48px;margin-bottom:16px;">[bee]</div><div style="font-size:16px;">No Sub-Agents Yet</div><div style="font-size:12px;margin-top:8px;max-width:360px;margin-left:auto;margin-right:auto;">Sub-agents are spawned by the main AI to handle complex tasks. They\'ll appear here when active.</div></div>';
+      var emptyHtml = '<div style="padding:40px;text-align:center;color:#666;"><div style="font-size:48px;margin-bottom:16px;">🐝</div><div style="font-size:16px;">No Sub-Agents Yet</div><div style="font-size:12px;margin-top:8px;max-width:360px;margin-left:auto;margin-right:auto;">Sub-agents are spawned by the main AI to handle complex tasks. They\'ll appear here when active.</div></div>';
       document.getElementById('sa-gantt').innerHTML = emptyHtml;
       document.getElementById('subagents-list').innerHTML = '';
       return;
@@ -8584,8 +8584,8 @@ async function loadSubAgentsPage(silent) {
 function openSAActivity(sessionId, name, status) {
   _saSelectedId = sessionId;
   document.getElementById('sa-activity-panel').style.display = 'block';
-  document.getElementById('sa-panel-title').textContent = '[bee] ' + name;
-  document.getElementById('sa-panel-status').textContent = status === 'active' ? '[green] Working' : status === 'idle' ? '[yellow] Idle' : '[ ] Done';
+  document.getElementById('sa-panel-title').textContent = '🐝 ' + name;
+  document.getElementById('sa-panel-status').textContent = status === 'active' ? '🟢 Working' : status === 'idle' ? '🟡 Idle' : '⬜ Done';
   loadSAActivity(sessionId);
   // Re-render list to highlight selected
   loadSubAgentsPage(true);
@@ -8614,32 +8614,32 @@ async function loadSAActivity(sessionId) {
         var color = evt.tool === 'exec' ? '#f0c040' : evt.tool.match(/Read|Write|Edit/) ? '#60a0ff' : evt.tool === 'web_search' ? '#c0a0ff' : evt.tool === 'browser' ? '#40a0b0' : '#50e080';
         html += '<div style="display:flex;gap:8px;padding:6px 16px;align-items:flex-start;border-left:3px solid ' + color + ';">';
         html += '<span style="font-size:10px;color:#555;min-width:55px;font-family:monospace;">' + time + '</span>';
-        html += '<span style="font-size:11px;color:' + color + ';font-weight:700;min-width:80px;">[*] ' + escHtml(evt.tool) + '</span>';
+        html += '<span style="font-size:11px;color:' + color + ';font-weight:700;min-width:80px;">⚡ ' + escHtml(evt.tool) + '</span>';
         html += '<span style="font-size:11px;color:#aaa;font-family:monospace;word-break:break-all;">' + escHtml(evt.input) + '</span>';
         html += '</div>';
       } else if (evt.type === 'tool_result') {
         var resultColor = evt.isError ? '#e04040' : '#2a5a3a';
         html += '<div style="display:flex;gap:8px;padding:4px 16px 4px 24px;align-items:flex-start;">';
         html += '<span style="font-size:10px;color:#555;min-width:55px;font-family:monospace;">' + time + '</span>';
-        html += '<span style="font-size:10px;color:' + (evt.isError ? '#e04040' : '#555') + ';min-width:80px;">' + (evt.isError ? '[ERR] error' : 'v result') + '</span>';
+        html += '<span style="font-size:10px;color:' + (evt.isError ? '#e04040' : '#555') + ';min-width:80px;">' + (evt.isError ? '❌ error' : '✓ result') + '</span>';
         html += '<span style="font-size:10px;color:#666;font-family:monospace;max-height:40px;overflow:hidden;word-break:break-all;">' + escHtml((evt.preview || '').substring(0, 200)) + '</span>';
         html += '</div>';
       } else if (evt.type === 'thinking') {
         html += '<div style="display:flex;gap:8px;padding:8px 16px;align-items:flex-start;border-left:3px solid #50e080;">';
         html += '<span style="font-size:10px;color:#555;min-width:55px;font-family:monospace;">' + time + '</span>';
-        html += '<span style="font-size:11px;color:#50e080;min-width:80px;">[msg] says</span>';
+        html += '<span style="font-size:11px;color:#50e080;min-width:80px;">💬 says</span>';
         html += '<span style="font-size:12px;color:#ccc;">' + escHtml(evt.text) + '</span>';
         html += '</div>';
       } else if (evt.type === 'internal_thought') {
         html += '<div style="display:flex;gap:8px;padding:4px 16px;align-items:flex-start;opacity:0.6;">';
         html += '<span style="font-size:10px;color:#555;min-width:55px;font-family:monospace;">' + time + '</span>';
-        html += '<span style="font-size:10px;color:#9070d0;min-width:80px;">[brain] thinks</span>';
+        html += '<span style="font-size:10px;color:#9070d0;min-width:80px;">🧠 thinks</span>';
         html += '<span style="font-size:10px;color:#888;font-style:italic;">' + escHtml(evt.text) + '</span>';
         html += '</div>';
       } else if (evt.type === 'model_change') {
         html += '<div style="display:flex;gap:8px;padding:4px 16px;align-items:center;opacity:0.5;">';
         html += '<span style="font-size:10px;color:#555;min-width:55px;font-family:monospace;">' + time + '</span>';
-        html += '<span style="font-size:10px;color:#888;">[sync] Model: ' + escHtml(evt.model) + '</span>';
+        html += '<span style="font-size:10px;color:#888;">🔄 Model: ' + escHtml(evt.model) + '</span>';
         html += '</div>';
       }
     });
@@ -8699,7 +8699,7 @@ function showSessionsModal() {
       html += '</table>';
     }
     html += '</div>';
-    showGenericModal('[msg] Active Sessions (' + sessions.length + ')', html);
+    showGenericModal('💬 Active Sessions (' + sessions.length + ')', html);
   });
 }
 
@@ -8714,7 +8714,7 @@ function showGenericModal(title, bodyHtml) {
   modal.style.cssText = 'background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:0;min-width:400px;max-width:600px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);';
   modal.innerHTML = '<div style="padding:16px 20px;border-bottom:1px solid var(--border-primary);display:flex;align-items:center;justify-content:space-between;">'
     + '<span style="font-size:15px;font-weight:700;color:var(--text-primary);">'+title+'</span>'
-    + '<span onclick="document.getElementById(\'generic-modal-overlay\').remove()" style="cursor:pointer;color:var(--text-muted);font-size:18px;">x</span>'
+    + '<span onclick="document.getElementById(\'generic-modal-overlay\').remove()" style="cursor:pointer;color:var(--text-muted);font-size:18px;">✕</span>'
     + '</div><div style="padding:16px 20px;">'+bodyHtml+'</div>';
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
@@ -8810,7 +8810,7 @@ async function loadSessions() {
   
   mainSessions.forEach(function(s) {
     html += '<div class="session-item" style="border-left:3px solid var(--bg-accent);padding-left:16px;">';
-    html += '<div class="session-name">[screen] ' + escHtml(s.displayName || s.key) + ' <span style="font-size:11px;color:var(--text-muted);font-weight:400;">Main Session</span></div>';
+    html += '<div class="session-name">🖥️ ' + escHtml(s.displayName || s.key) + ' <span style="font-size:11px;color:var(--text-muted);font-weight:400;">Main Session</span></div>';
     html += '<div class="session-meta">';
     html += '<span><span class="badge model">' + (s.model||'default') + '</span></span>';
     if (s.channel !== 'unknown') html += '<span><span class="badge channel">' + s.channel + '</span></span>';
@@ -8820,7 +8820,7 @@ async function loadSessions() {
     if (subagents.length > 0) {
       html += '<div style="margin-top:8px;margin-left:16px;border-left:2px solid var(--border-primary);padding-left:12px;">';
       subagents.forEach(function(sa) {
-        var statusIcon = sa.status === 'active' ? '[green]' : sa.status === 'idle' ? '[yellow]' : '[ ]';
+        var statusIcon = sa.status === 'active' ? '🟢' : sa.status === 'idle' ? '🟡' : '⬜';
         html += '<details style="margin-bottom:4px;">';
         html += '<summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);padding:4px 0;">';
         html += statusIcon + ' <strong>' + escHtml(sa.displayName) + '</strong>';
@@ -8829,11 +8829,11 @@ async function loadSessions() {
         html += '<div style="padding:6px 0 6px 20px;font-size:12px;color:var(--text-muted);">';
         if (sa.recentTools && sa.recentTools.length > 0) {
           sa.recentTools.slice(-3).forEach(function(t) {
-            html += '<div style="font-family:monospace;margin-bottom:2px;">[*] <span style="color:var(--text-accent);">' + escHtml(t.name) + '</span> ' + escHtml(t.summary.substring(0,80)) + '</div>';
+            html += '<div style="font-family:monospace;margin-bottom:2px;">⚡ <span style="color:var(--text-accent);">' + escHtml(t.name) + '</span> ' + escHtml(t.summary.substring(0,80)) + '</div>';
           });
         }
         if (sa.lastText) {
-          html += '<div style="font-style:italic;margin-top:4px;">[think] ' + escHtml(sa.lastText.substring(0, 120)) + '</div>';
+          html += '<div style="font-style:italic;margin-top:4px;">💭 ' + escHtml(sa.lastText.substring(0, 120)) + '</div>';
         }
         html += '</div></details>';
       });
@@ -9200,10 +9200,10 @@ async function loadMCTasks() {
     wrapper.style.display='';
     var tasks = data.tasks || [];
     var cols = [
-      {key:'inbox', label:'Inbox', color:'#3b82f6', bg:'#3b82f620', icon:'[in]', tasks:[]},
-      {key:'in_progress', label:'In Progress', color:'#16a34a', bg:'#16a34a20', icon:'[sync]', tasks:[]},
-      {key:'review', label:'Review', color:'#d97706', bg:'#d9770620', icon:'[eyes]', tasks:[]},
-      {key:'blocked', label:'Blocked', color:'#dc2626', bg:'#dc262620', icon:'[blocked]', tasks:[]},
+      {key:'inbox', label:'Inbox', color:'#3b82f6', bg:'#3b82f620', icon:'📥', tasks:[]},
+      {key:'in_progress', label:'In Progress', color:'#16a34a', bg:'#16a34a20', icon:'🔄', tasks:[]},
+      {key:'review', label:'Review', color:'#d97706', bg:'#d9770620', icon:'👀', tasks:[]},
+      {key:'blocked', label:'Blocked', color:'#dc2626', bg:'#dc262620', icon:'🚫', tasks:[]},
       {key:'done', label:'Done', color:'#6b7280', bg:'#6b728020', icon:'[ok]', tasks:[]}
     ];
     tasks.forEach(function(t) {
@@ -9213,9 +9213,9 @@ async function loadMCTasks() {
     });
     _mcData = cols;
     var bar = document.getElementById('mc-summary-bar');
-    var html = '<span style="font-size:12px;font-weight:700;color:var(--text-tertiary);margin-right:4px;">[target] MC</span>';
+    var html = '<span style="font-size:12px;font-weight:700;color:var(--text-tertiary);margin-right:4px;">🎯 MC</span>';
     cols.forEach(function(c, i) {
-      if (i > 0) html += '<span style="color:var(--text-faint);font-size:12px;margin:0 2px;">|</span>';
+      if (i > 0) html += '<span style="color:var(--text-faint);font-size:12px;margin:0 2px;">│</span>';
       var active = _mcExpanded === c.key ? 'outline:2px solid '+c.color+';outline-offset:-2px;' : '';
       html += '<span onclick="toggleMCColumn(\''+c.key+'\')" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:16px;background:'+c.bg+';'+active+'transition:all 0.15s;">';
       html += '<span style="font-size:12px;">'+c.icon+'</span>';
@@ -9240,9 +9240,9 @@ function toggleMCColumn(key) {
   if (_mcData) {
     var bar = document.getElementById('mc-summary-bar');
     var cols = _mcData;
-    var html = '<span style="font-size:12px;font-weight:700;color:var(--text-tertiary);margin-right:4px;">[target] MC</span>';
+    var html = '<span style="font-size:12px;font-weight:700;color:var(--text-tertiary);margin-right:4px;">🎯 MC</span>';
     cols.forEach(function(c, i) {
-      if (i > 0) html += '<span style="color:var(--text-faint);font-size:12px;margin:0 2px;">|</span>';
+      if (i > 0) html += '<span style="color:var(--text-faint);font-size:12px;margin:0 2px;">│</span>';
       var active = _mcExpanded === c.key ? 'outline:2px solid '+c.color+';outline-offset:-2px;' : '';
       html += '<span onclick="toggleMCColumn(\''+c.key+'\')" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:16px;background:'+c.bg+';'+active+'transition:all 0.15s;">';
       html += '<span style="font-size:12px;">'+c.icon+'</span>';
@@ -9331,7 +9331,7 @@ async function loadSystemHealth() {
     // Services
     var shtml = '';
     services.forEach(function(s) {
-      var dot = s.up ? '[green]' : '[red]';
+      var dot = s.up ? '🟢' : '🔴';
       shtml += '<div style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:13px;">'
         + dot + ' <span style="font-weight:600;color:var(--text-primary);">' + s.name + '</span>'
         + '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">:' + s.port + '</span></div>';
@@ -9370,7 +9370,7 @@ async function loadSystemHealth() {
       + '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">OK (24h)</div></div></div>';
     if (cFailed.length > 0) {
       chtml += '<div style="margin-top:8px;padding:10px 14px;background:var(--bg-error);border:1px solid rgba(220,38,38,0.2);border-radius:8px;font-size:12px;color:var(--text-error);">';
-      cFailed.forEach(function(f) { chtml += '<div>[ERR] ' + f + '</div>'; });
+      cFailed.forEach(function(f) { chtml += '<div>❌ ' + f + '</div>'; });
       chtml += '</div>';
     }
     document.getElementById('sh-crons').innerHTML = chtml;
@@ -9439,11 +9439,11 @@ async function loadUsage() {
     function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
     function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
     document.getElementById('usage-today').textContent = fmtTokens(data.today);
-    document.getElementById('usage-today-cost').textContent = '~ ' + fmtCost(data.todayCost);
+    document.getElementById('usage-today-cost').textContent = '≈ ' + fmtCost(data.todayCost);
     document.getElementById('usage-week').textContent = fmtTokens(data.week);
-    document.getElementById('usage-week-cost').textContent = '~ ' + fmtCost(data.weekCost);
+    document.getElementById('usage-week-cost').textContent = '≈ ' + fmtCost(data.weekCost);
     document.getElementById('usage-month').textContent = fmtTokens(data.month);
-    document.getElementById('usage-month-cost').textContent = '~ ' + fmtCost(data.monthCost);
+    document.getElementById('usage-month-cost').textContent = '≈ ' + fmtCost(data.monthCost);
 
     // Display cost warnings
     displayCostWarnings(data.warnings || []);
@@ -9517,7 +9517,7 @@ function displayCostWarnings(warnings) {
   
   var html = '';
   warnings.forEach(function(w) {
-    var icon = w.level === 'error' ? '[!]' : '[warn]';
+    var icon = w.level === 'error' ? '🚨' : '[warn]';
     html += '<div class="cost-warning ' + w.level + '">';
     html += '<div class="cost-warning-icon">' + icon + '</div>';
     html += '<div class="cost-warning-message">' + escHtml(w.message) + '</div>';
@@ -9538,7 +9538,7 @@ function displayTrendAnalysis(trend, usageData) {
   var directionEl = document.getElementById('trend-direction');
   var predictionEl = document.getElementById('trend-prediction');
   
-  var emoji = trend.trend === 'increasing' ? '[up]' : trend.trend === 'decreasing' ? '[down]' : '->';
+  var emoji = trend.trend === 'increasing' ? '📈' : trend.trend === 'decreasing' ? '📉' : '➡️';
   directionEl.textContent = emoji + ' ' + trend.trend.charAt(0).toUpperCase() + trend.trend.slice(1);
   
   if (trend.dailyAvg && trend.monthlyPrediction) {
@@ -9586,7 +9586,7 @@ async function loadTranscripts() {
       html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
       html += '<span>' + timeAgo(t.modified) + '</span>';
       html += '</div></div>';
-      html += '<span style="color:#444;font-size:18px;">></span>';
+      html += '<span style="color:#444;font-size:18px;">▸</span>';
       html += '</div>';
     });
     document.getElementById('transcript-list').innerHTML = html || '<div style="padding:16px;color:#666;">No transcript files found</div>';
@@ -9716,7 +9716,7 @@ async function loadMainActivity() {
         sessions_spawn:'Spawn',sessions_send:'Send',cron:'Cron',gateway:'GW',session_status:'Status',image:'Vision',canvas:'Canvas'};
       var toolLabel = toolLabels[c.name] || c.name;
       html += '<span style="color:var(--text-faint);min-width:48px;font-size:10px;">' + ts + '</span>';
-      html += '<span style="font-size:12px;min-width:16px;text-align:center;">' + (c.icon||'[gear]') + '</span>';
+      html += '<span style="font-size:12px;min-width:16px;text-align:center;">' + (c.icon||'⚙️') + '</span>';
       html += '<span style="color:#8b6fc0;min-width:38px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;">' + toolLabel + '</span>';
       html += '<span style="color:#c0c0c0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + summary + '">' + summary + '</span>';
       html += '</div>';
@@ -9741,7 +9741,7 @@ function startLogStream() {
     appendLogLine('ov-logs', data.line);
     appendLogLine('logs-full', data.line);
     processFlowEvent(data.line);
-    document.getElementById('refresh-time').textContent = 'Live * ' + new Date().toLocaleTimeString();
+    document.getElementById('refresh-time').textContent = 'Live • ' + new Date().toLocaleTimeString();
   };
   logStream.onerror = function() {
     setTimeout(startLogStream, 5000);
@@ -10193,13 +10193,13 @@ function processFlowEvent(line) {
     if (msg.includes('signal')) ch = 'sig';
     else if (msg.includes('whatsapp')) ch = 'wa';
     triggerInbound(ch);
-    addFlowFeedItem('[msg] New message arrived via ' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal'), '#c0a0ff');
+    addFlowFeedItem('📨 New message arrived via ' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal'), '#c0a0ff');
     flowStats.msgTimestamps.push(now);
     return;
   }
   if (msg.includes('inbound') || msg.includes('dispatching') || msg.includes('message received')) {
     triggerInbound('tg');
-    addFlowFeedItem('[msg] Incoming message received', '#c0a0ff');
+    addFlowFeedItem('📨 Incoming message received', '#c0a0ff');
     flowStats.msgTimestamps.push(now);
     return;
   }
@@ -10229,7 +10229,7 @@ function processFlowEvent(line) {
     if (now - (flowThrottles['tool-'+flowTool]||0) < 300) return;
     flowThrottles['tool-'+flowTool] = now;
     var toolNames = {exec:'running a command',browser:'browsing the web',search:'searching the web',cron:'scheduling a task',tts:'generating speech',memory:'accessing memory'};
-    addFlowFeedItem('[*] AI is ' + (toolNames[flowTool] || 'using ' + flowTool), '#f0c040');
+    addFlowFeedItem('⚡ AI is ' + (toolNames[flowTool] || 'using ' + flowTool), '#f0c040');
     triggerToolCall(flowTool); return;
   }
 
@@ -10253,7 +10253,7 @@ function processFlowEvent(line) {
     var ch = 'tg';
     if (msg.includes('signal')) ch = 'sig';
     else if (msg.includes('whatsapp')) ch = 'wa';
-    addFlowFeedItem('[mail] AI sent a reply via ' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal'), '#50e080');
+    addFlowFeedItem('✉️ AI sent a reply via ' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal'), '#50e080');
     triggerOutbound(ch);
     return;
   }
@@ -10265,8 +10265,8 @@ function processFlowEvent(line) {
     var ch = 'tg';
     if (msg.includes('messagechannel=signal')) ch = 'sig';
     else if (msg.includes('messagechannel=whatsapp')) ch = 'wa';
-    else if (msg.includes('messagechannel=heartbeat')) { addFlowFeedItem('[heartbeat] Heartbeat run started', '#4a7090'); return; }
-    addFlowFeedItem('[brain] AI run started (' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal') + ')', '#a080f0');
+    else if (msg.includes('messagechannel=heartbeat')) { addFlowFeedItem('💓 Heartbeat run started', '#4a7090'); return; }
+    addFlowFeedItem('🧠 AI run started (' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal') + ')', '#a080f0');
     triggerInbound(ch);
     flowStats.msgTimestamps.push(now);
     return;
@@ -10280,19 +10280,19 @@ function processFlowEvent(line) {
   if (msg.includes('session state') && msg.includes('new=processing')) {
     if (now - (flowThrottles['session-active']||0) < 2000) return;
     flowThrottles['session-active'] = now;
-    addFlowFeedItem('[*] Session activated', '#f0c040');
+    addFlowFeedItem('⚡ Session activated', '#f0c040');
     return;
   }
   if (msg.includes('lane enqueue') && msg.includes('main')) {
     if (now - (flowThrottles['lane']||0) < 2000) return;
     flowThrottles['lane'] = now;
-    addFlowFeedItem('[in] Task queued', '#8090b0');
+    addFlowFeedItem('📥 Task queued', '#8090b0');
     return;
   }
   if (msg.includes('tool end') || msg.includes('tool_end')) {
     if (now - (flowThrottles['tool-end']||0) < 300) return;
     flowThrottles['tool-end'] = now;
-    addFlowFeedItem('[OK] Tool completed', '#50c070');
+    addFlowFeedItem('✔️ Tool completed', '#50c070');
     return;
   }
 }
@@ -10438,10 +10438,10 @@ function _ovRenderCard(agent, idx) {
   h += '</div>';
   h += '</div>';
   // Status badge top-right
-  h += '<span class="task-card-badge ' + sc + '" style="flex-shrink:0;">' + (sc === 'running' ? '[sync]' : sc === 'failed' ? '[ERR]' : '[ok]') + '</span>';
+  h += '<span class="task-card-badge ' + sc + '" style="flex-shrink:0;">' + (sc === 'running' ? '🔄' : sc === 'failed' ? '❌' : '[ok]') + '</span>';
   h += '</div>';
   // Row 3: Show details toggle
-  h += '<button class="ov-toggle-btn" onclick="event.stopPropagation();var d=document.getElementById(\'' + detailId + '\');var o=d.classList.toggle(\'open\');this.textContent=o?\'v Hide details\':\'> Show details\';if(o){window._ovExpandedSet=window._ovExpandedSet||{};window._ovExpandedSet[\'' + escHtml(agent.sessionId) + '\']=true;}else{delete window._ovExpandedSet[\'' + escHtml(agent.sessionId) + '\'];}">' + (isOpen ? 'v Hide details' : '> Show details') + '</button>';
+  h += '<button class="ov-toggle-btn" onclick="event.stopPropagation();var d=document.getElementById(\'' + detailId + '\');var o=d.classList.toggle(\'open\');this.textContent=o?\'▼ Hide details\':\'▶ Show details\';if(o){window._ovExpandedSet=window._ovExpandedSet||{};window._ovExpandedSet[\'' + escHtml(agent.sessionId) + '\']=true;}else{delete window._ovExpandedSet[\'' + escHtml(agent.sessionId) + '\'];}">' + (isOpen ? '▼ Hide details' : '▶ Show details') + '</button>';
   // Collapsible details
   h += '<div class="ov-details' + (isOpen ? ' open' : '') + '" id="' + detailId + '">';
   h += '<div><span style="color:var(--text-muted);">Session:</span> <span style="font-family:monospace;font-size:10px;">' + escHtml(agent.sessionId) + '</span></div>';
@@ -10476,7 +10476,7 @@ async function loadOverviewTasks() {
     if (agents.length === 0) {
       if (countBadge) countBadge.textContent = '';
       el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
-        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">[sleep]</div>'
+        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
         + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">No active tasks</div>'
         + '<div style="font-size:12px;">The AI is idle.</div></div>';
       return true;
@@ -10498,7 +10498,7 @@ async function loadOverviewTasks() {
     var totalShown = running.length + done.length + failed.length;
     if (totalShown === 0) {
       el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
-        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">[sleep]</div>'
+        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
         + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">No active tasks</div>'
         + '<div style="font-size:12px;">The AI is idle.</div></div>';
       return true;
@@ -10507,7 +10507,7 @@ async function loadOverviewTasks() {
     var html = '';
     var cardIdx = 0;
     if (running.length > 0) {
-      html += '<div class="task-group-header">[sync] Running (' + running.length + ')</div>';
+      html += '<div class="task-group-header">🔄 Running (' + running.length + ')</div>';
       running.forEach(function(a) { html += _ovRenderCard(a, cardIdx++); });
     }
     if (done.length > 0) {
@@ -10515,7 +10515,7 @@ async function loadOverviewTasks() {
       done.forEach(function(a) { html += _ovRenderCard(a, cardIdx++); });
     }
     if (failed.length > 0) {
-      html += '<div class="task-group-header">[ERR] Failed (' + failed.length + ')</div>';
+      html += '<div class="task-group-header">❌ Failed (' + failed.length + ')</div>';
       failed.forEach(function(a) { html += _ovRenderCard(a, cardIdx++); });
     }
 
@@ -10544,39 +10544,39 @@ var _modalEvents = [];
 
 /* === Component Modal === */
 var COMP_MAP = {
-  'node-telegram':    {type:'channel', name:'Telegram',       icon:'[phone]', chKey:'telegram'},
-  'node-signal':      {type:'channel', name:'Signal',         icon:'[lock]', chKey:'signal'},
-  'node-whatsapp':    {type:'channel', name:'WhatsApp',       icon:'[phone]', chKey:'whatsapp'},
-  'node-imessage':    {type:'channel', name:'iMessage',       icon:'[msg]', chKey:'imessage'},
-  'node-discord':     {type:'channel', name:'Discord',        icon:'[game]', chKey:'discord'},
-  'node-slack':       {type:'channel', name:'Slack',          icon:'[briefcase]', chKey:'slack'},
-  'node-irc':         {type:'channel', name:'IRC',            icon:'##', chKey:'irc'},
-  'node-webchat':     {type:'channel', name:'WebChat',        icon:'[web]', chKey:'webchat'},
-  'node-googlechat':  {type:'channel', name:'Google Chat',    icon:'[msg]', chKey:'googlechat'},
-  'node-bluebubbles': {type:'channel', name:'BlueBubbles',    icon:'[apple]', chKey:'bluebubbles'},
-  'node-msteams':     {type:'channel', name:'MS Teams',       icon:'[tie]', chKey:'msteams'},
-  'node-matrix':      {type:'channel', name:'Matrix',         icon:'[1234]', chKey:'matrix'},
-  'node-mattermost':  {type:'channel', name:'Mattermost',     icon:'[anchor]', chKey:'mattermost'},
-  'node-line':        {type:'channel', name:'LINE',           icon:'[green-heart]', chKey:'line'},
-  'node-nostr':       {type:'channel', name:'Nostr',          icon:'[*]', chKey:'nostr'},
-  'node-twitch':      {type:'channel', name:'Twitch',         icon:'[game]', chKey:'twitch'},
-  'node-feishu':      {type:'channel', name:'Feishu',         icon:'[flower]', chKey:'feishu'},
-  'node-zalo':        {type:'channel', name:'Zalo',           icon:'[msg]', chKey:'zalo'},
-  'node-gateway': {type:'gateway', name:'Gateway', icon:'[web]'},
-  'node-brain': {type:'brain', name:'AI Model', icon:'[brain]'},
-  'node-session': {type:'tool', name:'Sessions', icon:'[list]'},
-  'node-exec': {type:'tool', name:'Exec', icon:'[*]'},
-  'node-browser': {type:'tool', name:'Web', icon:'[earth]'},
+  'node-telegram':    {type:'channel', name:'Telegram',       icon:'📱', chKey:'telegram'},
+  'node-signal':      {type:'channel', name:'Signal',         icon:'🔒', chKey:'signal'},
+  'node-whatsapp':    {type:'channel', name:'WhatsApp',       icon:'📲', chKey:'whatsapp'},
+  'node-imessage':    {type:'channel', name:'iMessage',       icon:'💬', chKey:'imessage'},
+  'node-discord':     {type:'channel', name:'Discord',        icon:'🎮', chKey:'discord'},
+  'node-slack':       {type:'channel', name:'Slack',          icon:'💼', chKey:'slack'},
+  'node-irc':         {type:'channel', name:'IRC',            icon:'#️⃣', chKey:'irc'},
+  'node-webchat':     {type:'channel', name:'WebChat',        icon:'🌐', chKey:'webchat'},
+  'node-googlechat':  {type:'channel', name:'Google Chat',    icon:'💬', chKey:'googlechat'},
+  'node-bluebubbles': {type:'channel', name:'BlueBubbles',    icon:'🍎', chKey:'bluebubbles'},
+  'node-msteams':     {type:'channel', name:'MS Teams',       icon:'👔', chKey:'msteams'},
+  'node-matrix':      {type:'channel', name:'Matrix',         icon:'🔢', chKey:'matrix'},
+  'node-mattermost':  {type:'channel', name:'Mattermost',     icon:'⚓', chKey:'mattermost'},
+  'node-line':        {type:'channel', name:'LINE',           icon:'💚', chKey:'line'},
+  'node-nostr':       {type:'channel', name:'Nostr',          icon:'⚡', chKey:'nostr'},
+  'node-twitch':      {type:'channel', name:'Twitch',         icon:'🎮', chKey:'twitch'},
+  'node-feishu':      {type:'channel', name:'Feishu',         icon:'🌸', chKey:'feishu'},
+  'node-zalo':        {type:'channel', name:'Zalo',           icon:'💬', chKey:'zalo'},
+  'node-gateway': {type:'gateway', name:'Gateway', icon:'🌐'},
+  'node-brain': {type:'brain', name:'AI Model', icon:'🧠'},
+  'node-session': {type:'tool', name:'Sessions', icon:'📋'},
+  'node-exec': {type:'tool', name:'Exec', icon:'⚡'},
+  'node-browser': {type:'tool', name:'Web', icon:'🌍'},
   'node-search': {type:'tool', name:'Search', icon:'[check]'},
-  'node-cron': {type:'tool', name:'Cron', icon:'[clock]'},
-  'node-tts': {type:'tool', name:'TTS', icon:'[sound]'},
-  'node-memory': {type:'tool', name:'Memory', icon:'[save]'},
-  'node-cost-optimizer': {type:'optimizer', name:'Cost Optimizer', icon:'[$]'},
-  'node-automation-advisor': {type:'advisor', name:'Automation Advisor', icon:'[brain]'},
-  'node-runtime': {type:'infra', name:'Runtime', icon:'[gear]'},
-  'node-machine': {type:'infra', name:'Machine', icon:'[screen]'},
-  'node-storage': {type:'infra', name:'Storage', icon:'[disk]'},
-  'node-network': {type:'infra', name:'Network', icon:'[link]'}
+  'node-cron': {type:'tool', name:'Cron', icon:'⏰'},
+  'node-tts': {type:'tool', name:'TTS', icon:'🔊'},
+  'node-memory': {type:'tool', name:'Memory', icon:'💾'},
+  'node-cost-optimizer': {type:'optimizer', name:'Cost Optimizer', icon:'💰'},
+  'node-automation-advisor': {type:'advisor', name:'Automation Advisor', icon:'🧠'},
+  'node-runtime': {type:'infra', name:'Runtime', icon:'⚙️'},
+  'node-machine': {type:'infra', name:'Machine', icon:'🖥️'},
+  'node-storage': {type:'infra', name:'Storage', icon:'💿'},
+  'node-network': {type:'infra', name:'Network', icon:'🔗'}
 };
 function initCompClickHandlers() {
   Object.keys(COMP_MAP).forEach(function(id) {
@@ -10849,7 +10849,7 @@ function loadTelegramMessages(isRefresh) {
     if (!isCompModalActive(expectedNodeId)) return;
     var msgs = data.messages || [];
     var body = document.getElementById('comp-modal-body');
-    var html = '<div class="tg-stats"><span class="in">[in] ' + (data.todayIn || 0) + ' incoming</span><span class="out">[out] ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    var html = '<div class="tg-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
     html += '<div class="tg-chat">';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No messages found</div>';
@@ -10886,7 +10886,7 @@ function loadMoreTelegram() {
     // Re-render with all data
     var msgs = data.messages || [];
     var body = document.getElementById('comp-modal-body');
-    var html = '<div class="tg-stats"><span class="in">[in] ' + (data.todayIn || 0) + ' incoming</span><span class="out">[out] ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    var html = '<div class="tg-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
     html += '<div class="tg-chat">';
     msgs.forEach(function(m) {
       var dir = m.direction === 'in' ? 'in' : 'out';
@@ -10912,7 +10912,7 @@ function loadIMessageMessages(isRefresh) {
     if (!isCompModalActive(expectedNodeId)) return;
     var msgs = data.messages || [];
     var body = document.getElementById('comp-modal-body');
-    var html = '<div class="imsg-stats"><span class="in">[in] ' + (data.todayIn || 0) + ' incoming</span><span class="out">[out] ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    var html = '<div class="imsg-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
     html += '<div class="imsg-chat">';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No messages found</div>';
@@ -10946,7 +10946,7 @@ function loadWhatsAppMessages(isRefresh) {
     if (!isCompModalActive(expectedNodeId)) return;
     var msgs = data.messages || [];
     var body = document.getElementById('comp-modal-body');
-    var html = '<div class="wa-stats"><span class="in">[in] ' + (data.todayIn || 0) + ' incoming</span><span class="out">[out] ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    var html = '<div class="wa-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
     html += '<div class="wa-chat">';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No WhatsApp messages found</div>';
@@ -10980,7 +10980,7 @@ function loadSignalMessages(isRefresh) {
     if (!isCompModalActive(expectedNodeId)) return;
     var msgs = data.messages || [];
     var body = document.getElementById('comp-modal-body');
-    var html = '<div class="sig-stats"><span class="in">[in] ' + (data.todayIn || 0) + ' incoming</span><span class="out">[out] ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    var html = '<div class="sig-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
     html += '<div class="sig-chat">';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No Signal messages found</div>';
@@ -11059,13 +11059,13 @@ function loadDiscordMessages(isRefresh) {
     if (!isCompModalActive(expectedNodeId)) return;
     var msgs = data.messages || [];
     var body = document.getElementById('comp-modal-body');
-    var html = '<div class="discord-stats"><span class="in">[in] ' + (data.todayIn || 0) + ' incoming</span><span class="out">[out] ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    var html = '<div class="discord-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
     // Show guild/channel info if available
     var guilds = data.guilds || [];
     var channels = data.channels || [];
     if (guilds.length || channels.length) {
       html += '<div class="discord-server-info">';
-      html += '<span style="opacity:0.6;">[home]</span>';
+      html += '<span style="opacity:0.6;">🏠</span>';
       if (guilds.length) html += '<span class="guild-name">' + escapeHtml(guilds[0]) + '</span>';
       if (channels.length) html += '<span class="ch-name">#' + escapeHtml(channels[0]) + '</span>';
       html += '</div>';
@@ -11103,12 +11103,12 @@ function loadSlackMessages(isRefresh) {
     if (!isCompModalActive(expectedNodeId)) return;
     var msgs = data.messages || [];
     var body = document.getElementById('comp-modal-body');
-    var html = '<div class="slack-stats"><span class="in">[in] ' + (data.todayIn || 0) + ' incoming</span><span class="out">[out] ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
+    var html = '<div class="slack-stats"><span class="in">📥 ' + (data.todayIn || 0) + ' incoming</span><span class="out">📤 ' + (data.todayOut || 0) + ' outgoing</span><span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today</span></div>';
     var workspaces = data.workspaces || [];
     var channels = data.channels || [];
     if (workspaces.length || channels.length) {
       html += '<div class="slack-workspace-info">';
-      html += '<span style="opacity:0.6;">[briefcase]</span>';
+      html += '<span style="opacity:0.6;">💼</span>';
       if (workspaces.length) html += '<span class="ws-name">' + escapeHtml(workspaces[0]) + '</span>';
       if (channels.length) html += '<span class="ch-name">#' + escapeHtml(channels[0]) + '</span>';
       html += '</div>';
@@ -11149,8 +11149,8 @@ function loadGenericChannelData(nodeId, chKey, comp, isRefresh) {
     var todayOut = data.todayOut || 0;
     var status = data.status || 'connected';
     var html = '<div class="tg-stats">'
-      + '<span class="in">[in] ' + todayIn + ' incoming</span>'
-      + '<span class="out">[out] ' + todayOut + ' outgoing</span>'
+      + '<span class="in">📥 ' + todayIn + ' incoming</span>'
+      + '<span class="out">📤 ' + todayOut + ' outgoing</span>'
       + '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">' + escapeHtml(status) + ' - Today</span>'
       + '</div>';
     if (msgs.length === 0) {
@@ -11187,7 +11187,7 @@ function loadGenericChannelData(nodeId, chKey, comp, isRefresh) {
   });
 }
 
-// -- Webchat themed loader -------------------------------------------------
+// ── Webchat themed loader ─────────────────────────────────────────────────
 var _webchatRefreshTimer = null;
 
 function loadWebchatMessages(isRefresh) {
@@ -11202,14 +11202,14 @@ function loadWebchatMessages(isRefresh) {
     var activeSessions = data.activeSessions || 0;
     var lastActive = data.lastActive ? new Date(data.lastActive).toLocaleTimeString() : '--';
     var html = '<div class="wc-stats">'
-      + '<span class="wc-stat-item">[web] <b>' + activeSessions + '</b> sessions</span>'
-      + '<span class="wc-stat-item">[in] <b>' + todayIn + '</b> in</span>'
-      + '<span class="wc-stat-item">[out] <b>' + todayOut + '</b> out</span>'
+      + '<span class="wc-stat-item">🌐 <b>' + activeSessions + '</b> sessions</span>'
+      + '<span class="wc-stat-item">📥 <b>' + todayIn + '</b> in</span>'
+      + '<span class="wc-stat-item">📤 <b>' + todayOut + '</b> out</span>'
       + '<span style="margin-left:auto;font-size:11px;color:#6b7280;">Last: ' + lastActive + '</span>'
       + '</div>';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:40px;color:#6b7280;">'
-        + '<div style="font-size:36px;margin-bottom:12px;">[web]</div>'
+        + '<div style="font-size:36px;margin-bottom:12px;">🌐</div>'
         + '<div style="font-size:15px;font-weight:600;margin-bottom:6px;color:#374151;">WebChat connected</div>'
         + '<div style="font-size:13px;">No recent messages found in logs.</div>'
         + '<div style="margin-top:8px;font-size:11px;">Messages appear once sessions are active.</div>'
@@ -11236,7 +11236,7 @@ function loadWebchatMessages(isRefresh) {
   });
 }
 
-// -- IRC themed loader ------------------------------------------------------
+// ── IRC themed loader ──────────────────────────────────────────────────────
 var _ircRefreshTimer = null;
 
 function loadIRCMessages(isRefresh) {
@@ -11251,14 +11251,14 @@ function loadIRCMessages(isRefresh) {
     var channels = data.channels || [];
     var nicks = data.nicks || [];
     var html = '<div class="irc-header">'
-      + '<span class="irc-stat">[in] ' + todayIn + '</span>'
-      + '<span class="irc-stat">[out] ' + todayOut + '</span>';
+      + '<span class="irc-stat">📥 ' + todayIn + '</span>'
+      + '<span class="irc-stat">📤 ' + todayOut + '</span>';
     if (channels.length > 0) html += '<span class="irc-channels">' + channels.map(function(c){return escapeHtml(c);}).join(' ') + '</span>';
     if (nicks.length > 0) html += '<span class="irc-nick">nick: ' + escapeHtml(nicks[0]) + '</span>';
     html += '</div>';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:32px;color:#9ca3af;font-family:monospace;">'
-        + '<div style="font-size:28px;margin-bottom:8px;">##</div>'
+        + '<div style="font-size:28px;margin-bottom:8px;">#️⃣</div>'
         + '<div>*** No messages found in IRC logs ***</div>'
         + '<div style="margin-top:6px;font-size:11px;color:#6b7280;">Messages appear when IRC channel is active</div>'
         + '</div>';
@@ -11285,7 +11285,7 @@ function loadIRCMessages(isRefresh) {
   });
 }
 
-// -- BlueBubbles themed loader ----------------------------------------------
+// ── BlueBubbles themed loader ──────────────────────────────────────────────
 var _bbRefreshTimer = null;
 
 function loadBlueBubblesMessages(isRefresh) {
@@ -11301,14 +11301,14 @@ function loadBlueBubblesMessages(isRefresh) {
     var status = data.status || 'configured';
     var statusColor = status === 'connected' ? '#34C759' : status === 'log-only' ? '#f59e0b' : '#6b7280';
     var html = '<div class="bb-stats">'
-      + '<span class="bb-stat-item" style="color:#34C759;">[in] <b>' + todayIn + '</b></span>'
-      + '<span class="bb-stat-item" style="color:#34C759;">[out] <b>' + todayOut + '</b></span>'
-      + (chatCount !== null && chatCount !== undefined ? '<span class="bb-stat-item">[msg] <b>' + chatCount + '</b> chats</span>' : '')
-      + '<span style="margin-left:auto;font-size:11px;color:' + statusColor + ';">* ' + escapeHtml(status) + '</span>'
+      + '<span class="bb-stat-item" style="color:#34C759;">📥 <b>' + todayIn + '</b></span>'
+      + '<span class="bb-stat-item" style="color:#34C759;">📤 <b>' + todayOut + '</b></span>'
+      + (chatCount !== null && chatCount !== undefined ? '<span class="bb-stat-item">💬 <b>' + chatCount + '</b> chats</span>' : '')
+      + '<span style="margin-left:auto;font-size:11px;color:' + statusColor + ';">● ' + escapeHtml(status) + '</span>'
       + '</div>';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:40px;">'
-        + '<div style="font-size:36px;margin-bottom:12px;">[apple]</div>'
+        + '<div style="font-size:36px;margin-bottom:12px;">🍎</div>'
         + '<div style="font-size:15px;font-weight:600;margin-bottom:6px;color:#34C759;">BlueBubbles ' + (status === 'connected' ? 'Connected' : 'Configured') + '</div>'
         + (chatCount !== null && chatCount !== undefined ? '<div style="font-size:13px;color:#6b7280;">' + chatCount + ' chats available via BB server</div>' : '<div style="font-size:13px;color:#6b7280;">No messages found in logs.</div>')
         + '</div>';
@@ -11345,13 +11345,13 @@ function loadGoogleChatMessages(isRefresh) {
     var todayOut = data.todayOut || 0;
     var spaces = data.spaces || [];
     var html = '<div class="gc-stats">'
-      + '<span class="in">[in] ' + todayIn + ' incoming</span>'
-      + '<span class="out">[out] ' + todayOut + ' outgoing</span>'
-      + (spaces.length ? '<span style="margin-left:auto;color:#1a73e8;font-size:11px;">[office] ' + escapeHtml(spaces.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today - Google Chat</span>')
+      + '<span class="in">📥 ' + todayIn + ' incoming</span>'
+      + '<span class="out">📤 ' + todayOut + ' outgoing</span>'
+      + (spaces.length ? '<span style="margin-left:auto;color:#1a73e8;font-size:11px;">🏢 ' + escapeHtml(spaces.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today - Google Chat</span>')
       + '</div>';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">'
-        + '<div style="font-size:40px;margin-bottom:12px;">[msg]</div>'
+        + '<div style="font-size:40px;margin-bottom:12px;">💬</div>'
         + '<div style="font-size:15px;font-weight:600;margin-bottom:6px;color:#1a73e8;">Google Chat</div>'
         + '<div style="font-size:13px;">No recent messages found in logs.</div>'
         + '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">Messages will appear here once detected in session transcripts.</div>'
@@ -11375,7 +11375,7 @@ function loadGoogleChatMessages(isRefresh) {
     document.getElementById('comp-modal-footer').textContent = 'Google Chat - Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function() {
     if (!isCompModalActive(nodeId)) return;
-    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">[msg]</div><div style="font-weight:600;color:#1a73e8;">Google Chat</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
+    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">💬</div><div style="font-weight:600;color:#1a73e8;">Google Chat</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
   });
 }
 
@@ -11390,13 +11390,13 @@ function loadMSTeamsMessages(isRefresh) {
     var todayOut = data.todayOut || 0;
     var teams = data.teams || [];
     var html = '<div class="mst-stats">'
-      + '<span class="in">[in] ' + todayIn + ' incoming</span>'
-      + '<span class="out">[out] ' + todayOut + ' outgoing</span>'
-      + (teams.length ? '<span style="margin-left:auto;color:#6264A7;font-size:11px;">[users] ' + escapeHtml(teams.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today - MS Teams</span>')
+      + '<span class="in">📥 ' + todayIn + ' incoming</span>'
+      + '<span class="out">📤 ' + todayOut + ' outgoing</span>'
+      + (teams.length ? '<span style="margin-left:auto;color:#6264A7;font-size:11px;">👥 ' + escapeHtml(teams.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today - MS Teams</span>')
       + '</div>';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">'
-        + '<div style="font-size:40px;margin-bottom:12px;">[tie]</div>'
+        + '<div style="font-size:40px;margin-bottom:12px;">👔</div>'
         + '<div style="font-size:15px;font-weight:600;margin-bottom:6px;color:#6264A7;">Microsoft Teams</div>'
         + '<div style="font-size:13px;">No recent messages found in logs.</div>'
         + '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">Messages will appear here once detected in session transcripts.</div>'
@@ -11420,7 +11420,7 @@ function loadMSTeamsMessages(isRefresh) {
     document.getElementById('comp-modal-footer').textContent = 'Microsoft Teams - Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function() {
     if (!isCompModalActive(nodeId)) return;
-    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">[tie]</div><div style="font-weight:600;color:#6264A7;">Microsoft Teams</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
+    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">👔</div><div style="font-weight:600;color:#6264A7;">Microsoft Teams</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
   });
 }
 
@@ -11435,13 +11435,13 @@ function loadMattermostMessages(isRefresh) {
     var todayOut = data.todayOut || 0;
     var channels = data.channels || [];
     var html = '<div class="mm-stats">'
-      + '<span class="in">[in] ' + todayIn + ' incoming</span>'
-      + '<span class="out">[out] ' + todayOut + ' outgoing</span>'
+      + '<span class="in">📥 ' + todayIn + ' incoming</span>'
+      + '<span class="out">📤 ' + todayOut + ' outgoing</span>'
       + (channels.length ? '<span style="margin-left:auto;color:#0058CC;font-size:11px;"># ' + escapeHtml(channels.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today - Mattermost</span>')
       + '</div>';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">'
-        + '<div style="font-size:40px;margin-bottom:12px;">[anchor]</div>'
+        + '<div style="font-size:40px;margin-bottom:12px;">⚓</div>'
         + '<div style="font-size:15px;font-weight:600;margin-bottom:6px;color:#0058CC;">Mattermost</div>'
         + '<div style="font-size:13px;">No recent messages found in logs.</div>'
         + '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">Messages will appear here once detected in session transcripts.</div>'
@@ -11465,7 +11465,7 @@ function loadMattermostMessages(isRefresh) {
     document.getElementById('comp-modal-footer').textContent = 'Mattermost - Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function() {
     if (!isCompModalActive(nodeId)) return;
-    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">[anchor]</div><div style="font-weight:600;color:#0058CC;">Mattermost</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
+    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">⚓</div><div style="font-weight:600;color:#0058CC;">Mattermost</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
   });
 }
 
@@ -11506,10 +11506,10 @@ function loadBrainData(isRefresh) {
     var cacheHits = s.cache_hits || 0;
     var cacheRate = s.today_calls > 0 ? Math.round(cacheHits / s.today_calls * 100) : 0;
     html += '<div style="display:flex;gap:8px;margin-bottom:12px;justify-content:center;flex-wrap:wrap;">';
-    html += '<span style="background:' + (thinkCount > 0 ? '#7c3aed22' : 'var(--bg-secondary)') + ';color:' + (thinkCount > 0 ? '#7c3aed' : 'var(--text-muted)') + ';padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;">[brain] Thinking: ' + thinkCount + '/' + (s.today_calls||0) + '</span>';
-    html += '<span style="background:' + (cacheRate > 50 ? '#22c55e22' : 'var(--bg-secondary)') + ';color:' + (cacheRate > 50 ? '#22c55e' : 'var(--text-muted)') + ';padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;">[save] Cache hit: ' + cacheRate + '%</span>';
+    html += '<span style="background:' + (thinkCount > 0 ? '#7c3aed22' : 'var(--bg-secondary)') + ';color:' + (thinkCount > 0 ? '#7c3aed' : 'var(--text-muted)') + ';padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;">🧠 Thinking: ' + thinkCount + '/' + (s.today_calls||0) + '</span>';
+    html += '<span style="background:' + (cacheRate > 50 ? '#22c55e22' : 'var(--bg-secondary)') + ';color:' + (cacheRate > 50 ? '#22c55e' : 'var(--text-muted)') + ';padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;">💾 Cache hit: ' + cacheRate + '%</span>';
     var cacheW = tok.cache_write||0;
-    html += '<span style="background:var(--bg-secondary);color:var(--text-muted);padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;">[write] Cache write: ' + (cacheW>=1e6?(cacheW/1e6).toFixed(1)+'M':cacheW>=1e3?(cacheW/1e3).toFixed(1)+'K':cacheW) + '</span>';
+    html += '<span style="background:var(--bg-secondary);color:var(--text-muted);padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;">✍️ Cache write: ' + (cacheW>=1e6?(cacheW/1e6).toFixed(1)+'M':cacheW>=1e3?(cacheW/1e3).toFixed(1)+'K':cacheW) + '</span>';
     html += '</div>';
 
     // Token breakdown bar
@@ -11521,7 +11521,7 @@ function loadBrainData(isRefresh) {
     html += '<div style="width:' + (tCR/tTotal*100) + '%;background:#22c55e;" title="Cache Read: ' + tCR + '"></div>';
     html += '</div>';
     html += '<div style="display:flex;gap:12px;font-size:10px;color:var(--text-muted);margin-bottom:14px;justify-content:center;">';
-    html += '<span>[blue] Input</span><span>[purple] Output</span><span>[green] Cache Read</span>';
+    html += '<span>🔵 Input</span><span>🟣 Output</span><span>🟢 Cache Read</span>';
     html += '</div>';
 
     // Call list
@@ -11530,7 +11530,7 @@ function loadBrainData(isRefresh) {
       html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No LLM calls found today</div>';
     } else {
       html += '<div style="display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto;">';
-      var TOOL_ICONS = {read:'[file]',write:'[pencil]',edit:'[tool]',exec:'[*]',process:'[gear]',browser:'[web]',web_search:'[check]',web_fetch:'[earth]',message:'[msg]',tts:'[sound]',image:'[image]',canvas:'[art]',nodes:'[phone]'};
+      var TOOL_ICONS = {read:'📄',write:'✏️',edit:'🔧',exec:'⚡',process:'⚙️',browser:'🌐',web_search:'[check]',web_fetch:'🌍',message:'💬',tts:'🔊',image:'🖼️',canvas:'🎨',nodes:'📱'};
       var TOOL_COLORS = {exec:'#f59e0b',browser:'#3b82f6',web_search:'#8b5cf6',web_fetch:'#06b6d4',message:'#ec4899',read:'#6b7280',write:'#22c55e',edit:'#f97316',tts:'#a855f7',image:'#ef4444',canvas:'#14b8a6',nodes:'#6366f1',process:'#64748b'};
       calls.forEach(function(c) {
         var ts = c.timestamp ? new Date(c.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
@@ -11544,13 +11544,13 @@ function loadBrainData(isRefresh) {
         html += '<span style="color:#8b5cf6;min-width:40px;" title="Out">' + (c.tokens_out>=1000?(c.tokens_out/1000).toFixed(1)+'K':c.tokens_out) + '</span>';
         html += '<span style="color:' + cColor + ';min-width:50px;">' + (c.cost||'$0') + '</span>';
         html += '<span style="color:var(--text-muted);min-width:35px;">' + dur + '</span>';
-        if (c.thinking) html += '<span style="background:#7c3aed22;color:#7c3aed;padding:1px 5px;border-radius:4px;font-size:10px;" title="Thinking enabled">[brain]</span>';
-        if (c.cache_read > 0) html += '<span style="background:#22c55e22;color:#22c55e;padding:1px 5px;border-radius:4px;font-size:10px;" title="Cache hit: ' + c.cache_read + ' tokens">[save]' + (c.cache_read>=1000?(c.cache_read/1000).toFixed(0)+'K':c.cache_read) + '</span>';
+        if (c.thinking) html += '<span style="background:#7c3aed22;color:#7c3aed;padding:1px 5px;border-radius:4px;font-size:10px;" title="Thinking enabled">🧠</span>';
+        if (c.cache_read > 0) html += '<span style="background:#22c55e22;color:#22c55e;padding:1px 5px;border-radius:4px;font-size:10px;" title="Cache hit: ' + c.cache_read + ' tokens">💾' + (c.cache_read>=1000?(c.cache_read/1000).toFixed(0)+'K':c.cache_read) + '</span>';
         // Tool badges
         if (c.tools_used && c.tools_used.length > 0) {
           html += '<span style="display:flex;gap:3px;flex-wrap:wrap;">';
           c.tools_used.forEach(function(t) {
-            var icon = TOOL_ICONS[t] || '[tool]';
+            var icon = TOOL_ICONS[t] || '🔧';
             var bg = TOOL_COLORS[t] || '#6b7280';
             html += '<span style="background:' + bg + '22;color:' + bg + ';padding:1px 5px;border-radius:4px;font-size:10px;" title="' + t + '">' + icon + t + '</span>';
           });
@@ -11584,11 +11584,11 @@ function loadCostOptimizerData(isRefresh) {
     var body = document.getElementById('comp-modal-body');
     var html = '';
 
-    // == SECTION 1: Cost Overview ==================================
+    // ══ SECTION 1: Cost Overview ══════════════════════════════════
     var todayCost = data.todayCost || 0;
     var monthCost = data.projectedMonthlyCost || 0;
     html += '<div class="cost-overview">';
-    html += '<div class="cost-overview-header">[$] Cost Overview</div>';
+    html += '<div class="cost-overview-header">💰 Cost Overview</div>';
     html += '<div class="cost-overview-row">';
     html += '<div class="cost-overview-item"><span class="cost-overview-label">Today</span><span class="cost-overview-value">$' + todayCost.toFixed(3) + '</span></div>';
     html += '<div class="cost-overview-item"><span class="cost-overview-label">Month Projected</span><span class="cost-overview-value">$' + monthCost.toFixed(2) + '</span></div>';
@@ -11610,9 +11610,9 @@ function loadCostOptimizerData(isRefresh) {
       html += '</div>';
     }
 
-    // == SECTION 2: Hardware =======================================
+    // ══ SECTION 2: Hardware ═══════════════════════════════════════
     var sys = (data.system) || {};
-    html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:6px;">[screen] Your Hardware</div>';
+    html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:6px;">🖥️ Your Hardware</div>';
     html += '<div class="hw-card">';
     if (sys.cpu) html += '<span class="hw-card-chip">' + sys.cpu + '</span>';
     if (sys.ram_gb) html += '<span class="hw-card-chip">' + sys.ram_gb + 'GB RAM</span>';
@@ -11621,15 +11621,15 @@ function loadCostOptimizerData(isRefresh) {
     html += '</div>';
     html += '<div class="hw-metal-notice">[warn] llmfit doesn\'t detect Apple Metal -- actual performance will be <strong>3-5x faster</strong> with Ollama\'s Metal backend</div>';
 
-    // == SECTION 3: Recommended Local Models ======================
+    // ══ SECTION 3: Recommended Local Models ══════════════════════
     html += '<div class="co-section">';
-    html += '<h3>[bot] Recommended Local Models <span style="font-size:11px;color:var(--text-muted);font-weight:400;">via llmfit - Metal-accelerated</span></h3>';
+    html += '<h3>🤖 Recommended Local Models <span style="font-size:11px;color:var(--text-muted);font-weight:400;">via llmfit - Metal-accelerated</span></h3>';
 
     if (!data.ollamaInstalled) {
       html += '<div class="co-ollama-prompt">';
       html += '<div style="font-size:13px;color:#a78bfa;font-weight:600;">[warn] Ollama not installed -- install to run models locally (free!)</div>';
       html += '<div class="co-ollama-cmd">brew install ollama</div>';
-      html += '<button class="co-action-btn" onclick="navigator.clipboard.writeText(\'brew install ollama\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'[list] Copy Install Command\',2000);">[list] Copy Install Command</button>';
+      html += '<button class="co-action-btn" onclick="navigator.clipboard.writeText(\'brew install ollama\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'📋 Copy Install Command\',2000);">📋 Copy Install Command</button>';
       html += '</div>';
     }
 
@@ -11652,9 +11652,9 @@ function loadCostOptimizerData(isRefresh) {
         html += '</div>';
         html += '<div class="model-install-cmd" onclick="navigator.clipboard.writeText(\'' + ollamaCmd + '\');this.querySelector(\'span.cmd-text\').textContent=\'[ok] Copied!\';setTimeout(()=>this.querySelector(\'span.cmd-text\').textContent=\'' + ollamaCmd + '\',2000);">';
         html += '<span class="cmd-text">' + ollamaCmd + '</span>';
-        html += '<span style="color:#4ade80;font-size:10px;flex-shrink:0;">[in] Copy</span>';
+        html += '<span style="color:#4ade80;font-size:10px;flex-shrink:0;">📥 Copy</span>';
         html += '</div>';
-        if (m.fullName) html += '<a style="display:block;margin-top:5px;font-size:10px;color:#60a5fa;text-decoration:none;" href="https://huggingface.co/' + m.fullName + '" target="_blank">[link] View on HuggingFace</a>';
+        if (m.fullName) html += '<a style="display:block;margin-top:5px;font-size:10px;color:#60a5fa;text-decoration:none;" href="https://huggingface.co/' + m.fullName + '" target="_blank">🔗 View on HuggingFace</a>';
         html += '</div>';
       });
       html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">* Speed estimated with Ollama Metal backend (3-5x llmfit baseline)</div>';
@@ -11663,11 +11663,11 @@ function loadCostOptimizerData(isRefresh) {
     }
     html += '</div>';
 
-    // == SECTION 4: Task Recommendations ==========================
+    // ══ SECTION 4: Task Recommendations ══════════════════════════
     var taskRecs = data.taskRecommendations || [];
     if (taskRecs.length > 0) {
       html += '<div class="co-section">';
-      html += '<h3>[list] Task Recommendations</h3>';
+      html += '<h3>📋 Task Recommendations</h3>';
       taskRecs.forEach(function(rec) {
         html += '<div class="task-rec">';
         html += '<div class="task-rec-title">' + rec.task + '</div>';
@@ -11675,7 +11675,7 @@ function loadCostOptimizerData(isRefresh) {
         html += '<div class="task-rec-arrow">';
         if (rec.currentModel) html += '<span style="color:var(--text-muted);">' + rec.currentModel + '</span>';
         if (rec.suggestedLocal) html += ' -> <span style="color:#4ade80;font-weight:600;">' + rec.suggestedLocal + '</span>';
-        else html += ' -> <span style="color:#4ade80;font-weight:600;">keep frontier v</span>';
+        else html += ' -> <span style="color:#4ade80;font-weight:600;">keep frontier ✓</span>';
         html += '</div>';
         if (rec.reason) html += '<div class="task-rec-reason">' + rec.reason + '</div>';
         html += '</div>';
@@ -11683,18 +11683,18 @@ function loadCostOptimizerData(isRefresh) {
       html += '</div>';
     }
 
-    // == SECTION 5: Quick Actions ==================================
+    // ══ SECTION 5: Quick Actions ══════════════════════════════════
     html += '<div class="co-section">';
-    html += '<h3>[gear] Quick Actions</h3>';
+    html += '<h3>⚙️ Quick Actions</h3>';
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
-    html += '<button class="co-action-btn" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'brew install ollama\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'[list] Install Ollama\',2000);">[list] Install Ollama</button>';
-    html += '<button class="co-action-btn secondary" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'ollama serve\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'[list] ollama serve\',2000);">[list] ollama serve</button>';
+    html += '<button class="co-action-btn" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'brew install ollama\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'📋 Install Ollama\',2000);">📋 Install Ollama</button>';
+    html += '<button class="co-action-btn secondary" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'ollama serve\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'📋 ollama serve\',2000);">📋 ollama serve</button>';
     html += '<a class="co-action-btn secondary" style="width:auto;padding:6px 14px;text-decoration:none;display:inline-block;" href="https://ollama.com/search" target="_blank">[check] Browse Models</a>';
     html += '</div>';
     html += '</div>';
 
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - llmfit v - Metal backend';
+    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - llmfit ✓ - Metal backend';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -11706,7 +11706,7 @@ function loadCostOptimizerData(isRefresh) {
 var _gwRefreshTimer = null;
 var _gwPage = 0;
 
-// === TIME TRAVEL ===================================================
+// ═══ TIME TRAVEL ═══════════════════════════════════════════════════
 var _timelineData = null;  // {days: [{date, label, events, hasMemory, hours}], today: 'YYYY-MM-DD'}
 var _currentTimeContext = null;  // {date: 'YYYY-MM-DD', hour: null} or null for "now"
 var _timeTravelMode = false;
@@ -11827,7 +11827,7 @@ function reloadCurrentComponent() {
 function loadCostOptimizerDataWithTime() {
   var body = document.getElementById('comp-modal-body');
   var timeContext = _currentTimeContext ? ' (' + _currentTimeContext.date + ')' : '';
-  body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">[$]</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">Cost Optimizer' + timeContext + '</div><div style="color:var(--text-muted);">Historical cost analysis coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">optimizer</div></div>';
+  body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">💰</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">Cost Optimizer' + timeContext + '</div><div style="color:var(--text-muted);">Historical cost analysis coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">optimizer</div></div>';
   document.getElementById('comp-modal-footer').textContent = 'Time travel: ' + (_currentTimeContext ? _currentTimeContext.date : 'Live');
 }
 
@@ -11836,17 +11836,17 @@ function loadAutomationAdvisorDataWithTime() {
   var timeContext = _currentTimeContext ? ' (' + _currentTimeContext.date + ')' : '';
   
   if (_currentTimeContext) {
-    body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">[brain]</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">Automation Advisor' + timeContext + '</div><div style="color:var(--text-muted);">Historical pattern analysis coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">advisor</div></div>';
+    body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">🧠</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">Automation Advisor' + timeContext + '</div><div style="color:var(--text-muted);">Historical pattern analysis coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">advisor</div></div>';
     document.getElementById('comp-modal-footer').textContent = 'Time travel: ' + _currentTimeContext.date;
     return;
   }
   
-  body.innerHTML = '<div style="text-align:center;padding:40px;"><div style="font-size:24px;margin-bottom:20px;">[brain] Loading automation analysis...</div></div>';
+  body.innerHTML = '<div style="text-align:center;padding:40px;"><div style="font-size:24px;margin-bottom:20px;">🧠 Loading automation analysis...</div></div>';
   document.getElementById('comp-modal-footer').textContent = 'Live';
   
   fetch('/api/automation-analysis').then(function(r){return r.json();}).then(function(data) {
     var html = '<div style="padding:20px;">';
-    html += '<div style="text-align:center;margin-bottom:30px;"><div style="font-size:48px;margin-bottom:12px;">[brain]</div><h2 style="margin:0;font-size:20px;">Automation Advisor</h2><p style="color:var(--text-muted);margin:8px 0 0 0;">Analyzing patterns to suggest new automations</p></div>';
+    html += '<div style="text-align:center;margin-bottom:30px;"><div style="font-size:48px;margin-bottom:12px;">🧠</div><h2 style="margin:0;font-size:20px;">Automation Advisor</h2><p style="color:var(--text-muted);margin:8px 0 0 0;">Analyzing patterns to suggest new automations</p></div>';
     
     if (data.patterns && data.patterns.length > 0) {
       html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">[check] Detected Patterns</h3>';
@@ -11855,7 +11855,7 @@ function loadAutomationAdvisorDataWithTime() {
         html += '<div style="background:var(--bg-hover);border-radius:8px;padding:16px;margin-bottom:16px;border-left:4px solid ' + priorityColor + ';">';
         html += '<div style="font-weight:600;margin-bottom:8px;">' + pattern.title + '</div>';
         html += '<div style="color:var(--text-muted);margin-bottom:12px;">' + pattern.description + '</div>';
-        html += '<div style="font-size:12px;color:var(--text-muted);">Frequency: ' + pattern.frequency + ' * Confidence: ' + pattern.confidence + '%</div>';
+        html += '<div style="font-size:12px;color:var(--text-muted);">Frequency: ' + pattern.frequency + ' • Confidence: ' + pattern.confidence + '%</div>';
         html += '</div>';
       });
     }
@@ -11863,7 +11863,7 @@ function loadAutomationAdvisorDataWithTime() {
     if (data.suggestions && data.suggestions.length > 0) {
       html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">[tip] Automation Suggestions</h3>';
       data.suggestions.forEach(function(suggestion) {
-        var typeIcon = suggestion.type === 'cron' ? '[clock]' : suggestion.type === 'skill' ? '[dev]' : '[tool]';
+        var typeIcon = suggestion.type === 'cron' ? '⏰' : suggestion.type === 'skill' ? '[dev]' : '🔧';
         html += '<div style="background:var(--bg-hover);border-radius:8px;padding:16px;margin-bottom:16px;">';
         html += '<div style="display:flex;align-items:center;margin-bottom:8px;"><span style="font-size:20px;margin-right:8px;">' + typeIcon + '</span>';
         html += '<span style="font-weight:600;">' + suggestion.title + '</span></div>';
@@ -11871,14 +11871,14 @@ function loadAutomationAdvisorDataWithTime() {
         if (suggestion.implementation) {
           html += '<div style="background:var(--bg-primary);padding:8px;border-radius:4px;font-family:monospace;font-size:12px;color:var(--text-muted);margin-bottom:8px;">' + suggestion.implementation + '</div>';
         }
-        html += '<div style="font-size:12px;color:var(--text-muted);">Impact: ' + suggestion.impact + ' * Effort: ' + suggestion.effort + '</div>';
+        html += '<div style="font-size:12px;color:var(--text-muted);">Impact: ' + suggestion.impact + ' • Effort: ' + suggestion.effort + '</div>';
         html += '</div>';
       });
     }
     
     if (!data.patterns || data.patterns.length === 0) {
       html += '<div style="text-align:center;padding:40px;color:var(--text-muted);">';
-      html += '<div style="font-size:48px;margin-bottom:16px;">[sprout]</div>';
+      html += '<div style="font-size:48px;margin-bottom:16px;">🌱</div>';
       html += '<h3>No patterns detected yet</h3>';
       html += '<p>Continue using the agent and check back later for automation suggestions.</p>';
       html += '</div>';
@@ -11953,17 +11953,17 @@ function loadGatewayData(isRefresh) {
 
     // Config summary & uptime
     html += '<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">';
-    if (s.uptime) html += '<span style="background:var(--bg-secondary);padding:3px 10px;border-radius:12px;font-size:11px;color:var(--text-muted);">[timer] Up since: ' + escapeHtml(s.uptime) + '</span>';
-    if (cfg.channels && cfg.channels.length) html += '<span style="background:var(--bg-secondary);padding:3px 10px;border-radius:12px;font-size:11px;color:var(--text-muted);">[signal] Channels: ' + cfg.channels.join(', ') + '</span>';
-    if (cfg.heartbeat) html += '<span style="background:var(--bg-secondary);padding:3px 10px;border-radius:12px;font-size:11px;color:var(--text-muted);">[heartbeat] Heartbeat: ' + cfg.heartbeat + '</span>';
-    if (cfg.max_concurrent) html += '<span style="background:var(--bg-secondary);padding:3px 10px;border-radius:12px;font-size:11px;color:var(--text-muted);">[*] Max concurrent: ' + cfg.max_concurrent + '</span>';
-    if (cfg.max_subagents) html += '<span style="background:var(--bg-secondary);padding:3px 10px;border-radius:12px;font-size:11px;color:var(--text-muted);">[bee] Max subagents: ' + cfg.max_subagents + '</span>';
+    if (s.uptime) html += '<span style="background:var(--bg-secondary);padding:3px 10px;border-radius:12px;font-size:11px;color:var(--text-muted);">⏱️ Up since: ' + escapeHtml(s.uptime) + '</span>';
+    if (cfg.channels && cfg.channels.length) html += '<span style="background:var(--bg-secondary);padding:3px 10px;border-radius:12px;font-size:11px;color:var(--text-muted);">📡 Channels: ' + cfg.channels.join(', ') + '</span>';
+    if (cfg.heartbeat) html += '<span style="background:var(--bg-secondary);padding:3px 10px;border-radius:12px;font-size:11px;color:var(--text-muted);">💓 Heartbeat: ' + cfg.heartbeat + '</span>';
+    if (cfg.max_concurrent) html += '<span style="background:var(--bg-secondary);padding:3px 10px;border-radius:12px;font-size:11px;color:var(--text-muted);">⚡ Max concurrent: ' + cfg.max_concurrent + '</span>';
+    if (cfg.max_subagents) html += '<span style="background:var(--bg-secondary);padding:3px 10px;border-radius:12px;font-size:11px;color:var(--text-muted);">🐝 Max subagents: ' + cfg.max_subagents + '</span>';
     html += '</div>';
 
     // Restart history
     var restarts = s.restarts || [];
     if (restarts.length > 0) {
-      html += '<div style="margin-bottom:12px;font-size:11px;color:var(--text-muted);"><strong>[sync] Restarts today:</strong> ';
+      html += '<div style="margin-bottom:12px;font-size:11px;color:var(--text-muted);"><strong>🔄 Restarts today:</strong> ';
       restarts.forEach(function(r) { if(r) html += '<span style="margin-right:8px;">' + new Date(r).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}) + '</span>'; });
       html += '</div>';
     }
@@ -11974,20 +11974,20 @@ function loadGatewayData(isRefresh) {
     } else {
       html += '<div style="display:flex;flex-direction:column;gap:6px;">';
       routes.forEach(function(r) {
-        var badge = '[msg]';
+        var badge = '📨';
         var badgeColor = '#3b82f6';
-        if (r.type === 'heartbeat') { badge = '[heartbeat]'; badgeColor = '#ec4899'; }
-        else if (r.type === 'cron') { badge = '[clock]'; badgeColor = '#f59e0b'; }
-        else if (r.type === 'subagent') { badge = '[bee]'; badgeColor = '#8b5cf6'; }
-        else if (r.from === 'telegram') { badge = '[phone]'; badgeColor = '#3b82f6'; }
-        else if (r.from === 'whatsapp') { badge = '[phone]'; badgeColor = '#22c55e'; }
+        if (r.type === 'heartbeat') { badge = '💓'; badgeColor = '#ec4899'; }
+        else if (r.type === 'cron') { badge = '⏰'; badgeColor = '#f59e0b'; }
+        else if (r.type === 'subagent') { badge = '🐝'; badgeColor = '#8b5cf6'; }
+        else if (r.from === 'telegram') { badge = '📱'; badgeColor = '#3b82f6'; }
+        else if (r.from === 'whatsapp') { badge = '📲'; badgeColor = '#22c55e'; }
 
-        var status = r.status === 'error' ? '[ERR]' : '[ok]';
+        var status = r.status === 'error' ? '❌' : '[ok]';
         var ts = r.timestamp ? new Date(r.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
         var model = r.to || '';
-        if (model.length > 20) model = model.substring(0, 18) + '...';
+        if (model.length > 20) model = model.substring(0, 18) + '…';
         var session = r.session || '';
-        if (session.length > 20) session = session.substring(0, 18) + '...';
+        if (session.length > 20) session = session.substring(0, 18) + '…';
 
         html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:12px;">';
         html += '<span style="font-size:16px;">' + badge + '</span>';
@@ -12063,7 +12063,7 @@ function loadToolData(toolKey, comp, isRefresh) {
     var color = TOOL_COLORS[toolKey] || '#555';
     var html = '';
 
-    // --- SESSION MODAL ---------------------------------
+    // ─── SESSION MODAL ─────────────────────────────────
     if (toolKey === 'session') {
       var agents = data.subagents || [];
       var active = agents.filter(function(a){return a.status==='active';}).length;
@@ -12107,7 +12107,7 @@ function loadToolData(toolKey, comp, isRefresh) {
         html += '<div style="text-align:center;padding:30px;color:var(--text-muted);">No active sub-agents</div>';
       }
 
-    // --- EXEC MODAL ------------------------------------
+    // ─── EXEC MODAL ────────────────────────────────────
     } else if (toolKey === 'exec') {
       var running = data.running_commands || [];
       html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">';
@@ -12117,7 +12117,7 @@ function loadToolData(toolKey, comp, isRefresh) {
       html += '</div>';
 
       if (running.length > 0) {
-        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">[*] Running Now</div>';
+        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">⚡ Running Now</div>';
         running.forEach(function(cmd) {
           html += '<div style="padding:8px 12px;background:#E6510011;border:1px solid #E6510033;border-radius:8px;margin-bottom:6px;font-family:monospace;font-size:12px;">';
           html += '<div style="display:flex;justify-content:space-between;"><span style="color:var(--text-primary);font-weight:600;">$ ' + escapeHtml((cmd.command||'').substring(0,120)) + '</span>';
@@ -12141,7 +12141,7 @@ function loadToolData(toolKey, comp, isRefresh) {
           html += '</div>';
           var meta = [];
           if (evt.duration_ms) meta.push(evt.duration_ms >= 1000 ? (evt.duration_ms/1000).toFixed(1)+'s' : evt.duration_ms+'ms');
-          if (isErr) meta.push('<span style="color:#ef4444;">x error</span>');
+          if (isErr) meta.push('<span style="color:#ef4444;">✗ error</span>');
           if (meta.length) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + meta.join(' - ') + '</div>';
           html += '</div>';
         });
@@ -12150,7 +12150,7 @@ function loadToolData(toolKey, comp, isRefresh) {
         html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No exec commands today</div>';
       }
 
-    // --- BROWSER/WEB MODAL -----------------------------
+    // ─── BROWSER/WEB MODAL ─────────────────────────────
     } else if (toolKey === 'browser') {
       var urls = data.recent_urls || [];
       html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">';
@@ -12160,11 +12160,11 @@ function loadToolData(toolKey, comp, isRefresh) {
       html += '</div>';
 
       if (urls.length > 0) {
-        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">[web] Recent URLs</div>';
+        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">🌐 Recent URLs</div>';
         html += '<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:14px;">';
         urls.forEach(function(u) {
           html += '<div style="padding:6px 10px;background:var(--bg-secondary);border-radius:6px;display:flex;align-items:center;gap:8px;">';
-          html += '<span style="font-size:14px;">[link]</span>';
+          html += '<span style="font-size:14px;">🔗</span>';
           html += '<a href="' + escapeHtml(u.url||'') + '" target="_blank" style="font-size:12px;color:var(--text-link);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">' + escapeHtml((u.url||'').substring(0,80)) + '</a>';
           html += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">' + _timeAgo(u.timestamp) + '</span>';
           html += '</div>';
@@ -12191,7 +12191,7 @@ function loadToolData(toolKey, comp, isRefresh) {
         html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No browser actions today</div>';
       }
 
-    // --- SEARCH MODAL ----------------------------------
+    // ─── SEARCH MODAL ──────────────────────────────────
     } else if (toolKey === 'search') {
       html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;">';
       html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + (s.today_calls||0) + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Searches Today</div></div>';
@@ -12209,7 +12209,7 @@ function loadToolData(toolKey, comp, isRefresh) {
           html += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + ts + '</span>';
           html += '</div>';
           if (evt.result_count !== undefined) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + evt.result_count + ' results returned</div>';
-          if (evt.status === 'error') html += '<div style="font-size:11px;color:#ef4444;margin-top:2px;">x Error</div>';
+          if (evt.status === 'error') html += '<div style="font-size:11px;color:#ef4444;margin-top:2px;">✗ Error</div>';
           html += '</div>';
         });
         html += '</div>';
@@ -12217,7 +12217,7 @@ function loadToolData(toolKey, comp, isRefresh) {
         html += '<div style="text-align:center;padding:30px;color:var(--text-muted);">No searches today</div>';
       }
 
-    // --- CRON MODAL ------------------------------------
+    // ─── CRON MODAL ────────────────────────────────────
     } else if (toolKey === 'cron') {
       var jobs = data.cron_jobs || [];
       html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">';
@@ -12257,7 +12257,7 @@ function loadToolData(toolKey, comp, isRefresh) {
         html += '<div style="text-align:center;padding:30px;color:var(--text-muted);">No cron jobs configured</div>';
       }
 
-    // --- TTS MODAL -------------------------------------
+    // ─── TTS MODAL ─────────────────────────────────────
     } else if (toolKey === 'tts') {
       html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;">';
       html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + (s.today_calls||0) + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Generations Today</div></div>';
@@ -12271,11 +12271,11 @@ function loadToolData(toolKey, comp, isRefresh) {
           var ts = _fmtToolTs(evt.timestamp);
           html += '<div style="padding:10px 12px;background:var(--bg-secondary);border-radius:8px;border-left:3px solid #F9A825;">';
           html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
-          html += '<span style="font-size:14px;">[sound]</span>';
+          html += '<span style="font-size:14px;">🔊</span>';
           html += '<span style="font-size:10px;color:var(--text-muted);">' + ts + '</span>';
           html += '</div>';
           html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:6px;font-style:italic;line-height:1.4;">"' + escapeHtml((evt.detail || '').substring(0, 200)) + '"</div>';
-          if (evt.voice) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">[mic] Voice: ' + escapeHtml(evt.voice) + '</div>';
+          if (evt.voice) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">🎤 Voice: ' + escapeHtml(evt.voice) + '</div>';
           if (evt.duration_ms) html += '<span style="font-size:10px;color:var(--text-muted);">' + (evt.duration_ms>=1000?(evt.duration_ms/1000).toFixed(1)+'s':evt.duration_ms+'ms') + '</span>';
           html += '</div>';
         });
@@ -12284,7 +12284,7 @@ function loadToolData(toolKey, comp, isRefresh) {
         html += '<div style="text-align:center;padding:30px;color:var(--text-muted);">No TTS generations today</div>';
       }
 
-    // --- MEMORY MODAL ----------------------------------
+    // ─── MEMORY MODAL ──────────────────────────────────
     } else if (toolKey === 'memory') {
       var files = data.memory_files || [];
       var reads = events.filter(function(e){return e.action!=='write';}).length;
@@ -12301,7 +12301,7 @@ function loadToolData(toolKey, comp, isRefresh) {
         files.forEach(function(f) {
           var sizeStr = f.size >= 1024 ? (f.size/1024).toFixed(1)+'KB' : f.size+'B';
           html += '<div style="padding:6px 10px;background:var(--bg-secondary);border-radius:6px;display:flex;align-items:center;gap:8px;font-size:12px;">';
-          html += '<span style="font-size:14px;">[file]</span>';
+          html += '<span style="font-size:14px;">📄</span>';
           html += '<span style="color:var(--text-link);font-family:monospace;flex:1;">' + escapeHtml(f.path) + '</span>';
           html += '<span style="color:var(--text-muted);font-size:11px;">' + sizeStr + '</span>';
           html += '</div>';
@@ -12327,7 +12327,7 @@ function loadToolData(toolKey, comp, isRefresh) {
         html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No file operations today</div>';
       }
 
-    // --- FALLBACK --------------------------------------
+    // ─── FALLBACK ──────────────────────────────────────
     } else {
       html += '<div style="display:flex;gap:12px;padding:10px 16px;background:' + color + '22;border-radius:10px;margin-bottom:14px;align-items:center;flex-wrap:wrap;">';
       html += '<span style="font-size:13px;font-weight:600;color:' + color + ';">Today: ' + (s.today_calls||0) + ' calls</span>';
@@ -12453,8 +12453,8 @@ async function loadModalTranscript() {
       return;
     }
     _modalEvents = data.events || [];
-    document.getElementById('modal-event-count').textContent = '[chart] ' + _modalEvents.length + ' events';
-    document.getElementById('modal-msg-count').textContent = '[msg] ' + (data.messageCount || 0) + ' messages';
+    document.getElementById('modal-event-count').textContent = '📊 ' + _modalEvents.length + ' events';
+    document.getElementById('modal-msg-count').textContent = '💬 ' + (data.messageCount || 0) + ' messages';
     renderModalContent();
   } catch(e) {
     document.getElementById('modal-content').innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load transcript</div>';
@@ -12502,17 +12502,17 @@ function renderModalNarrative(el) {
   events.forEach(function(evt) {
     var icon = '', text = '';
     if (evt.type === 'user') {
-      icon = '[user]'; text = 'User sent: <code>' + escHtml((evt.text||'').substring(0, 150)) + '</code>';
+      icon = '👤'; text = 'User sent: <code>' + escHtml((evt.text||'').substring(0, 150)) + '</code>';
     } else if (evt.type === 'agent') {
-      icon = '[bot]'; text = 'Agent said: <code>' + escHtml((evt.text||'').substring(0, 200)) + '</code>';
+      icon = '🤖'; text = 'Agent said: <code>' + escHtml((evt.text||'').substring(0, 200)) + '</code>';
     } else if (evt.type === 'thinking') {
-      icon = '[think]'; text = 'Agent thought about the problem...';
+      icon = '💭'; text = 'Agent thought about the problem...';
     } else if (evt.type === 'exec') {
-      icon = '[*]'; text = 'Ran command: <code>' + escHtml(evt.command||'') + '</code>';
+      icon = '⚡'; text = 'Ran command: <code>' + escHtml(evt.command||'') + '</code>';
     } else if (evt.type === 'read') {
-      icon = '[book]'; text = 'Read file: <code>' + escHtml(evt.file||'') + '</code>';
+      icon = '📖'; text = 'Read file: <code>' + escHtml(evt.file||'') + '</code>';
     } else if (evt.type === 'tool') {
-      icon = '[tool]'; text = 'Called tool: <code>' + escHtml(evt.toolName||'') + '</code>';
+      icon = '🔧'; text = 'Called tool: <code>' + escHtml(evt.toolName||'') + '</code>';
     } else if (evt.type === 'result') {
       icon = '[check]'; text = 'Got result (' + (evt.text||'').length + ' chars)';
     } else return;
@@ -12525,30 +12525,30 @@ function renderModalFull(el) {
   var events = _modalEvents;
   var html = '';
   events.forEach(function(evt, idx) {
-    var icon = '[note]', typeClass = '', summary = '', body = '';
+    var icon = '📝', typeClass = '', summary = '', body = '';
     var ts = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
     if (evt.type === 'agent') {
-      icon = '[bot]'; typeClass = 'type-agent';
+      icon = '🤖'; typeClass = 'type-agent';
       summary = '<strong>Agent</strong> - ' + escHtml((evt.text||'').substring(0, 120));
       body = evt.text || '';
     } else if (evt.type === 'thinking') {
-      icon = '[think]'; typeClass = 'type-thinking';
+      icon = '💭'; typeClass = 'type-thinking';
       summary = '<strong>Thinking</strong> - ' + escHtml((evt.text||'').substring(0, 120));
       body = evt.text || '';
     } else if (evt.type === 'user') {
-      icon = '[user]'; typeClass = 'type-user';
+      icon = '👤'; typeClass = 'type-user';
       summary = '<strong>User</strong> - ' + escHtml((evt.text||'').substring(0, 120));
       body = evt.text || '';
     } else if (evt.type === 'exec') {
-      icon = '[*]'; typeClass = 'type-exec';
+      icon = '⚡'; typeClass = 'type-exec';
       summary = '<strong>EXEC</strong> - <code>' + escHtml(evt.command||'') + '</code>';
       body = evt.command || '';
     } else if (evt.type === 'read') {
-      icon = '[book]'; typeClass = 'type-read';
+      icon = '📖'; typeClass = 'type-read';
       summary = '<strong>READ</strong> - ' + escHtml(evt.file||'');
       body = evt.file || '';
     } else if (evt.type === 'tool') {
-      icon = '[tool]'; typeClass = 'type-exec';
+      icon = '🔧'; typeClass = 'type-exec';
       summary = '<strong>' + escHtml(evt.toolName||'tool') + '</strong> - ' + escHtml((evt.args||'').substring(0, 100));
       body = evt.args || '';
     } else if (evt.type === 'result') {
@@ -12658,7 +12658,7 @@ document.addEventListener('DOMContentLoaded', function() {
   bootDashboard();
 });
 
-// -- History Tab ------------------------------------------------------
+// ── History Tab ──────────────────────────────────────────────────────
 var _historyRange = 3600; // seconds
 var _historyFrom = null;
 var _historyTo = null;
@@ -12850,21 +12850,21 @@ async function showSnapshot(ts) {
     <div class="comp-modal-header">
       <div class="comp-modal-title" id="comp-modal-title">Component</div>
       <div style="display: flex; align-items: center; gap: 10px;">
-        <div class="time-travel-toggle" id="time-travel-toggle" onclick="toggleTimeTravelMode()" title="Enable time travel">[clock]</div>
+        <div class="time-travel-toggle" id="time-travel-toggle" onclick="toggleTimeTravelMode()" title="Enable time travel">🕰️</div>
         <div class="comp-modal-close" onclick="closeCompModal()">&times;</div>
       </div>
     </div>
     <div class="time-travel-bar" id="time-travel-bar">
       <div class="time-travel-controls">
-        <div class="time-nav-btn" onclick="timeTravel('prev-day')" title="Previous day"><</div>
+        <div class="time-nav-btn" onclick="timeTravel('prev-day')" title="Previous day">‹</div>
         <div class="time-scrubber">
           <div class="time-slider" id="time-slider" onclick="onTimeSliderClick(event)">
             <div class="time-slider-thumb" id="time-slider-thumb"></div>
           </div>
           <div class="time-display" id="time-display">Loading...</div>
         </div>
-        <div class="time-nav-btn" onclick="timeTravel('next-day')" title="Next day">></div>
-        <div class="time-nav-btn" onclick="timeTravel('now')" title="Back to now">[stop]</div>
+        <div class="time-nav-btn" onclick="timeTravel('next-day')" title="Next day">›</div>
+        <div class="time-nav-btn" onclick="timeTravel('now')" title="Back to now">⏹</div>
       </div>
     </div>
     <div class="comp-modal-body" id="comp-modal-body">Loading...</div>
@@ -12901,8 +12901,8 @@ async function showSnapshot(ts) {
 <!-- Gateway Setup Wizard -->
 <div id="gw-setup-overlay" data-mandatory="false" onclick="if(event.target===this && this.dataset.mandatory!=='true'){this.style.display='none'}" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:10000; align-items:center; justify-content:center; font-family:Manrope,sans-serif;">
   <div style="background:var(--bg-secondary, #1a1a2e); border:1px solid var(--border-primary, #333); border-radius:16px; padding:40px; max-width:440px; width:90%; text-align:center; box-shadow:0 20px 60px rgba(0,0,0,0.5); position:relative;">
-    <button id="gw-setup-close" onclick="document.getElementById('gw-setup-overlay').style.display='none'" style="display:none; position:absolute; top:12px; right:16px; background:none; border:none; color:var(--text-muted, #888); font-size:22px; cursor:pointer; padding:4px 8px; line-height:1;">x</button>
-    <div style="font-size:48px; margin-bottom:16px;">[lobster]</div>
+    <button id="gw-setup-close" onclick="document.getElementById('gw-setup-overlay').style.display='none'" style="display:none; position:absolute; top:12px; right:16px; background:none; border:none; color:var(--text-muted, #888); font-size:22px; cursor:pointer; padding:4px 8px; line-height:1;">✕</button>
+    <div style="font-size:48px; margin-bottom:16px;">🦞</div>
     <h2 style="color:var(--text-primary, #fff); margin:0 0 8px; font-size:24px; font-weight:700;">ClawMetry Setup</h2>
     <p style="color:var(--text-muted, #888); margin:0 0 24px; font-size:14px;">Enter your OpenClaw gateway token to connect.</p>
     <input id="gw-token-input" type="password" placeholder="Paste your gateway token" 
@@ -13010,7 +13010,7 @@ document.addEventListener('DOMContentLoaded', checkGwConfig);
 """
 
 
-# -- API Routes ----------------------------------------------------------
+# ── API Routes ──────────────────────────────────────────────────────────
 
 def _acquire_stream_slot(kind):
     """Bound concurrent SSE clients per stream type."""
@@ -13038,14 +13038,14 @@ def _release_stream_slot(kind):
             _active_health_stream_clients = max(0, _active_health_stream_clients - 1)
 
 
-# -- Gateway API proxy (WebSocket JSON-RPC + HTTP fallback) --------------
+# ── Gateway API proxy (WebSocket JSON-RPC + HTTP fallback) ──────────────
 import urllib.request as _urllib_req
 import urllib.error as _urllib_err
 import uuid as _uuid
 
 _GW_CONFIG_FILE = os.path.expanduser('~/.clawmetry-gateway.json')
 
-# -- WebSocket RPC Client ------------------------------------------------
+# ── WebSocket RPC Client ────────────────────────────────────────────────
 _ws_client = None
 _ws_lock = threading.Lock()
 _ws_connected = False
@@ -13697,11 +13697,11 @@ def api_main_activity():
     except Exception:
         return jsonify({'calls': []})
     tool_icons = {
-        'exec': '[tool]', 'Read': '[book]', 'read': '[book]', 'Edit': '[pencil]', 'edit': '[pencil]',
-        'Write': '[pencil]', 'write': '[pencil]',
-        'web_search': '[web]', 'web_fetch': '[web]', 'browser': '[screen]',
-        'message': '[msg]', 'tts': '[sound]', 'image': '[image]',
-        'canvas': '[art]', 'nodes': '[phone]', 'process': '[tool]',
+        'exec': '🔧', 'Read': '📖', 'read': '📖', 'Edit': '✏️', 'edit': '✏️',
+        'Write': '✏️', 'write': '✏️',
+        'web_search': '🌐', 'web_fetch': '🌐', 'browser': '🖥️',
+        'message': '💬', 'tts': '🔊', 'image': '🖼️',
+        'canvas': '🎨', 'nodes': '📱', 'process': '🔧',
     }
     calls = []
     for line in lines:
@@ -13767,7 +13767,7 @@ def api_main_activity():
                 s = str(args)
                 if len(s) > 60: s = s[:57] + '...'
                 summary = s
-            icon = tool_icons.get(name, '[gear]')
+            icon = tool_icons.get(name, '⚙️')
             calls.append({'ts': ts, 'name': name, 'icon': icon, 'summary': summary})
     # Return last 20
     calls = calls[-20:]
@@ -14258,7 +14258,7 @@ def api_view_file():
         return jsonify({'error': str(e)}), 500
 
 
-# -- OTLP Receiver Endpoints ---------------------------------------------
+# ── OTLP Receiver Endpoints ─────────────────────────────────────────────
 
 @app.route('/v1/metrics', methods=['POST'])
 def otlp_metrics():
@@ -14315,7 +14315,7 @@ def api_otel_status():
     })
 
 
-# -- Multi-Node Fleet API Routes ------------------------------------------
+# ── Multi-Node Fleet API Routes ──────────────────────────────────────────
 
 FLEET_HTML = r"""
 <!DOCTYPE html>
@@ -14591,7 +14591,7 @@ def api_node_detail(node_id):
     })
 
 
-# -- Budget & Alert API Routes -------------------------------------------
+# ── Budget & Alert API Routes ───────────────────────────────────────────
 
 @app.route('/api/budget/config', methods=['GET', 'POST'])
 def api_budget_config():
@@ -14748,7 +14748,7 @@ def api_alerts_active():
     return jsonify({'alerts': _get_active_alerts()})
 
 
-# -- History / Time-Series API --------------------------------------------
+# ── History / Time-Series API ────────────────────────────────────────────
 
 @app.route('/api/history/metrics')
 def api_history_metrics():
@@ -14816,7 +14816,7 @@ def api_history_stats():
     return jsonify(stats)
 
 
-# -- Billing Mode Heuristics (API key vs OAuth/included) ------------------
+# ── Billing Mode Heuristics (API key vs OAuth/included) ──────────────────
 
 _openclaw_cfg_cache = None
 
@@ -14926,7 +14926,7 @@ def _build_model_billing(model_usage):
     return model_billing, summary
 
 
-# -- Enhanced Cost Tracking Utilities -------------------------------------
+# ── Enhanced Cost Tracking Utilities ─────────────────────────────────────
 
 def _get_model_pricing():
     """Model-specific pricing per 1M tokens (input, output)."""
@@ -15064,13 +15064,13 @@ def _generate_cost_warnings(today_cost, week_cost, month_cost, trend_data, month
     
     return warnings
 
-# -- Usage cache ---------------------------------------------------------
+# ── Usage cache ─────────────────────────────────────────────────────────
 _usage_cache = {'data': None, 'ts': 0}
 _USAGE_CACHE_TTL = 60  # seconds
 _sessions_cache = {'data': None, 'ts': 0}
 _SESSIONS_CACHE_TTL = 10  # seconds
 
-# -- New Feature APIs ----------------------------------------------------
+# ── New Feature APIs ────────────────────────────────────────────────────
 
 @app.route('/api/usage')
 def api_usage():
@@ -15793,21 +15793,21 @@ def _summarize_tool_input(name, inp):
     if name == 'exec':
         return (inp.get('command') or str(inp))[:150]
     elif name in ('Read', 'read'):
-        return f"[book] {inp.get('file_path') or inp.get('path') or '?'}"
+        return f"📖 {inp.get('file_path') or inp.get('path') or '?'}"
     elif name in ('Write', 'write'):
-        return f"[pencil] {inp.get('file_path') or inp.get('path') or '?'}"
+        return f"✏️ {inp.get('file_path') or inp.get('path') or '?'}"
     elif name in ('Edit', 'edit'):
-        return f"[tool] {inp.get('file_path') or inp.get('path') or '?'}"
+        return f"🔧 {inp.get('file_path') or inp.get('path') or '?'}"
     elif name == 'web_search':
         return f"[check] {inp.get('query', '?')}"
     elif name == 'web_fetch':
-        return f"[web] {inp.get('url', '?')[:80]}"
+        return f"🌐 {inp.get('url', '?')[:80]}"
     elif name == 'browser':
-        return f"[screen] {inp.get('action', '?')}"
+        return f"🖥️ {inp.get('action', '?')}"
     elif name == 'message':
-        return f"[msg] {inp.get('action', '?')} -> {inp.get('message', '')[:60]}"
+        return f"💬 {inp.get('action', '?')} -> {inp.get('message', '')[:60]}"
     elif name == 'tts':
-        return f"[sound] {inp.get('text', '')[:60]}"
+        return f"🔊 {inp.get('text', '')[:60]}"
     else:
         return str(inp)[:120]
 
@@ -17788,7 +17788,7 @@ def api_component_brain():
 def api_heatmap():
     """Activity heatmap - events per hour for the last 7 days."""
     now = datetime.now()
-    # Initialize 7 days x 24 hours grid
+    # Initialize 7 days × 24 hours grid
     grid = {}
     day_labels = []
     for i in range(6, -1, -1):
@@ -18286,7 +18286,7 @@ def api_automation_analysis():
         })
 
 
-# -- Data Helpers --------------------------------------------------------
+# ── Data Helpers ────────────────────────────────────────────────────────
 
 def _get_sessions():
     """Get sessions via gateway API first, file fallback."""
@@ -18948,7 +18948,7 @@ def _get_recent_log_files(days=7):
     return log_files
 
 
-# -- CLI Entry Point -----------------------------------------------------
+# ── CLI Entry Point ─────────────────────────────────────────────────────
 
 BANNER = r"""
    ____ _                 __  __      _
@@ -18967,23 +18967,23 @@ BANNER = r"""
 """
 
 ARCHITECTURE_OVERVIEW = """\
-[lobster] ClawMetry {version} -- See your agent think.
+🦞 ClawMetry {version} -- See your agent think.
 
-  +---------------------+              +---------------------+              +---------------------+
-  |  [bot]                 |  READS FILES |  [lobster]                 |  SHOWS YOU  |  [chart]                 |
-  |  Your OpenClaw      | ----------->  |                     | ----------->  |                     |
-  |  agents             |              |  ClawMetry          |              |  Your browser       |
-  |                     |              |  Parses logs +      |              |  localhost:{port}   |
-  |  Running normally.  |              |  sessions.          |              |  Live dashboard     |
-  |  Nothing changes.   |              |  Serves dashboard.  |              |                     |
-  +---------------------+              +---------------------+              +---------------------+
+  ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
+  │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
+  │  Your OpenClaw      │ ──────────->  │                     │ ──────────->  │                     │
+  │  agents             │              │  ClawMetry          │              │  Your browser       │
+  │                     │              │  Parses logs +      │              │  localhost:{port}   │
+  │  Running normally.  │              │  sessions.          │              │  Live dashboard     │
+  │  Nothing changes.   │              │  Serves dashboard.  │              │                     │
+  └─────────────────────┘              └─────────────────────┘              └─────────────────────┘
 
   Runs locally on the same machine as OpenClaw. Your data never leaves your box.
   Docs: https://clawmetry.com/how-it-works
 """
 
 HELP_TEXT = """\
-[lobster] ClawMetry {version} -- See your agent think.
+🦞 ClawMetry {version} -- See your agent think.
 
 Usage: clawmetry [command] [options]
 
@@ -19265,12 +19265,12 @@ def cmd_start(args):
                     os.kill(_old_pid, _signal.SIGTERM)
                     import time as _time; _time.sleep(1)
                 else:
-                    print(f"[ERR] Port {port} is in use by another application. Choose a different port with --port.")
+                    print(f"❌ Port {port} is in use by another application. Choose a different port with --port.")
                     sys.exit(1)
             except Exception:
                 pass
         else:
-            print(f"[ERR] Port {port} is in use by another application. Choose a different port with --port.")
+            print(f"❌ Port {port} is in use by another application. Choose a different port with --port.")
             sys.exit(1)
 
     if _is_macos():
@@ -19286,7 +19286,7 @@ def cmd_start(args):
         result = subprocess.run(['launchctl', 'load', LAUNCHD_PLIST],
                                 capture_output=True, text=True)
         if result.returncode != 0:
-            print(f"[ERR] Failed to load service: {result.stderr.strip()}")
+            print(f"❌ Failed to load service: {result.stderr.strip()}")
             sys.exit(1)
 
         import time
@@ -19309,7 +19309,7 @@ def cmd_start(args):
         result = subprocess.run(['systemctl', '--user', 'restart', 'clawmetry'],
                                 capture_output=True, text=True)
         if result.returncode != 0:
-            print(f"[ERR] Failed to start service: {result.stderr.strip()}")
+            print(f"❌ Failed to start service: {result.stderr.strip()}")
             sys.exit(1)
 
         import time
@@ -19330,7 +19330,7 @@ def cmd_stop(args):
     import subprocess
     if _is_macos():
         if not os.path.exists(LAUNCHD_PLIST):
-            print("[i]  No service file found. ClawMetry may not be installed as a service.")
+            print("ℹ️  No service file found. ClawMetry may not be installed as a service.")
             sys.exit(0)
         result = subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST],
                                 capture_output=True, text=True)
@@ -19352,7 +19352,7 @@ def cmd_stop(args):
             os.kill(pid, 15)  # SIGTERM
             print(f"[ok] Sent SIGTERM to PID {pid}.")
         else:
-            print("[i]  No running ClawMetry process found.")
+            print("ℹ️  No running ClawMetry process found.")
 
 
 def cmd_restart(args):
@@ -19360,7 +19360,7 @@ def cmd_restart(args):
     import subprocess
     if _is_macos():
         if not os.path.exists(LAUNCHD_PLIST):
-            print("[i]  No service installed. Use: clawmetry start")
+            print("ℹ️  No service installed. Use: clawmetry start")
             sys.exit(1)
         subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST], capture_output=True)
         result = subprocess.run(['launchctl', 'load', LAUNCHD_PLIST],
@@ -19368,7 +19368,7 @@ def cmd_restart(args):
         if result.returncode == 0:
             print("[ok] ClawMetry restarted.")
         else:
-            print(f"[ERR] {result.stderr.strip()}")
+            print(f"❌ {result.stderr.strip()}")
             sys.exit(1)
     elif _is_linux():
         result = subprocess.run(['systemctl', '--user', 'restart', 'clawmetry'],
@@ -19376,7 +19376,7 @@ def cmd_restart(args):
         if result.returncode == 0:
             print("[ok] ClawMetry restarted.")
         else:
-            print(f"[ERR] {result.stderr.strip()}")
+            print(f"❌ {result.stderr.strip()}")
             sys.exit(1)
     else:
         print("[warn]  Daemon mode not supported on this OS.")
@@ -19397,11 +19397,11 @@ def cmd_status(args):
     else:
         svc_type = 'process'
 
-    status_icon = '[ok] Running' if running else '[ERR] Stopped'
-    cloud_status = f'[ok] Connected' if token else '[ERR] Not connected'
+    status_icon = '[ok] Running' if running else '❌ Stopped'
+    cloud_status = f'[ok] Connected' if token else '❌ Not connected'
 
     print(f"""
-[lobster] ClawMetry Status
+🦞 ClawMetry Status
 
   Service:   {status_icon} ({svc_type})
   Port:      {port}
@@ -19416,7 +19416,7 @@ def cmd_status(args):
 def cmd_connect(args):
     """Connect to ClawMetry Cloud."""
     print()
-    print("[lobster] ClawMetry Cloud Connect")
+    print("🦞 ClawMetry Cloud Connect")
     print()
     print("  1. Go to: https://clawmetry.com/connect")
     print("  2. Sign in and copy your API key (starts with cm_)")
@@ -19428,7 +19428,7 @@ def cmd_connect(args):
         sys.exit(0)
 
     if not token.startswith('cm_'):
-        print("[ERR] Invalid key -- must start with cm_")
+        print("❌ Invalid key -- must start with cm_")
         sys.exit(1)
 
     _write_cloud_token(token)
@@ -19440,7 +19440,7 @@ def cmd_connect(args):
 def cmd_uninstall(args):
     """Stop and remove the ClawMetry service."""
     import subprocess
-    print("[trash]  Uninstalling ClawMetry service...")
+    print("🗑️  Uninstalling ClawMetry service...")
 
     if _is_macos():
         if os.path.exists(LAUNCHD_PLIST):
