@@ -145,7 +145,15 @@ def detect_paths() -> dict:
     log_candidates = [Path("/tmp/openclaw"), home / ".openclaw" / "logs", Path("/data/logs")]
     log_dir = next((str(p) for p in log_candidates if p.exists()), "/tmp/openclaw")
 
-    return {"sessions_dir": sessions_dir, "log_dir": log_dir}
+    workspace_candidates = [
+        home / ".openclaw" / "workspace",
+        Path("/data/workspace"),
+        Path("/app/workspace"),
+    ]
+    workspace = next((str(p) for p in workspace_candidates if p.exists()),
+                     str(workspace_candidates[0]))
+
+    return {"sessions_dir": sessions_dir, "log_dir": log_dir, "workspace": workspace}
 
 
 # ── Sync: session events (full content, encrypted) ────────────────────────────
@@ -298,6 +306,108 @@ def _get_version() -> str:
 
 # ── Daemon loop ────────────────────────────────────────────────────────────────
 
+def sync_crons(config: dict, state: dict, paths: dict) -> int:
+    """Sync cron job definitions to cloud."""
+    api_key = config["api_key"]
+    node_id = config["node_id"]
+    last_hash = state.get("cron_hash", "")
+
+    # Find cron jobs.json
+    home = Path.home()
+    cron_candidates = [
+        home / ".openclaw" / "cron" / "jobs.json",
+        home / ".openclaw" / "agents" / "main" / "cron" / "jobs.json",
+    ]
+    cron_file = next((str(p) for p in cron_candidates if p.exists()), None)
+    if not cron_file:
+        return 0
+
+    try:
+        import hashlib
+        raw = open(cron_file, "rb").read()
+        h = hashlib.md5(raw).hexdigest()
+        if h == last_hash:
+            return 0
+        data = json.loads(raw)
+        jobs = data.get("jobs", []) if isinstance(data, dict) else data
+
+        events = []
+        for j in jobs:
+            sched = j.get("schedule", {})
+            kind = sched.get("kind", "")
+            expr = sched.get("interval", "") if kind == "interval" else (
+                   f"at {sched.get('at', '')}" if kind == "at" else
+                   sched.get("cron", "") if kind == "cron" else "")
+            events.append({
+                "type": "cron_state", "session_id": "",
+                "data": {"job_id": j.get("id",""), "name": j.get("name",""),
+                         "enabled": j.get("enabled", True), "expr": expr}
+            })
+
+        if events:
+            _post("/api/ingest", {"events": events, "node_id": node_id}, api_key)
+            state["cron_hash"] = h
+            return len(events)
+    except Exception as e:
+        log.warning(f"Cron sync error: {e}")
+    return 0
+
+
+def sync_memory(config: dict, state: dict, paths: dict) -> int:
+    """Sync memory files (MEMORY.md + memory/*.md) to cloud."""
+    workspace = paths.get("workspace", "")
+    api_key   = config["api_key"]
+    enc_key   = config.get("encryption_key")
+    node_id   = config["node_id"]
+    last_hashes: dict = state.setdefault("memory_hashes", {})
+    synced = 0
+
+    # Collect memory files
+    memory_files = []
+    mem_md = os.path.join(workspace, "MEMORY.md")
+    if os.path.isfile(mem_md):
+        memory_files.append(("MEMORY.md", mem_md))
+    mem_dir = os.path.join(workspace, "memory")
+    if os.path.isdir(mem_dir):
+        for f in sorted(os.listdir(mem_dir)):
+            if f.endswith(".md"):
+                memory_files.append((f"memory/{f}", os.path.join(mem_dir, f)))
+
+    if not memory_files:
+        return 0
+
+    # Check for changes via content hash
+    import hashlib
+    changed_files = []
+    file_list = []
+    for name, path in memory_files:
+        try:
+            content_bytes = open(path, "rb").read()
+            h = hashlib.md5(content_bytes).hexdigest()
+            file_list.append({"name": name, "size": len(content_bytes), "modified": os.path.getmtime(path)})
+            if h != last_hashes.get(name):
+                changed_files.append((name, content_bytes.decode("utf-8", errors="replace")))
+                last_hashes[name] = h
+        except Exception as e:
+            log.debug(f"Memory file read error ({name}): {e}")
+
+    if not changed_files:
+        return 0
+
+    # Push memory_state (file list) + memory_content (changed files)
+    events = [{"type": "memory_state", "session_id": "", "data": {"files": file_list}}]
+    for name, file_content in changed_files:
+        events.append({"type": "memory_content", "session_id": "", "data": {"path": name, "content": file_content[:100000]}})
+
+    try:
+        _post("/api/ingest", {"events": events, "node_id": node_id}, api_key)
+        synced = len(changed_files)
+    except Exception as e:
+        log.warning(f"Memory sync error: {e}")
+
+    return synced
+
+
 def run_daemon() -> None:
     config = load_config()
     paths  = detect_paths()
@@ -312,10 +422,12 @@ def run_daemon() -> None:
             state = load_state()
             ev = sync_sessions(config, state, paths)
             lg = sync_logs(config, state, paths)
+            mem = sync_memory(config, state, paths)
+            crons = sync_crons(config, state, paths)
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
             save_state(state)
-            if ev or lg:
-                log.info(f"Synced {ev} events, {lg} log lines ({enc})")
+            if ev or lg or mem or crons:
+                log.info(f"Synced {ev} events, {lg} log lines, {mem} memory files, {crons} crons ({enc})")
 
             now = time.time()
             if now - last_heartbeat > heartbeat_interval:
