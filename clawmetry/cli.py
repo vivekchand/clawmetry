@@ -38,15 +38,30 @@ def _cmd_connect(args) -> None:
             print(f"❌  {e}")
             sys.exit(1)
 
+    from clawmetry.sync import generate_encryption_key
+    enc_key = generate_encryption_key()
+
     config = {
         "api_key": api_key,
         "node_id": node_id,
         "platform": platform.system(),
         "connected_at": __import__("datetime").datetime.now().isoformat(),
+        "encryption_key": enc_key,
     }
     save_config(config)
-    print(f"✅  Config saved to {CONFIG_FILE}")
-    print(f"    Node ID: {node_id}")
+
+    print()
+    print(f"  ✅  Config saved  {CONFIG_FILE}")
+    print(f"  Node ID:          {node_id}")
+    print()
+    print("  🔒  Encryption key (keep this safe — you need it to view your data):")
+    print()
+    print(f"      {enc_key}")
+    print()
+    print("  Store this key in your password manager.")
+    print("  You'll paste it into app.clawmetry.com / iOS / Mac app to decrypt your data.")
+    print("  The server never sees it — lose it and your cloud data is unreadable.")
+    print()
 
     # Start daemon
     _start_daemon(config, args)
@@ -193,12 +208,22 @@ def _cmd_status(args) -> None:
         try:
             import json
             cfg = json.loads(CONFIG_FILE.read_text())
-            key = cfg.get("api_key", "")
-            masked = key[:6] + "…" + key[-4:] if len(key) > 10 else key
+            api_key = cfg.get("api_key", "")
+            enc_key = cfg.get("encryption_key", "")
+            masked_api = api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
             print(f"  Cloud sync:  ✅  Connected")
-            print(f"  API key:     {masked}")
+            print(f"  API key:     {masked_api}")
             print(f"  Node ID:     {cfg.get('node_id', '?')}")
             print(f"  Connected:   {cfg.get('connected_at', '?')[:19]}")
+            if enc_key:
+                if getattr(args, 'show_key', False):
+                    print(f"  Enc key:     {enc_key}")
+                else:
+                    masked_enc = enc_key[:6] + "…" + enc_key[-4:]
+                    print(f"  Enc key:     {masked_enc}  (--show-key to reveal)")
+                print(f"  E2E:         🔒 enabled")
+            else:
+                print(f"  E2E:         ⚠️  disabled (no encryption key in config)")
         except Exception as e:
             print(f"  Config error: {e}")
     else:
@@ -254,7 +279,8 @@ def main() -> None:
     sub.add_parser("disconnect", help="Stop cloud sync and remove key")
 
     # status
-    sub.add_parser("status", help="Show local + cloud sync status")
+    p_status = sub.add_parser("status", help="Show local + cloud sync status")
+    p_status.add_argument("--show-key", action="store_true", help="Reveal encryption key")
 
     # Parse just the first token to decide if it's a sub-command or dashboard flag
     if len(sys.argv) > 1 and sys.argv[1] in ("connect", "disconnect", "status"):

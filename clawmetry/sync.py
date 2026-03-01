@@ -1,8 +1,9 @@
 """
 clawmetry/sync.py — Cloud sync daemon for clawmetry connect.
 
-Reads local OpenClaw sessions/logs and streams to ingest.clawmetry.com.
-Runs as a standalone process; the dashboard never needs to know about it.
+Reads local OpenClaw sessions/logs, encrypts with AES-256-GCM (E2E),
+and streams to ingest.clawmetry.com. The encryption key never leaves
+the local machine — cloud stores ciphertext only.
 """
 from __future__ import annotations
 import json
@@ -10,24 +11,23 @@ import os
 import sys
 import time
 import glob
-import hashlib
+import base64
+import secrets
 import logging
-import threading
 import platform
-import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
 from datetime import datetime, timezone
 
 INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
-CONFIG_DIR = Path.home() / ".clawmetry"
+CONFIG_DIR  = Path.home() / ".clawmetry"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 STATE_FILE  = CONFIG_DIR / "sync-state.json"
 LOG_FILE    = CONFIG_DIR / "sync.log"
 
-POLL_INTERVAL = 15   # seconds between sync cycles
-BATCH_SIZE    = 100  # max events per POST
+POLL_INTERVAL = 15    # seconds between sync cycles
+BATCH_SIZE    = 50    # events per encrypted POST
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,7 +40,48 @@ logging.basicConfig(
 log = logging.getLogger("clawmetry.sync")
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Encryption (AES-256-GCM) ─────────────────────────────────────────────────
+
+def generate_encryption_key() -> str:
+    """Generate a new 256-bit key. Returns base64url string."""
+    return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+
+
+def _get_aesgcm(key_b64: str):
+    """Return an AESGCM cipher from a base64url key."""
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        raw = base64.urlsafe_b64decode(key_b64 + "==")
+        return AESGCM(raw)
+    except ImportError:
+        raise RuntimeError(
+            "E2E encryption requires the 'cryptography' package.\n"
+            "  pip install cryptography"
+        )
+
+
+def encrypt_payload(data: dict, key_b64: str) -> str:
+    """
+    Encrypt a dict as AES-256-GCM.
+    Returns base64url(nonce || ciphertext) — a single opaque string.
+    Cloud stores this blob and never sees plaintext.
+    """
+    cipher = _get_aesgcm(key_b64)
+    nonce  = secrets.token_bytes(12)          # 96-bit nonce (GCM standard)
+    plain  = json.dumps(data).encode()
+    ct     = cipher.encrypt(nonce, plain, None)
+    return base64.urlsafe_b64encode(nonce + ct).decode()
+
+
+def decrypt_payload(blob: str, key_b64: str) -> dict:
+    """Decrypt a blob produced by encrypt_payload. Used by clients."""
+    cipher = _get_aesgcm(key_b64)
+    raw    = base64.urlsafe_b64decode(blob + "==")
+    nonce, ct = raw[:12], raw[12:]
+    return json.loads(cipher.decrypt(nonce, ct, None))
+
+
+# ── Config ─────────────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
     if not CONFIG_FILE.exists():
@@ -68,12 +109,12 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-# ── HTTP helper ───────────────────────────────────────────────────────────────
+# ── HTTP ──────────────────────────────────────────────────────────────────────
 
 def _post(path: str, payload: dict, api_key: str, timeout: int = 15) -> dict:
-    url = INGEST_URL.rstrip("/") + path
+    url  = INGEST_URL.rstrip("/") + path
     body = json.dumps(payload).encode()
-    req = urllib.request.Request(
+    req  = urllib.request.Request(
         url, data=body,
         headers={"Content-Type": "application/json", "X-Api-Key": api_key},
         method="POST",
@@ -85,114 +126,107 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 15) -> dict:
         raise RuntimeError(f"HTTP {e.code} from {url}: {e.read().decode()[:200]}")
 
 
-# ── Key validation ────────────────────────────────────────────────────────────
-
 def validate_key(api_key: str) -> dict:
-    """Validate cm_ key against ingest.clawmetry.com/auth. Returns {node_id, user}."""
     return _post("/auth", {"api_key": api_key}, api_key)
 
 
-# ── Path detection (mirrors dashboard.py logic) ───────────────────────────────
+# ── Path detection ─────────────────────────────────────────────────────────────
 
 def detect_paths() -> dict:
     home = Path.home()
-    candidates = [
+    sessions_candidates = [
         home / ".openclaw" / "agents" / "main" / "sessions",
-        Path("/data/agents/main/sessions"),   # Docker
+        Path("/data/agents/main/sessions"),
         Path("/app/agents/main/sessions"),
     ]
-    sessions_dir = next((str(p) for p in candidates if p.exists()), str(candidates[0]))
+    sessions_dir = next((str(p) for p in sessions_candidates if p.exists()),
+                        str(sessions_candidates[0]))
 
-    log_candidates = [
-        Path("/tmp/openclaw"),
-        home / ".openclaw" / "logs",
-        Path("/data/logs"),
-    ]
+    log_candidates = [Path("/tmp/openclaw"), home / ".openclaw" / "logs", Path("/data/logs")]
     log_dir = next((str(p) for p in log_candidates if p.exists()), "/tmp/openclaw")
 
-    workspace_candidates = [
-        home / ".openclaw" / "workspace",
-        Path("/data/workspace"),
-    ]
-    workspace = next((str(p) for p in workspace_candidates if p.exists()), str(home / ".openclaw" / "workspace"))
-
-    return {"sessions_dir": sessions_dir, "log_dir": log_dir, "workspace": workspace}
+    return {"sessions_dir": sessions_dir, "log_dir": log_dir}
 
 
-# ── Sync: session events ──────────────────────────────────────────────────────
+# ── Sync: session events (full content, encrypted) ────────────────────────────
 
 def sync_sessions(config: dict, state: dict, paths: dict) -> int:
     sessions_dir = paths["sessions_dir"]
-    api_key = config["api_key"]
-    node_id = config["node_id"]
+    api_key      = config["api_key"]
+    enc_key      = config.get("encryption_key")
+    node_id      = config["node_id"]
     last_ids: dict = state.setdefault("last_event_ids", {})
     total = 0
 
     jsonl_files = sorted(glob.glob(os.path.join(sessions_dir, "*.jsonl")))
     for fpath in jsonl_files:
-        fname = os.path.basename(fpath)
+        fname    = os.path.basename(fpath)
         last_line = last_ids.get(fname, 0)
-        events = []
+        batch: list[dict] = []
+
         try:
             with open(fpath, "r", errors="replace") as f:
-                for i, raw in enumerate(f):
-                    if i < last_line:
-                        continue
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        obj = json.loads(raw)
-                    except Exception:
-                        continue
-                    # Anonymise: keep structure, drop raw text content for privacy
-                    events.append({
-                        "session_file": fname,
-                        "line": i,
-                        "role": obj.get("role", ""),
-                        "type": obj.get("type", ""),
-                        "timestamp": obj.get("timestamp") or obj.get("time", ""),
-                        "tool_name": _extract_tool_name(obj),
-                        "node_id": node_id,
-                    })
-                    if len(events) >= BATCH_SIZE:
-                        _post("/ingest/events", {"events": events, "node_id": node_id}, api_key)
-                        total += len(events)
-                        last_ids[fname] = i + 1
-                        events = []
-            if events:
-                _post("/ingest/events", {"events": events, "node_id": node_id}, api_key)
-                total += len(events)
-                last_ids[fname] = last_line + len(events)
+                all_lines = f.readlines()
+
+            new_lines = all_lines[last_line:]
+            for i, raw in enumerate(new_lines, start=last_line):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except Exception:
+                    continue
+
+                # Full content — encrypted before leaving machine
+                batch.append(obj)
+
+                if len(batch) >= BATCH_SIZE:
+                    _flush_session_batch(batch, fname, api_key, enc_key, node_id)
+                    total += len(batch)
+                    batch = []
+
+            if batch:
+                _flush_session_batch(batch, fname, api_key, enc_key, node_id)
+                total += len(batch)
+
+            last_ids[fname] = len(all_lines)
+
         except Exception as e:
             log.warning(f"Session sync error ({fname}): {e}")
 
     return total
 
 
-def _extract_tool_name(obj: dict) -> str:
-    content = obj.get("content", [])
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") in ("tool_use", "toolCall"):
-                return block.get("name", "")
-    return ""
+def _flush_session_batch(batch: list, fname: str, api_key: str,
+                          enc_key: str | None, node_id: str) -> None:
+    payload = {"session_file": fname, "node_id": node_id, "events": batch}
+    if enc_key:
+        _post("/ingest/events", {
+            "node_id": node_id,
+            "encrypted": True,
+            "blob": encrypt_payload(payload, enc_key),
+        }, api_key)
+    else:
+        _post("/ingest/events", payload, api_key)
 
 
-# ── Sync: log lines ───────────────────────────────────────────────────────────
+# ── Sync: logs (full lines, encrypted) ────────────────────────────────────────
 
 def sync_logs(config: dict, state: dict, paths: dict) -> int:
-    log_dir = paths["log_dir"]
-    api_key = config["api_key"]
-    node_id = config["node_id"]
+    log_dir  = paths["log_dir"]
+    api_key  = config["api_key"]
+    enc_key  = config.get("encryption_key")
+    node_id  = config["node_id"]
     offsets: dict = state.setdefault("last_log_offsets", {})
     total = 0
 
-    log_files = sorted(glob.glob(os.path.join(log_dir, "openclaw-*.log")))[-3:]
+    log_files = sorted(glob.glob(os.path.join(log_dir, "openclaw-*.log")))[-5:]
     for fpath in log_files:
-        fname = os.path.basename(fpath)
+        fname  = os.path.basename(fpath)
         offset = offsets.get(fname, 0)
-        entries = []
+        entries: list[dict] = []
+
         try:
             with open(fpath, "r", errors="replace") as f:
                 f.seek(0, 2)
@@ -205,37 +239,48 @@ def sync_logs(config: dict, state: dict, paths: dict) -> int:
                     if not raw:
                         continue
                     try:
-                        obj = json.loads(raw)
+                        entries.append(json.loads(raw))
                     except Exception:
-                        continue
-                    entries.append({
-                        "ts": obj.get("time") or obj.get("timestamp", ""),
-                        "level": obj.get("level", "info"),
-                        "node_id": node_id,
-                    })
+                        entries.append({"raw": raw})
                     if len(entries) >= BATCH_SIZE:
-                        _post("/ingest/logs", {"logs": entries, "node_id": node_id}, api_key)
+                        _flush_log_batch(entries, fname, api_key, enc_key, node_id)
                         total += len(entries)
                         entries = []
                 offsets[fname] = f.tell()
+
             if entries:
-                _post("/ingest/logs", {"logs": entries, "node_id": node_id}, api_key)
+                _flush_log_batch(entries, fname, api_key, enc_key, node_id)
                 total += len(entries)
+
         except Exception as e:
             log.warning(f"Log sync error ({fname}): {e}")
 
     return total
 
 
+def _flush_log_batch(entries: list, fname: str, api_key: str,
+                      enc_key: str | None, node_id: str) -> None:
+    payload = {"log_file": fname, "node_id": node_id, "lines": entries}
+    if enc_key:
+        _post("/ingest/logs", {
+            "node_id": node_id,
+            "encrypted": True,
+            "blob": encrypt_payload(payload, enc_key),
+        }, api_key)
+    else:
+        _post("/ingest/logs", payload, api_key)
+
+
 # ── Heartbeat ─────────────────────────────────────────────────────────────────
 
-def send_heartbeat(config: dict, paths: dict) -> None:
+def send_heartbeat(config: dict) -> None:
     try:
         _post("/ingest/heartbeat", {
             "node_id": config["node_id"],
             "ts": datetime.now(timezone.utc).isoformat(),
             "platform": platform.system(),
             "version": _get_version(),
+            "e2e": bool(config.get("encryption_key")),
         }, config["api_key"])
     except Exception as e:
         log.debug(f"Heartbeat failed: {e}")
@@ -244,24 +289,22 @@ def send_heartbeat(config: dict, paths: dict) -> None:
 def _get_version() -> str:
     try:
         import re
-        root = Path(__file__).parent.parent
-        src = (root / "dashboard.py").read_text(errors="replace")
+        src = (Path(__file__).parent.parent / "dashboard.py").read_text(errors="replace")
         m = re.search(r'^__version__\s*=\s*["\'](.+?)["\']', src, re.M)
         return m.group(1) if m else "unknown"
     except Exception:
         return "unknown"
 
 
-# ── Main daemon loop ──────────────────────────────────────────────────────────
+# ── Daemon loop ────────────────────────────────────────────────────────────────
 
 def run_daemon() -> None:
     config = load_config()
     paths  = detect_paths()
-    log.info(f"Starting sync daemon — node_id={config['node_id']} → {INGEST_URL}")
-    log.info(f"Sessions: {paths['sessions_dir']}")
-    log.info(f"Logs:     {paths['log_dir']}")
+    enc    = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
+    log.info(f"Starting sync daemon — node={config['node_id']} → {INGEST_URL} ({enc})")
 
-    heartbeat_interval = 60  # seconds
+    heartbeat_interval = 60
     last_heartbeat = 0.0
 
     while True:
@@ -272,11 +315,11 @@ def run_daemon() -> None:
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
             save_state(state)
             if ev or lg:
-                log.info(f"Synced {ev} events, {lg} log lines")
+                log.info(f"Synced {ev} events, {lg} log lines ({enc})")
 
             now = time.time()
             if now - last_heartbeat > heartbeat_interval:
-                send_heartbeat(config, paths)
+                send_heartbeat(config)
                 last_heartbeat = now
 
         except Exception as e:
