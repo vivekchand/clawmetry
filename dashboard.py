@@ -18959,11 +18959,11 @@ BANNER = r"""
                                                 |___/
                           v{version}
 
-  🦞  See your agent think
+  [ClawMetry]  See your agent think
 
-  Tabs: Overview · 📊 Usage · Sessions · Crons · Logs
-        Memory · 📜 Transcripts · 🌊 Flow
-  Flow: Click nodes: 🧠 Automation Advisor · 💰 Cost Optimizer · 🕰️ Time Travel
+  Tabs: Overview ? ? Usage ? Sessions ? Crons ? Logs
+        Memory ? ? Transcripts ? ? Flow
+  Flow: Click nodes: ? Automation Advisor ? ? Cost Optimizer ? ?? Time Travel
 """
 
 ARCHITECTURE_OVERVIEW = """\
