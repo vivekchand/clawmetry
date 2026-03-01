@@ -71,7 +71,13 @@ jobs:
             } catch {}
             Start-Sleep 1
           }
-          if (-not $ready) { Write-Error "Server failed to start"; exit 1 }
+          if (-not $ready) {
+            Write-Host "=== server_out.txt ===" 
+            if (Test-Path server_out.txt) { Get-Content server_out.txt }
+            Write-Host "=== server_err.txt ==="
+            if (Test-Path server_err.txt) { Get-Content server_err.txt }
+            Write-Error "Server failed to start"; exit 1
+          }
         shell: pwsh
 
       - name: Run API tests
