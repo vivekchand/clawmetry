@@ -63,7 +63,19 @@ def page(browser_context):
 
 def load_dashboard(page: Page, wait_ms: int = 1500):
     """Navigate to dashboard and wait for initial render."""
-    page.goto(BASE_URL, wait_until="domcontentloaded")
+    # Inject token before navigating (each new page needs it)
+    if GATEWAY_TOKEN:
+        page.goto(BASE_URL, wait_until="domcontentloaded")
+        page.evaluate(f"localStorage.setItem('clawmetry-token', '{GATEWAY_TOKEN}')")
+        page.reload(wait_until="domcontentloaded")
+    else:
+        page.goto(BASE_URL, wait_until="domcontentloaded")
+    # Dismiss boot overlay and mark app ready so nav tabs are clickable
+    page.evaluate("""() => {
+        var o = document.getElementById('boot-overlay');
+        if (o) o.style.display = 'none';
+        document.body.className = 'app-ready';
+    }""")
     page.wait_for_timeout(wait_ms)
 
 
