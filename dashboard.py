@@ -19646,16 +19646,7 @@ def main():
     # clawmetry help (alias)
     subparsers.add_parser('help', add_help=True, help='Show this help message')
 
-    try:
     args = parser.parse_args()
-except SystemExit as _se:
-    # argparse --help closes stdout on Windows before writing finishes
-    try:
-        import sys as _sys
-        _sys.stdout.flush()
-    except (ValueError, OSError):
-        pass
-    raise
 
     # "clawmetry help" → print help and exit
     if args.command == 'help':
