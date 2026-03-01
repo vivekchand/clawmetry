@@ -13566,6 +13566,27 @@ def _check_auth():
     return jsonify({'error': 'Unauthorized', 'authRequired': True}), 401
 
 
+@bp_auth.route('/auth')
+def auth_token():
+    """Accept ?token=XXX, store in localStorage via JS, redirect to /.
+    Works for both OSS gateway tokens and cloud cm_ keys.
+    URL: /auth?token=YOUR_TOKEN
+    """
+    token = request.args.get('token', '').strip()
+    if not token:
+        return '<html><body style="background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;padding:40px;">' \
+               '<h2>Missing token</h2><p>Usage: <code>/auth?token=YOUR_TOKEN</code></p></body></html>', 400
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;padding:40px;min-height:100vh;">
+<p>Authenticating...</p>
+<script>
+  localStorage.setItem('clawmetry-token', '{token}');
+  localStorage.setItem('clawmetry-gw-token', '{token}');
+  window.location.href = '/';
+</script>
+</body></html>"""
+
+
 @bp_auth.route('/')
 def index():
     resp = make_response(render_template_string(DASHBOARD_HTML))
