@@ -62,7 +62,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           $env:OPENCLAW_GATEWAY_TOKEN = "ci-test-token"
-          Start-Process python -ArgumentList "dashboard.py --port 8900 --no-debug" -NoNewWindow
+          Start-Process python -ArgumentList "dashboard.py --port 8900 --no-debug" -NoNewWindow -RedirectStandardOutput "NUL" -RedirectStandardError "NUL"
           $ready = $false
           for ($i = 0; $i -lt 30; $i++) {
             try {
