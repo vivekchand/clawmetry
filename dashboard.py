@@ -176,7 +176,7 @@ def _load_metrics_from_disk():
             _otel_last_received = data.get('_last_received', 0)
         _expire_old_entries()
     except json.JSONDecodeError as e:
-        print(f"⚠️  Warning: Failed to parse metrics file {path}: {e}")
+        print(f"[warn]  Warning: Failed to parse metrics file {path}: {e}")
         # Create backup of corrupted file
         backup_path = f"{path}.corrupted.{int(time.time())}"
         try:
@@ -185,9 +185,9 @@ def _load_metrics_from_disk():
         except OSError:
             pass
     except (IOError, OSError) as e:
-        print(f"⚠️  Warning: Failed to read metrics file {path}: {e}")
+        print(f"[warn]  Warning: Failed to read metrics file {path}: {e}")
     except Exception as e:
-        print(f"⚠️  Warning: Unexpected error loading metrics: {e}")
+        print(f"[warn]  Warning: Unexpected error loading metrics: {e}")
 
 
 def _save_metrics_to_disk():
@@ -208,13 +208,13 @@ def _save_metrics_to_disk():
             json.dump(data, f)
         os.replace(tmp, path)
     except OSError as e:
-        print(f"⚠️  Warning: Failed to save metrics to {path}: {e}")
+        print(f"[warn]  Warning: Failed to save metrics to {path}: {e}")
         if "No space left on device" in str(e):
             print("💾 Disk full! Consider cleaning up old files or expanding storage.")
     except json.JSONEncodeError as e:
-        print(f"⚠️  Warning: Failed to serialize metrics data: {e}")
+        print(f"[warn]  Warning: Failed to serialize metrics data: {e}")
     except Exception as e:
-        print(f"⚠️  Warning: Unexpected error saving metrics: {e}")
+        print(f"[warn]  Warning: Unexpected error saving metrics: {e}")
 
 
 def _expire_old_entries():
@@ -256,7 +256,7 @@ def _metrics_flush_loop():
             print("📊 Metrics flush loop shutting down...")
             break
         except Exception as e:
-            print(f"⚠️  Warning: Error in metrics flush loop: {e}")
+            print(f"[warn]  Warning: Error in metrics flush loop: {e}")
             # Continue running despite errors
 
 
@@ -1087,7 +1087,7 @@ def _safe_date_ts(date_str):
         # Invalid date format - expected but handled gracefully
         return 0
     except Exception as e:
-        print(f"⚠️  Warning: Unexpected error parsing date '{date_str}': {e}")
+        print(f"[warn]  Warning: Unexpected error parsing date '{date_str}': {e}")
         return 0
 
 
@@ -1105,33 +1105,33 @@ def validate_configuration():
             found_files.append(f)
     
     if not found_files:
-        warnings.append(f"⚠️  No OpenClaw workspace files found in {WORKSPACE}")
-        tips.append("💡 Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
+        warnings.append(f"[warn]  No OpenClaw workspace files found in {WORKSPACE}")
+        tips.append("[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
     
     # Check if log directory exists and has recent logs
     if not os.path.exists(LOG_DIR):
-        warnings.append(f"⚠️  Log directory doesn't exist: {LOG_DIR}")
-        tips.append("💡 Make sure OpenClaw/Moltbot is running to generate logs")
+        warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
+        tips.append("[tip] Make sure OpenClaw/Moltbot is running to generate logs")
     else:
         # Check for recent log files
         log_pattern = os.path.join(LOG_DIR, "*claw*.log")
         recent_logs = [f for f in glob.glob(log_pattern) 
                       if os.path.getmtime(f) > time.time() - 86400]  # Last 24h
         if not recent_logs:
-            warnings.append(f"⚠️  No recent log files found in {LOG_DIR}")
-            tips.append("💡 Start your OpenClaw agent to see real-time data")
+            warnings.append(f"[warn]  No recent log files found in {LOG_DIR}")
+            tips.append("[tip] Start your OpenClaw agent to see real-time data")
     
     # Check if sessions directory exists
     if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
-        warnings.append(f"⚠️  Sessions directory not found: {SESSIONS_DIR}")
-        tips.append("💡 Sessions will appear when your agent starts conversations")
+        warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
+        tips.append("[tip] Sessions will appear when your agent starts conversations")
     
     # Check if OpenClaw binary is available
     try:
         subprocess.run(['openclaw', '--version'], capture_output=True, timeout=10)
     except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        warnings.append("⚠️  OpenClaw binary not found in PATH")
-        tips.append("💡 Install OpenClaw: https://github.com/openclaw/openclaw")
+        warnings.append("[warn]  OpenClaw binary not found in PATH")
+        tips.append("[tip] Install OpenClaw: https://github.com/openclaw/openclaw")
     
     return warnings, tips
 
@@ -1439,7 +1439,7 @@ def get_local_ip():
         # Network unavailable or socket error - common in offline/restricted environments
         return "127.0.0.1"
     except Exception as e:
-        print(f"⚠️  Warning: Unexpected error getting local IP: {e}")
+        print(f"[warn]  Warning: Unexpected error getting local IP: {e}")
         return "127.0.0.1"
 
 
@@ -1743,7 +1743,7 @@ DASHBOARD_HTML = r"""
   .co-ollama-prompt { background: #1c1c2e; border: 1px dashed #7c3aed; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
   .co-ollama-cmd { font-family: monospace; font-size: 12px; background: var(--bg-tertiary); padding: 6px 10px; border-radius: 5px; margin-top: 6px; color: #a78bfa; }
 
-  /* Cost Optimizer v2 — llmfit-powered */
+  /* Cost Optimizer v2 -- llmfit-powered */
   .cost-overview { background: linear-gradient(135deg, #1a2a1a, #1a1a2a); border: 1px solid #2d4a2d; border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; }
   .cost-overview-header { font-size: 14px; font-weight: 700; color: #4ade80; margin-bottom: 10px; letter-spacing: 0.3px; }
   .cost-overview-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
@@ -2381,7 +2381,7 @@ DASHBOARD_HTML = r"""
     .then(function(r){return r.json()})
     .then(function(d){
       if(d.needsSetup){
-        // No gateway token configured — show mandatory gateway setup wizard
+        // No gateway token configured -- show mandatory gateway setup wizard
         document.getElementById('login-overlay').style.display='none';
         var overlay=document.getElementById('gw-setup-overlay');
         overlay.dataset.mandatory='true';
@@ -2599,16 +2599,16 @@ function clawmetryLogout(){
         <div class="stats-footer-sub" id="cost-billing-badge" style="margin-top:2px;display:none;"></div>
       </div>
       <div style="margin-left:auto;text-align:right;">
-        <div class="stats-footer-sub">wk: <span id="cost-week">—</span></div>
-        <div class="stats-footer-sub">mo: <span id="cost-month">—</span></div>
+        <div class="stats-footer-sub">wk: <span id="cost-week">--</span></div>
+        <div class="stats-footer-sub">mo: <span id="cost-month">--</span></div>
       </div>
-      <span id="cost-trend" style="display:none;">Estimated from usage — may be $0 billed with OAuth auth</span>
+      <span id="cost-trend" style="display:none;">Estimated from usage -- may be $0 billed with OAuth auth</span>
     </div>
     <div class="stats-footer-item">
       <span class="stats-footer-icon">🤖</span>
       <div>
         <div class="stats-footer-label">Model</div>
-        <div class="stats-footer-value" id="model-primary">—</div>
+        <div class="stats-footer-value" id="model-primary">--</div>
       </div>
       <div id="model-breakdown" style="display:none;">Loading...</div>
     </div>
@@ -2616,15 +2616,15 @@ function clawmetryLogout(){
       <span class="stats-footer-icon">📊</span>
       <div>
         <div class="stats-footer-label">Tokens</div>
-        <div class="stats-footer-value" id="token-rate">—</div>
+        <div class="stats-footer-value" id="token-rate">--</div>
       </div>
-      <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">—</span></span>
+      <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">--</span></span>
     </div>
     <div class="stats-footer-item">
       <span class="stats-footer-icon">💬</span>
       <div>
         <div class="stats-footer-label">Sessions</div>
-        <div class="stats-footer-value" id="hot-sessions-count">—</div>
+        <div class="stats-footer-value" id="hot-sessions-count">--</div>
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
     </div>
@@ -2696,13 +2696,13 @@ function clawmetryLogout(){
 
   <!-- Hidden elements referenced by existing JS -->
   <div style="display:none;">
-    <span id="tokens-peak">—</span>
-    <span id="subagents-count">—</span>
-    <span id="subagents-status">—</span>
+    <span id="tokens-peak">--</span>
+    <span id="subagents-count">--</span>
+    <span id="subagents-status">--</span>
     <span id="subagents-preview"></span>
-    <span id="tools-active">—</span>
-    <span id="tools-recent">—</span>
-    <div id="tools-sparklines"><div class="tool-spark"><span>—</span></div><div class="tool-spark"><span>—</span></div><div class="tool-spark"><span>—</span></div></div>
+    <span id="tools-active">--</span>
+    <span id="tools-recent">--</span>
+    <div id="tools-sparklines"><div class="tool-spark"><span>--</span></div><div class="tool-spark"><span>--</span></div><div class="tool-spark"><span>--</span></div></div>
     <div id="active-tasks-grid"></div>
     <div id="activity-stream"></div>
   </div>
@@ -2724,22 +2724,22 @@ function clawmetryLogout(){
   <div class="grid">
     <div class="card">
       <div class="card-title"><span class="icon">📊</span> Today</div>
-      <div class="card-value" id="usage-today">—</div>
+      <div class="card-value" id="usage-today">--</div>
       <div class="card-sub" id="usage-today-cost"></div>
     </div>
     <div class="card">
       <div class="card-title"><span class="icon">📅</span> This Week</div>
-      <div class="card-value" id="usage-week">—</div>
+      <div class="card-value" id="usage-week">--</div>
       <div class="card-sub" id="usage-week-cost"></div>
     </div>
     <div class="card">
       <div class="card-title"><span class="icon">📆</span> This Month</div>
-      <div class="card-value" id="usage-month">—</div>
+      <div class="card-value" id="usage-month">--</div>
       <div class="card-sub" id="usage-month-cost"></div>
     </div>
     <div class="card" id="trend-card" style="display:none;">
       <div class="card-title"><span class="icon">📈</span> Trend</div>
-      <div class="card-value" id="trend-direction">—</div>
+      <div class="card-value" id="trend-direction">--</div>
       <div class="card-sub" id="trend-prediction"></div>
     </div>
   </div>
@@ -2753,12 +2753,12 @@ function clawmetryLogout(){
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-title"><span class="icon">⏱️</span> Avg Run Duration</div>
-        <div class="card-value" id="usage-avg-run">—</div>
+        <div class="card-value" id="usage-avg-run">--</div>
         <div class="card-sub">from OTLP openclaw.run.duration_ms</div>
       </div>
       <div class="card">
         <div class="card-title"><span class="icon">💬</span> Messages Processed</div>
-        <div class="card-value" id="usage-msg-count">—</div>
+        <div class="card-value" id="usage-msg-count">--</div>
         <div class="card-sub">from OTLP openclaw.message.processed</div>
       </div>
     </div>
@@ -2927,20 +2927,20 @@ function clawmetryLogout(){
       <rect width="980" height="550" fill="var(--bg-primary)" rx="12"/>
       <rect width="980" height="550" fill="url(#flow-grid)"/>
 
-      <!-- Human → Channel paths -->
+      <!-- Human -> Channel paths -->
       <path class="flow-path" id="path-human-tg"  d="M 60 56 C 60 70, 65 85, 75 100"/>
       <path class="flow-path" id="path-human-sig" d="M 60 56 C 55 90, 60 140, 75 170"/>
       <path class="flow-path" id="path-human-wa"  d="M 60 56 C 50 110, 55 200, 75 240"/>
 
-      <!-- Channel → Gateway paths -->
+      <!-- Channel -> Gateway paths -->
       <path class="flow-path" id="path-tg-gw"  d="M 130 120 C 150 120, 160 165, 180 170"/>
       <path class="flow-path" id="path-sig-gw" d="M 130 190 C 150 190, 160 185, 180 183"/>
       <path class="flow-path" id="path-wa-gw"  d="M 130 260 C 150 260, 160 200, 180 195"/>
 
-      <!-- Gateway → Brain -->
+      <!-- Gateway -> Brain -->
       <path class="flow-path" id="path-gw-brain" d="M 290 183 C 305 183, 315 175, 330 175"/>
 
-      <!-- Brain → Tools -->
+      <!-- Brain -> Tools -->
       <path class="flow-path" id="path-brain-session" d="M 510 155 C 530 130, 545 95, 560 89"/>
       <path class="flow-path" id="path-brain-exec"    d="M 510 160 C 530 150, 545 143, 560 139"/>
       <path class="flow-path" id="path-brain-browser" d="M 510 175 C 530 175, 545 189, 560 189"/>
@@ -3120,7 +3120,7 @@ function clawmetryLogout(){
       <g class="flow-node flow-node-infra flow-node-runtime" id="node-runtime">
         <rect x="30" y="450" width="130" height="40" rx="8" ry="8" fill="#455A64" stroke="#37474F" filter="url(#dropShadowLight)"/>
         <text x="95" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x2699;&#xFE0F; Runtime</text>
-        <text class="infra-sub" x="95" y="480" style="fill:#B0BEC5;font-size:8px;text-anchor:middle;" id="infra-runtime-text">Node.js · Linux</text>
+        <text class="infra-sub" x="95" y="480" style="fill:#B0BEC5;font-size:8px;text-anchor:middle;" id="infra-runtime-text">Node.js - Linux</text>
       </g>
       <g class="flow-node flow-node-infra flow-node-machine" id="node-machine">
         <rect x="195" y="450" width="130" height="40" rx="8" ry="8" fill="#4E342E" stroke="#3E2723" filter="url(#dropShadowLight)"/>
@@ -3167,12 +3167,12 @@ function clawmetryLogout(){
 <div class="page" id="page-brain">
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain — Unified Activity Stream</span>
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
       <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
     </div>
     <!-- Activity density chart -->
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Activity density — last 60 min (30s buckets)</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Activity density -- last 60 min (30s buckets)</div>
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
     <!-- Source filter chips -->
@@ -3618,7 +3618,7 @@ function timeAgo(ms) {
 }
 
 function formatTime(ms) {
-  if (!ms) return '—';
+  if (!ms) return '--';
   return new Date(ms).toLocaleString('en-GB', {hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'});
 }
 
@@ -3751,7 +3751,7 @@ async function loadMiniWidgets(overview, usage) {
   if (isOauthLikely) {
     if (badgeEl) {
       badgeEl.style.display = '';
-      badgeEl.textContent = 'est. equivalent if billed · OAuth likely';
+      badgeEl.textContent = 'est. equivalent if billed - OAuth likely';
     }
     trendEl.style.display = 'none';
   } else {
@@ -3783,7 +3783,7 @@ async function loadMiniWidgets(overview, usage) {
   document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
   document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
   
-  // 🔥 Hot Sessions — use /api/sessions for consistency with modal
+  // 🔥 Hot Sessions -- use /api/sessions for consistency with modal
   fetch('/api/sessions').then(function(r){return r.json()}).then(function(sd) {
     var sl = sd.sessions || sd || [];
     if (!Array.isArray(sl)) sl = [];
@@ -3850,7 +3850,7 @@ async function loadSubAgents() {
       var activeFirst = subagents.filter(function(a){return a.status==='active';}).concat(subagents.filter(function(a){return a.status!=='active';}));
       var topAgents = activeFirst.slice(0, 3);
       topAgents.forEach(function(agent) {
-        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
+        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '[ok]' : '⬜';
         var name = cleanTaskName(agent.displayName);
         if (name.length > 40) name = name.substring(0, 37) + '…';
         previewHtml += '<div class="subagent-item">';
@@ -4013,7 +4013,7 @@ async function loadToolActivity() {
     sparks[1].textContent = toolCounts.browser;  
     sparks[2].textContent = toolCounts.search;
   } catch(e) {
-    document.getElementById('tools-active').textContent = '—';
+    document.getElementById('tools-active').textContent = '--';
   }
 }
 
@@ -4036,7 +4036,7 @@ async function loadActivityStream() {
             var time = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
             
             if (content.includes('searching') || content.includes('search')) {
-              activity = time + ' 🔍 Searching web for information';
+              activity = time + ' [check] Searching web for information';
             } else if (content.includes('reading') || content.includes('file')) {
               activity = time + ' 📖 Reading files';
             } else if (content.includes('writing') || content.includes('edit')) {
@@ -4113,8 +4113,8 @@ var _brainAllEvents = [];
 
 var _brainTypeIcons = {
   'EXEC': '⚙️', 'SHELL': '⚙️', 'READ': '📖', 'WRITE': '✏️',
-  'BROWSER': '🌐', 'MSG': '📨', 'SEARCH': '🔍', 'SPAWN': '🚀',
-  'DONE': '✅', 'ERROR': '❌', 'TOOL': '🔧'
+  'BROWSER': '🌐', 'MSG': '📨', 'SEARCH': '[check]', 'SPAWN': '[prod]',
+  'DONE': '[ok]', 'ERROR': '❌', 'TOOL': '🔧'
 };
 
 function setBrainFilter(source, btn) {
@@ -4309,7 +4309,7 @@ def _load_metrics_from_disk():
             _otel_last_received = data.get('_last_received', 0)
         _expire_old_entries()
     except json.JSONDecodeError as e:
-        print(f"⚠️  Warning: Failed to parse metrics file {path}: {e}")
+        print(f"[warn]  Warning: Failed to parse metrics file {path}: {e}")
         # Create backup of corrupted file
         backup_path = f"{path}.corrupted.{int(time.time())}"
         try:
@@ -4318,9 +4318,9 @@ def _load_metrics_from_disk():
         except OSError:
             pass
     except (IOError, OSError) as e:
-        print(f"⚠️  Warning: Failed to read metrics file {path}: {e}")
+        print(f"[warn]  Warning: Failed to read metrics file {path}: {e}")
     except Exception as e:
-        print(f"⚠️  Warning: Unexpected error loading metrics: {e}")
+        print(f"[warn]  Warning: Unexpected error loading metrics: {e}")
 
 
 def _save_metrics_to_disk():
@@ -4341,13 +4341,13 @@ def _save_metrics_to_disk():
             json.dump(data, f)
         os.replace(tmp, path)
     except OSError as e:
-        print(f"⚠️  Warning: Failed to save metrics to {path}: {e}")
+        print(f"[warn]  Warning: Failed to save metrics to {path}: {e}")
         if "No space left on device" in str(e):
             print("💾 Disk full! Consider cleaning up old files or expanding storage.")
     except json.JSONEncodeError as e:
-        print(f"⚠️  Warning: Failed to serialize metrics data: {e}")
+        print(f"[warn]  Warning: Failed to serialize metrics data: {e}")
     except Exception as e:
-        print(f"⚠️  Warning: Unexpected error saving metrics: {e}")
+        print(f"[warn]  Warning: Unexpected error saving metrics: {e}")
 
 
 def _expire_old_entries():
@@ -4389,7 +4389,7 @@ def _metrics_flush_loop():
             print("📊 Metrics flush loop shutting down...")
             break
         except Exception as e:
-            print(f"⚠️  Warning: Error in metrics flush loop: {e}")
+            print(f"[warn]  Warning: Error in metrics flush loop: {e}")
             # Continue running despite errors
 
 
@@ -5220,7 +5220,7 @@ def _safe_date_ts(date_str):
         # Invalid date format - expected but handled gracefully
         return 0
     except Exception as e:
-        print(f"⚠️  Warning: Unexpected error parsing date '{date_str}': {e}")
+        print(f"[warn]  Warning: Unexpected error parsing date '{date_str}': {e}")
         return 0
 
 
@@ -5238,33 +5238,33 @@ def validate_configuration():
             found_files.append(f)
     
     if not found_files:
-        warnings.append(f"⚠️  No OpenClaw workspace files found in {WORKSPACE}")
-        tips.append("💡 Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
+        warnings.append(f"[warn]  No OpenClaw workspace files found in {WORKSPACE}")
+        tips.append("[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
     
     # Check if log directory exists and has recent logs
     if not os.path.exists(LOG_DIR):
-        warnings.append(f"⚠️  Log directory doesn't exist: {LOG_DIR}")
-        tips.append("💡 Make sure OpenClaw/Moltbot is running to generate logs")
+        warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
+        tips.append("[tip] Make sure OpenClaw/Moltbot is running to generate logs")
     else:
         # Check for recent log files
         log_pattern = os.path.join(LOG_DIR, "*claw*.log")
         recent_logs = [f for f in glob.glob(log_pattern) 
                       if os.path.getmtime(f) > time.time() - 86400]  # Last 24h
         if not recent_logs:
-            warnings.append(f"⚠️  No recent log files found in {LOG_DIR}")
-            tips.append("💡 Start your OpenClaw agent to see real-time data")
+            warnings.append(f"[warn]  No recent log files found in {LOG_DIR}")
+            tips.append("[tip] Start your OpenClaw agent to see real-time data")
     
     # Check if sessions directory exists
     if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
-        warnings.append(f"⚠️  Sessions directory not found: {SESSIONS_DIR}")
-        tips.append("💡 Sessions will appear when your agent starts conversations")
+        warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
+        tips.append("[tip] Sessions will appear when your agent starts conversations")
     
     # Check if OpenClaw binary is available
     try:
         subprocess.run(['openclaw', '--version'], capture_output=True, timeout=10)
     except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        warnings.append("⚠️  OpenClaw binary not found in PATH")
-        tips.append("💡 Install OpenClaw: https://github.com/openclaw/openclaw")
+        warnings.append("[warn]  OpenClaw binary not found in PATH")
+        tips.append("[tip] Install OpenClaw: https://github.com/openclaw/openclaw")
     
     return warnings, tips
 
@@ -5572,7 +5572,7 @@ def get_local_ip():
         # Network unavailable or socket error - common in offline/restricted environments
         return "127.0.0.1"
     except Exception as e:
-        print(f"⚠️  Warning: Unexpected error getting local IP: {e}")
+        print(f"[warn]  Warning: Unexpected error getting local IP: {e}")
         return "127.0.0.1"
 
 
@@ -5876,7 +5876,7 @@ DASHBOARD_HTML = r"""
   .co-ollama-prompt { background: #1c1c2e; border: 1px dashed #7c3aed; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
   .co-ollama-cmd { font-family: monospace; font-size: 12px; background: var(--bg-tertiary); padding: 6px 10px; border-radius: 5px; margin-top: 6px; color: #a78bfa; }
 
-  /* Cost Optimizer v2 — llmfit-powered */
+  /* Cost Optimizer v2 -- llmfit-powered */
   .cost-overview { background: linear-gradient(135deg, #1a2a1a, #1a1a2a); border: 1px solid #2d4a2d; border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; }
   .cost-overview-header { font-size: 14px; font-weight: 700; color: #4ade80; margin-bottom: 10px; letter-spacing: 0.3px; }
   .cost-overview-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
@@ -6514,7 +6514,7 @@ DASHBOARD_HTML = r"""
     .then(function(r){return r.json()})
     .then(function(d){
       if(d.needsSetup){
-        // No gateway token configured — show mandatory gateway setup wizard
+        // No gateway token configured -- show mandatory gateway setup wizard
         document.getElementById('login-overlay').style.display='none';
         var overlay=document.getElementById('gw-setup-overlay');
         overlay.dataset.mandatory='true';
@@ -6732,16 +6732,16 @@ function clawmetryLogout(){
         <div class="stats-footer-sub" id="cost-billing-badge" style="margin-top:2px;display:none;"></div>
       </div>
       <div style="margin-left:auto;text-align:right;">
-        <div class="stats-footer-sub">wk: <span id="cost-week">—</span></div>
-        <div class="stats-footer-sub">mo: <span id="cost-month">—</span></div>
+        <div class="stats-footer-sub">wk: <span id="cost-week">--</span></div>
+        <div class="stats-footer-sub">mo: <span id="cost-month">--</span></div>
       </div>
-      <span id="cost-trend" style="display:none;">Estimated from usage — may be $0 billed with OAuth auth</span>
+      <span id="cost-trend" style="display:none;">Estimated from usage -- may be $0 billed with OAuth auth</span>
     </div>
     <div class="stats-footer-item">
       <span class="stats-footer-icon">🤖</span>
       <div>
         <div class="stats-footer-label">Model</div>
-        <div class="stats-footer-value" id="model-primary">—</div>
+        <div class="stats-footer-value" id="model-primary">--</div>
       </div>
       <div id="model-breakdown" style="display:none;">Loading...</div>
     </div>
@@ -6749,15 +6749,15 @@ function clawmetryLogout(){
       <span class="stats-footer-icon">📊</span>
       <div>
         <div class="stats-footer-label">Tokens</div>
-        <div class="stats-footer-value" id="token-rate">—</div>
+        <div class="stats-footer-value" id="token-rate">--</div>
       </div>
-      <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">—</span></span>
+      <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">--</span></span>
     </div>
     <div class="stats-footer-item">
       <span class="stats-footer-icon">💬</span>
       <div>
         <div class="stats-footer-label">Sessions</div>
-        <div class="stats-footer-value" id="hot-sessions-count">—</div>
+        <div class="stats-footer-value" id="hot-sessions-count">--</div>
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
     </div>
@@ -6829,13 +6829,13 @@ function clawmetryLogout(){
 
   <!-- Hidden elements referenced by existing JS -->
   <div style="display:none;">
-    <span id="tokens-peak">—</span>
-    <span id="subagents-count">—</span>
-    <span id="subagents-status">—</span>
+    <span id="tokens-peak">--</span>
+    <span id="subagents-count">--</span>
+    <span id="subagents-status">--</span>
     <span id="subagents-preview"></span>
-    <span id="tools-active">—</span>
-    <span id="tools-recent">—</span>
-    <div id="tools-sparklines"><div class="tool-spark"><span>—</span></div><div class="tool-spark"><span>—</span></div><div class="tool-spark"><span>—</span></div></div>
+    <span id="tools-active">--</span>
+    <span id="tools-recent">--</span>
+    <div id="tools-sparklines"><div class="tool-spark"><span>--</span></div><div class="tool-spark"><span>--</span></div><div class="tool-spark"><span>--</span></div></div>
     <div id="active-tasks-grid"></div>
     <div id="activity-stream"></div>
   </div>
@@ -6857,22 +6857,22 @@ function clawmetryLogout(){
   <div class="grid">
     <div class="card">
       <div class="card-title"><span class="icon">📊</span> Today</div>
-      <div class="card-value" id="usage-today">—</div>
+      <div class="card-value" id="usage-today">--</div>
       <div class="card-sub" id="usage-today-cost"></div>
     </div>
     <div class="card">
       <div class="card-title"><span class="icon">📅</span> This Week</div>
-      <div class="card-value" id="usage-week">—</div>
+      <div class="card-value" id="usage-week">--</div>
       <div class="card-sub" id="usage-week-cost"></div>
     </div>
     <div class="card">
       <div class="card-title"><span class="icon">📆</span> This Month</div>
-      <div class="card-value" id="usage-month">—</div>
+      <div class="card-value" id="usage-month">--</div>
       <div class="card-sub" id="usage-month-cost"></div>
     </div>
     <div class="card" id="trend-card" style="display:none;">
       <div class="card-title"><span class="icon">📈</span> Trend</div>
-      <div class="card-value" id="trend-direction">—</div>
+      <div class="card-value" id="trend-direction">--</div>
       <div class="card-sub" id="trend-prediction"></div>
     </div>
   </div>
@@ -6886,12 +6886,12 @@ function clawmetryLogout(){
     <div class="grid" style="margin-top:16px;">
       <div class="card">
         <div class="card-title"><span class="icon">⏱️</span> Avg Run Duration</div>
-        <div class="card-value" id="usage-avg-run">—</div>
+        <div class="card-value" id="usage-avg-run">--</div>
         <div class="card-sub">from OTLP openclaw.run.duration_ms</div>
       </div>
       <div class="card">
         <div class="card-title"><span class="icon">💬</span> Messages Processed</div>
-        <div class="card-value" id="usage-msg-count">—</div>
+        <div class="card-value" id="usage-msg-count">--</div>
         <div class="card-sub">from OTLP openclaw.message.processed</div>
       </div>
     </div>
@@ -7060,20 +7060,20 @@ function clawmetryLogout(){
       <rect width="980" height="550" fill="var(--bg-primary)" rx="12"/>
       <rect width="980" height="550" fill="url(#flow-grid)"/>
 
-      <!-- Human → Channel paths -->
+      <!-- Human -> Channel paths -->
       <path class="flow-path" id="path-human-tg"  d="M 60 56 C 60 70, 65 85, 75 100"/>
       <path class="flow-path" id="path-human-sig" d="M 60 56 C 55 90, 60 140, 75 170"/>
       <path class="flow-path" id="path-human-wa"  d="M 60 56 C 50 110, 55 200, 75 240"/>
 
-      <!-- Channel → Gateway paths -->
+      <!-- Channel -> Gateway paths -->
       <path class="flow-path" id="path-tg-gw"  d="M 130 120 C 150 120, 160 165, 180 170"/>
       <path class="flow-path" id="path-sig-gw" d="M 130 190 C 150 190, 160 185, 180 183"/>
       <path class="flow-path" id="path-wa-gw"  d="M 130 260 C 150 260, 160 200, 180 195"/>
 
-      <!-- Gateway → Brain -->
+      <!-- Gateway -> Brain -->
       <path class="flow-path" id="path-gw-brain" d="M 290 183 C 305 183, 315 175, 330 175"/>
 
-      <!-- Brain → Tools -->
+      <!-- Brain -> Tools -->
       <path class="flow-path" id="path-brain-session" d="M 510 155 C 530 130, 545 95, 560 89"/>
       <path class="flow-path" id="path-brain-exec"    d="M 510 160 C 530 150, 545 143, 560 139"/>
       <path class="flow-path" id="path-brain-browser" d="M 510 175 C 530 175, 545 189, 560 189"/>
@@ -7253,7 +7253,7 @@ function clawmetryLogout(){
       <g class="flow-node flow-node-infra flow-node-runtime" id="node-runtime">
         <rect x="30" y="450" width="130" height="40" rx="8" ry="8" fill="#455A64" stroke="#37474F" filter="url(#dropShadowLight)"/>
         <text x="95" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x2699;&#xFE0F; Runtime</text>
-        <text class="infra-sub" x="95" y="480" style="fill:#B0BEC5;font-size:8px;text-anchor:middle;" id="infra-runtime-text">Node.js · Linux</text>
+        <text class="infra-sub" x="95" y="480" style="fill:#B0BEC5;font-size:8px;text-anchor:middle;" id="infra-runtime-text">Node.js - Linux</text>
       </g>
       <g class="flow-node flow-node-infra flow-node-machine" id="node-machine">
         <rect x="195" y="450" width="130" height="40" rx="8" ry="8" fill="#4E342E" stroke="#3E2723" filter="url(#dropShadowLight)"/>
@@ -7300,12 +7300,12 @@ function clawmetryLogout(){
 <div class="page" id="page-brain">
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain — Unified Activity Stream</span>
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
       <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
     </div>
     <!-- Activity density chart -->
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Activity density — last 60 min (30s buckets)</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Activity density -- last 60 min (30s buckets)</div>
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
     <!-- Source filter chips -->
@@ -7751,7 +7751,7 @@ function timeAgo(ms) {
 }
 
 function formatTime(ms) {
-  if (!ms) return '—';
+  if (!ms) return '--';
   return new Date(ms).toLocaleString('en-GB', {hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'});
 }
 
@@ -7884,7 +7884,7 @@ async function loadMiniWidgets(overview, usage) {
   if (isOauthLikely) {
     if (badgeEl) {
       badgeEl.style.display = '';
-      badgeEl.textContent = 'est. equivalent if billed · OAuth likely';
+      badgeEl.textContent = 'est. equivalent if billed - OAuth likely';
     }
     trendEl.style.display = 'none';
   } else {
@@ -7916,7 +7916,7 @@ async function loadMiniWidgets(overview, usage) {
   document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
   document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
   
-  // 🔥 Hot Sessions — use /api/sessions for consistency with modal
+  // 🔥 Hot Sessions -- use /api/sessions for consistency with modal
   fetch('/api/sessions').then(function(r){return r.json()}).then(function(sd) {
     var sl = sd.sessions || sd || [];
     if (!Array.isArray(sl)) sl = [];
@@ -7983,7 +7983,7 @@ async function loadSubAgents() {
       var activeFirst = subagents.filter(function(a){return a.status==='active';}).concat(subagents.filter(function(a){return a.status!=='active';}));
       var topAgents = activeFirst.slice(0, 3);
       topAgents.forEach(function(agent) {
-        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
+        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '[ok]' : '⬜';
         var name = cleanTaskName(agent.displayName);
         if (name.length > 40) name = name.substring(0, 37) + '…';
         previewHtml += '<div class="subagent-item">';
@@ -8146,7 +8146,7 @@ async function loadToolActivity() {
     sparks[1].textContent = toolCounts.browser;  
     sparks[2].textContent = toolCounts.search;
   } catch(e) {
-    document.getElementById('tools-active').textContent = '—';
+    document.getElementById('tools-active').textContent = '--';
   }
 }
 
@@ -8169,7 +8169,7 @@ async function loadActivityStream() {
             var time = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
             
             if (content.includes('searching') || content.includes('search')) {
-              activity = time + ' 🔍 Searching web for information';
+              activity = time + ' [check] Searching web for information';
             } else if (content.includes('reading') || content.includes('file')) {
               activity = time + ' 📖 Reading files';
             } else if (content.includes('writing') || content.includes('edit')) {
@@ -8246,8 +8246,8 @@ var _brainAllEvents = [];
 
 var _brainTypeIcons = {
   'EXEC': '⚙️', 'SHELL': '⚙️', 'READ': '📖', 'WRITE': '✏️',
-  'BROWSER': '🌐', 'MSG': '📨', 'SEARCH': '🔍', 'SPAWN': '🚀',
-  'DONE': '✅', 'ERROR': '❌', 'TOOL': '🔧'
+  'BROWSER': '🌐', 'MSG': '📨', 'SEARCH': '[check]', 'SPAWN': '[prod]',
+  'DONE': '[ok]', 'ERROR': '❌', 'TOOL': '🔧'
 };
 
 function setBrainFilter(source, btn) {
@@ -8687,7 +8687,7 @@ function showSessionsModal() {
         var tokens = s.totalTokens || s.tokens || 0;
         tokens = tokens > 1e6 ? (tokens/1e6).toFixed(1)+'M' : (tokens > 1e3 ? (tokens/1e3).toFixed(0)+'K' : tokens);
         var kind = s.kind || (s.sessionKey && s.sessionKey.includes('subagent') ? 'isolated' : 'main');
-        var label = s.label || s.sessionKey || s.name || '—';
+        var label = s.label || s.sessionKey || s.name || '--';
         var kindColor = kind === 'main' ? 'var(--text-success)' : kind === 'isolated' ? '#a78bfa' : 'var(--text-muted)';
         html += '<tr style="border-bottom:1px solid var(--border-primary);">';
         html += '<td style="padding:8px;color:var(--text-primary);font-weight:600;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(label) + '</td>';
@@ -8951,7 +8951,7 @@ async function loadCronRuns(jobId) {
     var h = '<div style="font-weight:600;margin-bottom:8px;">Run History (last ' + runs.length + ')</div>';
     runs.forEach(function(r) {
       var statusCls = r.status === 'ok' ? 'run-status-ok' : 'run-status-error';
-      var dur = r.durationMs ? ' · ' + (r.durationMs/1000).toFixed(1) + 's' : '';
+      var dur = r.durationMs ? ' - ' + (r.durationMs/1000).toFixed(1) + 's' : '';
       h += '<div class="run-entry">';
       h += '<span>' + new Date(r.startedAt || r.ts).toLocaleString() + dur + '</span>';
       h += '<span class="' + statusCls + '">' + (r.status || 'unknown') + '</span>';
@@ -9204,7 +9204,7 @@ async function loadMCTasks() {
       {key:'in_progress', label:'In Progress', color:'#16a34a', bg:'#16a34a20', icon:'🔄', tasks:[]},
       {key:'review', label:'Review', color:'#d97706', bg:'#d9770620', icon:'👀', tasks:[]},
       {key:'blocked', label:'Blocked', color:'#dc2626', bg:'#dc262620', icon:'🚫', tasks:[]},
-      {key:'done', label:'Done', color:'#6b7280', bg:'#6b728020', icon:'✅', tasks:[]}
+      {key:'done', label:'Done', color:'#6b7280', bg:'#6b728020', icon:'[ok]', tasks:[]}
     ];
     tasks.forEach(function(t) {
       var col = t.column || 'inbox';
@@ -9265,7 +9265,7 @@ function renderMCExpanded(key) {
   var html = '<div style="font-size:11px;font-weight:700;color:'+col.color+';margin-bottom:8px;">'+col.icon+' '+col.label+' ('+col.tasks.length+')</div>';
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px;">';
   col.tasks.forEach(function(t) {
-    var title = t.title || '—';
+    var title = t.title || '--';
     var badge = t.companyId ? '<span style="font-size:9px;background:var(--bg-secondary);padding:1px 5px;border-radius:3px;color:var(--text-muted);margin-left:6px;">'+t.companyId+'</span>' : '';
     html += '<div style="font-size:12px;color:var(--text-secondary);padding:4px 8px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid '+col.color+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="'+(t.title||'').replace(/"/g,'&quot;')+'">'+title+badge+'</div>';
   });
@@ -9484,7 +9484,7 @@ async function loadUsage() {
     if (data.source === 'otlp') {
       otelExtra.style.display = '';
       var runEl = document.getElementById('usage-avg-run');
-      if (runEl) runEl.textContent = data.avgRunMs > 0 ? (data.avgRunMs > 1000 ? (data.avgRunMs/1000).toFixed(1) + 's' : data.avgRunMs.toFixed(0) + 'ms') : '—';
+      if (runEl) runEl.textContent = data.avgRunMs > 0 ? (data.avgRunMs > 1000 ? (data.avgRunMs/1000).toFixed(1) + 's' : data.avgRunMs.toFixed(0) + 'ms') : '--';
       var msgEl = document.getElementById('usage-msg-count');
       if (msgEl) msgEl.textContent = data.messageCount || '0';
       // Model breakdown table
@@ -9517,7 +9517,7 @@ function displayCostWarnings(warnings) {
   
   var html = '';
   warnings.forEach(function(w) {
-    var icon = w.level === 'error' ? '🚨' : '⚠️';
+    var icon = w.level === 'error' ? '🚨' : '[warn]';
     html += '<div class="cost-warning ' + w.level + '">';
     html += '<div class="cost-warning-icon">' + icon + '</div>';
     html += '<div class="cost-warning-message">' + escHtml(w.message) + '</div>';
@@ -9553,7 +9553,7 @@ function displayTrendAnalysis(trend, usageData) {
       var costPerToken = usageData.monthCost / usageData.month;
       var projectedEquivalent = trend.monthlyPrediction * costPerToken;
       if (projectedEquivalent > 0.01) {
-        line += ' · ~$' + projectedEquivalent.toFixed(2) + '/mo equivalent if billed';
+        line += ' - ~$' + projectedEquivalent.toFixed(2) + '/mo equivalent if billed';
         if (usageData.billingSummary === 'likely_oauth_or_included') {
           line += ' (could be $0 with OAuth)';
         }
@@ -9660,7 +9660,7 @@ function toggleMsg(idx) {
 
 var _overviewRefreshRunning = false;
 function startOverviewRefresh() {
-  // Don't fire loadAll() immediately — bootDashboard already called it
+  // Don't fire loadAll() immediately -- bootDashboard already called it
   if (window._overviewTimer) clearInterval(window._overviewTimer);
   window._overviewTimer = setInterval(async function() {
     if (_overviewRefreshRunning) return;
@@ -10274,7 +10274,7 @@ function processFlowEvent(line) {
   if (msg.includes('embedded run agent end') || msg.includes('embedded run prompt end')) {
     if (now - (flowThrottles['run-end']||0) < 1000) return;
     flowThrottles['run-end'] = now;
-    addFlowFeedItem('✅ AI processing complete', '#50e080');
+    addFlowFeedItem('[ok] AI processing complete', '#50e080');
     return;
   }
   if (msg.includes('session state') && msg.includes('new=processing')) {
@@ -10438,7 +10438,7 @@ function _ovRenderCard(agent, idx) {
   h += '</div>';
   h += '</div>';
   // Status badge top-right
-  h += '<span class="task-card-badge ' + sc + '" style="flex-shrink:0;">' + (sc === 'running' ? '🔄' : sc === 'failed' ? '❌' : '✅') + '</span>';
+  h += '<span class="task-card-badge ' + sc + '" style="flex-shrink:0;">' + (sc === 'running' ? '🔄' : sc === 'failed' ? '❌' : '[ok]') + '</span>';
   h += '</div>';
   // Row 3: Show details toggle
   h += '<button class="ov-toggle-btn" onclick="event.stopPropagation();var d=document.getElementById(\'' + detailId + '\');var o=d.classList.toggle(\'open\');this.textContent=o?\'▼ Hide details\':\'▶ Show details\';if(o){window._ovExpandedSet=window._ovExpandedSet||{};window._ovExpandedSet[\'' + escHtml(agent.sessionId) + '\']=true;}else{delete window._ovExpandedSet[\'' + escHtml(agent.sessionId) + '\'];}">' + (isOpen ? '▼ Hide details' : '▶ Show details') + '</button>';
@@ -10511,7 +10511,7 @@ async function loadOverviewTasks() {
       running.forEach(function(a) { html += _ovRenderCard(a, cardIdx++); });
     }
     if (done.length > 0) {
-      html += '<div class="task-group-header">✅ Recently Completed (' + done.length + ')</div>';
+      html += '<div class="task-group-header">[ok] Recently Completed (' + done.length + ')</div>';
       done.forEach(function(a) { html += _ovRenderCard(a, cardIdx++); });
     }
     if (failed.length > 0) {
@@ -10567,7 +10567,7 @@ var COMP_MAP = {
   'node-session': {type:'tool', name:'Sessions', icon:'📋'},
   'node-exec': {type:'tool', name:'Exec', icon:'⚡'},
   'node-browser': {type:'tool', name:'Web', icon:'🌍'},
-  'node-search': {type:'tool', name:'Search', icon:'🔍'},
+  'node-search': {type:'tool', name:'Search', icon:'[check]'},
   'node-cron': {type:'tool', name:'Cron', icon:'⏰'},
   'node-tts': {type:'tool', name:'TTS', icon:'🔊'},
   'node-memory': {type:'tool', name:'Memory', icon:'💾'},
@@ -10870,7 +10870,7 @@ function loadTelegramMessages(isRefresh) {
     }
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' · ' + data.total + ' total messages';
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' - ' + data.total + ' total messages';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -10901,7 +10901,7 @@ function loadMoreTelegram() {
     });
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' · ' + data.total + ' total messages';
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' - ' + data.total + ' total messages';
   });
 }
 
@@ -10930,7 +10930,7 @@ function loadIMessageMessages(isRefresh) {
     });
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total || msgs.length) + ' total messages';
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total || msgs.length) + ' total messages';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -10964,7 +10964,7 @@ function loadWhatsAppMessages(isRefresh) {
     });
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total || msgs.length) + ' total messages';
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total || msgs.length) + ' total messages';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -10998,7 +10998,7 @@ function loadSignalMessages(isRefresh) {
     });
     html += '</div>';
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total || msgs.length) + ' total messages';
+    document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total || msgs.length) + ' total messages';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -11084,7 +11084,7 @@ function loadDiscordMessages(isRefresh) {
       html += '<div class="discord-bubble ' + dir + '">';
       html += '<div class="discord-sender">' + sender + '</div>';
       html += '<div class="discord-text">' + text + '</div>';
-      html += '<div class="discord-time">' + (date ? date + ' · ' : '') + ts + '</div>';
+      html += '<div class="discord-time">' + (date ? date + ' - ' : '') + ts + '</div>';
       html += '</div></div>';
     });
     html += '</div>';
@@ -11127,7 +11127,7 @@ function loadSlackMessages(isRefresh) {
       html += '<div class="slack-bubble ' + dir + '">';
       html += '<div class="slack-sender">' + sender + '</div>';
       html += '<div class="slack-text">' + text + '</div>';
-      html += '<div class="slack-time">' + (date ? date + ' · ' : '') + ts + '</div>';
+      html += '<div class="slack-time">' + (date ? date + ' - ' : '') + ts + '</div>';
       html += '</div></div>';
     });
     html += '</div>';
@@ -11151,7 +11151,7 @@ function loadGenericChannelData(nodeId, chKey, comp, isRefresh) {
     var html = '<div class="tg-stats">'
       + '<span class="in">📥 ' + todayIn + ' incoming</span>'
       + '<span class="out">📤 ' + todayOut + ' outgoing</span>'
-      + '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">' + escapeHtml(status) + ' · Today</span>'
+      + '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">' + escapeHtml(status) + ' - Today</span>'
       + '</div>';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">'
@@ -11200,7 +11200,7 @@ function loadWebchatMessages(isRefresh) {
     var todayIn = data.todayIn || 0;
     var todayOut = data.todayOut || 0;
     var activeSessions = data.activeSessions || 0;
-    var lastActive = data.lastActive ? new Date(data.lastActive).toLocaleTimeString() : '—';
+    var lastActive = data.lastActive ? new Date(data.lastActive).toLocaleTimeString() : '--';
     var html = '<div class="wc-stats">'
       + '<span class="wc-stat-item">🌐 <b>' + activeSessions + '</b> sessions</span>'
       + '<span class="wc-stat-item">📥 <b>' + todayIn + '</b> in</span>'
@@ -11229,7 +11229,7 @@ function loadWebchatMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'WebChat · Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = 'WebChat - Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     body.innerHTML = '<div style="text-align:center;padding:24px;color:#6b7280;">Could not fetch WebChat data.</div>';
@@ -11278,7 +11278,7 @@ function loadIRCMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'IRC · ' + (channels.join(', ') || 'no channels') + ' · ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = 'IRC - ' + (channels.join(', ') || 'no channels') + ' - ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     body.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;font-family:monospace;">*** Could not fetch IRC data ***</div>';
@@ -11327,7 +11327,7 @@ function loadBlueBubblesMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'BlueBubbles · ' + escapeHtml(status) + ' · ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = 'BlueBubbles - ' + escapeHtml(status) + ' - ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     body.innerHTML = '<div style="text-align:center;padding:24px;color:#6b7280;">Could not fetch BlueBubbles data.</div>';
@@ -11347,7 +11347,7 @@ function loadGoogleChatMessages(isRefresh) {
     var html = '<div class="gc-stats">'
       + '<span class="in">📥 ' + todayIn + ' incoming</span>'
       + '<span class="out">📤 ' + todayOut + ' outgoing</span>'
-      + (spaces.length ? '<span style="margin-left:auto;color:#1a73e8;font-size:11px;">🏢 ' + escapeHtml(spaces.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today · Google Chat</span>')
+      + (spaces.length ? '<span style="margin-left:auto;color:#1a73e8;font-size:11px;">🏢 ' + escapeHtml(spaces.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today - Google Chat</span>')
       + '</div>';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">'
@@ -11372,7 +11372,7 @@ function loadGoogleChatMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Google Chat · Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = 'Google Chat - Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function() {
     if (!isCompModalActive(nodeId)) return;
     body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">💬</div><div style="font-weight:600;color:#1a73e8;">Google Chat</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
@@ -11392,7 +11392,7 @@ function loadMSTeamsMessages(isRefresh) {
     var html = '<div class="mst-stats">'
       + '<span class="in">📥 ' + todayIn + ' incoming</span>'
       + '<span class="out">📤 ' + todayOut + ' outgoing</span>'
-      + (teams.length ? '<span style="margin-left:auto;color:#6264A7;font-size:11px;">👥 ' + escapeHtml(teams.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today · MS Teams</span>')
+      + (teams.length ? '<span style="margin-left:auto;color:#6264A7;font-size:11px;">👥 ' + escapeHtml(teams.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today - MS Teams</span>')
       + '</div>';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">'
@@ -11417,7 +11417,7 @@ function loadMSTeamsMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Microsoft Teams · Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = 'Microsoft Teams - Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function() {
     if (!isCompModalActive(nodeId)) return;
     body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">👔</div><div style="font-weight:600;color:#6264A7;">Microsoft Teams</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
@@ -11437,7 +11437,7 @@ function loadMattermostMessages(isRefresh) {
     var html = '<div class="mm-stats">'
       + '<span class="in">📥 ' + todayIn + ' incoming</span>'
       + '<span class="out">📤 ' + todayOut + ' outgoing</span>'
-      + (channels.length ? '<span style="margin-left:auto;color:#0058CC;font-size:11px;"># ' + escapeHtml(channels.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today · Mattermost</span>')
+      + (channels.length ? '<span style="margin-left:auto;color:#0058CC;font-size:11px;"># ' + escapeHtml(channels.join(', ')) + '</span>' : '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">Today - Mattermost</span>')
       + '</div>';
     if (msgs.length === 0) {
       html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">'
@@ -11462,7 +11462,7 @@ function loadMattermostMessages(isRefresh) {
       html += '</div>';
     }
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Mattermost · Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('comp-modal-footer').textContent = 'Mattermost - Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function() {
     if (!isCompModalActive(nodeId)) return;
     body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">⚓</div><div style="font-weight:600;color:#0058CC;">Mattermost</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
@@ -11530,17 +11530,17 @@ function loadBrainData(isRefresh) {
       html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No LLM calls found today</div>';
     } else {
       html += '<div style="display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto;">';
-      var TOOL_ICONS = {read:'📄',write:'✏️',edit:'🔧',exec:'⚡',process:'⚙️',browser:'🌐',web_search:'🔍',web_fetch:'🌍',message:'💬',tts:'🔊',image:'🖼️',canvas:'🎨',nodes:'📱'};
+      var TOOL_ICONS = {read:'📄',write:'✏️',edit:'🔧',exec:'⚡',process:'⚙️',browser:'🌐',web_search:'[check]',web_fetch:'🌍',message:'💬',tts:'🔊',image:'🖼️',canvas:'🎨',nodes:'📱'};
       var TOOL_COLORS = {exec:'#f59e0b',browser:'#3b82f6',web_search:'#8b5cf6',web_fetch:'#06b6d4',message:'#ec4899',read:'#6b7280',write:'#22c55e',edit:'#f97316',tts:'#a855f7',image:'#ef4444',canvas:'#14b8a6',nodes:'#6366f1',process:'#64748b'};
       calls.forEach(function(c) {
         var ts = c.timestamp ? new Date(c.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
         var costVal = parseFloat((c.cost||'$0').replace('$',''));
         var cColor = costVal > 0.50 ? '#f59e0b' : costVal > 1.0 ? '#ef4444' : '#22c55e';
-        var dur = c.duration_ms > 0 ? (c.duration_ms >= 1000 ? (c.duration_ms/1000).toFixed(1)+'s' : c.duration_ms+'ms') : '—';
+        var dur = c.duration_ms > 0 ? (c.duration_ms >= 1000 ? (c.duration_ms/1000).toFixed(1)+'s' : c.duration_ms+'ms') : '--';
         html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:11px;flex-wrap:wrap;">';
         html += '<span style="color:var(--text-tertiary);min-width:58px;">' + ts + '</span>';
         html += '<span style="color:var(--text-muted);font-size:10px;min-width:50px;">' + escapeHtml(c.session||'main') + '</span>';
-        html += '<span style="color:#3b82f6;min-width:45px;" title="In">' + (c.tokens_in>=1000?(c.tokens_in/1000).toFixed(1)+'K':c.tokens_in) + '→</span>';
+        html += '<span style="color:#3b82f6;min-width:45px;" title="In">' + (c.tokens_in>=1000?(c.tokens_in/1000).toFixed(1)+'K':c.tokens_in) + '-></span>';
         html += '<span style="color:#8b5cf6;min-width:40px;" title="Out">' + (c.tokens_out>=1000?(c.tokens_out/1000).toFixed(1)+'K':c.tokens_out) + '</span>';
         html += '<span style="color:' + cColor + ';min-width:50px;">' + (c.cost||'$0') + '</span>';
         html += '<span style="color:var(--text-muted);min-width:35px;">' + dur + '</span>';
@@ -11566,7 +11566,7 @@ function loadBrainData(isRefresh) {
     }
 
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing · Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total||0) + ' LLM calls today';
+    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' LLM calls today';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     var msg = String((e && e.message) || 'Unknown error');
@@ -11594,7 +11594,7 @@ function loadCostOptimizerData(isRefresh) {
     html += '<div class="cost-overview-item"><span class="cost-overview-label">Month Projected</span><span class="cost-overview-value">$' + monthCost.toFixed(2) + '</span></div>';
     html += '</div>';
     if (data.potentialSavings) {
-      html += '<div class="savings-highlight">🚀 ' + data.potentialSavings + '</div>';
+      html += '<div class="savings-highlight">[prod] ' + data.potentialSavings + '</div>';
     }
     html += '</div>';
 
@@ -11603,7 +11603,7 @@ function loadCostOptimizerData(isRefresh) {
       html += '<div style="margin-bottom:14px;">';
       data.expensiveOps.slice(0, 3).forEach(function(op) {
         html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--bg-hover);border-radius:6px;margin-bottom:4px;border-left:3px solid var(--text-error);">';
-        html += '<span style="font-size:12px;color:var(--text-secondary);">' + op.model + ' <span style="color:var(--text-muted);">· ' + op.tokens + ' tokens · ' + op.timeAgo + '</span></span>';
+        html += '<span style="font-size:12px;color:var(--text-secondary);">' + op.model + ' <span style="color:var(--text-muted);">- ' + op.tokens + ' tokens - ' + op.timeAgo + '</span></span>';
         html += '<span style="font-size:12px;color:var(--text-error);font-weight:700;">$' + op.cost.toFixed(4) + '</span>';
         html += '</div>';
       });
@@ -11619,17 +11619,17 @@ function loadCostOptimizerData(isRefresh) {
     if (sys.cores) html += '<span class="hw-card-chip">' + sys.cores + ' cores</span>';
     if (sys.backend) html += '<span class="hw-card-chip green">' + sys.backend + '</span>';
     html += '</div>';
-    html += '<div class="hw-metal-notice">⚠️ llmfit doesn\'t detect Apple Metal — actual performance will be <strong>3-5x faster</strong> with Ollama\'s Metal backend</div>';
+    html += '<div class="hw-metal-notice">[warn] llmfit doesn\'t detect Apple Metal -- actual performance will be <strong>3-5x faster</strong> with Ollama\'s Metal backend</div>';
 
     // ══ SECTION 3: Recommended Local Models ══════════════════════
     html += '<div class="co-section">';
-    html += '<h3>🤖 Recommended Local Models <span style="font-size:11px;color:var(--text-muted);font-weight:400;">via llmfit · Metal-accelerated</span></h3>';
+    html += '<h3>🤖 Recommended Local Models <span style="font-size:11px;color:var(--text-muted);font-weight:400;">via llmfit - Metal-accelerated</span></h3>';
 
     if (!data.ollamaInstalled) {
       html += '<div class="co-ollama-prompt">';
-      html += '<div style="font-size:13px;color:#a78bfa;font-weight:600;">⚠️ Ollama not installed — install to run models locally (free!)</div>';
+      html += '<div style="font-size:13px;color:#a78bfa;font-weight:600;">[warn] Ollama not installed -- install to run models locally (free!)</div>';
       html += '<div class="co-ollama-cmd">brew install ollama</div>';
-      html += '<button class="co-action-btn" onclick="navigator.clipboard.writeText(\'brew install ollama\');this.textContent=\'✅ Copied!\';setTimeout(()=>this.textContent=\'📋 Copy Install Command\',2000);">📋 Copy Install Command</button>';
+      html += '<button class="co-action-btn" onclick="navigator.clipboard.writeText(\'brew install ollama\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'📋 Copy Install Command\',2000);">📋 Copy Install Command</button>';
       html += '</div>';
     }
 
@@ -11637,7 +11637,7 @@ function loadCostOptimizerData(isRefresh) {
     if (models.length > 0) {
       models.slice(0, 5).forEach(function(m) {
         var badgeType = (m.useCase || '').toLowerCase().indexOf('cod') !== -1 ? 'coding' : 'chat';
-        var metalTps = m.estimatedTps ? Math.round(m.estimatedTps * 3.5) + ' tok/s*' : '—';
+        var metalTps = m.estimatedTps ? Math.round(m.estimatedTps * 3.5) + ' tok/s*' : '--';
         var ollamaCmd = 'ollama pull ' + (m.ollamaName || m.name.toLowerCase().replace(/-instruct.*/i,'').replace(/[^a-z0-9.-]/g,'-'));
         html += '<div class="model-card">';
         html += '<div class="model-card-header">';
@@ -11645,12 +11645,12 @@ function loadCostOptimizerData(isRefresh) {
         html += '<span class="model-badge ' + badgeType + '">' + (m.useCase || (badgeType === 'coding' ? 'Coding' : 'Chat')) + '</span>';
         html += '</div>';
         html += '<div class="model-card-stats">';
-        html += '<div class="model-card-stat"><span class="model-card-stat-label">Score</span><span class="model-card-stat-value">' + (m.score || '—') + '</span></div>';
+        html += '<div class="model-card-stat"><span class="model-card-stat-label">Score</span><span class="model-card-stat-value">' + (m.score || '--') + '</span></div>';
         html += '<div class="model-card-stat"><span class="model-card-stat-label">Speed (Metal)</span><span class="model-card-stat-value">' + metalTps + '</span></div>';
-        html += '<div class="model-card-stat"><span class="model-card-stat-label">RAM</span><span class="model-card-stat-value">' + (m.ramRequired || (m.memoryRequiredGb ? m.memoryRequiredGb + 'GB' : '—')) + '</span></div>';
+        html += '<div class="model-card-stat"><span class="model-card-stat-label">RAM</span><span class="model-card-stat-value">' + (m.ramRequired || (m.memoryRequiredGb ? m.memoryRequiredGb + 'GB' : '--')) + '</span></div>';
         if (m.savingsEstimate) html += '<div class="model-card-stat"><span class="model-card-stat-label">Savings est.</span><span class="model-card-stat-value" style="color:#4ade80;">' + m.savingsEstimate + '</span></div>';
         html += '</div>';
-        html += '<div class="model-install-cmd" onclick="navigator.clipboard.writeText(\'' + ollamaCmd + '\');this.querySelector(\'span.cmd-text\').textContent=\'✅ Copied!\';setTimeout(()=>this.querySelector(\'span.cmd-text\').textContent=\'' + ollamaCmd + '\',2000);">';
+        html += '<div class="model-install-cmd" onclick="navigator.clipboard.writeText(\'' + ollamaCmd + '\');this.querySelector(\'span.cmd-text\').textContent=\'[ok] Copied!\';setTimeout(()=>this.querySelector(\'span.cmd-text\').textContent=\'' + ollamaCmd + '\',2000);">';
         html += '<span class="cmd-text">' + ollamaCmd + '</span>';
         html += '<span style="color:#4ade80;font-size:10px;flex-shrink:0;">📥 Copy</span>';
         html += '</div>';
@@ -11659,7 +11659,7 @@ function loadCostOptimizerData(isRefresh) {
       });
       html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">* Speed estimated with Ollama Metal backend (3-5x llmfit baseline)</div>';
     } else {
-      html += '<div style="color:var(--text-muted);font-size:13px;padding:10px 0;">llmfit not available — install with: <code>pip install llmfit</code></div>';
+      html += '<div style="color:var(--text-muted);font-size:13px;padding:10px 0;">llmfit not available -- install with: <code>pip install llmfit</code></div>';
     }
     html += '</div>';
 
@@ -11674,8 +11674,8 @@ function loadCostOptimizerData(isRefresh) {
         if (rec.estimatedSavings) html += '<div class="task-rec-savings">' + rec.estimatedSavings + '</div>';
         html += '<div class="task-rec-arrow">';
         if (rec.currentModel) html += '<span style="color:var(--text-muted);">' + rec.currentModel + '</span>';
-        if (rec.suggestedLocal) html += ' → <span style="color:#4ade80;font-weight:600;">' + rec.suggestedLocal + '</span>';
-        else html += ' → <span style="color:#4ade80;font-weight:600;">keep frontier ✓</span>';
+        if (rec.suggestedLocal) html += ' -> <span style="color:#4ade80;font-weight:600;">' + rec.suggestedLocal + '</span>';
+        else html += ' -> <span style="color:#4ade80;font-weight:600;">keep frontier ✓</span>';
         html += '</div>';
         if (rec.reason) html += '<div class="task-rec-reason">' + rec.reason + '</div>';
         html += '</div>';
@@ -11687,14 +11687,14 @@ function loadCostOptimizerData(isRefresh) {
     html += '<div class="co-section">';
     html += '<h3>⚙️ Quick Actions</h3>';
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
-    html += '<button class="co-action-btn" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'brew install ollama\');this.textContent=\'✅ Copied!\';setTimeout(()=>this.textContent=\'📋 Install Ollama\',2000);">📋 Install Ollama</button>';
-    html += '<button class="co-action-btn secondary" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'ollama serve\');this.textContent=\'✅ Copied!\';setTimeout(()=>this.textContent=\'📋 ollama serve\',2000);">📋 ollama serve</button>';
-    html += '<a class="co-action-btn secondary" style="width:auto;padding:6px 14px;text-decoration:none;display:inline-block;" href="https://ollama.com/search" target="_blank">🔍 Browse Models</a>';
+    html += '<button class="co-action-btn" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'brew install ollama\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'📋 Install Ollama\',2000);">📋 Install Ollama</button>';
+    html += '<button class="co-action-btn secondary" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'ollama serve\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'📋 ollama serve\',2000);">📋 ollama serve</button>';
+    html += '<a class="co-action-btn secondary" style="width:auto;padding:6px 14px;text-decoration:none;display:inline-block;" href="https://ollama.com/search" target="_blank">[check] Browse Models</a>';
     html += '</div>';
     html += '</div>';
 
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing · Last updated: ' + new Date().toLocaleTimeString() + ' · llmfit ✓ · Metal backend';
+    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - llmfit ✓ - Metal backend';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -11849,7 +11849,7 @@ function loadAutomationAdvisorDataWithTime() {
     html += '<div style="text-align:center;margin-bottom:30px;"><div style="font-size:48px;margin-bottom:12px;">🧠</div><h2 style="margin:0;font-size:20px;">Automation Advisor</h2><p style="color:var(--text-muted);margin:8px 0 0 0;">Analyzing patterns to suggest new automations</p></div>';
     
     if (data.patterns && data.patterns.length > 0) {
-      html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">🔍 Detected Patterns</h3>';
+      html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">[check] Detected Patterns</h3>';
       data.patterns.forEach(function(pattern) {
         var priorityColor = pattern.priority === 'high' ? '#f44336' : pattern.priority === 'medium' ? '#ff9800' : '#4caf50';
         html += '<div style="background:var(--bg-hover);border-radius:8px;padding:16px;margin-bottom:16px;border-left:4px solid ' + priorityColor + ';">';
@@ -11861,9 +11861,9 @@ function loadAutomationAdvisorDataWithTime() {
     }
     
     if (data.suggestions && data.suggestions.length > 0) {
-      html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">💡 Automation Suggestions</h3>';
+      html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">[tip] Automation Suggestions</h3>';
       data.suggestions.forEach(function(suggestion) {
-        var typeIcon = suggestion.type === 'cron' ? '⏰' : suggestion.type === 'skill' ? '🛠️' : '🔧';
+        var typeIcon = suggestion.type === 'cron' ? '⏰' : suggestion.type === 'skill' ? '[dev]' : '🔧';
         html += '<div style="background:var(--bg-hover);border-radius:8px;padding:16px;margin-bottom:16px;">';
         html += '<div style="display:flex;align-items:center;margin-bottom:8px;"><span style="font-size:20px;margin-right:8px;">' + typeIcon + '</span>';
         html += '<span style="font-weight:600;">' + suggestion.title + '</span></div>';
@@ -11887,7 +11887,7 @@ function loadAutomationAdvisorDataWithTime() {
     html += '</div>';
     body.innerHTML = html;
   }).catch(function(e) {
-    body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><h3>Analysis Unavailable</h3><p>Unable to load automation analysis: ' + e.message + '</p></div>';
+    body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><div style="font-size:48px;margin-bottom:16px;">[warn]</div><h3>Analysis Unavailable</h3><p>Unable to load automation analysis: ' + e.message + '</p></div>';
   });
 }
 
@@ -11982,7 +11982,7 @@ function loadGatewayData(isRefresh) {
         else if (r.from === 'telegram') { badge = '📱'; badgeColor = '#3b82f6'; }
         else if (r.from === 'whatsapp') { badge = '📲'; badgeColor = '#22c55e'; }
 
-        var status = r.status === 'error' ? '❌' : '✅';
+        var status = r.status === 'error' ? '❌' : '[ok]';
         var ts = r.timestamp ? new Date(r.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
         var model = r.to || '';
         if (model.length > 20) model = model.substring(0, 18) + '…';
@@ -11993,7 +11993,7 @@ function loadGatewayData(isRefresh) {
         html += '<span style="font-size:16px;">' + badge + '</span>';
         html += '<span style="color:var(--text-tertiary);min-width:60px;">' + ts + '</span>';
         html += '<span style="color:var(--text-secondary);font-weight:600;">' + escapeHtml(r.from || '?') + '</span>';
-        html += '<span style="color:var(--text-muted);">→</span>';
+        html += '<span style="color:var(--text-muted);">-></span>';
         html += '<span style="color:var(--text-accent);font-weight:500;flex:1;">' + escapeHtml(model) + '</span>';
         if (session) html += '<span style="color:var(--text-muted);font-size:11px;">' + escapeHtml(session) + '</span>';
         html += '<span>' + status + '</span>';
@@ -12007,7 +12007,7 @@ function loadGatewayData(isRefresh) {
     }
 
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing · Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total||0) + ' events today';
+    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' events today';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
@@ -12095,7 +12095,7 @@ function loadToolData(toolKey, comp, isRefresh) {
           if (a.model) meta.push(a.model);
           if (a.tokens) meta.push(a.tokens >= 1000 ? (a.tokens/1000).toFixed(1)+'K tok' : a.tokens+' tok');
           if (a.channel) meta.push(a.channel);
-          if (meta.length > 0) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + escapeHtml(meta.join(' · ')) + '</div>';
+          if (meta.length > 0) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + escapeHtml(meta.join(' - ')) + '</div>';
           if (a.lastMessage) html += '<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">"' + escapeHtml(a.lastMessage.substring(0,120)) + '"</div>';
           html += '</div></div>';
         });
@@ -12142,7 +12142,7 @@ function loadToolData(toolKey, comp, isRefresh) {
           var meta = [];
           if (evt.duration_ms) meta.push(evt.duration_ms >= 1000 ? (evt.duration_ms/1000).toFixed(1)+'s' : evt.duration_ms+'ms');
           if (isErr) meta.push('<span style="color:#ef4444;">✗ error</span>');
-          if (meta.length) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + meta.join(' · ') + '</div>';
+          if (meta.length) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + meta.join(' - ') + '</div>';
           html += '</div>';
         });
         html += '</div>';
@@ -12205,7 +12205,7 @@ function loadToolData(toolKey, comp, isRefresh) {
           var ts = _fmtToolTs(evt.timestamp);
           html += '<div style="padding:10px 12px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);">';
           html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;">';
-          html += '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">🔍 ' + escapeHtml(evt.detail || '') + '</div>';
+          html += '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">[check] ' + escapeHtml(evt.detail || '') + '</div>';
           html += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + ts + '</span>';
           html += '</div>';
           if (evt.result_count !== undefined) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + evt.result_count + ' results returned</div>';
@@ -12244,8 +12244,8 @@ function loadToolData(toolKey, comp, isRefresh) {
           var meta = [];
           if (j.lastRun) meta.push('Last: ' + _fmtToolDate(j.lastRun));
           if (j.nextRun) meta.push('Next: ' + _fmtToolDate(j.nextRun));
-          if (j.channel) meta.push('→ ' + j.channel);
-          if (meta.length) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">' + escapeHtml(meta.join(' · ')) + '</div>';
+          if (j.channel) meta.push('-> ' + j.channel);
+          if (meta.length) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">' + escapeHtml(meta.join(' - ')) + '</div>';
           if (isErr && j.lastError) html += '<div style="font-size:11px;color:#ef4444;margin-top:4px;background:#ef444411;padding:4px 8px;border-radius:4px;">' + escapeHtml((j.lastError||'').substring(0,200)) + '</div>';
           html += '</div>';
         });
@@ -12337,7 +12337,7 @@ function loadToolData(toolKey, comp, isRefresh) {
     }
 
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing · Last updated: ' + new Date().toLocaleTimeString() + ' · ' + (data.total||0) + ' events today';
+    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' events today';
   }).catch(function(e) {
     if (!isCompModalActive(_expectedNodeId)) return;
     if (!isRefresh) {
@@ -12514,7 +12514,7 @@ function renderModalNarrative(el) {
     } else if (evt.type === 'tool') {
       icon = '🔧'; text = 'Called tool: <code>' + escHtml(evt.toolName||'') + '</code>';
     } else if (evt.type === 'result') {
-      icon = '🔍'; text = 'Got result (' + (evt.text||'').length + ' chars)';
+      icon = '[check]'; text = 'Got result (' + (evt.text||'').length + ' chars)';
     } else return;
     html += '<div class="narrative-item"><span class="narr-icon">' + icon + '</span>' + text + '</div>';
   });
@@ -12552,7 +12552,7 @@ function renderModalFull(el) {
       summary = '<strong>' + escHtml(evt.toolName||'tool') + '</strong> - ' + escHtml((evt.args||'').substring(0, 100));
       body = evt.args || '';
     } else if (evt.type === 'result') {
-      icon = '🔍'; typeClass = 'type-result';
+      icon = '[check]'; typeClass = 'type-result';
       summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
       body = evt.text || '';
     } else {
@@ -12596,7 +12596,7 @@ function finishBootOverlay() {
 }
 
 async function bootDashboard() {
-  // Check auth first — if not valid, show login and abort boot
+  // Check auth first -- if not valid, show login and abort boot
   try {
     var stored = localStorage.getItem('clawmetry-token');
     var authRes = await fetch('/api/auth/check' + (stored ? '?token=' + encodeURIComponent(stored) : ''));
@@ -12814,8 +12814,8 @@ async function loadHistory() {
       runs.slice(-100).reverse().forEach(function(r) {
         var t = new Date(r.timestamp * 1000).toLocaleString();
         var statusColor = r.status === 'success' || r.status === 'completed' ? '#10b981' : (r.status === 'error' || r.status === 'failed' ? '#ef4444' : '#f59e0b');
-        var dur = r.duration_ms ? (r.duration_ms/1000).toFixed(1)+'s' : '—';
-        cronHtml += '<tr style="border-bottom:1px solid var(--border-secondary);"><td style="padding:4px 8px;font-size:12px;">'+t+'</td><td style="padding:4px 8px;font-size:12px;">'+((r.job_name||r.job_id)||'—')+'</td><td style="padding:4px 8px;font-size:12px;"><span style="color:'+statusColor+';font-weight:600;">&#9679;</span> '+(r.status||'—')+'</td><td style="padding:4px 8px;font-size:12px;text-align:right;">'+dur+'</td></tr>';
+        var dur = r.duration_ms ? (r.duration_ms/1000).toFixed(1)+'s' : '--';
+        cronHtml += '<tr style="border-bottom:1px solid var(--border-secondary);"><td style="padding:4px 8px;font-size:12px;">'+t+'</td><td style="padding:4px 8px;font-size:12px;">'+((r.job_name||r.job_id)||'--')+'</td><td style="padding:4px 8px;font-size:12px;"><span style="color:'+statusColor+';font-weight:600;">&#9679;</span> '+(r.status||'--')+'</td><td style="padding:4px 8px;font-size:12px;text-align:right;">'+dur+'</td></tr>';
       });
       cronHtml += '</tbody></table>';
     }
@@ -12823,7 +12823,7 @@ async function loadHistory() {
 
     // Update status
     var totalPts = (tokIn.data||[]).length + (costData.data||[]).length;
-    status.textContent = totalPts > 0 ? totalPts + ' data points' : 'No data yet — collector polls every 60s';
+    status.textContent = totalPts > 0 ? totalPts + ' data points' : 'No data yet -- collector polls every 60s';
   } catch(e) {
     status.textContent = 'Error: ' + e.message;
     console.error('History load error:', e);
@@ -12868,7 +12868,7 @@ async function showSnapshot(ts) {
       </div>
     </div>
     <div class="comp-modal-body" id="comp-modal-body">Loading...</div>
-    <div class="comp-modal-footer" id="comp-modal-footer">Last updated: —</div>
+    <div class="comp-modal-footer" id="comp-modal-footer">Last updated: --</div>
   </div>
 </div>
 
@@ -12892,8 +12892,8 @@ async function showSnapshot(ts) {
     </div>
     <div class="modal-content" id="modal-content">Loading...</div>
     <div class="modal-footer">
-      <span id="modal-event-count">—</span>
-      <span id="modal-msg-count">—</span>
+      <span id="modal-event-count">--</span>
+      <span id="modal-msg-count">--</span>
     </div>
   </div>
 </div>
@@ -13542,7 +13542,7 @@ def api_channels():
                 continue
 
     # Filter to channels that actually have data directories (proof of real usage)
-    # Some channels (like imessage) use system paths, not openclaw dirs — skip dir check for those
+    # Some channels (like imessage) use system paths, not openclaw dirs -- skip dir check for those
     DIR_EXEMPT_CHANNELS = {
         'imessage', 'irc', 'googlechat', 'slack', 'webchat', 'bluebubbles',
         'matrix', 'mattermost', 'msteams', 'line', 'nostr', 'twitch', 'feishu',
@@ -13591,25 +13591,25 @@ def api_overview():
         disk_color = 'green' if disk_pct < 80 else ('yellow' if disk_pct < 90 else 'red')
         system.append(['Disk /', f'{disk[2]} / {disk[1]} ({disk[4]})', disk_color])
     except Exception:
-        system.append(['Disk /', '—', ''])
+        system.append(['Disk /', '--', ''])
 
     try:
         mem = subprocess.run(['free', '-h'], capture_output=True, text=True).stdout.strip().split('\n')[1].split()
         system.append(['RAM', f'{mem[2]} / {mem[1]}', ''])
     except Exception:
-        system.append(['RAM', '—', ''])
+        system.append(['RAM', '--', ''])
 
     try:
         load = open('/proc/loadavg').read().split()[:3]
         system.append(['Load', ' '.join(load), ''])
     except Exception:
-        system.append(['Load', '—', ''])
+        system.append(['Load', '--', ''])
 
     try:
         uptime = subprocess.run(['uptime', '-p'], capture_output=True, text=True).stdout.strip()
         system.append(['Uptime', uptime.replace('up ', ''), ''])
     except Exception:
-        system.append(['Uptime', '—', ''])
+        system.append(['Uptime', '--', ''])
 
     if sys.platform != 'win32':
         gw = subprocess.run(['pgrep', '-f', 'moltbot'], capture_output=True, text=True)
@@ -13628,7 +13628,7 @@ def api_overview():
         import platform
         uname = platform.uname()
         infra['machine'] = uname.node
-        infra['runtime'] = f'Node.js · {uname.system} {uname.release.split("-")[0]}'
+        infra['runtime'] = f'Node.js - {uname.system} {uname.release.split("-")[0]}'
     except Exception:
         infra['machine'] = 'Host'
         infra['runtime'] = 'Runtime'
@@ -13738,7 +13738,7 @@ def api_main_activity():
                 action = args.get('action', '')
                 target = args.get('target') or args.get('to') or args.get('channel', '')
                 msg = (args.get('message') or '')[:40]
-                summary = f"{action} → {target}: {msg}" if msg else f"{action} → {target}"
+                summary = f"{action} -> {target}: {msg}" if msg else f"{action} -> {target}"
                 summary = summary[:60]
             elif name == 'tts':
                 summary = (args.get('text', '')[:60])
@@ -13751,7 +13751,7 @@ def api_main_activity():
                 summary = task
             elif name == 'sessions_send':
                 label = args.get('label') or args.get('sessionKey', '')
-                summary = f"→ {label}"[:60]
+                summary = f"-> {label}"[:60]
             elif name == 'cron':
                 action = args.get('action', '')
                 jid = args.get('jobId', '')[:10]
@@ -14866,7 +14866,7 @@ def _provider_has_api_key(provider):
         if os.environ.get(key, '').strip():
             return True
 
-    # 2) Config-based check — try both legacy `providers` and OpenClaw `auth.profiles`
+    # 2) Config-based check -- try both legacy `providers` and OpenClaw `auth.profiles`
     cfg = _load_openclaw_config_cached()
 
     # 2a) Legacy: top-level `providers.<name>.apiKey`
@@ -15799,13 +15799,13 @@ def _summarize_tool_input(name, inp):
     elif name in ('Edit', 'edit'):
         return f"🔧 {inp.get('file_path') or inp.get('path') or '?'}"
     elif name == 'web_search':
-        return f"🔍 {inp.get('query', '?')}"
+        return f"[check] {inp.get('query', '?')}"
     elif name == 'web_fetch':
         return f"🌐 {inp.get('url', '?')[:80]}"
     elif name == 'browser':
         return f"🖥️ {inp.get('action', '?')}"
     elif name == 'message':
-        return f"💬 {inp.get('action', '?')} → {inp.get('message', '')[:60]}"
+        return f"💬 {inp.get('action', '?')} -> {inp.get('message', '')[:60]}"
     elif name == 'tts':
         return f"🔊 {inp.get('text', '')[:60]}"
     else:
@@ -17240,7 +17240,7 @@ def api_component_tool(name):
                 events.append({
                     'timestamp': cj.get('lastRun') or cj.get('createdAt') or '',
                     'action': 'cron',
-                    'detail': (cj.get('expr') or '') + ' → ' + (cj.get('task') or cj.get('command') or '')[:60],
+                    'detail': (cj.get('expr') or '') + ' -> ' + (cj.get('task') or cj.get('command') or '')[:60],
                     'status': 'ok' if cj.get('lastStatus') != 'error' else 'error',
                 })
         except Exception:
@@ -18467,7 +18467,7 @@ def _get_llmfit_recommendations():
         # Annotate: llmfit doesn't detect Apple Silicon GPU but Metal makes it 3-5x faster
         cpu = system_info.get('cpu_name', '')
         if 'apple' in cpu.lower() or 'M1' in cpu or 'M2' in cpu or 'M3' in cpu or 'M4' in cpu:
-            system_info['note'] = 'Apple Silicon — Metal GPU available (3-5x faster than llmfit estimates)'
+            system_info['note'] = 'Apple Silicon -- Metal GPU available (3-5x faster than llmfit estimates)'
             system_info['has_metal'] = True
         
         def _clean_model(m):
@@ -18967,11 +18967,11 @@ BANNER = r"""
 """
 
 ARCHITECTURE_OVERVIEW = """\
-🦞 ClawMetry {version} — See your agent think.
+🦞 ClawMetry {version} -- See your agent think.
 
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
   │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
-  │  Your OpenClaw      │ ──────────→  │                     │ ──────────→  │                     │
+  │  Your OpenClaw      │ ──────────->  │                     │ ──────────->  │                     │
   │  agents             │              │  ClawMetry          │              │  Your browser       │
   │                     │              │  Parses logs +      │              │  localhost:{port}   │
   │  Running normally.  │              │  sessions.          │              │  Live dashboard     │
@@ -18983,7 +18983,7 @@ ARCHITECTURE_OVERVIEW = """\
 """
 
 HELP_TEXT = """\
-🦞 ClawMetry {version} — See your agent think.
+🦞 ClawMetry {version} -- See your agent think.
 
 Usage: clawmetry [command] [options]
 
@@ -19292,11 +19292,11 @@ def cmd_start(args):
         import time
         time.sleep(1)
         if _launchd_running():
-            print(f"✅ ClawMetry started  →  http://localhost:{port}")
-            print(f"   Auto-starts on login · logs: /tmp/clawmetry.log")
+            print(f"[ok] ClawMetry started  ->  http://localhost:{port}")
+            print(f"   Auto-starts on login - logs: /tmp/clawmetry.log")
             print(f"   Stop with: clawmetry stop")
         else:
-            print("⚠️  Service loaded but may still be starting. Check: clawmetry status")
+            print("[warn]  Service loaded but may still be starting. Check: clawmetry status")
 
     elif _is_linux():
         unit_content = _build_systemd_unit(python_exe, script_path, port, host)
@@ -19315,13 +19315,13 @@ def cmd_start(args):
         import time
         time.sleep(1)
         if _systemd_running():
-            print(f"✅ ClawMetry started  →  http://localhost:{port}")
-            print(f"   Auto-starts on login · logs: journalctl --user -u clawmetry -f")
+            print(f"[ok] ClawMetry started  ->  http://localhost:{port}")
+            print(f"   Auto-starts on login - logs: journalctl --user -u clawmetry -f")
             print(f"   Stop with: clawmetry stop")
         else:
-            print("⚠️  Service started but may still be initialising. Check: clawmetry status")
+            print("[warn]  Service started but may still be initialising. Check: clawmetry status")
     else:
-        print("⚠️  Daemon mode not supported on this OS. Running in foreground instead.")
+        print("[warn]  Daemon mode not supported on this OS. Running in foreground instead.")
         _run_server(args)
 
 
@@ -19335,22 +19335,22 @@ def cmd_stop(args):
         result = subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST],
                                 capture_output=True, text=True)
         if result.returncode == 0:
-            print("✅ ClawMetry stopped.")
+            print("[ok] ClawMetry stopped.")
         else:
-            print(f"⚠️  {result.stderr.strip() or 'Service may already be stopped.'}")
+            print(f"[warn]  {result.stderr.strip() or 'Service may already be stopped.'}")
     elif _is_linux():
         result = subprocess.run(['systemctl', '--user', 'stop', 'clawmetry'],
                                 capture_output=True, text=True)
         if result.returncode == 0:
-            print("✅ ClawMetry stopped.")
+            print("[ok] ClawMetry stopped.")
         else:
-            print(f"⚠️  {result.stderr.strip() or 'Service may already be stopped.'}")
+            print(f"[warn]  {result.stderr.strip() or 'Service may already be stopped.'}")
     else:
         # Fallback: kill via PID file
         pid = _read_pid()
         if pid and _is_pid_running(pid):
             os.kill(pid, 15)  # SIGTERM
-            print(f"✅ Sent SIGTERM to PID {pid}.")
+            print(f"[ok] Sent SIGTERM to PID {pid}.")
         else:
             print("ℹ️  No running ClawMetry process found.")
 
@@ -19366,7 +19366,7 @@ def cmd_restart(args):
         result = subprocess.run(['launchctl', 'load', LAUNCHD_PLIST],
                                 capture_output=True, text=True)
         if result.returncode == 0:
-            print("✅ ClawMetry restarted.")
+            print("[ok] ClawMetry restarted.")
         else:
             print(f"❌ {result.stderr.strip()}")
             sys.exit(1)
@@ -19374,19 +19374,19 @@ def cmd_restart(args):
         result = subprocess.run(['systemctl', '--user', 'restart', 'clawmetry'],
                                 capture_output=True, text=True)
         if result.returncode == 0:
-            print("✅ ClawMetry restarted.")
+            print("[ok] ClawMetry restarted.")
         else:
             print(f"❌ {result.stderr.strip()}")
             sys.exit(1)
     else:
-        print("⚠️  Daemon mode not supported on this OS.")
+        print("[warn]  Daemon mode not supported on this OS.")
 
 
 def cmd_status(args):
     """Show ClawMetry service status."""
     running = _service_running()
     pid = _get_service_pid() if running else None
-    uptime = _get_uptime_str(pid) if pid else '—'
+    uptime = _get_uptime_str(pid) if pid else '--'
     token = _read_cloud_token()
     port = args.port
 
@@ -19397,15 +19397,15 @@ def cmd_status(args):
     else:
         svc_type = 'process'
 
-    status_icon = '✅ Running' if running else '❌ Stopped'
-    cloud_status = f'✅ Connected' if token else '❌ Not connected'
+    status_icon = '[ok] Running' if running else '❌ Stopped'
+    cloud_status = f'[ok] Connected' if token else '❌ Not connected'
 
     print(f"""
 🦞 ClawMetry Status
 
   Service:   {status_icon} ({svc_type})
   Port:      {port}
-  PID:       {pid or '—'}
+  PID:       {pid or '--'}
   Uptime:    {uptime}
   URL:       http://localhost:{port}
   Version:   {__version__}
@@ -19428,12 +19428,12 @@ def cmd_connect(args):
         sys.exit(0)
 
     if not token.startswith('cm_'):
-        print("❌ Invalid key — must start with cm_")
+        print("❌ Invalid key -- must start with cm_")
         sys.exit(1)
 
     _write_cloud_token(token)
     print()
-    print("✅ Connected! View your agent at: https://app.clawmetry.com")
+    print("[ok] Connected! View your agent at: https://app.clawmetry.com")
     print()
 
 
@@ -19463,7 +19463,7 @@ def cmd_uninstall(args):
     if os.path.exists(PID_FILE):
         os.remove(PID_FILE)
 
-    print("✅ ClawMetry service removed.")
+    print("[ok] ClawMetry service removed.")
 
 
 def _run_server(args):
@@ -19493,9 +19493,9 @@ def _run_server(args):
             try:
                 EXTRA_SERVICES.append({'name': name.strip(), 'port': int(port_str.strip())})
             except ValueError:
-                print(f"⚠️  Invalid --monitor-service format: {svc_spec} (expected NAME:PORT)")
+                print(f"[warn]  Invalid --monitor-service format: {svc_spec} (expected NAME:PORT)")
         else:
-            print(f"⚠️  Invalid --monitor-service format: {svc_spec} (expected NAME:PORT)")
+            print(f"[warn]  Invalid --monitor-service format: {svc_spec} (expected NAME:PORT)")
 
     if args.mc_url:
         MC_URL = args.mc_url
@@ -19548,10 +19548,10 @@ def _run_server(args):
     print(f"  Logs:       {LOG_DIR}")
     print(f"  Metrics:    {_metrics_file_path()}")
     if _HAS_OTEL_PROTO:
-        print(f"  OTLP:       ✅ Ready (opentelemetry-proto installed)")
+        print(f"  OTLP:       [ok] Ready (opentelemetry-proto installed)")
     print(f"  User:       {USER_NAME}")
-    print(f"  Mode:       {'🛠️  Dev (auto-reload ON)' if args.debug else '🚀 Prod (auto-reload OFF)'}")
-    print(f"  SSE Limits: {SSE_MAX_SECONDS}s max duration · logs {MAX_LOG_STREAM_CLIENTS} clients · health {MAX_HEALTH_STREAM_CLIENTS} clients")
+    print(f"  Mode:       {'[dev]  Dev (auto-reload ON)' if args.debug else '[prod] Prod (auto-reload OFF)'}")
+    print(f"  SSE Limits: {SSE_MAX_SECONDS}s max duration - logs {MAX_LOG_STREAM_CLIENTS} clients - health {MAX_HEALTH_STREAM_CLIENTS} clients")
     print(f"  Fleet DB:   {_fleet_db_path()}")
     print(f"  Fleet Auth: {'Enabled (key set)' if FLEET_API_KEY else 'Open (no key - set --fleet-api-key for production)'}")
     if _HAS_HISTORY and _history_db:
@@ -19562,40 +19562,40 @@ def _run_server(args):
 
     warnings, tips = validate_configuration()
     if warnings or tips:
-        print("🔍 Configuration Check:")
+        print("[check] Configuration Check:")
         for warning in warnings:
             print(f"  {warning}")
         for tip in tips:
             print(f"  {tip}")
         print()
         if warnings:
-            print("💡 The dashboard will work with limited functionality. See tips above for full experience.")
+            print("[tip] The dashboard will work with limited functionality. See tips above for full experience.")
             print()
 
     local_ip = get_local_ip()
     public_ip = get_public_ip()
-    print(f"  → http://localhost:{args.port}")
+    print(f"  -> http://localhost:{args.port}")
     if local_ip != '127.0.0.1':
-        print(f"  → http://{local_ip}:{args.port}  (LAN)")
+        print(f"  -> http://{local_ip}:{args.port}  (LAN)")
     if public_ip and public_ip != local_ip:
-        print(f"  → http://{public_ip}:{args.port}  (Public - ensure port is open)")
+        print(f"  -> http://{public_ip}:{args.port}  (Public - ensure port is open)")
     if _HAS_OTEL_PROTO:
-        print(f"  → OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
+        print(f"  -> OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
     print()
     if not args.debug:
         print(f"  Tip: run as background service with: clawmetry start")
         print()
 
     if args.debug:
-        # Dev mode — use Flask's reloader
+        # Dev mode -- use Flask's reloader
         app.run(host=args.host, port=args.port, debug=True, use_reloader=True, threaded=True)
     else:
-        # Prod mode — use Waitress (no WSGI warning, multi-threaded)
+        # Prod mode -- use Waitress (no WSGI warning, multi-threaded)
         try:
             from waitress import serve
             serve(app, host=args.host, port=args.port, threads=8)
         except ImportError:
-            # Waitress not installed — fall back to Flask with warning suppressed
+            # Waitress not installed -- fall back to Flask with warning suppressed
             import logging
             log = logging.getLogger('werkzeug')
             log.setLevel(logging.ERROR)
@@ -19668,7 +19668,7 @@ def main():
 
     args = parser.parse_args()
 
-    # "clawmetry help" → print help and exit
+    # "clawmetry help" -> print help and exit
     if args.command == 'help':
         try:
             parser.print_help()
@@ -19690,7 +19690,7 @@ def main():
     elif args.command == 'uninstall':
         cmd_uninstall(args)
     else:
-        # No subcommand → foreground server (original behaviour)
+        # No subcommand -> foreground server (original behaviour)
         try:
             print(ARCHITECTURE_OVERVIEW.format(version=__version__, port=args.port))
         except (ValueError, OSError):
