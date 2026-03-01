@@ -21,8 +21,11 @@ import sys
 # Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252)
 if sys.platform == 'win32':
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 import glob
 import json
@@ -59,6 +62,13 @@ except ImportError:
     trace_service_pb2 = None
 
 __version__ = "0.11.6"
+
+# Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
+try:
+    from clawmetry.extensions import emit as _ext_emit, load_plugins as _ext_load
+    _ext_load()
+except ImportError:
+    def _ext_emit(event, payload=None): pass  # noqa
 
 app = Flask(__name__)
 
@@ -13455,6 +13465,8 @@ def api_auth_check():
     if not token:
         token = request.args.get('token', '').strip()
     if token == GATEWAY_TOKEN:
+        try: _ext_emit('auth.check', {'ok': True})
+        except Exception: pass
         return jsonify({'authRequired': True, 'valid': True})
     return jsonify({'authRequired': True, 'valid': False})
 
@@ -13809,6 +13821,8 @@ def api_crons():
     # Try gateway API first
     gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': True})
     if gw_data and 'jobs' in gw_data:
+        try: _ext_emit('cron.run', {'count': len(gw_data.get('jobs', []))})
+        except Exception: pass
         return jsonify({'jobs': gw_data['jobs']})
     return jsonify({'jobs': _get_crons()})
 
@@ -14020,6 +14034,8 @@ def api_logs():
                 pass
         else:
             lines = _tail_lines(log_file, lines_count)
+    try: _ext_emit('log.ingested', {'count': len(lines)})
+    except Exception: pass
     return jsonify({'lines': lines, 'date': date_str})
 
 
@@ -14214,6 +14230,8 @@ def api_brain_history():
         if s not in seen_set:
             seen_set.add(s)
             sources_seen.append({'id': s, 'label': ev.get('sourceLabel', s), 'color': ev.get('color', '#888')})
+    try: _ext_emit('brain.event', {'count': len(events)})
+    except Exception: pass
     return jsonify({'events': events, 'total': len(events), 'sources': sources_seen})
 
 @app.route('/api/logs-stream')
@@ -14491,6 +14509,8 @@ def api_nodes_register():
         db.commit()
         db.close()
 
+    try: _ext_emit('fleet.node_register', {'node_id': node_id})
+    except Exception: pass
     return jsonify({'ok': True, 'node_id': node_id})
 
 
@@ -15108,6 +15128,8 @@ def api_usage():
         result = _get_otel_usage_data()
         _usage_cache['data'] = result
         _usage_cache['ts'] = now
+        try: _ext_emit('usage.compiled', {'ok': True})
+        except Exception: pass
         return jsonify(result)
 
     # NEW: Parse transcript JSONL files for real usage data
@@ -18403,6 +18425,8 @@ def _get_sessions_from_files():
         pass
     _sessions_cache['data'] = sessions
     _sessions_cache['ts'] = now
+    try: _ext_emit('session.snapshot', {'count': len(sessions)})
+    except Exception: pass
     return sessions
 
 
