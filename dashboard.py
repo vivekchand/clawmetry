@@ -1298,6 +1298,12 @@ def detect_config(args=None):
     else:
         USER_NAME = "You"
 
+    # Phase 3: initialize DataProvider with detected paths
+    try:
+        _init_data_provider()
+    except Exception:
+        pass
+
 
 def _detect_workspace_from_config():
     """Try to read workspace from Moltbot/OpenClaw agent config."""
@@ -19647,6 +19653,20 @@ def _run_server(args):
             log = logging.getLogger('werkzeug')
             log.setLevel(logging.ERROR)
             app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=True)
+
+
+def _init_data_provider():
+    """Phase 3: Initialize the active DataProvider after path detection."""
+    try:
+        from clawmetry.providers import init_providers
+        return init_providers(
+            sessions_dir=SESSIONS_DIR or '',
+            log_dir=LOG_DIR or '',
+            workspace=WORKSPACE or '',
+            metrics_file=METRICS_FILE or '',
+        )
+    except Exception:
+        return None
 
 
 def main():
