@@ -61,7 +61,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.11.11"
+__version__ = "0.11.12"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -12985,6 +12985,28 @@ async function showSnapshot(ts) {
 <script>
 // Gateway setup wizard
 async function checkGwConfig() {
+  // Support ?token=XXX in URL — auto-configure and strip from address bar
+  try {
+    var urlParams = new URLSearchParams(window.location.search);
+    var urlToken = urlParams.get('token');
+    if (urlToken && urlToken.trim()) {
+      urlToken = urlToken.trim();
+      localStorage.setItem('clawmetry-gw-token', urlToken);
+      localStorage.setItem('clawmetry-token', urlToken);
+      var tr = await fetch('/api/gw/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({token: urlToken})
+      });
+      var td = await tr.json();
+      if (td.ok) { updateGwStatus(true, td.url); }
+      // Strip token from URL (keep it out of browser history)
+      urlParams.delete('token');
+      var clean = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '');
+      window.history.replaceState({}, '', clean);
+      if (td.ok) { location.reload(); return; }
+    }
+  } catch(e) {}
   try {
     const r = await fetch('/api/gw/config');
     const d = await r.json();
@@ -13542,6 +13564,27 @@ def _check_auth():
     if token == GATEWAY_TOKEN:
         return
     return jsonify({'error': 'Unauthorized', 'authRequired': True}), 401
+
+
+@bp_auth.route('/auth')
+def auth_token():
+    """Accept ?token=XXX, store in localStorage via JS, redirect to /.
+    Works for both OSS gateway tokens and cloud cm_ keys.
+    URL: /auth?token=YOUR_TOKEN
+    """
+    token = request.args.get('token', '').strip()
+    if not token:
+        return '<html><body style="background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;padding:40px;">' \
+               '<h2>Missing token</h2><p>Usage: <code>/auth?token=YOUR_TOKEN</code></p></body></html>', 400
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;padding:40px;min-height:100vh;">
+<p>Authenticating...</p>
+<script>
+  localStorage.setItem('clawmetry-token', '{token}');
+  localStorage.setItem('clawmetry-gw-token', '{token}');
+  window.location.href = '/';
+</script>
+</body></html>"""
 
 
 @bp_auth.route('/')
