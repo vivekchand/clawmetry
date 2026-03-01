@@ -18,6 +18,7 @@ setup(
     author_email="vivek@openclaw.dev",
     url="https://github.com/vivekchand/clawmetry",
     py_modules=["dashboard"],
+    packages=["clawmetry"],
     python_requires=">=3.8",
     install_requires=[
         "flask>=2.0",
@@ -28,7 +29,8 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "clawmetry=dashboard:main",
+            "clawmetry=clawmetry.cli:main",
+            # legacy: "clawmetry=dashboard:main",
         ],
     },
     classifiers=[

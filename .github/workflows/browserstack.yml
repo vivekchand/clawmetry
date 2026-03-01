@@ -4,6 +4,9 @@ on:
   workflow_dispatch:  # Manual trigger only
   push:
     branches: [main]  # Run on merge to main
+  pull_request:
+    branches: [main]
+    types: [labeled]  # Trigger by adding label 'browserstack'
 
 jobs:
   cross-browser:
