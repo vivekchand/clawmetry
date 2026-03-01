@@ -5455,6 +5455,28 @@ def detect_config(args=None):
     else:
         USER_NAME = "You"
 
+    # ── Register blueprints (Phase 4) ───────────────────────────────────────
+    app.register_blueprint(bp_alerts)
+    app.register_blueprint(bp_auth)
+    app.register_blueprint(bp_brain)
+    app.register_blueprint(bp_budget)
+    app.register_blueprint(bp_channels)
+    app.register_blueprint(bp_components)
+    app.register_blueprint(bp_config)
+    app.register_blueprint(bp_crons)
+    app.register_blueprint(bp_fleet)
+    app.register_blueprint(bp_gateway)
+    app.register_blueprint(bp_health)
+    app.register_blueprint(bp_history)
+    app.register_blueprint(bp_logs)
+    app.register_blueprint(bp_memory)
+    app.register_blueprint(bp_otel)
+    app.register_blueprint(bp_overview)
+    app.register_blueprint(bp_sessions)
+    app.register_blueprint(bp_usage)
+    # ────────────────────────────────────────────────────────────────────────
+
+
 
 def _detect_workspace_from_config():
     """Try to read workspace from Moltbot/OpenClaw agent config."""
@@ -13254,7 +13276,29 @@ def _gw_invoke_docker(tool, args=None, token=None):
     return None
 
 
-@app.route('/api/gw/config', methods=['GET', 'POST'])
+# ── Flask Blueprints (Phase 4) ────────────────────────────────────────────────
+from flask import Blueprint as _Blueprint
+bp_alerts = _Blueprint('alerts', __name__)
+bp_auth = _Blueprint('auth', __name__)
+bp_brain = _Blueprint('brain', __name__)
+bp_budget = _Blueprint('budget', __name__)
+bp_channels = _Blueprint('channels', __name__)
+bp_components = _Blueprint('components', __name__)
+bp_config = _Blueprint('config', __name__)
+bp_crons = _Blueprint('crons', __name__)
+bp_fleet = _Blueprint('fleet', __name__)
+bp_gateway = _Blueprint('gateway', __name__)
+bp_health = _Blueprint('health', __name__)
+bp_history = _Blueprint('history', __name__)
+bp_logs = _Blueprint('logs', __name__)
+bp_memory = _Blueprint('memory', __name__)
+bp_otel = _Blueprint('otel', __name__)
+bp_overview = _Blueprint('overview', __name__)
+bp_sessions = _Blueprint('sessions', __name__)
+bp_usage = _Blueprint('usage', __name__)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@bp_gateway.route('/api/gw/config', methods=['GET', 'POST'])
 def api_gw_config():
     """Get or set gateway configuration."""
     global GATEWAY_URL, GATEWAY_TOKEN, _ws_client, _ws_connected
@@ -13352,7 +13396,7 @@ def api_gw_config():
         })
 
 
-@app.route('/api/gw/invoke', methods=['POST'])
+@bp_gateway.route('/api/gw/invoke', methods=['POST'])
 def api_gw_invoke():
     """Proxy a tool invocation to the OpenClaw gateway."""
     data = request.get_json(silent=True) or {}
@@ -13366,7 +13410,7 @@ def api_gw_invoke():
     return jsonify(result)
 
 
-@app.route('/api/gw/rpc', methods=['POST'])
+@bp_gateway.route('/api/gw/rpc', methods=['POST'])
 def api_gw_rpc():
     """Proxy a JSON-RPC method call to the OpenClaw gateway via WebSocket."""
     data = request.get_json(silent=True) or {}
@@ -13464,7 +13508,7 @@ def _auto_discover_gateway(token):
         pass
     return None
 
-@app.route('/api/auth/check')
+@bp_auth.route('/api/auth/check')
 def api_auth_check():
     """Check if auth is required and validate token."""
     if not GATEWAY_TOKEN:
@@ -13500,14 +13544,14 @@ def _check_auth():
     return jsonify({'error': 'Unauthorized', 'authRequired': True}), 401
 
 
-@app.route('/')
+@bp_auth.route('/')
 def index():
     resp = make_response(render_template_string(DASHBOARD_HTML))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     return resp
 
 
-@app.route('/api/channels')
+@bp_overview.route('/api/channels')
 def api_channels():
     """Return list of configured channel names (telegram, signal, whatsapp, discord, webchat, imessage, etc.)."""
     KNOWN_CHANNELS = (
@@ -13608,7 +13652,7 @@ def api_channels():
     return jsonify({'channels': configured})
 
 
-@app.route('/api/overview')
+@bp_overview.route('/api/overview')
 def api_overview():
     # Try gateway API for sessions
     gw_sessions = _gw_invoke('sessions_list', {'limit': 50, 'messageLimit': 0})
@@ -13699,7 +13743,7 @@ def api_overview():
     })
 
 
-@app.route('/api/main-activity')
+@bp_overview.route('/api/main-activity')
 def api_main_activity():
     """Return recent tool calls from the main (most recently modified) session."""
     import glob as _glob
@@ -13816,7 +13860,7 @@ def api_main_activity():
     return jsonify({'calls': calls, 'sessionFile': os.path.basename(best), 'lastModified': best_mt})
 
 
-@app.route('/api/sessions')
+@bp_sessions.route('/api/sessions')
 def api_sessions():
     gw_data = _gw_invoke('sessions_list', {'limit': 50, 'messageLimit': 0})
     if gw_data and 'sessions' in gw_data:
@@ -13824,7 +13868,7 @@ def api_sessions():
     return jsonify({'sessions': _get_sessions()})
 
 
-@app.route('/api/crons')
+@bp_crons.route('/api/crons')
 def api_crons():
     # Try gateway API first
     gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': True})
@@ -13835,7 +13879,7 @@ def api_crons():
     return jsonify({'jobs': _get_crons()})
 
 
-@app.route('/api/cron/fix', methods=['POST'])
+@bp_crons.route('/api/cron/fix', methods=['POST'])
 def api_cron_fix():
     data = request.get_json(silent=True) or {}
     job_id = data.get('jobId', '')
@@ -13851,7 +13895,7 @@ def api_cron_fix():
     return jsonify({'ok': True, 'message': f'Fix request submitted for "{job_name}"'})
 
 
-@app.route('/api/cron/run', methods=['POST'])
+@bp_crons.route('/api/cron/run', methods=['POST'])
 def api_cron_run():
     data = request.get_json(silent=True) or {}
     job_id = data.get('jobId', '')
@@ -13863,7 +13907,7 @@ def api_cron_run():
     return jsonify({'ok': True, 'message': 'Job triggered', 'result': result})
 
 
-@app.route('/api/cron/toggle', methods=['POST'])
+@bp_crons.route('/api/cron/toggle', methods=['POST'])
 def api_cron_toggle():
     data = request.get_json(silent=True) or {}
     job_id = data.get('jobId', '')
@@ -13876,7 +13920,7 @@ def api_cron_toggle():
     return jsonify({'ok': True, 'message': 'Job enabled' if enabled else 'Job disabled'})
 
 
-@app.route('/api/cron/delete', methods=['POST'])
+@bp_crons.route('/api/cron/delete', methods=['POST'])
 def api_cron_delete():
     data = request.get_json(silent=True) or {}
     job_id = data.get('jobId', '')
@@ -13888,7 +13932,7 @@ def api_cron_delete():
     return jsonify({'ok': True, 'message': 'Job deleted'})
 
 
-@app.route('/api/cron/update', methods=['POST'])
+@bp_crons.route('/api/cron/update', methods=['POST'])
 def api_cron_update():
     data = request.get_json(silent=True) or {}
     job_id = data.get('jobId', '')
@@ -13903,7 +13947,7 @@ def api_cron_update():
     return jsonify({'ok': True, 'message': 'Job updated'})
 
 
-@app.route('/api/cron/create', methods=['POST'])
+@bp_crons.route('/api/cron/create', methods=['POST'])
 def api_cron_create():
     data = request.get_json(silent=True) or {}
     name = data.get('name', '').strip()
@@ -13931,7 +13975,7 @@ def api_cron_create():
     return jsonify({'ok': True, 'message': f'Job "{name}" created', 'result': result})
 
 
-@app.route('/api/cron/<job_id>/runs')
+@bp_crons.route('/api/cron/<job_id>/runs')
 def api_cron_runs(job_id):
     result = _gw_invoke('cron', {'action': 'runs', 'jobId': job_id, 'limit': 10})
     if result is None:
@@ -13970,7 +14014,7 @@ def _infer_provider_from_model(model_name):
         return 'local/other'
     return 'unknown'
 
-@app.route('/api/timeline')
+@bp_overview.route('/api/timeline')
 def api_timeline():
     """Return available dates with activity counts for time travel."""
     now = datetime.now()
@@ -14010,7 +14054,7 @@ def api_timeline():
     return jsonify({'days': days, 'today': now.strftime('%Y-%m-%d')})
 
 
-@app.route('/api/logs')
+@bp_logs.route('/api/logs')
 def api_logs():
     lines_count = int(request.args.get('lines', 100))
     date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
@@ -14047,7 +14091,7 @@ def api_logs():
     return jsonify({'lines': lines, 'date': date_str})
 
 
-@app.route('/api/brain-history')
+@bp_brain.route('/api/brain-history')
 def api_brain_history():
     # Return unified event stream - v2 no truncation
     events = []
@@ -14275,7 +14319,7 @@ def api_brain_history():
     except Exception: pass
     return jsonify({'events': events, 'total': len(events), 'sources': sources_seen})
 
-@app.route('/api/logs-stream')
+@bp_logs.route('/api/logs-stream')
 def api_logs_stream():
     """SSE endpoint - streams new log lines in real-time."""
     if not _acquire_stream_slot('log'):
@@ -14318,12 +14362,12 @@ def api_logs_stream():
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
-@app.route('/api/memory-files')
+@bp_memory.route('/api/memory-files')
 def api_memory_files():
     return jsonify(_get_memory_files())
 
 
-@app.route('/api/file')
+@bp_memory.route('/api/file')
 def api_view_file():
     """Return the contents of a memory file."""
     path = request.args.get('path', '')
@@ -14342,7 +14386,7 @@ def api_view_file():
 
 # ── OTLP Receiver Endpoints ─────────────────────────────────────────────
 
-@app.route('/v1/metrics', methods=['POST'])
+@bp_otel.route('/v1/metrics', methods=['POST'])
 def otlp_metrics():
     """OTLP/HTTP receiver for metrics (protobuf)."""
     if _budget_paused:
@@ -14362,7 +14406,7 @@ def otlp_metrics():
         return jsonify({'error': str(e)}), 400
 
 
-@app.route('/v1/traces', methods=['POST'])
+@bp_otel.route('/v1/traces', methods=['POST'])
 def otlp_traces():
     """OTLP/HTTP receiver for traces (protobuf)."""
     if _budget_paused:
@@ -14382,7 +14426,7 @@ def otlp_traces():
         return jsonify({'error': str(e)}), 400
 
 
-@app.route('/api/otel-status')
+@bp_otel.route('/api/otel-status')
 def api_otel_status():
     """Return OTLP receiver status."""
     counts = {}
@@ -14515,13 +14559,13 @@ load(); setInterval(load, 30000);
 """
 
 
-@app.route('/fleet')
+@bp_fleet.route('/fleet')
 def fleet_page():
     """Fleet overview page for multi-node monitoring."""
     return FLEET_HTML
 
 
-@app.route('/api/nodes/register', methods=['POST'])
+@bp_fleet.route('/api/nodes/register', methods=['POST'])
 def api_nodes_register():
     """Register or update a remote node."""
     if not _fleet_check_key(request):
@@ -14555,7 +14599,7 @@ def api_nodes_register():
     return jsonify({'ok': True, 'node_id': node_id})
 
 
-@app.route('/api/nodes/<node_id>/metrics', methods=['POST'])
+@bp_fleet.route('/api/nodes/<node_id>/metrics', methods=['POST'])
 def api_nodes_push_metrics(node_id):
     """Receive metrics push from a remote node."""
     if not _fleet_check_key(request):
@@ -14582,7 +14626,7 @@ def api_nodes_push_metrics(node_id):
     return jsonify({'ok': True, 'received_at': now})
 
 
-@app.route('/api/nodes')
+@bp_fleet.route('/api/nodes')
 def api_nodes_list():
     """List all registered nodes with latest metrics."""
     _fleet_update_statuses()
@@ -14637,7 +14681,7 @@ def api_nodes_list():
     })
 
 
-@app.route('/api/nodes/<node_id>')
+@bp_fleet.route('/api/nodes/<node_id>')
 def api_node_detail(node_id):
     """Get detailed info for a single node with metric history."""
     with _fleet_db_lock:
@@ -14677,7 +14721,7 @@ def api_node_detail(node_id):
 
 # ── Budget & Alert API Routes ───────────────────────────────────────────
 
-@app.route('/api/budget/config', methods=['GET', 'POST'])
+@bp_budget.route('/api/budget/config', methods=['GET', 'POST'])
 def api_budget_config():
     """Get or update budget configuration."""
     if request.method == 'POST':
@@ -14694,13 +14738,13 @@ def api_budget_config():
     return jsonify(_get_budget_config())
 
 
-@app.route('/api/budget/status')
+@bp_budget.route('/api/budget/status')
 def api_budget_status():
     """Get current budget status with spending totals."""
     return jsonify(_get_budget_status())
 
 
-@app.route('/api/budget/pause', methods=['POST'])
+@bp_budget.route('/api/budget/pause', methods=['POST'])
 def api_budget_pause():
     """Manually pause the gateway."""
     global _budget_paused, _budget_paused_at, _budget_paused_reason
@@ -14711,14 +14755,14 @@ def api_budget_pause():
     return jsonify({'ok': True, 'paused': True})
 
 
-@app.route('/api/budget/resume', methods=['POST'])
+@bp_budget.route('/api/budget/resume', methods=['POST'])
 def api_budget_resume():
     """Resume the gateway after budget pause."""
     _resume_gateway()
     return jsonify({'ok': True, 'paused': False})
 
 
-@app.route('/api/budget/test-telegram', methods=['POST'])
+@bp_budget.route('/api/budget/test-telegram', methods=['POST'])
 def api_budget_test_telegram():
     """Send a test Telegram notification using saved config."""
     cfg = _get_budget_config()
@@ -14741,7 +14785,7 @@ def api_budget_test_telegram():
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 
-@app.route('/api/alerts/rules', methods=['GET', 'POST'])
+@bp_alerts.route('/api/alerts/rules', methods=['GET', 'POST'])
 def api_alert_rules():
     """List or create alert rules."""
     if request.method == 'POST':
@@ -14771,7 +14815,7 @@ def api_alert_rules():
     return jsonify({'rules': _get_alert_rules()})
 
 
-@app.route('/api/alerts/rules/<rule_id>', methods=['PUT', 'DELETE'])
+@bp_alerts.route('/api/alerts/rules/<rule_id>', methods=['PUT', 'DELETE'])
 def api_alert_rule(rule_id):
     """Update or delete an alert rule."""
     if request.method == 'DELETE':
@@ -14805,14 +14849,14 @@ def api_alert_rule(rule_id):
     return jsonify({'ok': True})
 
 
-@app.route('/api/alerts/history')
+@bp_alerts.route('/api/alerts/history')
 def api_alert_history():
     """Get alert history."""
     limit = request.args.get('limit', 50, type=int)
     return jsonify({'alerts': _get_alert_history(limit)})
 
 
-@app.route('/api/alerts/history/<int:alert_id>/ack', methods=['POST'])
+@bp_alerts.route('/api/alerts/history/<int:alert_id>/ack', methods=['POST'])
 def api_alert_ack(alert_id):
     """Acknowledge an alert."""
     with _fleet_db_lock:
@@ -14826,7 +14870,7 @@ def api_alert_ack(alert_id):
     return jsonify({'ok': True})
 
 
-@app.route('/api/alerts/active')
+@bp_alerts.route('/api/alerts/active')
 def api_alerts_active():
     """Get active (unacknowledged) alerts."""
     return jsonify({'alerts': _get_active_alerts()})
@@ -14834,7 +14878,7 @@ def api_alerts_active():
 
 # ── History / Time-Series API ────────────────────────────────────────────
 
-@app.route('/api/history/metrics')
+@bp_history.route('/api/history/metrics')
 def api_history_metrics():
     """Query historical metrics. Params: metric, from, to, interval."""
     if not _history_db:
@@ -14847,7 +14891,7 @@ def api_history_metrics():
     return jsonify({'data': data, 'metric': metric})
 
 
-@app.route('/api/history/metrics/list')
+@bp_history.route('/api/history/metrics/list')
 def api_history_metrics_list():
     """List available metric names."""
     if not _history_db:
@@ -14855,7 +14899,7 @@ def api_history_metrics_list():
     return jsonify({'metrics': _history_db.get_available_metrics()})
 
 
-@app.route('/api/history/sessions')
+@bp_history.route('/api/history/sessions')
 def api_history_sessions():
     """Query historical session data."""
     if not _history_db:
@@ -14867,7 +14911,7 @@ def api_history_sessions():
     return jsonify({'data': data})
 
 
-@app.route('/api/history/crons')
+@bp_history.route('/api/history/crons')
 def api_history_crons():
     """Query historical cron run data."""
     if not _history_db:
@@ -14879,7 +14923,7 @@ def api_history_crons():
     return jsonify({'data': data})
 
 
-@app.route('/api/history/snapshot/<float:timestamp>')
+@bp_history.route('/api/history/snapshot/<float:timestamp>')
 def api_history_snapshot(timestamp):
     """Get the snapshot closest to a given timestamp."""
     if not _history_db:
@@ -14890,7 +14934,7 @@ def api_history_snapshot(timestamp):
     return jsonify({'error': 'No snapshot found'}), 404
 
 
-@app.route('/api/history/stats')
+@bp_history.route('/api/history/stats')
 def api_history_stats():
     """Get history database stats."""
     if not _history_db:
@@ -15156,7 +15200,7 @@ _SESSIONS_CACHE_TTL = 10  # seconds
 
 # ── New Feature APIs ────────────────────────────────────────────────────
 
-@app.route('/api/usage')
+@bp_usage.route('/api/usage')
 def api_usage():
     """Token/cost tracking from transcript files - Enhanced OTLP workaround."""
     import time as _time
@@ -15315,7 +15359,7 @@ def api_usage():
     return jsonify(result)
 
 
-@app.route('/api/usage/export')
+@bp_usage.route('/api/usage/export')
 def api_usage_export():
     """Export usage data as CSV."""
     try:
@@ -15403,7 +15447,7 @@ def api_usage_export():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/transcripts')
+@bp_sessions.route('/api/transcripts')
 def api_transcripts():
     """List available session transcript .jsonl files."""
     sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.clawdbot/agents/main/sessions')
@@ -15430,7 +15474,7 @@ def api_transcripts():
     return jsonify({'transcripts': transcripts[:50]})
 
 
-@app.route('/api/transcript/<session_id>')
+@bp_sessions.route('/api/transcript/<session_id>')
 def api_transcript(session_id):
     """Parse and return a session transcript for the chat viewer."""
     sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.clawdbot/agents/main/sessions')
@@ -15528,7 +15572,7 @@ def api_transcript(session_id):
     })
 
 
-@app.route('/api/transcript-events/<session_id>')
+@bp_sessions.route('/api/transcript-events/<session_id>')
 def api_transcript_events(session_id):
     """Parse a session transcript JSONL into structured events for the detail modal."""
     sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.clawdbot/agents/main/sessions')
@@ -15614,7 +15658,7 @@ def api_transcript_events(session_id):
     return jsonify({'events': events[-500:], 'messageCount': msg_count, 'totalEvents': len(events)})
 
 
-@app.route('/api/subagents')
+@bp_sessions.route('/api/subagents')
 def api_subagents():
     """Get sub-agent sessions from sessions.json index (batch read, no N+1)."""
     sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
@@ -15786,7 +15830,7 @@ def api_subagents():
     return jsonify({'subagents': subagents, 'counts': counts, 'totalActive': counts['active']})
 
 
-@app.route('/api/subagent/<session_id>/activity')
+@bp_sessions.route('/api/subagent/<session_id>/activity')
 def api_subagent_activity(session_id):
     """Stream recent activity from a sub-agent's transcript. Progressive: reads tail only."""
     sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
@@ -15898,7 +15942,7 @@ def _summarize_tool_input(name, inp):
         return str(inp)[:120]
 
 
-@app.route('/api/channel/telegram')
+@bp_channels.route('/api/channel/telegram')
 def api_channel_telegram():
     """Parse logs and session transcripts for Telegram message activity."""
     import re
@@ -16091,7 +16135,7 @@ def api_channel_telegram():
     return jsonify({'messages': page, 'total': total, 'todayIn': today_in, 'todayOut': today_out})
 
 
-@app.route('/api/channel/imessage')
+@bp_channels.route('/api/channel/imessage')
 def api_channel_imessage():
     """Read iMessage history from ~/Library/Messages/chat.db."""
     if sys.platform != 'darwin':
@@ -16192,7 +16236,7 @@ def api_channel_imessage():
     return jsonify({'messages': page, 'total': total, 'todayIn': today_in, 'todayOut': today_out})
 
 
-@app.route('/api/channel/whatsapp')
+@bp_channels.route('/api/channel/whatsapp')
 def api_channel_whatsapp():
     """Parse logs and session transcripts for WhatsApp message activity."""
     import re
@@ -16277,7 +16321,7 @@ def api_channel_whatsapp():
     return jsonify({'messages': unique[:limit], 'total': total, 'todayIn': today_in, 'todayOut': today_out})
 
 
-@app.route('/api/channel/signal')
+@bp_channels.route('/api/channel/signal')
 def api_channel_signal():
     """Parse logs and session transcripts for Signal message activity."""
     import re
@@ -16487,7 +16531,7 @@ def _generic_channel_data(channel_key):
     })
 
 
-@app.route('/api/channel/discord')
+@bp_channels.route('/api/channel/discord')
 def api_channel_discord():
     """Discord channel data: log-based with guild/channel extraction."""
     import re
@@ -16612,7 +16656,7 @@ def api_channel_discord():
     })
 
 
-@app.route('/api/channel/slack')
+@bp_channels.route('/api/channel/slack')
 def api_channel_slack():
     """Slack channel data: log-based with workspace/channel extraction."""
     import re
@@ -16739,7 +16783,7 @@ def api_channel_slack():
         'channels': sorted(channels),
     })
 
-@app.route('/api/channel/irc')
+@bp_channels.route('/api/channel/irc')
 def api_channel_irc():
     """IRC channel data: log-based, extracts channel names and nicks."""
     import re
@@ -16852,7 +16896,7 @@ def api_channel_irc():
     })
 
 
-@app.route('/api/channel/webchat')
+@bp_channels.route('/api/channel/webchat')
 def api_channel_webchat():
     """Webchat channel data: parse logs + sessions, return active session info."""
     import re
@@ -16978,14 +17022,14 @@ def api_channel_webchat():
     })
 
 
-@app.route('/api/channel/googlechat')
+@bp_channels.route('/api/channel/googlechat')
 def api_channel_googlechat():
     result = _generic_channel_data('googlechat')
     data = result.get_json()
     data['spaces'] = []
     return jsonify(data)
 
-@app.route('/api/channel/bluebubbles')
+@bp_channels.route('/api/channel/bluebubbles')
 def api_channel_bluebubbles():
     """BlueBubbles channel: try REST API first, fallback to logs."""
     import re
@@ -17125,53 +17169,53 @@ def api_channel_bluebubbles():
         'status': bb_status,
     })
 
-@app.route('/api/channel/msteams')
+@bp_channels.route('/api/channel/msteams')
 def api_channel_msteams():
     result = _generic_channel_data('msteams')
     data = result.get_json()
     data['teams'] = []
     return jsonify(data)
 
-@app.route('/api/channel/matrix')
+@bp_channels.route('/api/channel/matrix')
 def api_channel_matrix():
     return _generic_channel_data('matrix')
 
-@app.route('/api/channel/mattermost')
+@bp_channels.route('/api/channel/mattermost')
 def api_channel_mattermost():
     result = _generic_channel_data('mattermost')
     data = result.get_json()
     data['channels'] = []
     return jsonify(data)
 
-@app.route('/api/channel/line')
+@bp_channels.route('/api/channel/line')
 def api_channel_line():
     return _generic_channel_data('line')
 
-@app.route('/api/channel/nostr')
+@bp_channels.route('/api/channel/nostr')
 def api_channel_nostr():
     return _generic_channel_data('nostr')
 
-@app.route('/api/channel/twitch')
+@bp_channels.route('/api/channel/twitch')
 def api_channel_twitch():
     return _generic_channel_data('twitch')
 
-@app.route('/api/channel/feishu')
+@bp_channels.route('/api/channel/feishu')
 def api_channel_feishu():
     return _generic_channel_data('feishu')
 
-@app.route('/api/channel/zalo')
+@bp_channels.route('/api/channel/zalo')
 def api_channel_zalo():
     return _generic_channel_data('zalo')
 
-@app.route('/api/channel/tlon')
+@bp_channels.route('/api/channel/tlon')
 def api_channel_tlon():
     return _generic_channel_data('tlon')
 
-@app.route('/api/channel/synology-chat')
+@bp_channels.route('/api/channel/synology-chat')
 def api_channel_synology_chat():
     return _generic_channel_data('synology-chat')
 
-@app.route('/api/channel/nextcloud-talk')
+@bp_channels.route('/api/channel/nextcloud-talk')
 def api_channel_nextcloud_talk():
     return _generic_channel_data('nextcloud-talk')
 
@@ -17179,7 +17223,7 @@ def api_channel_nextcloud_talk():
 _api_tool_cache = {}
 _api_tool_cache_time = {}
 
-@app.route('/api/component/tool/<name>')
+@bp_components.route('/api/component/tool/<name>')
 def api_component_tool(name):
     """Parse session transcripts for tool-specific events. Cached for 15s."""
     import time as _time
@@ -17435,7 +17479,7 @@ def api_component_tool(name):
     return jsonify(result)
 
 
-@app.route('/api/component/runtime')
+@bp_components.route('/api/component/runtime')
 def api_component_runtime():
     """Return runtime environment info."""
     import platform
@@ -17481,7 +17525,7 @@ def api_component_runtime():
     return jsonify({'items': items})
 
 
-@app.route('/api/component/machine')
+@bp_components.route('/api/component/machine')
 def api_component_machine():
     """Return machine/host hardware info."""
     import platform
@@ -17525,7 +17569,7 @@ def api_component_machine():
     return jsonify({'items': items})
 
 
-@app.route('/api/component/gateway')
+@bp_components.route('/api/component/gateway')
 def api_component_gateway():
     """Parse gateway routing events from today's log file."""
     import re
@@ -17692,7 +17736,7 @@ def api_component_gateway():
     return jsonify({'routes': page, 'stats': stats, 'total': total})
 
 
-@app.route('/api/component/brain')
+@bp_components.route('/api/component/brain')
 def api_component_brain():
     """Parse session transcripts for LLM API call details."""
     limit = int(request.args.get('limit', 50))
@@ -17870,7 +17914,7 @@ def api_component_brain():
     return jsonify(result)
 
 
-@app.route('/api/heatmap')
+@bp_health.route('/api/heatmap')
 def api_heatmap():
     """Activity heatmap - events per hour for the last 7 days."""
     now = datetime.now()
@@ -17920,7 +17964,7 @@ def api_heatmap():
     return jsonify({'days': days, 'max': max_val})
 
 
-@app.route('/api/system-health')
+@bp_health.route('/api/system-health')
 def api_system_health():
     """Comprehensive system health for the Overview tab."""
     import shutil
@@ -18026,7 +18070,7 @@ def api_system_health():
     })
 
 
-@app.route('/api/health')
+@bp_health.route('/api/health')
 def api_health():
     """System health checks."""
     checks = []
@@ -18114,7 +18158,7 @@ def api_health():
     return jsonify({'checks': checks})
 
 
-@app.route('/api/health-stream')
+@bp_health.route('/api/health-stream')
 def api_health_stream():
     """SSE endpoint - auto-refresh health checks every 30 seconds."""
     if not _acquire_stream_slot('health'):
@@ -18142,7 +18186,7 @@ def api_health_stream():
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
-@app.route('/api/llmfit')
+@bp_config.route('/api/llmfit')
 def api_llmfit():
     """Passthrough: run llmfit recommend and return raw JSON."""
     import shutil
@@ -18159,7 +18203,7 @@ def api_llmfit():
         return jsonify({'error': str(e), 'models': [], 'system': {}})
 
 
-@app.route('/api/cost-optimizer')
+@bp_config.route('/api/cost-optimizer')
 def api_cost_optimizer():
     """Enhanced cost optimizer: llmfit recommendations + task-level suggestions."""
     import shutil
@@ -18299,7 +18343,7 @@ def api_cost_optimizer():
         })
 
 
-@app.route('/api/cost-optimization')
+@bp_config.route('/api/cost-optimization')
 def api_cost_optimization():
     """Cost optimization analysis and local model fallback recommendations."""
     try:
@@ -18348,7 +18392,7 @@ def api_cost_optimization():
         })
 
 
-@app.route('/api/automation-analysis')
+@bp_config.route('/api/automation-analysis')
 def api_automation_analysis():
     """Automation pattern analysis and suggestions for new cron jobs or skills."""
     try:
