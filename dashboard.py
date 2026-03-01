@@ -4129,7 +4129,8 @@ var _brainAllEvents = [];
 var _brainTypeIcons = {
   'EXEC': '⚙️', 'SHELL': '⚙️', 'READ': '📖', 'WRITE': '✏️',
   'BROWSER': '🌐', 'MSG': '📨', 'SEARCH': '🔍', 'SPAWN': '🚀',
-  'DONE': '✅', 'ERROR': '❌', 'TOOL': '🔧'
+  'DONE': '✅', 'ERROR': '❌', 'TOOL': '🔧',
+  'USER': '💬', 'THINK': '🧠', 'AGENT': '🤖'
 };
 
 function setBrainFilter(source, btn) {
@@ -8279,7 +8280,8 @@ var _brainAllEvents = [];
 var _brainTypeIcons = {
   'EXEC': '⚙️', 'SHELL': '⚙️', 'READ': '📖', 'WRITE': '✏️',
   'BROWSER': '🌐', 'MSG': '📨', 'SEARCH': '🔍', 'SPAWN': '🚀',
-  'DONE': '✅', 'ERROR': '❌', 'TOOL': '🔧'
+  'DONE': '✅', 'ERROR': '❌', 'TOOL': '🔧',
+  'USER': '💬', 'THINK': '🧠', 'AGENT': '🤖'
 };
 
 function setBrainFilter(source, btn) {
@@ -14203,11 +14205,44 @@ def api_brain_history():
                     role = inner.get('role', '')
                     content_obj = inner.get('content', [])
 
+                # User prompt
+                if role == 'user' and ts:
+                    text = ''
+                    if isinstance(content_obj, str):
+                        text = content_obj
+                    elif isinstance(content_obj, list):
+                        parts = [b.get('text','') for b in content_obj if isinstance(b,dict) and b.get('type')=='text']
+                        text = ' '.join(parts)
+                    if text:
+                        events.append({'time': ts, 'source': source_id,
+                                       'sourceLabel': source_label, 'type': 'USER',
+                                       'detail': text[:300], 'color': color})
+
                 if role == 'assistant' and isinstance(content_obj, list):
                     for block in content_obj:
                         if not isinstance(block, dict):
                             continue
                         btype = block.get('type', '')
+
+                        # Thinking / reasoning block
+                        if btype == 'thinking' and ts:
+                            thinking_text = block.get('thinking', '')
+                            if thinking_text:
+                                events.append({'time': ts, 'source': source_id,
+                                               'sourceLabel': source_label, 'type': 'THINK',
+                                               'detail': thinking_text[:300], 'color': color})
+                            continue
+
+                        # Assistant text block
+                        if btype == 'text' and ts:
+                            text = block.get('text', '')
+                            if text:
+                                events.append({'time': ts, 'source': source_id,
+                                               'sourceLabel': source_label, 'type': 'AGENT',
+                                               'detail': text[:300], 'color': color})
+                            continue
+
+                        # Tool calls
                         if btype == 'tool_use':
                             tool_name = block.get('name', '')
                             inp = block.get('input', {})
