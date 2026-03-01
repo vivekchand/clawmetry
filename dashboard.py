@@ -61,7 +61,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.11.10"
+__version__ = "0.11.11"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
