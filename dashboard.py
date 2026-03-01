@@ -4139,11 +4139,13 @@ function setBrainFilter(source, btn) {
     b.style.opacity = '0.4';
   });
   var streamEl = document.getElementById('brain-stream');
-  if (streamEl) streamEl.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-muted);font-size:13px;"><div class="spin" style="display:inline-block;width:18px;height:18px;border:2px solid #444;border-top-color:#a855f7;border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:8px;"></div>Filtering...</div>';
+  var chartEl = document.getElementById('brain-density-chart');
+  if (streamEl) streamEl.innerHTML = '<div style="padding:40px;text-align:center;color:#a855f7;font-size:14px;font-weight:500;">● Filtering...</div>';
+  if (chartEl) { var ctx2=chartEl.getContext('2d'); ctx2.clearRect(0,0,chartEl.width,chartEl.height); }
   setTimeout(function() {
     renderBrainChart(_brainAllEvents);
     renderBrainStream(_brainAllEvents);
-  }, 150);
+  }, 80);
 }
 
 function scrollBrainToTop() {
@@ -14156,7 +14158,8 @@ def api_brain_history():
             fname = os.path.basename(sf).replace('.jsonl', '')
             label = sid_to_label.get(fname, '')
             source_id = fname
-            source_label = label if label else fname
+            import re as _re
+            source_label = label if label else ('agent:' + fname[:8] if _re.match(r'[0-9a-f-]{36}', fname) else fname)
             color = get_agent_color(source_id)
 
             with open(sf, 'r', errors='replace') as fh:
