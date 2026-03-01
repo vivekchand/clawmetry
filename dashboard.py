@@ -19237,7 +19237,10 @@ def cmd_start(args):
         print(ARCHITECTURE_OVERVIEW.format(version=__version__, port=port))
     except (ValueError, OSError):
         pass
-    print("Starting dashboard...")
+    try:
+        print("Starting dashboard...")
+    except (ValueError, OSError):
+        pass
 
     # Before loading daemon: if port is busy, only kill if it's our own stale process
     import socket as _socket
@@ -19678,8 +19681,11 @@ def main():
             print(ARCHITECTURE_OVERVIEW.format(version=__version__, port=args.port))
         except (ValueError, OSError):
             pass
-        print("Starting dashboard...")
-        print()
+        try:
+            print("Starting dashboard...")
+            print()
+        except (ValueError, OSError):
+            pass
         _run_server(args)
 
 
