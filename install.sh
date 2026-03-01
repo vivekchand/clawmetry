@@ -94,6 +94,12 @@ if [ -d "$HOME/.openclaw" ]; then
   WORKSPACE="$HOME/.openclaw"
 elif [ -d "/root/.openclaw" ]; then
   WORKSPACE="/root/.openclaw"
+else
+  # Check Docker-style paths: /docker/openclaw-*/data/.openclaw
+  DOCKER_WS=$(find /docker -maxdepth 4 -name ".openclaw" -type d 2>/dev/null | head -1)
+  if [ -n "$DOCKER_WS" ]; then
+    WORKSPACE="$DOCKER_WS"
+  fi
 fi
 
 CLAWMETRY_BIN="$BIN_DIR/clawmetry"
