@@ -66,6 +66,21 @@
 
 # Changelog
 
+## [0.11.0] - 2026-03-01
+
+### Added
+- Brain tab: unified real-time activity stream for main agent + all sub-agents
+- Brain tab: filter pills with glow highlight, chart filtering by agent
+- Brain tab: `/api/brain-history` + `/api/brain-stream` endpoints
+- Brain tab: spinner feedback on pill click
+- Nav reorder: Flow | Overview | Brain | Crons | Tokens | Memory
+
+### Fixed
+- Windows CI: UTF-8 encoding, stdout handling
+- E2E tests: auth token injection per-page, boot overlay dismissal
+- Sub-Agents tab removed from nav
+
+
 All notable changes to ClawMetry are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
