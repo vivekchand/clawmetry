@@ -70,7 +70,7 @@ $USE_SUDO "$INSTALL_DIR/bin/pip" install --upgrade pip >/dev/null 2>&1
 
 # Install clawmetry
 echo "→ Installing clawmetry from PyPI..."
-$USE_SUDO "$INSTALL_DIR/bin/pip" install --no-cache-dir clawmetry >/dev/null 2>&1
+$USE_SUDO "$INSTALL_DIR/bin/pip" install --no-cache-dir --upgrade clawmetry >/dev/null 2>&1
 
 # Create symlink for easy access
 mkdir -p "$BIN_DIR" 2>/dev/null || $USE_SUDO mkdir -p "$BIN_DIR"
