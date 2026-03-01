@@ -14029,7 +14029,7 @@ def api_brain_history():
     events = []
 
     # Build sessionId to displayName map
-    session_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
+    session_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
     index_path = os.path.join(session_dir, 'sessions.json')
     sid_to_label = {}
     try:
