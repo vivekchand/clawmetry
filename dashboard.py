@@ -19468,13 +19468,19 @@ def cmd_uninstall(args):
 
 def _run_server(args):
     import sys as _sys, os as _os
-    # Windows: stdout/stderr may be closed when launched via Start-Process
+    # Windows: fix stdout/stderr encoding and handle closed streams
     if _sys.platform == 'win32':
-        for _stream in ('stdout', 'stderr'):
+        import io as _io
+        for _attr in ('stdout', 'stderr'):
+            _s = getattr(_sys, _attr, None)
             try:
-                getattr(_sys, _stream).write('')
+                if _s is not None:
+                    getattr(_sys, _attr).write('')
+                    # Re-wrap with UTF-8 to handle unicode chars (emoji etc)
+                    setattr(_sys, _attr, _io.TextIOWrapper(
+                        getattr(_sys, _attr).buffer, encoding='utf-8', errors='replace'))
             except (ValueError, OSError, AttributeError):
-                setattr(_sys, _stream, open(_os.devnull, 'w'))
+                setattr(_sys, _attr, open(_os.devnull, 'w'))
     """Start the Flask server (foreground). Called by foreground mode and cmd_start on unsupported OS."""
     detect_config(args)
     _load_gw_config()
