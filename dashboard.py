@@ -19650,7 +19650,10 @@ def main():
 
     # "clawmetry help" → print help and exit
     if args.command == 'help':
-        parser.print_help()
+        try:
+            parser.print_help()
+        except (ValueError, OSError):
+            pass
         sys.exit(0)
 
     # Dispatch to subcommand handlers
