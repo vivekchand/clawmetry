@@ -354,27 +354,86 @@
   </div>
 </footer>
 
-<script>
-function startTrial() {
-  var nodeCount = 1;
-  var c = prompt('How many OpenClaw machines do you want to monitor?\n(You can change this later)', '1');
-  if (c === null) return;
-  nodeCount = Math.max(1, parseInt(c) || 1);
-  var email = prompt('Enter your email to start the free trial:');
-  if (!email || !email.includes('@')) { alert('Please enter a valid email.'); return; }
+<!-- Trial Modal -->
+<div id="trial-modal" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center;padding:16px;">
+  <div onclick="closeTrialModal()" style="position:absolute;inset:0;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);"></div>
+  <div style="position:relative;background:#131929;border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:36px 32px;width:100%;max-width:440px;box-shadow:0 24px 80px rgba(0,0,0,0.6);">
+    <button onclick="closeTrialModal()" style="position:absolute;top:16px;right:16px;background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;">&#x2715;</button>
+    <div style="font-size:32px;margin-bottom:12px;">&#x1F680;</div>
+    <h2 style="font-size:20px;font-weight:700;color:#f1f5f9;margin-bottom:6px;">Start your free trial</h2>
+    <p style="font-size:14px;color:#94a3b8;margin-bottom:24px;line-height:1.6;">7 days free, no credit card required. Cancel anytime.</p>
 
+    <label style="display:block;font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:6px;">Your email</label>
+    <input id="trial-email" type="email" placeholder="you@example.com" autocomplete="email"
+      style="width:100%;padding:12px 14px;background:#0d1420;border:1px solid #2d3748;border-radius:10px;color:#f1f5f9;font-size:15px;font-family:inherit;outline:none;transition:border-color 0.2s;margin-bottom:16px;"
+      onfocus="this.style.borderColor='#E5443A'" onblur="this.style.borderColor='#2d3748'"
+      onkeydown="if(event.key==='Enter')submitTrial()">
+
+    <label style="display:block;font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:6px;">Number of nodes <span style="font-weight:400;color:#64748b;">(OpenClaw machines)</span></label>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;">
+      <button onclick="adjustNodes(-1)" style="width:36px;height:36px;border-radius:8px;border:1px solid #2d3748;background:#0d1420;color:#f1f5f9;font-size:18px;cursor:pointer;">-</button>
+      <span id="trial-nodes" style="font-size:22px;font-weight:700;color:#f1f5f9;min-width:24px;text-align:center;">1</span>
+      <button onclick="adjustNodes(1)" style="width:36px;height:36px;border-radius:8px;border:1px solid #2d3748;background:#0d1420;color:#f1f5f9;font-size:18px;cursor:pointer;">+</button>
+      <span id="trial-price-preview" style="font-size:14px;color:#94a3b8;margin-left:4px;">= $5/month after trial</span>
+    </div>
+
+    <div id="trial-error" style="display:none;color:#f87171;font-size:13px;margin-bottom:12px;"></div>
+
+    <button onclick="submitTrial()" id="trial-submit-btn"
+      style="width:100%;padding:14px;background:#E5443A;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity 0.2s;">
+      Start Free Trial &rarr;
+    </button>
+    <p style="font-size:12px;color:#64748b;text-align:center;margin-top:10px;">7 days free &middot; $5/node/month after &middot; cancel anytime</p>
+  </div>
+</div>
+
+<script>
+var _trialNodes = 1;
+function startTrial() {
+  document.getElementById('trial-modal').style.display = 'flex';
+  setTimeout(function(){ document.getElementById('trial-email').focus(); }, 80);
+}
+function closeTrialModal() {
+  document.getElementById('trial-modal').style.display = 'none';
+}
+function adjustNodes(d) {
+  _trialNodes = Math.max(1, _trialNodes + d);
+  document.getElementById('trial-nodes').textContent = _trialNodes;
+  document.getElementById('trial-price-preview').textContent = '= $' + (_trialNodes * 5) + '/month after trial';
+}
+function submitTrial() {
+  var email = document.getElementById('trial-email').value.trim();
+  var errEl = document.getElementById('trial-error');
+  var btn = document.getElementById('trial-submit-btn');
+  errEl.style.display = 'none';
+  if (!email || !email.includes('@')) {
+    errEl.textContent = 'Please enter a valid email address.';
+    errEl.style.display = 'block';
+    return;
+  }
+  btn.textContent = 'Redirecting to checkout...';
+  btn.disabled = true; btn.style.opacity = '0.6';
   fetch('https://app.clawmetry.com/api/billing/checkout', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email: email, plan: 'monthly', node_count: nodeCount, cm_key: ''})
+    body: JSON.stringify({email: email, plan: 'monthly', node_count: _trialNodes, cm_key: ''})
   })
   .then(function(r){ return r.json(); })
   .then(function(d){
     if (d.url) { window.location.href = d.url; }
-    else { alert('Something went wrong. Please try again or email vivek@clawmetry.com'); }
+    else {
+      errEl.textContent = d.error || 'Something went wrong. Please try again.';
+      errEl.style.display = 'block';
+      btn.textContent = 'Start Free Trial →'; btn.disabled = false; btn.style.opacity = '1';
+    }
   })
-  .catch(function(){ alert('Network error. Please try again.'); });
+  .catch(function(){
+    errEl.textContent = 'Network error. Please try again.';
+    errEl.style.display = 'block';
+    btn.textContent = 'Start Free Trial →'; btn.disabled = false; btn.style.opacity = '1';
+  });
 }
+document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeTrialModal(); });
 </script>
 
 <script>
