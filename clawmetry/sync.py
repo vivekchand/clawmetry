@@ -15,6 +15,8 @@ import base64
 import secrets
 import logging
 import platform
+import threading
+import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -27,6 +29,7 @@ STATE_FILE  = CONFIG_DIR / "sync-state.json"
 LOG_FILE    = CONFIG_DIR / "sync.log"
 
 POLL_INTERVAL = 15    # seconds between sync cycles
+STREAM_INTERVAL = 2   # seconds between real-time stream pushes
 BATCH_SIZE    = 50    # events per encrypted POST
 
 logging.basicConfig(
@@ -408,11 +411,99 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     return synced
 
 
+
+# ── Real-time log streaming ────────────────────────────────────────────────────
+
+def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
+    """Start a background thread that tails the local log file and POSTs lines to cloud in real-time."""
+    api_key = config["api_key"]
+    node_id = config["node_id"]
+    log_dir = paths.get("log_dir", "")
+
+    def _find_latest_log():
+        if not log_dir or not os.path.isdir(log_dir):
+            return None
+        today = datetime.now().strftime("%Y-%m-%d")
+        candidates = sorted(glob.glob(os.path.join(log_dir, f"*{today}*")), reverse=True)
+        if candidates:
+            return candidates[0]
+        # Fallback: most recent log file
+        all_logs = sorted(glob.glob(os.path.join(log_dir, "*.log")), key=os.path.getmtime, reverse=True)
+        return all_logs[0] if all_logs else None
+
+    def _stream_worker():
+        log.info(f"Log streamer started — watching {log_dir}")
+        current_file = None
+        proc = None
+        batch = []
+        last_push = time.time()
+
+        while True:
+            try:
+                # Find/rotate to latest log file
+                latest = _find_latest_log()
+                if latest != current_file:
+                    if proc:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    current_file = latest
+                    if not current_file:
+                        time.sleep(5)
+                        continue
+                    proc = subprocess.Popen(
+                        ["tail", "-f", "-n", "0", current_file],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                    )
+                    log.info(f"Tailing {current_file}")
+
+                if not proc or not proc.stdout:
+                    time.sleep(2)
+                    continue
+
+                # Non-blocking read with select
+                import select
+                ready, _, _ = select.select([proc.stdout], [], [], STREAM_INTERVAL)
+                if ready:
+                    line = proc.stdout.readline()
+                    if line:
+                        batch.append(line.rstrip())
+
+                # Push batch every STREAM_INTERVAL seconds
+                now = time.time()
+                if batch and (now - last_push >= STREAM_INTERVAL or len(batch) >= 50):
+                    try:
+                        _post("/ingest/stream", {"node_id": node_id, "lines": batch}, api_key)
+                    except Exception as e:
+                        log.debug(f"Stream push error: {e}")
+                    batch = []
+                    last_push = now
+
+            except Exception as e:
+                log.debug(f"Stream worker error: {e}")
+                time.sleep(5)
+                if proc:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    proc = None
+                    current_file = None
+
+    t = threading.Thread(target=_stream_worker, daemon=True, name="log-streamer")
+    t.start()
+    return t
+
+
 def run_daemon() -> None:
     config = load_config()
     paths  = detect_paths()
     enc    = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
     log.info(f"Starting sync daemon — node={config['node_id']} → {INGEST_URL} ({enc})")
+
+    # Start real-time log streamer in background
+    start_log_streamer(config, paths)
 
     heartbeat_interval = 60
     last_heartbeat = 0.0
