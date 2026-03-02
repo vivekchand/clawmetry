@@ -12583,6 +12583,8 @@ function renderModalNarrative(el) {
   el.innerHTML = html || '<div style="padding:20px;color:var(--text-muted);">No events yet</div>';
 }
 
+var _expandedEvts = {};
+
 function renderModalFull(el) {
   var events = _modalEvents;
   var html = '';
@@ -12623,16 +12625,24 @@ function renderModalFull(el) {
     }
     var bodyId = 'evt-body-' + idx;
     html += '<div class="evt-item ' + typeClass + '">';
-    html += '<div class="evt-header" onclick="var b=document.getElementById(\'' + bodyId + '\');b.classList.toggle(\'open\');">';
+    html += '<div class="evt-header" onclick="toggleEvtBody(\'' + bodyId + '\',' + idx + ')">';
     html += '<span class="evt-icon">' + icon + '</span>';
     html += '<span class="evt-summary">' + summary + '</span>';
     html += '<span class="evt-ts">' + escHtml(ts) + '</span>';
     html += '</div>';
     var bodyHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(body) : escHtml(body);
-    html += '<div class="evt-body md-rendered" id="' + bodyId + '">' + bodyHtml + '</div>';
+    var isOpen = _expandedEvts[idx] ? ' open' : '';
+    html += '<div class="evt-body md-rendered' + isOpen + '" id="' + bodyId + '">' + bodyHtml + '</div>';
     html += '</div>';
   });
   el.innerHTML = html || '<div style="padding:20px;color:var(--text-muted);">No events yet</div>';
+}
+
+function toggleEvtBody(bodyId, idx) {
+  var b = document.getElementById(bodyId);
+  if (!b) return;
+  b.classList.toggle('open');
+  _expandedEvts[idx] = b.classList.contains('open');
 }
 
 // Initialize theme and zoom on page load
