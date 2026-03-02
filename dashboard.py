@@ -60,8 +60,7 @@ try:
 except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
-
-__version__ = "0.11.16"
+__version__ = "0.11.17"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -4124,6 +4123,7 @@ function formatBrainTime(isoStr) {
 }
 
 var _brainFilter = 'all';
+var _brainTypeFilter = 'all';
 var _brainAllEvents = [];
 
 var _brainTypeIcons = {
@@ -4133,6 +4133,16 @@ var _brainTypeIcons = {
   'USER': '💬', 'THINK': '🧠', 'AGENT': '🤖'
 };
 
+
+function setBrainTypeFilter(type, btn) {
+  _brainTypeFilter = type;
+  document.querySelectorAll('.brain-type-chip').forEach(function(b) {
+    var isActive = b.dataset.type === type;
+    b.style.background = isActive ? 'rgba(168,85,247,0.2)' : 'transparent';
+    b.style.fontWeight = isActive ? '600' : '400';
+  });
+  renderBrainFeed();
+}
 function setBrainFilter(source, btn) {
   _brainFilter = source;
   // Reset all pills
@@ -8297,6 +8307,7 @@ function formatBrainTime(isoStr) {
 }
 
 var _brainFilter = 'all';
+var _brainTypeFilter = 'all';
 var _brainAllEvents = [];
 
 var _brainTypeIcons = {
@@ -8306,6 +8317,16 @@ var _brainTypeIcons = {
   'USER': '💬', 'THINK': '🧠', 'AGENT': '🤖'
 };
 
+
+function setBrainTypeFilter(type, btn) {
+  _brainTypeFilter = type;
+  document.querySelectorAll('.brain-type-chip').forEach(function(b) {
+    var isActive = b.dataset.type === type;
+    b.style.background = isActive ? 'rgba(168,85,247,0.2)' : 'transparent';
+    b.style.fontWeight = isActive ? '600' : '400';
+  });
+  renderBrainFeed();
+}
 function setBrainFilter(source, btn) {
   _brainFilter = source;
   document.querySelectorAll('.brain-chip').forEach(function(b) {
@@ -8340,10 +8361,32 @@ function renderBrainFilterChips(sources) {
   container.innerHTML = html;
 }
 
+function renderBrainTypeChips(events) {
+  var container = document.getElementById('brain-filter-chips');
+  if (!container || !events) return;
+  var typeColors = {'USER':'#60a5fa','AGENT':'#a855f7','EXEC':'#f59e0b','THINK':'#94a3b8','TOOL':'#f97316','WRITE':'#10b981','SEARCH':'#06b6d4','BROWSER':'#ec4899','SPAWN':'#8b5cf6','MSG':'#22c55e','READ':'#6ee7b7','CONTEXT':'#64748b','RESULT':'#6ee7b7'};
+  var typeCounts = {};
+  events.forEach(function(ev) { typeCounts[ev.type] = (typeCounts[ev.type]||0) + 1; });
+  var types = Object.keys(typeCounts).sort();
+  if (types.length < 2) return;
+  var html = '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">';
+  html += '<button class="brain-type-chip" data-type="all" onclick="setBrainTypeFilter(\'all\',this)" style="padding:2px 9px;border-radius:10px;border:1px solid #666;background:' + (_brainTypeFilter === 'all' ? 'rgba(100,100,200,0.15)' : 'transparent') + ';color:#888;font-size:10px;cursor:pointer;font-weight:' + (_brainTypeFilter === 'all' ? '600' : '400') + ';">All types</button>';
+  types.forEach(function(t) {
+    var col = typeColors[t] || '#888';
+    var isActive = _brainTypeFilter === t;
+    html += '<button class="brain-type-chip" data-type="' + t + '" onclick="setBrainTypeFilter(\'' + t + '\',this)" style="padding:2px 9px;border-radius:10px;border:1px solid ' + col + ';background:' + (isActive ? col + '22' : 'transparent') + ';color:' + col + ';font-size:10px;cursor:pointer;font-weight:' + (isActive ? '600' : '400') + ';">' + t + ' (' + typeCounts[t] + ')</button>';
+  });
+  html += '</div>';
+  container.innerHTML += html;
+}
+
 function renderBrainStream(events) {
   var el = document.getElementById('brain-stream');
   if (!el) return;
   var filtered = _brainFilter === 'all' ? events : events.filter(function(ev) { return ev.source === _brainFilter; });
+    if (_brainTypeFilter !== 'all') {
+      filtered = filtered.filter(function(ev) { return ev.type === _brainTypeFilter; });
+    }
   if (!filtered || filtered.length === 0) {
     el.innerHTML = '<div style="color:var(--text-muted);padding:20px">No activity yet</div>';
     return;
@@ -8369,6 +8412,9 @@ function renderBrainChart(events) {
   // Filter events by active pill
   if (_brainFilter !== 'all') {
     events = events.filter(function(ev) { return ev.source === _brainFilter; });
+    }
+    if (_brainTypeFilter !== 'all') {
+    events = events.filter(function(ev) { return ev.type === _brainTypeFilter; });
   }
   var ctx = canvas.getContext('2d');
   var W = canvas.parentElement ? canvas.parentElement.offsetWidth : (canvas.offsetWidth || 800);
@@ -8416,6 +8462,7 @@ async function loadBrainPage(silent) {
     var events = data.events || [];
     _brainAllEvents = events;
     renderBrainFilterChips(data.sources || []);
+    renderBrainTypeChips(events);
     renderBrainChart(events);
     var streamEl = document.getElementById('brain-stream');
     var wasAtTop = !streamEl || streamEl.scrollTop < 40;
@@ -14283,7 +14330,8 @@ def api_brain_history():
             color = get_agent_color(source_id)
 
             with open(sf, 'r', errors='replace') as fh:
-                raw_lines = fh.readlines()[-600:]
+                all_lines = fh.readlines()
+                raw_lines = all_lines[:20] + all_lines[-600:]  # first 20 (system context) + last 600
 
             for raw in raw_lines:
                 raw = raw.strip()
@@ -14301,6 +14349,37 @@ def api_brain_history():
                     inner = obj.get('message', {})
                     role = inner.get('role', '')
                     content_obj = inner.get('content', [])
+
+                # System context (injected files, workspace context)
+                if role == 'system' and ts:
+                    text = ''
+                    if isinstance(content_obj, str):
+                        text = content_obj
+                    elif isinstance(content_obj, list):
+                        parts = [b.get('text','') for b in content_obj if isinstance(b,dict) and b.get('type')=='text']
+                        text = ' '.join(parts)
+                    if text:
+                        # Extract file references from system context
+                        import re as _re2
+                        file_refs = _re2.findall(r'## (/[^ ]+\.md)', text)
+                        detail = 'Context loaded: ' + ', '.join(file_refs) if file_refs else text[:300]
+                        events.append({'time': ts, 'source': source_id,
+                                       'sourceLabel': source_label, 'type': 'CONTEXT',
+                                       'detail': detail, 'color': color})
+
+                # Tool results
+                if role == 'tool' and ts:
+                    tool_id = obj.get('tool_use_id', '') or (isinstance(content_obj, list) and content_obj[0].get('tool_use_id','') if isinstance(content_obj, list) and content_obj else '')
+                    text = ''
+                    if isinstance(content_obj, str):
+                        text = content_obj
+                    elif isinstance(content_obj, list):
+                        parts = [b.get('text','') for b in content_obj if isinstance(b,dict) and b.get('type')=='text']
+                        text = ' '.join(parts)
+                    if text:
+                        events.append({'time': ts, 'source': source_id,
+                                       'sourceLabel': source_label, 'type': 'RESULT',
+                                       'detail': text[:300], 'color': color})
 
                 # User prompt
                 if role == 'user' and ts:
@@ -14359,8 +14438,32 @@ def api_brain_history():
         except Exception:
             pass
 
+    # Add synthetic CONTEXT events showing workspace files loaded at session start
+    workspace = os.environ.get('OPENCLAW_WORKSPACE') or os.path.expanduser('~/.openclaw/workspace')
+    context_files = ['SOUL.md', 'USER.md', 'MEMORY.md', 'AGENTS.md', 'IDENTITY.md', 'TOOLS.md', 'HEARTBEAT.md']
+    loaded_files = [f for f in context_files if os.path.isfile(os.path.join(workspace, f))]
+    if loaded_files and events:
+        earliest = min((ev.get('time','') for ev in events if ev.get('time')), default='')
+        if earliest:
+            events.append({'time': earliest, 'source': 'main', 'sourceLabel': 'main',
+                           'type': 'CONTEXT', 'detail': 'System context loaded: ' + ', '.join(loaded_files),
+                           'color': '#64748b'})
+            # Show which files contain key info
+            for f in loaded_files:
+                fpath = os.path.join(workspace, f)
+                try:
+                    first_lines = open(fpath, 'r', errors='replace').read(500).split('\n')[:5]
+                    preview = ' | '.join(l.strip() for l in first_lines if l.strip())[:200]
+                    events.append({'time': earliest, 'source': 'main', 'sourceLabel': 'main',
+                                   'type': 'CONTEXT', 'detail': f + ': ' + preview, 'color': '#64748b'})
+                except Exception:
+                    pass
+
     events.sort(key=lambda ev: ev.get('time', ''), reverse=True)
-    events = events[:300]
+    # Keep CONTEXT events + most recent 300
+    context_evts = [e for e in events if e.get('type') == 'CONTEXT']
+    other_evts = [e for e in events if e.get('type') != 'CONTEXT'][:300]
+    events = context_evts + other_evts
     sources_seen = []
     seen_set = set()
     for ev in events:
