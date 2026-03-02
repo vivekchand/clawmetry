@@ -16,7 +16,7 @@ def _cmd_connect(args) -> None:
 
     api_key = args.key or os.environ.get("CLAWMETRY_API_KEY") or ""
     if not api_key:
-        print("Get your API key at: https://app.clawmetry.com/connect\n")
+        print("Get your API key at: https://clawmetry.com/connect\n")
         api_key = getpass.getpass("ClawMetry API key (cm_…): ").strip()
 
     if not api_key.startswith("cm_"):
@@ -54,13 +54,13 @@ def _cmd_connect(args) -> None:
     print(f"  ✅  Config saved  {CONFIG_FILE}")
     print(f"  Node ID:          {node_id}")
     print()
-    print("  🔒  Encryption key (keep this safe — you need it to view your data):")
+    print("  🔒  Encryption key (keep this safe - you need it to view your data):")
     print()
     print(f"      {enc_key}")
     print()
     print("  Store this key in your password manager.")
     print("  You'll paste it into app.clawmetry.com / iOS / Mac app to decrypt your data.")
-    print("  The server never sees it — lose it and your cloud data is unreadable.")
+    print("  The server never sees it - lose it and your cloud data is unreadable.")
     print()
 
     # Start daemon
@@ -116,7 +116,14 @@ def _register_launchd(config: dict) -> None:
 
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     plist_path.write_text(plist)
-    __import__("subprocess").run(["launchctl", "load", "-w", str(plist_path)], check=False)
+    import subprocess as _sp, os as _os
+    uid = _os.getuid()
+    # Use modern bootstrap (macOS 10.11+), fall back silently to legacy
+    r = _sp.run(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+                capture_output=True, check=False)
+    if r.returncode != 0:
+        _sp.run(["launchctl", "load", "-w", str(plist_path)],
+                capture_output=True, check=False)
     print(f"✅  Sync daemon registered with launchd ({label})")
     print(f"    Logs: {LOG_FILE}")
     print(f"    Stop: clawmetry disconnect")
