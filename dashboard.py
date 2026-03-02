@@ -1802,7 +1802,7 @@ DASHBOARD_HTML = r"""
   .flow-stat { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 8px 14px; flex: 1; min-width: 100px; box-shadow: var(--card-shadow); }
   .flow-stat-label { font-size: 10px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; display: block; }
   .flow-stat-value { font-size: 20px; font-weight: 700; color: var(--text-primary); display: block; margin-top: 2px; }
-  #flow-svg { width: 100%; height: auto; display: block; overflow: visible; }
+  #flow-svg { width: 100%; height: calc(100vh - 155px); min-height: 400px; display: block; overflow: visible; }
   #flow-svg text { font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; font-weight: 700; text-anchor: middle; dominant-baseline: central; pointer-events: none; letter-spacing: -0.1px; }
   .flow-node-channel text, .flow-node-gateway text, .flow-node-session text, .flow-node-tool text { fill: #ffffff !important; }
   .flow-node-optimizer text { fill: #ffffff !important; }
@@ -5977,7 +5977,7 @@ DASHBOARD_HTML = r"""
   .flow-stat { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 8px 14px; flex: 1; min-width: 100px; box-shadow: var(--card-shadow); }
   .flow-stat-label { font-size: 10px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; display: block; }
   .flow-stat-value { font-size: 20px; font-weight: 700; color: var(--text-primary); display: block; margin-top: 2px; }
-  #flow-svg { width: 100%; height: auto; display: block; overflow: visible; }
+  #flow-svg { width: 100%; height: calc(100vh - 155px); min-height: 400px; display: block; overflow: visible; }
   #flow-svg text { font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; font-weight: 700; text-anchor: middle; dominant-baseline: central; pointer-events: none; letter-spacing: -0.1px; }
   .flow-node-channel text, .flow-node-gateway text, .flow-node-session text, .flow-node-tool text { fill: #ffffff !important; }
   .flow-node-optimizer text { fill: #ffffff !important; }
