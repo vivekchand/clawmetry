@@ -23,7 +23,7 @@ def _cmd_connect(args) -> None:
         print("❌  Key must start with cm_")
         sys.exit(1)
 
-    print(f"Validating key… ", end="", flush=True)
+    print("Connecting to ClawMetry Cloud… ", end="", flush=True)
     try:
         result = validate_key(api_key)
         node_id = result.get("node_id") or socket.gethostname()
@@ -33,7 +33,7 @@ def _cmd_connect(args) -> None:
         # Allow saving config if network/server issues (ingest may not be live yet)
         if any(x in err for x in ["443", "Connection", "unreachable", "405", "404", "timed out"]):
             node_id = socket.gethostname()
-            print(f"⚠️  Ingest server not reachable ({e}). Saving config locally.")
+            print("⚠️  Could not reach server right now. Your config has been saved and will sync when connected.")
         else:
             print(f"❌  {e}")
             sys.exit(1)
@@ -51,20 +51,17 @@ def _cmd_connect(args) -> None:
     save_config(config)
 
     print()
-    print(f"  ✅  Config saved  {CONFIG_FILE}")
-    print(f"  Node ID:          {node_id}")
+    print(f"  Connected as: {node_id}")
     print()
-    print("  🔒  Encryption key (keep this safe - you need it to view your data):")
-    print()
-    print(f"      {enc_key}")
-    print()
-    print("  Store this key in your password manager.")
-    print("  You'll paste it into app.clawmetry.com / iOS / Mac app to decrypt your data.")
-    print("  The server never sees it - lose it and your cloud data is unreadable.")
+    print("  Keep this encryption key safe (like a password):")
+    print(f"  {enc_key}")
     print()
 
     # Start daemon
     _start_daemon(config, args)
+    print()
+    print("  All done! Open app.clawmetry.com to see your dashboard.")
+    print()
 
 
 def _start_daemon(config: dict, args) -> None:
@@ -124,9 +121,8 @@ def _register_launchd(config: dict) -> None:
     if r.returncode != 0:
         _sp.run(["launchctl", "load", "-w", str(plist_path)],
                 capture_output=True, check=False)
-    print(f"✅  Sync daemon registered with launchd ({label})")
-    print(f"    Logs: {LOG_FILE}")
-    print(f"    Stop: clawmetry disconnect")
+    print("  Running in the background. Your data is syncing to the cloud.")
+    print('  To stop: clawmetry disconnect')
 
 
 def _register_systemd(config: dict) -> None:
@@ -156,9 +152,8 @@ WantedBy=default.target
     service_path.write_text(unit)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
     subprocess.run(["systemctl", "--user", "enable", "--now", label], check=False)
-    print(f"✅  Sync daemon registered with systemd ({label})")
-    print(f"    Logs: {LOG_FILE}")
-    print(f"    Stop: clawmetry disconnect")
+    print("  Running in the background. Your data is syncing to the cloud.")
+    print('  To stop: clawmetry disconnect')
 
 
 def _start_subprocess() -> None:
