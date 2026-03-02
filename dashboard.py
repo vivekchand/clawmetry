@@ -3183,7 +3183,13 @@ function clawmetryLogout(){
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
-      <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <div style="display:flex;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+          <button id="brain-view-list" onclick="setBrainView('list')" style="padding:4px 12px;font-size:11px;font-weight:600;background:#a855f7;color:#fff;border:none;cursor:pointer;">≡ List</button>
+          <button id="brain-view-graph" onclick="setBrainView('graph')" style="padding:4px 12px;font-size:11px;font-weight:600;background:transparent;color:var(--text-muted);border:none;cursor:pointer;">⬡ Neural</button>
+        </div>
+        <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+      </div>
     </div>
     <!-- Activity density chart -->
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
@@ -3194,8 +3200,19 @@ function clawmetryLogout(){
     <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
       <button class="brain-chip active" data-source="all" onclick="setBrainFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
     </div>
-    <!-- Event stream -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+    <!-- Neural graph -->
+    <div id="brain-graph-container" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;overflow:hidden;position:relative;">
+      <canvas id="brain-neural-canvas" style="width:100%;display:block;cursor:grab;" height="520"></canvas>
+      <div id="brain-node-detail" style="display:none;position:absolute;right:12px;top:12px;width:260px;background:#0f172a;border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;max-height:380px;overflow-y:auto;z-index:10;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span style="font-weight:700;color:var(--text-primary);">Event Detail</span>
+          <button onclick="document.getElementById('brain-node-detail').style.display='none'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;line-height:1;">×</button>
+        </div>
+        <div id="brain-node-detail-content" style="color:var(--text-secondary);line-height:1.5;word-break:break-word;"></div>
+      </div>
+    </div>
+    <!-- List stream -->
+    <div id="brain-list-container" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
         <span style="font-size:11px;color:var(--text-muted);">Live event stream (newest first)</span>
         <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">↑ new events</span>
@@ -7356,7 +7373,13 @@ function clawmetryLogout(){
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
-      <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <div style="display:flex;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+          <button id="brain-view-list" onclick="setBrainView('list')" style="padding:4px 12px;font-size:11px;font-weight:600;background:#a855f7;color:#fff;border:none;cursor:pointer;">≡ List</button>
+          <button id="brain-view-graph" onclick="setBrainView('graph')" style="padding:4px 12px;font-size:11px;font-weight:600;background:transparent;color:var(--text-muted);border:none;cursor:pointer;">⬡ Neural</button>
+        </div>
+        <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+      </div>
     </div>
     <!-- Activity density chart -->
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
@@ -7367,8 +7390,19 @@ function clawmetryLogout(){
     <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
       <button class="brain-chip active" data-source="all" onclick="setBrainFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
     </div>
-    <!-- Event stream -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+    <!-- Neural graph -->
+    <div id="brain-graph-container" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;overflow:hidden;position:relative;">
+      <canvas id="brain-neural-canvas" style="width:100%;display:block;cursor:grab;" height="520"></canvas>
+      <div id="brain-node-detail" style="display:none;position:absolute;right:12px;top:12px;width:260px;background:#0f172a;border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;max-height:380px;overflow-y:auto;z-index:10;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span style="font-weight:700;color:var(--text-primary);">Event Detail</span>
+          <button onclick="document.getElementById('brain-node-detail').style.display='none'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;line-height:1;">×</button>
+        </div>
+        <div id="brain-node-detail-content" style="color:var(--text-secondary);line-height:1.5;word-break:break-word;"></div>
+      </div>
+    </div>
+    <!-- List stream -->
+    <div id="brain-list-container" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
         <span style="font-size:11px;color:var(--text-muted);">Live event stream (newest first)</span>
         <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">↑ new events</span>
@@ -8306,6 +8340,266 @@ var _brainTypeIcons = {
   'USER': '💬', 'THINK': '🧠', 'AGENT': '🤖'
 };
 
+
+// ─── NEURAL BRAIN GRAPH ───────────────────────────────────────────────────────
+var _brainView = 'list';
+var _neuralNodes = [], _neuralEdges = [], _neuralAnim = null;
+var _neuralDrag = null, _neuralPan = {x:0,y:0}, _neuralScale = 1;
+var _neuralAllNodes = [];
+
+function setBrainView(v) {
+  _brainView = v;
+  var listBtn = document.getElementById('brain-view-list');
+  var graphBtn = document.getElementById('brain-view-graph');
+  var listC = document.getElementById('brain-list-container');
+  var graphC = document.getElementById('brain-graph-container');
+  if (v === 'graph') {
+    if (listBtn) { listBtn.style.background='transparent'; listBtn.style.color='var(--text-muted)'; }
+    if (graphBtn) { graphBtn.style.background='#a855f7'; graphBtn.style.color='#fff'; }
+    if (listC) listC.style.display = 'none';
+    if (graphC) graphC.style.display = 'block';
+    setTimeout(function() { initNeuralGraph(_brainAllEvents); }, 50);
+  } else {
+    if (graphBtn) { graphBtn.style.background='transparent'; graphBtn.style.color='var(--text-muted)'; }
+    if (listBtn) { listBtn.style.background='#a855f7'; listBtn.style.color='#fff'; }
+    if (listC) listC.style.display = 'block';
+    if (graphC) graphC.style.display = 'none';
+    if (_neuralAnim) { cancelAnimationFrame(_neuralAnim); _neuralAnim = null; }
+  }
+}
+
+function initNeuralGraph(events) {
+  var canvas = document.getElementById('brain-neural-canvas');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  canvas.width = canvas.offsetWidth || 900;
+
+  if (_neuralAnim) cancelAnimationFrame(_neuralAnim);
+
+  // Build nodes: one hub per source, satellites per event
+  var sourceMap = {};
+  var filtered = _brainFilter === 'all' ? events : events.filter(function(e){ return e.source===_brainFilter; });
+  var recent = filtered.slice(0, 120); // cap at 120 events for perf
+
+  // Create hub nodes first
+  recent.forEach(function(ev) {
+    if (!sourceMap[ev.source]) {
+      sourceMap[ev.source] = {
+        id: ev.source, label: ev.sourceLabel || ev.source,
+        color: ev.color || '#a855f7', isHub: true,
+        x: canvas.width/2 + (Math.random()-0.5)*200,
+        y: canvas.height/2 + (Math.random()-0.5)*200,
+        vx:0, vy:0, r:22, pulsePhase: Math.random()*Math.PI*2
+      };
+    }
+  });
+
+  var nodes = Object.values(sourceMap);
+  var edges = [];
+  var eventNodes = [];
+
+  // Satellite nodes for each event
+  recent.forEach(function(ev, i) {
+    var hub = sourceMap[ev.source];
+    if (!hub) return;
+    var angle = (i / recent.length) * Math.PI * 2;
+    var dist = 80 + Math.random()*60;
+    var n = {
+      id: 'ev_' + i, isHub: false, event: ev,
+      color: hub.color, label: ev.type || 'TOOL',
+      x: hub.x + Math.cos(angle)*dist,
+      y: hub.y + Math.sin(angle)*dist,
+      vx:0, vy:0, r:8,
+      pulsePhase: Math.random()*Math.PI*2,
+      hubId: ev.source
+    };
+    eventNodes.push(n);
+    edges.push({from: hub, to: n, pulse: 0, speed: 0.012+Math.random()*0.008,
+                age: i, active: i < 10});
+  });
+
+  var allNodes = nodes.concat(eventNodes);
+  _neuralAllNodes = allNodes;
+
+  // ── Force simulation ───────────────────────────────────────────────────────
+  function simulate() {
+    var W = canvas.width, H = canvas.height;
+    allNodes.forEach(function(n) {
+      // Repulsion between all nodes
+      allNodes.forEach(function(m) {
+        if (n===m) return;
+        var dx = n.x-m.x, dy = n.y-m.y;
+        var d = Math.sqrt(dx*dx+dy*dy) || 1;
+        var minD = n.r+m.r+20;
+        if (d < minD) {
+          var f = (minD-d)/d * 0.3;
+          n.vx += dx*f; n.vy += dy*f;
+        }
+      });
+      // Attraction toward hub
+      if (!n.isHub && n.hubId) {
+        var hub = sourceMap[n.hubId];
+        if (hub) {
+          var dx = hub.x-n.x, dy = hub.y-n.y;
+          var d = Math.sqrt(dx*dx+dy*dy) || 1;
+          var rest = 90;
+          var f = (d-rest)/d * 0.04;
+          n.vx += dx*f; n.vy += dy*f;
+        }
+      }
+      // Center gravity for hubs
+      if (n.isHub) {
+        n.vx += (W/2-n.x)*0.003;
+        n.vy += (H/2-n.y)*0.003;
+      }
+      // Multi-hub repulsion
+      if (n.isHub) {
+        nodes.forEach(function(m) {
+          if (n===m) return;
+          var dx=n.x-m.x, dy=n.y-m.y;
+          var d=Math.sqrt(dx*dx+dy*dy)||1;
+          if (d<180) { var f=(180-d)/d*0.15; n.vx+=dx*f; n.vy+=dy*f; }
+        });
+      }
+      n.vx *= 0.82; n.vy *= 0.82;
+      n.x = Math.max(n.r+8, Math.min(W-n.r-8, n.x+n.vx));
+      n.y = Math.max(n.r+8, Math.min(H-n.r-8, n.y+n.vy));
+    });
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  var t = 0;
+  var icons = _brainTypeIcons || {};
+  function draw() {
+    t++;
+    simulate();
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // Grid dots (subtle)
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    for (var gx=0;gx<canvas.width;gx+=40) for (var gy=0;gy<canvas.height;gy+=40) {
+      ctx.beginPath(); ctx.arc(gx,gy,1,0,Math.PI*2); ctx.fill();
+    }
+
+    // Draw edges with pulse animation
+    edges.forEach(function(e) {
+      var x1=e.from.x, y1=e.from.y, x2=e.to.x, y2=e.to.y;
+      var dx=x2-x1, dy=y2-y1, len=Math.sqrt(dx*dx+dy*dy)||1;
+
+      // Base line
+      ctx.beginPath();
+      ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+      ctx.strokeStyle = e.active ? e.from.color.replace(')',',0.4)').replace('rgb','rgba').replace('#','rgba(').replace('rgba(','rgba(') : 'rgba(255,255,255,0.06)';
+      try {
+        var hex = e.from.color;
+        if (hex.startsWith('#')) {
+          var r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+          ctx.strokeStyle = e.active ? 'rgba('+r+','+g+','+b+',0.35)' : 'rgba('+r+','+g+','+b+',0.08)';
+        }
+      } catch(ex){}
+      ctx.lineWidth = e.active ? 1.5 : 0.8;
+      ctx.stroke();
+
+      // Pulse dot traveling along edge
+      if (e.active) {
+        e.pulse = (e.pulse + e.speed) % 1;
+        var px=x1+dx*e.pulse, py=y1+dy*e.pulse;
+        ctx.beginPath(); ctx.arc(px,py,3,0,Math.PI*2);
+        try {
+          var hex=e.from.color;
+          if (hex.startsWith('#')) {
+            var r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+            var grd=ctx.createRadialGradient(px,py,0,px,py,6);
+            grd.addColorStop(0,'rgba('+r+','+g+','+b+',1)');
+            grd.addColorStop(1,'rgba('+r+','+g+','+b+',0)');
+            ctx.fillStyle=grd;
+          } else { ctx.fillStyle='#fff'; }
+        } catch(ex){ ctx.fillStyle='#fff'; }
+        ctx.fill();
+      }
+    });
+
+    // Draw nodes
+    allNodes.forEach(function(n) {
+      var pulse = Math.sin(t*0.03 + n.pulsePhase) * 0.15 + 1;
+      var r = n.r * (n.isHub ? pulse : 1);
+      try {
+        var hex=n.color;
+        if (hex.startsWith('#')) {
+          var rv=parseInt(hex.slice(1,3),16),gv=parseInt(hex.slice(3,5),16),bv=parseInt(hex.slice(5,7),16);
+          // Glow
+          if (n.isHub) {
+            var grd=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,r*2.5);
+            grd.addColorStop(0,'rgba('+rv+','+gv+','+bv+',0.25)');
+            grd.addColorStop(1,'rgba('+rv+','+gv+','+bv+',0)');
+            ctx.beginPath(); ctx.arc(n.x,n.y,r*2.5,0,Math.PI*2);
+            ctx.fillStyle=grd; ctx.fill();
+          }
+          // Body
+          var grd2=ctx.createRadialGradient(n.x-r*0.3,n.y-r*0.3,0,n.x,n.y,r);
+          grd2.addColorStop(0,'rgba('+rv+','+gv+','+bv+','+(n.isHub?0.95:0.75)+')');
+          grd2.addColorStop(1,'rgba('+(rv>>1)+','+(gv>>1)+','+(bv>>1)+',0.9)');
+          ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2);
+          ctx.fillStyle=grd2; ctx.fill();
+          // Border
+          ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2);
+          ctx.strokeStyle='rgba('+rv+','+gv+','+bv+',0.8)';
+          ctx.lineWidth=n.isHub?2:1; ctx.stroke();
+        } else {
+          ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2);
+          ctx.fillStyle=n.color; ctx.fill();
+        }
+      } catch(ex){
+        ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2);
+        ctx.fillStyle=n.color||'#a855f7'; ctx.fill();
+      }
+
+      // Label
+      if (n.isHub) {
+        ctx.font='bold 11px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillStyle='#fff'; ctx.fillText(n.label.length>12?n.label.slice(0,10)+'..':n.label, n.x, n.y);
+      } else {
+        var ico = icons[n.event&&n.event.type]||'🔧';
+        ctx.font='9px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillStyle='#fff'; ctx.fillText(ico, n.x, n.y);
+      }
+    });
+
+    _neuralAnim = requestAnimationFrame(draw);
+  }
+
+  draw();
+
+  // ── Interaction: click to show detail ────────────────────────────────────
+  canvas.onclick = function(e) {
+    var rect = canvas.getBoundingClientRect();
+    var mx = (e.clientX-rect.left)*(canvas.width/rect.width);
+    var my = (e.clientY-rect.top)*(canvas.height/rect.height);
+    for (var i=0; i<_neuralAllNodes.length; i++) {
+      var n = _neuralAllNodes[i];
+      var dx=mx-n.x, dy=my-n.y;
+      if (dx*dx+dy*dy < n.r*n.r+20) {
+        var detail = document.getElementById('brain-node-detail');
+        var content = document.getElementById('brain-node-detail-content');
+        if (!detail||!content) break;
+        if (n.isHub) {
+          content.innerHTML = '<div style="color:#a855f7;font-weight:700;margin-bottom:4px;">'+escHtml(n.label)+'</div><div style="color:var(--text-muted);">Agent / Session hub</div>';
+        } else {
+          var ev = n.event||{};
+          var ico = icons[ev.type]||'🔧';
+          content.innerHTML =
+            '<div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;">'+ico+' '+escHtml(ev.type||'TOOL')+'</div>'+
+            '<div style="color:var(--text-muted);font-size:10px;margin-bottom:4px;">'+escHtml(ev.sourceLabel||ev.source||'')+'</div>'+
+            '<div style="color:var(--text-muted);font-size:10px;margin-bottom:8px;">'+escHtml(formatBrainTime(ev.time||''))+'</div>'+
+            '<div style="color:var(--text-secondary);font-size:11px;white-space:pre-wrap;">'+escHtml((ev.detail||'').slice(0,600))+'</div>';
+        }
+        detail.style.display = 'block';
+        break;
+      }
+    }
+  };
+}
+// ─── END NEURAL GRAPH ────────────────────────────────────────────────────────
 function setBrainFilter(source, btn) {
   _brainFilter = source;
   document.querySelectorAll('.brain-chip').forEach(function(b) {
