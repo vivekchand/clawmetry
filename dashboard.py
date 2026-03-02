@@ -1572,6 +1572,7 @@ DASHBOARD_HTML = r"""
   .time-btn.active { background: var(--bg-accent); color: #fff; border-color: var(--bg-accent); }
 
   .page { display: none; padding: 16px 20px; max-width: 1200px; margin: 0 auto; }
+  #page-flow { padding: 0; max-width: 100%; }
   #page-overview { max-width: 1600px; padding: 8px 12px; }
   .page.active { display: block; }
   body.booting #zoom-wrapper { opacity: 0; pointer-events: none; transform: translateY(4px); }
@@ -2347,6 +2348,7 @@ DASHBOARD_HTML = r"""
     .nav h1 { font-size: 16px; }
     .nav-tab { padding: 6px 12px; font-size: 12px; }
     .page { padding: 12px; }
+    #page-flow { padding: 0; }
     .grid { grid-template-columns: 1fr; gap: 12px; }
     .card-value { font-size: 22px; }
     .flow-stats { gap: 8px; }
@@ -5745,6 +5747,7 @@ DASHBOARD_HTML = r"""
   .time-btn.active { background: var(--bg-accent); color: #fff; border-color: var(--bg-accent); }
 
   .page { display: none; padding: 16px 20px; max-width: 1200px; margin: 0 auto; }
+  #page-flow { padding: 0; max-width: 100%; }
   #page-overview { max-width: 1600px; padding: 8px 12px; }
   .page.active { display: block; }
   body.booting #zoom-wrapper { opacity: 0; pointer-events: none; transform: translateY(4px); }
@@ -6520,6 +6523,7 @@ DASHBOARD_HTML = r"""
     .nav h1 { font-size: 16px; }
     .nav-tab { padding: 6px 12px; font-size: 12px; }
     .page { padding: 12px; }
+    #page-flow { padding: 0; }
     .grid { grid-template-columns: 1fr; gap: 12px; }
     .card-value { font-size: 22px; }
     .flow-stats { gap: 8px; }
