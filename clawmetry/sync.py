@@ -117,9 +117,12 @@ def save_state(state: dict) -> None:
 def _post(path: str, payload: dict, api_key: str, timeout: int = 15) -> dict:
     url  = INGEST_URL.rstrip("/") + path
     body = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json", "X-Api-Key": api_key}
+    if payload.get("node_id"):
+        headers["X-Node-Id"] = payload["node_id"]
     req  = urllib.request.Request(
         url, data=body,
-        headers={"Content-Type": "application/json", "X-Api-Key": api_key},
+        headers=headers,
         method="POST",
     )
     try:
