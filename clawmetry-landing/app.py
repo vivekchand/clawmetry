@@ -2217,6 +2217,37 @@ def api_globe_data():
     return jsonify(result)
 
 
+
+_hero_stats_cache = {"data": None, "ts": 0}
+
+@app.route("/api/hero-stats", methods=["GET"])
+def api_hero_stats():
+    import re as _re
+    now = time.time()
+    if _hero_stats_cache["data"] and now - _hero_stats_cache["ts"] < 3600:
+        return jsonify(_hero_stats_cache["data"])
+    result = {}
+    try:
+        r = _req.get("https://static.pepy.tech/badge/clawmetry", timeout=5)
+        nums = _re.findall(r">([0-9,.k]+)</text>", r.text)
+        result["downloads"] = nums[0] if nums else "23k"
+    except Exception:
+        result["downloads"] = "23k"
+    try:
+        r = _req.get("https://pypi.org/pypi/clawmetry/json", timeout=5)
+        result["version"] = "v" + r.json()["info"]["version"]
+    except Exception:
+        result["version"] = "v0.11.23"
+    try:
+        r = _req.get("https://api.github.com/repos/vivekchand/clawmetry", timeout=5,
+                     headers={"Accept": "application/vnd.github.v3+json"})
+        result["stars"] = str(r.json().get("stargazers_count", 107))
+    except Exception:
+        result["stars"] = "107"
+    _hero_stats_cache["data"] = result
+    _hero_stats_cache["ts"] = now
+    return jsonify(result)
+
 # ─── Static Routes ───────────────────────────────────────────────────────────
 
 

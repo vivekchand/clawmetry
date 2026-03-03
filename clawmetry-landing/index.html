@@ -485,16 +485,23 @@
       <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank" rel="noopener noreferrer"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=dark&period=daily&t=1771491508782" alt="ClawMetry for OpenClaw - Real-time observability dashboard for OpenClaw AI agents | Product Hunt" width="250" height="54" style="vertical-align:middle;" /></a>
     </div>
     <div style="margin-top:16px;padding-bottom:36px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center;">
-      <a href="https://clickpy.clickhouse.com/dashboard/clawmetry" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;background:#111827;border:1px solid rgba(255,255,255,0.08);border-radius:20px;padding:6px 14px;text-decoration:none;font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:500;transition:border-color 0.2s;">
-        <span style="color:#94A3B8;">downloads</span><span style="color:#E5443A;font-weight:700;">22k+</span>
+      <a href="https://clickpy.clickhouse.com/dashboard/clawmetry" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;background:#111827;border:1px solid rgba(255,255,255,0.08);border-radius:20px;padding:6px 14px;text-decoration:none;font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:500;transition:border-color 0.2s,background 0.2s;" onmouseover="this.style.background='#1a2236';this.style.borderColor='rgba(229,68,58,0.35)'" onmouseout="this.style.background='#111827';this.style.borderColor='rgba(255,255,255,0.08)'">
+        <span style="color:#94A3B8;">downloads</span><span id="hero-downloads-val" style="color:#E5443A;font-weight:700;">23k+</span>
       </a>
-      <a href="https://github.com/vivekchand/clawmetry/stargazers" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;background:#111827;border:1px solid rgba(255,255,255,0.08);border-radius:20px;padding:6px 14px;text-decoration:none;font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:500;transition:border-color 0.2s;">
-        <span style="color:#94A3B8;">stars</span><span style="color:#E5443A;font-weight:700;">107</span>
+      <a href="https://github.com/vivekchand/clawmetry/stargazers" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;background:#111827;border:1px solid rgba(255,255,255,0.08);border-radius:20px;padding:6px 14px;text-decoration:none;font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:500;transition:border-color 0.2s,background 0.2s;" onmouseover="this.style.background='#1a2236';this.style.borderColor='rgba(229,68,58,0.35)'" onmouseout="this.style.background='#111827';this.style.borderColor='rgba(255,255,255,0.08)'">
+        <span style="color:#94A3B8;">stars</span><span id="hero-stars-val" style="color:#E5443A;font-weight:700;">107</span>
       </a>
-      <a href="https://pypi.org/project/clawmetry/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;background:#111827;border:1px solid rgba(255,255,255,0.08);border-radius:20px;padding:6px 14px;text-decoration:none;font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:500;transition:border-color 0.2s;">
-        <span style="color:#94A3B8;">version</span><span style="color:#F1F5F9;font-weight:600;">v0.11.23</span>
+      <a href="https://pypi.org/project/clawmetry/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;background:#111827;border:1px solid rgba(255,255,255,0.08);border-radius:20px;padding:6px 14px;text-decoration:none;font-family:Inter,-apple-system,sans-serif;font-size:13px;font-weight:500;transition:border-color 0.2s,background 0.2s;" onmouseover="this.style.background='#1a2236';this.style.borderColor='rgba(229,68,58,0.35)'" onmouseout="this.style.background='#111827';this.style.borderColor='rgba(255,255,255,0.08)'">
+        <span style="color:#94A3B8;">version</span><span id="hero-version-val" style="color:#F1F5F9;font-weight:600;">v0.11.23</span>
       </a>
     </div>
+    <script>
+    fetch('/api/hero-stats').then(r=>r.json()).then(d=>{
+      if(d.downloads){var el=document.getElementById('hero-downloads-val');if(el)el.textContent=d.downloads+'+';}
+      if(d.stars){var el=document.getElementById('hero-stars-val');if(el)el.textContent=d.stars;}
+      if(d.version){var el=document.getElementById('hero-version-val');if(el)el.textContent=d.version;}
+    }).catch(()=>{});
+    </script>
   </div>
 </section>
 
