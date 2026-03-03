@@ -168,7 +168,7 @@ function verifyOtp() {
       _verifying=false; btn.disabled=false; btn.textContent='Verify';
       if (d.ok && d.api_key) {
         _apiKey = d.api_key;
-        var btn = document.getElementById("open-dash-btn"); if (btn) btn.href = "https://app.clawmetry.com/fleet/?token=" + encodeURIComponent(_apiKey);
+        var dashBtn = document.getElementById("open-dash-btn"); if (dashBtn) dashBtn.href = "https://app.clawmetry.com/fleet/?token=" + encodeURIComponent(_apiKey);
         document.getElementById('key-display').textContent = d.api_key;
         document.getElementById('key-inline').textContent = d.api_key;
         // If coming from app.clawmetry.com, redirect back with token
