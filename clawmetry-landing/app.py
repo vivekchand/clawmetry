@@ -2259,6 +2259,10 @@ def install_sh():
     from flask import Response
     return Response(script, mimetype="text/plain", headers={"Cache-Control": "no-cache, no-store"})
 
+@app.route("/cloud")
+def cloud():
+    return send_from_directory(".", "cloud.html")
+
 @app.route("/<path:path>")
 def static_files(path):
     # Don't serve admin routes as static
