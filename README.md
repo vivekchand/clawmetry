@@ -117,7 +117,7 @@ See the **[Cloud Testing Guide](docs/CLOUD_TESTING.md)** for SSH tunnels, revers
 
 This project is tested with BrowserStack.
 
-[![BrowserStack](https://automate.browserstack.com/badge.svg)](https://browserstack.com)
+[![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
 
 ## License
 
