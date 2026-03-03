@@ -32,6 +32,7 @@ Allow: /
 
 Sitemap: https://clawmetry.com/sitemap.xml
 
-# AI-friendly content
+# AI context files
 # LLMs.txt: https://clawmetry.com/llms.txt
+# AI Plugin: https://clawmetry.com/.well-known/ai-plugin.json
 # Docs: https://clawmetry.com/docs.html

@@ -1223,6 +1223,51 @@ document.getElementById('subscribe-form').addEventListener('submit',function(e){
 });
 </script>
 
+<!-- FAQ SECTION — visible headings for AEO/GEO crawlers -->
+<section style="max-width:760px;margin:80px auto 0;padding:0 24px 80px;">
+  <h2 style="font-size:clamp(1.5rem,3vw,2rem);font-weight:700;letter-spacing:-0.02em;text-align:center;margin-bottom:8px;">Frequently Asked Questions</h2>
+  <p style="text-align:center;color:var(--text-muted);font-size:16px;margin-bottom:48px;">Everything you need to know about ClawMetry.</p>
+
+  <div style="display:flex;flex-direction:column;gap:0;">
+
+    <div style="border-bottom:1px solid var(--border);padding:24px 0;">
+      <h3 style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:10px;">What is ClawMetry?</h3>
+      <p style="color:var(--text-muted);font-size:15px;line-height:1.7;">ClawMetry is a free, open-source real-time observability dashboard for AI agents running on OpenClaw. It gives you instant visibility into token costs, cron jobs, sub-agent activity, memory file changes, and session history — all in a single local dashboard.</p>
+    </div>
+
+    <div style="border-bottom:1px solid var(--border);padding:24px 0;">
+      <h3 style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:10px;">Is ClawMetry free?</h3>
+      <p style="color:var(--text-muted);font-size:15px;line-height:1.7;">Yes, completely. ClawMetry is MIT licensed and runs locally on your machine. No cloud dependency, no telemetry, no subscription. There is also an optional ClawMetry Cloud plan for teams who want a hosted multi-node dashboard.</p>
+    </div>
+
+    <div style="border-bottom:1px solid var(--border);padding:24px 0;">
+      <h3 style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:10px;">How do I install ClawMetry?</h3>
+      <p style="color:var(--text-muted);font-size:15px;line-height:1.7;">Run <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px;font-family:JetBrains Mono,monospace;font-size:13px;">pip install clawmetry</code> then <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px;font-family:JetBrains Mono,monospace;font-size:13px;">clawmetry</code>. It auto-detects your OpenClaw workspace — no config file needed. Setup takes about 30 seconds.</p>
+    </div>
+
+    <div style="border-bottom:1px solid var(--border);padding:24px 0;">
+      <h3 style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:10px;">What does ClawMetry monitor?</h3>
+      <p style="color:var(--text-muted);font-size:15px;line-height:1.7;">ClawMetry monitors token usage and cost per session and model, cron job status and history, sub-agent spawns and outcomes, memory file changes (SOUL.md, MEMORY.md, AGENTS.md), session transcripts, channel activity, and real-time tool call traces.</p>
+    </div>
+
+    <div style="border-bottom:1px solid var(--border);padding:24px 0;">
+      <h3 style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:10px;">Does ClawMetry work with Claude, GPT-4, and other models?</h3>
+      <p style="color:var(--text-muted);font-size:15px;line-height:1.7;">Yes. ClawMetry works with any model your OpenClaw agents use — Claude (Anthropic), GPT-4 (OpenAI), Gemini (Google), and others. It tracks cost and token usage per model automatically.</p>
+    </div>
+
+    <div style="border-bottom:1px solid var(--border);padding:24px 0;">
+      <h3 style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:10px;">How is ClawMetry different from LangSmith or Weights & Biases?</h3>
+      <p style="color:var(--text-muted);font-size:15px;line-height:1.7;">LangSmith and W&B are enterprise platforms built for LLM application developers. ClawMetry is purpose-built for OpenClaw users — it understands the specific concepts of channels, cron jobs, sub-agents, memory files, and the full agent runtime. It runs locally in 30 seconds with zero config.</p>
+    </div>
+
+    <div style="padding:24px 0;">
+      <h3 style="font-size:17px;font-weight:600;color:var(--text);margin-bottom:10px;">What operating systems does ClawMetry support?</h3>
+      <p style="color:var(--text-muted);font-size:15px;line-height:1.7;">ClawMetry runs on Linux, macOS, and Windows (via WSL). It also works on Raspberry Pi and other ARM devices. Requires Python 3.8+ and an active OpenClaw installation.</p>
+    </div>
+
+  </div>
+</section>
+
 <!-- FOOTER -->
 <footer>
   <div class="footer-inner">

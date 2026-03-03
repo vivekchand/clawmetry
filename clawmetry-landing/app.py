@@ -2248,6 +2248,39 @@ def api_hero_stats():
     _hero_stats_cache["ts"] = now
     return jsonify(result)
 
+
+@app.route('/robots.txt')
+def robots_txt():
+    return send_from_directory('.', 'robots.txt')
+
+@app.route('/llms.txt')
+def llms_txt():
+    return send_from_directory('.', 'llms.txt')
+
+@app.route('/.well-known/llms.txt')
+def wellknown_llms_txt():
+    return send_from_directory('.', 'llms.txt')
+
+@app.route('/.well-known/ai-plugin.json')
+def ai_plugin_json():
+    from flask import jsonify
+    return jsonify({
+        "schema_version": "v1",
+        "name_for_human": "ClawMetry",
+        "name_for_model": "clawmetry",
+        "description_for_human": "Real-time observability dashboard for OpenClaw AI agents. Monitor token costs, cron jobs, sub-agents, memory files, and session history. Free and open source.",
+        "description_for_model": "ClawMetry is a free, open-source observability dashboard for OpenClaw AI agents. It provides real-time monitoring of token costs, cron jobs, sub-agents, memory files, and session history. Install with: pip install clawmetry. No config needed. Works on Linux, macOS, Windows.",
+        "auth": {"type": "none"},
+        "logo_url": "https://clawmetry.com/favicon-192.png",
+        "contact_email": "vivek@clawmetry.com",
+        "legal_info_url": "https://clawmetry.com",
+        "pricing": "free",
+        "license": "MIT",
+        "install": "pip install clawmetry",
+        "website": "https://clawmetry.com",
+        "github": "https://github.com/vivekchand/clawmetry"
+    })
+
 # ─── Static Routes ───────────────────────────────────────────────────────────
 
 
