@@ -1377,6 +1377,32 @@ def api_otp_verify():
             break
 
     if not valid_doc:
+        # Grace period: if this OTP was recently used (within 5 min), the user
+        # may have lost their session after verify (redirect blip, etc.).
+        # Return their existing API key rather than locking them out.
+        try:
+            import datetime as _dt2
+            grace_cutoff = (_dt2.datetime.now(_dt2.timezone.utc) - _dt2.timedelta(minutes=5)).isoformat()
+            grace_docs = (fs.collection("otps")
+                            .where("email", "==", email)
+                            .where("otp", "==", otp)
+                            .where("used", "==", True)
+                            .limit(5).get())
+            for gd in grace_docs:
+                gdata = gd.to_dict()
+                if gdata.get("expires_at", "") >= grace_cutoff:
+                    key_docs = (fs.collection("api_keys")
+                                  .where("email", "==", email)
+                                  .where("status", "==", "active")
+                                  .limit(1).get())
+                    key_list = list(key_docs)
+                    if key_list:
+                        existing_key = key_list[0].to_dict().get("api_key", "")
+                        log.info("[otp/verify] grace-period retry for %s", email)
+                        return jsonify({"ok": True, "api_key": existing_key, "new": False})
+                    break
+        except Exception:
+            pass
         return jsonify({"error": "Invalid or expired code. Please try again."}), 400
 
     # Mark OTP as used
