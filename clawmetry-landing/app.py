@@ -2224,7 +2224,7 @@ _hero_stats_cache = {"data": None, "ts": 0}
 def api_hero_stats():
     import re as _re
     now = time.time()
-    if _hero_stats_cache["data"] and now - _hero_stats_cache["ts"] < 3600:
+    if _hero_stats_cache["data"] and now - _hero_stats_cache["ts"] < 300:
         return jsonify(_hero_stats_cache["data"])
     result = {}
     try:
