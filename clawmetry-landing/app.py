@@ -2281,7 +2281,7 @@ def static_files(path):
 
 @app.route("/cloud")
 def cloud():
-    return send_file("cloud.html")
+    return send_from_directory(".", "cloud.html")
 
 @app.route("/docs")
 def docs_redirect():
