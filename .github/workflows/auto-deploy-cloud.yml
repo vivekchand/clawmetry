@@ -8,14 +8,9 @@ on:
       - 'clawmetry/**'
       - 'setup.py'
   workflow_dispatch:
-    inputs:
-      reason:
-        description: 'Reason for manual deploy'
-        required: false
-        default: 'manual trigger'
 
 jobs:
-  deploy-cloud:
+  pin-version:
     name: Rebuild cloud with latest OSS
     runs-on: ubuntu-latest
     steps:
@@ -27,7 +22,7 @@ jobs:
         run: |
           VERSION=$(python3 -c "import re; m=re.search(r'__version__ = \"([^\"]+)\"', open('dashboard.py').read()); print(m.group(1))")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building cloud with clawmetry==$VERSION"
+          echo "OSS version: $VERSION"
 
       - name: Checkout cloud repo
         uses: actions/checkout@v4
@@ -42,25 +37,15 @@ jobs:
           sed -i "s/clawmetry==[0-9.]*/clawmetry==${{ steps.oss_version.outputs.version }}/" Dockerfile
           grep -q "clawmetry==${{ steps.oss_version.outputs.version }}" Dockerfile || \
             sed -i "s/clawmetry$/clawmetry==${{ steps.oss_version.outputs.version }}/" Dockerfile
-          echo "Dockerfile now has:"; grep clawmetry Dockerfile
+          echo "Dockerfile:"; grep clawmetry Dockerfile
 
-      - name: Commit version bump if changed
+      - name: Commit and push version pin
         run: |
           cd clawmetry-cloud
           git config user.email "diya-bot@clawmetry.com"
           git config user.name "Diya (auto-deploy)"
           git add Dockerfile
-          git diff --staged --quiet && echo "No Dockerfile change" || \
+          git diff --staged --quiet && echo "No change needed" || \
             git commit -m "chore: auto-pin clawmetry==${{ steps.oss_version.outputs.version }} from OSS"
           git push
-
-      - name: Deploy via Dhriti (SSH)
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: 192.168.178.57
-          username: vivek
-          key: ${{ secrets.DHRITI_SSH_KEY }}
-          script: |
-            cd /home/vivek/projects/clawmetry-cloud
-            git pull origin main
-            bash deploy.sh 2>&1 | tail -10
+          echo "✅ Cloud repo pinned to clawmetry==${{ steps.oss_version.outputs.version }} — Dhriti cron will deploy"
