@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ClawMetry — Get your API key</title>
+  <title>ClawMetry - Get your API key</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
@@ -20,14 +20,13 @@
     .input { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid #2d3748; background: #0d1420; color: #e2e8f0; font-size: 15px; outline: none; transition: border-color 0.2s; margin-bottom: 14px; font-family: inherit; }
     .input:focus { border-color: #E5443A; }
     .input-otp { font-size: 28px; font-weight: 700; letter-spacing: 12px; text-align: center; padding: 14px; }
-    .btn { width: 100%; padding: 13px; border-radius: 8px; border: none; background: #E5443A; color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; transition: opacity 0.2s; font-family: inherit; }
+    .btn { width: 100%; padding: 13px; border-radius: 8px; border: none; background: #E5443A; color: #fff !important; font-size: 15px; font-weight: 700; cursor: pointer; transition: opacity 0.2s; font-family: inherit; }
     .btn:hover { opacity: 0.9; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-ghost { background: transparent; color: #64748b; font-size: 13px; padding: 8px; margin-top: 8px; }
     .error { color: #f87171; font-size: 13px; margin-top: 10px; display: none; }
     .step { display: none; }
     .step.active { display: block; }
-    /* Key display */
     .key-box { background: #0d1117; border: 1px solid #1e293b; border-radius: 10px; padding: 18px; margin: 16px 0; position: relative; }
     .key-text { font-family: 'Courier New', monospace; font-size: 13px; color: #22c55e; word-break: break-all; letter-spacing: 0.5px; }
     .copy-btn { position: absolute; top: 10px; right: 10px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #94a3b8; font-size: 12px; padding: 4px 10px; cursor: pointer; }
@@ -37,7 +36,7 @@
     .step-num { min-width: 22px; height: 22px; border-radius: 50%; background: #E5443A; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
     .step-text { font-size: 13px; color: #94a3b8; line-height: 1.6; }
     .step-text code { background: #1e293b; padding: 4px 8px; border-radius: 4px; font-size: 12px; color: #e2e8f0; white-space: pre-wrap; word-break: break-all; display: block; margin-top: 4px; }
-    .open-btn { display: inline-flex; align-items: center; gap: 6px; background: #E5443A; color: #fff; font-weight: 700; font-size: 14px; padding: 12px 28px; border-radius: 8px; text-decoration: none; margin-top: 20px; }
+    .open-btn { display: inline-flex; align-items: center; gap: 6px; background: #E5443A; color: #fff !important; font-weight: 700; font-size: 14px; padding: 12px 28px; border-radius: 8px; text-decoration: none; margin-top: 20px; }
     .open-btn:hover { opacity: 0.9; }
     .note { font-size: 12px; color: #475569; margin-top: 14px; }
     .resend-link { font-size: 13px; color: #64748b; cursor: pointer; margin-top: 10px; display: inline-block; }
@@ -90,32 +89,18 @@
       <div class="steps-label">Next steps</div>
       <div class="step-item">
         <div class="step-num">1</div>
-        <div class="step-text">Install ClawMetry: <code>curl -fsSL https://clawmetry.com/install.sh | bash</code></div>
+        <div class="step-text">Install ClawMetry:<code>curl -fsSL https://clawmetry.com/install.sh | bash</code></div>
       </div>
       <div class="step-item">
         <div class="step-num">2</div>
-        <div class="step-text">Run on each machine: <code style="word-break:break-all;">clawmetry connect --key <span id="key-inline"></span></code></div>
+        <div class="step-text">Connect this machine:<code id="connect-cmd">clawmetry connect --key ...</code></div>
       </div>
       <div class="step-item">
         <div class="step-num">3</div>
-        <div class="step-text">Open your dashboard and sign in with the same email.</div>
+        <div class="step-text">Open your dashboard below.</div>
       </div>
-      <a href="https://app.clawmetry.com/fleet/" class="open-btn" id="open-dash-btn">Open dashboard &#x2192;</a>
-      <script>
-      // Set dashboard link with token so auth gate lets user through
-      (function() {
-        function setDashLink() {
-          var key = window._apiKey || '';
-          var btn = document.getElementById('open-dash-btn');
-          if (btn && key) btn.href = 'https://app.clawmetry.com/fleet/?token=' + encodeURIComponent(key);
-        }
-        setDashLink();
-        // Re-run after key is revealed
-        var _orig = window.revealKey;
-        window.revealKey = function() { if(_orig) _orig.apply(this, arguments); setTimeout(setDashLink, 100); };
-      })();
-      </script>
-      <p class="note">Same key works on all your machines. Regenerate anytime from settings.</p>
+      <a href="https://app.clawmetry.com/fleet/" class="open-btn" id="open-dash-btn">Open dashboard &rarr;</a>
+      <p class="note">Same key works on all your machines.</p>
     </div>
 
   </div>
@@ -124,67 +109,87 @@
 var _email = '';
 var _apiKey = '';
 var _resendTimer = null;
+var _verifying = false;
 
 function showStep(n) {
-  ['step1','step2','step3'].forEach(function(id,i){ document.getElementById(id).classList.toggle('active', i+1===n); });
+  ['step1','step2','step3'].forEach(function(id,i){
+    document.getElementById(id).classList.toggle('active', i+1===n);
+  });
 }
+
+function showErr(id, msg) { var e=document.getElementById(id); e.textContent=msg; e.style.display=''; }
+function hideErr(id) { document.getElementById(id).style.display='none'; }
 
 function sendOtp(resend) {
   var email = document.getElementById('email').value.trim();
-  if (!resend && (!email || email.indexOf('@') < 0)) {
-    showErr('step1-err','Enter a valid email address.'); return;
+  if (!resend) {
+    if (!email || email.indexOf('@') < 0) { showErr('step1-err','Enter a valid email address.'); return; }
+    _email = email;
   }
-  if (!resend) _email = email;
   hideErr('step1-err');
   var btn = document.getElementById('send-btn');
   btn.disabled = true; btn.textContent = 'Sending...';
-  fetch('/api/otp/send', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:_email})})
-    .then(function(r){return r.json();})
-    .then(function(d){
-      btn.disabled=false; btn.textContent='Send code';
-      if (d.ok) {
-        document.getElementById('email-display').textContent = _email;
-        showStep(2);
-        document.getElementById('otp').focus();
-        startResendTimer();
-      } else {
-        showErr('step1-err', d.error||'Failed to send code. Try again.');
-      }
-    }).catch(function(){ btn.disabled=false; btn.textContent='Send code'; showErr('step1-err','Network error. Try again.'); });
+  fetch('/api/otp/send', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email: _email})
+  }).then(function(r){ return r.json(); }).then(function(d){
+    btn.disabled = false; btn.textContent = 'Send code';
+    if (d.ok) {
+      document.getElementById('email-display').textContent = _email;
+      showStep(2);
+      document.getElementById('otp').focus();
+      startResendTimer();
+    } else {
+      showErr('step1-err', d.error || 'Failed to send code. Try again.');
+    }
+  }).catch(function(){
+    btn.disabled = false; btn.textContent = 'Send code';
+    showErr('step1-err', 'Network error. Try again.');
+  });
 }
 
-var _verifying = false;
 function verifyOtp() {
   if (_verifying) return;
-  _verifying = true;
   var otp = document.getElementById('otp').value.trim();
   hideErr('step2-err');
-  if (!otp || otp.length !== 6) { showErr('step2-err','Enter the 6-digit code.'); return; }
+  if (!otp || otp.length !== 6) {
+    showErr('step2-err', 'Enter the 6-digit code.');
+    return; // NOTE: _verifying never set to true here
+  }
+  _verifying = true;
   var btn = document.getElementById('verify-btn');
-  btn.disabled=true; btn.textContent='Verifying...';
-  fetch('/api/otp/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:_email, otp:otp})})
-    .then(function(r){return r.json();})
-    .then(function(d){
-      _verifying=false; btn.disabled=false; btn.textContent='Verify';
-      if (d.ok && d.api_key) {
-        _apiKey = d.api_key;
-        var dashBtn = document.getElementById("open-dash-btn"); if (dashBtn) dashBtn.href = "https://app.clawmetry.com/fleet/?token=" + encodeURIComponent(_apiKey);
-        document.getElementById('key-display').textContent = d.api_key;
-        document.getElementById('key-inline').textContent = d.api_key;
-        // If coming from app.clawmetry.com, redirect back with token
-        if (getNext() === 'app') {
-          window.location.href = 'https://app.clawmetry.com/auth?token=' + encodeURIComponent(d.api_key);
-          return;
-        }
-        showStep(3);
-      } else {
-        showErr('step2-err', d.error||'Invalid code. Try again.');
+  btn.disabled = true; btn.textContent = 'Verifying...';
+  fetch('/api/otp/verify', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email: _email, otp: otp})
+  }).then(function(r){ return r.json(); }).then(function(d){
+    _verifying = false; btn.disabled = false; btn.textContent = 'Verify';
+    if (d.ok && d.api_key) {
+      _apiKey = d.api_key;
+      document.getElementById('key-display').textContent = _apiKey;
+      document.getElementById('connect-cmd').textContent = 'clawmetry connect --key ' + _apiKey;
+      var dashBtn = document.getElementById('open-dash-btn');
+      if (dashBtn) dashBtn.href = 'https://app.clawmetry.com/fleet/?token=' + encodeURIComponent(_apiKey);
+      var next = new URLSearchParams(window.location.search).get('next') || '';
+      if (next === 'app') {
+        window.location.href = 'https://app.clawmetry.com/auth?token=' + encodeURIComponent(_apiKey);
+        return;
       }
-    }).catch(function(){ btn.disabled=false; btn.textContent='Verify'; showErr('step2-err','Network error. Try again.'); });
+      showStep(3);
+    } else {
+      showErr('step2-err', d.error || 'Invalid code. Try again.');
+    }
+  }).catch(function(){
+    _verifying = false; btn.disabled = false; btn.textContent = 'Verify';
+    showErr('step2-err', 'Network error. Try again.');
+  });
 }
 
 function goBack() {
-  document.getElementById('otp').value='';
+  document.getElementById('otp').value = '';
+  _verifying = false;
   hideErr('step2-err');
   clearInterval(_resendTimer);
   showStep(1);
@@ -193,60 +198,41 @@ function goBack() {
 function copyKey() {
   navigator.clipboard.writeText(_apiKey).then(function(){
     var btn = document.getElementById('copy-btn');
-    btn.textContent='Copied!'; setTimeout(function(){ btn.textContent='Copy'; }, 2000);
+    btn.textContent = 'Copied!';
+    setTimeout(function(){ btn.textContent = 'Copy'; }, 2000);
   });
-}
-
-function getNext() {
-  var p = new URLSearchParams(window.location.search);
-  return p.get('next') || '';
 }
 
 function startResendTimer() {
   var secs = 30;
   var timerEl = document.getElementById('resend-timer');
   var linkEl = document.getElementById('resend-link');
-  linkEl.style.display='none'; timerEl.style.display='';
-  timerEl.textContent='Resend in ' + secs + 's';
+  linkEl.style.display = 'none'; timerEl.style.display = '';
+  timerEl.textContent = 'Resend in ' + secs + 's';
   clearInterval(_resendTimer);
   _resendTimer = setInterval(function(){
     secs--;
     if (secs <= 0) {
       clearInterval(_resendTimer);
-      timerEl.style.display='none'; linkEl.style.display='';
+      timerEl.style.display = 'none'; linkEl.style.display = '';
     } else {
-      timerEl.textContent='Resend in '+secs+'s';
+      timerEl.textContent = 'Resend in ' + secs + 's';
     }
   }, 1000);
 }
 
-function showErr(id, msg) { var e=document.getElementById(id); e.textContent=msg; e.style.display=''; }
-function hideErr(id) { var e=document.getElementById(id); e.style.display='none'; }
-</script>
-<script>
+// Analytics
 (function() {
   function getOrCreateVisitorId() {
-    var key = "cm_vid";
-    var vid = localStorage.getItem(key);
-    if (!vid) { vid = "v_" + Math.random().toString(36).substr(2,9) + Date.now().toString(36); localStorage.setItem(key, vid); }
+    var key = 'cm_vid', vid = localStorage.getItem(key);
+    if (!vid) { vid = 'v_' + Math.random().toString(36).substr(2,9) + Date.now().toString(36); localStorage.setItem(key, vid); }
     return vid;
   }
-  function track(eventType, metadata) {
-    try {
-      fetch("/api/track", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          event_type: eventType,
-          visitor_id: getOrCreateVisitorId(),
-          page: window.location.pathname,
-          metadata: metadata || {}
-        })
-      }).catch(function(){});
-    } catch(e) {}
-  }
-  track("page_visit");
-  window.cmTrack = track;
+  try {
+    fetch('/api/track', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({event_type:'page_visit', visitor_id:getOrCreateVisitorId(), page:window.location.pathname, metadata:{}})
+    }).catch(function(){});
+  } catch(e) {}
 })();
 </script>
 </body>
