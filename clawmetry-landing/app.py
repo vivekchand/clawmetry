@@ -2291,7 +2291,7 @@ if __name__ == "__main__":
 import time as _time
 
 _traction_cache = {"data": None, "ts": 0}
-_last_known = {"pypi_day": "2,628", "pypi_week": "13,461", "pypi_month": "13,461+"}  # seeded fallbacks; updated on each successful API call
+_last_known = {"pypi_day": "831", "pypi_week": "4,490", "pypi_month": "8,327"}  # seeded fallbacks; updated on each successful API call
 
 def _fetch_traction_data():
     now = _time.time()
