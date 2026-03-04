@@ -61,7 +61,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.11.26"
+__version__ = "0.11.27"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -8977,9 +8977,13 @@ function closeFileViewer() {
 }
 
 async function loadSessions() {
+  if (window.CLOUD_MODE) {
+    // In cloud mode: /api/sessions and /api/subagents already handle CLOUD_MODE server-side
+    // fetch interceptor appends node_id+token so these hit the cloud endpoints correctly
+  }
   var [sessData, saData] = await Promise.all([
-    fetch('/api/sessions').then(r => r.json()),
-    fetch('/api/subagents').then(r => r.json())
+    fetch('/api/sessions').then(r => r.json()).catch(function() { return {sessions:[]}; }),
+    fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; })
   ]);
   var html = '';
   // Main sessions (non-subagent)
@@ -9346,13 +9350,22 @@ function formatSchedule(s) {
 }
 
 async function loadLogs() {
+  if (window.CLOUD_MODE) {
+    var el = document.getElementById('logs-full');
+    if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">Full logs are not available in cloud view. Use the live stream on the Flow tab.</div>';
+    return;
+  }
   var lines = document.getElementById('log-lines').value;
   var data = await fetch('/api/logs?lines=' + lines).then(r => r.json());
   renderLogs('logs-full', data.lines);
 }
 
 async function loadMemory() {
-  if (window.CLOUD_MODE) return;
+  if (window.CLOUD_MODE) {
+    var el = document.getElementById('memory-list');
+    if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">Memory files are stored locally on the agent machine and are not synced to cloud.</div>';
+    return;
+  }
   var data = await fetch('/api/memory-files').then(r => r.json());
   var html = '';
   data.forEach(function(f) {
