@@ -2275,6 +2275,9 @@ DASHBOARD_HTML = r"""
   #node-telegram rect { fill: #2f6feb !important; stroke: #1f4fb8 !important; }
   #node-signal rect { fill: #0f766e !important; stroke: #115e59 !important; }
   #node-whatsapp rect { fill: #2f9e44 !important; stroke: #237738 !important; }
+  #node-slack rect { fill: #611f69 !important; stroke: #4a154b !important; }
+  #node-discord rect { fill: #5865F2 !important; stroke: #4752c4 !important; }
+  #node-googlechat rect { fill: #1a73e8 !important; stroke: #1557b0 !important; }
   #node-gateway rect { fill: #334155 !important; stroke: #1f2937 !important; }
   #node-brain rect { fill: #a63a16 !important; stroke: #7c2d12 !important; }
   #brain-model-label { fill: #fde68a !important; }
@@ -3302,6 +3305,12 @@ function clawmetryLogout(){
       <path class="flow-path" id="path-tg-gw"  d="M 130 120 C 150 120, 160 165, 180 170"/>
       <path class="flow-path" id="path-sig-gw" d="M 130 190 C 150 190, 160 185, 180 183"/>
       <path class="flow-path" id="path-wa-gw"  d="M 130 260 C 150 260, 160 200, 180 195"/>
+      <path class="flow-path" id="path-human-slack"      d="M 60 56 C 45 130, 50 270, 75 310"/>
+      <path class="flow-path" id="path-human-discord"    d="M 60 56 C 40 160, 45 340, 75 380"/>
+      <path class="flow-path" id="path-human-googlechat" d="M 60 56 C 35 200, 40 410, 75 450"/>
+      <path class="flow-path" id="path-slack-gw"      d="M 130 330 C 155 330, 165 205, 180 200"/>
+      <path class="flow-path" id="path-discord-gw"    d="M 130 400 C 155 400, 163 208, 180 203"/>
+      <path class="flow-path" id="path-googlechat-gw" d="M 130 470 C 155 470, 160 212, 180 205"/>
 
       <!-- Gateway → Brain -->
       <path class="flow-path" id="path-gw-brain" d="M 290 183 C 305 183, 315 175, 330 175"/>
@@ -3341,6 +3350,18 @@ function clawmetryLogout(){
       <g class="flow-node flow-node-channel" id="node-whatsapp">
         <rect x="20" y="240" width="110" height="40" rx="10" ry="10" fill="#43A047" stroke="#2E7D32" stroke-width="2" filter="url(#dropShadow)"/>
         <text x="75" y="265" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 WA</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-slack">
+        <rect x="20" y="310" width="110" height="40" rx="10" ry="10" fill="#611f69" stroke="#4A154B" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="335" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💼 Slack</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-discord">
+        <rect x="20" y="380" width="110" height="40" rx="10" ry="10" fill="#5865F2" stroke="#4752C4" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="405" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Discord</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-googlechat">
+        <rect x="20" y="450" width="110" height="40" rx="10" ry="10" fill="#1a73e8" stroke="#1557B0" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="475" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 Chat</text>
       </g>
 
       <!-- Gateway -->
@@ -5637,13 +5658,16 @@ var flowInitDone = false;
 function hideUnconfiguredChannels(svgRoot) {
   // Hide channel nodes and their paths for unconfigured channels
   var channelMap = {
-    'telegram': { node: 'node-telegram', paths: ['path-human-tg', 'path-tg-gw'] },
-    'signal':   { node: 'node-signal',   paths: ['path-human-sig', 'path-sig-gw'] },
-    'whatsapp': { node: 'node-whatsapp', paths: ['path-human-wa', 'path-wa-gw'] }
+    'telegram':   { node: 'node-telegram',   paths: ['path-human-tg', 'path-tg-gw'] },
+    'signal':     { node: 'node-signal',     paths: ['path-human-sig', 'path-sig-gw'] },
+    'whatsapp':   { node: 'node-whatsapp',   paths: ['path-human-wa', 'path-wa-gw'] },
+    'slack':      { node: 'node-slack',      paths: ['path-human-slack', 'path-slack-gw'] },
+    'discord':    { node: 'node-discord',    paths: ['path-human-discord', 'path-discord-gw'] },
+    'googlechat': { node: 'node-googlechat', paths: ['path-human-googlechat', 'path-googlechat-gw'] }
   };
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
     var active = d.channels || ['telegram', 'signal', 'whatsapp'];
-    var allChannels = ['telegram', 'signal', 'whatsapp'];
+    var allChannels = ['telegram', 'signal', 'whatsapp', 'slack', 'discord', 'googlechat'];
     var hiddenCount = 0;
     allChannels.forEach(function(ch) {
       if (active.indexOf(ch) === -1) {
@@ -5660,9 +5684,12 @@ function hideUnconfiguredChannels(svgRoot) {
     // Shift remaining visible channel nodes up to fill gaps
     if (hiddenCount > 0) {
       var visibleChannels = allChannels.filter(function(ch) { return active.indexOf(ch) !== -1; });
-      var yPositions = [120, 175, 230]; // Evenly spaced positions for 1-3 channels
+      var yPositions = [120, 175, 230, 300, 370, 440]; // Evenly spaced positions for 1-6 channels
       if (visibleChannels.length === 1) yPositions = [175];
       else if (visibleChannels.length === 2) yPositions = [130, 210];
+      else if (visibleChannels.length === 3) yPositions = [120, 175, 230];
+      else if (visibleChannels.length === 4) yPositions = [100, 170, 240, 310];
+      else if (visibleChannels.length === 5) yPositions = [90, 155, 220, 290, 360];
       visibleChannels.forEach(function(ch, i) {
         var info = channelMap[ch];
         var node = svgRoot.getElementById ? svgRoot.getElementById(info.node) : svgRoot.querySelector('#' + info.node);
@@ -5888,7 +5915,8 @@ function highlightNode(nodeId, dur) {
 
 function triggerInbound(ch) {
   ch = ch || 'tg';
-  var chNodeId = ch === 'tg' ? 'node-telegram' : ch === 'sig' ? 'node-signal' : 'node-whatsapp';
+  var chNodeMap = {'tg': 'node-telegram', 'sig': 'node-signal', 'wa': 'node-whatsapp', 'slack': 'node-slack', 'discord': 'node-discord', 'googlechat': 'node-googlechat'};
+  var chNodeId = chNodeMap[ch] || 'node-telegram';
   highlightNode(chNodeId, 3000);
   animateParticle('path-human-' + ch, '#c0a0ff', 550, false);
   highlightNode('node-human', 2200);
@@ -6146,11 +6174,14 @@ function initOverviewFlow() {
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
     var active = d.channels || ['telegram', 'signal', 'whatsapp'];
     var channelMap = {
-      'telegram': { node: 'ov-node-telegram', paths: ['ov-path-human-tg', 'ov-path-tg-gw'] },
-      'signal':   { node: 'ov-node-signal',   paths: ['ov-path-human-sig', 'ov-path-sig-gw'] },
-      'whatsapp': { node: 'ov-node-whatsapp', paths: ['ov-path-human-wa', 'ov-path-wa-gw'] }
+      'telegram':   { node: 'ov-node-telegram',   paths: ['ov-path-human-tg', 'ov-path-tg-gw'] },
+      'signal':     { node: 'ov-node-signal',     paths: ['ov-path-human-sig', 'ov-path-sig-gw'] },
+      'whatsapp':   { node: 'ov-node-whatsapp',   paths: ['ov-path-human-wa', 'ov-path-wa-gw'] },
+      'slack':      { node: 'ov-node-slack',      paths: ['ov-path-human-slack', 'ov-path-slack-gw'] },
+      'discord':    { node: 'ov-node-discord',    paths: ['ov-path-human-discord', 'ov-path-discord-gw'] },
+      'googlechat': { node: 'ov-node-googlechat', paths: ['ov-path-human-googlechat', 'ov-path-googlechat-gw'] }
     };
-    var allChannels = ['telegram', 'signal', 'whatsapp'];
+    var allChannels = ['telegram', 'signal', 'whatsapp', 'slack', 'discord', 'googlechat'];
     var hiddenCount = 0;
     allChannels.forEach(function(ch) {
       if (active.indexOf(ch) === -1) {
@@ -6166,7 +6197,7 @@ function initOverviewFlow() {
     });
     if (hiddenCount > 0) {
       var visibleChannels = allChannels.filter(function(ch) { return active.indexOf(ch) !== -1; });
-      var yPositions = visibleChannels.length === 1 ? [175] : visibleChannels.length === 2 ? [130, 210] : [120, 175, 230];
+      var yPositions = visibleChannels.length === 1 ? [175] : visibleChannels.length === 2 ? [130, 210] : visibleChannels.length === 3 ? [120, 175, 230] : visibleChannels.length === 4 ? [100, 170, 240, 310] : visibleChannels.length === 5 ? [90, 155, 220, 290, 360] : [80, 145, 210, 280, 350, 420];
       visibleChannels.forEach(function(ch, i) {
         var info = channelMap[ch];
         var node = document.getElementById(info.node);
@@ -6342,6 +6373,9 @@ var COMP_MAP = {
   'node-telegram': {type:'channel', name:'Telegram', icon:'📱'},
   'node-signal': {type:'channel', name:'Signal', icon:'💬'},
   'node-whatsapp': {type:'channel', name:'WhatsApp', icon:'📲'},
+  'node-slack': {type:'channel', name:'Slack', icon:'💼'},
+  'node-discord': {type:'channel', name:'Discord', icon:'🎮'},
+  'node-googlechat': {type:'channel', name:'Google Chat', icon:'💬'},
   'node-gateway': {type:'gateway', name:'Gateway', icon:'🌐'},
   'node-brain': {type:'brain', name:'AI Model', icon:'🧠'},
   'node-session': {type:'tool', name:'Sessions', icon:'📋'},
