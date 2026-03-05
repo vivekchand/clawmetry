@@ -145,7 +145,13 @@ def detect_paths() -> dict:
         home / ".openclaw" / "agents" / "main" / "sessions",
         Path("/data/agents/main/sessions"),
         Path("/app/agents/main/sessions"),
+        Path("/root/.openclaw/agents/main/sessions"),
+        Path("/opt/openclaw/agents/main/sessions"),
     ]
+    # Also check OPENCLAW_HOME env var
+    oc_home = os.environ.get("OPENCLAW_HOME", "")
+    if oc_home:
+        sessions_candidates.insert(0, Path(oc_home) / "agents" / "main" / "sessions")
     sessions_dir = next((str(p) for p in sessions_candidates if p.exists()),
                         str(sessions_candidates[0]))
 
@@ -160,6 +166,7 @@ def detect_paths() -> dict:
     workspace = next((str(p) for p in workspace_candidates if p.exists()),
                      str(workspace_candidates[0]))
 
+    log.info(f"Paths: sessions={sessions_dir} logs={log_dir} workspace={workspace}")
     return {"sessions_dir": sessions_dir, "log_dir": log_dir, "workspace": workspace}
 
 
