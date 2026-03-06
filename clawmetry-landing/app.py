@@ -560,11 +560,6 @@ WELCOME_SIGNUP_HTML_TMPL = """\
       <p style="font-size:13px;color:#9ca3af;margin:0 0 12px;">A quick review helps others find ClawMetry.</p>
       <a href="https://www.producthunt.com/products/clawmetry/reviews/new" style="display:inline-block;background:#ff6154;color:#fff;font-weight:700;font-size:13px;padding:10px 24px;border-radius:8px;text-decoration:none;">Write a review &#x2192;</a>
     </div>
-    <div style="background:linear-gradient(135deg,#1e3a5f,#1a2744);border:1px solid #3b82f6;border-radius:10px;padding:20px;margin:24px 0;text-align:center;">
-      <div style="font-size:24px;margin-bottom:8px;">&#x1F381;</div>
-      <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:8px;">Get a $10 Amazon Gift Card</div>
-      <p style="font-size:13px;color:#93c5fd;line-height:1.6;margin:0;">Try ClawMetry, leave a <a href="https://www.producthunt.com/products/clawmetry/reviews/new" style="color:#93c5fd;font-weight:700;">Product Hunt review</a>, and reply to this email with a screenshot of your dashboard. We will send you a <strong>$10 Amazon gift card</strong> as a thank you.</p>
-    </div>
     <p style="font-size:15px;color:#d1d5db;">Cheers,<br><strong style="color:#fff;">Vivek</strong> &#x1F99E;</p>
   </div>
   <div style="border-top:1px solid #1f1f2e;padding:20px 28px;text-align:center;">
