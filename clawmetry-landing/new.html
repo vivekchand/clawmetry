@@ -440,7 +440,7 @@
       <div class="nav-logo-text"><span>Claw</span><span>Metry</span></div><span style="font-size:12px;color:var(--text-muted);margin-left:6px;opacity:0.7;">for OpenClaw</span>
     </a>
     <div class="nav-links">
-      <a href="https://docs.clawmetry.com" class="nav-link-text">Docs</a>
+      <a href="/docs" class="nav-link-text">Docs</a>
       <a href="/cloud" class="nav-link-text">Cloud</a>
       <a href="#get-started" style="background:#E5443A;color:#fff !important;padding:8px 20px;border-radius:20px;font-weight:600;font-size:13px;">Get Started</a>
     </div>
@@ -457,54 +457,49 @@
 
 <!-- HERO -->
 <style>
-.hero-v3 { padding:72px 24px 48px !important; text-align:left !important; }
-.hero-v3 .v3-grid { display:grid; grid-template-columns:1fr 1fr; gap:48px; max-width:1100px; margin:0 auto; align-items:center; }
-.hero-v3 .v3-label { font-size:12px; color:#E5443A; font-weight:700; text-transform:uppercase; letter-spacing:0.12em; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
-.hero-v3 .v3-title { font-size:42px !important; font-weight:700 !important; line-height:1.15 !important; margin-bottom:16px !important; letter-spacing:-1px !important; text-align:left !important; color:#fff !important; }
-.hero-v3 .v3-sub { font-size:16px !important; color:#94a3b8 !important; line-height:1.7 !important; margin-bottom:28px !important; text-align:left !important; }
-.hero-v3 .v3-btns { display:flex !important; gap:12px !important; flex-wrap:wrap !important; justify-content:flex-start !important; flex-direction:row !important; align-items:center !important; margin-bottom:0 !important; }
-.hero-v3 .v3-btn-main { display:inline-flex !important; background:#E5443A !important; color:#fff !important; padding:12px 28px !important; border-radius:10px !important; font-size:14px !important; font-weight:600 !important; text-decoration:none !important; border:none !important; }
+.hero-v3 { padding:72px 24px 32px !important; text-align:center !important; }
+.hero-v3 .v3-inner { max-width:800px; margin:0 auto; position:relative; z-index:1; }
+.hero-v3 .v3-title { font-size:48px !important; font-weight:700 !important; line-height:1.1 !important; margin-bottom:20px !important; letter-spacing:-1px !important; text-align:center !important; color:#fff !important; }
+.hero-v3 .v3-sub { font-size:17px !important; color:#94a3b8 !important; line-height:1.7 !important; margin-bottom:36px !important; text-align:center !important; max-width:600px !important; margin-left:auto !important; margin-right:auto !important; }
+.hero-v3 .v3-btns { display:flex !important; gap:12px !important; flex-wrap:wrap !important; justify-content:center !important; flex-direction:row !important; align-items:center !important; margin-bottom:0 !important; }
+.hero-v3 .v3-btn-main { display:inline-flex !important; background:#E5443A !important; color:#fff !important; padding:14px 32px !important; border-radius:28px !important; font-size:15px !important; font-weight:600 !important; text-decoration:none !important; border:none !important; }
 .hero-v3 .v3-btn-cloud { display:inline-flex !important; align-items:center !important; gap:6px !important; color:#6366f1 !important; padding:12px 20px !important; font-size:14px !important; text-decoration:none !important; border:1px solid #6366f1 !important; border-radius:10px !important; font-weight:500 !important; background:transparent !important; }
 .hero-v3 .v3-btn-cloud:hover { background:rgba(99,102,241,0.1) !important; }
-.hero-v3 .v3-proof { display:flex; gap:20px; margin-top:24px; flex-wrap:wrap; }
+.hero-v3 .v3-proof { display:flex; gap:20px; margin-top:24px; flex-wrap:wrap; justify-content:center; }
 .hero-v3 .v3-proof a { font-size:13px; color:#6b7280; text-decoration:none; }
 .hero-v3 .v3-proof strong { color:#fff; }
+.hero-v3 .v3-gh-link { margin-top:16px; text-align:center; }
+.hero-v3 .v3-terminal-wrap { max-width:680px; margin:40px auto 0; }
 .hero-v3 .v3-terminal { background:#111827; border:1px solid #1f2937; border-radius:16px; overflow:hidden; }
 .hero-v3 .v3-term-header { background:#0d1117; padding:12px 16px; display:flex; align-items:center; gap:8px; border-bottom:1px solid #1f2937; }
 .hero-v3 .v3-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
-.hero-v3 .v3-term-body { padding:20px; font-family:'SF Mono',Menlo,monospace; font-size:13px; line-height:2.1; color:#d1d5db; }
+.hero-v3 .v3-term-body { padding:20px 24px; font-family:'SF Mono',Menlo,monospace; font-size:13px; line-height:2.1; color:#d1d5db; text-align:left; }
 @media(max-width:768px) {
-  .hero-v3 { padding:40px 16px 32px !important; }
-  .hero-v3 .v3-grid { grid-template-columns:1fr !important; gap:28px !important; }
-  .hero-v3 .v3-title { font-size:28px !important; text-align:center !important; }
-  .hero-v3 .v3-label { justify-content:center !important; }
-  .hero-v3 .v3-sub { text-align:center !important; font-size:15px !important; }
-  .hero-v3 .v3-btns { justify-content:center !important; }
-  .hero-v3 .v3-proof { justify-content:center !important; }
+  .hero-v3 { padding:40px 16px 24px !important; }
+  .hero-v3 .v3-title { font-size:28px !important; }
+  .hero-v3 .v3-sub { font-size:15px !important; }
   .hero-v3 .v3-term-body { font-size:11px !important; padding:14px !important; line-height:1.9 !important; }
+  .hero-v3 .v3-terminal-wrap { margin-top:28px; }
 }
 </style>
 <section class="hero hero-v3">
   <div class="hero-glow"></div>
-  <div class="v3-grid" style="position:relative;z-index:1;">
-    <div>
-      <div class="v3-label">&#x1F99E; For OpenClaw</div>
-      <h1 class="v3-title">Your agents are busy. Do you know what they're doing?</h1>
-      <p class="v3-sub">Real-time dashboard for token costs, sessions, cron jobs, and sub-agent activity. Open source.</p>
-      <div class="v3-btns">
-        <a href="#get-started" class="v3-btn-main">Get Started Free</a>
-        <a href="https://clawmetry.com/cloud" class="v3-btn-cloud">&#x2601;&#xFE0F; Try Cloud</a>
-      </div>
-      <div class="v3-proof">
-        <a href="https://clickpy.clickhouse.com/dashboard/clawmetry" target="_blank" rel="noopener"><strong id="hero-downloads-val">23k+</strong> installs</a>
-        <a href="https://github.com/vivekchand/clawmetry/stargazers" target="_blank" rel="noopener"><strong id="hero-stars-val">107</strong> &#x2B50;</a>
-        <a href="https://clawmetry.com/globe" target="_blank" rel="noopener"><strong id="hero-countries-val">50+</strong> countries</a>
-      </div>
-      <div style="margin-top:16px;text-align:center;">
-        <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;color:#94a3b8;font-size:14px;text-decoration:none;font-weight:500;transition:color 0.2s;" onmouseover="this.style.color=&#39;#fff&#39;" onmouseout="this.style.color=&#39;#94a3b8&#39;"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>View on GitHub &#x2192;</a>
-      </div>
+  <div class="v3-inner">
+    <h1 class="v3-title">Know what your agents are doing.<br><span style="color:#E5443A;">Right now.</span></h1>
+    <p class="v3-sub">Your OpenClaw agents spawn sub-agents, burn tokens, call tools. You have no idea what they're actually doing. ClawMetry shows you, in real-time.</p>
+    <div class="v3-btns">
+      <a href="#get-started" class="v3-btn-main">Get Started Free</a>
+      <a href="https://clawmetry.com/cloud" class="v3-btn-cloud">&#x2601;&#xFE0F; Try Cloud</a>
     </div>
-    <div>
+    <div class="v3-proof">
+      <a href="https://clickpy.clickhouse.com/dashboard/clawmetry" target="_blank" rel="noopener"><strong id="hero-downloads-val">23k+</strong> installs</a>
+      <a href="https://github.com/vivekchand/clawmetry/stargazers" target="_blank" rel="noopener"><strong id="hero-stars-val">107</strong> &#x2B50;</a>
+      <a href="https://clawmetry.com/globe" target="_blank" rel="noopener"><strong id="hero-countries-val">50+</strong> countries</a>
+    </div>
+    <div class="v3-gh-link">
+      <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;color:#94a3b8;font-size:14px;text-decoration:none;font-weight:500;transition:color 0.2s;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#94a3b8'"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>View on GitHub &#x2192;</a>
+    </div>
+    <div class="v3-terminal-wrap">
       <div class="v3-terminal">
         <div class="v3-term-header">
           <span class="v3-dot" style="background:#ef4444;"></span>
