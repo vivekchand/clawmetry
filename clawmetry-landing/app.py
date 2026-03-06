@@ -926,17 +926,30 @@ def managed_request():
             f'<div style="background:#f5f5f5;border-left:3px solid #ccc;border-radius:4px;padding:10px 16px;margin:14px 0;font-size:14px;color:#555;font-style:italic;">You mentioned: {use_case}</div>'
             if use_case else ""
         )
-        email_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#ffffff;color:#111111;">
+        email_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;padding:32px 24px;background:#ffffff;color:#111111;">
     <p style="font-size:15px;line-height:1.7;margin:0 0 12px;">Hi {name},</p>
-    <p style="font-size:15px;line-height:1.7;margin:0 0 16px;">Thanks for your interest in a managed ClawMetry setup. I will keep you posted once we are ready with the cloud hosted version of ClawMetry.</p>
+    <p style="font-size:15px;line-height:1.7;margin:0 0 16px;">Thanks for your interest in managed ClawMetry hosting! We are giving early access to select users, and you are one of them.</p>
     {uc_block}
-    <p style="font-size:15px;color:#111;margin-top:24px;line-height:1.7;">Vivek<br><span style="font-size:13px;color:#666;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#E5443A;text-decoration:none;">clawmetry.com</a></span></p>
+    <p style="font-size:15px;line-height:1.7;margin:0 0 16px;">Here is how to get started:</p>
+    <ol style="font-size:15px;color:#111;padding-left:20px;line-height:2.2;margin:8px 0 24px;">
+      <li>Visit our <a href="https://clawmetry.com/pricing" style="color:#E5443A;font-weight:600;">pricing page</a> to see plans and pick the number of nodes you need</li>
+      <li>Complete the signup to get your API key</li>
+      <li>Run <code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:13px;">pip install clawmetry</code> on your machine</li>
+      <li>Run <code style="background:#f0f0f0;padding:2px 8px;border-radius:4px;font-size:13px;">clawmetry connect</code> and paste your API key</li>
+      <li>Open <a href="https://app.clawmetry.com" style="color:#E5443A;font-weight:600;">app.clawmetry.com</a> and enter the secret key from your terminal for E2E encryption</li>
+    </ol>
+    <div style="text-align:center;margin:24px 0;">
+      <a href="https://clawmetry.com/pricing" style="display:inline-block;background:#E5443A;color:#fff;font-weight:700;font-size:15px;padding:12px 32px;border-radius:8px;text-decoration:none;">View Plans &amp; Get Started &#x2192;</a>
+    </div>
+    <p style="font-size:14px;line-height:1.7;color:#666;margin:0 0 16px;">Learn more about what ClawMetry Cloud offers on our <a href="https://clawmetry.com/cloud" style="color:#E5443A;">features page</a>.</p>
+    <p style="font-size:14px;line-height:1.7;color:#666;margin:0 0 16px;">Got questions? Just hit reply -- I read every email and will personally help you get set up.</p>
+    <p style="font-size:15px;color:#111;margin-top:24px;line-height:1.7;">Cheers,<br>Vivek<br><span style="font-size:13px;color:#666;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#E5443A;text-decoration:none;">clawmetry.com</a></span></p>
 </div>"""
         try:
             _resend_post("/emails", {
                 "from": FROM_EMAIL, "to": [email], "bcc": ["vivek@clawmetry.com"],
                 "reply_to": ["vivek@clawmetry.com"],
-                "subject": "You're on the ClawMetry managed hosting list",
+                "subject": "Your ClawMetry Cloud early access is ready 🦞",
                 "html": email_html
             })
         except Exception as e:
