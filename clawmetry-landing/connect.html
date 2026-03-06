@@ -184,7 +184,7 @@ function verifyOtp() {
   fetch('/api/otp/verify', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email: _email, otp: otp, ref: new URLSearchParams(window.location.search).get('ref') || ''})
+    body: JSON.stringify({email: _email, otp: otp, ref: new URLSearchParams(window.location.search).get('ref') || localStorage.getItem('cm_ref') || ''})
   }).then(function(r){ return r.json(); }).then(function(d){
     _verifying = false; btn.disabled = false; btn.textContent = 'Verify';
     if (d.ok && d.api_key) {
