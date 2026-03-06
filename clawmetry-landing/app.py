@@ -532,6 +532,69 @@ WELCOME_HTML = """\
 """
 
 
+
+WELCOME_SIGNUP_HTML_TMPL = """\
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;overflow:hidden;">
+  <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:32px 28px;text-align:center;">
+    <div style="font-size:32px;margin-bottom:8px;">&#x1F99E;</div>
+    <h1 style="color:#fff;font-size:22px;margin:0 0 6px;">You're all set!</h1>
+    <p style="color:#9ca3af;font-size:13px;margin:0;">Your ClawMetry account is ready</p>
+  </div>
+  <div style="padding:28px;">
+    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Hey there &#x1F44B;</p>
+    <p style="font-size:15px;line-height:1.7;color:#d1d5db;">Welcome to ClawMetry! Here is your API key. Keep it safe.</p>
+    <div style="background:#111827;border:1px solid #2d2d44;border-radius:8px;padding:16px;font-family:monospace;font-size:14px;color:#10b981;word-break:break-all;margin:12px 0 24px;">{api_key}</div>
+    <p style="font-size:14px;line-height:1.7;color:#9ca3af;font-weight:600;">Get started in 2 minutes:</p>
+    <ol style="font-size:14px;color:#d1d5db;padding-left:20px;line-height:2.2;margin:8px 0 24px;">
+      <li>Install: <code style="background:#1a1a2e;border:1px solid #334155;padding:2px 8px;border-radius:4px;font-size:12px;color:#10b981;">curl -fsSL https://clawmetry.com/install.sh | bash</code></li>
+      <li>Connect: <code style="background:#1a1a2e;border:1px solid #334155;padding:2px 8px;border-radius:4px;font-size:12px;color:#10b981;">clawmetry connect</code> and paste the key above</li>
+      <li>Open <a href="https://app.clawmetry.com" style="color:#E5443A;font-weight:600;">app.clawmetry.com</a> and enter the same key</li>
+    </ol>
+    <div style="background:#1a1a2e;border:1px solid #2d2d44;border-radius:10px;padding:20px;margin:20px 0;">
+      <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:8px;">&#x2B50; Star us on GitHub</div>
+      <p style="font-size:13px;color:#9ca3af;margin:0 0 12px;">Help other OpenClaw users discover ClawMetry.</p>
+      <a href="https://github.com/vivekchand/clawmetry" style="display:inline-block;background:#238636;color:#fff;font-weight:700;font-size:13px;padding:10px 24px;border-radius:8px;text-decoration:none;">Star on GitHub &#x2192;</a>
+    </div>
+    <div style="background:#1a1a2e;border:1px solid #2d2d44;border-radius:10px;padding:20px;margin:20px 0;">
+      <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:8px;">&#x1F4AC; Share your experience on Product Hunt</div>
+      <p style="font-size:13px;color:#9ca3af;margin:0 0 12px;">A quick review helps others find ClawMetry.</p>
+      <a href="https://www.producthunt.com/products/clawmetry/reviews/new" style="display:inline-block;background:#ff6154;color:#fff;font-weight:700;font-size:13px;padding:10px 24px;border-radius:8px;text-decoration:none;">Write a review &#x2192;</a>
+    </div>
+    <div style="background:linear-gradient(135deg,#1e3a5f,#1a2744);border:1px solid #3b82f6;border-radius:10px;padding:20px;margin:24px 0;text-align:center;">
+      <div style="font-size:24px;margin-bottom:8px;">&#x1F381;</div>
+      <div style="font-size:16px;font-weight:700;color:#fff;margin-bottom:8px;">Get a $10 Amazon Gift Card</div>
+      <p style="font-size:13px;color:#93c5fd;line-height:1.6;margin:0;">Try ClawMetry, leave a <a href="https://www.producthunt.com/products/clawmetry/reviews/new" style="color:#93c5fd;font-weight:700;">Product Hunt review</a>, and reply to this email with a screenshot of your dashboard. We will send you a <strong>$10 Amazon gift card</strong> as a thank you.</p>
+    </div>
+    <p style="font-size:15px;color:#d1d5db;">Cheers,<br><strong style="color:#fff;">Vivek</strong> &#x1F99E;</p>
+  </div>
+  <div style="border-top:1px solid #1f1f2e;padding:20px 28px;text-align:center;">
+    <p style="font-size:14px;color:#d1d5db;margin:0 0 8px;font-weight:600;">Stuck? Just hit reply.</p>
+    <p style="font-size:13px;color:#9ca3af;margin:0 0 12px;">I read every email and will personally help you get set up.</p>
+    <a href="https://clawmetry.com/?support=1" style="color:#60a5fa;font-weight:600;font-size:14px;text-decoration:none;">Or book a free onboarding call &#x2192;</a>
+  </div>
+</div>
+"""
+
+
+def send_signup_welcome_email(email, api_key):
+    """Send welcome email with API key to new OTP signups. Reply goes to vivek@clawmetry.com."""
+    subject = "Welcome to ClawMetry - your API key inside \U0001f99e"
+    html = WELCOME_SIGNUP_HTML_TMPL.format(api_key=api_key)
+    ok, resp = _resend_post("/emails", {
+        "from": FROM_EMAIL, "to": [email], "bcc": ["vivek@clawmetry.com"],
+        "reply_to": ["vivek@clawmetry.com"],
+        "subject": subject, "html": html,
+    })
+    if ok:
+        sent_data = {
+            "to_email": email, "subject": subject,
+            "body_html": html, "sent_at": _now_iso(),
+            "in_reply_to": "", "resend_id": resp.get("id", ""),
+        }
+        _fs_add("emails_sent", sent_data)
+    return ok, resp
+
+
 def _resend_post(path, payload, retries=3):
     for attempt in range(retries):
         try:
@@ -1449,8 +1512,16 @@ def api_otp_verify():
     except Exception:
         pass
 
-    # Notify Vivek
+    # Send welcome email with API key (background thread so response isn't delayed)
     import threading
+    def _send_welcome():
+        try:
+            send_signup_welcome_email(email, api_key)
+        except Exception as e:
+            log.warning(f"[otp/verify] welcome email failed for {email}: {e}")
+    threading.Thread(target=_send_welcome, daemon=True).start()
+
+    # Notify Vivek
     def _notify():
         try:
             _resend_post("/emails", {
