@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.17"
+__version__ = "0.9.18"
 
 # ── Turso Cloud Sync (optional) ─────────────────────────────────────────
 try:
@@ -802,7 +802,13 @@ def _send_webhook_alert(url, alert_data):
 
 # ── Alert Channel Integrations ─────────────────────────────────────────
 
-_CHANNEL_TYPES = {'slack', 'discord', 'pagerduty', 'opsgenie', 'webhook'}
+_CHANNEL_TYPES = {'slack', 'discord', 'pagerduty', 'opsgenie', 'webhook', 'email'}
+
+# ── Email alert digest queue (for batch/digest mode) ──────────────────
+import threading as _threading
+_email_digest_queue = {}   # channel_id -> list of (message, alert_type, details, timestamp)
+_email_digest_lock = _threading.Lock()
+_email_digest_timers = {}  # channel_id -> threading.Timer
 
 def _get_alert_channels():
     """Get all configured alert channels."""
@@ -1050,6 +1056,181 @@ def _send_opsgenie_alert(config, message, alert_type, details=None):
         return False, str(e)
 
 
+def _send_email_alert(config, message, alert_type, details=None, subject=None):
+    """Send alert via email using Resend API.
+
+    config keys:
+      api_key      – Resend API key (required)
+      to           – recipient address(es), comma-separated (required)
+      from_email   – sender address (optional; defaults to alerts@clawmetry.com)
+      digest_min   – if >0, batch alerts and send one digest every N minutes (optional)
+    """
+    import urllib.request as _ur
+
+    api_key = config.get('api_key', '').strip()
+    if not api_key:
+        return False, 'No api_key configured'
+
+    to_raw = config.get('to', '').strip()
+    if not to_raw:
+        return False, 'No recipient address configured'
+
+    to_list = [e.strip() for e in to_raw.split(',') if e.strip()]
+    from_email = config.get('from_email', '').strip() or 'ClawMetry Alerts <alerts@clawmetry.com>'
+
+    severity_map = {
+        'agent_down': ('critical', '#ff4444'),
+        'agent_silent': ('critical', '#ff4444'),
+        'error_rate_spike': ('error', '#ff8800'),
+        'token_anomaly': ('warning', '#ffbb00'),
+        'anomaly': ('warning', '#ffbb00'),
+        'threshold': ('warning', '#ff8800'),
+        'spike': ('error', '#ff4444'),
+        'test': ('info', '#888888'),
+    }
+    severity, color = severity_map.get(alert_type, ('warning', '#888888'))
+
+    email_subject = subject or f'[ClawMetry] {severity.upper()}: {alert_type.replace("_", " ").title()}'
+
+    # Build details rows
+    detail_rows = ''
+    if details:
+        for k, v in details.items():
+            detail_rows += (
+                f'<tr><td style="padding:4px 8px;font-weight:600;color:#555;">{k}</td>'
+                f'<td style="padding:4px 8px;color:#222;">{v}</td></tr>'
+            )
+
+    html_body = f"""
+    <div style="font-family:system-ui,sans-serif;max-width:560px;margin:auto;background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      <div style="background:{color};padding:16px 20px;">
+        <span style="font-size:20px;">🚨</span>
+        <span style="color:#fff;font-size:16px;font-weight:700;margin-left:8px;">ClawMetry Alert</span>
+      </div>
+      <div style="padding:20px;">
+        <p style="font-size:15px;color:#111;margin-top:0;">{message}</p>
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;margin-top:12px;font-size:13px;">
+          <table style="width:100%;border-collapse:collapse;">
+            <tr><td style="padding:4px 8px;font-weight:600;color:#555;">Type</td>
+                <td style="padding:4px 8px;color:#222;">{alert_type}</td></tr>
+            <tr><td style="padding:4px 8px;font-weight:600;color:#555;">Severity</td>
+                <td style="padding:4px 8px;color:#222;">{severity}</td></tr>
+            {detail_rows}
+          </table>
+        </div>
+        <p style="font-size:12px;color:#888;margin-bottom:0;margin-top:16px;">
+          Sent by <a href="https://clawmetry.com" style="color:#6366f1;">ClawMetry</a> — AI Agent Observability
+        </p>
+      </div>
+    </div>
+    """
+
+    payload = {
+        'from': from_email,
+        'to': to_list,
+        'subject': email_subject,
+        'html': html_body,
+    }
+
+    try:
+        data = json.dumps(payload).encode()
+        req = _ur.Request(
+            'https://api.resend.com/emails',
+            data=data,
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            },
+            method='POST'
+        )
+        resp = _ur.urlopen(req, timeout=15)
+        result = json.loads(resp.read().decode())
+        if result.get('id'):
+            return True, None
+        return False, str(result)
+    except Exception as e:
+        return False, str(e)
+
+
+def _send_email_digest(channel_id, config):
+    """Flush the digest queue for a channel and send a single summary email."""
+    with _email_digest_lock:
+        items = _email_digest_queue.pop(channel_id, [])
+        _email_digest_timers.pop(channel_id, None)
+
+    if not items:
+        return
+
+    count = len(items)
+    subject = f'[ClawMetry] Alert Digest — {count} alert{"s" if count != 1 else ""}'
+    lines = []
+    for msg, atype, det, ts in items:
+        import datetime as _dt
+        t = _dt.datetime.fromtimestamp(ts).strftime('%H:%M:%S')
+        lines.append(f'<li style="margin-bottom:8px;"><b>[{t}] {atype}</b><br>{msg}</li>')
+
+    html_body = f"""
+    <div style="font-family:system-ui,sans-serif;max-width:580px;margin:auto;background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      <div style="background:#6366f1;padding:16px 20px;">
+        <span style="font-size:20px;">📋</span>
+        <span style="color:#fff;font-size:16px;font-weight:700;margin-left:8px;">ClawMetry Alert Digest</span>
+        <span style="color:#c7d2fe;font-size:13px;margin-left:8px;">({count} alert{"s" if count != 1 else ""})</span>
+      </div>
+      <div style="padding:20px;">
+        <ul style="font-size:14px;color:#111;padding-left:16px;margin:0 0 16px 0;">
+          {''.join(lines)}
+        </ul>
+        <p style="font-size:12px;color:#888;margin:0;">
+          Sent by <a href="https://clawmetry.com" style="color:#6366f1;">ClawMetry</a> — AI Agent Observability
+        </p>
+      </div>
+    </div>
+    """
+
+    api_key = config.get('api_key', '').strip()
+    to_raw = config.get('to', '').strip()
+    if not api_key or not to_raw:
+        return
+
+    to_list = [e.strip() for e in to_raw.split(',') if e.strip()]
+    from_email = config.get('from_email', '').strip() or 'ClawMetry Alerts <alerts@clawmetry.com>'
+
+    import urllib.request as _ur
+    payload = {'from': from_email, 'to': to_list, 'subject': subject, 'html': html_body}
+    try:
+        data = json.dumps(payload).encode()
+        req = _ur.Request(
+            'https://api.resend.com/emails',
+            data=data,
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            method='POST'
+        )
+        _ur.urlopen(req, timeout=15)
+    except Exception as e:
+        print(f'Warning: Email digest send failed: {e}')
+
+
+def _queue_email_digest(channel_id, config, message, alert_type, details):
+    """Queue an alert for digest delivery; schedules a flush timer if not already running."""
+    digest_min = int(config.get('digest_min', 0) or 0)
+    if digest_min <= 0:
+        # Immediate send (no digest)
+        _send_email_alert(config, message, alert_type, details)
+        return
+
+    with _email_digest_lock:
+        if channel_id not in _email_digest_queue:
+            _email_digest_queue[channel_id] = []
+        _email_digest_queue[channel_id].append((message, alert_type, details, time.time()))
+
+        if channel_id not in _email_digest_timers:
+            import threading as _t
+            timer = _t.Timer(digest_min * 60, _send_email_digest, args=(channel_id, config))
+            timer.daemon = True
+            timer.start()
+            _email_digest_timers[channel_id] = timer
+
+
 def _dispatch_to_alert_channels(message, alert_type, details=None):
     """Send alert to all enabled configured channels."""
     channels = _get_alert_channels()
@@ -1074,6 +1255,8 @@ def _dispatch_to_alert_channels(message, alert_type, details=None):
                         'type': alert_type, 'message': message,
                         'timestamp': time.time(), 'details': details or {}
                     })
+            elif ctype == 'email':
+                _queue_email_digest(ch['id'], cfg, message, alert_type, details)
         except Exception as e:
             print(f'Warning: Failed to send alert to channel {ch["id"]} ({ctype}): {e}')
 
@@ -2896,7 +3079,7 @@ function clawmetryLogout(){
     <!-- Integrations Tab (Slack, Discord, PagerDuty, OpsGenie) -->
     <div id="budget-tab-integrations" style="display:none;">
       <div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-size:12px;color:var(--text-muted);">Send alerts to Slack, Discord, PagerDuty, OpsGenie, or any webhook.</div>
+        <div style="font-size:12px;color:var(--text-muted);">Send alerts to Slack, Discord, PagerDuty, OpsGenie, Email, or any webhook.</div>
         <button onclick="showAddChannelForm()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;">+ Add Channel</button>
       </div>
       <div id="add-channel-form" style="display:none;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
@@ -2908,6 +3091,7 @@ function clawmetryLogout(){
               <option value="discord">Discord (Webhook)</option>
               <option value="pagerduty">PagerDuty (Events API v2)</option>
               <option value="opsgenie">OpsGenie (REST API)</option>
+              <option value="email">Email (via Resend)</option>
               <option value="webhook">Generic Webhook</option>
             </select>
           </div>
@@ -3548,6 +3732,7 @@ var CHANNEL_CONFIG_FIELDS = {
   discord:   [{id:'webhook_url',label:'Webhook URL',placeholder:'https://discord.com/api/webhooks/...',required:true},{id:'username',label:'Bot Name (optional)',placeholder:'ClawMetry',required:false}],
   pagerduty: [{id:'routing_key',label:'Integration/Routing Key',placeholder:'abc123...',required:true},{id:'source',label:'Source (optional)',placeholder:'ClawMetry',required:false}],
   opsgenie:  [{id:'api_key',label:'API Key',placeholder:'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',required:true},{id:'team',label:'Team Name (optional)',placeholder:'ops-team',required:false},{id:'priority',label:'Priority (optional)',placeholder:'P2',required:false}],
+  email:     [{id:'api_key',label:'Resend API Key',placeholder:'re_xxxxxxxxxxxx',required:true},{id:'to',label:'Recipient(s)',placeholder:'you@example.com, team@example.com',required:true},{id:'from_email',label:'From Address (optional)',placeholder:'ClawMetry Alerts <alerts@clawmetry.com>',required:false},{id:'digest_min',label:'Digest Mode — batch every N minutes (0 = immediate)',placeholder:'0',required:false}],
   webhook:   [{id:'url',label:'Webhook URL',placeholder:'https://your-server/webhook',required:true}],
 };
 
@@ -3558,7 +3743,7 @@ function updateChannelForm() {
   fields.forEach(function(f) {
     html += '<div style="margin-bottom:6px;">';
     html += '<label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:3px;">' + f.label + (f.required ? ' <span style="color:#ff4444">*</span>' : '') + '</label>';
-    var inputType = (f.id==='api_key'||f.id==='routing_key') ? 'password' : 'text';
+    var inputType = (f.id==='api_key'||f.id==='routing_key') ? 'password' : (f.id==='digest_min' ? 'number' : 'text');
     html += '<input id="channel-cfg-' + f.id + '" type="' + inputType + '" placeholder="' + f.placeholder + '" style="width:100%;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);font-family:monospace;font-size:12px;">';
     html += '</div>';
   });
@@ -10011,6 +10196,7 @@ def api_alert_channels():
             'pagerduty': ['routing_key'],
             'opsgenie': ['api_key'],
             'webhook': ['url'],
+            'email': ['api_key', 'to'],
         }
         missing = [f for f in required.get(ctype, []) if not config.get(f, '').strip()]
         if missing:
@@ -10085,6 +10271,8 @@ def api_alert_channel_test(channel_id):
             ok, err = True, None
         else:
             ok, err = False, 'No URL configured'
+    elif ctype == 'email':
+        ok, err = _send_email_alert(cfg, test_msg, 'test', {'source': 'ClawMetry test'})
     if ok:
         return jsonify({'ok': True})
     return jsonify({'ok': False, 'error': err or 'Unknown error'}), 500

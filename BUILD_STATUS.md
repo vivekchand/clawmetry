@@ -2,6 +2,37 @@
 
 ## Latest Updates
 
+### March 8, 2026 — v0.9.18: Email Alert Delivery (Resend + Digest Mode) ✅ COMPLETE
+
+**📧 Email Alert Delivery via Resend API**
+
+Added first-class email alert delivery so ClawMetry can notify teams via email — including a configurable digest/batch mode to avoid inbox flooding:
+
+**New Backend:**
+- `_send_email_alert(config, message, alert_type, details)` — sends rich HTML email via Resend API. Color-coded by severity (critical/error/warning/info). Includes alert type, severity, and detail rows in a clean card layout.
+- `_send_email_digest(channel_id, config)` — flushes the digest queue for a channel and sends a single summary email listing all batched alerts with timestamps.
+- `_queue_email_digest(channel_id, config, message, alert_type, details)` — queues an alert; if `digest_min > 0`, schedules a timer to flush after N minutes. If `digest_min = 0`, sends immediately.
+- `_email_digest_queue` / `_email_digest_timers` — thread-safe in-memory batch state using `threading.Lock` + `threading.Timer`.
+- `'email'` added to `_CHANNEL_TYPES`
+- Required config validation: `api_key` + `to` fields enforced server-side
+- Email test endpoint now dispatches via `_send_email_alert()` for the `'email'` channel type
+
+**New Frontend:**
+- `Email (via Resend)` option in the "Add Channel" type selector
+- Config fields: Resend API Key (password input), Recipient(s) (comma-separated), From Address (optional), Digest Mode minutes (number input, 0 = immediate)
+- Integrations tab description updated to mention Email
+- `digest_min` field rendered as `type="number"` input
+
+**Digest Mode:**
+- Set `digest_min = N` to batch alerts and send one summary email every N minutes
+- Set `digest_min = 0` (default) for immediate delivery per alert
+- Timer is daemon-safe and resets after each flush
+
+**🚀 Impact:**
+- Email is now a first-class notification channel alongside Slack, Discord, PagerDuty, OpsGenie
+- Digest mode prevents inbox flooding during alert storms
+- Works with any Resend API key — clawmetry.com domain pre-approved
+
 ### March 3, 2026 — v0.9.17: Alert Channel Integrations ✅ COMPLETE
 
 **🔌 Alert Channel Integrations (Slack, Discord, PagerDuty, OpsGenie)**
