@@ -43,7 +43,7 @@
     nav a span { color: #E5443A; }
     .page { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 16px; }
     .card { background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 40px; width: 100%; max-width: 440px; text-align: center; box-shadow: 0 8px 40px rgba(0,0,0,0.4); }
-    .card-icon { font-size: 48px; margin-bottom: 16px; }
+    .card-icon { font-size: 48px; margin-bottom: 16px; line-height: 1; }
     .card h1 { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 8px; }
     .card p { font-size: 14px; color: #94a3b8; line-height: 1.6; margin-bottom: 24px; }
     .input { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid #2d3748; background: #0d1420; color: #e2e8f0; font-size: 15px; outline: none; transition: border-color 0.2s; margin-bottom: 14px; font-family: inherit; }
@@ -78,14 +78,14 @@
 </head>
 <body>
 <nav>
-  <a href="/">&#x1F99E; Claw<span>Metry</span></a>
+  <a href="/"><img src="/favicon.svg" width="28" height="28" style="display:inline-block;vertical-align:middle;margin-right:4px;border-radius:4px"> Claw<span>Metry</span></a>
 </nav>
 <div class="page">
   <div class="card">
 
     <!-- Step 1: Email -->
     <div id="step1" class="step active">
-      <div class="card-icon">&#x1F99E;</div>
+      <div class="card-icon"><img src="/favicon.svg" width="56" height="56" style="border-radius:10px;"></div>
       <h1 id="step1-title">Sign in to ClawMetry</h1>
       <p id="step1-desc">Enter your email to continue.<br>We'll send you a verification code.</p>
       <input id="email" class="input" type="email" placeholder="you@example.com" autocomplete="email"
