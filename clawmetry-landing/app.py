@@ -2777,6 +2777,24 @@ def static_files(path):
 def docs_redirect():
     return redirect("/docs.html", code=301)
 
+
+@app.route("/Clawmetry-<version>.dmg")
+def download_mac_app(version):
+    import threading, datetime, json as _j, urllib.request as _ur
+    url = f"https://storage.googleapis.com/clawmetry-downloads/Clawmetry-{version}.dmg"
+    def _notify():
+        try:
+            ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+            ua = request.headers.get("User-Agent", "")
+            body = f"<p>Mac app downloaded</p><ul><li>Version: {version}</li><li>IP: {ip}</li><li>UA: {ua}</li></ul>"
+            payload = _j.dumps({"from": FROM_EMAIL, "to": ["vivek@clawmetry.com"], "subject": f"[ClawMetry] Mac downloaded: {version}", "html": body}).encode()
+            req = _ur.Request("https://api.resend.com/emails", data=payload, headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"}, method="POST")
+            _ur.urlopen(req, timeout=5)
+        except Exception:
+            pass
+    threading.Thread(target=_notify, daemon=True).start()
+    return redirect(url, code=302)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
 
