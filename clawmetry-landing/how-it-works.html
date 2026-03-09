@@ -54,7 +54,7 @@
       border-bottom: 1px solid var(--border);
     }
     .nav-logo { display: flex; align-items: center; gap: 8px; }
-    .nav-logo-emoji { font-size: 20px; line-height: 1; }
+    .nav-logo img { width: 42px; height: 42px; display: block; }
     .nav-logo-text { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
     .nav-logo-text span:first-child { color: var(--text); }
     .nav-logo-text span:last-child { color: var(--accent); }
@@ -293,13 +293,17 @@
       .cta-box { padding: 40px 24px; }
     }
   </style>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
 </head>
 <body>
 
 <!-- Nav -->
 <nav>
   <a href="/" class="nav-logo">
-    <span class="nav-logo-emoji">🦞</span>
+    <img src="/favicon.svg" width="42" height="42" alt="ClawMetry" style="display:block">
     <div class="nav-logo-text"><span>Claw</span><span>Metry</span></div>
   </a>
   <div class="nav-links">

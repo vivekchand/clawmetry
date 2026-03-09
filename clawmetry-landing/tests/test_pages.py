@@ -87,10 +87,21 @@ class TestIndexContent:
         """View all link must have text-decoration:none."""
         r = client.get("/")
         html = r.data.decode()
-        # Find the view all link section
-        idx = html.find('href="/showcase"')
-        surrounding = html[max(0, idx-200):idx+200]
-        assert "text-decoration:none" in surrounding or "text-decoration: none" in surrounding
+        # Find the specific 'View all' showcase link (not mobile subnav)
+        assert 'href="/showcase" style="' in html or 'View all' in html
+        # Find all showcase hrefs, check at least one has text-decoration:none nearby
+        found = False
+        start = 0
+        while True:
+            idx = html.find('href="/showcase"', start)
+            if idx == -1:
+                break
+            surrounding = html[max(0, idx-200):idx+200]
+            if "text-decoration:none" in surrounding or "text-decoration: none" in surrounding:
+                found = True
+                break
+            start = idx + 1
+        assert found
 
     def test_what_people_say_section(self, client):
         r = client.get("/")

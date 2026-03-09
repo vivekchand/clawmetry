@@ -153,10 +153,11 @@
   <meta property="og:image" content="https://clawmetry.com/dashboard-overview-og.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://clawmetry.com/dashboard-overview-og.png">
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png">
+  <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
-  <link rel="manifest" href="/site.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -224,8 +225,8 @@
       display: flex; align-items: center; justify-content: space-between;
       padding: 0 24px; height: 60px;
     }
-    .nav-logo { display: flex; align-items: center; gap: 4px; text-decoration: none; }
-    .nav-logo img { width: 42px; height: 42px; display: block; }
+    .nav-logo { display: flex; align-items: center; gap: 8px; text-decoration: none; }
+    .nav-logo-emoji { font-size: 20px; line-height: 1; }
     .nav-logo svg { width: 28px; height: 28px; }
     .nav-logo-text { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
     .nav-logo-text span:first-child { color: var(--text); }
@@ -402,7 +403,7 @@
       .features-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 640px) {
-      .hero { padding-top: 60px; }
+      .hero { padding-top: 110px; }
       .hero-buttons { flex-direction: column; align-items: center; }
       .nav-links .nav-link-text { display: none; }
       .footer-inner { flex-direction: column; text-align: center; }
@@ -435,7 +436,7 @@
 <nav>
   <div class="nav-inner">
     <a href="/" class="nav-logo">
-      <img src="/favicon.svg" width="42" height="42" alt="ClawMetry" style="display:block">
+      <span class="nav-logo-emoji">🦞</span>
       <div class="nav-logo-text"><span>Claw</span><span>Metry</span></div><span style="font-size:12px;color:var(--text-muted);margin-left:6px;opacity:0.7;">for OpenClaw</span>
     </a>
     <div class="nav-links">
@@ -476,7 +477,7 @@
     </p>
     <div class="hero-buttons">
       <a href="#get-started" class="btn-primary">Get Started Free</a>
-      <a href="https://clawmetry.com/cloud" onclick="fetch('/api/track-click',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event:'try_cloud',ref:document.referrer,ua:navigator.userAgent.substring(0,120)})}).catch(function(){})" style="display:inline-flex;align-items:center;gap:6px;color:#fff;padding:12px 24px;font-size:14px;text-decoration:none;border:none;border-radius:10px;font-weight:600;background:#1e293b;transition:all 0.2s;" onmouseover="this.style.background='#334155'" onmouseout="this.style.background='#1e293b'">&#x2601;&#xFE0F; Try Cloud</a>
+      <a href="https://clawmetry.com/cloud" style="display:inline-flex;align-items:center;gap:6px;color:#6366f1;padding:12px 20px;font-size:14px;text-decoration:none;border:1px solid #6366f1;border-radius:10px;font-weight:500;background:transparent;transition:all 0.2s;" onmouseover="this.style.background='rgba(99,102,241,0.1)'" onmouseout="this.style.background='transparent'">&#x2601;&#xFE0F; Try Cloud</a>
     </div>
     <div style="margin-top:24px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;justify-content:center;">
       <a href="https://clickpy.clickhouse.com/dashboard/clawmetry" target="_blank" rel="noopener" style="font-size:13px;color:#6b7280;text-decoration:none;"><strong id="hero-downloads-val" style="color:#fff;">23k+</strong> installs</a>
@@ -759,7 +760,6 @@
           <button onclick="showTab('pip')" id="tab-pip" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">pip</button>
           <button onclick="showTab('powershell')" id="tab-powershell" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">PowerShell</button>
           <button onclick="showTab('cmd')" id="tab-cmd" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">CMD</button>
-          <button onclick="showTab('macos')" id="tab-macos" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">macOS</button>
         </div>
         <div style="margin-left:auto;display:flex;align-items:center;">
           <button id="copy-btn" onclick="copyActiveCmd()" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:rgba(255,255,255,0.5);cursor:pointer;padding:5px 8px;display:flex;align-items:center;transition:all 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.06)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
@@ -783,16 +783,6 @@
         <div id="panel-cmd" style="display:none;">
           <div style="color:rgba(255,255,255,0.35);font-style:italic;"># For the CMD holdouts</div>
           <div><span style="color:rgba(255,255,255,0.4);">&gt; </span><span style="color:#28c840;font-size:13px;">curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd</span></div>
-        </div>
-        <div id="panel-macos" style="display:none;text-align:center;padding:8px 0 4px;">
-          <div style="font-size:17px;font-weight:700;color:#fff;margin-bottom:8px;">Companion App <span style="font-size:13px;font-weight:500;color:rgba(255,255,255,0.45);vertical-align:middle;">(Beta)</span></div>
-          <div style="font-size:13px;color:rgba(255,255,255,0.45);margin-bottom:20px;line-height:1.6;">Native menubar access to your ClawMetry dashboard.<br>Works great alongside the CLI.</div>
-          <a href="https://clawmetry.com/Clawmetry-2026-03-09.dmg" onclick="if(typeof trackConversion==='function')trackConversion('ads_conversion_Sign_Up_1');_encPost('/api/social-click',{platform:'macos-download',identity:_getIdentity()}).catch(function(){});" style="display:inline-flex;align-items:center;gap:10px;padding:13px 32px;background:#E5443A;color:#fff;border-radius:30px;font-size:15px;font-weight:700;text-decoration:none;transition:opacity 0.15s;" onmouseover="this.style.opacity='0.88'" onmouseout="this.style.opacity='1'"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download for macOS</a>
-          <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:14px;font-family:'JetBrains Mono',monospace;">Requires macOS 14+ &nbsp;&middot;&nbsp; Apple Silicon + Intel</div>
-          <div style="margin-top:16px;padding:12px 16px;background:rgba(255,255,255,0.05);border-radius:10px;max-width:420px;margin-left:auto;margin-right:auto;">
-            
-            
-          </div>
         </div>
       </div>
     </div>
@@ -819,7 +809,7 @@ var cmds = {
 var activeTab = 'oneliner';
 function showTab(id) {
   activeTab = id;
-  ['oneliner','pip','powershell','cmd','macos'].forEach(function(t) {
+  ['oneliner','pip','powershell','cmd'].forEach(function(t) {
     var panel = document.getElementById('panel-'+t);
     if(panel) panel.style.display = t===id ? 'block' : 'none';
     var tab = document.getElementById('tab-'+t);
@@ -839,9 +829,6 @@ function copyActiveCmd() {
   if(Object.keys(utm).length>1)copyData.utm=utm;
   _encPost('/api/copy-track', copyData).catch(function(){});
 
-  // Hide copy button for macos tab
-  var copyBtn = document.getElementById('copy-btn');
-  if(copyBtn) copyBtn.style.visibility = activeTab === 'macos' ? 'hidden' : 'visible';
   var btn = document.getElementById('copy-btn');
   btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#28c840" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
   setTimeout(function(){ btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'; }, 1500);
@@ -900,27 +887,6 @@ document.addEventListener('click', function(e) {
       <button type="submit" id="managed-btn" style="width:100%;padding:12px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-weight:600;font-size:15px;cursor:pointer;transition:all 0.2s;box-shadow:0 0 20px rgba(229,68,58,0.2);">Submit Request</button>
       <p id="managed-msg" style="margin-top:12px;font-size:13px;text-align:center;display:none;"></p>
     </form>
-    <!-- OTP STEP -->
-    <div id="managed-otp-step" style="display:none;">
-      <div style="text-align:center;margin-bottom:24px;">
-        <div style="font-size:36px;margin-bottom:12px;">📬</div>
-        <h3 style="font-size:18px;font-weight:700;margin:0 0 8px;">Check your email</h3>
-        <p id="managed-otp-hint" style="font-size:13px;color:var(--text-muted);margin:0;">We sent a 6-digit code to your email. Enter it below to get instant access.</p>
-      </div>
-      <input type="text" id="managed-otp-input" maxlength="6" placeholder="000000"
-        inputmode="numeric" autocomplete="one-time-code"
-        style="width:100%;padding:14px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:28px;font-family:monospace;text-align:center;letter-spacing:10px;outline:none;box-sizing:border-box;margin-bottom:14px;"
-        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"
-        oninput="if(this.value.replace(/\D/g,'').length===6){this.value=this.value.replace(/\D/g,'');managedVerifyOtp();}">
-      <button onclick="managedVerifyOtp()" id="managed-otp-btn"
-        style="width:100%;padding:12px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-weight:600;font-size:15px;cursor:pointer;margin-bottom:10px;">
-        Verify &amp; Go to Dashboard &rarr;
-      </button>
-      <p id="managed-otp-msg" style="margin-top:4px;font-size:13px;text-align:center;display:none;"></p>
-      <p style="margin-top:14px;text-align:center;font-size:12px;color:var(--text-dim);">
-        Didn't get it? <a href="#" onclick="managedResendOtp();return false;" style="color:var(--accent);text-decoration:none;">Resend code</a>
-      </p>
-    </div>
   </div>
 </div>
 
@@ -991,82 +957,32 @@ document.getElementById('support-form').addEventListener('submit', function(e) {
     } else { msg.textContent='Something went wrong. Try again.'; msg.style.display='block'; msg.style.color='#ef4444'; btn.textContent='Get Help'; btn.disabled=false; }
   }).catch(function(){msg.textContent='Network error.'; msg.style.display='block'; msg.style.color='#ef4444'; btn.textContent='Get Help'; btn.disabled=false;});
 });
-var _managedEmail = '';
-
 document.getElementById('managed-form').addEventListener('submit', function(e) {
   e.preventDefault();
   var btn = document.getElementById('managed-btn');
   var msg = document.getElementById('managed-msg');
-  var name = document.getElementById('managed-name').value;
-  var email = document.getElementById('managed-email').value;
-  var company = document.getElementById('managed-company').value;
-  var use_case = document.getElementById('managed-usecase').value;
-  _managedEmail = email;
-  btn.disabled = true; btn.textContent = 'Sending code...';
+  btn.disabled = true; btn.textContent = 'Submitting...';
   msg.style.display = 'none';
-  // Save lead in background (fire and forget)
-  _encPost('/api/managed-request', {name:name, email:email, company:company, use_case:use_case}).catch(function(){});
-  // Send OTP
-  _encPost('/api/otp/send', {email:email}).then(function(r){return r.json();}).then(function(d){
-    if (d.ok || d.sent) {
-      _setIdentity(name, email);
-      document.getElementById('managed-form').style.display = 'none';
-      var hint = document.getElementById('managed-otp-hint');
-      if (hint) hint.textContent = 'We sent a 6-digit code to ' + email + '. Enter it below to access your dashboard.';
-      document.getElementById('managed-otp-step').style.display = 'block';
-      setTimeout(function(){ var inp=document.getElementById('managed-otp-input'); if(inp) inp.focus(); }, 120);
+  _encPost('/api/managed-request', {
+      name: document.getElementById('managed-name').value,
+      email: document.getElementById('managed-email').value,
+      company: document.getElementById('managed-company').value,
+      use_case: document.getElementById('managed-usecase').value
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) {
+      _setIdentity(document.getElementById('managed-name').value, document.getElementById('managed-email').value);
+      document.getElementById('managed-form').innerHTML = '<div style="text-align:center;padding:20px 0;"><div style="font-size:40px;margin-bottom:12px;">✅</div><h3 style="font-size:18px;margin-bottom:8px;">Thanks! We\'ll be in touch.</h3><p style="color:var(--text-muted);font-size:14px;">We\'ll review your request and get back to you within 24-48 hours.</p></div>';
     } else {
       msg.style.display = 'block'; msg.style.color = '#E5443A';
-      msg.textContent = d.error || 'Could not send verification code. Try again.';
+      msg.textContent = d.error || 'Something went wrong. Try again.';
       btn.disabled = false; btn.textContent = 'Submit Request';
     }
-  }).catch(function(){
+  }).catch(function() {
     msg.style.display = 'block'; msg.style.color = '#E5443A';
     msg.textContent = 'Something went wrong. Try again.';
     btn.disabled = false; btn.textContent = 'Submit Request';
   });
 });
-
-function managedVerifyOtp() {
-  var otp = document.getElementById('managed-otp-input').value.replace(/\D/g,'').trim();
-  var btn = document.getElementById('managed-otp-btn');
-  var msg = document.getElementById('managed-otp-msg');
-  if (otp.length !== 6) return;
-  btn.disabled = true; btn.textContent = 'Verifying...';
-  msg.style.display = 'none';
-  _encPost('/api/otp/verify', {email:_managedEmail, otp:otp}).then(function(r){return r.json();}).then(function(d){
-    if (d.ok && d.api_key) {
-      document.getElementById('managed-otp-step').innerHTML =
-        '<div style="text-align:center;padding:20px 0;">' +
-        '<div style="font-size:40px;margin-bottom:12px;">🎉</div>' +
-        '<h3 style="font-size:18px;margin-bottom:8px;">You\'re in!</h3>' +
-        '<p style="color:var(--text-muted);font-size:14px;">Opening your ClawMetry dashboard...</p></div>';
-      setTimeout(function(){
-        window.location.href = 'https://app.clawmetry.com/?token=' + encodeURIComponent(d.api_key);
-      }, 1200);
-    } else {
-      msg.style.display = 'block'; msg.style.color = '#E5443A';
-      msg.textContent = d.error || 'Invalid code. Please check your email and try again.';
-      btn.disabled = false; btn.textContent = 'Verify & Go to Dashboard \u2192';
-    }
-  }).catch(function(){
-    msg.style.display = 'block'; msg.style.color = '#E5443A';
-    msg.textContent = 'Something went wrong. Try again.';
-    btn.disabled = false; btn.textContent = 'Verify & Go to Dashboard \u2192';
-  });
-}
-
-function managedResendOtp() {
-  var msg = document.getElementById('managed-otp-msg');
-  _encPost('/api/otp/send', {email:_managedEmail}).then(function(r){return r.json();}).then(function(d){
-    msg.style.display = 'block';
-    msg.style.color = (d.ok || d.sent) ? '#10b981' : '#E5443A';
-    msg.textContent = (d.ok || d.sent) ? 'New code sent!' : (d.error || 'Could not resend. Try again.');
-  }).catch(function(){
-    msg.style.display = 'block'; msg.style.color = '#E5443A';
-    msg.textContent = 'Could not resend. Try again.';
-  });
-}
 </script>
 
 <!-- DASHBOARD PREVIEW -->
@@ -1241,7 +1157,7 @@ function managedResendOtp() {
       <div style="font-size:13px;color:rgba(255,255,255,0.45);line-height:1.5;">Agents pause at key decisions and wait for your approval before continuing.</div>
     </div>
   </div>
-  <a href="#" onclick="openManagedModal();return false;" style="display:inline-block;background:#E5443A;color:#fff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:10px;text-decoration:none;box-shadow:0 0 30px rgba(229,68,58,0.25);transition:all 150ms ease;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">Start free &rarr;</a>
+  <a href="#" onclick="openManagedModal();return false;" style="display:inline-block;background:#E5443A;color:#fff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:10px;text-decoration:none;box-shadow:0 0 30px rgba(229,68,58,0.25);transition:all 150ms ease;" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">Request early access &rarr;</a>
 </section>
 
 <!-- SUBSCRIBE -->
@@ -1395,9 +1311,6 @@ document.getElementById('subscribe-form').addEventListener('submit',function(e){
   track("page_visit");
   window.cmTrack = track;
 })();
-</script>
-<script>
-(function(){var r=new URLSearchParams(window.location.search).get('ref');if(r)localStorage.setItem('cm_ref',r);})();
 </script>
 </body>
 </html>

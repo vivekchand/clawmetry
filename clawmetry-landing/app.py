@@ -83,7 +83,7 @@ def _bg_send_managed_email(name, email, use_case):
             "subject": ai_s or "You're on the ClawMetry managed hosting list",
             "html": f'''<div style="font-family:sans-serif;max-width:500px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;overflow:hidden;">
   <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:32px 28px;text-align:center;">
-    <div style="font-size:28px;margin-bottom:8px;">🦞</div>
+    <img src="https://clawmetry.com/web-app-manifest-192x192.png" style="width:56px;height:56px;border-radius:10px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;" alt="ClawMetry">
     <h1 style="color:#fff;font-size:20px;margin:0;">Thanks, {name}!</h1>
   </div>
   <div style="padding:28px;">
@@ -134,6 +134,9 @@ logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 log = logging.getLogger("clawmetry")
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "clawmetry-admin-2026")
+# Set to False to suppress per-click email notifications (use /admin/analytics instead)
+NOTIFY_CLICKS = os.environ.get("NOTIFY_CLICKS", "false").lower() == "true"
+
 DB_PATH = "/tmp/clawmetry.db"
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "re_jWLL59fj_PBctxiwxDLFiWjBZ9MiJ4ems")
@@ -435,7 +438,7 @@ label{display:block;color:var(--muted);font-size:13px;margin-bottom:4px;margin-t
 </head>
 <body>
 <nav class="top-nav">
-  <span class="brand">🦞 ClawMetry</span>
+  <span class="brand"><img src="/favicon.svg" width="22" height="22" style="vertical-align:middle;margin-right:4px;border-radius:4px"> ClawMetry</span>
   <a href="/admin" class="{{ 'active' if active=='dash' }}">Dashboard</a>
   <a href="/admin/inbox" class="{{ 'active' if active=='inbox' }}">Inbox</a>
   <a href="/admin/compose" class="{{ 'active' if active=='compose' }}">Compose</a>
@@ -470,7 +473,7 @@ button{width:100%;padding:12px;border-radius:8px;border:none;background:#E5443A;
 .err{color:#fca5a5;font-size:13px;margin-bottom:12px}
 </style></head><body>
 <div class="box">
-<h1>🦞 ClawMetry Admin</h1>
+<h1>ClawMetry Admin</h1>
 {% if error %}<p class="err">{{ error }}</p>{% endif %}
 <form method="POST"><input type="password" name="password" placeholder="Password" autofocus><button type="submit">Login</button></form>
 </div></body></html>
@@ -481,7 +484,7 @@ button{width:100%;padding:12px;border-radius:8px;border:none;background:#E5443A;
 WELCOME_HTML = """\
 <div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;overflow:hidden;">
   <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:32px 28px;text-align:center;">
-    <div style="font-size:28px;margin-bottom:8px;">🦞</div>
+    <img src="https://clawmetry.com/web-app-manifest-192x192.png" style="width:56px;height:56px;border-radius:10px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;" alt="ClawMetry">
     <h1 style="color:#fff;font-size:22px;margin:0 0 6px;">Welcome to ClawMetry!</h1>
     <p style="color:#9ca3af;font-size:13px;margin:0;">Real-time observability for your AI agents</p>
   </div>
@@ -530,6 +533,117 @@ WELCOME_HTML = """\
   </div>
 </div>
 """
+
+
+
+WELCOME_SIGNUP_HTML_TMPL = """\
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;max-width:580px;margin:0 auto;background:#080d16;color:#e2e8f0;border-radius:16px;overflow:hidden;border:1px solid #1e2d40;">
+
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,#0f1623 0%,#1a1a2e 100%);padding:36px 32px;text-align:center;border-bottom:1px solid #1e2d40;">
+    <img src="https://clawmetry.com/apple-touch-icon.png" style="width:48px;height:48px;border-radius:10px;margin-bottom:16px;display:block;margin-left:auto;margin-right:auto;" alt="ClawMetry">
+    <h1 style="color:#fff;font-size:24px;font-weight:700;margin:0 0 6px;letter-spacing:-0.3px;">Welcome to ClawMetry Cloud</h1>
+    <p style="color:#64748b;font-size:14px;margin:0;">Real-time observability for your AI agents</p>
+  </div>
+
+  <!-- Body -->
+  <div style="padding:32px;">
+
+    <p style="font-size:15px;line-height:1.7;color:#cbd5e1;margin:0 0 20px;">Your cloud account is live. Everything your agents do — tool calls, sessions, memory, cost — streams to your dashboard in real time.</p>
+
+    <!-- No API key in email - security -->
+    <div style="background:#0f1623;border:1px solid #1e2d40;border-radius:10px;padding:16px 20px;margin:0 0 24px;">
+      <p style="font-size:13px;color:#cbd5e1;margin:0 0 10px;line-height:1.6;">Your account is live. Open the dashboard to find your API key under <strong style="color:#e2e8f0;">Account</strong>.</p>
+      <a href="https://app.clawmetry.com" style="display:inline-block;background:#10b981;color:#fff;font-size:12px;font-weight:600;padding:8px 18px;border-radius:6px;text-decoration:none;">Open Dashboard</a>
+    </div>
+
+    <!-- Setup steps -->
+    <p style="font-size:13px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;margin:0 0 14px;">Connect your first machine</p>
+
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 28px;">
+      <tr><td style="padding-bottom:10px;">
+        <table width="100%" cellpadding="14" cellspacing="0" border="0" style="background:#0f1623;border:1px solid #1e2d40;border-radius:8px;">
+          <tr>
+            <td width="28" valign="top" style="padding:14px 8px 14px 16px;">
+              <span style="display:inline-block;background:#e5443a;color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;">1</span>
+            </td>
+            <td valign="top" style="padding:14px 16px 14px 4px;">
+              <p style="margin:0 0 4px;font-size:12px;color:#64748b;">Install</p>
+              <code style="font-size:12px;color:#10b981;">curl -fsSL https://clawmetry.com/install.sh | bash</code>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+      <tr><td>
+        <table width="100%" cellpadding="14" cellspacing="0" border="0" style="background:#0f1623;border:1px solid #1e2d40;border-radius:8px;">
+          <tr>
+            <td width="28" valign="top" style="padding:14px 8px 14px 16px;">
+              <span style="display:inline-block;background:#e5443a;color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;">2</span>
+            </td>
+            <td valign="top" style="padding:14px 16px 14px 4px;">
+              <p style="margin:0 0 4px;font-size:12px;color:#64748b;">Connect — run this and follow the prompts</p>
+              <code style="font-size:12px;color:#10b981;">clawmetry connect</code>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>
+
+    <!-- CTA -->
+    <div style="text-align:center;margin:0 0 28px;">
+      <a href="https://app.clawmetry.com" style="display:inline-block;background:#e5443a;color:#fff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:10px;text-decoration:none;letter-spacing:-0.1px;">Open Dashboard &rarr;</a>
+    </div>
+
+    <!-- What you get -->
+    <div style="background:#0f1623;border:1px solid #1e2d40;border-radius:10px;padding:20px;margin:0 0 24px;">
+      <p style="font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin:0 0 14px;">What you can see in your dashboard</p>
+      <div style="display:grid;gap:10px;">
+        <div style="display:flex;gap:10px;align-items:flex-start;"><span style="color:#e5443a;font-size:14px;flex-shrink:0;">&#9679;</span><span style="font-size:13px;color:#cbd5e1;line-height:1.5;"><strong style="color:#e2e8f0;">Brain tab</strong> &mdash; live stream of every thought your agent has, as it happens</span></div>
+        <div style="display:flex;gap:10px;align-items:flex-start;"><span style="color:#e5443a;font-size:14px;flex-shrink:0;">&#9679;</span><span style="font-size:13px;color:#cbd5e1;line-height:1.5;"><strong style="color:#e2e8f0;">Flow tab</strong> &mdash; visual graph of every tool call, sub-agent, and session</span></div>
+        <div style="display:flex;gap:10px;align-items:flex-start;"><span style="color:#e5443a;font-size:14px;flex-shrink:0;">&#9679;</span><span style="font-size:13px;color:#cbd5e1;line-height:1.5;"><strong style="color:#e2e8f0;">Memory tab</strong> &mdash; see what your agent remembers across sessions</span></div>
+        <div style="display:flex;gap:10px;align-items:flex-start;"><span style="color:#e5443a;font-size:14px;flex-shrink:0;">&#9679;</span><span style="font-size:13px;color:#cbd5e1;line-height:1.5;"><strong style="color:#e2e8f0;">Crons tab</strong> &mdash; monitor scheduled tasks and heartbeats</span></div>
+      </div>
+    </div>
+
+    <!-- Referral -->
+    <div style="background:#0d1f35;border:1px solid #1e3a5f;border-radius:10px;padding:18px;margin:0 0 28px;text-align:center;">
+      <p style="font-size:13px;font-weight:700;color:#fff;margin:0 0 4px;">&#127381; Share &amp; get 1 month free</p>
+      <p style="font-size:12px;color:#64748b;margin:0 0 10px;">For every friend who signs up with your link, you both get 1 month of Cloud Pro.</p>
+      <code style="font-size:12px;color:#e5443a;word-break:break-all;">https://clawmetry.com?ref={referral_code}</code>
+    </div>
+
+    <!-- Sign-off -->
+    <p style="font-size:14px;color:#cbd5e1;line-height:1.7;margin:0 0 4px;">Stuck? Just hit reply &mdash; I personally help every new user get set up.</p>
+    <p style="font-size:15px;color:#e2e8f0;margin:16px 0 0;line-height:1.6;">Cheers,<br><strong style="color:#fff;">Vivek</strong><br><span style="font-size:12px;color:#64748b;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#e5443a;text-decoration:none;">clawmetry.com</a></span></p>
+  </div>
+
+  <!-- Footer -->
+  <div style="border-top:1px solid #1e2d40;padding:16px 32px;text-align:center;">
+    <p style="font-size:12px;color:#334155;margin:0;">ClawMetry &middot; <a href="https://clawmetry.com/cloud" style="color:#475569;text-decoration:none;">Cloud features</a> &middot; <a href="https://github.com/vivekchand/clawmetry" style="color:#475569;text-decoration:none;">GitHub</a></p>
+  </div>
+
+</div>
+"""
+
+
+def send_signup_welcome_email(email, api_key, referral_code=""):
+    """Send welcome email with API key to new OTP signups. Reply goes to vivek@clawmetry.com."""
+    subject = "Welcome to ClawMetry \U0001f99e"
+    referral_code_val = referral_code or _generate_referral_code(email)
+    html = WELCOME_SIGNUP_HTML_TMPL.format(referral_code=referral_code_val)
+    ok, resp = _resend_post("/emails", {
+        "from": FROM_EMAIL, "to": [email], "bcc": ["vivek@clawmetry.com"],
+        "reply_to": ["vivek@clawmetry.com"],
+        "subject": subject, "html": html,
+    })
+    if ok:
+        sent_data = {
+            "to_email": email, "subject": subject,
+            "body_html": html, "sent_at": _now_iso(),
+            "in_reply_to": "", "resend_id": resp.get("id", ""),
+        }
+        _fs_add("emails_sent", sent_data)
+    return ok, resp
 
 
 def _resend_post(path, payload, retries=3):
@@ -621,7 +735,13 @@ def _utm_html(utm):
     return rows
 
 
+CLICK_NOISE_SUBJECTS = ("[Click]", "[Social Click]", "[Install Copy]")
+
 def notify_vivek(subject, body_html):
+    # Suppress high-frequency click emails when NOTIFY_CLICKS is off
+    if not NOTIFY_CLICKS and any(subject.startswith(s) for s in CLICK_NOISE_SUBJECTS):
+        log.info(f"[notify_vivek] suppressed (NOTIFY_CLICKS=false): {subject}")
+        return
     try:
         ok, resp = _resend_post("/emails", {"from": FROM_EMAIL, "to": [VIVEK_EMAIL], "subject": subject, "html": body_html})
         if not ok:
@@ -651,6 +771,113 @@ VALID_FEATURES = {
     'cloud', 'alerting', 'hitl', 'mac-app',
     'ios-app', 'android-app', 'frameworks', 'team', 'cost'
 }
+
+
+
+import hashlib as _rl_hash
+import string as _rl_string
+
+def _generate_referral_code(email):
+    """Generate a short anonymous referral code from email."""
+    return _rl_hash.md5(email.lower().encode()).hexdigest()[:6]
+
+def _credit_referrer(ref_code, new_email):
+    """Credit the referrer with +30 days of pro access."""
+    if not ref_code or not _firestore_available:
+        return
+    try:
+        import datetime as _dt_ref
+        # Find the referrer by their referral_code
+        fs = _firestore_db
+        docs = list(fs.collection("api_keys").where("referral_code", "==", ref_code).limit(1).stream())
+        if not docs:
+            log.warning(f"[referral] code {ref_code} not found")
+            return
+        referrer_doc = docs[0]
+        referrer_data = referrer_doc.to_dict()
+        referrer_email = referrer_data.get("email", "")
+
+        # Don't allow self-referral
+        if referrer_email.lower() == new_email.lower():
+            return
+
+        # Track the referral
+        fs.collection("referrals").add({
+            "referrer_code": ref_code,
+            "referrer_email": referrer_email,
+            "referred_email": new_email,
+            "created_at": _dt_ref.datetime.utcnow().isoformat() + "Z",
+            "reward": "30_days_pro",
+        })
+
+        # Extend referrer's pro access by 30 days
+        current_plan = referrer_data.get("plan", "trial")
+        current_expires = referrer_data.get("coupon_expires", "")
+        now = _dt_ref.datetime.now(_dt_ref.timezone.utc)
+
+        if current_expires:
+            try:
+                base = _dt_ref.datetime.fromisoformat(current_expires.replace("Z", "+00:00"))
+                if base < now:
+                    base = now
+            except Exception:
+                base = now
+        elif current_plan in ("cloud_pro", "pro"):
+            # Already paid, extend from far future or just track
+            base = now + _dt_ref.timedelta(days=365)
+        else:
+            base = now
+
+        new_expires = base + _dt_ref.timedelta(days=30)
+        referrer_doc.reference.update({
+            "plan": "cloud_pro",
+            "coupon_expires": new_expires.isoformat(),
+            "referral_months_earned": (referrer_data.get("referral_months_earned", 0) or 0) + 1,
+        })
+
+        log.info(f"[referral] {referrer_email} earned +30 days (referred {new_email}), pro until {new_expires.date()}")
+
+        # Notify referrer
+        try:
+            _resend_post("/emails", {
+                "from": FROM_EMAIL,
+                "to": [referrer_email],
+                "reply_to": ["vivek@clawmetry.com"],
+                "subject": "You earned 1 month free! \U0001f389",
+                "html": f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#ffffff;color:#111;">
+                    <div style="font-size:48px;text-align:center;margin-bottom:16px;">\U0001f381</div>
+                    <h2 style="text-align:center;margin:0 0 16px;">You earned 1 month of free ClawMetry Cloud!</h2>
+                    <p style="font-size:15px;line-height:1.7;color:#333;">Someone signed up using your referral link. As a thank you, we have extended your Cloud Pro access by 30 days.</p>
+                    <p style="font-size:15px;line-height:1.7;color:#333;">Keep sharing to earn more free months!</p>
+                    <div style="text-align:center;margin:24px 0;">
+                        <a href="https://app.clawmetry.com" style="display:inline-block;background:#E5443A;color:#fff;font-weight:700;font-size:14px;padding:10px 24px;border-radius:8px;text-decoration:none;">Open Dashboard</a>
+                    </div>
+                    <p style="font-size:13px;color:#666;">Your referral code: <strong>{ref_code}</strong></p>
+                </div>""",
+            })
+        except Exception:
+            pass
+
+        # Notify Vivek
+        try:
+            _resend_post("/emails", {
+                "from": FROM_EMAIL,
+                "to": ["vivekchand19@gmail.com"],
+                "subject": f"Referral conversion: {referrer_email} referred {new_email}",
+                "html": f"<p><strong>{referrer_email}</strong> (code: {ref_code}) referred <strong>{new_email}</strong>. Referrer earned +30 days pro.</p>",
+            })
+        except Exception:
+            pass
+
+    except Exception as e:
+        log.error(f"[referral] credit error: {e}")
+
+
+@app.route("/ref/<code>")
+def referral_redirect(code):
+    """Redirect referral links to main page with ref tracking."""
+    return redirect(f"/?ref={code}")
+
 
 @app.route("/api/roadmap-vote", methods=["POST"])
 def roadmap_vote():
@@ -868,17 +1095,33 @@ def managed_request():
             f'<div style="background:#f5f5f5;border-left:3px solid #ccc;border-radius:4px;padding:10px 16px;margin:14px 0;font-size:14px;color:#555;font-style:italic;">You mentioned: {use_case}</div>'
             if use_case else ""
         )
-        email_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#ffffff;color:#111111;">
-    <p style="font-size:15px;line-height:1.7;margin:0 0 12px;">Hi {name},</p>
-    <p style="font-size:15px;line-height:1.7;margin:0 0 16px;">Thanks for your interest in a managed ClawMetry setup. I will keep you posted once we are ready with the cloud hosted version of ClawMetry.</p>
+        email_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;padding:32px 24px;background:#0d0d14;color:#e0e0e0;border-radius:12px;">
+    <div style="text-align:center;margin-bottom:24px;">
+      <div style="font-size:36px;margin-bottom:8px;">&#x1F99E;</div>
+      <h2 style="color:#fff;margin:0 0 4px;font-size:20px;">You're in, {name}!</h2>
+      <p style="color:#9ca3af;font-size:13px;margin:0;">Your ClawMetry account is live</p>
+    </div>
     {uc_block}
-    <p style="font-size:15px;color:#111;margin-top:24px;line-height:1.7;">Vivek<br><span style="font-size:13px;color:#666;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#E5443A;text-decoration:none;">clawmetry.com</a></span></p>
+    <p style="font-size:14px;line-height:1.7;color:#d1d5db;margin:0 0 20px;">Your dashboard is live at <a href="https://app.clawmetry.com" style="color:#E5443A;font-weight:600;">app.clawmetry.com</a>. Connect your first machine with two commands:</p>
+    <div style="background:#111827;border:1px solid #1e2d40;border-radius:8px;padding:16px;margin:0 0 12px;">
+      <p style="margin:0 0 6px;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;">Step 1 — Install</p>
+      <code style="color:#10b981;font-size:13px;display:block;word-break:break-all;">curl -fsSL https://clawmetry.com/install.sh | bash</code>
+    </div>
+    <div style="background:#111827;border:1px solid #1e2d40;border-radius:8px;padding:16px;margin:0 0 24px;">
+      <p style="margin:0 0 6px;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;">Step 2 — Connect</p>
+      <code style="color:#10b981;font-size:13px;display:block;">clawmetry connect</code>
+    </div>
+    <div style="text-align:center;margin:24px 0;">
+      <a href="https://app.clawmetry.com" style="display:inline-block;background:#E5443A;color:#fff;font-weight:700;font-size:15px;padding:12px 32px;border-radius:8px;text-decoration:none;">Open Your Dashboard &#x2192;</a>
+    </div>
+    <p style="font-size:13px;line-height:1.7;color:#64748b;margin:0 0 16px;">Your API key is in the dashboard under <a href="https://app.clawmetry.com/account" style="color:#E5443A;">Account</a>. Need help? Just hit reply.</p>
+    <p style="font-size:15px;color:#e0e0e0;margin-top:24px;line-height:1.7;">Cheers,<br><strong style="color:#fff;">Vivek</strong><br><span style="font-size:13px;color:#64748b;">Founder, ClawMetry &middot; <a href="https://clawmetry.com" style="color:#E5443A;text-decoration:none;">clawmetry.com</a></span></p>
 </div>"""
         try:
             _resend_post("/emails", {
                 "from": FROM_EMAIL, "to": [email], "bcc": ["vivek@clawmetry.com"],
                 "reply_to": ["vivek@clawmetry.com"],
-                "subject": "You're on the ClawMetry managed hosting list",
+                "subject": "You're in 🦞 — here's how to connect your first agent",
                 "html": email_html
             })
         except Exception as e:
@@ -1267,6 +1510,12 @@ def webhook_email():
 
 # ─── Admin Routes ────────────────────────────────────────────────────────────
 
+@app.route("/signin")
+@app.route("/login")
+def signin_page():
+    """Sign-in page - same as connect but in sign-in mode."""
+    return send_from_directory(".", "connect.html")
+
 @app.route("/connect")
 def connect_page():
     return send_from_directory(".", "connect.html")
@@ -1276,7 +1525,7 @@ def connect_page():
 def api_otp_send():
     """Send a 6-digit OTP to the given email."""
     import random as _rand, datetime as _dt
-    data = request.get_json(silent=True) or {}
+    data = _decrypt_payload(request)
     email = str(data.get("email", "")).strip().lower()
     if not email or "@" not in email or "." not in email.split("@")[-1]:
         return jsonify({"error": "Invalid email address"}), 400
@@ -1318,7 +1567,7 @@ def api_otp_send():
     otp_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;background:#0d0d14;color:#e0e0e0;border-radius:12px;padding:32px;text-align:center;">
 <div style="font-size:32px;margin-bottom:8px;">&#x1F99E;</div>
 <h2 style="color:#fff;margin:0 0 8px;">Your login code</h2>
-<p style="color:#9ca3af;margin:0 0 24px;font-size:14px;">Enter this code at clawmetry.com/connect</p>
+
 <div style="background:#1a1a2e;border:1px solid #334155;border-radius:12px;padding:24px;margin:0 0 20px;">
 <div style="font-size:40px;font-weight:700;letter-spacing:12px;color:#fff;font-family:monospace;">{otp}</div>
 </div>
@@ -1343,7 +1592,7 @@ def api_otp_send():
 def api_otp_verify():
     """Verify OTP and return/create the account cm_ API key."""
     import uuid, datetime as _dt
-    data = request.get_json(silent=True) or {}
+    data = _decrypt_payload(request)
     email = str(data.get("email", "")).strip().lower()
     otp = str(data.get("otp", "")).strip()
 
@@ -1427,6 +1676,7 @@ def api_otp_verify():
         return jsonify({"ok": True, "api_key": existing_key, "new": False})
 
     # Create new API key
+    ref_code = request.json.get("ref", "") or ""
     api_key = "cm_" + uuid.uuid4().hex
     created_at = _now_iso()
     _fs_add("api_keys", {
@@ -1435,6 +1685,8 @@ def api_otp_verify():
         "node_name": "",
         "created_at": created_at,
         "status": "active",
+        "referral_code": _generate_referral_code(email),
+        "referred_by": ref_code,
     })
 
     # Subscribe to Resend audience
@@ -1443,8 +1695,20 @@ def api_otp_verify():
     except Exception:
         pass
 
-    # Notify Vivek
+    # Send welcome email with API key (background thread so response isn't delayed)
     import threading
+    def _send_welcome():
+        try:
+            send_signup_welcome_email(email, api_key, _generate_referral_code(email))
+        except Exception as e:
+            log.warning(f"[otp/verify] welcome email failed for {email}: {e}")
+    threading.Thread(target=_send_welcome, daemon=True).start()
+
+    # Credit referrer if ref code provided
+    if ref_code:
+        threading.Thread(target=_credit_referrer, args=(ref_code, email), daemon=True).start()
+
+    # Notify Vivek
     def _notify():
         try:
             _resend_post("/emails", {
@@ -1502,8 +1766,8 @@ def api_connect():
         <p style="font-size:14px;color:#374151;margin:0 0 6px;font-weight:600;">Next steps:</p>
         <ol style="font-size:14px;color:#374151;padding-left:20px;line-height:2;">
           <li>Install: <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px;">curl -fsSL https://clawmetry.com/install.sh | bash</code></li>
-          <li>Run: <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px;">clawmetry connect</code> and paste the key above</li>
-          <li>Open <a href="https://app.clawmetry.com" style="color:#E5443A;">app.clawmetry.com</a> and enter the same key</li>
+          <li>Run: <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px;">clawmetry connect</code> and paste your API key</li>
+          <li>Open <a href="https://app.clawmetry.com" style="color:#E5443A;">app.clawmetry.com</a> and enter the secret key from your terminal for E2E encryption</li>
         </ol>
         <p style="font-size:13px;color:#94a3b8;margin-top:20px;">Questions? Reply to this email.</p>
       </div>
@@ -2301,7 +2565,7 @@ def ai_plugin_json():
         "description_for_human": "Real-time observability dashboard for OpenClaw AI agents. Monitor token costs, cron jobs, sub-agents, memory files, and session history. Free and open source.",
         "description_for_model": "ClawMetry is a free, open-source observability dashboard for OpenClaw AI agents. It provides real-time monitoring of token costs, cron jobs, sub-agents, memory files, and session history. Install with: pip install clawmetry. No config needed. Works on Linux, macOS, Windows.",
         "auth": {"type": "none"},
-        "logo_url": "https://clawmetry.com/favicon-192.png",
+        "logo_url": "https://clawmetry.com/web-app-manifest-192x192.png",
         "contact_email": "vivek@clawmetry.com",
         "legal_info_url": "https://clawmetry.com",
         "pricing": "free",
@@ -2459,14 +2723,29 @@ def index():
     return send_from_directory(".", "index.html")
 
 
+@app.route("/new")
+def new_landing():
+    return send_from_directory(".", "new.html")
+
+
+@app.route("/old")
+def old_landing():
+    return send_from_directory(".", "old.html")
+
+
+@app.route("/v2")
+def v2_landing():
+    return send_from_directory(".", "v2.html")
+
+
 
 @app.route("/install.sh")
 def install_sh():
-    import urllib.request
-    url = "https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh"
-    with urllib.request.urlopen(url, timeout=10) as r:
-        script = r.read().decode("utf-8")
     from flask import Response
+    import os
+    _sh = os.path.join(os.path.dirname(__file__), "install.sh")
+    with open(_sh) as _f:
+        script = _f.read()
     return Response(script, mimetype="text/plain", headers={"Cache-Control": "no-cache, no-store"})
 
 @app.route("/cloud")
@@ -2506,7 +2785,7 @@ if __name__ == "__main__":
 import time as _time
 
 _traction_cache = {"data": None, "ts": 0}
-_last_known = {"pypi_day": "831", "pypi_week": "4,490", "pypi_month": "8,327"}  # seeded fallbacks; updated on each successful API call
+_last_known = {"pypi_day": "1,809", "pypi_week": "10,054", "pypi_month": "17,550"}  # seeded fallbacks; updated on each successful API call
 
 def _fetch_traction_data():
     now = _time.time()
@@ -2585,3 +2864,539 @@ def traction_page():
     for key, val in data.items():
         html = html.replace("{{" + key + "}}", val)
     return html
+
+# ─────────────────────────────────────────────────────────────
+# ANALYTICS DASHBOARD  /admin/analytics
+# ─────────────────────────────────────────────────────────────
+import functools, collections
+
+_analytics_cache = {"data": None, "ts": 0}
+_ANALYTICS_TTL = 120  # seconds
+
+def _require_admin(f):
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        pwd = request.args.get("pwd", "")
+        if auth == f"Bearer {ADMIN_PASSWORD}" or pwd == ADMIN_PASSWORD:
+            return f(*args, **kwargs)
+        if request.method == "GET" and not request.is_json:
+            return """<!doctype html><html><body style="font:16px sans-serif;padding:40px;background:#111;color:#eee;">
+            <h2 style="color:#ef4444;">ClawMetry Analytics</h2>
+            <form method="GET">
+            <input name="pwd" type="password" placeholder="Admin password" autofocus
+              style="padding:10px 14px;border-radius:8px;border:1px solid #333;background:#1a1a1a;color:#eee;font-size:15px;width:260px;">
+            <button type="submit" style="padding:10px 20px;background:#ef4444;color:#fff;border:none;border-radius:8px;margin-left:8px;cursor:pointer;font-size:15px;">Enter</button>
+            </form></body></html>"""
+        return jsonify({"error": "Unauthorized"}), 401
+    return wrapper
+
+def _fetch_analytics_data(force=False):
+    now = time.time()
+    if not force and _analytics_cache["data"] and now - _analytics_cache["ts"] < _ANALYTICS_TTL:
+        return _analytics_cache["data"]
+
+    import datetime as _dt
+    fs = _fs()
+    result = {
+        "generated_at": _dt.datetime.utcnow().isoformat() + "Z",
+        "summary": {},
+        "by_event": {},
+        "by_hour": {},
+        "by_day": {},
+        "by_country": {},
+        "by_source": {},
+        "recent": []
+    }
+
+    if not fs:
+        result["error"] = "Firestore not available"
+        return result
+
+    now_dt = _dt.datetime.utcnow()
+    day7_ago = (now_dt - _dt.timedelta(days=7)).isoformat() + "Z"
+    day1_ago = (now_dt - _dt.timedelta(hours=24)).isoformat() + "Z"
+    today_str = now_dt.strftime("%Y-%m-%d")
+
+    all_events = []
+
+    # Collect visitor_events (most recent 2000, ordered)
+    ve = _fs_get_all("visitor_events", order_by="ts", order_dir="DESCENDING", limit=2000) or []
+    for d in ve:
+        d["_collection"] = "visitor_events"
+        all_events.append(d)
+
+    # Collect copy_events (most recent 500)
+    ce = _fs_get_all("copy_events", order_by="created_at", order_dir="DESCENDING", limit=500) or []
+    for d in ce:
+        d["_collection"] = "copy_events"
+        d.setdefault("event_type", d.get("tab", "copy"))
+        d.setdefault("ts", d.get("created_at", ""))
+        d.setdefault("country", "")
+        d.setdefault("visitor_id", d.get("ip", ""))
+        all_events.append(d)
+
+    # Filter to last 7 days
+    events_7d = [e for e in all_events if str(e.get("ts","")) >= day7_ago]
+    events_24h = [e for e in events_7d if str(e.get("ts","")) >= day1_ago]
+
+    # Summary
+    unique_visitors_7d = len(set(e.get("visitor_id","") for e in events_7d if e.get("visitor_id")))
+    unique_visitors_24h = len(set(e.get("visitor_id","") for e in events_24h if e.get("visitor_id")))
+    result["summary"] = {
+        "total_events_7d": len(events_7d),
+        "total_events_24h": len(events_24h),
+        "unique_visitors_7d": unique_visitors_7d,
+        "unique_visitors_24h": unique_visitors_24h,
+        "total_all_time": len(all_events),
+    }
+
+    # By event type
+    ctr = collections.Counter(e.get("event_type","unknown") for e in events_7d)
+    result["by_event"] = dict(ctr.most_common(20))
+
+    # By hour (last 24h)
+    hour_ctr = collections.Counter()
+    for e in events_24h:
+        ts = str(e.get("ts",""))
+        if len(ts) >= 13:
+            hour_ctr[ts[11:13] + ":00"] += 1
+    result["by_hour"] = dict(sorted(hour_ctr.items()))
+
+    # By day (last 7d)
+    day_ctr = collections.Counter()
+    for e in events_7d:
+        ts = str(e.get("ts",""))
+        if len(ts) >= 10:
+            day_ctr[ts[:10]] += 1
+    result["by_day"] = dict(sorted(day_ctr.items()))
+
+    # By country
+    country_ctr = collections.Counter(e.get("country","Unknown") or "Unknown" for e in events_7d)
+    result["by_country"] = dict(country_ctr.most_common(15))
+
+    # By source (utm_source or referer)
+    source_ctr = collections.Counter()
+    for e in events_7d:
+        meta = e.get("metadata") or {}
+        if isinstance(meta, str):
+            try: meta = json.loads(meta)
+            except: meta = {}
+        src = (meta.get("utm_source") or e.get("source") or "direct")[:40]
+        source_ctr[src] += 1
+    result["by_source"] = dict(source_ctr.most_common(15))
+
+    # Recent events feed (last 50)
+    sorted_events = sorted(events_7d, key=lambda e: str(e.get("ts","")), reverse=True)[:50]
+    result["recent"] = [{
+        "ts": e.get("ts",""),
+        "type": e.get("event_type", e.get("tab","?")),
+        "country": e.get("country",""),
+        "city": e.get("city",""),
+        "source": (e.get("source","") or "")[:40],
+        "meta": str(e.get("metadata",""))[:80] if e.get("metadata") else "",
+        "visitor": (e.get("visitor_id","") or "")[:8],
+    } for e in sorted_events]
+
+    _analytics_cache["data"] = result
+    _analytics_cache["ts"] = time.time()
+    return result
+
+
+@app.route("/admin/analytics")
+@_require_admin
+def admin_analytics():
+    data = _fetch_analytics_data()
+    s = data.get("summary", {})
+    by_event = data.get("by_event", {})
+    by_day = data.get("by_day", {})
+    by_country = data.get("by_country", {})
+    by_source = data.get("by_source", {})
+    recent = data.get("recent", [])
+
+    def bar(val, max_val, color="#ef4444"):
+        pct = int(val / max_val * 100) if max_val else 0
+        return f'<div style="height:6px;background:#1e1e1e;border-radius:3px;margin-top:4px;"><div style="height:6px;width:{pct}%;background:{color};border-radius:3px;"></div></div>'
+
+    max_event = max(by_event.values()) if by_event else 1
+    max_country = max(by_country.values()) if by_country else 1
+    max_source = max(by_source.values()) if by_source else 1
+    max_day = max(by_day.values()) if by_day else 1
+
+    event_rows = "".join(
+        f'<tr><td style="padding:6px 8px;color:#94a3b8;font-size:13px;">{k}</td>'
+        f'<td style="padding:6px 8px;font-weight:600;color:#eee;">{v}</td>'
+        f'<td style="padding:6px 8px;width:160px;">{bar(v, max_event)}</td></tr>'
+        for k, v in sorted(by_event.items(), key=lambda x: -x[1])
+    )
+
+    country_rows = "".join(
+        f'<tr><td style="padding:5px 8px;color:#94a3b8;font-size:13px;">{k}</td>'
+        f'<td style="padding:5px 8px;font-weight:600;color:#eee;">{v}</td>'
+        f'<td style="padding:5px 8px;width:120px;">{bar(v, max_country, "#3b82f6")}</td></tr>'
+        for k, v in list(by_country.items())[:10]
+    )
+
+    source_rows = "".join(
+        f'<tr><td style="padding:5px 8px;color:#94a3b8;font-size:13px;">{k}</td>'
+        f'<td style="padding:5px 8px;font-weight:600;color:#eee;">{v}</td>'
+        f'<td style="padding:5px 8px;width:120px;">{bar(v, max_source, "#22c55e")}</td></tr>'
+        for k, v in list(by_source.items())[:10]
+    )
+
+    day_bars = "".join(
+        f'<div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;">'
+        f'<div style="font-size:10px;color:#64748b;">{v}</div>'
+        f'<div style="width:100%;background:#1e1e1e;border-radius:3px;height:60px;display:flex;align-items:flex-end;">'
+        f'<div style="width:100%;background:#ef4444;border-radius:3px 3px 0 0;height:{int(v/max_day*60)}px;"></div></div>'
+        f'<div style="font-size:9px;color:#64748b;">{k[5:]}</div>'
+        f'</div>'
+        for k, v in list(by_day.items())[-7:]
+    )
+
+    type_emoji = {
+        "page_visit": "👁", "install_copy": "🦞", "copy": "📋",
+        "social-click": "🔗", "cta_click": "👆", "managed-cta": "👀",
+        "subscribe": "📧", "signup": "🎉", "page_view": "👁"
+    }
+
+    recent_rows = "".join(
+        f'<tr style="border-bottom:1px solid #1e1e1e;">'
+        f'<td style="padding:6px 8px;color:#64748b;font-size:11px;white-space:nowrap;">{e["ts"][11:19] if len(e["ts"])>10 else e["ts"]}</td>'
+        f'<td style="padding:6px 8px;font-size:13px;">{type_emoji.get(e["type"],"•")} {e["type"]}</td>'
+        f'<td style="padding:6px 8px;color:#94a3b8;font-size:12px;">{e.get("city","")}, {e.get("country","")}</td>'
+        f'<td style="padding:6px 8px;color:#64748b;font-size:12px;">{e.get("source","")[:30]}</td>'
+        f'<td style="padding:6px 8px;color:#475569;font-size:11px;">{e.get("meta","")[:50]}</td>'
+        f'</tr>'
+        for e in recent
+    )
+
+    notify_status = "🔴 OFF (emails suppressed)" if not NOTIFY_CLICKS else "🟢 ON (sending emails)"
+
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ClawMetry Analytics</title>
+<style>
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e2e8f0; min-height: 100vh; }}
+.header {{ background: #111; border-bottom: 1px solid #1e1e1e; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; }}
+.logo {{ font-size: 18px; font-weight: 700; color: #ef4444; }}
+.logo span {{ color: #94a3b8; font-weight: 400; font-size: 13px; margin-left: 8px; }}
+.refresh {{ font-size: 12px; color: #475569; }}
+.container {{ max-width: 1200px; margin: 0 auto; padding: 24px 20px; }}
+.grid-4 {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }}
+.card {{ background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 18px 20px; }}
+.stat-label {{ font-size: 12px; color: #64748b; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }}
+.stat-value {{ font-size: 32px; font-weight: 700; color: #fff; }}
+.stat-sub {{ font-size: 12px; color: #475569; margin-top: 4px; }}
+.grid-3 {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 24px; }}
+.grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }}
+.card h3 {{ font-size: 13px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 14px; }}
+table {{ width: 100%; border-collapse: collapse; }}
+th {{ text-align: left; font-size: 11px; color: #475569; padding: 4px 8px; text-transform: uppercase; }}
+.badge {{ display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
+.badge-red {{ background: #2d1515; color: #ef4444; }}
+.badge-green {{ background: #0f1f12; color: #22c55e; }}
+.notify-bar {{ background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px 16px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; }}
+.full {{ grid-column: 1 / -1; }}
+@media(max-width:768px) {{ .grid-4,.grid-3,.grid-2 {{ grid-template-columns: 1fr 1fr; }} }}
+@media(max-width:480px) {{ .grid-4,.grid-3,.grid-2 {{ grid-template-columns: 1fr; }} }}
+</style>
+</head><body>
+<div class="header">
+  <div class="logo"><img src="/favicon.svg" width="22" height="22" style="vertical-align:middle;margin-right:4px;border-radius:4px"> ClawMetry <span>Analytics</span></div>
+  <div class="refresh">Updated: {data.get("generated_at","")[:19].replace("T"," ")} UTC &nbsp;|&nbsp;
+    <a href="?pwd={request.args.get('pwd','')}&bust={int(time.time())}" style="color:#ef4444;text-decoration:none;">↻ Refresh</a>
+  </div>
+</div>
+<div class="container">
+
+  <div class="notify-bar">
+    <span>Click notifications: <strong>{notify_status}</strong></span>
+    <span style="color:#475569;font-size:12px;">Set <code>NOTIFY_CLICKS=true</code> env var to re-enable &nbsp;|&nbsp; Signups & setup-help emails still send always</span>
+  </div>
+
+  <div class="grid-4">
+    <div class="card">
+      <div class="stat-label">Events today</div>
+      <div class="stat-value">{s.get("total_events_24h",0):,}</div>
+      <div class="stat-sub">Last 24 hours</div>
+    </div>
+    <div class="card">
+      <div class="stat-label">Visitors today</div>
+      <div class="stat-value">{s.get("unique_visitors_24h",0):,}</div>
+      <div class="stat-sub">Unique visitor IDs</div>
+    </div>
+    <div class="card">
+      <div class="stat-label">Events (7d)</div>
+      <div class="stat-value">{s.get("total_events_7d",0):,}</div>
+      <div class="stat-sub">{s.get("unique_visitors_7d",0):,} unique visitors</div>
+    </div>
+    <div class="card">
+      <div class="stat-label">All-time events</div>
+      <div class="stat-value">{s.get("total_all_time",0):,}</div>
+      <div class="stat-sub">Since launch</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:24px;">
+    <h3>Activity — Last 7 Days</h3>
+    <div style="display:flex;gap:6px;height:80px;align-items:flex-end;">{day_bars}</div>
+  </div>
+
+  <div class="grid-3">
+    <div class="card">
+      <h3>Events by Type (7d)</h3>
+      <table><thead><tr><th>Type</th><th>Count</th><th></th></tr></thead>
+      <tbody>{event_rows}</tbody></table>
+    </div>
+    <div class="card">
+      <h3>By Country (7d)</h3>
+      <table><thead><tr><th>Country</th><th>Count</th><th></th></tr></thead>
+      <tbody>{country_rows}</tbody></table>
+    </div>
+    <div class="card">
+      <h3>By Source (7d)</h3>
+      <table><thead><tr><th>Source</th><th>Count</th><th></th></tr></thead>
+      <tbody>{source_rows}</tbody></table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Recent Events Feed <span style="color:#475569;font-weight:400;text-transform:none;font-size:11px;">(last 50 — replaces email inbox)</span></h3>
+    <div style="overflow-x:auto;">
+    <table>
+      <thead><tr><th>Time</th><th>Event</th><th>Location</th><th>Source</th><th>Detail</th></tr></thead>
+      <tbody>{recent_rows}</tbody>
+    </table>
+    </div>
+  </div>
+
+</div>
+</body></html>"""
+    return html
+
+
+@app.route("/admin/analytics/data")
+@_require_admin
+def admin_analytics_data():
+    """Raw JSON endpoint for the analytics data."""
+    force = request.args.get("force") == "1"
+    return jsonify(_fetch_analytics_data(force=force))
+
+# ─────────────────────────────────────────────────────────────
+
+
+@app.route("/admin/support", methods=["GET"])
+def admin_support():
+    """Admin inbox for support messages from the cloud dashboard."""
+    pwd = request.args.get("pwd", "")
+    if pwd != "clawmetry-admin-2026":
+        return "Unauthorized", 401
+
+    fs_client = _fs()
+    messages = []
+    if fs_client:
+        try:
+            docs = (fs_client.collection("support_messages")
+                    .order_by("created_at", direction="DESCENDING")
+                    .limit(200).get())
+            for d in docs:
+                m = d.to_dict()
+                m["_id"] = d.id
+                messages.append(m)
+        except Exception as e:
+            log.warning(f"[admin/support] Firestore error: {e}")
+
+    rows_html = ""
+    for m in messages:
+        email = m.get("email", "anonymous")
+        node  = m.get("node_id", "")
+        msg   = m.get("message", "")
+        ts    = m.get("created_at", "")[:19].replace("T", " ")
+        replied = m.get("replied", False)
+        mid   = m.get("_id", "")
+        badge = ('<span style="background:#10b981;color:#fff;font-size:10px;padding:2px 7px;border-radius:99px;">replied</span>'
+                 if replied else
+                 '<span style="background:#e5443a;color:#fff;font-size:10px;padding:2px 7px;border-radius:99px;">new</span>')
+        mailto = f"mailto:{email}?subject=Re: Your ClawMetry support request&body=Hi%2C%0A%0AThanks for reaching out!%0A%0A---%0A{msg[:200]}"
+        rows_html += f"""
+<div style="background:#0f1623;border:1px solid #1e2d40;border-radius:12px;padding:18px;margin-bottom:14px;" id="msg-{mid}">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+    <div style="display:flex;gap:10px;align-items:center;">
+      {badge}
+      <span style="color:#e2e8f0;font-weight:600;font-size:14px;">{email}</span>
+      {('<span style="color:#64748b;font-size:12px;">· '+node+'</span>') if node else ''}
+    </div>
+    <span style="color:#64748b;font-size:12px;">{ts}</span>
+  </div>
+  <div style="background:#1a2332;border-left:3px solid #e5443a;padding:12px 14px;border-radius:0 8px 8px 0;margin-bottom:12px;">
+    <p style="margin:0;font-size:14px;color:#e2e8f0;white-space:pre-wrap;line-height:1.6;">{msg}</p>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+    <a href="{mailto}" style="background:#e5443a;color:#fff;padding:8px 14px;border-radius:7px;text-decoration:none;font-size:12px;font-weight:600;">Reply via email</a>
+    <div style="display:flex;gap:6px;flex:1;">
+      <textarea id="rt-{mid}" placeholder="Quick reply..." style="flex:1;background:#1a2332;border:1px solid #1e2d40;border-radius:7px;color:#e2e8f0;font-size:12px;padding:8px;min-height:36px;resize:none;font-family:inherit;outline:none;"></textarea>
+      <button onclick="cmReply('{mid}','{email}')" style="background:#334155;color:#e2e8f0;border:none;border-radius:7px;padding:8px 12px;font-size:12px;cursor:pointer;font-weight:600;white-space:nowrap;">Send reply</button>
+    </div>
+  </div>
+  <div id="rstat-{mid}" style="font-size:11px;color:#64748b;margin-top:6px;"></div>
+</div>"""
+
+    page = f"""<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Support Inbox | ClawMetry</title>
+<meta name="robots" content="noindex,nofollow">
+<style>*{{box-sizing:border-box;}}body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#080d16;color:#e2e8f0;min-height:100vh;padding:24px;}}
+h1{{margin:0 0 4px;font-size:22px;}}p{{margin:0 0 20px;color:#64748b;font-size:14px;}}
+.stats{{display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap;}}
+.stat{{background:#0f1623;border:1px solid #1e2d40;border-radius:10px;padding:12px 18px;min-width:100px;}}
+.stat .n{{font-size:24px;font-weight:700;color:#fff;}}
+.stat .l{{font-size:11px;color:#64748b;margin-top:2px;}}
+</style></head><body>
+<div style="max-width:760px;margin:0 auto;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;">
+    <div>
+      <h1>&#128172; Support Inbox</h1>
+      <p>{len(messages)} message{"s" if len(messages)!=1 else ""} total</p>
+    </div>
+    <a href="/admin/analytics?pwd=clawmetry-admin-2026" style="color:#64748b;font-size:13px;text-decoration:none;">&#8592; Analytics</a>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="n">{len(messages)}</div><div class="l">Total</div></div>
+    <div class="stat"><div class="n" style="color:#e5443a;">{sum(1 for m in messages if not m.get("replied"))}</div><div class="l">Unread</div></div>
+    <div class="stat"><div class="n" style="color:#10b981;">{sum(1 for m in messages if m.get("replied"))}</div><div class="l">Replied</div></div>
+  </div>
+  {rows_html if rows_html else '<div style="text-align:center;padding:60px 0;color:#64748b;">No messages yet.</div>'}
+</div>
+<script>
+function cmReply(mid, email) {{
+  var txt = document.getElementById('rt-' + mid).value.trim();
+  if (!txt) return;
+  var stat = document.getElementById('rstat-' + mid);
+  stat.textContent = 'Sending...'; stat.style.color = '#94a3b8';
+  fetch('/admin/support/reply?pwd=clawmetry-admin-2026', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{doc_id: mid, email: email, reply: txt}})
+  }}).then(r => r.json()).then(d => {{
+    if (d.ok) {{
+      stat.textContent = 'Replied!'; stat.style.color = '#10b981';
+      document.getElementById('rt-' + mid).value = '';
+    }} else {{
+      stat.textContent = d.error || 'Failed'; stat.style.color = '#e5443a';
+    }}
+  }}).catch(() => {{ stat.textContent = 'Network error'; stat.style.color = '#e5443a'; }});
+}}
+</script>
+</body></html>"""
+    return page
+
+
+@app.route("/admin/support/reply", methods=["POST"])
+def admin_support_reply():
+    """Send a reply email and mark message as replied in Firestore."""
+    pwd = request.args.get("pwd", "")
+    if pwd != "clawmetry-admin-2026":
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    doc_id    = str(data.get("doc_id", "")).strip()
+    email     = str(data.get("email", "")).strip()
+    reply_txt = str(data.get("reply", "")).strip()
+
+    if not doc_id or not email or not reply_txt:
+        return jsonify({"error": "Missing fields"}), 400
+    if email == "anonymous" or "@" not in email:
+        return jsonify({"error": "No valid email to reply to"}), 400
+
+    reply_html = f"""<div style="font-family:-apple-system,sans-serif;max-width:520px;margin:0 auto;background:#0f1623;color:#e2e8f0;padding:28px;border-radius:12px;">
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+  <img src="https://clawmetry.com/apple-touch-icon.png" style="width:32px;height:32px;border-radius:6px;">
+  <strong style="color:#fff;font-size:16px;">ClawMetry Support</strong>
+</div>
+<div style="background:#1a2332;border-left:3px solid #e5443a;padding:14px 16px;border-radius:0 8px 8px 0;margin-bottom:20px;">
+  <p style="margin:0;font-size:15px;line-height:1.7;white-space:pre-wrap;">{reply_txt}</p>
+</div>
+<p style="color:#64748b;font-size:12px;margin:0;">Reply from the ClawMetry team. Questions? Email us at hello@clawmetry.com</p>
+</div>"""
+
+    # Send email
+    try:
+        ok, resp = _resend_post("/emails", {
+            "from": "ClawMetry Support <hello@clawmetry.com>",
+            "to": [email],
+            "subject": "Re: Your ClawMetry support message",
+            "html": reply_html,
+        })
+        if not ok:
+            return jsonify({"error": f"Resend error: {resp}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    # Mark as replied in Firestore
+    fs_client = _fs()
+    if fs_client and doc_id:
+        try:
+            import datetime as _dt
+            fs_client.collection("support_messages").document(doc_id).update({
+                "replied": True,
+                "reply_text": reply_txt,
+                "replied_at": _dt.datetime.utcnow().isoformat() + "Z",
+            })
+        except Exception as e:
+            log.warning(f"[admin/support/reply] Firestore update failed: {e}")
+
+    return jsonify({"ok": True})
+
+
+@app.route('/api/track-click', methods=['POST'])
+def api_track_click():
+    """Track high-intent button clicks and notify Vivek via email."""
+    import datetime
+    data = request.get_json(silent=True) or {}
+    event = data.get('event', 'unknown')
+    ref = data.get('ref', '')[:200]
+    ua = data.get('ua', '')[:150]
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or '')[:60]
+    ts = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+
+    NOTIFY_EVENTS = {'try_cloud', 'get_started', 'pricing_click'}
+    if event not in NOTIFY_EVENTS:
+        return jsonify({'ok': True})
+
+    label_map = {
+        'try_cloud': 'Try Cloud button clicked',
+        'get_started': 'Get Started Free clicked',
+        'pricing_click': 'Pricing page CTA clicked',
+    }
+    subject = f"[ClawMetry] {label_map.get(event, event)} on clawmetry.com"
+    body = f"""<p style="font-family:sans-serif;font-size:15px;">
+<strong>{label_map.get(event, event)}</strong><br><br>
+<b>Time:</b> {ts}<br>
+<b>IP:</b> {ip}<br>
+<b>Referrer:</b> {ref or 'direct'}<br>
+<b>User-agent:</b> {ua}<br>
+</p>"""
+
+    try:
+        import urllib.request as _ur2, json as _j2
+        _payload = {
+            "from": "ClawMetry <noreply@clawmetry.com>",
+            "to": ["vivek@clawmetry.com"],
+            "subject": subject,
+            "html": body,
+        }
+        _req = _ur2.Request(
+            "https://api.resend.com/emails",
+            data=_j2.dumps(_payload).encode(),
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        _ur2.urlopen(_req, timeout=5)
+    except Exception:
+        pass
+
+    return jsonify({'ok': True})
+

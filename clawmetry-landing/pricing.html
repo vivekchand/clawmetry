@@ -6,6 +6,16 @@
   <title>Pricing - ClawMetry</title>
   <meta name="description" content="ClawMetry is free and open source forever. Cloud Pro ($5/node/month) gets you remote access from anywhere - same features, no LAN required.">
   <link rel="canonical" href="https://clawmetry.com/pricing">
+  <meta property="og:title" content="ClawMetry Pricing — Free & Open Source Forever">
+  <meta property="og:description" content="ClawMetry is free and open source. Cloud Pro ($5/node/month) gives you remote access from anywhere. No credit card required to start.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://clawmetry.com/pricing">
+  <meta property="og:image" content="https://clawmetry.com/dashboard-overview-og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ClawMetry Pricing — Free Agent Observability">
+  <meta name="twitter:description" content="Free open-source plan forever. Cloud Pro at $5/node/month. pip install clawmetry to get started.">
+  <meta name="twitter:image" content="https://clawmetry.com/dashboard-overview-og.png">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"ClawMetry","description":"Real-time AI agent observability dashboard for OpenClaw","url":"https://clawmetry.com","offers":[{"@type":"Offer","name":"Free Open Source","price":"0","priceCurrency":"USD","description":"Self-hosted, full features, free forever"},{"@type":"Offer","name":"Cloud Pro","price":"5","priceCurrency":"USD","priceSpecification":{"billingDuration":"P1M"},"description":"Remote access from anywhere, end-to-end encrypted"}]}</script>
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
@@ -48,7 +58,7 @@
       border-bottom: 1px solid var(--border);
     }
     .nav-logo { display: flex; align-items: center; gap: 8px; }
-    .nav-logo-emoji { font-size: 20px; line-height: 1; }
+    .nav-logo img { width: 42px; height: 42px; display: block; }
     .nav-logo-text { font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }
     .nav-logo-text span:first-child { color: var(--text); }
     .nav-logo-text span:last-child { color: var(--accent); }
@@ -186,12 +196,16 @@
     }
     @media (max-width: 640px) { .nav-links { display: none; } }
   </style>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
 </head>
 <body>
 
 <nav>
   <a href="/" class="nav-logo">
-    <span class="nav-logo-emoji">🦞</span>
+    <img src="/favicon.svg" width="42" height="42" alt="ClawMetry" style="display:block">
     <div class="nav-logo-text"><span>Claw</span><span>Metry</span></div>
   </a>
   <div class="nav-links">
@@ -260,7 +274,7 @@
 
         <div class="features-label">Everything in Free, plus</div>
         <ul class="pcard-features">
-          <li><span class="icon icon-check">✓</span> All OSS features (full list above)</li>
+          <li><span class="icon icon-check">✓</span> All OSS features</li>
           <li><span class="icon icon-check">✓</span> E2E encrypted - server never sees plaintext</li>
           <li><span class="icon icon-check">✓</span> 30-day cloud data retention</li>
           <li><span class="icon icon-soon">◐</span> Mac app - menu bar, native notifications</li>
@@ -355,36 +369,40 @@
 </footer>
 
 <!-- Trial Modal -->
-<div id="trial-modal" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center;padding:16px;">
-  <div onclick="closeTrialModal()" style="position:absolute;inset:0;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);"></div>
-  <div style="position:relative;background:#131929;border:1px solid rgba(255,255,255,0.1);border-radius:20px;padding:36px 32px;width:100%;max-width:440px;box-shadow:0 24px 80px rgba(0,0,0,0.6);">
-    <button onclick="closeTrialModal()" style="position:absolute;top:16px;right:16px;background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;">&#x2715;</button>
-    <div style="font-size:32px;margin-bottom:12px;">&#x1F680;</div>
-    <h2 style="font-size:20px;font-weight:700;color:#f1f5f9;margin-bottom:6px;">Start your free trial</h2>
-    <p style="font-size:14px;color:#94a3b8;margin-bottom:24px;line-height:1.6;">7-day free trial. Cancel before it ends and pay nothing.</p>
+<div id="trial-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;">
+  <div onclick="closeTrialModal()" style="position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);"></div>
+  <div style="position:relative;background:#131929;border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:32px 24px;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.6);box-sizing:border-box;">
+    <button onclick="closeTrialModal()" style="position:absolute;top:14px;right:14px;background:none;border:none;color:#64748b;font-size:22px;cursor:pointer;line-height:1;padding:4px;">&#x2715;</button>
 
-    <label style="display:block;font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:6px;">Your email</label>
-    <input id="trial-email" type="email" placeholder="you@example.com" autocomplete="email"
-      style="width:100%;padding:12px 14px;background:#0d1420;border:1px solid #2d3748;border-radius:10px;color:#f1f5f9;font-size:15px;font-family:inherit;outline:none;transition:border-color 0.2s;margin-bottom:16px;"
-      onfocus="this.style.borderColor='#E5443A'" onblur="this.style.borderColor='#2d3748'"
-      onkeydown="if(event.key==='Enter')submitTrial()">
+    <div style="font-size:28px;margin-bottom:10px;">&#x1F680;</div>
+    <h2 style="font-size:20px;font-weight:700;color:#f1f5f9;margin:0 0 6px;">Start your free trial</h2>
+    <p style="font-size:14px;color:#94a3b8;margin:0 0 24px;line-height:1.5;">7 days free. No credit card required.</p>
 
-    <label style="display:block;font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:6px;">Number of nodes <span style="font-weight:400;color:#64748b;">(OpenClaw machines)</span></label>
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;">
-      <button onclick="adjustNodes(-1)" style="width:36px;height:36px;border-radius:8px;border:1px solid #2d3748;background:#0d1420;color:#f1f5f9;font-size:18px;cursor:pointer;">-</button>
-      <span id="trial-nodes" style="font-size:22px;font-weight:700;color:#f1f5f9;min-width:24px;text-align:center;">1</span>
-      <button onclick="adjustNodes(1)" style="width:36px;height:36px;border-radius:8px;border:1px solid #2d3748;background:#0d1420;color:#f1f5f9;font-size:18px;cursor:pointer;">+</button>
-      <span id="trial-price-preview" style="font-size:14px;color:#94a3b8;margin-left:4px;">= $5/month after trial</span>
+    <div id="trial-step-email">
+      <label style="display:block;font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:6px;">Your email</label>
+      <input id="trial-email" type="email" placeholder="you@example.com" autocomplete="email"
+        style="display:block;width:100%;padding:12px 14px;background:#0d1420;border:1px solid #2d3748;border-radius:10px;color:#f1f5f9;font-size:15px;font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:0;"
+        onfocus="this.style.borderColor='#E5443A'" onblur="this.style.borderColor='#2d3748'"
+        onkeydown="if(event.key==='Enter')submitTrial()">
     </div>
 
-    <div id="trial-error" style="display:none;color:#f87171;font-size:13px;margin-bottom:12px;"></div>
+    <div id="trial-step-otp" style="display:none;">
+      <label style="display:block;font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:6px;">Enter the 6-digit code sent to your email</label>
+      <input id="trial-otp" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="000000"
+        style="display:block;width:100%;padding:14px;background:#0d1420;border:1px solid #2d3748;border-radius:10px;color:#f1f5f9;font-size:24px;letter-spacing:8px;text-align:center;font-family:inherit;outline:none;box-sizing:border-box;"
+        onfocus="this.style.borderColor='#E5443A'" onblur="this.style.borderColor='#2d3748'"
+        onkeydown="if(event.key==='Enter')submitTrial()">
+    </div>
+
+    <div id="trial-error" style="display:none;color:#f87171;font-size:13px;margin-top:10px;"></div>
 
     <button onclick="submitTrial()" id="trial-submit-btn"
-      style="width:100%;padding:14px;background:#E5443A;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity 0.2s;">
+      style="display:block;width:100%;margin-top:16px;padding:14px;background:#E5443A;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;">
       Start Free Trial &rarr;
     </button>
-    <p style="font-size:12px;color:#64748b;text-align:center;margin-top:10px;">7-day trial &middot; $5/node/month after &middot; cancel anytime</p>
+    <p style="font-size:12px;color:#64748b;text-align:center;margin:10px 0 0;">No credit card &middot; 7-day trial &middot; cancel anytime</p>
   </div>
+</div>
 </div>
 
 <script>
@@ -401,37 +419,82 @@ function adjustNodes(d) {
   document.getElementById('trial-nodes').textContent = _trialNodes;
   document.getElementById('trial-price-preview').textContent = '= $' + (_trialNodes * 5) + '/month after trial';
 }
+var _trialEmail = '';
+var _trialOtpSent = false;
+
 function submitTrial() {
-  var email = document.getElementById('trial-email').value.trim();
   var errEl = document.getElementById('trial-error');
   var btn = document.getElementById('trial-submit-btn');
   errEl.style.display = 'none';
-  if (!email || !email.includes('@')) {
-    errEl.textContent = 'Please enter a valid email address.';
-    errEl.style.display = 'block';
-    return;
-  }
-  btn.textContent = 'Redirecting to checkout...';
-  btn.disabled = true; btn.style.opacity = '0.6';
-  fetch('https://app.clawmetry.com/api/billing/checkout', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email: email, plan: 'monthly', node_count: _trialNodes, cm_key: ''})
-  })
-  .then(function(r){ return r.json(); })
-  .then(function(d){
-    if (d.url) { window.location.href = d.url; }
-    else {
-      errEl.textContent = d.error || 'Something went wrong. Please try again.';
+
+  if (!_trialOtpSent) {
+    // Step 1: send OTP
+    var email = document.getElementById('trial-email').value.trim();
+    if (!email || !email.includes('@')) {
+      errEl.textContent = 'Please enter a valid email address.';
+      errEl.style.display = 'block';
+      return;
+    }
+    _trialEmail = email;
+    btn.textContent = 'Sending code...';
+    btn.disabled = true; btn.style.opacity = '0.6';
+    fetch('/api/otp/send', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email: email})
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.ok || d.sent) {
+        _trialOtpSent = true;
+        document.getElementById('trial-step-email').style.display = 'none';
+        document.getElementById('trial-step-otp').style.display = 'block';
+        btn.textContent = 'Verify & Start Trial →';
+        btn.disabled = false; btn.style.opacity = '1';
+        setTimeout(function(){ var oi=document.getElementById('trial-otp'); if(oi) oi.focus(); }, 80);
+      } else {
+        errEl.textContent = d.error || 'Failed to send code. Try again.';
+        errEl.style.display = 'block';
+        btn.textContent = 'Start Free Trial →'; btn.disabled = false; btn.style.opacity = '1';
+      }
+    })
+    .catch(function(){
+      errEl.textContent = 'Network error. Please try again.';
       errEl.style.display = 'block';
       btn.textContent = 'Start Free Trial →'; btn.disabled = false; btn.style.opacity = '1';
+    });
+  } else {
+    // Step 2: verify OTP
+    var otp = (document.getElementById('trial-otp').value || '').trim();
+    if (!otp || otp.length < 4) {
+      errEl.textContent = 'Please enter the 6-digit code from your email.';
+      errEl.style.display = 'block';
+      return;
     }
-  })
-  .catch(function(){
-    errEl.textContent = 'Network error. Please try again.';
-    errEl.style.display = 'block';
-    btn.textContent = 'Start Free Trial →'; btn.disabled = false; btn.style.opacity = '1';
-  });
+    btn.textContent = 'Verifying...';
+    btn.disabled = true; btn.style.opacity = '0.6';
+    fetch('/api/otp/verify', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email: _trialEmail, otp: otp})
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.api_key) {
+        btn.textContent = 'Opening dashboard...';
+        window.location.href = 'https://app.clawmetry.com/?token=' + encodeURIComponent(d.api_key);
+      } else {
+        errEl.textContent = d.error || 'Invalid code. Please try again.';
+        errEl.style.display = 'block';
+        btn.textContent = 'Verify & Start Trial →'; btn.disabled = false; btn.style.opacity = '1';
+      }
+    })
+    .catch(function(){
+      errEl.textContent = 'Network error. Please try again.';
+      errEl.style.display = 'block';
+      btn.textContent = 'Verify & Start Trial →'; btn.disabled = false; btn.style.opacity = '1';
+    });
+  }
 }
 document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeTrialModal(); });
 </script>

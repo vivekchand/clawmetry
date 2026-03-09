@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.18"
+__version__ = "0.9.19"
 
 # ── Turso Cloud Sync (optional) ─────────────────────────────────────────
 try:
@@ -756,6 +756,140 @@ def _fire_alert(rule_id, alert_type, message, channels=None, details=None):
         print(f"Warning: Failed to dispatch to alert channels: {e}")
 
 
+# ── System Health Alert Engine ─────────────────────────────────────────
+
+_system_health_alert_cooldowns = {}  # alert_key -> last_fired_timestamp
+
+_SYSTEM_HEALTH_DEFAULTS = {
+    'disk_alert_pct': 90.0,        # Alert when any disk mount exceeds this %
+    'disk_warn_pct': 80.0,         # Warning level for disk
+    'memory_alert_pct': 90.0,      # Alert when RAM usage exceeds this %
+    'memory_warn_pct': 80.0,       # Warning level for memory
+    'service_down_alert': 1,       # Alert when a monitored service goes down
+    'cron_fail_alert': 1,          # Alert when a cron job fails
+    'system_alert_cooldown_min': 30,  # Minutes between repeated alerts for same issue
+}
+
+
+def _get_system_health_config():
+    """Get system health alert config from budget_config table with defaults."""
+    base = dict(_SYSTEM_HEALTH_DEFAULTS)
+    try:
+        cfg = _get_budget_config()
+        for k in _SYSTEM_HEALTH_DEFAULTS:
+            if k in cfg:
+                try:
+                    base[k] = float(cfg[k])
+                except (ValueError, TypeError):
+                    pass
+    except Exception:
+        pass
+    return base
+
+
+def _check_system_health_alerts(health_data):
+    """Check system health data against configured thresholds and fire alerts.
+
+    Called on each /api/system-health poll. health_data is the dict returned
+    by api_system_health before jsonification (disks, services, crons, memory).
+    """
+    global _system_health_alert_cooldowns
+
+    now = time.time()
+    cfg = _get_system_health_config()
+    cooldown_sec = int(cfg.get('system_alert_cooldown_min', 30)) * 60
+
+    def _should_fire(alert_key):
+        last = _system_health_alert_cooldowns.get(alert_key, 0)
+        return (now - last) >= cooldown_sec
+
+    def _record_fired(alert_key):
+        _system_health_alert_cooldowns[alert_key] = now
+
+    # --- Disk Usage ---
+    for disk in health_data.get('disks', []):
+        mount = disk.get('mount', '/')
+        pct = disk.get('pct', 0)
+        alert_key = f'disk_{mount}'
+
+        if pct >= cfg['disk_alert_pct']:
+            if _should_fire(alert_key):
+                _record_fired(alert_key)
+                _fire_alert(
+                    rule_id=alert_key,
+                    alert_type='system_health',
+                    message=f'Disk critical: {mount} is {pct:.1f}% full ({disk.get("used_gb", 0):.1f} / {disk.get("total_gb", 0):.1f} GB)',
+                    channels=['banner', 'telegram'],
+                    details={'mount': mount, 'pct': pct, 'level': 'critical'},
+                )
+        elif pct >= cfg['disk_warn_pct']:
+            warn_key = f'disk_warn_{mount}'
+            if _should_fire(warn_key):
+                _record_fired(warn_key)
+                _fire_alert(
+                    rule_id=warn_key,
+                    alert_type='system_health',
+                    message=f'Disk warning: {mount} is {pct:.1f}% full ({disk.get("used_gb", 0):.1f} / {disk.get("total_gb", 0):.1f} GB)',
+                    channels=['banner'],
+                    details={'mount': mount, 'pct': pct, 'level': 'warning'},
+                )
+
+    # --- Memory Usage ---
+    mem = health_data.get('memory', {})
+    mem_pct = mem.get('pct', 0)
+    if mem_pct > 0:
+        if mem_pct >= cfg['memory_alert_pct']:
+            if _should_fire('memory_critical'):
+                _record_fired('memory_critical')
+                _fire_alert(
+                    rule_id='memory_critical',
+                    alert_type='system_health',
+                    message=f'Memory critical: {mem_pct:.1f}% used ({mem.get("used_gb", 0):.1f} / {mem.get("total_gb", 0):.1f} GB)',
+                    channels=['banner', 'telegram'],
+                    details={'pct': mem_pct, 'level': 'critical'},
+                )
+        elif mem_pct >= cfg['memory_warn_pct']:
+            if _should_fire('memory_warning'):
+                _record_fired('memory_warning')
+                _fire_alert(
+                    rule_id='memory_warning',
+                    alert_type='system_health',
+                    message=f'Memory warning: {mem_pct:.1f}% used ({mem.get("used_gb", 0):.1f} / {mem.get("total_gb", 0):.1f} GB)',
+                    channels=['banner'],
+                    details={'pct': mem_pct, 'level': 'warning'},
+                )
+
+    # --- Service Down ---
+    if cfg.get('service_down_alert', 1):
+        for svc in health_data.get('services', []):
+            if not svc.get('up', True):
+                svc_name = svc.get('name', 'Unknown')
+                alert_key = f'service_down_{svc_name.lower().replace(" ", "_")}'
+                if _should_fire(alert_key):
+                    _record_fired(alert_key)
+                    _fire_alert(
+                        rule_id=alert_key,
+                        alert_type='system_health',
+                        message=f'Service down: {svc_name} (port {svc.get("port", "?")})',
+                        channels=['banner', 'telegram'],
+                        details={'service': svc_name, 'port': svc.get('port'), 'level': 'critical'},
+                    )
+
+    # --- Cron Failures ---
+    if cfg.get('cron_fail_alert', 1):
+        for cron_name in health_data.get('crons', {}).get('failed', []):
+            alert_key = f'cron_fail_{cron_name[:40].lower().replace(" ", "_")}'
+            if _should_fire(alert_key):
+                _record_fired(alert_key)
+                _fire_alert(
+                    rule_id=alert_key,
+                    alert_type='system_health',
+                    message=f'Cron job failed: {cron_name}',
+                    channels=['banner'],
+                    details={'cron': cron_name, 'level': 'warning'},
+                )
+
+
 def _send_telegram_alert(message):
     """Send alert via direct Telegram API (preferred) or gateway fallback."""
     # Try direct Telegram API first (using budget config)
@@ -802,7 +936,13 @@ def _send_webhook_alert(url, alert_data):
 
 # ── Alert Channel Integrations ─────────────────────────────────────────
 
-_CHANNEL_TYPES = {'slack', 'discord', 'pagerduty', 'opsgenie', 'webhook'}
+_CHANNEL_TYPES = {'slack', 'discord', 'pagerduty', 'opsgenie', 'webhook', 'email'}
+
+# ── Email alert digest queue (for batch/digest mode) ──────────────────
+import threading as _threading
+_email_digest_queue = {}   # channel_id -> list of (message, alert_type, details, timestamp)
+_email_digest_lock = _threading.Lock()
+_email_digest_timers = {}  # channel_id -> threading.Timer
 
 def _get_alert_channels():
     """Get all configured alert channels."""
@@ -1050,6 +1190,181 @@ def _send_opsgenie_alert(config, message, alert_type, details=None):
         return False, str(e)
 
 
+def _send_email_alert(config, message, alert_type, details=None, subject=None):
+    """Send alert via email using Resend API.
+
+    config keys:
+      api_key      – Resend API key (required)
+      to           – recipient address(es), comma-separated (required)
+      from_email   – sender address (optional; defaults to alerts@clawmetry.com)
+      digest_min   – if >0, batch alerts and send one digest every N minutes (optional)
+    """
+    import urllib.request as _ur
+
+    api_key = config.get('api_key', '').strip()
+    if not api_key:
+        return False, 'No api_key configured'
+
+    to_raw = config.get('to', '').strip()
+    if not to_raw:
+        return False, 'No recipient address configured'
+
+    to_list = [e.strip() for e in to_raw.split(',') if e.strip()]
+    from_email = config.get('from_email', '').strip() or 'ClawMetry Alerts <alerts@clawmetry.com>'
+
+    severity_map = {
+        'agent_down': ('critical', '#ff4444'),
+        'agent_silent': ('critical', '#ff4444'),
+        'error_rate_spike': ('error', '#ff8800'),
+        'token_anomaly': ('warning', '#ffbb00'),
+        'anomaly': ('warning', '#ffbb00'),
+        'threshold': ('warning', '#ff8800'),
+        'spike': ('error', '#ff4444'),
+        'test': ('info', '#888888'),
+    }
+    severity, color = severity_map.get(alert_type, ('warning', '#888888'))
+
+    email_subject = subject or f'[ClawMetry] {severity.upper()}: {alert_type.replace("_", " ").title()}'
+
+    # Build details rows
+    detail_rows = ''
+    if details:
+        for k, v in details.items():
+            detail_rows += (
+                f'<tr><td style="padding:4px 8px;font-weight:600;color:#555;">{k}</td>'
+                f'<td style="padding:4px 8px;color:#222;">{v}</td></tr>'
+            )
+
+    html_body = f"""
+    <div style="font-family:system-ui,sans-serif;max-width:560px;margin:auto;background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      <div style="background:{color};padding:16px 20px;">
+        <span style="font-size:20px;">🚨</span>
+        <span style="color:#fff;font-size:16px;font-weight:700;margin-left:8px;">ClawMetry Alert</span>
+      </div>
+      <div style="padding:20px;">
+        <p style="font-size:15px;color:#111;margin-top:0;">{message}</p>
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;margin-top:12px;font-size:13px;">
+          <table style="width:100%;border-collapse:collapse;">
+            <tr><td style="padding:4px 8px;font-weight:600;color:#555;">Type</td>
+                <td style="padding:4px 8px;color:#222;">{alert_type}</td></tr>
+            <tr><td style="padding:4px 8px;font-weight:600;color:#555;">Severity</td>
+                <td style="padding:4px 8px;color:#222;">{severity}</td></tr>
+            {detail_rows}
+          </table>
+        </div>
+        <p style="font-size:12px;color:#888;margin-bottom:0;margin-top:16px;">
+          Sent by <a href="https://clawmetry.com" style="color:#6366f1;">ClawMetry</a> — AI Agent Observability
+        </p>
+      </div>
+    </div>
+    """
+
+    payload = {
+        'from': from_email,
+        'to': to_list,
+        'subject': email_subject,
+        'html': html_body,
+    }
+
+    try:
+        data = json.dumps(payload).encode()
+        req = _ur.Request(
+            'https://api.resend.com/emails',
+            data=data,
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            },
+            method='POST'
+        )
+        resp = _ur.urlopen(req, timeout=15)
+        result = json.loads(resp.read().decode())
+        if result.get('id'):
+            return True, None
+        return False, str(result)
+    except Exception as e:
+        return False, str(e)
+
+
+def _send_email_digest(channel_id, config):
+    """Flush the digest queue for a channel and send a single summary email."""
+    with _email_digest_lock:
+        items = _email_digest_queue.pop(channel_id, [])
+        _email_digest_timers.pop(channel_id, None)
+
+    if not items:
+        return
+
+    count = len(items)
+    subject = f'[ClawMetry] Alert Digest — {count} alert{"s" if count != 1 else ""}'
+    lines = []
+    for msg, atype, det, ts in items:
+        import datetime as _dt
+        t = _dt.datetime.fromtimestamp(ts).strftime('%H:%M:%S')
+        lines.append(f'<li style="margin-bottom:8px;"><b>[{t}] {atype}</b><br>{msg}</li>')
+
+    html_body = f"""
+    <div style="font-family:system-ui,sans-serif;max-width:580px;margin:auto;background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      <div style="background:#6366f1;padding:16px 20px;">
+        <span style="font-size:20px;">📋</span>
+        <span style="color:#fff;font-size:16px;font-weight:700;margin-left:8px;">ClawMetry Alert Digest</span>
+        <span style="color:#c7d2fe;font-size:13px;margin-left:8px;">({count} alert{"s" if count != 1 else ""})</span>
+      </div>
+      <div style="padding:20px;">
+        <ul style="font-size:14px;color:#111;padding-left:16px;margin:0 0 16px 0;">
+          {''.join(lines)}
+        </ul>
+        <p style="font-size:12px;color:#888;margin:0;">
+          Sent by <a href="https://clawmetry.com" style="color:#6366f1;">ClawMetry</a> — AI Agent Observability
+        </p>
+      </div>
+    </div>
+    """
+
+    api_key = config.get('api_key', '').strip()
+    to_raw = config.get('to', '').strip()
+    if not api_key or not to_raw:
+        return
+
+    to_list = [e.strip() for e in to_raw.split(',') if e.strip()]
+    from_email = config.get('from_email', '').strip() or 'ClawMetry Alerts <alerts@clawmetry.com>'
+
+    import urllib.request as _ur
+    payload = {'from': from_email, 'to': to_list, 'subject': subject, 'html': html_body}
+    try:
+        data = json.dumps(payload).encode()
+        req = _ur.Request(
+            'https://api.resend.com/emails',
+            data=data,
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            method='POST'
+        )
+        _ur.urlopen(req, timeout=15)
+    except Exception as e:
+        print(f'Warning: Email digest send failed: {e}')
+
+
+def _queue_email_digest(channel_id, config, message, alert_type, details):
+    """Queue an alert for digest delivery; schedules a flush timer if not already running."""
+    digest_min = int(config.get('digest_min', 0) or 0)
+    if digest_min <= 0:
+        # Immediate send (no digest)
+        _send_email_alert(config, message, alert_type, details)
+        return
+
+    with _email_digest_lock:
+        if channel_id not in _email_digest_queue:
+            _email_digest_queue[channel_id] = []
+        _email_digest_queue[channel_id].append((message, alert_type, details, time.time()))
+
+        if channel_id not in _email_digest_timers:
+            import threading as _t
+            timer = _t.Timer(digest_min * 60, _send_email_digest, args=(channel_id, config))
+            timer.daemon = True
+            timer.start()
+            _email_digest_timers[channel_id] = timer
+
+
 def _dispatch_to_alert_channels(message, alert_type, details=None):
     """Send alert to all enabled configured channels."""
     channels = _get_alert_channels()
@@ -1074,6 +1389,8 @@ def _dispatch_to_alert_channels(message, alert_type, details=None):
                         'type': alert_type, 'message': message,
                         'timestamp': time.time(), 'details': details or {}
                     })
+            elif ctype == 'email':
+                _queue_email_digest(ch['id'], cfg, message, alert_type, details)
         except Exception as e:
             print(f'Warning: Failed to send alert to channel {ch["id"]} ({ctype}): {e}')
 
@@ -2240,6 +2557,31 @@ DASHBOARD_HTML = r"""
   @keyframes pulse { 0%,100% { opacity: 1; box-shadow: 0 0 4px #16a34a; } 50% { opacity: 0.3; box-shadow: none; } }
   .live-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; background: var(--bg-success); color: var(--text-success); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; animation: pulse 1.5s infinite; }
 
+  /* Alert Bell */
+  .alert-bell-btn { position: relative; background: none; border: none; cursor: pointer; width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--text-tertiary); transition: background 0.15s, color 0.15s; flex-shrink: 0; }
+  .alert-bell-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
+  .alert-bell-btn.has-alerts { color: #ef4444; animation: bell-shake 2s ease-in-out infinite; }
+  @keyframes bell-shake { 0%,100%{transform:rotate(0)} 10%{transform:rotate(-12deg)} 20%{transform:rotate(10deg)} 30%{transform:rotate(-8deg)} 40%{transform:rotate(6deg)} 50%{transform:rotate(0)} }
+  .alert-bell-badge { position: absolute; top: 2px; right: 2px; background: #ef4444; color: #fff; border-radius: 50%; font-size: 9px; font-weight: 700; min-width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; padding: 0 2px; line-height: 1; border: 1.5px solid var(--bg-primary); }
+  .alert-panel { position: fixed; top: 52px; right: 12px; width: 360px; max-height: 480px; background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 14px; box-shadow: 0 16px 48px rgba(0,0,0,0.18); z-index: 1300; display: none; flex-direction: column; overflow: hidden; }
+  .alert-panel.open { display: flex; }
+  .alert-panel-header { padding: 14px 16px 10px; border-bottom: 1px solid var(--border-secondary); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  .alert-panel-title { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+  .alert-panel-actions { display: flex; gap: 6px; }
+  .alert-panel-body { overflow-y: auto; flex: 1; }
+  .alert-panel-item { padding: 10px 16px; border-bottom: 1px solid var(--border-secondary); display: flex; gap: 10px; align-items: flex-start; }
+  .alert-panel-item:last-child { border-bottom: none; }
+  .alert-panel-item .alert-dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; flex-shrink: 0; margin-top: 4px; }
+  .alert-panel-item .alert-dot.acked { background: #22c55e; }
+  .alert-panel-item .alert-text { flex: 1; }
+  .alert-panel-item .alert-type-badge { display: inline-block; background: #fee2e2; color: #991b1b; border-radius: 4px; font-size: 10px; font-weight: 700; padding: 1px 5px; margin-right: 4px; }
+  [data-theme="dark"] .alert-type-badge { background: #450a0a; color: #fca5a5; }
+  .alert-panel-item .alert-msg { font-size: 12px; color: var(--text-secondary); margin-top: 2px; line-height: 1.4; }
+  .alert-panel-item .alert-time { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+  .alert-panel-item .ack-btn { background: none; border: 1px solid var(--border-primary); border-radius: 5px; color: var(--text-muted); font-size: 10px; padding: 2px 6px; cursor: pointer; flex-shrink: 0; margin-top: 2px; }
+  .alert-panel-item .ack-btn:hover { background: var(--bg-hover); }
+  .alert-panel-empty { padding: 28px 16px; text-align: center; color: var(--text-muted); font-size: 13px; }
+
   .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
   .badge.model { background: var(--bg-hover); color: var(--text-accent); }
   .badge.channel { background: var(--bg-hover); color: #7c3aed; }
@@ -2277,6 +2619,9 @@ DASHBOARD_HTML = r"""
   #node-telegram rect { fill: #2f6feb !important; stroke: #1f4fb8 !important; }
   #node-signal rect { fill: #0f766e !important; stroke: #115e59 !important; }
   #node-whatsapp rect { fill: #2f9e44 !important; stroke: #237738 !important; }
+  #node-slack rect { fill: #611f69 !important; stroke: #4a154b !important; }
+  #node-discord rect { fill: #5865F2 !important; stroke: #4752c4 !important; }
+  #node-googlechat rect { fill: #1a73e8 !important; stroke: #1557b0 !important; }
   #node-gateway rect { fill: #334155 !important; stroke: #1f2937 !important; }
   #node-brain rect { fill: #a63a16 !important; stroke: #7c2d12 !important; }
   #brain-model-label { fill: #fde68a !important; }
@@ -2506,6 +2851,23 @@ DASHBOARD_HTML = r"""
   /* Scanline overlay */
   .scanline-overlay { pointer-events: none; position: absolute; inset: 0; z-index: 2; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,65,0.015) 2px, rgba(0,255,65,0.015) 4px); }
   .grid-overlay { pointer-events: none; position: absolute; inset: 0; z-index: 1; background-image: linear-gradient(var(--border-secondary) 1px, transparent 1px), linear-gradient(90deg, var(--border-secondary) 1px, transparent 1px); background-size: 40px 40px; opacity: 0.3; }
+  /* === Execution Trace Panel === */
+  .exec-trace-tabs { position:absolute;top:0;left:0;right:0;z-index:5;display:flex;gap:3px;padding:5px 8px 0; }
+  .exec-trace-tab { background:var(--bg-tertiary);border:1px solid var(--border-primary);border-bottom:none;border-radius:5px 5px 0 0;padding:3px 10px;font-size:10px;font-weight:600;color:var(--text-muted);cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:4px;letter-spacing:0.3px; }
+  .exec-trace-tab.active { background:rgba(30,58,95,0.5);border-color:rgba(99,179,237,0.3);color:var(--text-primary); }
+  .exec-trace-tab:hover:not(.active) { color:var(--text-secondary);background:var(--bg-secondary); }
+  .exec-trace-view { position:absolute;inset:30px 0 0 0;z-index:3; }
+  .exec-trace-view.hidden { display:none; }
+  .exec-trace-container { height:100%;overflow-x:auto;overflow-y:hidden;display:flex;align-items:center;padding:4px 8px;scrollbar-width:thin;scrollbar-color:var(--border-primary) transparent; }
+  .exec-trace-container::-webkit-scrollbar { height:4px; }
+  .exec-trace-container::-webkit-scrollbar-track { background:transparent; }
+  .exec-trace-container::-webkit-scrollbar-thumb { background:var(--border-primary);border-radius:2px; }
+  @keyframes execNodeIn { from { opacity:0;transform:translateX(30px); } to { opacity:1;transform:translateX(0); } }
+  .exec-node-new { animation: execNodeIn 0.3s ease-out; }
+  .live-badge { display:inline-flex;align-items:center;gap:3px;font-size:8px;font-weight:700;color:#22c55e;letter-spacing:0.5px; }
+  .live-dot { width:5px;height:5px;border-radius:50%;background:#22c55e;flex-shrink:0; }
+  @keyframes livePulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.4;transform:scale(0.8);} }
+  .live-dot { animation: livePulse 1.2s ease-in-out infinite; }
   /* Task cards in overview */
   .ov-task-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: var(--card-shadow); position: relative; transition: box-shadow 0.2s; }
   .ov-task-card:hover { box-shadow: var(--card-shadow-hover); }
@@ -2754,8 +3116,11 @@ function clawmetryLogout(){
 <div class="nav">
   <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="https://clawmetry.com/favicon.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span>Claw<span style="color:#E5443A">metry</span></span></a></h1>
   <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
-  <!-- Budget & Alerts hidden until mature -->
-  <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
+  <!-- Alert Bell -->
+  <button class="alert-bell-btn" id="alert-bell-btn" onclick="toggleAlertPanel()" title="Alerts">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    <span class="alert-bell-badge" id="alert-bell-badge" style="display:none"></span>
+  </button>
   <div class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle theme"><svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></div>
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="zoom-controls">
@@ -2773,6 +3138,7 @@ function clawmetryLogout(){
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
     <div class="nav-tab" onclick="switchTab('memory-history')">Main Agent</div>
     <div class="nav-tab" onclick="switchTab('tasks-history')">Sub Agents</div>
+    <div class="nav-tab" onclick="switchTab('transcripts')">Transcripts</div>
   </div>
 </div>
 
@@ -2782,6 +3148,20 @@ function clawmetryLogout(){
   <span id="alert-banner-msg" style="flex:1;"></span>
   <button onclick="ackAllAlerts()" style="background:var(--text-error);color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
   <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
+</div>
+
+<!-- Alert Bell Panel -->
+<div class="alert-panel" id="alert-panel">
+  <div class="alert-panel-header">
+    <span class="alert-panel-title">&#128276; Alerts</span>
+    <div class="alert-panel-actions">
+      <button onclick="ackAllAlertsPanel()" style="font-size:11px;padding:3px 10px;border:1px solid var(--border-primary);border-radius:6px;background:none;cursor:pointer;color:var(--text-secondary);" title="Dismiss all">Dismiss all</button>
+      <button onclick="closeAlertPanel()" style="background:var(--button-bg);border:1px solid var(--border-primary);border-radius:6px;width:24px;height:24px;cursor:pointer;font-size:14px;color:var(--text-tertiary);display:flex;align-items:center;justify-content:center;">&times;</button>
+    </div>
+  </div>
+  <div class="alert-panel-body" id="alert-panel-body">
+    <div class="alert-panel-empty">Loading…</div>
+  </div>
 </div>
 
 <!-- Budget Settings Modal -->
@@ -2878,7 +3258,7 @@ function clawmetryLogout(){
     <!-- Integrations Tab (Slack, Discord, PagerDuty, OpsGenie) -->
     <div id="budget-tab-integrations" style="display:none;">
       <div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-size:12px;color:var(--text-muted);">Send alerts to Slack, Discord, PagerDuty, OpsGenie, or any webhook.</div>
+        <div style="font-size:12px;color:var(--text-muted);">Send alerts to Slack, Discord, PagerDuty, OpsGenie, Email, or any webhook.</div>
         <button onclick="showAddChannelForm()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;">+ Add Channel</button>
       </div>
       <div id="add-channel-form" style="display:none;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
@@ -2890,6 +3270,7 @@ function clawmetryLogout(){
               <option value="discord">Discord (Webhook)</option>
               <option value="pagerduty">PagerDuty (Events API v2)</option>
               <option value="opsgenie">OpsGenie (REST API)</option>
+              <option value="email">Email (via Resend)</option>
               <option value="webhook">Generic Webhook</option>
             </select>
           </div>
@@ -2974,9 +3355,23 @@ function clawmetryLogout(){
       <div class="overview-flow-pane" style="border-radius:8px 0 0 0;flex:3;min-height:0;">
         <div class="grid-overlay"></div>
         <div class="scanline-overlay"></div>
-        <div class="flow-container" id="overview-flow-container">
-          <!-- Flow SVG cloned here by JS -->
-          <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:13px;">Loading flow...</div>
+        <!-- Tab Toggle: Trace / Arch -->
+        <div class="exec-trace-tabs">
+          <button id="tab-btn-trace" class="exec-trace-tab active" onclick="switchFlowTab('trace')">⚡ Trace <span id="trace-live-badge" class="live-badge" style="display:none;"><span class="live-dot"></span>LIVE</span></button>
+          <button id="tab-btn-arch" class="exec-trace-tab" onclick="switchFlowTab('arch')">🔌 Arch</button>
+        </div>
+        <!-- Execution Trace View (default) -->
+        <div id="exec-trace-view" class="exec-trace-view">
+          <div class="exec-trace-container" id="exec-trace-container">
+            <div style="color:var(--text-muted);font-size:12px;padding:20px;">Loading trace...</div>
+          </div>
+        </div>
+        <!-- Architecture SVG View -->
+        <div id="arch-flow-view" class="exec-trace-view hidden">
+          <div class="flow-container" id="overview-flow-container">
+            <!-- Flow SVG cloned here by JS -->
+            <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:13px;">Loading flow...</div>
+          </div>
         </div>
       </div>
 
@@ -3022,6 +3417,8 @@ function clawmetryLogout(){
         <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
         <div id="sh-disks" style="margin-bottom:14px;"></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Memory</div>
+        <div id="sh-memory" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Cron Jobs</div>
         <div id="sh-crons" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
@@ -3175,6 +3572,7 @@ function clawmetryLogout(){
   <div class="refresh-bar">
     <button class="refresh-btn" onclick="loadTranscripts()">↻ Refresh</button>
     <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← Back to list</button>
+    <input id="transcript-search" type="text" placeholder="Filter sessions…" oninput="filterTranscripts()" style="display:none;padding:5px 10px;border-radius:7px;border:1px solid var(--border-primary);background:var(--bg-secondary);color:var(--text-primary);font-size:12px;width:200px;">
   </div>
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
@@ -3280,7 +3678,7 @@ function clawmetryLogout(){
     <div class="flow-stat"><span class="flow-stat-label">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
   </div>
   <div class="flow-container">
-    <svg id="flow-svg" viewBox="0 0 980 550" preserveAspectRatio="xMidYMid meet">
+    <svg id="flow-svg" viewBox="0 0 1020 570" preserveAspectRatio="xMidYMid meet">
       <defs>
         <pattern id="flow-grid" width="40" height="40" patternUnits="userSpaceOnUse">
           <path d="M 40 0 L 0 0 0 40" fill="none" stroke="var(--border-secondary)" stroke-width="0.5"/>
@@ -3304,6 +3702,12 @@ function clawmetryLogout(){
       <path class="flow-path" id="path-tg-gw"  d="M 130 120 C 150 120, 160 165, 180 170"/>
       <path class="flow-path" id="path-sig-gw" d="M 130 190 C 150 190, 160 185, 180 183"/>
       <path class="flow-path" id="path-wa-gw"  d="M 130 260 C 150 260, 160 200, 180 195"/>
+      <path class="flow-path" id="path-human-slack"      d="M 60 56 C 45 130, 50 270, 75 310"/>
+      <path class="flow-path" id="path-human-discord"    d="M 60 56 C 40 160, 45 340, 75 380"/>
+      <path class="flow-path" id="path-human-googlechat" d="M 60 56 C 35 200, 40 410, 75 450"/>
+      <path class="flow-path" id="path-slack-gw"      d="M 130 330 C 155 330, 165 205, 180 200"/>
+      <path class="flow-path" id="path-discord-gw"    d="M 130 400 C 155 400, 163 208, 180 203"/>
+      <path class="flow-path" id="path-googlechat-gw" d="M 130 470 C 155 470, 160 212, 180 205"/>
 
       <!-- Gateway → Brain -->
       <path class="flow-path" id="path-gw-brain" d="M 290 183 C 305 183, 315 175, 330 175"/>
@@ -3343,6 +3747,18 @@ function clawmetryLogout(){
       <g class="flow-node flow-node-channel" id="node-whatsapp">
         <rect x="20" y="240" width="110" height="40" rx="10" ry="10" fill="#43A047" stroke="#2E7D32" stroke-width="2" filter="url(#dropShadow)"/>
         <text x="75" y="265" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 WA</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-slack">
+        <rect x="20" y="310" width="110" height="40" rx="10" ry="10" fill="#611f69" stroke="#4A154B" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="335" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💼 Slack</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-discord">
+        <rect x="20" y="380" width="110" height="40" rx="10" ry="10" fill="#5865F2" stroke="#4752C4" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="405" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Discord</text>
+      </g>
+      <g class="flow-node flow-node-channel" id="node-googlechat">
+        <rect x="20" y="450" width="110" height="40" rx="10" ry="10" fill="#1a73e8" stroke="#1557B0" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="475" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 Chat</text>
       </g>
 
       <!-- Gateway -->
@@ -3402,51 +3818,51 @@ function clawmetryLogout(){
 
       <!-- Cost Optimizer -->
       <g class="flow-node flow-node-optimizer" id="node-cost-optimizer">
-        <rect x="680" y="370" width="145" height="44" rx="12" ry="12" fill="#2E7D32" stroke="#1B5E20" stroke-width="2" filter="url(#dropShadow)"/>
+        <rect x="670" y="418" width="140" height="38" rx="12" ry="12" fill="#2E7D32" stroke="#1B5E20" stroke-width="2" filter="url(#dropShadow)"/>
         <text x="752" y="389" style="font-size:12px;font-weight:700;fill:#ffffff;text-anchor:middle;">
-          <tspan x="752" dy="-5">&#x1F4B0; Cost</tspan>
-          <tspan x="752" dy="13">Optimizer</tspan>
+          <tspan x="740" dy="-5">&#x1F4B0; Cost</tspan>
+          <tspan x="740" dy="13">Optimizer</tspan>
         </text>
-        <circle class="tool-indicator" id="ind-cost-optimizer" cx="817" cy="378" r="5" fill="#66BB6A"/>
+        <circle class="tool-indicator" id="ind-cost-optimizer" cx="802" cy="426" r="5" fill="#66BB6A"/>
       </g>
 
       <!-- Automation Advisor -->
       <g class="flow-node flow-node-advisor" id="node-automation-advisor">
-        <rect x="835" y="370" width="145" height="44" rx="12" ry="12" fill="#7B1FA2" stroke="#4A148C" stroke-width="2" filter="url(#dropShadow)"/>
+        <rect x="820" y="418" width="148" height="38" rx="12" ry="12" fill="#7B1FA2" stroke="#4A148C" stroke-width="2" filter="url(#dropShadow)"/>
         <text x="907" y="389" style="font-size:12px;font-weight:700;fill:#ffffff;text-anchor:middle;">
-          <tspan x="907" dy="-5">&#x1F9E0; Automation</tspan>
-          <tspan x="907" dy="13">Advisor</tspan>
+          <tspan x="894" dy="-5">&#x1F9E0; Automation</tspan>
+          <tspan x="894" dy="13">Advisor</tspan>
         </text>
-        <circle class="tool-indicator" id="ind-automation-advisor" cx="972" cy="378" r="5" fill="#BA68C8"/>
+        <circle class="tool-indicator" id="ind-automation-advisor" cx="960" cy="426" r="5" fill="#BA68C8"/>
       </g>
 
       <!-- Infrastructure Layer -->
-      <line class="flow-ground" x1="20" y1="440" x2="970" y2="440"/>
-      <text class="flow-ground-label" x="400" y="438" style="text-anchor:middle;font-size:10px;">I N F R A S T R U C T U R E</text>
+      <line class="flow-ground" x1="20" y1="460" x2="1010" y2="460"/>
+      <text class="flow-ground-label" x="400" y="458" style="text-anchor:middle;font-size:10px;">I N F R A S T R U C T U R E</text>
 
       <g class="flow-node flow-node-infra flow-node-runtime" id="node-runtime">
-        <rect x="30" y="450" width="130" height="40" rx="8" ry="8" fill="#455A64" stroke="#37474F" filter="url(#dropShadowLight)"/>
-        <text x="95" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x2699;&#xFE0F; Runtime</text>
-        <text class="infra-sub" x="95" y="480" style="fill:#B0BEC5;font-size:8px;text-anchor:middle;" id="infra-runtime-text">Node.js · Linux</text>
+        <rect x="30" y="470" width="130" height="40" rx="8" ry="8" fill="#455A64" stroke="#37474F" filter="url(#dropShadowLight)"/>
+        <text x="95" y="486" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x2699;&#xFE0F; Runtime</text>
+        <text class="infra-sub" x="95" y="500" style="fill:#B0BEC5;font-size:8px;text-anchor:middle;" id="infra-runtime-text">Node.js · Linux</text>
       </g>
       <g class="flow-node flow-node-infra flow-node-machine" id="node-machine">
-        <rect x="195" y="450" width="130" height="40" rx="8" ry="8" fill="#4E342E" stroke="#3E2723" filter="url(#dropShadowLight)"/>
-        <text x="260" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F5A5;&#xFE0F; Machine</text>
-        <text class="infra-sub" x="260" y="480" style="fill:#BCAAA4;font-size:8px;text-anchor:middle;" id="infra-machine-text">Host</text>
+        <rect x="195" y="470" width="130" height="40" rx="8" ry="8" fill="#4E342E" stroke="#3E2723" filter="url(#dropShadowLight)"/>
+        <text x="260" y="486" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F5A5;&#xFE0F; Machine</text>
+        <text class="infra-sub" x="260" y="500" style="fill:#BCAAA4;font-size:8px;text-anchor:middle;" id="infra-machine-text">Host</text>
       </g>
       <g class="flow-node flow-node-infra flow-node-storage" id="node-storage">
-        <rect x="360" y="450" width="130" height="40" rx="8" ry="8" fill="#5D4037" stroke="#4E342E" filter="url(#dropShadowLight)"/>
-        <text x="425" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F4BF; Storage</text>
-        <text class="infra-sub" x="425" y="480" style="fill:#BCAAA4;font-size:8px;text-anchor:middle;" id="infra-storage-text">Disk</text>
+        <rect x="360" y="470" width="130" height="40" rx="8" ry="8" fill="#5D4037" stroke="#4E342E" filter="url(#dropShadowLight)"/>
+        <text x="425" y="486" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F4BF; Storage</text>
+        <text class="infra-sub" x="425" y="500" style="fill:#BCAAA4;font-size:8px;text-anchor:middle;" id="infra-storage-text">Disk</text>
       </g>
       <g class="flow-node flow-node-infra flow-node-network" id="node-network">
-        <rect x="525" y="450" width="130" height="40" rx="8" ry="8" fill="#004D40" stroke="#00332E" filter="url(#dropShadowLight)"/>
-        <text x="590" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F310; Network</text>
-        <text class="infra-sub" x="590" y="480" style="fill:#80CBC4;font-size:8px;text-anchor:middle;" id="infra-network-text">LAN</text>
+        <rect x="525" y="470" width="130" height="40" rx="8" ry="8" fill="#004D40" stroke="#00332E" filter="url(#dropShadowLight)"/>
+        <text x="590" y="486" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F310; Network</text>
+        <text class="infra-sub" x="590" y="500" style="fill:#80CBC4;font-size:8px;text-anchor:middle;" id="infra-network-text">LAN</text>
       </g>
 
       <!-- Legend -->
-      <g transform="translate(140, 510)">
+      <g transform="translate(140, 530)">
         <rect x="0" y="0" width="700" height="28" rx="14" ry="14" fill="var(--bg-tertiary)" stroke="var(--border-primary)" stroke-width="1" opacity="0.9"/>
         <text x="350" y="18" style="font-size:12px;font-weight:600;fill:var(--text-secondary);letter-spacing:1px;text-anchor:middle;">&#x1F4E8; Channels  &#x27A1;&#xFE0F;  🔀 Gateway  &#x27A1;&#xFE0F;  &#x1F9E0; AI Brain  &#x27A1;&#xFE0F;  &#x1F6E0;&#xFE0F; Tools</text>
       </g>
@@ -3498,6 +3914,7 @@ var CHANNEL_CONFIG_FIELDS = {
   discord:   [{id:'webhook_url',label:'Webhook URL',placeholder:'https://discord.com/api/webhooks/...',required:true},{id:'username',label:'Bot Name (optional)',placeholder:'ClawMetry',required:false}],
   pagerduty: [{id:'routing_key',label:'Integration/Routing Key',placeholder:'abc123...',required:true},{id:'source',label:'Source (optional)',placeholder:'ClawMetry',required:false}],
   opsgenie:  [{id:'api_key',label:'API Key',placeholder:'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',required:true},{id:'team',label:'Team Name (optional)',placeholder:'ops-team',required:false},{id:'priority',label:'Priority (optional)',placeholder:'P2',required:false}],
+  email:     [{id:'api_key',label:'Resend API Key',placeholder:'re_xxxxxxxxxxxx',required:true},{id:'to',label:'Recipient(s)',placeholder:'you@example.com, team@example.com',required:true},{id:'from_email',label:'From Address (optional)',placeholder:'ClawMetry Alerts <alerts@clawmetry.com>',required:false},{id:'digest_min',label:'Digest Mode — batch every N minutes (0 = immediate)',placeholder:'0',required:false}],
   webhook:   [{id:'url',label:'Webhook URL',placeholder:'https://your-server/webhook',required:true}],
 };
 
@@ -3508,7 +3925,7 @@ function updateChannelForm() {
   fields.forEach(function(f) {
     html += '<div style="margin-bottom:6px;">';
     html += '<label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:3px;">' + f.label + (f.required ? ' <span style="color:#ff4444">*</span>' : '') + '</label>';
-    var inputType = (f.id==='api_key'||f.id==='routing_key') ? 'password' : 'text';
+    var inputType = (f.id==='api_key'||f.id==='routing_key') ? 'password' : (f.id==='digest_min' ? 'number' : 'text');
     html += '<input id="channel-cfg-' + f.id + '" type="' + inputType + '" placeholder="' + f.placeholder + '" style="width:100%;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);font-family:monospace;font-size:12px;">';
     html += '</div>';
   });
@@ -3739,11 +4156,95 @@ async function loadAlertHistory() {
   }
 }
 
+var _alertPanelOpen = false;
+
+function toggleAlertPanel() {
+  _alertPanelOpen = !_alertPanelOpen;
+  var panel = document.getElementById('alert-panel');
+  if (_alertPanelOpen) {
+    panel.classList.add('open');
+    renderAlertPanel();
+  } else {
+    panel.classList.remove('open');
+  }
+}
+
+function closeAlertPanel() {
+  _alertPanelOpen = false;
+  document.getElementById('alert-panel').classList.remove('open');
+}
+
+// Close panel when clicking outside
+document.addEventListener('click', function(e) {
+  if (!_alertPanelOpen) return;
+  var panel = document.getElementById('alert-panel');
+  var bell = document.getElementById('alert-bell-btn');
+  if (!panel.contains(e.target) && !bell.contains(e.target)) closeAlertPanel();
+});
+
+async function renderAlertPanel() {
+  var body = document.getElementById('alert-panel-body');
+  try {
+    var data = await fetch('/api/alerts/history?limit=30').then(function(r){return r.json();});
+    var alerts = data.alerts || [];
+    if (alerts.length === 0) {
+      body.innerHTML = '<div class="alert-panel-empty">&#10003; No alerts — all clear!</div>';
+      return;
+    }
+    var html = '';
+    alerts.forEach(function(a) {
+      var ts = new Date(a.fired_at * 1000);
+      var now = new Date();
+      var diffMs = now - ts;
+      var timeStr;
+      if (diffMs < 60000) timeStr = 'just now';
+      else if (diffMs < 3600000) timeStr = Math.floor(diffMs/60000) + 'm ago';
+      else if (diffMs < 86400000) timeStr = Math.floor(diffMs/3600000) + 'h ago';
+      else timeStr = ts.toLocaleDateString();
+      var isAcked = a.acknowledged;
+      html += '<div class="alert-panel-item">';
+      html += '<div class="alert-dot' + (isAcked ? ' acked' : '') + '"></div>';
+      html += '<div class="alert-text">';
+      html += '<span class="alert-type-badge">' + escHtml((a.type||'alert').replace(/_/g,' ')) + '</span>';
+      html += '<div class="alert-msg">' + escHtml(a.message || '') + '</div>';
+      html += '<div class="alert-time">' + timeStr + '</div>';
+      html += '</div>';
+      if (!isAcked) {
+        html += '<button class="ack-btn" onclick="ackAlert(' + a.id + ')">✓ Ack</button>';
+      }
+      html += '</div>';
+    });
+    body.innerHTML = html;
+  } catch(e) {
+    body.innerHTML = '<div class="alert-panel-empty" style="color:var(--text-error);">Failed to load alerts</div>';
+  }
+}
+
+async function ackAlert(id) {
+  try {
+    await fetch('/api/alerts/history/' + id + '/ack', {method: 'POST'});
+    await checkActiveAlerts();
+    if (_alertPanelOpen) renderAlertPanel();
+  } catch(e) {}
+}
+
 async function checkActiveAlerts() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
     var alerts = data.alerts || [];
     var banner = document.getElementById('alert-banner');
+    var bell = document.getElementById('alert-bell-btn');
+    var badge = document.getElementById('alert-bell-badge');
+    // Update bell badge
+    if (alerts.length > 0) {
+      badge.textContent = alerts.length > 9 ? '9+' : alerts.length;
+      badge.style.display = 'flex';
+      bell.classList.add('has-alerts');
+    } else {
+      badge.style.display = 'none';
+      bell.classList.remove('has-alerts');
+    }
+    // Update banner
     if(alerts.length === 0) {
       banner.style.display = 'none';
       return;
@@ -3758,15 +4259,21 @@ async function checkActiveAlerts() {
   } catch(e) {}
 }
 
-async function ackAllAlerts() {
+async function ackAllAlertsPanel() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
     var alerts = data.alerts || [];
     for(var i=0; i<alerts.length; i++) {
       await fetch('/api/alerts/history/'+alerts[i].id+'/ack', {method:'POST'});
     }
-    document.getElementById('alert-banner').style.display = 'none';
+    await checkActiveAlerts();
+    if (_alertPanelOpen) renderAlertPanel();
   } catch(e) {}
+}
+
+async function ackAllAlerts() {
+  await ackAllAlertsPanel();
+  document.getElementById('alert-banner').style.display = 'none';
 }
 
 // Check alerts every 30s
@@ -5198,6 +5705,7 @@ async function loadSystemHealth() {
     var disks = Array.isArray(d.disks) ? d.disks : [];
     var crons = (d.crons && typeof d.crons === 'object') ? d.crons : {enabled: 0, ok24h: 0, failed: []};
     var subagents = (d.subagents && typeof d.subagents === 'object') ? d.subagents : {runs: 0, successPct: 0};
+    var memory = (d.memory && typeof d.memory === 'object') ? d.memory : {};
 
     // Services
     var shtml = '';
@@ -5228,6 +5736,26 @@ async function loadSystemHealth() {
       dhtml = '<div style="padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;font-size:12px;color:var(--text-muted);">No disk data available</div>';
     }
     document.getElementById('sh-disks').innerHTML = dhtml;
+
+    // Memory
+    var mhtml = '';
+    if (memory && memory.pct > 0) {
+      var memColor = memory.pct > 90 ? '#dc2626' : (memory.pct > 80 ? '#d97706' : '#16a34a');
+      mhtml = '<div style="margin-bottom:10px;">'
+        + '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">'
+        + '<span style="font-weight:600;color:var(--text-primary);">RAM</span>'
+        + '<span style="color:var(--text-muted);">' + memory.used_gb + ' / ' + memory.total_gb + ' GB (' + memory.pct + '%)</span></div>'
+        + '<div style="background:var(--bg-secondary);border-radius:6px;height:10px;overflow:hidden;border:1px solid var(--border-secondary);">'
+        + '<div style="width:' + Math.min(100, memory.pct) + '%;height:100%;background:' + memColor + ';border-radius:6px;transition:width 0.5s;"></div>'
+        + '</div></div>';
+      if (memory.pct >= 80) {
+        mhtml += '<div style="font-size:11px;color:' + memColor + ';margin-top:4px;">⚠ High memory usage — consider restarting heavy processes</div>';
+      }
+    } else {
+      mhtml = '<div style="padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;font-size:12px;color:var(--text-muted);">Memory data unavailable</div>';
+    }
+    var shMem = document.getElementById('sh-memory');
+    if (shMem) shMem.innerHTML = mhtml;
 
     // Crons
     var c = crons;
@@ -5415,34 +5943,58 @@ function exportUsageData() {
 }
 
 // ===== Transcripts =====
+var _allTranscripts = [];
+
 async function loadTranscripts() {
   try {
     var data = await fetch('/api/transcripts').then(r => r.json());
-    var html = '';
-    data.transcripts.forEach(function(t) {
-      html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(t.id) + '\')">';
-      html += '<div><div class="transcript-name">' + escHtml(t.name) + '</div>';
-      html += '<div class="transcript-meta-row">';
-      html += '<span>' + t.messages + ' messages</span>';
-      html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
-      html += '<span>' + timeAgo(t.modified) + '</span>';
-      html += '</div></div>';
-      html += '<span style="color:#444;font-size:18px;">▸</span>';
-      html += '</div>';
-    });
-    document.getElementById('transcript-list').innerHTML = html || '<div style="padding:16px;color:#666;">No transcript files found</div>';
+    _allTranscripts = data.transcripts || [];
+    renderTranscriptList(_allTranscripts);
     document.getElementById('transcript-list').style.display = '';
     document.getElementById('transcript-viewer').style.display = 'none';
     document.getElementById('transcript-back-btn').style.display = 'none';
+    // Show search bar
+    var search = document.getElementById('transcript-search');
+    search.style.display = _allTranscripts.length > 5 ? '' : 'none';
+    search.value = '';
   } catch(e) {
     document.getElementById('transcript-list').innerHTML = '<div style="padding:16px;color:#666;">Failed to load transcripts</div>';
   }
+}
+
+function renderTranscriptList(transcripts) {
+  var html = '';
+  transcripts.forEach(function(t) {
+    html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(t.id) + '\')">';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div class="transcript-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(t.name) + '</div>';
+    html += '<div class="transcript-meta-row">';
+    html += '<span>' + t.messages + ' msg</span>';
+    html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
+    html += '<span>' + timeAgo(t.modified) + '</span>';
+    html += '</div></div>';
+    html += '<span style="color:var(--text-muted);font-size:18px;flex-shrink:0;">▸</span>';
+    html += '</div>';
+  });
+  document.getElementById('transcript-list').innerHTML = html ||
+    '<div style="padding:28px;text-align:center;color:var(--text-muted);">No transcript files found</div>';
+}
+
+function filterTranscripts() {
+  var q = (document.getElementById('transcript-search').value || '').toLowerCase().trim();
+  if (!q) { renderTranscriptList(_allTranscripts); return; }
+  var filtered = _allTranscripts.filter(function(t) {
+    return (t.name || '').toLowerCase().includes(q) || (t.id || '').toLowerCase().includes(q);
+  });
+  renderTranscriptList(filtered);
 }
 
 function showTranscriptList() {
   document.getElementById('transcript-list').style.display = '';
   document.getElementById('transcript-viewer').style.display = 'none';
   document.getElementById('transcript-back-btn').style.display = 'none';
+  var search = document.getElementById('transcript-search');
+  search.style.display = _allTranscripts.length > 5 ? '' : 'none';
 }
 
 async function viewTranscript(sessionId) {
@@ -5499,6 +6051,112 @@ function toggleMsg(idx) {
   }
 }
 
+// === Execution Trace Flow ===
+var _execTraceTab = 'trace';
+
+function switchFlowTab(tab) {
+  _execTraceTab = tab;
+  var traceView = document.getElementById('exec-trace-view');
+  var archView = document.getElementById('arch-flow-view');
+  var btnTrace = document.getElementById('tab-btn-trace');
+  var btnArch = document.getElementById('tab-btn-arch');
+  if (tab === 'trace') {
+    if (traceView) traceView.classList.remove('hidden');
+    if (archView) archView.classList.add('hidden');
+    if (btnTrace) btnTrace.classList.add('active');
+    if (btnArch) btnArch.classList.remove('active');
+    loadExecutionTrace();
+  } else {
+    if (traceView) traceView.classList.add('hidden');
+    if (archView) archView.classList.remove('hidden');
+    if (btnArch) btnArch.classList.add('active');
+    if (btnTrace) btnTrace.classList.remove('active');
+  }
+}
+
+function _escXml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function _toolColor(name) {
+  if (!name) return '#374151';
+  var n = (name || '').toLowerCase();
+  if (n === 'exec' || n === 'process' || n === 'bash') return '#b45309';
+  if (n === 'web_search' || n === 'web_fetch') return '#6d28d9';
+  if (n === 'browser') return '#3730a3';
+  if (n === 'read' || n === 'write' || n === 'edit') return '#065f46';
+  if (n === 'message' || n === 'send') return '#0369a1';
+  return '#374151';
+}
+
+async function loadExecutionTrace() {
+  try {
+    var data = await fetchJsonWithTimeout('/api/execution-trace', 3000);
+    if (!data) return;
+    var events = data.events || [];
+    var container = document.getElementById('exec-trace-container');
+    if (!container) return;
+
+    // Show LIVE badge if most recent event is within last 90s
+    var liveBadge = document.getElementById('trace-live-badge');
+    if (liveBadge) {
+      var lastTs = events.length > 0 ? (events[events.length - 1].ts || 0) : 0;
+      var nowSec = Math.floor(Date.now() / 1000);
+      liveBadge.style.display = (lastTs > 0 && (nowSec - lastTs) < 90) ? 'inline-flex' : 'none';
+    }
+
+    if (events.length === 0) {
+      container.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:20px;text-align:center;width:100%;">No trace data — waiting for agent activity...</div>';
+      return;
+    }
+
+    // Show last 12 events
+    var display = events.slice(-12);
+    var NODE_W = 120, NODE_H = 50, ARROW_W = 28, MARGIN_X = 10, MARGIN_Y = 8;
+    var totalW = MARGIN_X * 2 + display.length * NODE_W + Math.max(0, display.length - 1) * ARROW_W;
+    var svgH = NODE_H + MARGIN_Y * 2;
+
+    var parts = [];
+    parts.push('<svg xmlns="http://www.w3.org/2000/svg" width="' + totalW + '" height="' + svgH + '" style="display:block;flex-shrink:0;">');
+    parts.push('<defs><marker id="et-arrow" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="#4b5563"/></marker></defs>');
+
+    display.forEach(function(ev, i) {
+      var x = MARGIN_X + i * (NODE_W + ARROW_W);
+      var y = MARGIN_Y;
+      var isThink = ev.type === 'think';
+      var fill = isThink ? '#1e3a5f' : _toolColor(ev.name);
+      var label = isThink ? '\uD83D\uDCAD Think' : ('\uD83D\uDD27 ' + (ev.name || 'tool'));
+      if (label.length > 14) label = label.substring(0, 13) + '\u2026';
+      var preview = isThink ? (ev.preview || '') : (ev.input_preview || '');
+      if (preview.length > 18) preview = preview.substring(0, 17) + '\u2026';
+      var isNewest = (i === display.length - 1);
+
+      // Node rect
+      parts.push('<rect x="' + x + '" y="' + y + '" width="' + NODE_W + '" height="' + NODE_H + '" rx="8" ry="8" fill="' + fill + '" stroke="rgba(255,255,255,0.12)" stroke-width="1"' + (isNewest ? ' class="exec-node-new"' : '') + '/>');
+      // Label
+      parts.push('<text x="' + (x + NODE_W / 2) + '" y="' + (y + 19) + '" text-anchor="middle" font-size="11" font-weight="600" fill="#f0f4f8" font-family="\'JetBrains Mono\',monospace,system-ui">' + _escXml(label) + '</text>');
+      // Preview
+      if (preview) {
+        parts.push('<text x="' + (x + NODE_W / 2) + '" y="' + (y + 33) + '" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.55)" font-family="system-ui,sans-serif">' + _escXml(preview) + '</text>');
+      }
+      // Arrow to next node
+      if (i < display.length - 1) {
+        var ax1 = x + NODE_W, ay = y + NODE_H / 2;
+        var ax2 = ax1 + ARROW_W - 2;
+        parts.push('<line x1="' + ax1 + '" y1="' + ay + '" x2="' + ax2 + '" y2="' + ay + '" stroke="#4b5563" stroke-width="1.5" marker-end="url(#et-arrow)"/>');
+      }
+    });
+    parts.push('</svg>');
+
+    container.innerHTML = parts.join('');
+    // Scroll right to show newest
+    container.scrollLeft = container.scrollWidth;
+  } catch(e) {
+    console.warn('Execution trace load failed:', e);
+  }
+}
+
 function startOverviewRefresh() {
   loadAll();
   if (window._overviewTimer) clearInterval(window._overviewTimer);
@@ -5506,6 +6164,12 @@ function startOverviewRefresh() {
   loadMainActivity();
   if (window._mainActivityTimer) clearInterval(window._mainActivityTimer);
   window._mainActivityTimer = setInterval(loadMainActivity, 5000);
+  // Start execution trace refresh (every 3s, only when trace tab active)
+  loadExecutionTrace();
+  if (window._execTraceTimer) clearInterval(window._execTraceTimer);
+  window._execTraceTimer = setInterval(function() {
+    if (_execTraceTab === 'trace') loadExecutionTrace();
+  }, 3000);
 }
 
 async function loadMainActivity() {
@@ -5639,13 +6303,16 @@ var flowInitDone = false;
 function hideUnconfiguredChannels(svgRoot) {
   // Hide channel nodes and their paths for unconfigured channels
   var channelMap = {
-    'telegram': { node: 'node-telegram', paths: ['path-human-tg', 'path-tg-gw'] },
-    'signal':   { node: 'node-signal',   paths: ['path-human-sig', 'path-sig-gw'] },
-    'whatsapp': { node: 'node-whatsapp', paths: ['path-human-wa', 'path-wa-gw'] }
+    'telegram':   { node: 'node-telegram',   paths: ['path-human-tg', 'path-tg-gw'] },
+    'signal':     { node: 'node-signal',     paths: ['path-human-sig', 'path-sig-gw'] },
+    'whatsapp':   { node: 'node-whatsapp',   paths: ['path-human-wa', 'path-wa-gw'] },
+    'slack':      { node: 'node-slack',      paths: ['path-human-slack', 'path-slack-gw'] },
+    'discord':    { node: 'node-discord',    paths: ['path-human-discord', 'path-discord-gw'] },
+    'googlechat': { node: 'node-googlechat', paths: ['path-human-googlechat', 'path-googlechat-gw'] }
   };
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
     var active = d.channels || ['telegram', 'signal', 'whatsapp'];
-    var allChannels = ['telegram', 'signal', 'whatsapp'];
+    var allChannels = ['telegram', 'signal', 'whatsapp', 'slack', 'discord', 'googlechat'];
     var hiddenCount = 0;
     allChannels.forEach(function(ch) {
       if (active.indexOf(ch) === -1) {
@@ -5662,9 +6329,12 @@ function hideUnconfiguredChannels(svgRoot) {
     // Shift remaining visible channel nodes up to fill gaps
     if (hiddenCount > 0) {
       var visibleChannels = allChannels.filter(function(ch) { return active.indexOf(ch) !== -1; });
-      var yPositions = [120, 175, 230]; // Evenly spaced positions for 1-3 channels
+      var yPositions = [120, 175, 230, 300, 370, 440]; // Evenly spaced positions for 1-6 channels
       if (visibleChannels.length === 1) yPositions = [175];
       else if (visibleChannels.length === 2) yPositions = [130, 210];
+      else if (visibleChannels.length === 3) yPositions = [120, 175, 230];
+      else if (visibleChannels.length === 4) yPositions = [100, 170, 240, 310];
+      else if (visibleChannels.length === 5) yPositions = [90, 155, 220, 290, 360];
       visibleChannels.forEach(function(ch, i) {
         var info = channelMap[ch];
         var node = svgRoot.getElementById ? svgRoot.getElementById(info.node) : svgRoot.querySelector('#' + info.node);
@@ -5890,7 +6560,8 @@ function highlightNode(nodeId, dur) {
 
 function triggerInbound(ch) {
   ch = ch || 'tg';
-  var chNodeId = ch === 'tg' ? 'node-telegram' : ch === 'sig' ? 'node-signal' : 'node-whatsapp';
+  var chNodeMap = {'tg': 'node-telegram', 'sig': 'node-signal', 'wa': 'node-whatsapp', 'slack': 'node-slack', 'discord': 'node-discord', 'googlechat': 'node-googlechat'};
+  var chNodeId = chNodeMap[ch] || 'node-telegram';
   highlightNode(chNodeId, 3000);
   animateParticle('path-human-' + ch, '#c0a0ff', 550, false);
   highlightNode('node-human', 2200);
@@ -6148,11 +6819,14 @@ function initOverviewFlow() {
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
     var active = d.channels || ['telegram', 'signal', 'whatsapp'];
     var channelMap = {
-      'telegram': { node: 'ov-node-telegram', paths: ['ov-path-human-tg', 'ov-path-tg-gw'] },
-      'signal':   { node: 'ov-node-signal',   paths: ['ov-path-human-sig', 'ov-path-sig-gw'] },
-      'whatsapp': { node: 'ov-node-whatsapp', paths: ['ov-path-human-wa', 'ov-path-wa-gw'] }
+      'telegram':   { node: 'ov-node-telegram',   paths: ['ov-path-human-tg', 'ov-path-tg-gw'] },
+      'signal':     { node: 'ov-node-signal',     paths: ['ov-path-human-sig', 'ov-path-sig-gw'] },
+      'whatsapp':   { node: 'ov-node-whatsapp',   paths: ['ov-path-human-wa', 'ov-path-wa-gw'] },
+      'slack':      { node: 'ov-node-slack',      paths: ['ov-path-human-slack', 'ov-path-slack-gw'] },
+      'discord':    { node: 'ov-node-discord',    paths: ['ov-path-human-discord', 'ov-path-discord-gw'] },
+      'googlechat': { node: 'ov-node-googlechat', paths: ['ov-path-human-googlechat', 'ov-path-googlechat-gw'] }
     };
-    var allChannels = ['telegram', 'signal', 'whatsapp'];
+    var allChannels = ['telegram', 'signal', 'whatsapp', 'slack', 'discord', 'googlechat'];
     var hiddenCount = 0;
     allChannels.forEach(function(ch) {
       if (active.indexOf(ch) === -1) {
@@ -6168,7 +6842,7 @@ function initOverviewFlow() {
     });
     if (hiddenCount > 0) {
       var visibleChannels = allChannels.filter(function(ch) { return active.indexOf(ch) !== -1; });
-      var yPositions = visibleChannels.length === 1 ? [175] : visibleChannels.length === 2 ? [130, 210] : [120, 175, 230];
+      var yPositions = visibleChannels.length === 1 ? [175] : visibleChannels.length === 2 ? [130, 210] : visibleChannels.length === 3 ? [120, 175, 230] : visibleChannels.length === 4 ? [100, 170, 240, 310] : visibleChannels.length === 5 ? [90, 155, 220, 290, 360] : [80, 145, 210, 280, 350, 420];
       visibleChannels.forEach(function(ch, i) {
         var info = channelMap[ch];
         var node = document.getElementById(info.node);
@@ -6344,6 +7018,9 @@ var COMP_MAP = {
   'node-telegram': {type:'channel', name:'Telegram', icon:'📱'},
   'node-signal': {type:'channel', name:'Signal', icon:'💬'},
   'node-whatsapp': {type:'channel', name:'WhatsApp', icon:'📲'},
+  'node-slack': {type:'channel', name:'Slack', icon:'💼'},
+  'node-discord': {type:'channel', name:'Discord', icon:'🎮'},
+  'node-googlechat': {type:'channel', name:'Google Chat', icon:'💬'},
   'node-gateway': {type:'gateway', name:'Gateway', icon:'🌐'},
   'node-brain': {type:'brain', name:'AI Model', icon:'🧠'},
   'node-session': {type:'tool', name:'Sessions', icon:'📋'},
@@ -9675,6 +10352,20 @@ def api_budget_config():
     return jsonify(_get_budget_config())
 
 
+@app.route('/api/system-health/config', methods=['GET', 'POST'])
+def api_system_health_config():
+    """Get or update system health alert thresholds."""
+    allowed_keys = list(_SYSTEM_HEALTH_DEFAULTS.keys())
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        updates = {k: v for k, v in data.items() if k in allowed_keys}
+        if not updates:
+            return jsonify({'error': 'No valid fields provided'}), 400
+        _set_budget_config(updates)  # Reuse budget_config table (generic KV store)
+        return jsonify({'ok': True})
+    return jsonify(_get_system_health_config())
+
+
 @app.route('/api/budget/status')
 def api_budget_status():
     """Get current budget status with spending totals."""
@@ -9836,6 +10527,7 @@ def api_alert_channels():
             'pagerduty': ['routing_key'],
             'opsgenie': ['api_key'],
             'webhook': ['url'],
+            'email': ['api_key', 'to'],
         }
         missing = [f for f in required.get(ctype, []) if not config.get(f, '').strip()]
         if missing:
@@ -9910,6 +10602,8 @@ def api_alert_channel_test(channel_id):
             ok, err = True, None
         else:
             ok, err = False, 'No URL configured'
+    elif ctype == 'email':
+        ok, err = _send_email_alert(cfg, test_msg, 'test', {'source': 'ClawMetry test'})
     if ok:
         return jsonify({'ok': True})
     return jsonify({'ok': False, 'error': err or 'Unknown error'}), 500
@@ -10362,6 +11056,90 @@ def api_usage_export():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/execution-trace')
+def execution_trace():
+    """Return last 30 think+tool events from the most recent session transcript."""
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    if not os.path.isdir(sessions_dir):
+        for p in [
+            os.path.expanduser('~/.openclaw/agents/main/sessions'),
+            os.path.expanduser('~/.clawdbot/agents/main/sessions'),
+            os.path.expanduser('~/.moltbot/agents/main/sessions'),
+        ]:
+            if os.path.isdir(p):
+                sessions_dir = p
+                break
+    if not os.path.isdir(sessions_dir):
+        return jsonify({'events': [], 'session_id': None, 'total': 0})
+
+    try:
+        files = [f for f in os.listdir(sessions_dir) if f.endswith('.jsonl') and 'deleted' not in f]
+        if not files:
+            return jsonify({'events': [], 'session_id': None, 'total': 0})
+        latest = max(files, key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)))
+        session_id = latest.replace('.jsonl', '')
+        fpath = os.path.join(sessions_dir, latest)
+    except Exception as e:
+        return jsonify({'error': str(e), 'events': [], 'session_id': None, 'total': 0})
+
+    events = []
+    try:
+        with open(fpath, 'r', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if obj.get('type') != 'message':
+                        continue
+                    msg = obj.get('message', {})
+                    role = msg.get('role')
+                    content = msg.get('content', [])
+                    ts_str = obj.get('timestamp', '')
+                    try:
+                        ts = int(datetime.fromisoformat(ts_str.replace('Z', '+00:00')).timestamp())
+                    except Exception:
+                        ts = 0
+                    if not isinstance(content, list):
+                        continue
+                    if role == 'assistant':
+                        for block in content:
+                            if not isinstance(block, dict):
+                                continue
+                            btype = block.get('type', '')
+                            if btype == 'thinking':
+                                text = block.get('thinking') or block.get('text') or ''
+                                events.append({
+                                    'type': 'think',
+                                    'preview': text[:60],
+                                    'ts': ts,
+                                })
+                            elif btype in ('tool_use', 'toolCall'):
+                                name = block.get('name', 'unknown')
+                                args = block.get('arguments') or block.get('input') or {}
+                                if isinstance(args, dict):
+                                    parts = []
+                                    for k, v in list(args.items())[:2]:
+                                        parts.append('{}: {}'.format(k, str(v)[:40]))
+                                    input_preview = ', '.join(parts)
+                                else:
+                                    input_preview = str(args)[:60]
+                                events.append({
+                                    'type': 'tool',
+                                    'name': name,
+                                    'input_preview': input_preview,
+                                    'ts': ts,
+                                })
+                except Exception:
+                    continue
+    except Exception as e:
+        return jsonify({'error': str(e), 'events': [], 'session_id': session_id, 'total': 0})
+
+    events = events[-30:]
+    return jsonify({'events': events, 'session_id': session_id, 'total': len(events)})
+
 
 @app.route('/api/transcripts')
 def api_transcripts():
@@ -11896,12 +12674,35 @@ def api_system_health():
 
     sa_pct = round((sa_success / sa_runs * 100) if sa_runs > 0 else 100, 0)
 
-    return jsonify({
+    # --- MEMORY ---
+    memory = {}
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        memory = {
+            'used_gb': round(mem.used / (1024**3), 1),
+            'total_gb': round(mem.total / (1024**3), 1),
+            'pct': round(mem.percent, 1),
+            'available_gb': round(mem.available / (1024**3), 1),
+        }
+    except Exception:
+        pass
+
+    health_data = {
         'services': services,
         'disks': disks,
         'crons': {'enabled': cron_enabled, 'ok24h': cron_ok_24h, 'failed': cron_failed},
         'subagents': {'runs': sa_runs, 'successPct': sa_pct},
-    })
+        'memory': memory,
+    }
+
+    # Run system health alert checks (non-blocking, fires alerts if thresholds exceeded)
+    try:
+        _check_system_health_alerts(health_data)
+    except Exception as e:
+        print(f"Warning: System health alert check failed: {e}")
+
+    return jsonify(health_data)
 
 
 @app.route('/api/health')

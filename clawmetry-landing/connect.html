@@ -2,6 +2,35 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <script>
+    // If user is already logged in on app.clawmetry.com, redirect to fleet
+    // We use an iframe to check localStorage on the app domain
+    (function(){
+      var next = new URLSearchParams(window.location.search).get('next');
+      if (next === 'app') return; // Coming from app redirect, don't loop
+      var iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.src = 'https://app.clawmetry.com/check-auth-frame';
+      document.documentElement.appendChild(iframe);
+      window.addEventListener('message', function(e) {
+        if (e.origin === 'https://app.clawmetry.com' && e.data && e.data.hasToken) {
+          window.location.href = 'https://app.clawmetry.com/fleet/';
+        }
+      });
+      // Timeout: if no response in 2s, user isn't logged in
+      setTimeout(function(){ if(iframe.parentNode) iframe.remove(); }, 2000);
+    })();
+  </script>
+    <meta name="description" content="Connect your OpenClaw agent to ClawMetry Cloud in seconds. Get your API key and start monitoring AI agent activity in real time from anywhere.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://clawmetry.com/connect">
+  <meta property="og:title" content="Connect to ClawMetry Cloud — Get Your API Key">
+  <meta property="og:description" content="Get your ClawMetry API key and start monitoring your AI agents from anywhere. Free to start. pip install clawmetry && clawmetry connect.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://clawmetry.com/connect">
+  <meta property="og:image" content="https://clawmetry.com/dashboard-overview-og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://clawmetry.com/dashboard-overview-og.png">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ClawMetry - Get your API key</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -14,7 +43,7 @@
     nav a span { color: #E5443A; }
     .page { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 16px; }
     .card { background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 40px; width: 100%; max-width: 440px; text-align: center; box-shadow: 0 8px 40px rgba(0,0,0,0.4); }
-    .card-icon { font-size: 48px; margin-bottom: 16px; }
+    .card-icon { font-size: 48px; margin-bottom: 16px; line-height: 1; }
     .card h1 { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 8px; }
     .card p { font-size: 14px; color: #94a3b8; line-height: 1.6; margin-bottom: 24px; }
     .input { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid #2d3748; background: #0d1420; color: #e2e8f0; font-size: 15px; outline: none; transition: border-color 0.2s; margin-bottom: 14px; font-family: inherit; }
@@ -42,23 +71,29 @@
     .resend-link { font-size: 13px; color: #64748b; cursor: pointer; margin-top: 10px; display: inline-block; }
     .resend-link:hover { color: #94a3b8; }
   </style>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
 </head>
 <body>
 <nav>
-  <a href="/">&#x1F99E; Claw<span>Metry</span></a>
+  <a href="/"><img src="/favicon.svg" width="28" height="28" style="display:inline-block;vertical-align:middle;margin-right:4px;border-radius:4px"> Claw<span>Metry</span></a>
 </nav>
 <div class="page">
   <div class="card">
 
     <!-- Step 1: Email -->
     <div id="step1" class="step active">
-      <div class="card-icon">&#x1F99E;</div>
-      <h1>Get your API key</h1>
-      <p>Sign in or create a free account.<br>Takes 30 seconds.</p>
+      <div class="card-icon"><img src="/favicon.svg" width="56" height="56" style="border-radius:10px;"></div>
+      <h1 id="step1-title">Sign in to ClawMetry</h1>
+      <p id="step1-desc">Enter your email to continue.<br>We'll send you a verification code.</p>
       <input id="email" class="input" type="email" placeholder="you@example.com" autocomplete="email"
         onkeydown="if(event.key==='Enter')sendOtp()">
-      <button class="btn" onclick="sendOtp()" id="send-btn">Send code</button>
+      <button class="btn" onclick="sendOtp()" id="send-btn">Continue</button>
       <p id="step1-err" class="error"></p>
+      <p id="signup-link" style="font-size:13px;color:#64748b;margin-top:14px;">Don't have an account? <a href="/connect" style="color:#E5443A;text-decoration:none;font-weight:600;">Sign up free</a></p>
+      <p id="signin-link" style="font-size:13px;color:#64748b;margin-top:14px;display:none;">Already have an account? <a href="/connect?next=app" style="color:#E5443A;text-decoration:none;font-weight:600;">Sign in</a></p>
     </div>
 
     <!-- Step 2: OTP -->
@@ -80,8 +115,8 @@
     <!-- Step 3: Success -->
     <div id="step3" class="step">
       <div class="card-icon">&#x1F389;</div>
-      <h1>You're all set!</h1>
-      <p>Here is your ClawMetry API key. Keep it safe.</p>
+      <h1 id="step3-title">You're all set!</h1>
+      <p id="step3-desc">Here is your ClawMetry API key. Keep it safe.</p>
       <div class="key-box">
         <div class="key-text" id="key-display"></div>
         <button class="copy-btn" onclick="copyKey()" id="copy-btn">Copy</button>
@@ -163,7 +198,7 @@ function verifyOtp() {
   fetch('/api/otp/verify', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email: _email, otp: otp})
+    body: JSON.stringify({email: _email, otp: otp, ref: new URLSearchParams(window.location.search).get('ref') || localStorage.getItem('cm_ref') || ''})
   }).then(function(r){ return r.json(); }).then(function(d){
     _verifying = false; btn.disabled = false; btn.textContent = 'Verify';
     if (d.ok && d.api_key) {
@@ -219,6 +254,23 @@ function startResendTimer() {
       timerEl.textContent = 'Resend in ' + secs + 's';
     }
   }, 1000);
+}
+
+// Mode detection: sign-in vs sign-up
+var _isSignIn = new URLSearchParams(window.location.search).get('next') === 'app' || window.location.pathname === '/signin' || window.location.pathname === '/login';
+if (_isSignIn) {
+  document.getElementById('step1-title').textContent = 'Sign in to ClawMetry';
+  document.getElementById('step1-desc').innerHTML = 'Enter your email to access your dashboard.<br>We\u0027ll send you a verification code.';
+  document.getElementById('send-btn').textContent = 'Continue';
+  document.getElementById('signup-link').style.display = '';
+  document.getElementById('signin-link').style.display = 'none';
+  document.title = 'ClawMetry - Sign In';
+} else {
+  document.getElementById('step1-title').textContent = 'Get started with ClawMetry';
+  document.getElementById('step1-desc').innerHTML = 'Create your free account. 7-day trial included.<br>No credit card required.';
+  document.getElementById('send-btn').textContent = 'Create account';
+  document.getElementById('signup-link').style.display = 'none';
+  document.getElementById('signin-link').style.display = '';
 }
 
 // Analytics
