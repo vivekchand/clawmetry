@@ -164,7 +164,7 @@ function sendOtp(resend) {
   hideErr('step1-err');
   var btn = document.getElementById('send-btn');
   btn.disabled = true; btn.textContent = 'Sending...';
-  fetch('/api/otp/send', {
+  fetch('https://app.clawmetry.com/api/otp/send', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({email: _email})
@@ -195,7 +195,7 @@ function verifyOtp() {
   _verifying = true;
   var btn = document.getElementById('verify-btn');
   btn.disabled = true; btn.textContent = 'Verifying...';
-  fetch('/api/otp/verify', {
+  fetch('https://app.clawmetry.com/api/otp/verify', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({email: _email, otp: otp, ref: new URLSearchParams(window.location.search).get('ref') || localStorage.getItem('cm_ref') || ''})
