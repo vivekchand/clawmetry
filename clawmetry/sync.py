@@ -1085,67 +1085,95 @@ def _build_channel_list(config):
 
 
 def _build_channel_data(config):
-    """Build recent channel message data from gateway.log (plain-text format)."""
+    """Build channel message data from gateway.log (outgoing) + session files (incoming)."""
     import re as _re
     try:
         home = str(Path.home())
         today = datetime.now().strftime("%Y-%m-%d")
-        # gateway.log uses lines like:
-        #   2026-03-10T10:00:59.952Z [telegram] sendMessage ok chat=1532693273 message=5769
-        #   2026-03-10T09:45:12.100Z [telegram] [default] inbound message from 1532693273
-        #   2026-03-10T09:45:12.100Z [imessage] received message from +49...
         gw_log = os.path.join(home, ".openclaw", "logs", "gateway.log")
+        session_dir = os.path.join(home, ".openclaw", "agents", "main", "sessions")
         channels = {}
 
         known_channels = {"telegram", "imessage", "whatsapp", "signal", "discord",
                           "slack", "webchat", "irc", "googlechat", "msteams"}
 
+        # ── Outgoing: parse gateway.log ──────────────────────────────────────
         if os.path.exists(gw_log):
             with open(gw_log, errors="ignore") as f:
                 for raw in f:
                     raw = raw.strip()
                     if not raw:
                         continue
-                    # Parse timestamp from ISO prefix
-                    ts_match = _re.match(r'^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)', raw)
-                    if not ts_match:
+                    ts_match = _re.match(r'(\d{4}-\d{2}-\d{2}T[\d:.]+Z)', raw)
+                    if not ts_match or today not in ts_match.group(1):
                         continue
                     ts = ts_match.group(1)
-                    if today not in ts:
-                        continue
-
-                    # Extract channel name from [channel] tag
                     ch_match = _re.search(r'\[(\w+)\]', raw)
                     if not ch_match:
                         continue
                     ch_name = ch_match.group(1).lower()
                     if ch_name not in known_channels:
                         continue
-
                     if ch_name not in channels:
                         channels[ch_name] = {"messages": [], "todayIn": 0, "todayOut": 0, "total": 0}
-
                     rest = raw[ts_match.end():].strip()
-
-                    # Outgoing: sendMessage / send / deliver
-                    if any(x in rest for x in ("sendMessage ok", "send ok", "delivered", "sendPhoto ok", "sendAudio ok")):
+                    if any(x in rest for x in ("sendMessage ok", "send ok", "delivered",
+                                               "sendPhoto ok", "sendAudio ok", "sendDocument ok")):
                         channels[ch_name]["todayOut"] += 1
                         channels[ch_name]["total"] += 1
                         channels[ch_name]["messages"].append({
                             "direction": "out", "content": "", "timestamp": ts, "sender": "Diya"
                         })
-                    # Incoming: inbound / received / message from
-                    elif any(x in rest for x in ("inbound message", "received message", "message from", "new message")):
-                        channels[ch_name]["todayIn"] += 1
-                        channels[ch_name]["total"] += 1
-                        channels[ch_name]["messages"].append({
-                            "direction": "in", "content": "", "timestamp": ts, "sender": "User"
+
+        # ── Incoming: parse session JSONL files ──────────────────────────────
+        # Telegram sessions contain "message_id" in first user message
+        # iMessage sessions contain media paths or iMessage-specific metadata
+        if os.path.isdir(session_dir):
+            for fname in sorted(os.listdir(session_dir)):
+                if not fname.endswith(".jsonl"):
+                    continue
+                fpath = os.path.join(session_dir, fname)
+                try:
+                    mtime = datetime.fromtimestamp(os.path.getmtime(fpath)).strftime("%Y-%m-%d")
+                    if mtime != today:
+                        continue
+                    detected_ch = None
+                    first_user_ts = None
+                    first_user_text = ""
+                    with open(fpath, errors="ignore") as f2:
+                        for line in f2:
+                            try:
+                                obj = json.loads(line)
+                                if obj.get("type") == "message" and obj.get("message", {}).get("role") == "user":
+                                    content = obj["message"].get("content", "")
+                                    text = content if isinstance(content, str) else " ".join(
+                                        c.get("text", "") for c in content if isinstance(c, dict))
+                                    if 'message_id' in text and 'sender_id' in text:
+                                        if 'imessage' in text.lower() or '+' in text:
+                                            detected_ch = "imessage"
+                                        else:
+                                            detected_ch = "telegram"
+                                        first_user_ts = obj.get("timestamp", "")
+                                        first_user_text = text[:100]
+                                    break
+                            except Exception:
+                                continue
+                    if detected_ch and first_user_ts:
+                        if detected_ch not in channels:
+                            channels[detected_ch] = {"messages": [], "todayIn": 0, "todayOut": 0, "total": 0}
+                        channels[detected_ch]["todayIn"] += 1
+                        channels[detected_ch]["total"] += 1
+                        channels[detected_ch]["messages"].append({
+                            "direction": "in", "content": first_user_text, 
+                            "timestamp": first_user_ts, "sender": "User"
                         })
+                except Exception:
+                    continue
 
         # Cap and reverse (newest first)
         for ch in channels.values():
-            ch["messages"] = ch["messages"][-30:]
-            ch["messages"].reverse()
+            ch["messages"] = ch["messages"][-50:]
+            ch["messages"].sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
         return channels
     except Exception as e:
@@ -1573,63 +1601,52 @@ if __name__ == "__main__":
 
 
 def _build_gateway_data(paths: dict = None) -> dict:
-    """Parse today's openclaw log for gateway routing events."""
-    import re, json as _json
+    """Parse gateway.log (plain text) for routing events."""
+    import re
     try:
         from datetime import datetime as _dt
         today = _dt.now().strftime("%Y-%m-%d")
-        log_dir = (paths or {}).get("log_dir") or "/tmp/openclaw"
-        candidates = [
-            os.path.join(log_dir, f"openclaw-{today}.log"),
-            os.path.join(log_dir, f"moltbot-{today}.log"),
-            os.path.expanduser(f"~/.openclaw/logs/openclaw-{today}.log"),
-        ]
-        log_path = next((p for p in candidates if os.path.exists(p)), None)
+        gw_log = os.path.expanduser("~/.openclaw/logs/gateway.log")
 
         routes = []
         stats = {"today_messages": 0, "today_heartbeats": 0, "today_crons": 0,
                  "today_errors": 0, "active_sessions": 0}
 
-        if log_path:
-            with open(log_path, errors="ignore") as f:
+        _KNOWN_CHANNELS = {"telegram", "imessage", "whatsapp", "signal", "discord",
+                           "slack", "irc", "webchat", "googlechat", "msteams"}
+
+        if os.path.exists(gw_log):
+            with open(gw_log, errors="ignore") as f:
                 for line in f:
                     line = line.strip()
-                    if not line:
+                    if not line or not line.startswith(today):
                         continue
-                    try:
-                        entry = _json.loads(line)
-                    except Exception:
+                    # Format: 2026-03-10T10:00:59.952Z [channel] rest...
+                    m = re.match(r"(\S+Z)\s+\[(\w+)\]\s+(.*)", line)
+                    if not m:
                         continue
-                    msg = entry.get("1", "") or entry.get("0", "") or entry.get("msg", "")
-                    ts = entry.get("time", "")
-                    level = (entry.get("_meta") or {}).get("logLevelName", "")
-                    if "embedded run start:" in msg:
-                        route = {"timestamp": ts, "from": "", "to": "", "session": "", "type": "message", "status": "ok"}
-                        m_model = re.search(r"model=(\S+)", msg)
-                        m_chan = re.search(r"messageChannel=(\S+)", msg)
-                        m_sid = re.search(r"sessionId=(\S+)", msg)
-                        if m_model:
-                            route["to"] = m_model.group(1)
-                        if m_chan:
-                            ch = m_chan.group(1)
-                            route["from"] = ch
-                            if ch == "heartbeat":
-                                route["type"] = "heartbeat"
-                                stats["today_heartbeats"] += 1
-                            elif ch == "cron":
-                                route["type"] = "cron"
-                                stats["today_crons"] += 1
-                            else:
-                                stats["today_messages"] += 1
-                        else:
-                            stats["today_messages"] += 1
-                        if m_sid:
-                            route["session"] = m_sid.group(1)[:12]
+                    ts, tag, rest = m.group(1), m.group(2), m.group(3)
+                    route = {"timestamp": ts, "from": tag, "to": "brain",
+                             "session": "", "type": "message", "status": "ok"}
+                    if tag == "heartbeat":
+                        route["type"] = "heartbeat"
+                        stats["today_heartbeats"] += 1
                         routes.append(route)
-                    elif "Delivery failed" in msg or ("Delivery" in msg and level == "ERROR"):
+                    elif tag == "cron":
+                        route["type"] = "cron"
+                        stats["today_crons"] += 1
+                        routes.append(route)
+                    elif tag in _KNOWN_CHANNELS:
+                        if "sendMessage ok" in rest or "send ok" in rest or "delivered" in rest.lower():
+                            # Extract message_id for display
+                            m_id = re.search(r"message=(\d+)", rest)
+                            if m_id:
+                                route["session"] = m_id.group(1)
+                            route["to"] = "user"
+                            stats["today_messages"] += 1
+                            routes.append(route)
+                    elif tag in ("warn", "error") or "error" in rest.lower()[:30]:
                         stats["today_errors"] += 1
-                        routes.append({"timestamp": ts, "from": "", "to": "delivery",
-                                       "session": "", "type": "message", "status": "error"})
 
         routes.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
         return {
