@@ -77,16 +77,14 @@ def _cmd_onboard(args) -> None:
         print()
         return
 
-    print(f"  {BOLD('🌐  Access your dashboard from anywhere?')}")
-    print(f"      {DIM('app.clawmetry.com · Mac · iOS · Android')}")
+    print(f"  {BOLD('Your dashboard is ready at')}")
+    print(f"  {BOLD('app.clawmetry.com')}")
     print()
-    print(f"  {BOLD('🔒  E2E encrypted with your local secret key')}")
-    print(f"      {DIM('Data is encrypted before it leaves your machine.')}")
-    print(f"      {DIM('Decrypted in the dashboard on demand.')}")
-    print(f"      {DIM('Nothing reaches the cloud in plaintext. Ever.')}")
+    print(f"  {DIM('E2E encrypted. Only you can read it.')}")
     print()
-    print(f"      {BOLD('[Y]')} Connect to ClawMetry Cloud  {DIM('(free 7-day trial · $5/node/month after)')}")
-    print(f"      {BOLD('[n]')} I\'ll start the server locally for now")
+    print(f"      {BOLD('[Y]')} Start 7-day trial {DIM('(then $5/node/mo)')}")
+    print(f"      {BOLD('[n]')} Run locally for now")
+    print(f"          {DIM('Enable cloud anytime: clawmetry connect')}")
     print()
 
     try:
