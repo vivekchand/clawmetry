@@ -10204,8 +10204,7 @@ var _flowSse = null;
 var _flowSseDebounce = {};
 function _startFlowSse() {
   if (_flowSse && _flowSse.readyState !== EventSource.CLOSED) return;
-  var tok = localStorage.getItem('clawmetry-token') || '';
-  _flowSse = new EventSource('/api/flow-events' + (tok ? '?token=' + encodeURIComponent(tok) : ''));
+  _flowSse = new EventSource('/api/flow-events');
   _flowSse.onmessage = function(e) {
     try {
       var evt = JSON.parse(e.data);
@@ -14753,6 +14752,154 @@ def api_brain_history():
     try: _ext_emit('brain.event', {'count': len(events)})
     except Exception: pass
     return jsonify({'events': events, 'total': len(events), 'sources': sources_seen})
+
+@bp_logs.route('/api/flow-events')
+def api_flow_events():
+    """SSE endpoint — emits typed flow events (msg_in, msg_out, tool_call, tool_result).
+    No auth required. Tails gateway.log + active session JSONL on disk.
+    """
+    import glob as _glob
+
+    def _find_active_jsonl():
+        sd = SESSIONS_DIR
+        if not sd or not os.path.isdir(sd):
+            return None
+        files = [f for f in _glob.glob(os.path.join(sd, '*.jsonl'))
+                 if 'deleted' not in f and os.path.getsize(f) > 0]
+        return max(files, key=os.path.getmtime) if files else None
+
+    gw_log = os.path.join(os.path.expanduser('~'), '.openclaw', 'logs', 'gateway.log')
+
+    _TOOL_MAP = {
+        'web_search': ('tool_call', 'search'),
+        'exec': ('tool_call', 'exec'),
+        'browser': ('tool_call', 'browser'),
+        'web_fetch': ('tool_call', 'browser'),
+        'memory_search': ('tool_call', 'memory'),
+        'memory_get': ('tool_call', 'memory'),
+        'message': ('msg_out', 'telegram'),
+        'tts': ('tool_call', 'tts'),
+        'sessions_spawn': ('tool_call', 'session'),
+        'cron': ('tool_call', 'cron'),
+    }
+
+    def _parse_gw(line):
+        for ch in ('telegram', 'imessage', 'whatsapp', 'signal', 'discord'):
+            if f'[{ch}]' in line or f'channels/{ch}' in line:
+                if any(x in line for x in ('sendMessage ok', 'send ok', 'sent ok')):
+                    return {'type': 'msg_out', 'channel': ch}
+                if any(x in line for x in ('received', 'inbound', 'run start')):
+                    return {'type': 'msg_in', 'channel': ch}
+        return None
+
+    def _parse_jsonl(obj, last_tool):
+        otype = obj.get('type')
+        role = obj.get('role')
+        if otype == 'tool_use':
+            name = obj.get('name', '')
+            mapping = _TOOL_MAP.get(name)
+            if mapping:
+                ev_type, tool_key = mapping
+                last_tool[0] = tool_key
+                if ev_type == 'msg_out':
+                    return {'type': 'msg_out', 'channel': tool_key}
+                return {'type': 'tool_call', 'tool': tool_key}
+            last_tool[0] = name
+            return {'type': 'tool_call', 'tool': name}
+        if otype == 'tool_result':
+            return {'type': 'tool_result', 'tool': last_tool[0] or 'exec'}
+        if role == 'user':
+            content = obj.get('content', '')
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get('type') == 'tool_result':
+                        return {'type': 'tool_result', 'tool': last_tool[0] or 'exec'}
+            return {'type': 'msg_in', 'channel': 'telegram'}
+        return None
+
+    def generate():
+        gw_pos = 0
+        jsonl_pos = 0
+        jsonl_path = None
+        last_tool = ['exec']
+        last_jsonl_check = 0.0
+        started = time.time()
+
+        # Seek to end of existing files — only emit NEW events
+        if os.path.exists(gw_log):
+            with open(gw_log, 'rb') as f:
+                f.seek(0, 2)
+                gw_pos = f.tell()
+        jsonl_path = _find_active_jsonl()
+        if jsonl_path:
+            with open(jsonl_path, 'rb') as f:
+                f.seek(0, 2)
+                jsonl_pos = f.tell()
+
+        try:
+            while True:
+                if time.time() - started > SSE_MAX_SECONDS:
+                    yield 'event: done\ndata: {}\n\n'
+                    break
+
+                events = []
+
+                # Tail gateway.log
+                if os.path.exists(gw_log):
+                    try:
+                        with open(gw_log, 'rb') as f:
+                            f.seek(gw_pos)
+                            data = f.read()
+                            gw_pos = f.tell()
+                        for line in data.decode('utf-8', errors='replace').splitlines():
+                            ev = _parse_gw(line)
+                            if ev:
+                                events.append(ev)
+                    except Exception:
+                        pass
+
+                # Re-detect active JSONL every 10s
+                now = time.time()
+                if now - last_jsonl_check > 10:
+                    new_path = _find_active_jsonl()
+                    if new_path and new_path != jsonl_path:
+                        jsonl_path = new_path
+                        jsonl_pos = 0
+                        with open(jsonl_path, 'rb') as f:
+                            f.seek(0, 2)
+                            jsonl_pos = f.tell()
+                    last_jsonl_check = now
+
+                # Tail session JSONL
+                if jsonl_path:
+                    try:
+                        with open(jsonl_path, 'rb') as f:
+                            f.seek(jsonl_pos)
+                            data = f.read()
+                            jsonl_pos = f.tell()
+                        for line in data.decode('utf-8', errors='replace').splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                ev = _parse_jsonl(json.loads(line), last_tool)
+                                if ev:
+                                    events.append(ev)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                for ev in events:
+                    yield f'data: {json.dumps(ev)}\n\n'
+
+                time.sleep(0.5)
+        except GeneratorExit:
+            pass
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
 
 @bp_logs.route('/api/logs-stream')
 def api_logs_stream():
