@@ -14564,7 +14564,7 @@ def cloud_cta_send_otp():
     if not email or '@' not in email:
         return jsonify({'ok': False, 'error': 'Invalid email'}), 400
     try:
-        r = _requests_mod.post('https://clawmetry.com/api/otp/send',
+        r = _requests_mod.post('https://app.clawmetry.com/api/otp/send',
                                json={'email': email, 'source': 'dashboard'}, timeout=10)
         result = r.json()
         return jsonify({'ok': r.status_code == 200, 'error': result.get('error')})
@@ -14580,7 +14580,7 @@ def cloud_cta_verify_otp():
     if not email or not code:
         return jsonify({'ok': False, 'error': 'Missing email or code'}), 400
     try:
-        r = _requests_mod.post('https://clawmetry.com/api/otp/verify',
+        r = _requests_mod.post('https://app.clawmetry.com/api/otp/verify',
                                json={'email': email, 'code': code}, timeout=10)
         result = r.json()
         if r.status_code == 200 and result.get('token'):
