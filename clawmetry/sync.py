@@ -1585,20 +1585,6 @@ def run_daemon() -> None:
         time.sleep(POLL_INTERVAL)
 
 
-if __name__ == "__main__":
-    while True:
-        try:
-            run_daemon()
-            break  # clean exit
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            import traceback
-            log.error(f"Daemon crashed: {e}")
-            log.error(traceback.format_exc())
-            log.info("Restarting in 15 seconds...")
-            time.sleep(15)
-
 
 def _build_gateway_data(paths: dict = None) -> dict:
     """Parse gateway.log (plain text) for routing events."""
@@ -1660,3 +1646,19 @@ def _build_gateway_data(paths: dict = None) -> dict:
         return {"stats": {"today_messages": 0, "today_heartbeats": 0, "today_crons": 0,
                           "today_errors": 0, "active_sessions": 0},
                 "routes": [], "total": 0, "status": "running", "port": 18789}
+
+
+if __name__ == "__main__":
+    while True:
+        try:
+            run_daemon()
+            break  # clean exit
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            import traceback
+            log.error(f"Daemon crashed: {e}")
+            log.error(traceback.format_exc())
+            log.info("Restarting in 15 seconds...")
+            time.sleep(15)
+
