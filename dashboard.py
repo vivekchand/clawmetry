@@ -6770,8 +6770,47 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
+  <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(229,68,58,0.4);border-radius:8px;font-size:12px;font-weight:600;color:#E5443A;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(229,68,58,0.08)'" onmouseout="this.style.background='transparent'">&#9729; Enable ClawMetry Cloud</div>
+  <div id="cloud-connected-badge" onclick="window.open('https://app.clawmetry.com','_blank')" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(34,197,94,0.4);border-radius:8px;font-size:12px;font-weight:600;color:#22c55e;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='transparent'">&#9679; Cloud Connected</div>
   </div>
 </div>
+<!-- ClawMetry Cloud CTA Modal -->
+<div id="cloud-modal-overlay" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+  <div style="background:#0f1623;border:1px solid rgba(229,68,58,0.2);border-radius:16px;width:90%;max-width:440px;padding:32px;box-shadow:0 25px 60px rgba(0,0,0,0.5);position:relative;">
+    <button onclick="closeCloudModal()" style="position:absolute;top:16px;right:16px;background:rgba(255,255,255,0.05);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:#888;">&times;</button>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <img src="https://clawmetry.com/favicon.svg" width="28" height="28" style="border-radius:6px;">
+      <span style="font-size:18px;font-weight:700;color:#fff;">ClawMetry Cloud</span>
+    </div>
+    <p style="color:#94a3b8;font-size:14px;margin:0 0 24px;line-height:1.5;">Monitor your agents from anywhere. Encrypted, real-time, accessible from any browser or as a Mac app.</p>
+    <div id="cloud-step-email">
+      <label style="font-size:12px;font-weight:600;color:#94a3b8;display:block;margin-bottom:6px;">YOUR EMAIL</label>
+      <div style="display:flex;gap:8px;">
+        <input id="cloud-email-input" type="email" placeholder="you@example.com" style="flex:1;padding:10px 14px;background:#1a2235;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-size:14px;outline:none;" onkeydown="if(event.key==='Enter')cloudSendOtp()">
+        <button onclick="cloudSendOtp()" style="padding:10px 18px;background:#E5443A;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;">Get Started</button>
+      </div>
+      <p id="cloud-email-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
+      <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.06);text-align:center;">
+        <span style="color:#64748b;font-size:12px;">Already have a key? Run </span><code style="color:#94a3b8;font-size:12px;background:rgba(255,255,255,0.05);padding:2px 8px;border-radius:4px;">clawmetry connect</code>
+      </div>
+    </div>
+    <div id="cloud-step-otp" style="display:none;">
+      <p style="color:#94a3b8;font-size:13px;margin:0 0 16px;">Check your email for a 6-digit code</p>
+      <div style="display:flex;gap:8px;">
+        <input id="cloud-otp-input" type="text" maxlength="6" placeholder="_ _ _ _ _ _" style="flex:1;padding:10px 14px;background:#1a2235;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-size:18px;letter-spacing:6px;text-align:center;outline:none;" onkeydown="if(event.key==='Enter')cloudVerifyOtp()">
+        <button onclick="cloudVerifyOtp()" style="padding:10px 18px;background:#E5443A;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">Verify</button>
+      </div>
+      <p id="cloud-otp-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
+      <p style="color:#64748b;font-size:12px;margin:10px 0 0;text-align:center;cursor:pointer;" onclick="cloudResendOtp()">Resend code</p>
+    </div>
+    <div id="cloud-step-done" style="display:none;text-align:center;padding:16px 0;">
+      <div style="font-size:36px;margin-bottom:12px;">&#10003;</div>
+      <p style="color:#22c55e;font-size:16px;font-weight:600;margin:0 0 6px;">Connected!</p>
+      <p style="color:#94a3b8;font-size:13px;margin:0;">Opening ClawMetry Cloud...</p>
+    </div>
+  </div>
+</div>
+
 
 <!-- Alert Banner -->
 <div id="alert-banner" style="display:none;padding:10px 16px;background:var(--bg-error);border-bottom:2px solid var(--text-error);color:var(--text-error);font-size:13px;font-weight:600;display:none;align-items:center;gap:10px;">
@@ -13411,6 +13450,80 @@ async function gwSetupConnect() {
 
 // Check on load
 document.addEventListener('DOMContentLoaded', checkGwConfig);
+
+// ClawMetry Cloud CTA
+var _cloudEmail = '';
+function openCloudModal() {
+  document.getElementById('cloud-modal-overlay').style.display = 'flex';
+  document.getElementById('cloud-step-email').style.display = '';
+  document.getElementById('cloud-step-otp').style.display = 'none';
+  document.getElementById('cloud-step-done').style.display = 'none';
+  document.getElementById('cloud-email-error').style.display = 'none';
+  setTimeout(function(){ var el = document.getElementById('cloud-email-input'); if(el) el.focus(); }, 100);
+}
+function closeCloudModal() {
+  document.getElementById('cloud-modal-overlay').style.display = 'none';
+}
+document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeCloudModal(); });
+function cloudSendOtp() {
+  var email = document.getElementById('cloud-email-input').value.trim();
+  if (!email || !email.includes('@')) {
+    var err = document.getElementById('cloud-email-error');
+    err.textContent = 'Please enter a valid email.';
+    err.style.display = '';
+    return;
+  }
+  _cloudEmail = email;
+  document.getElementById('cloud-email-error').style.display = 'none';
+  fetch('/api/cloud-cta/send-otp', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: email})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.ok) {
+        document.getElementById('cloud-step-email').style.display = 'none';
+        document.getElementById('cloud-step-otp').style.display = '';
+        setTimeout(function(){ var el = document.getElementById('cloud-otp-input'); if(el) el.focus(); }, 100);
+      } else {
+        var err = document.getElementById('cloud-email-error');
+        err.textContent = d.error || 'Could not send code. Try again.';
+        err.style.display = '';
+      }
+    })
+    .catch(function(){ var err = document.getElementById('cloud-email-error'); err.textContent = 'Network error. Try again.'; err.style.display = ''; });
+}
+function cloudResendOtp() { cloudSendOtp(); }
+function cloudVerifyOtp() {
+  var code = document.getElementById('cloud-otp-input').value.replace(/\s/g,'');
+  if (code.length !== 6) {
+    var err = document.getElementById('cloud-otp-error');
+    err.textContent = 'Enter the 6-digit code from your email.';
+    err.style.display = '';
+    return;
+  }
+  fetch('/api/cloud-cta/verify-otp', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: _cloudEmail, code: code})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.ok && d.token) {
+        document.getElementById('cloud-step-otp').style.display = 'none';
+        document.getElementById('cloud-step-done').style.display = '';
+        setTimeout(function(){ window.open('https://app.clawmetry.com/auth?token=' + encodeURIComponent(d.token), '_blank'); closeCloudModal(); _updateCloudStatus(); }, 1800);
+      } else {
+        var err = document.getElementById('cloud-otp-error');
+        err.textContent = d.error || 'Invalid code. Try again.';
+        err.style.display = '';
+      }
+    })
+    .catch(function(){ var err = document.getElementById('cloud-otp-error'); err.textContent = 'Network error. Try again.'; err.style.display = ''; });
+}
+function _updateCloudStatus() {
+  fetch('/api/cloud-cta/status').then(function(r){ return r.json(); }).then(function(d){
+    document.getElementById('cloud-cta-btn').style.display = d.connected ? 'none' : '';
+    document.getElementById('cloud-connected-badge').style.display = d.connected ? '' : 'none';
+  }).catch(function(){
+    document.getElementById('cloud-cta-btn').style.display = '';
+    document.getElementById('cloud-connected-badge').style.display = 'none';
+  });
+}
+_updateCloudStatus();
 </script>
 
 </body>
@@ -14435,6 +14548,47 @@ def api_timeline():
             })
     return jsonify({'days': days, 'today': now.strftime('%Y-%m-%d')})
 
+
+
+
+@bp_overview.route('/api/cloud-cta/status')
+def cloud_cta_status():
+    token = _read_cloud_token()
+    return jsonify({'connected': bool(token)})
+
+
+@bp_overview.route('/api/cloud-cta/send-otp', methods=['POST'])
+def cloud_cta_send_otp():
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip()
+    if not email or '@' not in email:
+        return jsonify({'ok': False, 'error': 'Invalid email'}), 400
+    try:
+        r = _requests_mod.post('https://clawmetry.com/api/otp/send',
+                               json={'email': email, 'source': 'dashboard'}, timeout=10)
+        result = r.json()
+        return jsonify({'ok': r.status_code == 200, 'error': result.get('error')})
+    except Exception:
+        return jsonify({'ok': False, 'error': 'Could not reach ClawMetry server'}), 502
+
+
+@bp_overview.route('/api/cloud-cta/verify-otp', methods=['POST'])
+def cloud_cta_verify_otp():
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip()
+    code = (data.get('code') or '').strip()
+    if not email or not code:
+        return jsonify({'ok': False, 'error': 'Missing email or code'}), 400
+    try:
+        r = _requests_mod.post('https://clawmetry.com/api/otp/verify',
+                               json={'email': email, 'code': code}, timeout=10)
+        result = r.json()
+        if r.status_code == 200 and result.get('token'):
+            _write_cloud_token(result['token'])
+            return jsonify({'ok': True, 'token': result['token']})
+        return jsonify({'ok': False, 'error': result.get('error', 'Invalid code')})
+    except Exception:
+        return jsonify({'ok': False, 'error': 'Could not reach ClawMetry server'}), 502
 
 @bp_logs.route('/api/logs')
 def api_logs():
