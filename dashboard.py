@@ -61,7 +61,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.1"
+__version__ = "0.12.2"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -10208,7 +10208,8 @@ var _flowSse = null;
 var _flowSseDebounce = {};
 function _startFlowSse() {
   if (_flowSse && _flowSse.readyState !== EventSource.CLOSED) return;
-  _flowSse = new EventSource('/api/flow-events');
+  var _fTok = localStorage.getItem('clawmetry-token') || '';
+  _flowSse = new EventSource('/api/flow-events' + (_fTok ? '?token=' + encodeURIComponent(_fTok) : ''));
   _flowSse.onmessage = function(e) {
     try {
       var evt = JSON.parse(e.data);
