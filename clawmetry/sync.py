@@ -156,8 +156,11 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
         raise RuntimeError(f"HTTP {e.code} from {url}: {e.read().decode()[:200]}")
 
 
-def validate_key(api_key: str) -> dict:
-    return _post("/auth", {"api_key": api_key}, api_key)
+def validate_key(api_key: str, hostname: str = "", existing_node_id: str = "", **kwargs) -> dict:
+    payload = {"api_key": api_key}
+    if hostname: payload["hostname"] = hostname
+    if existing_node_id: payload["existing_node_id"] = existing_node_id
+    return _post("/auth", payload, api_key)
 
 
 # ── Path detection ─────────────────────────────────────────────────────────────
@@ -1585,20 +1588,6 @@ def run_daemon() -> None:
         time.sleep(POLL_INTERVAL)
 
 
-if __name__ == "__main__":
-    while True:
-        try:
-            run_daemon()
-            break  # clean exit
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            import traceback
-            log.error(f"Daemon crashed: {e}")
-            log.error(traceback.format_exc())
-            log.info("Restarting in 15 seconds...")
-            time.sleep(15)
-
 
 def _build_gateway_data(paths: dict = None) -> dict:
     """Parse gateway.log (plain text) for routing events."""
@@ -1660,3 +1649,19 @@ def _build_gateway_data(paths: dict = None) -> dict:
         return {"stats": {"today_messages": 0, "today_heartbeats": 0, "today_crons": 0,
                           "today_errors": 0, "active_sessions": 0},
                 "routes": [], "total": 0, "status": "running", "port": 18789}
+
+
+if __name__ == "__main__":
+    while True:
+        try:
+            run_daemon()
+            break  # clean exit
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            import traceback
+            log.error(f"Daemon crashed: {e}")
+            log.error(traceback.format_exc())
+            log.info("Restarting in 15 seconds...")
+            time.sleep(15)
+
