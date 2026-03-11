@@ -69,10 +69,6 @@ def _cmd_onboard(args) -> None:
 
     already_connected = bool(_os.environ.get("CLAWMETRY_API_KEY") or _os.environ.get("CLAWMETRY_NODE_ID"))
 
-    print()
-    print(SEP)
-    print()
-
     if already_connected:
         print(f"  {GREEN(BOLD('✓ Already connected to ClawMetry Cloud'))}")
         print(f"  {DIM('Run  clawmetry status  to check sync health.')}")

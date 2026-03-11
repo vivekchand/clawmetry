@@ -6775,8 +6775,8 @@ function clawmetryLogout(){
   </div>
 </div>
 <!-- ClawMetry Cloud CTA Modal -->
-<div id="cloud-modal-overlay" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
-  <div style="background:#0f1623;border:1px solid rgba(229,68,58,0.2);border-radius:16px;width:90%;max-width:440px;padding:32px;box-shadow:0 25px 60px rgba(0,0,0,0.5);position:relative;">
+<div id="cloud-modal-overlay" onclick="if(event.target===this)closeCloudModal()" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+  <div style="background:#0f1623;border:1px solid rgba(229,68,58,0.2);border-radius:16px;width:90%;max-width:440px;padding:32px;box-shadow:0 25px 60px rgba(0,0,0,0.5);position:relative;margin:auto;">
     <button onclick="closeCloudModal()" style="position:absolute;top:16px;right:16px;background:rgba(255,255,255,0.05);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:#888;">&times;</button>
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
       <img src="https://clawmetry.com/favicon.svg" width="28" height="28" style="border-radius:6px;">
@@ -13454,7 +13454,9 @@ document.addEventListener('DOMContentLoaded', checkGwConfig);
 // ClawMetry Cloud CTA
 var _cloudEmail = '';
 function openCloudModal() {
-  document.getElementById('cloud-modal-overlay').style.display = 'flex';
+  var _cmo = document.getElementById('cloud-modal-overlay');
+  document.body.appendChild(_cmo);
+  _cmo.style.display = 'flex';
   document.getElementById('cloud-step-email').style.display = '';
   document.getElementById('cloud-step-otp').style.display = 'none';
   document.getElementById('cloud-step-done').style.display = 'none';
@@ -14559,36 +14561,51 @@ def cloud_cta_status():
 
 @bp_overview.route('/api/cloud-cta/send-otp', methods=['POST'])
 def cloud_cta_send_otp():
+    import urllib.request as _ur; import json as _jr
     data = request.get_json(silent=True) or {}
     email = (data.get('email') or '').strip()
     if not email or '@' not in email:
         return jsonify({'ok': False, 'error': 'Invalid email'}), 400
     try:
-        r = _requests_mod.post('https://app.clawmetry.com/api/otp/send',
-                               json={'email': email, 'source': 'dashboard'}, timeout=10)
-        result = r.json()
-        return jsonify({'ok': r.status_code == 200, 'error': result.get('error')})
-    except Exception:
-        return jsonify({'ok': False, 'error': 'Could not reach ClawMetry server'}), 502
+        _body = _jr.dumps({'email': email, 'source': 'dashboard'}).encode()
+        _req = _ur.Request('https://app.clawmetry.com/api/otp/send', data=_body,
+                           headers={'Content-Type': 'application/json'}, method='POST')
+        with _ur.urlopen(_req, timeout=10) as _resp:
+            result = _jr.loads(_resp.read())
+            return jsonify({'ok': True, 'error': result.get('error')})
+    except Exception as _ex:
+        _sc = getattr(getattr(_ex, 'code', None), '__class__', type(_ex)).__name__
+        try:
+            _eb = _jr.loads(_ex.read()) if hasattr(_ex, 'read') else {}
+        except Exception:
+            _eb = {}
+        return jsonify({'ok': False, 'error': _eb.get('error', 'Could not reach ClawMetry server')}), 502
 
 
 @bp_overview.route('/api/cloud-cta/verify-otp', methods=['POST'])
 def cloud_cta_verify_otp():
+    import urllib.request as _ur; import json as _jr
     data = request.get_json(silent=True) or {}
     email = (data.get('email') or '').strip()
     code = (data.get('code') or '').strip()
     if not email or not code:
         return jsonify({'ok': False, 'error': 'Missing email or code'}), 400
     try:
-        r = _requests_mod.post('https://app.clawmetry.com/api/otp/verify',
-                               json={'email': email, 'code': code}, timeout=10)
-        result = r.json()
-        if r.status_code == 200 and result.get('token'):
-            _write_cloud_token(result['token'])
-            return jsonify({'ok': True, 'token': result['token']})
-        return jsonify({'ok': False, 'error': result.get('error', 'Invalid code')})
-    except Exception:
-        return jsonify({'ok': False, 'error': 'Could not reach ClawMetry server'}), 502
+        _body = _jr.dumps({'email': email, 'code': code}).encode()
+        _req = _ur.Request('https://app.clawmetry.com/api/otp/verify', data=_body,
+                           headers={'Content-Type': 'application/json'}, method='POST')
+        with _ur.urlopen(_req, timeout=10) as _resp:
+            result = _jr.loads(_resp.read())
+            if result.get('token'):
+                _write_cloud_token(result['token'])
+                return jsonify({'ok': True, 'token': result['token']})
+            return jsonify({'ok': False, 'error': result.get('error', 'Invalid code')})
+    except Exception as _ex:
+        try:
+            _eb = _jr.loads(_ex.read()) if hasattr(_ex, 'read') else {}
+        except Exception:
+            _eb = {}
+        return jsonify({'ok': False, 'error': _eb.get('error', 'Invalid code')}), 502
 
 @bp_logs.route('/api/logs')
 def api_logs():
