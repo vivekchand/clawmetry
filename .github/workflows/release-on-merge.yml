@@ -68,3 +68,4 @@ jobs:
           title: "chore: bump to v${{ steps.bump.outputs.new }}"
           body: "Auto-generated after PyPI release of v${{ steps.bump.outputs.new }}."
           labels: "automated"
+# test trigger
