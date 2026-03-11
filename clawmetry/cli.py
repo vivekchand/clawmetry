@@ -53,6 +53,81 @@ def _stop_existing_daemon() -> None:
     if LOG_FILE.exists():
         LOG_FILE.write_text("")
 
+def _cmd_onboard(args) -> None:
+    """Interactive onboarding — set up cloud access or print run instructions."""
+    import os as _os
+    import sys as _sys
+
+    # Colour helpers (same as rest of CLI)
+    _is_tty = _sys.stdout.isatty()
+    def _c(code, text): return f"\033[{code}m{text}\033[0m" if _is_tty else text
+    BOLD = lambda t: _c("1", t)
+    GREEN = lambda t: _c("32", t)
+    CYAN = lambda t: _c("36", t)
+    DIM = lambda t: _c("2", t)
+    SEP = "  " + "─" * 48
+
+    already_connected = bool(_os.environ.get("CLAWMETRY_API_KEY") or _os.environ.get("CLAWMETRY_NODE_ID"))
+
+    print()
+    print(SEP)
+    print()
+
+    if already_connected:
+        print(f"  {GREEN(BOLD('✓ Already connected to ClawMetry Cloud'))}")
+        print(f"  {DIM('Run  clawmetry status  to check sync health.')}")
+        print()
+        print(SEP)
+        print()
+        return
+
+    print(f"  {BOLD('🌐  Access your dashboard from anywhere?')}")
+    print(f"      {DIM('app.clawmetry.com · Mac · iOS · Android')}")
+    print()
+    print(f"  {BOLD('🔒  E2E encrypted with your local secret key')}")
+    print(f"      {DIM('Data is encrypted before it leaves your machine.')}")
+    print(f"      {DIM('Decrypted in the dashboard on demand.')}")
+    print(f"      {DIM('Nothing reaches the cloud in plaintext. Ever.')}")
+    print()
+    print(f"      {BOLD('[y]')} Connect to ClawMetry Cloud  {DIM('(free 7-day trial · $5/node/month after)')}")
+    print(f"      {BOLD('[n]')} I\'ll start the server locally for now")
+    print()
+
+    try:
+        choice = input("  → [y/n]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        choice = "n"
+
+    print()
+
+    if choice == "y":
+        print(f"  {DIM('Starting clawmetry connect...')}")
+        print()
+        import argparse as _ap
+        _fake_args = _ap.Namespace(key=None, foreground=False, custom_node_id=None)
+        _cmd_connect(_fake_args)
+        return
+
+    # User said no — print run instructions
+    print(SEP)
+    print()
+    print(f"  Run with:")
+    print()
+    print(f"    {BOLD('clawmetry --host 0.0.0.0 --port 8900')}        {DIM('# foreground (LAN accessible)')}")
+    print(f"    {BOLD('clawmetry start --host 0.0.0.0 --port 8900')}  {DIM('# background service (LAN accessible)')}")
+    print()
+    print(SEP)
+    print()
+    print(f"  {BOLD('🌐  Access from anywhere:')}  {BOLD('clawmetry connect')}")
+    print(f"      {DIM('🔒  E2E encrypted with your local key — decrypted on demand.')}")
+    print(f"      {DIM('Free 7-day trial · no credit card required.')}")
+    print()
+    print(f"  Docs:  {CYAN('https://clawmetry.com/how-it-works')}")
+    print()
+    print("  🦞  Happy observing!")
+    print()
+
+
 def _cmd_connect(args) -> None:
     """clawmetry connect — validate key, save config, start daemon."""
     # Read existing config FIRST — before stopping daemon (avoids race condition)
@@ -492,6 +567,9 @@ def main() -> None:
     p_connect.add_argument("--foreground", action="store_true", help="Run daemon in foreground")
     p_connect.add_argument("--node-id", metavar="NAME", dest="custom_node_id", help="Custom node name (default: hostname)")
 
+    # onboard
+    sub.add_parser("onboard", help="Interactive setup: cloud access or local run instructions")
+
     # disconnect
     sub.add_parser("disconnect", help="Stop cloud sync and remove key")
 
@@ -500,7 +578,7 @@ def main() -> None:
     p_status.add_argument("--show-key", action="store_true", help="Reveal secret key")
 
     # Parse just the first token to decide if it's a sub-command or dashboard flag
-    if len(sys.argv) > 1 and sys.argv[1] in ("connect", "disconnect", "status"):
+    if len(sys.argv) > 1 and sys.argv[1] in ("connect", "disconnect", "status", "onboard"):
         args = parser.parse_args()
         if args.cmd == "connect":
             _cmd_connect(args)
@@ -508,6 +586,8 @@ def main() -> None:
             _cmd_disconnect(args)
         elif args.cmd == "status":
             _cmd_status(args)
+        elif args.cmd == "onboard":
+            _cmd_onboard(args)
     else:
         # Fall through to dashboard (handles --host, --port, --version, start, stop, etc.)
         dashboard_main()
