@@ -159,7 +159,7 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
 def validate_key(api_key: str, hostname: str = "", existing_node_id: str = "", **kwargs) -> dict:
     payload = {"api_key": api_key}
     if hostname: payload["hostname"] = hostname
-    if existing_node_id: payload["existing_node_id"] = existing_node_id
+    if existing_node_id: payload["node_id"] = existing_node_id
     return _post("/auth", payload, api_key)
 
 
