@@ -15968,7 +15968,7 @@ def api_usage_export():
             data = _get_otel_usage_data()
         else:
             # Call the same logic as /api/usage but get full data
-            sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.clawdbot/agents/main/sessions')
+            sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
             daily_tokens = {}
             
             if os.path.isdir(sessions_dir):
@@ -16050,7 +16050,7 @@ def api_usage_export():
 @bp_sessions.route('/api/transcripts')
 def api_transcripts():
     """List available session transcript .jsonl files."""
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.clawdbot/agents/main/sessions')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
     transcripts = []
     if os.path.isdir(sessions_dir):
         for fname in sorted(os.listdir(sessions_dir), key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)), reverse=True):
@@ -16077,7 +16077,7 @@ def api_transcripts():
 @bp_sessions.route('/api/transcript/<session_id>')
 def api_transcript(session_id):
     """Parse and return a session transcript for the chat viewer."""
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.clawdbot/agents/main/sessions')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
     fpath = os.path.join(sessions_dir, session_id + '.jsonl')
     # Sanitize path
     fpath = os.path.normpath(fpath)
@@ -16175,7 +16175,7 @@ def api_transcript(session_id):
 @bp_sessions.route('/api/transcript-events/<session_id>')
 def api_transcript_events(session_id):
     """Parse a session transcript JSONL into structured events for the detail modal."""
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.clawdbot/agents/main/sessions')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
     fpath = os.path.join(sessions_dir, session_id + '.jsonl')
     fpath = os.path.normpath(fpath)
     if not fpath.startswith(os.path.normpath(sessions_dir)):
@@ -16564,8 +16564,8 @@ def api_channel_telegram():
     run_sessions = {}
     for lf in log_files:
         try:
-            # Use grep to pre-filter telegram-relevant lines
-            _grep_lines = _grep_log_file(lf, 'messageChannel=telegram\\|telegram.*deliver\\|telegram message failed')
+            # Pre-filter: outbound = "sendMessage ok", inbound via JSONL
+            _grep_lines = _grep_log_file(lf, 'sendMessage ok\|sendMessage failed\|telegram message failed')
             for line in _grep_lines:
                 line = line.strip()
                 if not line:
@@ -16574,40 +16574,29 @@ def api_channel_telegram():
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                msg1 = obj.get('1', '') or obj.get('0', '')
+                msg1 = obj.get('1', '') or ''
                 ts = obj.get('time', '') or (obj.get('_meta', {}) or {}).get('date', '')
 
-                if 'messageChannel=telegram' in msg1 and 'run start' in msg1:
-                    sid_match = re.search(r'sessionId=([a-f0-9-]+)', msg1)
-                    sid = sid_match.group(1) if sid_match else ''
-                    messages.append({
-                        'timestamp': ts, 'direction': 'in', 'sender': 'User',
-                        'text': '', 'chatId': '', 'sessionId': sid,
-                    })
-                    if sid:
-                        run_sessions[sid] = ts
-
-                msg0 = obj.get('0', '')
-                if 'telegram' in msg0.lower() and 'deliver' in msg0.lower():
-                    chat_match = re.search(r'telegram:(-?\d+)', msg0)
+                # Outbound: "telegram sendMessage ok chat=1532693273 message=5961"
+                if 'sendmessage ok' in msg1.lower():
+                    chat_match = re.search(r'chat=(-?\d+)', msg1)
+                    msg_match = re.search(r'message=(\d+)', msg1)
                     chat_id = chat_match.group(1) if chat_match else ''
-                    failed = 'failed' in msg0.lower()
                     messages.append({
-                        'timestamp': ts, 'direction': 'out', 'sender': 'Clawd',
-                        'text': '(delivery failed)' if failed else '(message sent)',
+                        'timestamp': ts, 'direction': 'out', 'sender': 'Bot',
+                        'text': f'(sent message {msg_match.group(1) if msg_match else ""})',
                         'chatId': chat_id, 'sessionId': '',
                     })
-
-                if 'telegram message failed' in msg1:
+                elif 'sendmessage' in msg1.lower() and 'failed' in msg1.lower():
                     messages.append({
-                        'timestamp': ts, 'direction': 'out', 'sender': 'Clawd',
-                        'text': msg1[:200], 'chatId': '', 'sessionId': '',
+                        'timestamp': ts, 'direction': 'out', 'sender': 'Bot',
+                        'text': '(delivery failed)', 'chatId': '', 'sessionId': '',
                     })
         except Exception:
             pass
 
-    # 2. Try to enrich incoming messages with text from session transcripts
-    sessions_dir = os.path.expanduser('~/.clawdbot/agents/main/sessions')
+    # 2. Parse session JSONL files for inbound messages (user role = incoming Telegram)
+    sessions_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
     for msg in messages:
         if msg['direction'] == 'in' and msg['sessionId'] and not msg['text']:
             sf = os.path.join(sessions_dir, msg['sessionId'] + '.jsonl')
@@ -18265,7 +18254,7 @@ def api_component_gateway():
     # Active sessions
     active_sessions = 0
     try:
-        sess_file = os.path.join(SESSIONS_DIR or os.path.expanduser('~/.clawdbot/agents/main/sessions'), 'sessions.json')
+        sess_file = os.path.join(SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions'), 'sessions.json')
         with open(sess_file) as f:
             sess_data = json.load(f)
         now_ts = time.time() * 1000  # ms
@@ -19078,7 +19067,7 @@ def _get_sessions_from_files():
 
     sessions = []
     try:
-        base = SESSIONS_DIR or os.path.expanduser('~/.clawdbot/agents/main/sessions')
+        base = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
         if not os.path.isdir(base):
             return sessions
         idx_files = sorted(
