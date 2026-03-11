@@ -84,19 +84,47 @@ echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
 echo -e "  Run with:"
 echo ""
-echo -e "    clawmetry --host 0.0.0.0 --port 8900        ${DIM}# foreground (LAN accessible)${NC}"
-echo -e "    clawmetry start --host 0.0.0.0 --port 8900  ${DIM}# background service (LAN accessible)${NC}"
+
+# ── Interactive cloud prompt (only when stdin is a real terminal) ──────────
+if [ -t 0 ]; then
+  echo -e "  ${BOLD}🌐  Access your dashboard from anywhere?${NC}"
+  echo -e "      ${DIM}app.clawmetry.com · Mac · iOS · Android${NC}"
+  echo ""
+  echo -e "  ${BOLD}🔒  E2E encrypted with your local secret key${NC}"
+  echo -e "      ${DIM}Data is encrypted before it leaves your machine.${NC}"
+  echo -e "      ${DIM}Decrypted in the dashboard on demand. Nothing${NC}"
+  echo -e "      ${DIM}reaches the cloud in plaintext. Ever.${NC}"
+  echo ""
+  printf "      ${BOLD}[y]${NC} Connect to ClawMetry Cloud  ${DIM}(free 7-day trial)${NC}\n"
+  printf "      ${BOLD}[n]${NC} I'll start the server locally for now\n"
+  echo ""
+  printf "  → [y/n]: "
+  read -r CLOUD_CHOICE </dev/tty
+  echo ""
+  if [ "$CLOUD_CHOICE" = "y" ] || [ "$CLOUD_CHOICE" = "Y" ]; then
+    echo -e "  ${DIM}Running clawmetry connect...${NC}"
+    echo ""
+    clawmetry connect
+    echo ""
+    echo -e "  ${GREEN}${BOLD}✓ Connected!${NC}  View your dashboard at ${CYAN}https://app.clawmetry.com${NC}"
+    echo ""
+    echo -e "  Docs:  ${CYAN}https://clawmetry.com/how-it-works${NC}"
+    echo ""
+    echo -e "  🦞  Happy observing!"
+    echo ""
+    exit 0
+  fi
+fi
+
+# ── Non-interactive or user chose n: print run instructions ───────────────
+echo -e "    ${BOLD}clawmetry --host 0.0.0.0 --port 8900${NC}        ${DIM}# foreground (LAN accessible)${NC}"
+echo -e "    ${BOLD}clawmetry start --host 0.0.0.0 --port 8900${NC}  ${DIM}# background service (LAN accessible)${NC}"
 echo ""
 echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
-echo -e "  ${BOLD}🦞 ClawMetry Cloud${NC}  ${DIM}— monitor from anywhere${NC}"
-echo ""
-echo -e "  Sign in and connect this node to your cloud dashboard:"
-echo ""
-echo -e "    ${BOLD}clawmetry connect${NC}  ${DIM}# sync to clawmetry cloud${NC}"
-echo ""
-echo -e "  Your data stays encrypted end-to-end."
-echo -e "  Free 7-day trial · no credit card required."
+echo -e "  ${BOLD}🌐  Access from anywhere:${NC}  ${BOLD}clawmetry connect${NC}"
+echo -e "      ${DIM}🔒  E2E encrypted with your local key — decrypted on demand.${NC}"
+echo -e "      ${DIM}Free 7-day trial · no credit card required.${NC}"
 echo ""
 echo -e "  Docs:  ${CYAN}https://clawmetry.com/how-it-works${NC}"
 echo ""
