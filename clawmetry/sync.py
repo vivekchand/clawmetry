@@ -156,8 +156,11 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
         raise RuntimeError(f"HTTP {e.code} from {url}: {e.read().decode()[:200]}")
 
 
-def validate_key(api_key: str) -> dict:
-    return _post("/auth", {"api_key": api_key}, api_key)
+def validate_key(api_key: str, hostname: str = "", existing_node_id: str = "", **kwargs) -> dict:
+    payload = {"api_key": api_key}
+    if hostname: payload["hostname"] = hostname
+    if existing_node_id: payload["existing_node_id"] = existing_node_id
+    return _post("/auth", payload, api_key)
 
 
 # ── Path detection ─────────────────────────────────────────────────────────────
