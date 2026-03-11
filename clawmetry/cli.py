@@ -181,7 +181,9 @@ def _cmd_connect(args) -> None:
         except (SystemExit, KeyboardInterrupt):
             raise
         except Exception as _otp_err:
-            print(f"\n  \u26a0\ufe0f  OTP check unavailable ({_otp_err}). Proceeding.")
+            print(f"\n  \u274c  OTP verification failed: {_otp_err}")
+            print("  Cannot connect without device verification. Try again or contact support.")
+            sys.exit(1)
 
     from clawmetry.sync import generate_encryption_key
 
