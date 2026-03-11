@@ -40,8 +40,8 @@ CLAWMETRY_VERSION=$(python3 -c "import clawmetry; print(getattr(clawmetry, '__ve
 echo -e "  ${GREEN}✓${NC} ClawMetry installed"
 echo ""
 
-# Run connect wizard
-clawmetry connect
+# Run onboarding wizard
+clawmetry onboard
 
 echo ""
 echo -e "  ${GREEN}${BOLD}Done!${NC} Open ${CYAN}${CLAWMETRY_APP}${NC} to see your agents."
