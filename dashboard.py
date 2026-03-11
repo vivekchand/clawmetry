@@ -10200,6 +10200,42 @@ function hideUnconfiguredChannels(svgRoot) {
   }).catch(function(){});
 }
 
+var _flowSse = null;
+var _flowSseDebounce = {};
+function _startFlowSse() {
+  if (_flowSse && _flowSse.readyState !== EventSource.CLOSED) return;
+  var tok = localStorage.getItem('clawmetry-token') || '';
+  _flowSse = new EventSource('/api/flow-events' + (tok ? '?token=' + encodeURIComponent(tok) : ''));
+  _flowSse.onmessage = function(e) {
+    try {
+      var evt = JSON.parse(e.data);
+      var type = evt.type, now = Date.now();
+      var dk = type + '_' + (evt.tool || evt.channel || '');
+      if (_flowSseDebounce[dk] && (now - _flowSseDebounce[dk]) < 200) return;
+      _flowSseDebounce[dk] = now;
+      if (type === 'msg_in') {
+        triggerInbound(evt.channel || 'tg');
+        addFlowFeedItem('📨 Message via ' + (evt.channel || 'telegram'), '#c0a0ff');
+        flowStats.msgTimestamps.push(now);
+      } else if (type === 'msg_out') {
+        triggerOutbound(evt.channel || 'tg');
+        addFlowFeedItem('📤 Replied via ' + (evt.channel || 'telegram'), '#50e080');
+      } else if (type === 'tool_call') {
+        var toolName = evt.tool || 'exec';
+        triggerToolCall(toolName);
+        var toolNames = {exec:'running a command',browser:'browsing the web',search:'searching the web',cron:'scheduling',tts:'generating speech',memory:'accessing memory'};
+        addFlowFeedItem('⚡ AI is ' + (toolNames[toolName] || 'using ' + toolName), '#f0c040');
+        flowStats.events++;
+      } else if (type === 'tool_result') {
+        // return bubble already handled by triggerToolCall
+      } else if (type === 'heartbeat') {
+        addFlowFeedItem('💓 Heartbeat', '#555');
+      }
+    } catch(e2) {}
+  };
+  _flowSse.onerror = function() { setTimeout(_startFlowSse, 5000); };
+}
+
 function initFlow() {
   if (flowInitDone) return;
   flowInitDone = true;
@@ -10224,6 +10260,9 @@ function initFlow() {
       enhanceArchitectureClarity();
     }, 1000);
   }).catch(function(){});
+
+  // Connect to the typed flow-events SSE (tails gateway.log + session JSONL)
+  _startFlowSse();
   
   setInterval(updateFlowStats, updateInterval);
 }
@@ -10511,6 +10550,14 @@ function processFlowEvent(line) {
   } catch(e) { msg = line.toLowerCase(); }
 
   if (level === 'error' || level === 'fatal') { triggerError(); return; }
+
+  // SSE endpoint handles real events — log stream only catches outbound sends as fallback
+  if (msg.includes('sendmessage ok') || msg.includes('send ok') || msg.includes('sent ok')) {
+    if (now - (flowThrottles['outbound']||0) < 500) return;
+    flowThrottles['outbound'] = now;
+    var ch = msg.includes('imessage') ? 'sig' : msg.includes('whatsapp') ? 'wa' : 'tg';
+    triggerOutbound(ch); return;
+  }
 
   if (msg.includes('run start') && msg.includes('messagechannel')) {
     if (now - (flowThrottles['inbound']||0) < 500) return;
