@@ -8,7 +8,7 @@ on:
 jobs:
   release:
     name: Bump version & publish to PyPI
-    if: github.event.pull_request.merged == true && contains(github.event.pull_request.title, '[RELEASE]')
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.title, '[RELEASE]') && github.event.pull_request.merged_by.login == 'vivekchand'
     runs-on: ubuntu-latest
 
     permissions:
