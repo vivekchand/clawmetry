@@ -1,0 +1,67 @@
+name: Auto-release on [RELEASE] merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    name: Bump version & publish to PyPI
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.title, '[RELEASE]')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Bump patch version in dashboard.py
+        id: bump
+        run: |
+          OLD=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
+          MAJOR=$(echo $OLD | cut -d. -f1)
+          MINOR=$(echo $OLD | cut -d. -f2)
+          PATCH=$(echo $OLD | cut -d. -f3)
+          NEW="$MAJOR.$MINOR.$((PATCH + 1))"
+          sed -i "s/__version__ = \"$OLD\"/__version__ = \"$NEW\"/" dashboard.py
+          echo "old=$OLD" >> $GITHUB_OUTPUT
+          echo "new=$NEW" >> $GITHUB_OUTPUT
+          echo "Bumped $OLD → $NEW"
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dashboard.py
+          git commit -m "chore: bump to v${{ steps.bump.outputs.new }} [skip ci]"
+          git push
+
+      - name: Build package
+        run: python3 -m build
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.bump.outputs.new }}" \
+            --title "v${{ steps.bump.outputs.new }}" \
+            --notes "Released via PR: ${{ github.event.pull_request.title }}" \
+            --latest
