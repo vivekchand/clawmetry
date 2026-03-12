@@ -13477,7 +13477,7 @@ function cloudSendOtp() {
   }
   _cloudEmail = email;
   document.getElementById('cloud-email-error').style.display = 'none';
-  fetch('/api/cloud-cta/send-otp', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: email})})
+  fetch('https://app.clawmetry.com/api/otp/send', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: email})})
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d.ok) {
@@ -13501,13 +13501,13 @@ function cloudVerifyOtp() {
     err.style.display = '';
     return;
   }
-  fetch('/api/cloud-cta/verify-otp', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: _cloudEmail, code: code})})
+  fetch('https://app.clawmetry.com/api/otp/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: _cloudEmail, code: code})})
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if (d.ok && d.token) {
+      if (d.ok && (d.token || d.api_key)) {
         document.getElementById('cloud-step-otp').style.display = 'none';
         document.getElementById('cloud-step-done').style.display = '';
-        setTimeout(function(){ window.open('https://app.clawmetry.com/auth?token=' + encodeURIComponent(d.token), '_blank'); closeCloudModal(); _updateCloudStatus(); }, 1800);
+        setTimeout(function(){ window.open('https://app.clawmetry.com/auth?token=' + encodeURIComponent(d.token || d.api_key), '_blank'); closeCloudModal(); _updateCloudStatus(); }, 1800);
       } else {
         var err = document.getElementById('cloud-otp-error');
         err.textContent = d.error || 'Invalid code. Try again.';
