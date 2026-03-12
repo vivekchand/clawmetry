@@ -9940,27 +9940,95 @@ function exportUsageData() {
 }
 
 // ===== Transcripts =====
+var _transcriptData = [];
+var _transcriptSort = 'recent';
+
+function formatTokens(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function costColor(cost) {
+  if (cost >= 1.0) return '#ef4444';
+  if (cost >= 0.10) return '#f59e0b';
+  return '#22c55e';
+}
+
+function renderTranscripts() {
+  var sorted = _transcriptData.slice();
+  if (_transcriptSort === 'cost') sorted.sort(function(a, b) { return (b.cost || 0) - (a.cost || 0); });
+  else if (_transcriptSort === 'tokens') sorted.sort(function(a, b) { return (b.totalTokens || 0) - (a.totalTokens || 0); });
+  // else 'recent' - already sorted by modified desc from API
+
+  // Top 5 most expensive sessions summary
+  var topCost = _transcriptData.slice().sort(function(a, b) { return (b.cost || 0) - (a.cost || 0); }).slice(0, 5);
+  var summaryHtml = '';
+  if (topCost.length > 0 && topCost[0].cost > 0) {
+    var totalCost = _transcriptData.reduce(function(s, t) { return s + (t.cost || 0); }, 0);
+    summaryHtml += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">';
+    summaryHtml += '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 14px;font-size:13px;">';
+    summaryHtml += '<span style="color:var(--text-muted);">Total: </span><strong style="color:var(--text-primary);">$' + totalCost.toFixed(2) + '</strong>';
+    summaryHtml += '</div>';
+    summaryHtml += '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 14px;font-size:12px;flex:1;min-width:200px;">';
+    summaryHtml += '<span style="color:var(--text-muted);">Top spenders: </span>';
+    topCost.forEach(function(t, i) {
+      if (t.cost <= 0) return;
+      if (i > 0) summaryHtml += '<span style="color:var(--border-primary);"> | </span>';
+      summaryHtml += '<span style="color:' + costColor(t.cost) + ';font-weight:600;">$' + t.cost.toFixed(2) + '</span>';
+      summaryHtml += ' <span style="color:var(--text-muted);">' + escHtml(t.name.substring(0, 16)) + '</span>';
+    });
+    summaryHtml += '</div></div>';
+  }
+
+  // Sort controls
+  var sortHtml = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">';
+  sortHtml += '<span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">Sort:</span>';
+  ['recent', 'cost', 'tokens'].forEach(function(s) {
+    var active = _transcriptSort === s;
+    sortHtml += '<button onclick="_transcriptSort=\'' + s + '\';renderTranscripts()" style="font-size:11px;padding:3px 10px;border-radius:4px;border:1px solid ' + (active ? 'var(--bg-accent)' : 'var(--border-primary)') + ';background:' + (active ? 'var(--bg-accent)' : 'transparent') + ';color:' + (active ? '#fff' : 'var(--text-secondary)') + ';cursor:pointer;">' + s.charAt(0).toUpperCase() + s.slice(1) + '</button>';
+  });
+  sortHtml += '</div>';
+
+  var html = '';
+  sorted.forEach(function(t) {
+    html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(t.id) + '\')">';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
+    html += '<span class="transcript-name" style="flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(t.name) + '</span>';
+    if (t.cost > 0) {
+      html += '<span style="font-size:11px;font-weight:700;color:' + costColor(t.cost) + ';background:' + costColor(t.cost) + '18;padding:1px 6px;border-radius:4px;">$' + t.cost.toFixed(3) + '</span>';
+    }
+    if (t.model && t.model !== 'unknown') {
+      var shortModel = t.model;
+      if (shortModel.indexOf('/') !== -1) shortModel = shortModel.split('/').pop();
+      html += '<span style="font-size:10px;color:var(--text-muted);background:var(--bg-secondary);padding:1px 5px;border-radius:3px;">' + escHtml(shortModel) + '</span>';
+    }
+    html += '</div>';
+    html += '<div class="transcript-meta-row" style="margin-top:3px;">';
+    html += '<span>' + t.messages + ' msgs</span>';
+    if (t.totalTokens > 0) {
+      html += '<span title="Input: ' + formatTokens(t.inputTokens || 0) + ' | Output: ' + formatTokens(t.outputTokens || 0) + ' | Cache read: ' + formatTokens(t.cacheRead || 0) + ' | Cache write: ' + formatTokens(t.cacheWrite || 0) + '">' + formatTokens(t.totalTokens) + ' tokens</span>';
+    }
+    html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
+    html += '<span>' + timeAgo(t.modified) + '</span>';
+    html += '</div></div>';
+    html += '<span style="color:var(--text-muted);font-size:18px;">&#9656;</span>';
+    html += '</div>';
+  });
+  document.getElementById('transcript-list').innerHTML = summaryHtml + sortHtml + html || '<div style="padding:16px;color:var(--text-muted);">No transcript files found</div>';
+}
+
 async function loadTranscripts() {
   try {
     var data = await fetch('/api/transcripts').then(r => r.json());
-    var html = '';
-    data.transcripts.forEach(function(t) {
-      html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(t.id) + '\')">';
-      html += '<div><div class="transcript-name">' + escHtml(t.name) + '</div>';
-      html += '<div class="transcript-meta-row">';
-      html += '<span>' + t.messages + ' messages</span>';
-      html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
-      html += '<span>' + timeAgo(t.modified) + '</span>';
-      html += '</div></div>';
-      html += '<span style="color:#444;font-size:18px;">▸</span>';
-      html += '</div>';
-    });
-    document.getElementById('transcript-list').innerHTML = html || '<div style="padding:16px;color:#666;">No transcript files found</div>';
+    _transcriptData = data.transcripts || [];
+    renderTranscripts();
     document.getElementById('transcript-list').style.display = '';
     document.getElementById('transcript-viewer').style.display = 'none';
     document.getElementById('transcript-back-btn').style.display = 'none';
   } catch(e) {
-    document.getElementById('transcript-list').innerHTML = '<div style="padding:16px;color:#666;">Failed to load transcripts</div>';
+    document.getElementById('transcript-list').innerHTML = '<div style="padding:16px;color:var(--text-muted);">Failed to load transcripts</div>';
   }
 }
 
@@ -9981,7 +10049,17 @@ async function viewTranscript(sessionId) {
     var metaHtml = '<div class="stat-row"><span class="stat-label">Session</span><span class="stat-val">' + escHtml(data.name) + '</span></div>';
     metaHtml += '<div class="stat-row"><span class="stat-label">Messages</span><span class="stat-val">' + data.messageCount + '</span></div>';
     if (data.model) metaHtml += '<div class="stat-row"><span class="stat-label">Model</span><span class="stat-val"><span class="badge model">' + escHtml(data.model) + '</span></span></div>';
-    if (data.totalTokens) metaHtml += '<div class="stat-row"><span class="stat-label">Tokens</span><span class="stat-val"><span class="badge tokens">' + (data.totalTokens/1000).toFixed(0) + 'K</span></span></div>';
+    if (data.cost > 0) metaHtml += '<div class="stat-row"><span class="stat-label">Cost</span><span class="stat-val"><span style="font-weight:700;color:' + costColor(data.cost) + ';">$' + data.cost.toFixed(4) + '</span></span></div>';
+    if (data.totalTokens) {
+      metaHtml += '<div class="stat-row"><span class="stat-label">Tokens</span><span class="stat-val"><span class="badge tokens">' + formatTokens(data.totalTokens) + '</span></span></div>';
+      if (data.inputTokens || data.outputTokens) {
+        metaHtml += '<div class="stat-row"><span class="stat-label">Breakdown</span><span class="stat-val" style="font-size:11px;color:var(--text-muted);">';
+        metaHtml += 'In: ' + formatTokens(data.inputTokens || 0) + ' | Out: ' + formatTokens(data.outputTokens || 0);
+        if (data.cacheRead > 0) metaHtml += ' | Cache R: ' + formatTokens(data.cacheRead);
+        if (data.cacheWrite > 0) metaHtml += ' | Cache W: ' + formatTokens(data.cacheWrite);
+        metaHtml += '</span></div>';
+      }
+    }
     if (data.duration) metaHtml += '<div class="stat-row"><span class="stat-label">Duration</span><span class="stat-val">' + data.duration + '</span></div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
     // Messages
@@ -16221,7 +16299,7 @@ def api_usage_export():
 
 @bp_sessions.route('/api/transcripts')
 def api_transcripts():
-    """List available session transcript .jsonl files."""
+    """List available session transcript .jsonl files with per-session cost & token data."""
     sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
     transcripts = []
     if os.path.isdir(sessions_dir):
@@ -16231,15 +16309,55 @@ def api_transcripts():
             fpath = os.path.join(sessions_dir, fname)
             try:
                 msg_count = 0
+                session_cost = 0.0
+                input_tokens = 0
+                output_tokens = 0
+                cache_read = 0
+                cache_write = 0
+                total_tokens = 0
+                session_model = None
                 with open(fpath) as f:
-                    for _ in f:
+                    for line in f:
                         msg_count += 1
+                        try:
+                            obj = json.loads(line.strip())
+                            if obj.get('type') != 'message':
+                                continue
+                            message = obj.get('message', {})
+                            if not isinstance(message, dict):
+                                continue
+                            usage = message.get('usage')
+                            if usage and isinstance(usage, dict):
+                                input_tokens += usage.get('input', 0) or 0
+                                output_tokens += usage.get('output', 0) or 0
+                                cache_read += usage.get('cacheRead', 0) or 0
+                                cache_write += usage.get('cacheWrite', 0) or 0
+                                total_tokens += usage.get('totalTokens', 0) or 0
+                                cost_data = usage.get('cost', {})
+                                if isinstance(cost_data, dict) and 'total' in cost_data:
+                                    try:
+                                        session_cost += float(cost_data['total'])
+                                    except (ValueError, TypeError):
+                                        pass
+                            if not session_model:
+                                m = message.get('model')
+                                if m:
+                                    session_model = m
+                        except (json.JSONDecodeError, ValueError, KeyError):
+                            continue
                 transcripts.append({
                     'id': fname.replace('.jsonl', ''),
                     'name': fname.replace('.jsonl', '')[:40],
                     'messages': msg_count,
                     'size': os.path.getsize(fpath),
                     'modified': int(os.path.getmtime(fpath) * 1000),
+                    'cost': round(session_cost, 4),
+                    'inputTokens': input_tokens,
+                    'outputTokens': output_tokens,
+                    'cacheRead': cache_read,
+                    'cacheWrite': cache_write,
+                    'totalTokens': total_tokens,
+                    'model': session_model or 'unknown',
                 })
             except Exception:
                 pass
@@ -16261,6 +16379,11 @@ def api_transcript(session_id):
     messages = []
     model = None
     total_tokens = 0
+    total_cost = 0.0
+    input_tokens = 0
+    output_tokens = 0
+    cache_read_tokens = 0
+    cache_write_tokens = 0
     first_ts = None
     last_ts = None
     try:
@@ -16311,10 +16434,31 @@ def api_transcript(session_id):
                         ts_ms = None
                     if not model:
                         model = obj.get('model')
-                    usage = obj.get('usage', {})
-                    if isinstance(usage, dict):
-                        total_tokens += usage.get('total_tokens', 0) or (
-                            usage.get('input_tokens', 0) + usage.get('output_tokens', 0))
+                    # Extract usage from message wrapper (OpenClaw transcript format)
+                    msg_obj = obj.get('message', {})
+                    if isinstance(msg_obj, dict):
+                        usage = msg_obj.get('usage')
+                        if usage and isinstance(usage, dict):
+                            input_tokens += usage.get('input', 0) or 0
+                            output_tokens += usage.get('output', 0) or 0
+                            cache_read_tokens += usage.get('cacheRead', 0) or 0
+                            cache_write_tokens += usage.get('cacheWrite', 0) or 0
+                            total_tokens += usage.get('totalTokens', 0) or 0
+                            cost_data = usage.get('cost', {})
+                            if isinstance(cost_data, dict) and 'total' in cost_data:
+                                try:
+                                    total_cost += float(cost_data['total'])
+                                except (ValueError, TypeError):
+                                    pass
+                        if not model:
+                            m = msg_obj.get('model')
+                            if m:
+                                model = m
+                    # Legacy usage format fallback
+                    usage_legacy = obj.get('usage', {})
+                    if isinstance(usage_legacy, dict) and not isinstance(msg_obj, dict):
+                        total_tokens += usage_legacy.get('total_tokens', 0) or (
+                            usage_legacy.get('input_tokens', 0) + usage_legacy.get('output_tokens', 0))
                     if content or role in ('user', 'assistant', 'system'):
                         messages.append({
                             'role': role, 'content': content, 'timestamp': ts_ms,
@@ -16339,6 +16483,11 @@ def api_transcript(session_id):
         'messageCount': len(messages),
         'model': model,
         'totalTokens': total_tokens,
+        'cost': round(total_cost, 4),
+        'inputTokens': input_tokens,
+        'outputTokens': output_tokens,
+        'cacheRead': cache_read_tokens,
+        'cacheWrite': cache_write_tokens,
         'duration': duration,
         'messages': messages[:500],  # Cap at 500 messages
     })
