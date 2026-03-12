@@ -2744,6 +2744,29 @@ function clawmetryLogout(){
     </div>
   </div>
 
+
+  <!-- 30-Day Activity Heatmap -->
+  <div class="card" id="activity-heatmap-card" style="margin-top:16px;padding:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:15px;font-weight:700;color:var(--text-primary);">📊 Activity Heatmap</span>
+        <span style="font-size:11px;color:var(--text-muted);">30 days · hourly</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-muted);">
+        <span>Less</span>
+        <span style="width:10px;height:10px;border-radius:2px;background:#161b22;border:1px solid #30363d;display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:2px;background:#0e4429;display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:2px;background:#006d32;display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:2px;background:#26a641;display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:2px;background:#39d353;display:inline-block;"></span>
+        <span>More</span>
+      </div>
+    </div>
+    <div id="activity-heatmap" style="overflow-x:auto;">
+      <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">Loading heatmap...</div>
+    </div>
+    <div id="heatmap-tooltip" style="display:none;position:fixed;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:6px 10px;font-size:11px;color:var(--text-primary);pointer-events:none;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);"></div>
+  </div>
   <!-- Hidden elements referenced by existing JS -->
   <div style="display:none;">
     <span id="tokens-peak">--</span>
@@ -3732,6 +3755,98 @@ function setFlowTextAll(idSuffix, text, maxLen) {
   });
 }
 
+// ===== 30-Day Activity Heatmap =====
+async function loadActivityHeatmap() {
+  var container = document.getElementById('activity-heatmap');
+  if (!container) return;
+  try {
+    var data = await fetch('/api/activity-heatmap').then(function(r){return r.json();});
+    if (!data.cells || data.cells.length === 0) {
+      container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">No activity data yet</div>';
+      return;
+    }
+    renderHeatmapSVG(container, data);
+  } catch(e) {
+    container.innerHTML = '<div style="padding:20px;text-align:center;color:#e74c3c;font-size:12px;">Failed to load heatmap</div>';
+  }
+}
+
+function renderHeatmapSVG(container, data) {
+  var cells = data.cells;
+  var maxCount = data.maxCount || 1;
+  var totalEvents = data.totalEvents || 0;
+  var activeDays = data.activeDays || 0;
+  var cellSize = 13;
+  var cellGap = 2;
+  var labelW = 30;
+  var labelH = 18;
+  var rows = 24;
+  var cols = data.days || 30;
+  var svgW = labelW + cols * (cellSize + cellGap) + 10;
+  var svgH = labelH + rows * (cellSize + cellGap) + 30;
+  var lookup = {};
+  cells.forEach(function(c) { lookup[c.day + '_' + c.hour] = c.count; });
+  var colors = ['#161b22', '#0e4429', '#006d32', '#26a641', '#39d353'];
+  function getColor(count) {
+    if (count === 0) return colors[0];
+    var q = count / maxCount;
+    if (q <= 0.25) return colors[1];
+    if (q <= 0.5) return colors[2];
+    if (q <= 0.75) return colors[3];
+    return colors[4];
+  }
+  var svg = '<svg width="100%" viewBox="0 0 ' + svgW + ' ' + svgH + '" xmlns="http://www.w3.org/2000/svg" style="display:block;">';
+  for (var h = 0; h < 24; h += 3) {
+    var y = labelH + h * (cellSize + cellGap) + cellSize / 2 + 4;
+    var hourStr = (h < 10 ? '0' : '') + h + ':00';
+    svg += '<text x="' + (labelW - 4) + '" y="' + y + '" text-anchor="end" font-size="9" fill="#555">' + hourStr + '</text>';
+  }
+  var dayLabels = data.dayLabels || [];
+  for (var d = 0; d < cols; d++) {
+    if (d % 5 === 0 && dayLabels[d]) {
+      var x = labelW + d * (cellSize + cellGap) + cellSize / 2;
+      svg += '<text x="' + x + '" y="' + (labelH - 4) + '" text-anchor="middle" font-size="9" fill="#555">' + dayLabels[d] + '</text>';
+    }
+  }
+  for (var d = 0; d < cols; d++) {
+    for (var h = 0; h < 24; h++) {
+      var count = lookup[d + '_' + h] || 0;
+      var cx = labelW + d * (cellSize + cellGap);
+      var cy = labelH + h * (cellSize + cellGap);
+      var color = getColor(count);
+      svg += '<rect x="' + cx + '" y="' + cy + '" width="' + cellSize + '" height="' + cellSize + '" rx="2" fill="' + color + '"';
+      svg += ' data-day="' + d + '" data-hour="' + h + '" data-count="' + count + '"';
+      if (dayLabels[d]) svg += ' data-date="' + dayLabels[d] + '"';
+      svg += ' style="cursor:pointer;" onmouseover="showHeatmapTip(evt)" onmouseout="hideHeatmapTip()"/>';
+    }
+  }
+  var sumY = svgH - 8;
+  svg += '<text x="' + labelW + '" y="' + sumY + '" font-size="10" fill="#666">' + totalEvents.toLocaleString() + ' events across ' + activeDays + ' active days</text>';
+  svg += '</svg>';
+  container.innerHTML = svg;
+}
+
+function showHeatmapTip(evt) {
+  var el = evt.target;
+  var count = el.getAttribute('data-count');
+  var date = el.getAttribute('data-date') || '';
+  var hour = parseInt(el.getAttribute('data-hour'));
+  var hourEnd = (hour + 1) % 24;
+  var hourStr = (hour < 10 ? '0' : '') + hour + ':00';
+  var hourEndStr = (hourEnd < 10 ? '0' : '') + hourEnd + ':00';
+  var tip = document.getElementById('heatmap-tooltip');
+  if (!tip) return;
+  tip.innerHTML = '<strong>' + count + ' event' + (count !== '1' ? 's' : '') + '</strong><br>' + date + ' ' + hourStr + ' \u2013 ' + hourEndStr;
+  tip.style.display = 'block';
+  tip.style.left = (evt.clientX + 12) + 'px';
+  tip.style.top = (evt.clientY - 40) + 'px';
+}
+
+function hideHeatmapTip() {
+  var tip = document.getElementById('heatmap-tooltip');
+  if (tip) tip.style.display = 'none';
+}
+
 async function loadAll() {
   try {
     // Render overview quickly; do not block on heavy usage aggregation.
@@ -3742,6 +3857,7 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    loadActivityHeatmap().catch(function(e){console.warn('heatmap failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -7029,6 +7145,29 @@ function clawmetryLogout(){
     </div>
   </div>
 
+  <!-- 30-Day Activity Heatmap -->
+  <div class="card" id="activity-heatmap-card" style="margin-top:16px;padding:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:15px;font-weight:700;color:var(--text-primary);">📊 Activity Heatmap</span>
+        <span style="font-size:11px;color:var(--text-muted);">30 days · hourly</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-muted);">
+        <span>Less</span>
+        <span style="width:10px;height:10px;border-radius:2px;background:#161b22;border:1px solid #30363d;display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:2px;background:#0e4429;display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:2px;background:#006d32;display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:2px;background:#26a641;display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:2px;background:#39d353;display:inline-block;"></span>
+        <span>More</span>
+      </div>
+    </div>
+    <div id="activity-heatmap" style="overflow-x:auto;">
+      <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">Loading heatmap...</div>
+    </div>
+    <div id="heatmap-tooltip" style="display:none;position:fixed;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:6px 10px;font-size:11px;color:var(--text-primary);pointer-events:none;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);"></div>
+  </div>
+
   <!-- Hidden elements referenced by existing JS -->
   <div style="display:none;">
     <span id="tokens-peak">--</span>
@@ -8017,6 +8156,98 @@ function setFlowTextAll(idSuffix, text, maxLen) {
   });
 }
 
+// ===== 30-Day Activity Heatmap =====
+async function loadActivityHeatmap() {
+  var container = document.getElementById('activity-heatmap');
+  if (!container) return;
+  try {
+    var data = await fetch('/api/activity-heatmap').then(function(r){return r.json();});
+    if (!data.cells || data.cells.length === 0) {
+      container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">No activity data yet</div>';
+      return;
+    }
+    renderHeatmapSVG(container, data);
+  } catch(e) {
+    container.innerHTML = '<div style="padding:20px;text-align:center;color:#e74c3c;font-size:12px;">Failed to load heatmap</div>';
+  }
+}
+
+function renderHeatmapSVG(container, data) {
+  var cells = data.cells;
+  var maxCount = data.maxCount || 1;
+  var totalEvents = data.totalEvents || 0;
+  var activeDays = data.activeDays || 0;
+  var cellSize = 13;
+  var cellGap = 2;
+  var labelW = 30;
+  var labelH = 18;
+  var rows = 24;
+  var cols = data.days || 30;
+  var svgW = labelW + cols * (cellSize + cellGap) + 10;
+  var svgH = labelH + rows * (cellSize + cellGap) + 30;
+  var lookup = {};
+  cells.forEach(function(c) { lookup[c.day + '_' + c.hour] = c.count; });
+  var colors = ['#161b22', '#0e4429', '#006d32', '#26a641', '#39d353'];
+  function getColor(count) {
+    if (count === 0) return colors[0];
+    var q = count / maxCount;
+    if (q <= 0.25) return colors[1];
+    if (q <= 0.5) return colors[2];
+    if (q <= 0.75) return colors[3];
+    return colors[4];
+  }
+  var svg = '<svg width="100%" viewBox="0 0 ' + svgW + ' ' + svgH + '" xmlns="http://www.w3.org/2000/svg" style="display:block;">';
+  for (var h = 0; h < 24; h += 3) {
+    var y = labelH + h * (cellSize + cellGap) + cellSize / 2 + 4;
+    var hourStr = (h < 10 ? '0' : '') + h + ':00';
+    svg += '<text x="' + (labelW - 4) + '" y="' + y + '" text-anchor="end" font-size="9" fill="#555">' + hourStr + '</text>';
+  }
+  var dayLabels = data.dayLabels || [];
+  for (var d = 0; d < cols; d++) {
+    if (d % 5 === 0 && dayLabels[d]) {
+      var x = labelW + d * (cellSize + cellGap) + cellSize / 2;
+      svg += '<text x="' + x + '" y="' + (labelH - 4) + '" text-anchor="middle" font-size="9" fill="#555">' + dayLabels[d] + '</text>';
+    }
+  }
+  for (var d = 0; d < cols; d++) {
+    for (var h = 0; h < 24; h++) {
+      var count = lookup[d + '_' + h] || 0;
+      var cx = labelW + d * (cellSize + cellGap);
+      var cy = labelH + h * (cellSize + cellGap);
+      var color = getColor(count);
+      svg += '<rect x="' + cx + '" y="' + cy + '" width="' + cellSize + '" height="' + cellSize + '" rx="2" fill="' + color + '"';
+      svg += ' data-day="' + d + '" data-hour="' + h + '" data-count="' + count + '"';
+      if (dayLabels[d]) svg += ' data-date="' + dayLabels[d] + '"';
+      svg += ' style="cursor:pointer;" onmouseover="showHeatmapTip(evt)" onmouseout="hideHeatmapTip()"/>';
+    }
+  }
+  var sumY = svgH - 8;
+  svg += '<text x="' + labelW + '" y="' + sumY + '" font-size="10" fill="#666">' + totalEvents.toLocaleString() + ' events across ' + activeDays + ' active days</text>';
+  svg += '</svg>';
+  container.innerHTML = svg;
+}
+
+function showHeatmapTip(evt) {
+  var el = evt.target;
+  var count = el.getAttribute('data-count');
+  var date = el.getAttribute('data-date') || '';
+  var hour = parseInt(el.getAttribute('data-hour'));
+  var hourEnd = (hour + 1) % 24;
+  var hourStr = (hour < 10 ? '0' : '') + hour + ':00';
+  var hourEndStr = (hourEnd < 10 ? '0' : '') + hourEnd + ':00';
+  var tip = document.getElementById('heatmap-tooltip');
+  if (!tip) return;
+  tip.innerHTML = '<strong>' + count + ' event' + (count !== '1' ? 's' : '') + '</strong><br>' + date + ' ' + hourStr + ' \u2013 ' + hourEndStr;
+  tip.style.display = 'block';
+  tip.style.left = (evt.clientX + 12) + 'px';
+  tip.style.top = (evt.clientY - 40) + 'px';
+}
+
+function hideHeatmapTip() {
+  var tip = document.getElementById('heatmap-tooltip');
+  if (tip) tip.style.display = 'none';
+}
+
 async function loadAll() {
   try {
     // Render overview quickly; do not block on heavy usage aggregation.
@@ -8027,6 +8258,7 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    loadActivityHeatmap().catch(function(e){console.warn('heatmap failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -14510,6 +14742,110 @@ def _infer_provider_from_model(model_name):
     if 'llama' in m or 'mistral' in m or 'qwen' in m or 'deepseek' in m:
         return 'local/other'
     return 'unknown'
+
+@bp_overview.route('/api/activity-heatmap')
+def api_activity_heatmap():
+    """Return 30-day activity heatmap data: event counts per (day, hour) cell."""
+    import datetime
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    now = datetime.datetime.now()
+    cutoff = now - datetime.timedelta(days=30)
+    cutoff_ts = cutoff.timestamp()
+
+    # Build hour-of-day x day grid
+    counts = {}  # key: (day_index, hour) -> count
+    day_labels = []
+    for d in range(30):
+        dt = cutoff + datetime.timedelta(days=d)
+        day_labels.append(dt.strftime('%b %d'))
+
+    total_events = 0
+    active_hours = set()
+
+    # Scan JSONL session files modified in last 30 days
+    try:
+        for fname in os.listdir(sessions_dir):
+            if not fname.endswith('.jsonl'):
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            try:
+                mtime = os.path.getmtime(fpath)
+                if mtime < cutoff_ts:
+                    continue
+            except OSError:
+                continue
+
+            try:
+                with open(fpath, 'r', errors='replace') as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        # Fast extraction: find "timestamp":" pattern without full JSON parse
+                        ts_str = None
+                        idx = line.find('"timestamp":"')
+                        if idx >= 0:
+                            ts_start = idx + 13
+                            ts_end = line.find('"', ts_start)
+                            if ts_end > ts_start:
+                                ts_str = line[ts_start:ts_end]
+                        else:
+                            idx = line.find('"time":"')
+                            if idx >= 0:
+                                ts_start = idx + 8
+                                ts_end = line.find('"', ts_start)
+                                if ts_end > ts_start:
+                                    ts_str = line[ts_start:ts_end]
+
+                        if not ts_str:
+                            continue
+                        try:
+                            if ts_str.endswith('Z'):
+                                ts_str = ts_str[:-1] + '+00:00'
+                            dt_evt = datetime.datetime.fromisoformat(ts_str)
+                            # Convert to local time
+                            dt_local = dt_evt.replace(tzinfo=None) if dt_evt.tzinfo is None else dt_evt.astimezone(None).replace(tzinfo=None)
+                        except (ValueError, TypeError):
+                            continue
+
+                        if dt_local < cutoff:
+                            continue
+                        if dt_local > now:
+                            continue
+
+                        day_index = (dt_local.date() - cutoff.date()).days
+                        if day_index < 0 or day_index >= 30:
+                            continue
+                        hour = dt_local.hour
+
+                        key = (day_index, hour)
+                        counts[key] = counts.get(key, 0) + 1
+                        total_events += 1
+                        active_hours.add((day_index,))
+            except (IOError, OSError):
+                continue
+    except OSError:
+        pass
+
+    # Build response
+    cells = []
+    max_count = 0
+    active_days = set()
+    for key, cnt in counts.items():
+        cells.append({'day': key[0], 'hour': key[1], 'count': cnt})
+        if cnt > max_count:
+            max_count = cnt
+        active_days.add(key[0])
+
+    return jsonify({
+        'cells': cells,
+        'maxCount': max_count,
+        'totalEvents': total_events,
+        'activeDays': len(active_days),
+        'days': 30,
+        'dayLabels': day_labels,
+    })
+
 
 @bp_overview.route('/api/timeline')
 def api_timeline():
