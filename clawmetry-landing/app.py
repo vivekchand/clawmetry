@@ -2306,6 +2306,31 @@ def api_globe_data():
 
 
 _hero_stats_cache = {"data": None, "ts": 0}
+_HERO_STATS_DAILY_FILE = "/tmp/hero_stats_daily.json"
+
+
+def _load_daily_stats():
+    """Load last successful stats from daily file cache."""
+    try:
+        import json as _jdc
+        with open(_HERO_STATS_DAILY_FILE, "r") as _f:
+            cached = _jdc.load(_f)
+            if cached.get("date") == time.strftime("%Y-%m-%d"):
+                return cached.get("data")
+    except Exception:
+        pass
+    return None
+
+
+def _save_daily_stats(data):
+    """Persist successful stats to daily file cache."""
+    try:
+        import json as _jdc
+        with open(_HERO_STATS_DAILY_FILE, "w") as _f:
+            _jdc.dump({"date": time.strftime("%Y-%m-%d"), "data": data}, _f)
+    except Exception:
+        pass
+
 
 @app.route("/api/hero-stats", methods=["GET"])
 def api_hero_stats():
@@ -2330,6 +2355,16 @@ def api_hero_stats():
             result["countries"] = str(len([r for r in rows if r[1] and int(r[1]) > 0]))
     except Exception as e:
         log.warning(f"[hero-stats] metabase countries error: {e}")
+    # If live fetches failed, use daily cache before hardcoded fallback
+    if "downloads" not in result or "countries" not in result:
+        daily = _load_daily_stats()
+        if daily:
+            if "downloads" not in result:
+                result["downloads"] = daily.get("downloads", "56k")
+                result["downloads_exact"] = daily.get("downloads_exact", 56000)
+            if "countries" not in result:
+                result["countries"] = daily.get("countries", "83")
+            log.info("[hero-stats] using daily cache for missing fields")
     if "downloads" not in result:
         result["downloads"] = "56k"
         result["downloads_exact"] = 56000
@@ -2344,6 +2379,8 @@ def api_hero_stats():
         result["stars"] = "107"
     _hero_stats_cache["data"] = result
     _hero_stats_cache["ts"] = now
+    # Persist to daily cache on every successful fetch
+    _save_daily_stats(result)
     return jsonify(result)
 
 
