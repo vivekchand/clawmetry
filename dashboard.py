@@ -1963,6 +1963,20 @@ DASHBOARD_HTML = r"""
   .transcript-meta-row { font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
   .transcript-viewer-meta { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
   .transcript-viewer-meta .stat-row { padding: 6px 0; }
+  .replay-controls { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .replay-nav { display: flex; align-items: center; gap: 8px; }
+  .replay-nav button { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; padding: 4px 10px; color: var(--text-secondary); cursor: pointer; font-size: 13px; transition: background 0.15s; }
+  .replay-nav button:hover { background: var(--button-hover); }
+  .replay-nav button:disabled { opacity: 0.3; cursor: default; }
+  .replay-scrubber { flex: 1; height: 6px; -webkit-appearance: none; appearance: none; background: var(--border-primary); border-radius: 3px; outline: none; cursor: pointer; }
+  .replay-scrubber::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #3b82f6; cursor: pointer; }
+  .replay-scrubber::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #3b82f6; border: none; cursor: pointer; }
+  .replay-counter { font-size: 12px; color: var(--text-muted); min-width: 60px; text-align: center; white-space: nowrap; }
+  .replay-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+  .replay-filter-pill { padding: 3px 10px; border-radius: 12px; font-size: 11px; cursor: pointer; border: 1px solid var(--border-primary); background: var(--bg-tertiary); color: var(--text-muted); transition: all 0.15s; user-select: none; }
+  .replay-filter-pill.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  .replay-filter-pill:hover { border-color: #3b82f6; }
+  .chat-msg.replay-highlight { box-shadow: 0 0 0 2px #3b82f6; }
   .chat-messages { display: flex; flex-direction: column; gap: 10px; padding: 8px 0; }
   .chat-msg { max-width: 85%; padding: 12px 16px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
   .chat-msg.user { background: #1a2a4a; border: 1px solid #2a4a7a; color: #c0d8ff; align-self: flex-end; border-bottom-right-radius: 4px; }
@@ -2892,6 +2906,15 @@ function clawmetryLogout(){
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>
+    <div class="replay-controls" id="replay-controls" style="display:none">
+      <div class="replay-nav">
+        <button onclick="replayStep(-1)" id="replay-prev" title="Previous message">&#9664; Prev</button>
+        <input type="range" class="replay-scrubber" id="replay-scrubber" min="0" max="0" value="0" oninput="replayJump(this.value)">
+        <button onclick="replayStep(1)" id="replay-next" title="Next message">Next &#9654;</button>
+        <span class="replay-counter" id="replay-counter">0 / 0</span>
+      </div>
+      <div class="replay-filters" id="replay-filters"></div>
+    </div>
     <div class="chat-messages" id="transcript-messages"></div>
   </div>
 </div>
@@ -6209,6 +6232,20 @@ DASHBOARD_HTML = r"""
   .transcript-meta-row { font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
   .transcript-viewer-meta { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
   .transcript-viewer-meta .stat-row { padding: 6px 0; }
+  .replay-controls { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .replay-nav { display: flex; align-items: center; gap: 8px; }
+  .replay-nav button { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; padding: 4px 10px; color: var(--text-secondary); cursor: pointer; font-size: 13px; transition: background 0.15s; }
+  .replay-nav button:hover { background: var(--button-hover); }
+  .replay-nav button:disabled { opacity: 0.3; cursor: default; }
+  .replay-scrubber { flex: 1; height: 6px; -webkit-appearance: none; appearance: none; background: var(--border-primary); border-radius: 3px; outline: none; cursor: pointer; }
+  .replay-scrubber::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #3b82f6; cursor: pointer; }
+  .replay-scrubber::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #3b82f6; border: none; cursor: pointer; }
+  .replay-counter { font-size: 12px; color: var(--text-muted); min-width: 60px; text-align: center; white-space: nowrap; }
+  .replay-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+  .replay-filter-pill { padding: 3px 10px; border-radius: 12px; font-size: 11px; cursor: pointer; border: 1px solid var(--border-primary); background: var(--bg-tertiary); color: var(--text-muted); transition: all 0.15s; user-select: none; }
+  .replay-filter-pill.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  .replay-filter-pill:hover { border-color: #3b82f6; }
+  .chat-msg.replay-highlight { box-shadow: 0 0 0 2px #3b82f6; }
   .chat-messages { display: flex; flex-direction: column; gap: 10px; padding: 8px 0; }
   .chat-msg { max-width: 85%; padding: 12px 16px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
   .chat-msg.user { background: #1a2a4a; border: 1px solid #2a4a7a; color: #c0d8ff; align-self: flex-end; border-bottom-right-radius: 4px; }
@@ -7177,6 +7214,15 @@ function clawmetryLogout(){
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>
+    <div class="replay-controls" id="replay-controls" style="display:none">
+      <div class="replay-nav">
+        <button onclick="replayStep(-1)" id="replay-prev" title="Previous message">&#9664; Prev</button>
+        <input type="range" class="replay-scrubber" id="replay-scrubber" min="0" max="0" value="0" oninput="replayJump(this.value)">
+        <button onclick="replayStep(1)" id="replay-next" title="Next message">Next &#9654;</button>
+        <span class="replay-counter" id="replay-counter">0 / 0</span>
+      </div>
+      <div class="replay-filters" id="replay-filters"></div>
+    </div>
     <div class="chat-messages" id="transcript-messages"></div>
   </div>
 </div>
@@ -9968,13 +10014,22 @@ function showTranscriptList() {
   document.getElementById('transcript-list').style.display = '';
   document.getElementById('transcript-viewer').style.display = 'none';
   document.getElementById('transcript-back-btn').style.display = 'none';
+  document.getElementById('replay-controls').style.display = 'none';
+  _replayMessages = []; _replayFiltered = []; _replayIndex = -1;
 }
+
+// Session Replay state
+var _replayMessages = [];
+var _replayFiltered = [];
+var _replayIndex = -1;
+var _replayActiveFilters = new Set();
 
 async function viewTranscript(sessionId) {
   document.getElementById('transcript-list').style.display = 'none';
   document.getElementById('transcript-viewer').style.display = '';
   document.getElementById('transcript-back-btn').style.display = '';
   document.getElementById('transcript-messages').innerHTML = '<div style="padding:20px;color:#666;">Loading transcript...</div>';
+  document.getElementById('replay-controls').style.display = 'none';
   try {
     var data = await fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json());
     // Metadata
@@ -9984,30 +10039,117 @@ async function viewTranscript(sessionId) {
     if (data.totalTokens) metaHtml += '<div class="stat-row"><span class="stat-label">Tokens</span><span class="stat-val"><span class="badge tokens">' + (data.totalTokens/1000).toFixed(0) + 'K</span></span></div>';
     if (data.duration) metaHtml += '<div class="stat-row"><span class="stat-label">Duration</span><span class="stat-val">' + data.duration + '</span></div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
-    // Messages
-    var msgsHtml = '';
-    data.messages.forEach(function(m, idx) {
+
+    // Store messages for replay
+    _replayMessages = (data.messages || []).map(function(m, idx) {
       var role = m.role || 'unknown';
       var cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
-      var content = m.content || '';
-      var needsTruncate = content.length > 800;
-      var displayContent = needsTruncate ? content.substring(0, 800) : content;
-      msgsHtml += '<div class="chat-msg ' + cls + '">';
-      msgsHtml += '<div class="chat-role">' + escHtml(role) + '</div>';
-      if (needsTruncate) {
-        msgsHtml += '<div class="chat-content-truncated" id="msg-' + idx + '-short">' + escHtml(displayContent) + '</div>';
-        msgsHtml += '<div id="msg-' + idx + '-full" style="display:none;white-space:pre-wrap;">' + escHtml(content) + '</div>';
-        msgsHtml += '<div class="chat-expand" onclick="toggleMsg(' + idx + ')">Show more (' + content.length + ' chars)</div>';
-      } else {
-        msgsHtml += '<div style="white-space:pre-wrap;">' + escHtml(content) + '</div>';
-      }
-      if (m.timestamp) msgsHtml += '<div class="chat-ts">' + new Date(m.timestamp).toLocaleString() + '</div>';
-      msgsHtml += '</div>';
+      return { role: role, cls: cls, content: m.content || '', timestamp: m.timestamp, origIdx: idx };
     });
-    document.getElementById('transcript-messages').innerHTML = msgsHtml || '<div style="color:#555;padding:16px;">No messages in this transcript</div>';
+
+    // Build filter pills from roles present
+    var roles = {};
+    _replayMessages.forEach(function(m) { roles[m.role] = (roles[m.role] || 0) + 1; });
+    _replayActiveFilters = new Set(Object.keys(roles));
+    var filterHtml = '';
+    var roleLabels = { user: '👤 User', assistant: '🤖 Assistant', system: '⚙️ System', tool: '🔧 Tool', tool_result: '📋 Result', toolResult: '📋 Result' };
+    Object.keys(roles).forEach(function(r) {
+      var label = roleLabels[r] || r;
+      filterHtml += '<span class="replay-filter-pill active" data-role="' + escHtml(r) + '" onclick="toggleReplayFilter(this)">' + label + ' (' + roles[r] + ')</span>';
+    });
+    document.getElementById('replay-filters').innerHTML = filterHtml;
+
+    // Render all messages and show controls
+    _replayIndex = -1;
+    replayApplyFilters();
+    replayRenderAll();
+    if (_replayMessages.length > 1) {
+      document.getElementById('replay-controls').style.display = '';
+    }
   } catch(e) {
     document.getElementById('transcript-messages').innerHTML = '<div style="color:#e74c3c;padding:16px;">Failed to load transcript</div>';
   }
+}
+
+function replayApplyFilters() {
+  _replayFiltered = _replayMessages.filter(function(m) { return _replayActiveFilters.has(m.role); });
+  var scrubber = document.getElementById('replay-scrubber');
+  scrubber.max = Math.max(0, _replayFiltered.length - 1);
+  if (_replayIndex >= _replayFiltered.length) _replayIndex = _replayFiltered.length - 1;
+  if (_replayIndex >= 0) scrubber.value = _replayIndex;
+  replayUpdateCounter();
+}
+
+function replayRenderAll() {
+  var msgsHtml = '';
+  _replayFiltered.forEach(function(m, idx) {
+    var content = m.content;
+    var needsTruncate = content.length > 800;
+    var displayContent = needsTruncate ? content.substring(0, 800) : content;
+    var highlight = (idx === _replayIndex) ? ' replay-highlight' : '';
+    msgsHtml += '<div class="chat-msg ' + m.cls + highlight + '" id="replay-msg-' + idx + '">';
+    msgsHtml += '<div class="chat-role">' + escHtml(m.role) + '</div>';
+    if (needsTruncate) {
+      msgsHtml += '<div class="chat-content-truncated" id="msg-' + m.origIdx + '-short">' + escHtml(displayContent) + '</div>';
+      msgsHtml += '<div id="msg-' + m.origIdx + '-full" style="display:none;white-space:pre-wrap;">' + escHtml(content) + '</div>';
+      msgsHtml += '<div class="chat-expand" onclick="toggleMsg(' + m.origIdx + ')">Show more (' + content.length + ' chars)</div>';
+    } else {
+      msgsHtml += '<div style="white-space:pre-wrap;">' + escHtml(content) + '</div>';
+    }
+    if (m.timestamp) msgsHtml += '<div class="chat-ts">' + new Date(m.timestamp).toLocaleString() + '</div>';
+    msgsHtml += '</div>';
+  });
+  document.getElementById('transcript-messages').innerHTML = msgsHtml || '<div style="color:#555;padding:16px;">No messages matching filter</div>';
+}
+
+function replayStep(dir) {
+  var newIdx = _replayIndex + dir;
+  if (newIdx < 0 || newIdx >= _replayFiltered.length) return;
+  replayGoTo(newIdx);
+}
+
+function replayJump(val) {
+  replayGoTo(parseInt(val, 10));
+}
+
+function replayGoTo(idx) {
+  // Remove old highlight
+  if (_replayIndex >= 0) {
+    var old = document.getElementById('replay-msg-' + _replayIndex);
+    if (old) old.classList.remove('replay-highlight');
+  }
+  _replayIndex = idx;
+  var el = document.getElementById('replay-msg-' + idx);
+  if (el) {
+    el.classList.add('replay-highlight');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  document.getElementById('replay-scrubber').value = idx;
+  replayUpdateCounter();
+}
+
+function replayUpdateCounter() {
+  var total = _replayFiltered.length;
+  var pos = _replayIndex >= 0 ? (_replayIndex + 1) : 0;
+  document.getElementById('replay-counter').textContent = pos + ' / ' + total;
+  document.getElementById('replay-prev').disabled = (_replayIndex <= 0);
+  document.getElementById('replay-next').disabled = (_replayIndex >= total - 1);
+}
+
+function toggleReplayFilter(el) {
+  var role = el.dataset.role;
+  if (_replayActiveFilters.has(role)) {
+    // Don't allow deselecting ALL filters
+    if (_replayActiveFilters.size <= 1) return;
+    _replayActiveFilters.delete(role);
+    el.classList.remove('active');
+  } else {
+    _replayActiveFilters.add(role);
+    el.classList.add('active');
+  }
+  _replayIndex = -1;
+  replayApplyFilters();
+  replayRenderAll();
 }
 
 function toggleMsg(idx) {
@@ -10023,6 +10165,18 @@ function toggleMsg(idx) {
     event.target.textContent = 'Show less';
   }
 }
+
+// Keyboard shortcuts for session replay (arrow keys when transcript viewer is visible)
+document.addEventListener('keydown', function(e) {
+  var viewer = document.getElementById('transcript-viewer');
+  if (!viewer || viewer.style.display === 'none') return;
+  if (_replayFiltered.length === 0) return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); replayStep(-1); }
+  else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); replayStep(1); }
+  else if (e.key === 'Home') { e.preventDefault(); replayGoTo(0); }
+  else if (e.key === 'End') { e.preventDefault(); replayGoTo(_replayFiltered.length - 1); }
+});
 
 var _overviewRefreshRunning = false;
 function startOverviewRefresh() {
@@ -14372,8 +14526,12 @@ def api_crons():
     if gw_data and 'jobs' in gw_data:
         try: _ext_emit('cron.run', {'count': len(gw_data.get('jobs', []))})
         except Exception: pass
-        return jsonify({'jobs': gw_data['jobs']})
-    return jsonify({'jobs': _get_crons()})
+        jobs = gw_data['jobs']
+    else:
+        jobs = _get_crons()
+    # Enrich jobs with cost data from history
+    jobs = _enrich_cron_jobs_with_cost(jobs)
+    return jsonify({'jobs': jobs})
 
 
 @bp_crons.route('/api/cron/fix', methods=['POST'])
@@ -14477,7 +14635,156 @@ def api_cron_runs(job_id):
     result = _gw_invoke('cron', {'action': 'runs', 'jobId': job_id, 'limit': 10})
     if result is None:
         return jsonify({'error': 'Gateway unavailable'}), 502
+    # Enrich runs with cost data from history if available
+    if _history_db and result and 'runs' in result:
+        result['runs'] = _enrich_cron_runs_with_cost(job_id, result['runs'])
     return jsonify(result)
+
+
+@bp_crons.route('/api/cron/<job_id>/cost-history')
+def api_cron_cost_history(job_id):
+    """Cost time series for a specific cron job."""
+    if not _history_db:
+        return jsonify({'data': [], 'error': 'History not available'})
+    days = request.args.get('days', type=int, default=30)
+    days = min(days, 90)  # Cap at 90 days
+    data = _history_db.query_cron_cost_history(job_id, days)
+    return jsonify({'data': data})
+
+
+@bp_crons.route('/api/crons/cost-leaderboard')
+def api_cron_cost_leaderboard():
+    """Top cost-driving cron jobs."""
+    if not _history_db:
+        return jsonify({'jobs': [], 'error': 'History not available'})
+    days = request.args.get('days', type=int, default=7)
+    limit = request.args.get('limit', type=int, default=10)
+    days = min(days, 90)
+    limit = min(limit, 50)
+    jobs = _history_db.query_cron_cost_leaderboard(days, limit)
+    return jsonify({'jobs': jobs, 'days': days})
+
+
+@bp_crons.route('/api/crons/anomalies')
+def api_cron_anomalies():
+    """Cron runs with anomalous costs (2x+ above rolling average)."""
+    if not _history_db:
+        return jsonify({'anomalies': [], 'error': 'History not available'})
+    multiplier = request.args.get('multiplier', type=float, default=2.0)
+    multiplier = max(1.5, min(multiplier, 10.0))  # Clamp to sane range
+    anomalies = _history_db.query_cron_anomalies(multiplier)
+    return jsonify({'anomalies': anomalies})
+
+
+@bp_crons.route('/api/crons/daily-totals')
+def api_cron_daily_totals():
+    """Daily aggregated cron costs with 30-day projection."""
+    if not _history_db:
+        return jsonify({'days': [], 'projection': None, 'error': 'History not available'})
+    num_days = request.args.get('days', type=int, default=30)
+    num_days = min(num_days, 90)
+    daily = _history_db.query_cron_daily_totals(num_days)
+
+    # Calculate 30-day projection from the last 7 days of data
+    projection = None
+    if len(daily) >= 3:
+        recent = daily[-7:] if len(daily) >= 7 else daily
+        avg_daily = sum(d['total_cost'] for d in recent) / len(recent)
+        projection = {
+            'monthly_estimate': avg_daily * 30,
+            'daily_average': avg_daily,
+            'based_on_days': len(recent),
+        }
+
+    return jsonify({'days': daily, 'projection': projection})
+
+
+def _enrich_cron_jobs_with_cost(jobs):
+    """Enrich cron job list with last-run cost and run history cost data."""
+    if not _history_db or not jobs:
+        return jobs
+    try:
+        now = time.time()
+        week_ago = now - 7 * 86400
+
+        for job in jobs:
+            jid = job.get('id', '')
+            if not jid:
+                continue
+
+            # Get recent runs with cost data
+            history = _history_db.query_cron_cost_history(jid, 7)
+            if not history:
+                continue
+
+            # Set last run cost/tokens
+            last = history[-1] if history else None
+            if last and last.get('cost_usd', 0) > 0:
+                job['lastRunCostUsd'] = last['cost_usd']
+                job['lastRunTokens'] = (last.get('tokens_in', 0) or 0) + (last.get('tokens_out', 0) or 0)
+                job['lastRunModel'] = last.get('model', '')
+
+            # Build run history for anomaly detection in UI
+            cost_runs = [h for h in history if h.get('cost_usd', 0) > 0]
+            if cost_runs:
+                job['runHistory'] = [
+                    {'costUsd': h['cost_usd'], 'ts': h['timestamp']}
+                    for h in cost_runs[-20:]  # Last 20 runs
+                ]
+                job['totalCostWeek'] = sum(h['cost_usd'] for h in cost_runs)
+                job['avgCostPerRun'] = job['totalCostWeek'] / len(cost_runs) if cost_runs else 0
+    except Exception:
+        pass  # Best-effort enrichment
+    return jobs
+
+
+def _enrich_cron_runs_with_cost(job_id, runs):
+    """Enrich gateway cron runs with cost data from history DB."""
+    if not _history_db or not runs:
+        return runs
+    try:
+        # Get last 30 days of cost data for this job
+        history = _history_db.query_cron_cost_history(job_id, 30)
+        if not history:
+            return runs
+
+        # Build lookup by approximate timestamp (within 60s tolerance)
+        cost_by_ts = {}
+        for h in history:
+            cost_by_ts[int(h['timestamp'])] = h
+
+        for run in runs:
+            started = run.get('startedAt', run.get('ts', ''))
+            if not started:
+                continue
+            try:
+                if isinstance(started, str):
+                    run_ts = int(datetime.fromisoformat(started.replace('Z', '+00:00')).timestamp())
+                else:
+                    run_ts = int(started / 1000 if started > 1e12 else started)
+            except (ValueError, TypeError):
+                continue
+
+            # Find matching history entry (within 120s tolerance)
+            match = None
+            for offset in range(0, 121):
+                if run_ts + offset in cost_by_ts:
+                    match = cost_by_ts[run_ts + offset]
+                    break
+                if run_ts - offset in cost_by_ts:
+                    match = cost_by_ts[run_ts - offset]
+                    break
+
+            if match:
+                run['tokensIn'] = match.get('tokens_in', 0)
+                run['tokensOut'] = match.get('tokens_out', 0)
+                run['costUsd'] = match.get('cost_usd', 0)
+                run['tokens'] = (match.get('tokens_in', 0) or 0) + (match.get('tokens_out', 0) or 0)
+                if match.get('model'):
+                    run['model'] = match['model']
+    except Exception:
+        pass  # Best-effort enrichment
+    return runs
 
 
 def _find_log_file(ds):
