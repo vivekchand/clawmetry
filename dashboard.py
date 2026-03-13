@@ -2535,6 +2535,13 @@ function clawmetryLogout(){
   <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
 </div>
 
+<!-- Stuck Session Banner -->
+<div id="stuck-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg, #78350f 0%, #92400e 100%);border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:600;align-items:center;gap:10px;">
+  <span style="font-size:18px;">&#9203;</span>
+  <span id="stuck-banner-msg" style="flex:1;"></span>
+  <button onclick="dismissStuckBanner()" style="background:#b45309;color:#fef3c7;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+</div>
+
 <!-- Budget Settings Modal -->
 <div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
   <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
@@ -3742,6 +3749,7 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    checkStuckSessions().catch(function(e){console.warn('stuck check failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -6820,6 +6828,13 @@ function clawmetryLogout(){
   <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
 </div>
 
+<!-- Stuck Session Banner -->
+<div id="stuck-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg, #78350f 0%, #92400e 100%);border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:600;align-items:center;gap:10px;">
+  <span style="font-size:18px;">&#9203;</span>
+  <span id="stuck-banner-msg" style="flex:1;"></span>
+  <button onclick="dismissStuckBanner()" style="background:#b45309;color:#fef3c7;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+</div>
+
 <!-- Budget Settings Modal -->
 <div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
   <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
@@ -8027,6 +8042,7 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    checkStuckSessions().catch(function(e){console.warn('stuck check failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -9143,6 +9159,26 @@ async function loadSessions() {
   }
   
   document.getElementById('sessions-list').innerHTML = html || '<div style="padding:16px;color:var(--text-muted);">No sessions found</div>';
+
+  // Client-side stuck session detection: flag active sub-agents idle >15 min
+  var stuckThresholdMs = 15 * 60 * 1000;
+  var nowMs = Date.now();
+  var foundStuck = {};
+  (saData.subagents || []).forEach(function(sa) {
+    if (sa.status === 'active' && sa.updatedAt) {
+      var lastActive = new Date(sa.updatedAt).getTime();
+      var idleMs = nowMs - lastActive;
+      if (idleMs > stuckThresholdMs) {
+        var sid = sa.sessionKey || sa.displayName || sa.id;
+        foundStuck[sid] = true;
+        showStuckAlert(sid, idleMs);
+      }
+    }
+  });
+  // Clear previously stuck sessions that are no longer stuck
+  Object.keys(_stuckSessions).forEach(function(sid) {
+    if (!foundStuck[sid]) clearStuckAlert(sid);
+  });
 }
 
 var _cronJobs = [];
@@ -10581,6 +10617,77 @@ function addFlowFeedItem(text, color) {
 }
 
 var flowThrottles = {};
+
+// --- Stuck Session Tracking ---
+var _stuckSessions = {};
+var _stuckDismissed = false;
+
+function showStuckAlert(sessionId, ageMs) {
+  _stuckSessions[sessionId] = { ageMs: ageMs, ts: Date.now() };
+  _updateStuckBanner();
+}
+
+function clearStuckAlert(sessionId) {
+  delete _stuckSessions[sessionId];
+  _updateStuckBanner();
+}
+
+function dismissStuckBanner() {
+  _stuckDismissed = true;
+  var b = document.getElementById('stuck-banner');
+  if (b) b.style.display = 'none';
+}
+
+function _updateStuckBanner() {
+  var keys = Object.keys(_stuckSessions);
+  var banner = document.getElementById('stuck-banner');
+  if (!banner) return;
+  if (keys.length === 0 || _stuckDismissed) {
+    banner.style.display = 'none';
+    if (keys.length === 0) _stuckDismissed = false;
+    // Update sessions tab badge
+    var badge = document.getElementById('stuck-sessions-badge');
+    if (badge) badge.style.display = 'none';
+    return;
+  }
+  var msgs = keys.map(function(sid) {
+    var info = _stuckSessions[sid];
+    var mins = Math.round(info.ageMs / 60000);
+    return sid.substring(0, 12) + ' stuck for ' + mins + 'min';
+  });
+  var msgEl = document.getElementById('stuck-banner-msg');
+  if (msgEl) msgEl.textContent = keys.length === 1
+    ? '&#x23F3; Session ' + msgs[0]
+    : '&#x23F3; ' + keys.length + ' stuck sessions: ' + msgs.join(', ');
+  // Use innerHTML for the hourglass entity
+  if (msgEl) msgEl.innerHTML = keys.length === 1
+    ? '&#x23F3; Session ' + escHtml(msgs[0])
+    : '&#x23F3; ' + keys.length + ' stuck sessions: ' + escHtml(msgs.join(', '));
+  banner.style.display = 'flex';
+  // Update sessions tab badge
+  var badge = document.getElementById('stuck-sessions-badge');
+  if (badge) { badge.textContent = keys.length; badge.style.display = 'inline-flex'; }
+}
+
+async function checkStuckSessions() {
+  if (window.CLOUD_MODE) return;
+  try {
+    var data = await fetch('/api/stuck-sessions').then(function(r) { return r.json(); });
+    var serverStuck = {};
+    (data.stuck || []).forEach(function(s) {
+      serverStuck[s.sessionKey] = true;
+      showStuckAlert(s.sessionKey, s.idleMs);
+    });
+    // Clear sessions no longer stuck
+    Object.keys(_stuckSessions).forEach(function(sid) {
+      if (!serverStuck[sid]) clearStuckAlert(sid);
+    });
+  } catch(e) { /* silent */ }
+}
+
+// Check for stuck sessions every 5 minutes
+setInterval(function() { checkStuckSessions().catch(function(){}); }, 5 * 60 * 1000);
+
 function processFlowEvent(line) {
   flowStats.events++;
   var now = Date.now();
@@ -10592,6 +10699,22 @@ function processFlowEvent(line) {
   } catch(e) { msg = line.toLowerCase(); }
 
   if (level === 'error' || level === 'fatal') { triggerError(); return; }
+
+  // Stuck session detection: look for session.stuck events or long-idle active sessions
+  try {
+    var obj2 = JSON.parse(line);
+    // Detect explicit session.stuck events from gateway
+    if (obj2.msg && (obj2.msg.indexOf('session.stuck') !== -1 || obj2.msg.indexOf('stuck') !== -1) && obj2.sessionKey) {
+      var ageMs = obj2.ageMs || obj2.idleMs || 600000;
+      showStuckAlert(obj2.sessionKey, ageMs);
+    }
+    // Detect session completion/termination to clear stuck state
+    if (obj2.sessionKey && (
+      (obj2.msg && (obj2.msg.indexOf('session.end') !== -1 || obj2.msg.indexOf('session.done') !== -1 || obj2.msg.indexOf('session.killed') !== -1))
+    )) {
+      clearStuckAlert(obj2.sessionKey);
+    }
+  } catch(e3) {}
 
   // SSE endpoint handles real events — log stream only catches outbound sends as fallback
   if (msg.includes('sendmessage ok') || msg.includes('send ok') || msg.includes('sent ok')) {
@@ -18723,6 +18846,44 @@ def api_heatmap():
         days.append({'label': dl['label'], 'hours': grid.get(dl['date'], [0] * 24)})
 
     return jsonify({'days': days, 'max': max_val})
+
+
+@bp_health.route('/api/stuck-sessions')
+def api_stuck_sessions():
+    """Detect sessions that appear stuck (active but idle >15 min)."""
+    stuck_threshold_sec = 15 * 60
+    stuck = []
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    if not os.path.isdir(sessions_dir):
+        return jsonify({'stuck': []})
+    now = time.time()
+    try:
+        for fn in os.listdir(sessions_dir):
+            if not fn.endswith('.jsonl'):
+                continue
+            fp = os.path.join(sessions_dir, fn)
+            try:
+                mtime = os.path.getmtime(fp)
+                idle_sec = now - mtime
+                # Only flag sessions modified in last 24h but idle >15 min
+                if idle_sec > stuck_threshold_sec and idle_sec < 86400:
+                    sid = fn.replace('.jsonl', '')
+                    # Check if session has recent sub-agent activity (still working)
+                    fsize = os.path.getsize(fp)
+                    if fsize > 500:  # Non-trivial session
+                        stuck.append({
+                            'sessionKey': sid,
+                            'idleMs': int(idle_sec * 1000),
+                            'lastActive': datetime.fromtimestamp(mtime).isoformat(),
+                            'sizeBytes': fsize,
+                        })
+            except OSError:
+                continue
+    except OSError:
+        pass
+    # Sort by idle time descending
+    stuck.sort(key=lambda x: x['idleMs'], reverse=True)
+    return jsonify({'stuck': stuck[:10]})
 
 
 @bp_health.route('/api/system-health')
