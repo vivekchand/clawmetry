@@ -152,6 +152,18 @@ def _get_api_key_interactive() -> str:
 
 def _cmd_connect(args) -> None:
     """clawmetry connect — validate key, save config, start daemon."""
+    # Read existing config BEFORE stopping daemon (preserve node_id + encryption_key)
+    _saved_node_id = ''
+    _saved_enc_key = ''
+    try:
+        import json as _jcfg_pre
+        _cfgpath_pre = os.path.expanduser('~/.clawmetry/config.json')
+        _cfg_pre = _jcfg_pre.load(open(_cfgpath_pre))
+        _saved_node_id = _cfg_pre.get('node_id', '')
+        _saved_enc_key = _cfg_pre.get('encryption_key', '')
+    except Exception:
+        pass
+
     _stop_existing_daemon()
     import getpass
     from clawmetry.sync import validate_key, save_config, CONFIG_FILE, CONFIG_DIR
@@ -167,14 +179,7 @@ def _cmd_connect(args) -> None:
 
     custom_name = getattr(args, 'custom_node_id', None) or ''
     machine_hostname = custom_name or socket.gethostname()
-    # Read existing node_id from config so reconnect on same machine keeps same node
-    _existing_node_id = ''
-    try:
-        import json as _jcfg
-        _cfgpath = os.path.expanduser('~/.clawmetry/config.json')
-        _existing_node_id = _jcfg.load(open(_cfgpath)).get('node_id', '')
-    except Exception:
-        pass
+    _existing_node_id = _saved_node_id
     print("Connecting to ClawMetry Cloud… ", end="", flush=True)
     try:
         result = validate_key(api_key, hostname=machine_hostname, existing_node_id=_existing_node_id)
@@ -191,15 +196,8 @@ def _cmd_connect(args) -> None:
             sys.exit(1)
 
     from clawmetry.sync import generate_encryption_key
-    # Preserve existing key on reconnect — only generate new key on first connect
-    _existing_key = ''
-    try:
-        import json as _jx, os as _ox
-        _cfg = _jx.load(open(_ox.path.expanduser('~/.clawmetry/config.json')))
-        _existing_key = _cfg.get('encryption_key', '')
-    except Exception:
-        pass
-    enc_key = _existing_key or generate_encryption_key()
+    # Reuse existing encryption key on reconnect (only generate new on first connect)
+    enc_key = _saved_enc_key or generate_encryption_key()
 
     config = {
         "api_key": api_key,

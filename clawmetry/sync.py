@@ -156,10 +156,59 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
         raise RuntimeError(f"HTTP {e.code} from {url}: {e.read().decode()[:200]}")
 
 
+def get_machine_id() -> str:
+    """Generate a stable hardware fingerprint for this machine."""
+    import hashlib, platform
+    mid = ""
+    # macOS: IOPlatformUUID (stable across reboots/reinstalls)
+    if platform.system() == "Darwin":
+        try:
+            import subprocess
+            out = subprocess.check_output(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                timeout=5, stderr=subprocess.DEVNULL
+            ).decode()
+            for line in out.splitlines():
+                if "IOPlatformUUID" in line:
+                    mid = line.split('"')[-2]
+                    break
+        except Exception:
+            pass
+    # Linux: /etc/machine-id
+    if not mid:
+        for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"]:
+            try:
+                with open(path) as f:
+                    mid = f.read().strip()
+                    if mid:
+                        break
+            except Exception:
+                pass
+    # Windows: WMIC
+    if not mid and platform.system() == "Windows":
+        try:
+            import subprocess
+            out = subprocess.check_output(
+                ["wmic", "csproduct", "get", "uuid"],
+                timeout=5, stderr=subprocess.DEVNULL
+            ).decode()
+            lines = [l.strip() for l in out.splitlines() if l.strip() and l.strip() != "UUID"]
+            if lines:
+                mid = lines[0]
+        except Exception:
+            pass
+    # Fallback: MAC address (less stable but better than nothing)
+    if not mid:
+        import uuid as _uuid_mod
+        mid = str(_uuid_mod.getnode())
+    return hashlib.sha256(mid.encode()).hexdigest()[:32]
+
+
 def validate_key(api_key: str, hostname: str = "", existing_node_id: str = "", **kwargs) -> dict:
     payload = {"api_key": api_key}
     if hostname: payload["hostname"] = hostname
     if existing_node_id: payload["existing_node_id"] = existing_node_id
+    payload["machine_id"] = get_machine_id()
     return _post("/auth", payload, api_key)
 
 
