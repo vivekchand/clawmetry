@@ -2697,6 +2697,8 @@ function clawmetryLogout(){
       <!-- System Health Panel (below flow SVG) -->
       <div id="system-health-panel" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-top:none;padding:16px;box-shadow:var(--card-shadow);">
         <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
+        <!-- CPU / RAM / Temp gauges -->
+        <div id="sh-hw-gauges" style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
         <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
@@ -6982,6 +6984,8 @@ function clawmetryLogout(){
       <!-- System Health Panel (below flow SVG) -->
       <div id="system-health-panel" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-top:none;padding:16px;box-shadow:var(--card-shadow);">
         <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
+        <!-- CPU / RAM / Temp gauges -->
+        <div id="sh-hw-gauges" style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
         <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
@@ -9694,6 +9698,41 @@ async function loadSystemHealth() {
     var crons = (d.crons && typeof d.crons === 'object') ? d.crons : {enabled: 0, ok24h: 0, failed: []};
     var subagents = (d.subagents && typeof d.subagents === 'object') ? d.subagents : {runs: 0, successPct: 0};
 
+    // Hardware gauges (CPU, RAM, Temperature, Network)
+    var hwhtml = '';
+    function gaugeColor(pct) { return pct > 90 ? '#dc2626' : (pct > 70 ? '#d97706' : '#16a34a'); }
+    function gaugeCard(icon, label, value, subtext, pct) {
+      var c = gaugeColor(pct);
+      var radius = 28, circ = 2 * Math.PI * radius, offset = circ - (pct / 100) * circ;
+      return '<div style="flex:1;min-width:120px;padding:12px 14px;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-secondary);display:flex;align-items:center;gap:12px;">'
+        + '<div style="position:relative;width:64px;height:64px;flex-shrink:0;">'
+        + '<svg width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="' + radius + '" fill="none" stroke="var(--border-secondary)" stroke-width="5" />'
+        + '<circle cx="32" cy="32" r="' + radius + '" fill="none" stroke="' + c + '" stroke-width="5" stroke-linecap="round" '
+        + 'stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + offset.toFixed(1) + '" transform="rotate(-90 32 32)" style="transition:stroke-dashoffset 0.6s ease;" /></svg>'
+        + '<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:14px;font-weight:700;color:' + c + ';">' + value + '</div></div>'
+        + '<div><div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + icon + ' ' + label + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + subtext + '</div></div></div>';
+    }
+    if (d.cpu && d.cpu.percent !== undefined) {
+      hwhtml += gaugeCard('🖥️', 'CPU', Math.round(d.cpu.percent) + '%', d.cpu.cores + ' cores', d.cpu.percent);
+    }
+    if (d.ram && d.ram.percent !== undefined) {
+      hwhtml += gaugeCard('🧠', 'RAM', d.ram.percent + '%', d.ram.used_gb + ' / ' + d.ram.total_gb + ' GB', d.ram.percent);
+    }
+    if (d.temperature && d.temperature.current !== undefined) {
+      var tempPct = d.temperature.high ? Math.min(100, (d.temperature.current / d.temperature.high) * 100) : Math.min(100, (d.temperature.current / 100) * 100);
+      hwhtml += gaugeCard('🌡️', 'Temp', d.temperature.current + '°', d.temperature.sensor || 'CPU', tempPct);
+    }
+    if (d.network) {
+      var sentGB = (d.network.bytes_sent / (1024*1024*1024)).toFixed(1);
+      var recvGB = (d.network.bytes_recv / (1024*1024*1024)).toFixed(1);
+      hwhtml += '<div style="flex:1;min-width:120px;padding:12px 14px;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-secondary);">'
+        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:4px;">📡 Network</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);">↑ ' + sentGB + ' GB &nbsp; ↓ ' + recvGB + ' GB</div></div>';
+    }
+    var hwEl = document.getElementById('sh-hw-gauges');
+    if (hwEl) hwEl.innerHTML = hwhtml || '<div style="font-size:12px;color:var(--text-muted);">Hardware metrics unavailable (install psutil)</div>';
+
     // Services
     var shtml = '';
     services.forEach(function(s) {
@@ -9756,6 +9795,8 @@ async function loadSystemHealth() {
   } catch(e) {
     console.error('System health load failed', e);
     var msg = '<div style="padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;font-size:12px;color:var(--text-muted);">Unable to load right now</div>';
+    var hwEl = document.getElementById('sh-hw-gauges');
+    if (hwEl) hwEl.innerHTML = msg;
     document.getElementById('sh-services').innerHTML = msg;
     document.getElementById('sh-disks').innerHTML = msg;
     document.getElementById('sh-crons').innerHTML = msg;
@@ -9766,7 +9807,7 @@ async function loadSystemHealth() {
 function startSystemHealthRefresh() {
   loadSystemHealth();
   if (window._sysHealthTimer) clearInterval(window._sysHealthTimer);
-  window._sysHealthTimer = setInterval(loadSystemHealth, 30000);
+  window._sysHealthTimer = setInterval(loadSystemHealth, 10000);
 }
 
 // ===== Activity Heatmap =====
@@ -18823,11 +18864,67 @@ def api_system_health():
 
     sa_pct = round((sa_success / sa_runs * 100) if sa_runs > 0 else 100, 0)
 
+    # --- CPU / RAM / TEMPERATURE ---
+    cpu_data = {}
+    ram_data = {}
+    temp_data = {}
+    net_data = {}
+    try:
+        import psutil
+        cpu_data = {
+            'percent': psutil.cpu_percent(interval=0.5),
+            'per_core': psutil.cpu_percent(interval=0, percpu=True),
+            'cores': psutil.cpu_count(logical=True),
+        }
+        mem = psutil.virtual_memory()
+        ram_data = {
+            'used_gb': round(mem.used / (1024**3), 1),
+            'total_gb': round(mem.total / (1024**3), 1),
+            'percent': round(mem.percent, 1),
+        }
+        # CPU temperature (Linux: /sys/class/thermal, macOS: powermetrics)
+        try:
+            temps = psutil.sensors_temperatures()
+            if temps:
+                # Pick the first available sensor group
+                for sensor_name in ('coretemp', 'cpu_thermal', 'k10temp', 'zenpower', 'acpitz'):
+                    if sensor_name in temps and temps[sensor_name]:
+                        t = temps[sensor_name][0]
+                        temp_data = {'current': round(t.current, 1), 'sensor': sensor_name}
+                        if t.high:
+                            temp_data['high'] = round(t.high, 1)
+                        if t.critical:
+                            temp_data['critical'] = round(t.critical, 1)
+                        break
+                if not temp_data and temps:
+                    # Fallback: use first available sensor
+                    first_key = next(iter(temps))
+                    if temps[first_key]:
+                        t = temps[first_key][0]
+                        temp_data = {'current': round(t.current, 1), 'sensor': first_key}
+        except (AttributeError, OSError):
+            pass  # sensors_temperatures not available on all platforms
+        # Network I/O
+        try:
+            net = psutil.net_io_counters()
+            net_data = {
+                'bytes_sent': net.bytes_sent,
+                'bytes_recv': net.bytes_recv,
+            }
+        except Exception:
+            pass
+    except ImportError:
+        pass  # psutil not installed
+
     return jsonify({
         'services': services,
         'disks': disks,
         'crons': {'enabled': cron_enabled, 'ok24h': cron_ok_24h, 'failed': cron_failed},
         'subagents': {'runs': sa_runs, 'successPct': sa_pct},
+        'cpu': cpu_data,
+        'ram': ram_data,
+        'temperature': temp_data,
+        'network': net_data,
     })
 
 
