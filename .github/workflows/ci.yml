@@ -14,9 +14,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Check Python syntax
-        run: python3 -c "import ast; ast.parse(open('dashboard.py').read()); print('✅ Syntax OK')"
+          python-version: "3.9"
+      - name: Check Python syntax (all .py files, Python 3.9 compatible)
+        run: |
+          python3 -c "
+          import ast, glob, sys
+          errors = 0
+          for f in ['dashboard.py'] + glob.glob('clawmetry/**/*.py', recursive=True):
+              try:
+                  ast.parse(open(f).read(), filename=f)
+              except SyntaxError as e:
+                  print(f'❌ {f}:{e.lineno}: {e.msg}')
+                  errors += 1
+          if errors:
+              sys.exit(1)
+          print(f'✅ Syntax OK ({len(glob.glob(\"clawmetry/**/*.py\", recursive=True)) + 1} files)')
+          "
       - name: Install ruff (fast linter)
         run: pip install ruff
       - name: Lint (warnings only, don't fail)
