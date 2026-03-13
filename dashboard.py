@@ -20569,63 +20569,60 @@ def _run_server(args):
         print(f"  Sessions:   {SESSIONS_DIR}")
         print(f"  Logs:       {LOG_DIR}")
         print(f"  Metrics:    {_metrics_file_path()}")
-        if _HAS_OTEL_PROTO:
-            print(f"  OTLP:       [ok] Ready (opentelemetry-proto installed)")
-        print(f"  User:       {USER_NAME}")
-        print(f"  Mode:       {'[dev]  Dev (auto-reload ON)' if args.debug else '[prod] Prod (auto-reload OFF)'}")
-        print(f"  SSE Limits: {SSE_MAX_SECONDS}s max duration - logs {MAX_LOG_STREAM_CLIENTS} clients - health {MAX_HEALTH_STREAM_CLIENTS} clients")
-        print(f"  Fleet DB:   {_fleet_db_path()}")
-        print(f"  Fleet Auth: {'Enabled (key set)' if FLEET_API_KEY else 'Open (no key - set --fleet-api-key for production)'}")
-        if _HAS_HISTORY and _history_db:
-            print(f"  History DB: {_history_db.db_path}")
-        else:
-            print(f"  History:    Disabled (history.py not found)")
-        print()
     except (ValueError, OSError):
-        pass  # stdout may be closed on Windows when launched via Start-Process
+        pass  # stdout may be closed/redirected on Windows
+    if _HAS_OTEL_PROTO:
+        print(f"  OTLP:       [ok] Ready (opentelemetry-proto installed)")
+    print(f"  User:       {USER_NAME}")
+    print(f"  Mode:       {'[dev]  Dev (auto-reload ON)' if args.debug else '[prod] Prod (auto-reload OFF)'}")
+    print(f"  SSE Limits: {SSE_MAX_SECONDS}s max duration - logs {MAX_LOG_STREAM_CLIENTS} clients - health {MAX_HEALTH_STREAM_CLIENTS} clients")
+    print(f"  Fleet DB:   {_fleet_db_path()}")
+    print(f"  Fleet Auth: {'Enabled (key set)' if FLEET_API_KEY else 'Open (no key - set --fleet-api-key for production)'}")
+    if _HAS_HISTORY and _history_db:
+        print(f"  History DB: {_history_db.db_path}")
+    else:
+        print(f"  History:    Disabled (history.py not found)")
+    print()
 
-    try:
-        warnings, tips = validate_configuration()
-        if warnings or tips:
-            print("[check] Configuration Check:")
-            for warning in warnings:
-                print(f"  {warning}")
-            for tip in tips:
-                print(f"  {tip}")
-            print()
-            if warnings:
-                print("[tip] The dashboard will work with limited functionality. See tips above for full experience.")
-                print()
-
-        local_ip = get_local_ip()
-        public_ip = get_public_ip()
-        print(f"  -> http://localhost:{args.port}")
-        if local_ip != '127.0.0.1':
-            print(f"  -> http://{local_ip}:{args.port}  (LAN)")
-        if public_ip and public_ip != local_ip:
-            print(f"  -> http://{public_ip}:{args.port}  (Public - ensure port is open)")
-        if _HAS_OTEL_PROTO:
-            print(f"  -> OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
+    warnings, tips = validate_configuration()
+    if warnings or tips:
+        print("[check] Configuration Check:")
+        for warning in warnings:
+            print(f"  {warning}")
+        for tip in tips:
+            print(f"  {tip}")
         print()
-        # Cloud nudge — only if not already connected
-        import os as _os_nudge
-        _already_connected = bool(_os_nudge.environ.get('CLAWMETRY_API_KEY') or _os_nudge.environ.get('CLAWMETRY_NODE_ID'))
-        if not _already_connected:
-            _sep = "  -" if sys.platform == "win32" else "  \u2500"
-            print(_sep * 25)
-            print()
-            _globe = "[web]" if sys.platform == "win32" else "🌐 "
-            _lock  = "[enc]" if sys.platform == "win32" else "🔒 "
-            print(f"  {_globe}  Run clawmetry connect to access your dashboard from app.clawmetry.com")
-            print(f"      {_lock}  E2E encrypted with your local key — decrypted in the dashboard on demand.")
-            print("      Free 7-day trial · no credit card required.")
+        if warnings:
+            print("[tip] The dashboard will work with limited functionality. See tips above for full experience.")
             print()
 
-        if not args.debug:
-            print(f"  Tip: run as background service with: clawmetry start")
-            print()
-    except (ValueError, OSError):
-        pass  # stdout may be closed on Windows when launched via Start-Process
+    local_ip = get_local_ip()
+    public_ip = get_public_ip()
+    print(f"  -> http://localhost:{args.port}")
+    if local_ip != '127.0.0.1':
+        print(f"  -> http://{local_ip}:{args.port}  (LAN)")
+    if public_ip and public_ip != local_ip:
+        print(f"  -> http://{public_ip}:{args.port}  (Public - ensure port is open)")
+    if _HAS_OTEL_PROTO:
+        print(f"  -> OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
+    print()
+    # Cloud nudge — only if not already connected
+    import os as _os_nudge
+    _already_connected = bool(_os_nudge.environ.get('CLAWMETRY_API_KEY') or _os_nudge.environ.get('CLAWMETRY_NODE_ID'))
+    if not _already_connected:
+        _sep = "  -" if sys.platform == "win32" else "  \u2500"
+        print(_sep * 25)
+        print()
+        _globe = "[web]" if sys.platform == "win32" else "🌐 "
+        _lock  = "[enc]" if sys.platform == "win32" else "🔒 "
+        print(f"  {_globe}  Run clawmetry connect to access your dashboard from app.clawmetry.com")
+        print(f"      {_lock}  E2E encrypted with your local key — decrypted in the dashboard on demand.")
+        print("      Free 7-day trial · no credit card required.")
+        print()
+
+    if not args.debug:
+        print(f"  Tip: run as background service with: clawmetry start")
+        print()
 
     if args.debug:
         # Dev mode -- use Flask's reloader
@@ -20640,6 +20637,11 @@ def _run_server(args):
             import logging
             log = logging.getLogger('werkzeug')
             log.setLevel(logging.ERROR)
+            # cli=False prevents Click from printing the "Serving Flask app" banner,
+            # which crashes on Windows when stdout is redirected (closed fileno).
+            import os
+            if os.name == 'nt':
+                os.environ['FLASK_RUN_FROM_CLI'] = 'false'
             app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=True)
 
 
