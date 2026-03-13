@@ -84,7 +84,7 @@ echo ""
 
 # ── Onboarding ───────────────────────────────────────────────────────────────
 
-if [ -e /dev/tty ]; then
+if [ -r /dev/tty ] && (echo < /dev/tty) 2>/dev/null; then
   "$CLAWMETRY_BIN" onboard < /dev/tty
 else
   "$CLAWMETRY_BIN" onboard || true
