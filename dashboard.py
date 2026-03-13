@@ -2705,6 +2705,8 @@ function clawmetryLogout(){
         <div id="sh-crons" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
         <div id="sh-subagents" style="margin-bottom:14px;"></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;cursor:pointer;user-select:none;" onclick="var el=document.getElementById('sh-diagnostics');var arr=this.querySelector('.diag-arrow');if(el.style.display==='none'){el.style.display='block';arr.textContent='▼';loadDiagnostics();}else{el.style.display='none';arr.textContent='▶';}"><span class="diag-arrow">▶</span> Diagnostics</div>
+        <div id="sh-diagnostics" style="display:none;margin-bottom:14px;"></div>
       </div>
     </div>
 
@@ -6990,6 +6992,8 @@ function clawmetryLogout(){
         <div id="sh-crons" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
         <div id="sh-subagents" style="margin-bottom:14px;"></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;cursor:pointer;user-select:none;" onclick="var el=document.getElementById('sh-diagnostics');var arr=this.querySelector('.diag-arrow');if(el.style.display==='none'){el.style.display='block';arr.textContent='▼';loadDiagnostics();}else{el.style.display='none';arr.textContent='▶';}"><span class="diag-arrow">▶</span> Diagnostics</div>
+        <div id="sh-diagnostics" style="display:none;margin-bottom:14px;"></div>
       </div>
     </div>
 
@@ -9767,6 +9771,99 @@ function startSystemHealthRefresh() {
   loadSystemHealth();
   if (window._sysHealthTimer) clearInterval(window._sysHealthTimer);
   window._sysHealthTimer = setInterval(loadSystemHealth, 30000);
+}
+
+// ===== Diagnostics Panel =====
+var _diagLoaded = false;
+async function loadDiagnostics() {
+  if (_diagLoaded) return;
+  var el = document.getElementById('sh-diagnostics');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:12px;">Loading diagnostics...</div>';
+  try {
+    var d = await fetch('/api/diagnostics').then(function(r) { return r.json(); });
+    var html = '';
+
+    // Gateway
+    var gw = d.gateway || {};
+    var gwDot = gw.reachable ? '🟢' : '🔴';
+    html += '<div style="margin-bottom:10px;padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;">';
+    html += '<div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">⚡ Gateway</div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary);line-height:1.8;">';
+    html += gwDot + ' <span style="color:var(--text-muted);">URL:</span> ' + (gw.url || 'unknown') + '<br>';
+    html += '<span style="color:var(--text-muted);">Token:</span> ' + (gw.token_present ? '<span style="color:var(--text-success);">✓ configured</span>' : '<span style="color:var(--text-error);">✗ missing</span>');
+    html += '</div></div>';
+
+    // Workspace
+    var ws = d.workspace || {};
+    html += '<div style="margin-bottom:10px;padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;">';
+    html += '<div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">📁 Workspace</div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary);line-height:1.8;">';
+    html += '<span style="color:var(--text-muted);">Path:</span> ' + (ws.path || 'unknown') + '<br>';
+    var files = ws.found_files || [];
+    if (files.length > 0) {
+      html += '<span style="color:var(--text-muted);">Files:</span> ';
+      files.forEach(function(f) { html += '<span style="display:inline-block;padding:1px 6px;margin:1px 2px;background:var(--bg-hover);border-radius:4px;font-size:10px;">' + f + '</span>'; });
+    } else {
+      html += '<span style="color:var(--text-warning);">No workspace files found</span>';
+    }
+    html += '</div></div>';
+
+    // Sessions & Logs
+    var sess = d.sessions || {};
+    var logs = d.logs || {};
+    html += '<div style="margin-bottom:10px;padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;">';
+    html += '<div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">📊 Data</div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary);line-height:1.8;">';
+    html += '<span style="color:var(--text-muted);">Sessions:</span> ' + (sess.exists ? (sess.count + ' files') : '<span style="color:var(--text-error);">dir not found</span>') + '<br>';
+    html += '<span style="color:var(--text-muted);">Logs:</span> ' + (logs.exists ? (logs.recent_count + ' recent (24h)') : '<span style="color:var(--text-error);">dir not found</span>');
+    html += '</div></div>';
+
+    // Config flags
+    var cfg = d.config || {};
+    var flags = cfg.flags || {};
+    if (cfg.file || Object.keys(flags).length > 0) {
+      html += '<div style="margin-bottom:10px;padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;">';
+      html += '<div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">⚙️ Config Flags</div>';
+      html += '<div style="font-size:11px;color:var(--text-secondary);line-height:1.8;">';
+      if (cfg.file) html += '<span style="color:var(--text-muted);">File:</span> ' + cfg.file + '<br>';
+      Object.keys(flags).forEach(function(k) {
+        var v = flags[k];
+        if (Array.isArray(v)) v = v.join(', ');
+        else if (typeof v === 'object' && v !== null) v = JSON.stringify(v);
+        html += '<span style="color:var(--text-muted);">' + k + ':</span> ' + v + '<br>';
+      });
+      html += '</div></div>';
+    }
+
+    // Validation warnings
+    var val = d.validation || {};
+    var warns = val.warnings || [];
+    var tips = val.tips || [];
+    if (warns.length > 0 || tips.length > 0) {
+      html += '<div style="padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;">';
+      html += '<div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">🔍 Validation</div>';
+      html += '<div style="font-size:11px;line-height:1.8;">';
+      warns.forEach(function(w) { html += '<div style="color:var(--text-warning);">' + w + '</div>'; });
+      tips.forEach(function(t) { html += '<div style="color:var(--text-muted);">' + t + '</div>'; });
+      html += '</div></div>';
+    }
+
+    // Environment
+    var env = d.environment || {};
+    html += '<div style="padding:10px 14px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;">';
+    html += '<div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">🖥️ Environment</div>';
+    html += '<div style="font-size:11px;color:var(--text-secondary);line-height:1.8;">';
+    if (env.clawmetry_version) html += '<span style="color:var(--text-muted);">ClawMetry:</span> v' + env.clawmetry_version + '<br>';
+    if (env.python) html += '<span style="color:var(--text-muted);">Python:</span> ' + env.python + '<br>';
+    if (env.os) html += '<span style="color:var(--text-muted);">OS:</span> ' + env.os;
+    html += '</div></div>';
+
+    el.innerHTML = html;
+    _diagLoaded = true;
+  } catch(e) {
+    el.innerHTML = '<div style="padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;font-size:12px;color:var(--text-muted);">Unable to load diagnostics</div>';
+  }
 }
 
 // ===== Activity Heatmap =====
@@ -18723,6 +18820,131 @@ def api_heatmap():
         days.append({'label': dl['label'], 'hours': grid.get(dl['date'], [0] * 24)})
 
     return jsonify({'days': days, 'max': max_val})
+
+
+@bp_health.route('/api/diagnostics')
+def api_diagnostics():
+    """Return detected configuration for the diagnostics panel."""
+    import platform
+    result = {}
+
+    # Gateway
+    gw_cfg = _load_gw_config()
+    gw_port = _detect_gateway_port()
+    gw_token = _detect_gateway_token()
+    result['gateway'] = {
+        'url': gw_cfg.get('url') or f'http://localhost:{gw_port}',
+        'port': gw_port,
+        'token_present': bool(gw_token),
+        'reachable': False,
+    }
+    # Check if gateway is reachable
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2)
+        result['gateway']['reachable'] = s.connect_ex(('127.0.0.1', gw_port)) == 0
+        s.close()
+    except Exception:
+        pass
+
+    # Workspace
+    workspace_files = ['SOUL.md', 'AGENTS.md', 'MEMORY.md', 'USER.md', 'IDENTITY.md', 'TOOLS.md', 'CODING.md', 'HEARTBEAT.md']
+    found = [f for f in workspace_files if os.path.exists(os.path.join(WORKSPACE or '', f))]
+    result['workspace'] = {
+        'path': WORKSPACE,
+        'found_files': found,
+        'memory_dir': os.path.isdir(MEMORY_DIR) if MEMORY_DIR else False,
+    }
+
+    # Sessions
+    session_count = 0
+    if SESSIONS_DIR and os.path.isdir(SESSIONS_DIR):
+        try:
+            session_count = len([f for f in os.listdir(SESSIONS_DIR) if f.endswith('.jsonl')])
+        except Exception:
+            pass
+    result['sessions'] = {
+        'dir': SESSIONS_DIR,
+        'exists': bool(SESSIONS_DIR and os.path.isdir(SESSIONS_DIR)),
+        'count': session_count,
+    }
+
+    # Logs
+    recent_logs = 0
+    if LOG_DIR and os.path.isdir(LOG_DIR):
+        try:
+            recent_logs = len([f for f in glob.glob(os.path.join(LOG_DIR, '*claw*.log'))
+                              if os.path.getmtime(f) > time.time() - 86400])
+        except Exception:
+            pass
+    result['logs'] = {
+        'dir': LOG_DIR,
+        'exists': bool(LOG_DIR and os.path.isdir(LOG_DIR)),
+        'recent_count': recent_logs,
+    }
+
+    # OpenClaw config flags
+    oc_flags = {}
+    json_paths = [
+        os.path.expanduser('~/.openclaw/openclaw.json'),
+        os.path.expanduser('~/.openclaw/moltbot.json'),
+    ]
+    config_file_used = None
+    for jp in json_paths:
+        try:
+            import json as _json
+            with open(jp) as f:
+                cfg = _json.load(f)
+            config_file_used = jp
+            # Extract interesting flags (no secrets)
+            if 'gateway' in cfg and isinstance(cfg['gateway'], dict):
+                gw = cfg['gateway']
+                oc_flags['port'] = gw.get('port')
+                oc_flags['reasoning'] = gw.get('reasoning')
+                oc_flags['thinking'] = gw.get('thinking')
+            if 'model' in cfg:
+                oc_flags['model'] = cfg['model']
+            if 'default_model' in cfg:
+                oc_flags['default_model'] = cfg['default_model']
+            if 'channels' in cfg and isinstance(cfg['channels'], dict):
+                oc_flags['channels'] = list(cfg['channels'].keys())
+            if 'tools' in cfg and isinstance(cfg['tools'], dict):
+                oc_flags['tools_configured'] = list(cfg['tools'].keys())
+            if 'telemetry' in cfg:
+                oc_flags['telemetry'] = cfg['telemetry']
+            break
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            pass
+    result['config'] = {
+        'file': config_file_used,
+        'flags': oc_flags,
+    }
+
+    # Validation warnings
+    warnings, tips = validate_configuration()
+    result['validation'] = {
+        'warnings': warnings,
+        'tips': tips,
+    }
+
+    # Environment
+    result['environment'] = {
+        'python': platform.python_version(),
+        'os': f'{platform.system()} {platform.release()}',
+        'user': USER_NAME,
+        'clawmetry_version': getattr(importlib.import_module('clawmetry') if 'clawmetry' in sys.modules else type('', (), {'__version__': 'unknown'}), '__version__', 'unknown') if 'importlib' in dir() else 'unknown',
+    }
+    # Try to get clawmetry version more reliably
+    try:
+        from clawmetry import __version__ as _cm_ver
+        result['environment']['clawmetry_version'] = _cm_ver
+    except Exception:
+        try:
+            result['environment']['clawmetry_version'] = VERSION
+        except Exception:
+            pass
+
+    return jsonify(result)
 
 
 @bp_health.route('/api/system-health')
