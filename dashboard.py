@@ -61,7 +61,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.26"
+__version__ = "0.12.21"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -13477,7 +13477,7 @@ function cloudSendOtp() {
   }
   _cloudEmail = email;
   document.getElementById('cloud-email-error').style.display = 'none';
-  fetch('https://app.clawmetry.com/api/otp/send', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: email})})
+  fetch('/api/cloud-cta/send-otp', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: email})})
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d.ok) {
@@ -13501,13 +13501,13 @@ function cloudVerifyOtp() {
     err.style.display = '';
     return;
   }
-  fetch('https://app.clawmetry.com/api/otp/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: _cloudEmail, code: code})})
+  fetch('/api/cloud-cta/verify-otp', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: _cloudEmail, code: code})})
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if (d.ok && (d.token || d.api_key)) {
+      if (d.ok && d.token) {
         document.getElementById('cloud-step-otp').style.display = 'none';
         document.getElementById('cloud-step-done').style.display = '';
-        setTimeout(function(){ window.open('https://app.clawmetry.com/auth?token=' + encodeURIComponent(d.token || d.api_key), '_blank'); closeCloudModal(); _updateCloudStatus(); }, 1800);
+        setTimeout(function(){ window.open('https://app.clawmetry.com/auth?token=' + encodeURIComponent(d.token), '_blank'); closeCloudModal(); _updateCloudStatus(); }, 1800);
       } else {
         var err = document.getElementById('cloud-otp-error');
         err.textContent = d.error || 'Invalid code. Try again.';
@@ -20593,10 +20593,7 @@ def _run_server(args):
             if warnings:
                 print("[tip] The dashboard will work with limited functionality. See tips above for full experience.")
                 print()
-    except (ValueError, OSError):
-        pass  # stdout may be closed/redirected on Windows
 
-    try:
         local_ip = get_local_ip()
         public_ip = get_public_ip()
         print(f"  -> http://localhost:{args.port}")
@@ -20608,7 +20605,8 @@ def _run_server(args):
             print(f"  -> OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
         print()
         # Cloud nudge — only if not already connected
-        _already_connected = bool(os.environ.get('CLAWMETRY_API_KEY') or os.environ.get('CLAWMETRY_NODE_ID'))
+        import os as _os_nudge
+        _already_connected = bool(_os_nudge.environ.get('CLAWMETRY_API_KEY') or _os_nudge.environ.get('CLAWMETRY_NODE_ID'))
         if not _already_connected:
             _sep = "  -" if sys.platform == "win32" else "  \u2500"
             print(_sep * 25)
@@ -20623,8 +20621,9 @@ def _run_server(args):
         if not args.debug:
             print(f"  Tip: run as background service with: clawmetry start")
             print()
+
     except (ValueError, OSError):
-        pass  # stdout may be closed/redirected on Windows
+        pass  # stdout may be closed (e.g. Windows Start-Process with redirections)
 
     if args.debug:
         # Dev mode -- use Flask's reloader
@@ -20635,16 +20634,10 @@ def _run_server(args):
             from waitress import serve
             serve(app, host=args.host, port=args.port, threads=8)
         except ImportError:
-            # Waitress not installed -- fall back to Flask dev server.
-            # On Windows with redirected stdout (e.g. Start-Process),
-            # Flask/Click banner printing crashes on closed file handles.
-            # Unconditionally redirect to devnull on Windows to prevent it.
+            # Waitress not installed -- fall back to Flask with warning suppressed
             import logging
             log = logging.getLogger('werkzeug')
             log.setLevel(logging.ERROR)
-            if os.name == 'nt':
-                sys.stdout = open(os.devnull, 'w', encoding='utf-8')
-                sys.stderr = open(os.devnull, 'w', encoding='utf-8')
             app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=True)
 
 
