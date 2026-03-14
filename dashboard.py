@@ -3201,14 +3201,33 @@ function clawmetryLogout(){
     </svg>
   </div>
 
-  <!-- Live activity feed under the flow diagram -->
+  <!-- Live Tool Call Stream -->
   <div style="margin-top:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:12px 16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <span style="font-size:13px;font-weight:600;color:#aaa;">📡 Live Activity Feed</span>
-      <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
+      <span style="font-size:13px;font-weight:600;color:#aaa;">🛠️ Live Tool Call Stream</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
+        <button id="tool-stream-pause-btn" onclick="toggleToolStreamPause()" style="background:none;border:1px solid #444;border-radius:6px;padding:2px 8px;color:#aaa;font-size:11px;cursor:pointer;" title="Pause/Resume stream">▌▌</button>
+        <button onclick="clearToolStream()" style="background:none;border:1px solid #444;border-radius:6px;padding:2px 8px;color:#aaa;font-size:11px;cursor:pointer;" title="Clear">✕</button>
+      </div>
     </div>
-    <div id="flow-live-feed" style="max-height:120px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.5;color:#777;">
-      <div style="color:#555;">Waiting for activity...</div>
+    <div id="tool-filter-pills" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">
+      <span class="tool-filter-pill active" data-tool="all" onclick="setToolFilter(this,'all')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:#333;color:#ccc;border:1px solid #555;">All</span>
+      <span class="tool-filter-pill" data-tool="exec" onclick="setToolFilter(this,'exec')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">exec</span>
+      <span class="tool-filter-pill" data-tool="read" onclick="setToolFilter(this,'read')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">read</span>
+      <span class="tool-filter-pill" data-tool="write" onclick="setToolFilter(this,'write')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">write</span>
+      <span class="tool-filter-pill" data-tool="edit" onclick="setToolFilter(this,'edit')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">edit</span>
+      <span class="tool-filter-pill" data-tool="browser" onclick="setToolFilter(this,'browser')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">browser</span>
+      <span class="tool-filter-pill" data-tool="web_search" onclick="setToolFilter(this,'web_search')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">search</span>
+      <span class="tool-filter-pill" data-tool="message" onclick="setToolFilter(this,'message')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">message</span>
+      <span class="tool-filter-pill" data-tool="sessions_spawn" onclick="setToolFilter(this,'sessions_spawn')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">spawn</span>
+    </div>
+    <div id="flow-live-feed" style="max-height:360px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.6;color:#777;">
+      <div style="color:#555;">Waiting for tool calls...</div>
+    </div>
+    <div style="margin-top:6px;font-size:10px;color:#555;display:flex;justify-content:space-between;">
+      <span id="tool-stream-filter-label">Filter: All</span>
+      <span id="tool-stream-paused-label" style="color:#f0c040;display:none;">⏸ Paused</span>
     </div>
   </div>
 </div><!-- end page-flow -->
@@ -7571,14 +7590,33 @@ function clawmetryLogout(){
     </svg>
   </div>
 
-  <!-- Live activity feed under the flow diagram -->
+  <!-- Live Tool Call Stream -->
   <div style="margin-top:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:12px 16px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <span style="font-size:13px;font-weight:600;color:#aaa;">📡 Live Activity Feed</span>
-      <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
+      <span style="font-size:13px;font-weight:600;color:#aaa;">🛠️ Live Tool Call Stream</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
+        <button id="tool-stream-pause-btn" onclick="toggleToolStreamPause()" style="background:none;border:1px solid #444;border-radius:6px;padding:2px 8px;color:#aaa;font-size:11px;cursor:pointer;" title="Pause/Resume stream">▌▌</button>
+        <button onclick="clearToolStream()" style="background:none;border:1px solid #444;border-radius:6px;padding:2px 8px;color:#aaa;font-size:11px;cursor:pointer;" title="Clear">✕</button>
+      </div>
     </div>
-    <div id="flow-live-feed" style="max-height:120px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.5;color:#777;">
-      <div style="color:#555;">Waiting for activity...</div>
+    <div id="tool-filter-pills" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">
+      <span class="tool-filter-pill active" data-tool="all" onclick="setToolFilter(this,'all')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:#333;color:#ccc;border:1px solid #555;">All</span>
+      <span class="tool-filter-pill" data-tool="exec" onclick="setToolFilter(this,'exec')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">exec</span>
+      <span class="tool-filter-pill" data-tool="read" onclick="setToolFilter(this,'read')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">read</span>
+      <span class="tool-filter-pill" data-tool="write" onclick="setToolFilter(this,'write')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">write</span>
+      <span class="tool-filter-pill" data-tool="edit" onclick="setToolFilter(this,'edit')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">edit</span>
+      <span class="tool-filter-pill" data-tool="browser" onclick="setToolFilter(this,'browser')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">browser</span>
+      <span class="tool-filter-pill" data-tool="web_search" onclick="setToolFilter(this,'web_search')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">search</span>
+      <span class="tool-filter-pill" data-tool="message" onclick="setToolFilter(this,'message')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">message</span>
+      <span class="tool-filter-pill" data-tool="sessions_spawn" onclick="setToolFilter(this,'sessions_spawn')" style="padding:2px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:transparent;color:#888;border:1px solid #444;">spawn</span>
+    </div>
+    <div id="flow-live-feed" style="max-height:360px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.6;color:#777;">
+      <div style="color:#555;">Waiting for tool calls...</div>
+    </div>
+    <div style="margin-top:6px;font-size:10px;color:#555;display:flex;justify-content:space-between;">
+      <span id="tool-stream-filter-label">Filter: All</span>
+      <span id="tool-stream-paused-label" style="color:#f0c040;display:none;">⏸ Paused</span>
     </div>
   </div>
 </div><!-- end page-flow -->
@@ -10399,11 +10437,12 @@ function _startFlowSse() {
       } else if (type === 'tool_call') {
         var toolName = evt.tool || 'exec';
         triggerToolCall(toolName);
-        var toolNames = {exec:'running a command',browser:'browsing the web',search:'searching the web',cron:'scheduling',tts:'generating speech',memory:'accessing memory'};
-        addFlowFeedItem('⚡ AI is ' + (toolNames[toolName] || 'using ' + toolName), '#f0c040');
+        var toolDescs = {exec:'running a command',browser:'browsing the web',search:'searching the web',cron:'scheduling',tts:'generating speech',memory:'accessing memory'};
+        addFlowFeedItem('⚡ ' + toolName + ' — ' + (toolDescs[toolName] || 'invoked'), getToolColor(toolName), toolName);
         flowStats.events++;
       } else if (type === 'tool_result') {
-        // return bubble already handled by triggerToolCall
+        var rToolName = evt.tool || '';
+        addFlowFeedItem('✔️ ' + (rToolName || 'tool') + ' — completed' + (evt.duration ? ' (' + evt.duration + 'ms)' : ''), '#50c070', rToolName);
       } else if (type === 'heartbeat') {
         addFlowFeedItem('💓 Heartbeat', '#555');
       }
@@ -10439,6 +10478,9 @@ function initFlow() {
 
   // Connect to the typed flow-events SSE (tails gateway.log + session JSONL)
   _startFlowSse();
+  
+  // Load initial tool calls from recent sessions
+  loadRecentToolCalls();
   
   setInterval(updateFlowStats, updateInterval);
 }
@@ -10694,22 +10736,156 @@ function triggerInfraStorage() {
   highlightNode('node-storage', 2000);
 }
 
-// Live feed for Flow tab - shows recent events in plain English
-var _flowFeedItems = [];
-var _flowFeedMax = 30;
-function addFlowFeedItem(text, color) {
+// === Tool Call Stream state ===
+var _toolStreamItems = [];     // all tool call entries {time, text, color, toolName, id}
+var _toolStreamMax = 100;      // keep up to 100 entries
+var _toolStreamPaused = false; // pause flag
+var _toolStreamFilter = 'all'; // active filter
+var _toolStreamPendingWhilePaused = []; // buffered while paused
+
+// Tool call color map
+var _toolColors = {
+  exec: '#f0c040', read: '#60b0ff', write: '#50e080', edit: '#a0d060',
+  browser: '#ff8040', web_search: '#c080ff', web_fetch: '#c080ff',
+  message: '#50e080', sessions_spawn: '#ff60a0', sessions_send: '#ff60a0',
+  tts: '#40d0d0', memory_search: '#80a0c0', memory_get: '#80a0c0',
+  canvas: '#ff8040', process: '#f0c040', image: '#d060d0', pdf: '#d060d0',
+  default: '#888'
+};
+
+function getToolColor(toolName) {
+  return _toolColors[toolName] || _toolColors.default;
+}
+
+function extractToolName(msg) {
+  var m = msg.match(/tool=(\w+)/);
+  if (m) return m[1].toLowerCase();
+  // fallback: check for known tool names in the message
+  var tools = ['exec','read','write','edit','browser','web_search','web_fetch','message','sessions_spawn','sessions_send','tts','memory_search','memory_get','canvas','process','image','pdf'];
+  for (var i = 0; i < tools.length; i++) {
+    if (msg.includes(tools[i])) return tools[i];
+  }
+  return '';
+}
+
+function toggleToolStreamPause() {
+  _toolStreamPaused = !_toolStreamPaused;
+  var btn = document.getElementById('tool-stream-pause-btn');
+  var label = document.getElementById('tool-stream-paused-label');
+  if (btn) btn.textContent = _toolStreamPaused ? '▶' : '▌▌';
+  if (btn) btn.style.color = _toolStreamPaused ? '#f0c040' : '#aaa';
+  if (label) label.style.display = _toolStreamPaused ? 'inline' : 'none';
+  if (!_toolStreamPaused && _toolStreamPendingWhilePaused.length > 0) {
+    for (var i = 0; i < _toolStreamPendingWhilePaused.length; i++) {
+      var p = _toolStreamPendingWhilePaused[i];
+      _addToolEntry(p.text, p.color, p.toolName);
+    }
+    _toolStreamPendingWhilePaused = [];
+    renderToolStream();
+  }
+}
+
+function clearToolStream() {
+  _toolStreamItems = [];
+  _toolStreamPendingWhilePaused = [];
+  renderToolStream();
+}
+
+function setToolFilter(el, filter) {
+  _toolStreamFilter = filter;
+  // Update pill styles
+  var pills = document.querySelectorAll('.tool-filter-pill');
+  for (var i = 0; i < pills.length; i++) {
+    if (pills[i].getAttribute('data-tool') === filter) {
+      pills[i].style.background = '#333';
+      pills[i].style.color = '#ccc';
+      pills[i].style.borderColor = '#555';
+      pills[i].classList.add('active');
+    } else {
+      pills[i].style.background = 'transparent';
+      pills[i].style.color = '#888';
+      pills[i].style.borderColor = '#444';
+      pills[i].classList.remove('active');
+    }
+  }
+  var label = document.getElementById('tool-stream-filter-label');
+  if (label) label.textContent = 'Filter: ' + (filter === 'all' ? 'All' : filter);
+  renderToolStream();
+}
+
+function _addToolEntry(text, color, toolName) {
   var now = new Date();
   var time = now.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  _flowFeedItems.push({time: time, text: text, color: color || '#888'});
-  if (_flowFeedItems.length > _flowFeedMax) _flowFeedItems.shift();
+  _toolStreamItems.push({time: time, text: text, color: color || '#888', toolName: toolName || ''});
+  if (_toolStreamItems.length > _toolStreamMax) _toolStreamItems.shift();
+}
+
+function renderToolStream() {
   var el = document.getElementById('flow-live-feed');
   if (!el) return;
-  var html = '';
-  for (var i = _flowFeedItems.length - 1; i >= Math.max(0, _flowFeedItems.length - 15); i--) {
-    var item = _flowFeedItems[i];
-    html += '<div><span style="color:#555;">' + item.time + '</span> <span style="color:' + item.color + ';">' + item.text + '</span></div>';
+  var filtered = _toolStreamItems;
+  if (_toolStreamFilter !== 'all') {
+    filtered = [];
+    for (var i = 0; i < _toolStreamItems.length; i++) {
+      var item = _toolStreamItems[i];
+      if (item.toolName === _toolStreamFilter ||
+          (_toolStreamFilter === 'web_search' && (item.toolName === 'web_search' || item.toolName === 'web_fetch')) ||
+          (_toolStreamFilter === 'sessions_spawn' && (item.toolName === 'sessions_spawn' || item.toolName === 'sessions_send'))) {
+        filtered.push(item);
+      }
+    }
   }
-  el.innerHTML = html;
+  if (filtered.length === 0) {
+    el.innerHTML = '<div style="color:#555;">No ' + (_toolStreamFilter === 'all' ? '' : _toolStreamFilter + ' ') + 'tool calls yet...</div>';
+  } else {
+    var html = '';
+    var start = Math.max(0, filtered.length - 50);
+    for (var i = start; i < filtered.length; i++) {
+      var item = filtered[i];
+      var badge = item.toolName ? '<span style="display:inline-block;padding:0 5px;border-radius:4px;background:' + (getToolColor(item.toolName)) + '22;color:' + getToolColor(item.toolName) + ';font-size:10px;margin-right:4px;">' + escHtml(item.toolName) + '</span>' : '';
+      html += '<div style="padding:2px 0;border-bottom:1px solid #1a1a3a;">' +
+        '<span style="color:#555;">' + item.time + '</span> ' +
+        badge +
+        '<span style="color:' + item.color + ';">' + item.text + '</span></div>';
+    }
+    el.innerHTML = html;
+    if (!_toolStreamPaused) el.scrollTop = el.scrollHeight;
+  }
+  var countEl = document.getElementById('flow-feed-count');
+  if (countEl) countEl.textContent = _toolStreamItems.length + ' events';
+}
+
+function loadRecentToolCalls() {
+  var token = localStorage.getItem('clawmetry-token') || '';
+  fetch('/api/tool-calls/recent?limit=30' + (token ? '&token=' + encodeURIComponent(token) : ''))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.tool_calls && data.tool_calls.length > 0) {
+        for (var i = 0; i < data.tool_calls.length; i++) {
+          var tc = data.tool_calls[i];
+          var statusIcon = tc.status === 'completed' ? '✔️' : '⚡';
+          var statusText = tc.status === 'completed' ? 'completed' : (tc.input_summary ? tc.input_summary.substring(0, 60) : 'invoked');
+          _addToolEntry(statusIcon + ' ' + tc.tool + ' — ' + statusText,
+            tc.status === 'completed' ? '#50c070' : getToolColor(tc.tool), tc.tool);
+        }
+        renderToolStream();
+      }
+    })
+    .catch(function() {});
+}
+
+// Live feed for Flow tab - shows recent events
+var _flowFeedItems = [];
+var _flowFeedMax = 30;
+function addFlowFeedItem(text, color, toolName) {
+  // Add to the tool stream
+  if (_toolStreamPaused) {
+    _toolStreamPendingWhilePaused.push({text: text, color: color || '#888', toolName: toolName || ''});
+  } else {
+    _addToolEntry(text, color, toolName);
+    renderToolStream();
+  }
+  // Also update the event counter
   var countEl = document.getElementById('flow-feed-count');
   if (countEl) countEl.textContent = flowStats.events + ' events';
 }
@@ -10778,7 +10954,7 @@ function processFlowEvent(line) {
     if (now - (flowThrottles['tool-'+flowTool]||0) < 300) return;
     flowThrottles['tool-'+flowTool] = now;
     var toolNames = {exec:'running a command',browser:'browsing the web',search:'searching the web',cron:'scheduling a task',tts:'generating speech',memory:'accessing memory'};
-    addFlowFeedItem('⚡ AI is ' + (toolNames[flowTool] || 'using ' + flowTool), '#f0c040');
+    addFlowFeedItem('⚡ ' + (toolName || flowTool) + ' — ' + (toolNames[flowTool] || 'invoked'), getToolColor(toolName || flowTool), toolName || flowTool);
     triggerToolCall(flowTool); return;
   }
 
@@ -10841,7 +11017,8 @@ function processFlowEvent(line) {
   if (msg.includes('tool end') || msg.includes('tool_end')) {
     if (now - (flowThrottles['tool-end']||0) < 300) return;
     flowThrottles['tool-end'] = now;
-    addFlowFeedItem('✔️ Tool completed', '#50c070');
+    var endToolName = extractToolName(msg);
+    addFlowFeedItem('✔️ ' + (endToolName || 'tool') + ' — completed', '#50c070', endToolName);
     return;
   }
 }
@@ -15208,6 +15385,81 @@ def api_flow_events():
 
     return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@bp_logs.route('/api/tool-calls/recent')
+def api_tool_calls_recent():
+    """Return recent tool calls extracted from the most recent session JSONL files."""
+    import glob as _glob
+    limit = min(int(request.args.get('limit', 50)), 200)
+    tool_filter = request.args.get('tool', '')
+
+    session_dir = SESSIONS_DIR
+    if not session_dir or not os.path.isdir(session_dir):
+        return jsonify({'tool_calls': [], 'total': 0})
+
+    # Find recent JSONL files (last 10 sessions)
+    jsonl_files = sorted(_glob.glob(os.path.join(session_dir, '**', '*.jsonl'), recursive=True),
+                         key=os.path.getmtime, reverse=True)[:10]
+
+    tool_calls = []
+    for jf in jsonl_files:
+        try:
+            with open(jf, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+
+                    # Look for tool_use / tool_call blocks
+                    content = obj.get('content', '')
+                    role = obj.get('role', '')
+
+                    if role == 'assistant' and isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get('type') in ('tool_use', 'toolCall'):
+                                tool_name = block.get('name', block.get('function', {}).get('name', ''))
+                                if tool_filter and tool_name != tool_filter:
+                                    continue
+                                tc = {
+                                    'tool': tool_name,
+                                    'id': block.get('id', ''),
+                                    'timestamp': obj.get('timestamp', obj.get('time', '')),
+                                    'session': os.path.basename(os.path.dirname(jf)),
+                                    'status': 'called'
+                                }
+                                # Extract short input summary
+                                inp = block.get('input', block.get('function', {}).get('arguments', {}))
+                                if isinstance(inp, dict):
+                                    summary_parts = []
+                                    for k, v in list(inp.items())[:3]:
+                                        sv = str(v)[:80]
+                                        summary_parts.append(f'{k}={sv}')
+                                    tc['input_summary'] = ', '.join(summary_parts)
+                                tool_calls.append(tc)
+
+                    elif role == 'tool' or (role == 'user' and isinstance(content, list)):
+                        # Tool results
+                        blocks = content if isinstance(content, list) else [{'type': 'tool_result', 'tool_use_id': obj.get('tool_use_id', ''), 'content': content}]
+                        for block in blocks:
+                            if isinstance(block, dict) and block.get('type') == 'tool_result':
+                                tid = block.get('tool_use_id', '')
+                                # Find matching call and mark as completed
+                                for tc in reversed(tool_calls):
+                                    if tc.get('id') == tid and tc['status'] == 'called':
+                                        tc['status'] = 'completed'
+                                        break
+
+        except Exception:
+            continue
+
+    # Return last N
+    tool_calls = tool_calls[-limit:]
+    return jsonify({'tool_calls': tool_calls, 'total': len(tool_calls)})
 
 
 @bp_logs.route('/api/logs-stream')
