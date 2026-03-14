@@ -264,3 +264,40 @@ class TestHeartbeatStatus:
         assert "heartbeat" in d, "system-health should include heartbeat key"
         hb = d["heartbeat"]
         assert_keys(hb, "status", "interval_seconds")
+
+
+class TestToolCalls:
+    """Tests for /api/tool-calls/recent endpoint (added in tool stream feature)."""
+
+    @staticmethod
+    def _skip_if_not_available(api, base_url):
+        r = api.get(f"{base_url}/api/tool-calls/recent", timeout=10)
+        if r.status_code == 404:
+            pytest.skip("tool-calls endpoint not yet deployed")
+
+    def test_tool_calls_recent_endpoint(self, api, base_url):
+        """Tool calls recent endpoint returns proper structure."""
+        self._skip_if_not_available(api, base_url)
+        d = assert_ok(get(api, base_url, "/api/tool-calls/recent"))
+        assert_keys(d, "tool_calls", "total")
+        assert isinstance(d["tool_calls"], list)
+
+    def test_tool_calls_with_limit(self, api, base_url):
+        """Tool calls endpoint respects limit parameter."""
+        self._skip_if_not_available(api, base_url)
+        d = assert_ok(get(api, base_url, "/api/tool-calls/recent?limit=5"))
+        assert len(d["tool_calls"]) <= 5
+
+    def test_tool_calls_with_filter(self, api, base_url):
+        """Tool calls endpoint accepts tool filter."""
+        self._skip_if_not_available(api, base_url)
+        d = assert_ok(get(api, base_url, "/api/tool-calls/recent?tool=exec"))
+        for tc in d["tool_calls"]:
+            assert tc["tool"] == "exec"
+
+    def test_tool_call_structure(self, api, base_url):
+        """Each tool call has required fields."""
+        self._skip_if_not_available(api, base_url)
+        d = assert_ok(get(api, base_url, "/api/tool-calls/recent?limit=10"))
+        for tc in d["tool_calls"]:
+            assert_keys(tc, "tool", "id", "status", "session")
