@@ -1688,7 +1688,8 @@ DASHBOARD_HTML = r"""
   .cron-config-detail { margin-top: 8px; padding: 8px; background: var(--bg-secondary); border-radius: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
 
   .log-viewer { background: var(--log-bg); border: 1px solid var(--border-primary); border-radius: 8px; font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.6; padding: 12px; max-height: 500px; overflow-y: auto; -webkit-overflow-scrolling: touch; white-space: pre-wrap; word-break: break-all; }
-  .log-line { padding: 1px 0; }
+  .log-line { padding: 2px 4px; border-radius: 3px; }
+  .log-line:hover { background: var(--bg-hover); }
   .log-line .ts { color: var(--text-muted); }
   .log-line .info { color: var(--text-link); }
   .log-line .warn { color: var(--text-warning); }
@@ -2522,6 +2523,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('logs')">Logs</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3308,6 +3310,46 @@ function clawmetryLogout(){
   </div>
 </div>
 </div>
+
+<!-- LOGS -->
+<div class="page" id="page-logs">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">📋 Live Logs</span>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div id="log-level-filters" style="display:flex;gap:4px;">
+          <button class="log-level-btn active" data-level="all" onclick="setLogLevelFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid var(--border-secondary);background:var(--bg-accent);color:#fff;font-size:11px;cursor:pointer;font-weight:600;">All</button>
+          <button class="log-level-btn" data-level="error" onclick="setLogLevelFilter('error',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #dc2626;background:transparent;color:#dc2626;font-size:11px;cursor:pointer;font-weight:600;">Error</button>
+          <button class="log-level-btn" data-level="warn" onclick="setLogLevelFilter('warn',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #d97706;background:transparent;color:#d97706;font-size:11px;cursor:pointer;font-weight:600;">Warn</button>
+          <button class="log-level-btn" data-level="info" onclick="setLogLevelFilter('info',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #3b82f6;background:transparent;color:#3b82f6;font-size:11px;cursor:pointer;font-weight:600;">Info</button>
+          <button class="log-level-btn" data-level="debug" onclick="setLogLevelFilter('debug',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #6b7280;background:transparent;color:#6b7280;font-size:11px;cursor:pointer;font-weight:600;">Debug</button>
+        </div>
+        <input type="text" id="log-search" placeholder="Search logs..." oninput="filterLogsView()" style="padding:4px 10px;border-radius:8px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;width:180px;outline:none;">
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-secondary);cursor:pointer;">
+          <input type="checkbox" id="log-auto-scroll" checked> Auto-scroll
+        </label>
+        <select id="log-lines" onchange="loadLogs()" style="padding:4px 8px;border-radius:8px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;outline:none;">
+          <option value="100">100 lines</option>
+          <option value="250">250 lines</option>
+          <option value="500" selected>500 lines</option>
+          <option value="1000">1000 lines</option>
+        </select>
+        <button class="refresh-btn" onclick="loadLogs()" style="padding:4px 12px;border-radius:8px;font-size:12px;">↻ Refresh</button>
+      </div>
+    </div>
+    <!-- Log stats bar -->
+    <div id="log-stats-bar" style="display:flex;gap:12px;margin-bottom:10px;font-size:11px;color:var(--text-muted);">
+      <span id="log-stat-total">0 lines</span>
+      <span id="log-stat-errors" style="color:#dc2626;">0 errors</span>
+      <span id="log-stat-warnings" style="color:#d97706;">0 warnings</span>
+      <span id="log-stat-stream" style="margin-left:auto;">Stream: connecting...</span>
+    </div>
+    <!-- Log output -->
+    <div id="logs-full" style="background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;padding:10px 14px;max-height:calc(100vh - 240px);overflow-y:auto;font-family:'SF Mono','Menlo','Monaco',monospace;font-size:11.5px;line-height:1.6;">
+      <div style="color:var(--text-muted);padding:20px;text-align:center;">Loading logs...</div>
+    </div>
+  </div>
+</div><!-- end page-logs -->
 
 <script>
 // === Budget & Alert Functions ===
@@ -6010,7 +6052,8 @@ DASHBOARD_HTML = r"""
   .cron-config-detail { margin-top: 8px; padding: 8px; background: var(--bg-secondary); border-radius: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
 
   .log-viewer { background: var(--log-bg); border: 1px solid var(--border-primary); border-radius: 8px; font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.6; padding: 12px; max-height: 500px; overflow-y: auto; -webkit-overflow-scrolling: touch; white-space: pre-wrap; word-break: break-all; }
-  .log-line { padding: 1px 0; }
+  .log-line { padding: 2px 4px; border-radius: 3px; }
+  .log-line:hover { background: var(--bg-hover); }
   .log-line .ts { color: var(--text-muted); }
   .log-line .info { color: var(--text-link); }
   .log-line .warn { color: var(--text-warning); }
@@ -6844,6 +6887,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('logs')">Logs</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -7678,6 +7722,46 @@ function clawmetryLogout(){
   </div>
 </div>
 </div>
+
+<!-- LOGS -->
+<div class="page" id="page-logs">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">📋 Live Logs</span>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div id="log-level-filters" style="display:flex;gap:4px;">
+          <button class="log-level-btn active" data-level="all" onclick="setLogLevelFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid var(--border-secondary);background:var(--bg-accent);color:#fff;font-size:11px;cursor:pointer;font-weight:600;">All</button>
+          <button class="log-level-btn" data-level="error" onclick="setLogLevelFilter('error',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #dc2626;background:transparent;color:#dc2626;font-size:11px;cursor:pointer;font-weight:600;">Error</button>
+          <button class="log-level-btn" data-level="warn" onclick="setLogLevelFilter('warn',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #d97706;background:transparent;color:#d97706;font-size:11px;cursor:pointer;font-weight:600;">Warn</button>
+          <button class="log-level-btn" data-level="info" onclick="setLogLevelFilter('info',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #3b82f6;background:transparent;color:#3b82f6;font-size:11px;cursor:pointer;font-weight:600;">Info</button>
+          <button class="log-level-btn" data-level="debug" onclick="setLogLevelFilter('debug',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #6b7280;background:transparent;color:#6b7280;font-size:11px;cursor:pointer;font-weight:600;">Debug</button>
+        </div>
+        <input type="text" id="log-search" placeholder="Search logs..." oninput="filterLogsView()" style="padding:4px 10px;border-radius:8px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;width:180px;outline:none;">
+        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-secondary);cursor:pointer;">
+          <input type="checkbox" id="log-auto-scroll" checked> Auto-scroll
+        </label>
+        <select id="log-lines" onchange="loadLogs()" style="padding:4px 8px;border-radius:8px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;outline:none;">
+          <option value="100">100 lines</option>
+          <option value="250">250 lines</option>
+          <option value="500" selected>500 lines</option>
+          <option value="1000">1000 lines</option>
+        </select>
+        <button class="refresh-btn" onclick="loadLogs()" style="padding:4px 12px;border-radius:8px;font-size:12px;">↻ Refresh</button>
+      </div>
+    </div>
+    <!-- Log stats bar -->
+    <div id="log-stats-bar" style="display:flex;gap:12px;margin-bottom:10px;font-size:11px;color:var(--text-muted);">
+      <span id="log-stat-total">0 lines</span>
+      <span id="log-stat-errors" style="color:#dc2626;">0 errors</span>
+      <span id="log-stat-warnings" style="color:#d97706;">0 warnings</span>
+      <span id="log-stat-stream" style="margin-left:auto;">Stream: connecting...</span>
+    </div>
+    <!-- Log output -->
+    <div id="logs-full" style="background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;padding:10px 14px;max-height:calc(100vh - 240px);overflow-y:auto;font-family:'SF Mono','Menlo','Monaco',monospace;font-size:11.5px;line-height:1.6;">
+      <div style="color:var(--text-muted);padding:20px;text-align:center;">Loading logs...</div>
+    </div>
+  </div>
+</div><!-- end page-logs -->
 
 <script>
 // === Budget & Alert Functions ===
@@ -9116,9 +9200,12 @@ function showGenericModal(title, bodyHtml) {
 
 function renderLogs(elId, lines) {
   var html = '';
+  var stats = {total: 0, errors: 0, warnings: 0};
   lines.forEach(function(l) {
     var cls = 'msg';
+    var levelTag = 'debug';
     var display = l;
+    var rawText = l;
     try {
       var obj = JSON.parse(l);
       var ts = '';
@@ -9127,10 +9214,10 @@ function renderLogs(elId, lines) {
         ts = d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
       }
       var level = (obj.logLevelName || obj.level || 'info').toLowerCase();
-      if (level === 'error' || level === 'fatal') cls = 'err';
-      else if (level === 'warn' || level === 'warning') cls = 'warn';
-      else if (level === 'debug') cls = 'msg';
-      else cls = 'info';
+      if (level === 'error' || level === 'fatal') { cls = 'err'; levelTag = 'error'; stats.errors++; }
+      else if (level === 'warn' || level === 'warning') { cls = 'warn'; levelTag = 'warn'; stats.warnings++; }
+      else if (level === 'debug') { cls = 'msg'; levelTag = 'debug'; }
+      else { cls = 'info'; levelTag = 'info'; }
       var msg = obj.msg || obj.message || obj.name || '';
       var extras = [];
       // Field "0" is usually a JSON string like {"subsystem":"gateway/ws"} - extract subsystem
@@ -9156,17 +9243,28 @@ function renderLogs(elId, lines) {
       else if (extras.length) display = prefix + extras.join(' ');
       else if (msg) display = prefix + msg;
       else display = l.substring(0, 200);
+      rawText = display;
       if (ts) display = '<span class="ts">' + ts + '</span> ' + escHtml(display);
       else display = escHtml(display);
     } catch(e) {
-      if (l.includes('Error') || l.includes('failed')) cls = 'err';
-      else if (l.includes('WARN')) cls = 'warn';
+      if (l.includes('Error') || l.includes('failed')) { cls = 'err'; levelTag = 'error'; stats.errors++; }
+      else if (l.includes('WARN')) { cls = 'warn'; levelTag = 'warn'; stats.warnings++; }
+      else { levelTag = 'info'; }
       display = escHtml(l.substring(0, 300));
+      rawText = l;
     }
-    html += '<div class="log-line"><span class="' + cls + '">' + display + '</span></div>';
+    stats.total++;
+    html += '<div class="log-line" data-level="' + levelTag + '" data-text="' + escHtml(rawText.toLowerCase()) + '"><span class="' + cls + '">' + display + '</span></div>';
   });
   document.getElementById(elId).innerHTML = html || '<span style="color:#555">No logs</span>';
   document.getElementById(elId).scrollTop = document.getElementById(elId).scrollHeight;
+  // Update stats bar if on logs page
+  var statTotal = document.getElementById('log-stat-total');
+  if (statTotal) {
+    statTotal.textContent = stats.total + ' lines';
+    document.getElementById('log-stat-errors').textContent = stats.errors + ' errors';
+    document.getElementById('log-stat-warnings').textContent = stats.warnings + ' warnings';
+  }
 }
 
 function escHtml(s) { s=String(s||''); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -9642,6 +9740,50 @@ async function loadLogs() {
   var lines = document.getElementById('log-lines').value;
   var data = await fetch('/api/logs?lines=' + lines).then(r => r.json());
   renderLogs('logs-full', data.lines);
+  filterLogsView();
+}
+
+var _logLevelFilter = 'all';
+
+function setLogLevelFilter(level, btn) {
+  _logLevelFilter = level;
+  document.querySelectorAll('.log-level-btn').forEach(function(b) {
+    b.classList.remove('active');
+    b.style.background = 'transparent';
+    b.style.color = b.style.borderColor;
+  });
+  btn.classList.add('active');
+  if (level === 'all') {
+    btn.style.background = 'var(--bg-accent)';
+    btn.style.color = '#fff';
+  } else {
+    btn.style.background = btn.style.borderColor;
+    btn.style.color = '#fff';
+  }
+  filterLogsView();
+}
+
+function filterLogsView() {
+  var el = document.getElementById('logs-full');
+  if (!el) return;
+  var search = (document.getElementById('log-search') || {}).value || '';
+  search = search.toLowerCase();
+  var lines = el.querySelectorAll('.log-line');
+  var shown = 0;
+  lines.forEach(function(line) {
+    var level = line.getAttribute('data-level') || 'info';
+    var text = line.getAttribute('data-text') || '';
+    var showLevel = _logLevelFilter === 'all' || level === _logLevelFilter;
+    var showSearch = !search || text.indexOf(search) !== -1;
+    if (showLevel && showSearch) {
+      line.style.display = '';
+      shown++;
+    } else {
+      line.style.display = 'none';
+    }
+  });
+  var statTotal = document.getElementById('log-stat-total');
+  if (statTotal) statTotal.textContent = shown + '/' + lines.length + ' lines';
 }
 
 async function loadMemory() {
@@ -10287,14 +10429,32 @@ function appendLogLine(elId, line) {
   var el = document.getElementById(elId);
   if (!el) return;
   var parsed = parseLogLine(line);
+  var levelTag = 'info';
+  if (parsed.cls === 'err') levelTag = 'error';
+  else if (parsed.cls === 'warn') levelTag = 'warn';
+  else if (parsed.cls === 'msg') levelTag = 'debug';
   var div = document.createElement('div');
   div.className = 'log-line';
+  div.setAttribute('data-level', levelTag);
+  div.setAttribute('data-text', line.toLowerCase().substring(0, 500));
   div.innerHTML = '<span class="' + parsed.cls + '">' + parsed.html + '</span>';
+  // Apply current filter if on logs page
+  if (elId === 'logs-full') {
+    var showLevel = _logLevelFilter === 'all' || levelTag === _logLevelFilter;
+    var search = (document.getElementById('log-search') || {}).value || '';
+    var showSearch = !search || line.toLowerCase().indexOf(search.toLowerCase()) !== -1;
+    if (!showLevel || !showSearch) div.style.display = 'none';
+  }
   el.appendChild(div);
   while (el.children.length > MAX_STREAM_LINES) el.removeChild(el.firstChild);
-  if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+  var autoScroll = document.getElementById('log-auto-scroll');
+  var shouldScroll = autoScroll ? autoScroll.checked : true;
+  if (shouldScroll && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
     el.scrollTop = el.scrollHeight;
   }
+  // Update stream indicator
+  var streamStat = document.getElementById('log-stat-stream');
+  if (streamStat && elId === 'logs-full') streamStat.textContent = 'Stream: live ● ' + new Date().toLocaleTimeString();
 }
 
 // ===== Flow Visualization Engine =====
