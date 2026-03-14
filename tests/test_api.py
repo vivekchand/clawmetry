@@ -264,3 +264,47 @@ class TestHeartbeatStatus:
         assert "heartbeat" in d, "system-health should include heartbeat key"
         hb = d["heartbeat"]
         assert_keys(hb, "status", "interval_seconds")
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic Event Catalog (GH#36)
+# ---------------------------------------------------------------------------
+
+class TestDiagnosticEventCatalog:
+    """Test diagnostic event catalog endpoints."""
+
+    def test_queue_depth_endpoint(self, api, base_url):
+        """Queue depth endpoint returns lanes dict."""
+        d = assert_ok(get(api, base_url, "/api/diagnostics/queue-depth"))
+        assert "lanes" in d, "queue-depth should include lanes key"
+        assert "total_events" in d, "queue-depth should include total_events"
+        assert isinstance(d["lanes"], dict)
+
+    def test_diagnostics_events_endpoint(self, api, base_url):
+        """Diagnostics events endpoint returns events list with summary."""
+        d = assert_ok(get(api, base_url, "/api/diagnostics/events"))
+        assert "events" in d, "diagnostics/events should include events key"
+        assert "retry_count_24h" in d, "should include retry_count_24h"
+        assert "stuck_sessions_1h" in d, "should include stuck_sessions_1h"
+        assert isinstance(d["events"], list)
+
+    def test_diagnostics_events_type_filter(self, api, base_url):
+        """Diagnostics events supports type filter."""
+        d = assert_ok(get(api, base_url, "/api/diagnostics/events?type=session_stuck"))
+        assert isinstance(d["events"], list)
+        # All returned events should match the filter
+        for e in d["events"]:
+            assert e.get("type") == "session_stuck"
+
+    def test_diagnostics_events_limit(self, api, base_url):
+        """Diagnostics events supports limit parameter."""
+        d = assert_ok(get(api, base_url, "/api/diagnostics/events?limit=5"))
+        assert len(d["events"]) <= 5
+
+    def test_system_health_includes_diagnostics(self, api, base_url):
+        """System health endpoint includes diagnostics summary."""
+        d = assert_ok(get(api, base_url, "/api/system-health"))
+        assert "diagnostics" in d, "system-health should include diagnostics key"
+        diag = d["diagnostics"]
+        assert_keys(diag, "queue_depths", "retry_count_24h", "stuck_sessions_1h")
+        assert isinstance(diag["queue_depths"], dict)

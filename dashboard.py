@@ -156,6 +156,8 @@ metrics_store = {
     "runs": [],         # [{timestamp, duration_ms, model, channel}]
     "messages": [],     # [{timestamp, channel, outcome, duration_ms}]
     "webhooks": [],     # [{timestamp, channel, type}]
+    "queues": [],       # [{timestamp, lane, depth}]
+    "diagnostics": [],  # [{timestamp, type, detail}]
 }
 MAX_STORE_ENTRIES = 10_000
 STORE_RETENTION_DAYS = 14
@@ -967,6 +969,58 @@ def _process_otlp_metrics(pb_data):
                         })
 
 
+                elif name == 'openclaw.queue.lane.depth':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('queues', {
+                            'timestamp': ts,
+                            'lane': attrs.get('lane', attrs.get('channel', 'main')),
+                            'depth': _get_dp_value(dp),
+                        })
+                elif name == 'openclaw.session.state':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('diagnostics', {
+                            'timestamp': ts,
+                            'type': 'session_state',
+                            'detail': {
+                                'session_id': attrs.get('session_id', ''),
+                                'state': attrs.get('state', attrs.get('new', '')),
+                                'previous': attrs.get('previous', attrs.get('old', '')),
+                            },
+                        })
+                elif name == 'openclaw.session.stuck':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('diagnostics', {
+                            'timestamp': ts,
+                            'type': 'session_stuck',
+                            'detail': {
+                                'session_id': attrs.get('session_id', ''),
+                                'age_ms': _get_dp_value(dp),
+                            },
+                        })
+                elif name == 'openclaw.run.attempt':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('diagnostics', {
+                            'timestamp': ts,
+                            'type': 'run_attempt',
+                            'detail': {
+                                'session_id': attrs.get('session_id', ''),
+                                'attempt': int(_get_dp_value(dp)),
+                                'model': attrs.get('model', ''),
+                            },
+                        })
+                elif name == 'openclaw.diagnostic.heartbeat':
+                    for dp in _get_data_points(metric):
+                        _add_metric('diagnostics', {
+                            'timestamp': ts,
+                            'type': 'gateway_heartbeat',
+                            'detail': {'value': _get_dp_value(dp)},
+                        })
+                        # Update the heartbeat tracker for gateway health indicator
+                        _record_heartbeat()
 def _process_otlp_traces(pb_data):
     """Decode OTLP traces protobuf and extract relevant span data."""
     req = trace_service_pb2.ExportTraceServiceRequest()
@@ -2705,6 +2759,24 @@ function clawmetryLogout(){
         <div id="sh-crons" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
         <div id="sh-subagents" style="margin-bottom:14px;"></div>
+        <!-- Diagnostic Event Catalog -->
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📋 Diagnostics</div>
+        <div id="diag-stuck-banner" style="display:none;background:#2a1a00;border:1px solid #fb923c;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#fb923c;"></div>
+        <div id="sh-diagnostics" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;">
+          <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);">
+            <span style="font-size:10px;color:var(--text-muted);">Queue:</span>
+            <span id="diag-queue-depth" style="font-weight:600;color:var(--text-primary);">0</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);">
+            <span style="font-size:10px;color:var(--text-muted);">Retries (24h):</span>
+            <span id="diag-retry-count" style="font-weight:600;color:#f0a040;display:none;">0</span>
+            <span id="diag-retry-none" style="font-size:11px;color:var(--text-muted);">0</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);">
+            <span style="font-size:10px;color:var(--text-muted);">Stuck:</span>
+            <span id="diag-stuck-count" style="font-weight:600;color:var(--text-primary);">0</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -4447,6 +4519,8 @@ metrics_store = {
     "runs": [],         # [{timestamp, duration_ms, model, channel}]
     "messages": [],     # [{timestamp, channel, outcome, duration_ms}]
     "webhooks": [],     # [{timestamp, channel, type}]
+    "queues": [],       # [{timestamp, lane, depth}]
+    "diagnostics": [],  # [{timestamp, type, detail}]
 }
 MAX_STORE_ENTRIES = 10_000
 STORE_RETENTION_DAYS = 14
@@ -5272,6 +5346,58 @@ def _process_otlp_metrics(pb_data):
                             'type': wtype,
                         })
 
+                elif name == 'openclaw.queue.lane.depth':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('queues', {
+                            'timestamp': ts,
+                            'lane': attrs.get('lane', attrs.get('channel', 'main')),
+                            'depth': _get_dp_value(dp),
+                        })
+                elif name == 'openclaw.session.state':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('diagnostics', {
+                            'timestamp': ts,
+                            'type': 'session_state',
+                            'detail': {
+                                'session_id': attrs.get('session_id', ''),
+                                'state': attrs.get('state', attrs.get('new', '')),
+                                'previous': attrs.get('previous', attrs.get('old', '')),
+                            },
+                        })
+                elif name == 'openclaw.session.stuck':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('diagnostics', {
+                            'timestamp': ts,
+                            'type': 'session_stuck',
+                            'detail': {
+                                'session_id': attrs.get('session_id', ''),
+                                'age_ms': _get_dp_value(dp),
+                            },
+                        })
+                elif name == 'openclaw.run.attempt':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('diagnostics', {
+                            'timestamp': ts,
+                            'type': 'run_attempt',
+                            'detail': {
+                                'session_id': attrs.get('session_id', ''),
+                                'attempt': int(_get_dp_value(dp)),
+                                'model': attrs.get('model', ''),
+                            },
+                        })
+                elif name == 'openclaw.diagnostic.heartbeat':
+                    for dp in _get_data_points(metric):
+                        _add_metric('diagnostics', {
+                            'timestamp': ts,
+                            'type': 'gateway_heartbeat',
+                            'detail': {'value': _get_dp_value(dp)},
+                        })
+                        # Update the heartbeat tracker for gateway health indicator
+                        _record_heartbeat()
 
 def _process_otlp_traces(pb_data):
     """Decode OTLP traces protobuf and extract relevant span data."""
@@ -7075,6 +7201,24 @@ function clawmetryLogout(){
         <div id="sh-subagents" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Heartbeat</div>
         <div id="sh-heartbeat" style="margin-bottom:14px;"></div>
+        <!-- Diagnostic Event Catalog (light theme) -->
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📋 Diagnostics</div>
+        <div id="diag-stuck-banner-light" style="display:none;background:#fff3e0;border:1px solid #fb923c;border-radius:6px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#e65100;"></div>
+        <div id="sh-diagnostics-light" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;">
+          <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);">
+            <span style="font-size:10px;color:var(--text-muted);">Queue:</span>
+            <span id="diag-queue-depth-light" style="font-weight:600;color:var(--text-primary);">0</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);">
+            <span style="font-size:10px;color:var(--text-muted);">Retries (24h):</span>
+            <span id="diag-retry-count-light" style="font-weight:600;color:#f0a040;display:none;">0</span>
+            <span id="diag-retry-none-light" style="font-size:11px;color:var(--text-muted);">0</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);">
+            <span style="font-size:10px;color:var(--text-muted);">Stuck:</span>
+            <span id="diag-stuck-count-light" style="font-weight:600;color:var(--text-primary);">0</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -9899,8 +10043,47 @@ async function loadSystemHealth() {
 }
 function startSystemHealthRefresh() {
   loadSystemHealth();
+  loadDiagnostics();
   if (window._sysHealthTimer) clearInterval(window._sysHealthTimer);
-  window._sysHealthTimer = setInterval(loadSystemHealth, 30000);
+  window._sysHealthTimer = setInterval(function() { loadSystemHealth(); loadDiagnostics(); }, 30000);
+}
+
+// ===== Diagnostic Event Catalog =====
+async function loadDiagnostics() {
+  try {
+    // Fetch queue depth
+    var qd = await fetch('/api/diagnostics/queue-depth', {headers:{'Authorization':'Bearer '+(localStorage.getItem('clawmetry-token')||'')}}).then(function(r){return r.json();});
+    var totalDepth = 0;
+    if (qd && qd.lanes) {
+      for (var lane in qd.lanes) { totalDepth += (qd.lanes[lane].depth || 0); }
+    }
+    ['diag-queue-depth','diag-queue-depth-light'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) { el.textContent = totalDepth; el.style.color = totalDepth > 5 ? '#fb923c' : totalDepth > 0 ? '#f0c040' : 'var(--text-primary)'; }
+    });
+
+    // Fetch diagnostic events
+    var de = await fetch('/api/diagnostics/events?limit=50', {headers:{'Authorization':'Bearer '+(localStorage.getItem('clawmetry-token')||'')}}).then(function(r){return r.json();});
+    // Update retry count
+    var retries = de.retry_count_24h || 0;
+    ['diag-retry-count','diag-retry-count-light'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) {
+        if (retries > 0) { el.textContent = retries; el.style.display = 'inline-block'; }
+        else { el.style.display = 'none'; }
+      }
+    });
+    ['diag-retry-none','diag-retry-none-light'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = retries > 0 ? 'none' : 'inline';
+    });
+    // Update stuck count
+    var stuck = de.stuck_sessions_1h || 0;
+    ['diag-stuck-count','diag-stuck-count-light'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) { el.textContent = stuck; el.style.color = stuck > 0 ? '#fb923c' : 'var(--text-primary)'; }
+    });
+  } catch(e) { /* diagnostics fetch failed, ignore */ }
 }
 
 // ===== Activity Heatmap =====
@@ -10842,6 +11025,54 @@ function processFlowEvent(line) {
     if (now - (flowThrottles['tool-end']||0) < 300) return;
     flowThrottles['tool-end'] = now;
     addFlowFeedItem('✔️ Tool completed', '#50c070');
+    return;
+  }
+  // --- Diagnostic Event Catalog: lane dequeue, run.attempt, session.stuck ---
+  if (msg.includes('lane dequeue')) {
+    if (now - (flowThrottles['lane-dequeue']||0) < 2000) return;
+    flowThrottles['lane-dequeue'] = now;
+    // Compute queue wait time if we have a matching enqueue timestamp
+    var waitMs = '';
+    var waitMatch = msg.match(/wait[=: ]*(\d+)/i);
+    if (waitMatch) waitMs = ' (' + waitMatch[1] + 'ms wait)';
+    addFlowFeedItem('📤 Task dequeued' + waitMs, '#6090c0');
+    // Update queue depth indicator
+    var depthEl = document.getElementById('diag-queue-depth');
+    if (depthEl) {
+      var depthMatch = msg.match(/depth[=: ]*(\d+)/i);
+      if (depthMatch) depthEl.textContent = depthMatch[1];
+    }
+    return;
+  }
+  if (msg.includes('run.attempt') || msg.includes('run attempt')) {
+    var attemptMatch = msg.match(/attempt[=: ]*(\d+)/i);
+    var attemptNum = attemptMatch ? parseInt(attemptMatch[1]) : 1;
+    if (attemptNum > 1) {
+      if (now - (flowThrottles['run-retry']||0) < 1000) return;
+      flowThrottles['run-retry'] = now;
+      addFlowFeedItem('🔄 Retry attempt #' + attemptNum, '#f0a040');
+      // Update retry count badge in sessions panel
+      var retryBadge = document.getElementById('diag-retry-count');
+      if (retryBadge) {
+        var cur = parseInt(retryBadge.textContent || '0');
+        retryBadge.textContent = cur + 1;
+        retryBadge.style.display = 'inline-block';
+      }
+    }
+    return;
+  }
+  if (msg.includes('session.stuck') || msg.includes('session stuck')) {
+    if (now - (flowThrottles['session-stuck']||0) < 5000) return;
+    flowThrottles['session-stuck'] = now;
+    var stuckIdMatch = msg.match(/session[=: ]*([a-zA-Z0-9_-]+)/);
+    var stuckId = stuckIdMatch ? stuckIdMatch[1] : 'unknown';
+    addFlowFeedItem('⚠️ Session stuck: ' + stuckId, '#fb923c');
+    // Show stuck session banner
+    var stuckBanner = document.getElementById('diag-stuck-banner');
+    if (stuckBanner) {
+      stuckBanner.style.display = 'block';
+      stuckBanner.innerHTML = '<span style="color:#fb923c;font-weight:600;">⚠️ Stuck session detected:</span> ' + stuckId + ' <button onclick="this.parentElement.style.display=\\'none\\'" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:16px;margin-left:8px;">✕</button>';
+    }
     return;
   }
 }
@@ -18959,12 +19190,37 @@ def api_system_health():
 
     sa_pct = round((sa_success / sa_runs * 100) if sa_runs > 0 else 100, 0)
 
+    # Diagnostics summary
+    with _metrics_lock:
+        queue_entries = list(metrics_store.get('queues', []))
+        diag_entries = list(metrics_store.get('diagnostics', []))
+    lane_depths = {}
+    for e in queue_entries:
+        lane = e.get('lane', 'main')
+        lane_depths[lane] = e.get('depth', 0)
+    retry_count = sum(
+        1 for e in diag_entries
+        if e.get('type') == 'run_attempt'
+        and e.get('detail', {}).get('attempt', 1) > 1
+        and (now_ts - e.get('timestamp', 0)) < 86400
+    )
+    stuck_count = sum(
+        1 for e in diag_entries
+        if e.get('type') == 'session_stuck'
+        and (now_ts - e.get('timestamp', 0)) < 3600
+    )
+
     return jsonify({
         'services': services,
         'disks': disks,
         'crons': {'enabled': cron_enabled, 'ok24h': cron_ok_24h, 'failed': cron_failed},
         'subagents': {'runs': sa_runs, 'successPct': sa_pct},
         'heartbeat': _get_heartbeat_status(),
+        'diagnostics': {
+            'queue_depths': lane_depths,
+            'retry_count_24h': retry_count,
+            'stuck_sessions_1h': stuck_count,
+        },
     })
 
 
@@ -19054,6 +19310,50 @@ def api_health():
                        'detail': 'Not installed - pip install clawmetry[otel]'})
 
     return jsonify({'checks': checks})
+
+
+@bp_health.route('/api/diagnostics/queue-depth')
+def api_diagnostics_queue_depth():
+    """Return current queue depth per lane from OTLP metrics."""
+    with _metrics_lock:
+        entries = list(metrics_store.get('queues', []))
+    # Group by lane, return latest depth per lane
+    lane_depths = {}
+    for e in entries:
+        lane = e.get('lane', 'main')
+        lane_depths[lane] = {'depth': e.get('depth', 0), 'timestamp': e.get('timestamp', 0)}
+    return jsonify({'lanes': lane_depths, 'total_events': len(entries)})
+
+
+@bp_health.route('/api/diagnostics/events')
+def api_diagnostics_events():
+    """Return recent diagnostic events (session_state, session_stuck, run_attempt, gateway_heartbeat)."""
+    event_type = request.args.get('type', None)
+    limit = min(int(request.args.get('limit', 100)), 500)
+    with _metrics_lock:
+        entries = list(metrics_store.get('diagnostics', []))
+    if event_type:
+        entries = [e for e in entries if e.get('type') == event_type]
+    # Return newest first
+    entries = sorted(entries, key=lambda e: e.get('timestamp', 0), reverse=True)[:limit]
+    # Count retries (run_attempt with attempt > 1) in last 24h
+    now = time.time()
+    retry_count_24h = sum(
+        1 for e in metrics_store.get('diagnostics', [])
+        if e.get('type') == 'run_attempt'
+        and e.get('detail', {}).get('attempt', 1) > 1
+        and (now - e.get('timestamp', 0)) < 86400
+    )
+    stuck_sessions = [
+        e for e in metrics_store.get('diagnostics', [])
+        if e.get('type') == 'session_stuck'
+        and (now - e.get('timestamp', 0)) < 3600  # last hour
+    ]
+    return jsonify({
+        'events': entries,
+        'retry_count_24h': retry_count_24h,
+        'stuck_sessions_1h': len(stuck_sessions),
+    })
 
 
 @bp_health.route('/api/heartbeat-status')
