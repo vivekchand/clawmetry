@@ -2522,6 +2522,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3242,6 +3243,57 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-brain -->
 
+<!-- SECURITY -->
+<div class="page" id="page-security">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128737;&#65039; Security -- Threat Detection &amp; Anomaly Alerts</span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span id="security-scan-time" style="font-size:11px;color:var(--text-muted);"></span>
+        <button class="refresh-btn" onclick="loadSecurityPage()">&#8635; Scan</button>
+      </div>
+    </div>
+    <div id="security-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:#ef4444;" id="sec-critical-count">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Critical</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:#f59e0b;" id="sec-high-count">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">High</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:#3b82f6;" id="sec-medium-count">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Medium</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:#22c55e;" id="sec-clean-count">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Clean Sessions</div>
+      </div>
+    </div>
+    <div id="security-filter-pills" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+      <button class="brain-chip active" data-severity="all" onclick="setSecurityFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
+      <button class="brain-chip" data-severity="critical" onclick="setSecurityFilter('critical',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #ef4444;background:transparent;color:#ef4444;font-size:11px;cursor:pointer;font-weight:600;">Critical</button>
+      <button class="brain-chip" data-severity="high" onclick="setSecurityFilter('high',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #f59e0b;background:transparent;color:#f59e0b;font-size:11px;cursor:pointer;font-weight:600;">High</button>
+      <button class="brain-chip" data-severity="medium" onclick="setSecurityFilter('medium',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #3b82f6;background:transparent;color:#3b82f6;font-size:11px;cursor:pointer;font-weight:600;">Medium</button>
+      <button class="brain-chip" data-severity="low" onclick="setSecurityFilter('low',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #64748b;background:transparent;color:#64748b;font-size:11px;cursor:pointer;font-weight:600;">Low</button>
+    </div>
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-size:11px;color:var(--text-muted);">Threat timeline (newest first)</span>
+        <span id="sec-total-label" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div id="security-threat-list" style="max-height:600px;overflow-y:auto;">
+        <div style="color:var(--text-muted);padding:20px">Scanning...</div>
+      </div>
+    </div>
+    <div style="margin-top:14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+      <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:8px;cursor:pointer;" onclick="toggleSecCatalog()">&#128203; Signature Catalog <span id="sec-catalog-arrow" style="font-size:10px;">&#9654;</span></div>
+      <div id="sec-catalog" style="display:none;"></div>
+    </div>
+  </div>
+</div><!-- end page-security -->
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -3552,6 +3604,7 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'subagents') loadSubAgentsPage(false);
   if (name === 'brain') loadBrainPage();
+  if (name === 'security') loadSecurityPage();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -5621,6 +5674,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_memory)
     app.register_blueprint(bp_otel)
     app.register_blueprint(bp_overview)
+    app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_usage)
     # ────────────────────────────────────────────────────────────────────────
@@ -6844,6 +6898,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -7612,6 +7667,57 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-brain -->
 
+<!-- SECURITY -->
+<div class="page" id="page-security">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128737;&#65039; Security -- Threat Detection &amp; Anomaly Alerts</span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span id="security-scan-time" style="font-size:11px;color:var(--text-muted);"></span>
+        <button class="refresh-btn" onclick="loadSecurityPage()">&#8635; Scan</button>
+      </div>
+    </div>
+    <div id="security-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:#ef4444;" id="sec-critical-count">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Critical</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:#f59e0b;" id="sec-high-count">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">High</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:#3b82f6;" id="sec-medium-count">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Medium</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:#22c55e;" id="sec-clean-count">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Clean Sessions</div>
+      </div>
+    </div>
+    <div id="security-filter-pills" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+      <button class="brain-chip active" data-severity="all" onclick="setSecurityFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
+      <button class="brain-chip" data-severity="critical" onclick="setSecurityFilter('critical',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #ef4444;background:transparent;color:#ef4444;font-size:11px;cursor:pointer;font-weight:600;">Critical</button>
+      <button class="brain-chip" data-severity="high" onclick="setSecurityFilter('high',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #f59e0b;background:transparent;color:#f59e0b;font-size:11px;cursor:pointer;font-weight:600;">High</button>
+      <button class="brain-chip" data-severity="medium" onclick="setSecurityFilter('medium',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #3b82f6;background:transparent;color:#3b82f6;font-size:11px;cursor:pointer;font-weight:600;">Medium</button>
+      <button class="brain-chip" data-severity="low" onclick="setSecurityFilter('low',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #64748b;background:transparent;color:#64748b;font-size:11px;cursor:pointer;font-weight:600;">Low</button>
+    </div>
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-size:11px;color:var(--text-muted);">Threat timeline (newest first)</span>
+        <span id="sec-total-label" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div id="security-threat-list" style="max-height:600px;overflow-y:auto;">
+        <div style="color:var(--text-muted);padding:20px">Scanning...</div>
+      </div>
+    </div>
+    <div style="margin-top:14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+      <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:8px;cursor:pointer;" onclick="toggleSecCatalog()">&#128203; Signature Catalog <span id="sec-catalog-arrow" style="font-size:10px;">&#9654;</span></div>
+      <div id="sec-catalog" style="display:none;"></div>
+    </div>
+  </div>
+</div><!-- end page-security -->
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -7948,6 +8054,7 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'subagents') loadSubAgentsPage(false);
   if (name === 'brain') loadBrainPage();
+  if (name === 'security') loadSecurityPage();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -8761,6 +8868,116 @@ async function loadBrainPage(silent) {
   if (_brainRefreshTimer) clearTimeout(_brainRefreshTimer);
   if (document.getElementById('page-brain') && document.getElementById('page-brain').classList.contains('active')) {
     _brainRefreshTimer = setTimeout(function() { loadBrainPage(true); }, 5000);
+  }
+}
+
+
+// ── Security Threat Detection ──────────────────────────────────────────────
+var _securityFilter = 'all';
+var _securityAllThreats = [];
+var _securityRefreshTimer = null;
+
+var _severityColors = {critical:'#ef4444', high:'#f59e0b', medium:'#3b82f6', low:'#64748b', info:'#22c55e'};
+
+function setSecurityFilter(sev, btn) {
+  _securityFilter = sev;
+  document.querySelectorAll('#security-filter-pills .brain-chip').forEach(function(c){
+    c.classList.remove('active');
+    c.style.background = 'transparent';
+  });
+  btn.classList.add('active');
+  btn.style.background = 'rgba(' + (sev==='critical'?'239,68,68':sev==='high'?'245,158,11':sev==='medium'?'59,130,246':sev==='low'?'100,116,139':'168,85,247') + ',0.2)';
+  renderSecurityThreats(_securityAllThreats);
+}
+
+function renderSecurityThreats(threats) {
+  var el = document.getElementById('security-threat-list');
+  if (!el) return;
+  var filtered = _securityFilter === 'all' ? threats : threats.filter(function(t){return t.severity === _securityFilter;});
+  var label = document.getElementById('sec-total-label');
+  if (label) label.textContent = filtered.length + ' threat' + (filtered.length!==1?'s':'') + ' found';
+  if (filtered.length === 0) {
+    el.innerHTML = '<div style="color:#22c55e;padding:20px;text-align:center;font-size:13px;">&#9989; No threats detected' + (_securityFilter!=='all'?' at this severity level':'') + '</div>';
+    return;
+  }
+  var html = '';
+  filtered.forEach(function(t){
+    var sColor = _severityColors[t.severity] || '#888';
+    var sevBadge = '<span style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;color:#fff;background:' + sColor + ';min-width:55px;text-align:center;">' + (t.severity||'?').toUpperCase() + '</span>';
+    var time = t.time ? new Date(t.time).toLocaleTimeString() : '';
+    html += '<div class="brain-event" style="border-left:3px solid ' + sColor + ';padding-left:10px;margin-bottom:4px;">';
+    html += '<span class="brain-time">' + escHtml(time) + '</span>';
+    html += sevBadge + ' ';
+    html += '<span style="font-weight:600;color:var(--text-primary);min-width:140px;display:inline-block;">' + escHtml(t.rule_id || '') + '</span>';
+    html += '<span class="brain-detail" style="white-space:normal;">' + escHtml(t.detail || '') + '</span>';
+    if (t.session) html += ' <span style="color:var(--text-muted);font-size:10px;">[' + escHtml(t.session) + ']</span>';
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function toggleSecCatalog() {
+  var el = document.getElementById('sec-catalog');
+  var arrow = document.getElementById('sec-catalog-arrow');
+  if (!el) return;
+  if (el.style.display === 'none') {
+    el.style.display = 'block';
+    if (arrow) arrow.innerHTML = '&#9660;';
+    loadSecCatalog();
+  } else {
+    el.style.display = 'none';
+    if (arrow) arrow.innerHTML = '&#9654;';
+  }
+}
+
+async function loadSecCatalog() {
+  var el = document.getElementById('sec-catalog');
+  if (!el) return;
+  try {
+    var data = await fetchJsonWithTimeout('/api/security/signatures', 5000);
+    var sigs = data.signatures || [];
+    if (sigs.length === 0) { el.innerHTML = '<div style="color:var(--text-muted);font-size:11px;">No signatures loaded</div>'; return; }
+    var html = '<table style="width:100%;font-size:11px;border-collapse:collapse;">';
+    html += '<tr style="color:var(--text-muted);border-bottom:1px solid var(--border);"><th style="text-align:left;padding:4px;">ID</th><th style="text-align:left;padding:4px;">Severity</th><th style="text-align:left;padding:4px;">Description</th><th style="text-align:left;padding:4px;">Pattern</th></tr>';
+    sigs.forEach(function(s){
+      var sColor = _severityColors[s.severity] || '#888';
+      html += '<tr style="border-bottom:1px solid var(--border);">';
+      html += '<td style="padding:4px;font-family:monospace;color:var(--text-primary);">' + escHtml(s.id) + '</td>';
+      html += '<td style="padding:4px;"><span style="color:' + sColor + ';font-weight:600;">' + escHtml((s.severity||'').toUpperCase()) + '</span></td>';
+      html += '<td style="padding:4px;color:var(--text-secondary);">' + escHtml(s.description) + '</td>';
+      html += '<td style="padding:4px;font-family:monospace;font-size:10px;color:var(--text-muted);">' + escHtml(s.pattern || '') + '</td>';
+      html += '</tr>';
+    });
+    html += '</table>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="color:var(--text-error);font-size:11px;">Failed to load: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+async function loadSecurityPage(silent) {
+  if (window.CLOUD_MODE) return;
+  try {
+    var data = await fetchJsonWithTimeout('/api/security/threats', 10000);
+    var threats = data.threats || [];
+    _securityAllThreats = threats;
+    var counts = data.counts || {};
+    document.getElementById('sec-critical-count').textContent = counts.critical || 0;
+    document.getElementById('sec-high-count').textContent = counts.high || 0;
+    document.getElementById('sec-medium-count').textContent = counts.medium || 0;
+    document.getElementById('sec-clean-count').textContent = counts.clean_sessions || 0;
+    var scanTime = document.getElementById('security-scan-time');
+    if (scanTime) scanTime.textContent = 'Scanned ' + new Date().toLocaleTimeString();
+    renderSecurityThreats(threats);
+  } catch(e) {
+    if (!silent) {
+      var el = document.getElementById('security-threat-list');
+      if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px">Scan failed: ' + escHtml(String(e)) + '</div>';
+    }
+  }
+  if (_securityRefreshTimer) clearTimeout(_securityRefreshTimer);
+  if (document.getElementById('page-security') && document.getElementById('page-security').classList.contains('active')) {
+    _securityRefreshTimer = setTimeout(function() { loadSecurityPage(true); }, 30000);
   }
 }
 
@@ -13905,6 +14122,7 @@ bp_memory = _Blueprint('memory', __name__)
 bp_otel = _Blueprint('otel', __name__)
 bp_overview = _Blueprint('overview', __name__)
 bp_sessions = _Blueprint('sessions', __name__)
+bp_security = _Blueprint('security', __name__)
 bp_usage = _Blueprint('usage', __name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -18809,6 +19027,294 @@ def api_component_brain():
         'total': total,
     }
     return jsonify(result)
+
+
+
+# ── Security Threat Detection Engine ─────────────────────────────────────────
+import re as _sec_re
+
+# Built-in threat signatures: pattern matching on tool call details
+_THREAT_SIGNATURES = [
+    # Critical: Direct system compromise attempts
+    {
+        'id': 'SEC-001',
+        'severity': 'critical',
+        'description': 'Reverse shell attempt via exec',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'(?:bash|sh|nc|ncat|netcat)\s.*-[ie]\s',
+            r'/dev/tcp/',
+            r'mkfifo\s+/tmp/',
+            r'\bsocat\b.*\bexec\b',
+            r'\btelnet\b.*\|.*\bsh\b',
+        ],
+    },
+    {
+        'id': 'SEC-002',
+        'severity': 'critical',
+        'description': 'Credential/secret file access',
+        'tool_types': ['READ', 'EXEC'],
+        'patterns': [
+            r'(?:/etc/shadow|/etc/passwd)',
+            r'\.ssh/(?:id_rsa|id_ed25519|authorized_keys)',
+            r'\.aws/credentials',
+            r'\.env(?:\b|$)',
+            r'(?:\.kube|kubeconfig)',
+            r'\.gnupg/private',
+            r'\.netrc',
+        ],
+    },
+    {
+        'id': 'SEC-003',
+        'severity': 'critical',
+        'description': 'Privilege escalation attempt',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'\bsudo\s+(?:su|bash|sh|chmod\s+[ugo]*s)',
+            r'\bchmod\s+[0-7]*4[0-7]{2}\b',
+            r'\bchmod\s+u\+s\b',
+            r'\bpkexec\b',
+            r'\bsu\s+-\s',
+        ],
+    },
+    # High: Data exfiltration and suspicious network activity
+    {
+        'id': 'SEC-004',
+        'severity': 'high',
+        'description': 'Potential data exfiltration via curl/wget POST',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'\bcurl\b.*\b-[dX]\b.*(?:POST|PUT)',
+            r'\bcurl\b.*--data(?:-binary|-raw|-urlencode)?\b',
+            r'\bwget\b.*--post-(?:data|file)\b',
+        ],
+    },
+    {
+        'id': 'SEC-005',
+        'severity': 'high',
+        'description': 'SSH/SCP to unknown external host',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'\bssh\b\s+(?!localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01]))',
+            r'\bscp\b\s+.*:',
+            r'\brsync\b.*(?<!localhost):',
+        ],
+    },
+    {
+        'id': 'SEC-006',
+        'severity': 'high',
+        'description': 'Cryptocurrency miner indicators',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'\bxmrig\b',
+            r'\bstratum\+tcp\b',
+            r'(?:mine|pool)\..*\.(?:com|net|org)',
+            r'\bcpuminer\b',
+        ],
+    },
+    # Medium: Suspicious but potentially legitimate
+    {
+        'id': 'SEC-007',
+        'severity': 'medium',
+        'description': 'Destructive file operation (rm -rf on system paths)',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'\brm\s+(?:-[rfRv]+\s+)*(?:/(?:etc|usr|var|boot|lib|bin|sbin|opt|root)\b|/\s*$)',
+            r'\brm\s+-[rfR]+\s+\*',
+            r'\bdd\s+.*of=/dev/',
+            r'\bmkfs\b',
+        ],
+    },
+    {
+        'id': 'SEC-008',
+        'severity': 'medium',
+        'description': 'Package manager running as agent (supply chain risk)',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'\bpip\s+install\b.*(?:--index-url|--extra-index-url|--trusted-host)',
+            r'\bnpm\s+install\b.*(?:--registry|--unsafe-perm)',
+            r'\bcurl\b.*\|\s*(?:sudo\s+)?(?:bash|sh)\b',
+            r'\bwget\b.*\|\s*(?:sudo\s+)?(?:bash|sh)\b',
+        ],
+    },
+    {
+        'id': 'SEC-009',
+        'severity': 'medium',
+        'description': 'Firewall or security policy modification',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'\b(?:ufw|iptables|nftables|firewall-cmd)\b.*(?:allow|disable|delete|flush)',
+            r'\bsetenforce\s+0\b',
+            r'\bsystemctl\s+(?:stop|disable)\s+(?:firewalld|ufw|apparmor)',
+        ],
+    },
+    {
+        'id': 'SEC-010',
+        'severity': 'medium',
+        'description': 'Cron/systemd persistence mechanism',
+        'tool_types': ['EXEC', 'WRITE'],
+        'patterns': [
+            r'\bcrontab\b',
+            r'/etc/cron\.',
+            r'/etc/systemd/system/.*\.service',
+            r'systemctl\s+enable\b',
+        ],
+    },
+    # Low: Informational security events
+    {
+        'id': 'SEC-011',
+        'severity': 'low',
+        'description': 'Port scanning or network reconnaissance',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'\bnmap\b',
+            r'\bmasscan\b',
+            r'\bnetstat\s+-[tul]*p',
+            r'\bss\s+-[tul]*p',
+        ],
+    },
+    {
+        'id': 'SEC-012',
+        'severity': 'low',
+        'description': 'Large file download (potential payload)',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'\bwget\b\s+https?://(?!github\.com|pypi\.org|registry\.npmjs\.org|dl\.google\.com)',
+            r'\bcurl\b\s+-[oOL]+\s+https?://(?!github\.com|pypi\.org|registry\.npmjs\.org)',
+        ],
+    },
+    {
+        'id': 'SEC-013',
+        'severity': 'medium',
+        'description': 'Environment variable or API key extraction',
+        'tool_types': ['EXEC', 'READ'],
+        'patterns': [
+            r'\bprintenv\b',
+            r'\benv\s*$',
+            r'\bset\s*\|\s*grep\b.*(?:KEY|SECRET|TOKEN|PASS)',
+            r'cat\s+.*(?:\.env|secrets|credentials)',
+        ],
+    },
+    {
+        'id': 'SEC-014',
+        'severity': 'high',
+        'description': 'Process injection or debugging attachment',
+        'tool_types': ['EXEC'],
+        'patterns': [
+            r'\bgdb\b.*-p\s*\d+',
+            r'\bstrace\b.*-p\s*\d+',
+            r'\bptrace\b',
+            r'\bLD_PRELOAD\b',
+            r'\b/proc/\d+/mem\b',
+        ],
+    },
+    {
+        'id': 'SEC-015',
+        'severity': 'high',
+        'description': 'Browser tool accessing sensitive URLs',
+        'tool_types': ['BROWSER', 'SEARCH'],
+        'patterns': [
+            r'(?:bank|paypal|stripe\.com/dashboard|console\.aws|portal\.azure)',
+            r'(?:admin|phpmyadmin|wp-admin|cpanel)',
+            r'file:///etc/',
+        ],
+    },
+]
+
+# Compile patterns once
+for _sig in _THREAT_SIGNATURES:
+    _sig['_compiled'] = [_sec_re.compile(p, _sec_re.IGNORECASE) for p in _sig['patterns']]
+
+
+def _scan_events_for_threats(events):
+    """Scan brain-history events against threat signatures. Returns list of threat matches."""
+    threats = []
+    sessions_seen = set()
+    sessions_with_threats = set()
+
+    for ev in events:
+        source = ev.get('source', '')
+        sessions_seen.add(source)
+        ev_type = ev.get('type', '')
+        detail = ev.get('detail', '')
+        if not detail:
+            continue
+
+        for sig in _THREAT_SIGNATURES:
+            if ev_type not in sig['tool_types']:
+                continue
+            for compiled in sig['_compiled']:
+                if compiled.search(detail):
+                    sessions_with_threats.add(source)
+                    threats.append({
+                        'rule_id': sig['id'],
+                        'severity': sig['severity'],
+                        'description': sig['description'],
+                        'detail': detail[:500],
+                        'time': ev.get('time', ''),
+                        'session': ev.get('sourceLabel', source),
+                        'source': source,
+                        'event_type': ev_type,
+                    })
+                    break  # One match per signature per event
+
+    # Sort by severity then time
+    sev_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+    threats.sort(key=lambda t: (sev_order.get(t['severity'], 9), t.get('time', '') or ''), reverse=False)
+    threats.sort(key=lambda t: t.get('time', '') or '', reverse=True)
+
+    counts = {
+        'critical': sum(1 for t in threats if t['severity'] == 'critical'),
+        'high': sum(1 for t in threats if t['severity'] == 'high'),
+        'medium': sum(1 for t in threats if t['severity'] == 'medium'),
+        'low': sum(1 for t in threats if t['severity'] == 'low'),
+        'total': len(threats),
+        'sessions_scanned': len(sessions_seen),
+        'clean_sessions': len(sessions_seen - sessions_with_threats),
+    }
+    return threats, counts
+
+
+@bp_security.route('/api/security/threats')
+def api_security_threats():
+    """Scan recent agent activity for security threats using built-in signatures."""
+    try:
+        # Call brain-history endpoint internally
+        brain_resp = api_brain_history()
+        brain_data = brain_resp.get_json()
+        events = brain_data.get('events', [])
+    except Exception:
+        events = []
+
+    threats, counts = _scan_events_for_threats(events)
+
+    # Fire alerts for critical/high threats (with cooldown via _fire_alert)
+    for t in threats:
+        if t['severity'] in ('critical', 'high'):
+            _fire_alert(
+                rule_id=f"security_{t['rule_id']}",
+                alert_type='security_threat',
+                message=f"🛡️ Security: {t['severity'].upper()} - {t['description']}\n{t['detail'][:200]}",
+                channels=['banner', 'telegram'],
+            )
+
+    return jsonify({'threats': threats, 'counts': counts, 'scanned_events': len(events)})
+
+
+@bp_security.route('/api/security/signatures')
+def api_security_signatures():
+    """Return the built-in threat signature catalog."""
+    sigs = []
+    for sig in _THREAT_SIGNATURES:
+        sigs.append({
+            'id': sig['id'],
+            'severity': sig['severity'],
+            'description': sig['description'],
+            'tool_types': sig['tool_types'],
+            'pattern': ' | '.join(sig['patterns'][:2]) + ('...' if len(sig['patterns']) > 2 else ''),
+            'pattern_count': len(sig['patterns']),
+        })
+    return jsonify({'signatures': sigs, 'total': len(sigs)})
 
 
 @bp_health.route('/api/heatmap')

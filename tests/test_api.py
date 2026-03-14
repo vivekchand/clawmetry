@@ -264,3 +264,56 @@ class TestHeartbeatStatus:
         assert "heartbeat" in d, "system-health should include heartbeat key"
         hb = d["heartbeat"]
         assert_keys(hb, "status", "interval_seconds")
+
+
+# ---------------------------------------------------------------------------
+# Security
+# ---------------------------------------------------------------------------
+
+class TestSecurity:
+    def test_threats_endpoint(self, api, base_url):
+        """Security threats endpoint returns 200."""
+        d = assert_ok(get(api, base_url, "/api/security/threats"))
+
+    def test_threats_response_structure(self, api, base_url):
+        """Threats response has required keys."""
+        d = assert_ok(get(api, base_url, "/api/security/threats"))
+        assert_keys(d, "threats", "counts", "scanned_events")
+        assert isinstance(d["threats"], list)
+        assert isinstance(d["counts"], dict)
+        assert_keys(d["counts"], "critical", "high", "medium", "low", "total")
+
+    def test_threats_count_consistency(self, api, base_url):
+        """Threat counts add up correctly."""
+        d = assert_ok(get(api, base_url, "/api/security/threats"))
+        counts = d["counts"]
+        expected_total = counts["critical"] + counts["high"] + counts["medium"] + counts["low"]
+        assert counts["total"] == expected_total, (
+            f"Total {counts['total']} != sum of severities {expected_total}"
+        )
+
+    def test_signatures_endpoint(self, api, base_url):
+        """Security signatures endpoint returns 200."""
+        d = assert_ok(get(api, base_url, "/api/security/signatures"))
+
+    def test_signatures_response_structure(self, api, base_url):
+        """Signatures response has required keys."""
+        d = assert_ok(get(api, base_url, "/api/security/signatures"))
+        assert_keys(d, "signatures", "total")
+        assert isinstance(d["signatures"], list)
+        assert d["total"] >= 10, f"Expected at least 10 signatures, got {d['total']}"
+
+    def test_signatures_have_required_fields(self, api, base_url):
+        """Each signature has id, severity, description."""
+        d = assert_ok(get(api, base_url, "/api/security/signatures"))
+        for sig in d["signatures"]:
+            assert_keys(sig, "id", "severity", "description", "tool_types")
+            assert sig["severity"] in ("critical", "high", "medium", "low"), (
+                f"Invalid severity: {sig['severity']}"
+            )
+
+    def test_threat_fields_if_present(self, api, base_url):
+        """If threats exist, they have the right structure."""
+        d = assert_ok(get(api, base_url, "/api/security/threats"))
+        for t in d["threats"][:5]:  # check first 5
+            assert_keys(t, "rule_id", "severity", "description", "detail", "time")
