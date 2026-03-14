@@ -2522,6 +2522,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('limits')">Limits</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -2880,6 +2881,21 @@ function clawmetryLogout(){
       <button class="file-viewer-close" onclick="closeFileViewer()">✕ Close</button>
     </div>
     <div class="file-viewer-content" id="file-viewer-content"></div>
+  </div>
+</div>
+
+<!-- RATE LIMITS -->
+<div class="page" id="page-limits">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadRateLimits()">↻ Refresh</button>
+  </div>
+  <div class="section-title">⚡ API Rate Limit Consumption (Rolling 1-Minute Window)</div>
+  <div id="rate-limits-content">
+    <div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">Loading rate limit data...</div>
+  </div>
+  <div id="rate-limits-hourly" style="margin-top:16px;"></div>
+  <div style="margin-top:12px;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;font-size:12px;color:var(--text-muted);">
+    📡 Data source: OpenTelemetry OTLP metrics from OpenClaw gateway. Limits are defaults per provider tier; actual limits may vary by API plan.
   </div>
 </div>
 
@@ -3553,6 +3569,7 @@ function switchTab(name) {
   if (name === 'subagents') loadSubAgentsPage(false);
   if (name === 'brain') loadBrainPage();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+  if (name === 'limits') loadRateLimits();
 }
 
 function exportUsageData() {
@@ -6844,6 +6861,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('limits')">Limits</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -7250,6 +7268,21 @@ function clawmetryLogout(){
       <button class="file-viewer-close" onclick="closeFileViewer()">✕ Close</button>
     </div>
     <div class="file-viewer-content" id="file-viewer-content"></div>
+  </div>
+</div>
+
+<!-- RATE LIMITS -->
+<div class="page" id="page-limits">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadRateLimits()">↻ Refresh</button>
+  </div>
+  <div class="section-title">⚡ API Rate Limit Consumption (Rolling 1-Minute Window)</div>
+  <div id="rate-limits-content">
+    <div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">Loading rate limit data...</div>
+  </div>
+  <div id="rate-limits-hourly" style="margin-top:16px;"></div>
+  <div style="margin-top:12px;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;font-size:12px;color:var(--text-muted);">
+    📡 Data source: OpenTelemetry OTLP metrics from OpenClaw gateway. Limits are defaults per provider tier; actual limits may vary by API plan.
   </div>
 </div>
 
@@ -7949,6 +7982,7 @@ function switchTab(name) {
   if (name === 'subagents') loadSubAgentsPage(false);
   if (name === 'brain') loadBrainPage();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+  if (name === 'limits') loadRateLimits();
 }
 
 function exportUsageData() {
@@ -9660,6 +9694,98 @@ async function loadMemory() {
     html += '</div>';
   });
   document.getElementById('memory-list').innerHTML = html || 'No memory files';
+}
+
+// ===== Rate Limits ======================================================
+var _rateLimitTimer = null;
+
+async function loadRateLimits() {
+  try {
+    var data = await fetch('/api/rate-limits').then(function(r) { return r.json(); });
+    var container = document.getElementById('rate-limits-content');
+    var hourlyEl = document.getElementById('rate-limits-hourly');
+    if (!container) return;
+
+    var providers = data.providers || [];
+    if (providers.length === 0) {
+      container.innerHTML = '<div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">No API usage data yet. Rate limits will appear once OTLP metrics flow from the OpenClaw gateway.</div>';
+      if (hourlyEl) hourlyEl.innerHTML = '';
+      return;
+    }
+
+    var html = '<div class="grid">';
+    providers.forEach(function(p) {
+      var statusColor = p.status === 'red' ? '#ef4444' : (p.status === 'amber' ? '#f59e0b' : '#22c55e');
+      var statusBg = p.status === 'red' ? 'rgba(239,68,68,0.1)' : (p.status === 'amber' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)');
+      var statusBorder = p.status === 'red' ? 'rgba(239,68,68,0.3)' : (p.status === 'amber' ? 'rgba(245,158,11,0.3)' : 'rgba(34,197,94,0.15)');
+      var statusLabel = p.status === 'red' ? '🔴 HIGH' : (p.status === 'amber' ? '🟡 MODERATE' : '🟢 OK');
+
+      html += '<div class="card" style="border:1px solid ' + statusBorder + ';background:' + statusBg + ';">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
+      html += '<div class="card-title" style="margin:0;">' + escHtml(p.label) + '</div>';
+      html += '<span style="font-size:11px;font-weight:700;color:' + statusColor + ';">' + statusLabel + '</span>';
+      html += '</div>';
+
+      // RPM bar
+      html += _rateLimitBar('RPM', p.rpm.current, p.rpm.limit, p.rpm.pct);
+      // Input TPM bar
+      html += _rateLimitBar('Input TPM', p.tpm_input.current, p.tpm_input.limit, p.tpm_input.pct);
+      // Output TPM bar
+      html += _rateLimitBar('Output TPM', p.tpm_output.current, p.tpm_output.limit, p.tpm_output.pct);
+
+      // Models used
+      if (p.models && p.models.length > 0) {
+        html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">Models: ';
+        p.models.forEach(function(m) {
+          html += '<span style="display:inline-block;padding:2px 6px;margin:2px;background:var(--bg-secondary);border-radius:4px;font-size:10px;">' + escHtml(m) + '</span>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    container.innerHTML = html;
+
+    // Hourly summary
+    var hourlyHtml = '<div class="section-title">📊 Last Hour Summary</div><div class="grid">';
+    var totalReqs = 0, totalCost = 0;
+    providers.forEach(function(p) { totalReqs += p.hour.requests; totalCost += p.hour.cost_usd; });
+    hourlyHtml += '<div class="card"><div class="card-title"><span class="icon">📨</span> Requests (1h)</div><div class="card-value">' + totalReqs.toLocaleString() + '</div></div>';
+    hourlyHtml += '<div class="card"><div class="card-title"><span class="icon">💰</span> Cost (1h)</div><div class="card-value">$' + totalCost.toFixed(4) + '</div></div>';
+    providers.forEach(function(p) {
+      hourlyHtml += '<div class="card"><div class="card-title"><span class="icon">🔗</span> ' + escHtml(p.label) + '</div>';
+      hourlyHtml += '<div class="card-value">' + p.hour.requests + ' reqs</div>';
+      hourlyHtml += '<div class="card-sub">' + p.hour.tokens_in.toLocaleString() + ' in / ' + p.hour.tokens_out.toLocaleString() + ' out · $' + p.hour.cost_usd.toFixed(4) + '</div></div>';
+    });
+    hourlyHtml += '</div>';
+    if (hourlyEl) hourlyEl.innerHTML = hourlyHtml;
+
+    // Auto-refresh every 30s if tab is active
+    if (_rateLimitTimer) clearInterval(_rateLimitTimer);
+    _rateLimitTimer = setInterval(function() {
+      var limitsPage = document.getElementById('page-limits');
+      if (limitsPage && limitsPage.classList.contains('active')) loadRateLimits();
+      else { clearInterval(_rateLimitTimer); _rateLimitTimer = null; }
+    }, 30000);
+  } catch(e) {
+    var el = document.getElementById('rate-limits-content');
+    if (el) el.innerHTML = '<div class="card" style="padding:16px;color:#ef4444;">Failed to load rate limits: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function _rateLimitBar(label, current, limit, pct) {
+  var barColor = pct >= 90 ? '#ef4444' : (pct >= 70 ? '#f59e0b' : '#22c55e');
+  var barBg = pct >= 90 ? 'rgba(239,68,68,0.2)' : (pct >= 70 ? 'rgba(245,158,11,0.2)' : 'rgba(34,197,94,0.15)');
+  var w = Math.min(pct, 100);
+  var html = '<div style="margin-bottom:8px;">';
+  html += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);margin-bottom:3px;">';
+  html += '<span>' + label + '</span>';
+  html += '<span style="font-weight:600;">' + current.toLocaleString() + ' / ' + limit.toLocaleString() + ' (' + pct + '%)</span>';
+  html += '</div>';
+  html += '<div style="height:8px;background:' + barBg + ';border-radius:4px;overflow:hidden;">';
+  html += '<div style="height:100%;width:' + w + '%;background:' + barColor + ';border-radius:4px;transition:width 0.5s ease;"></div>';
+  html += '</div></div>';
+  return html;
 }
 
 // ===== Mission Control Summary Bar =====
@@ -19067,6 +19193,114 @@ def api_heartbeat_ping():
     """Called by frontend when a heartbeat event is detected in log stream."""
     _record_heartbeat()
     return jsonify({'ok': True})
+
+
+# ── Rate Limit Monitor ────────────────────────────────────────────────────────
+
+# Default rate limits per provider (RPM = requests per minute, TPM = tokens per minute)
+DEFAULT_RATE_LIMITS = {
+    'anthropic': {'rpm': 60, 'tpm_input': 80000, 'tpm_output': 16000, 'label': 'Anthropic (Claude)'},
+    'google': {'rpm': 360, 'tpm_input': 4000000, 'tpm_output': 400000, 'label': 'Google (Gemini)'},
+    'openai': {'rpm': 60, 'tpm_input': 800000, 'tpm_output': 100000, 'label': 'OpenAI'},
+    'bedrock': {'rpm': 60, 'tpm_input': 80000, 'tpm_output': 16000, 'label': 'AWS Bedrock'},
+    'openrouter': {'rpm': 200, 'tpm_input': 1000000, 'tpm_output': 200000, 'label': 'OpenRouter'},
+}
+
+
+@bp_health.route('/api/rate-limits')
+def api_rate_limits():
+    """Rate limit consumption across providers (rolling 1-minute and 1-hour windows)."""
+    now = time.time()
+    one_min_ago = now - 60
+    one_hour_ago = now - 3600
+
+    with _metrics_lock:
+        token_entries = list(metrics_store.get('tokens', []))
+        cost_entries = list(metrics_store.get('cost', []))
+
+    # Aggregate per-provider stats
+    providers = {}  # provider -> {rpm_1m, tokens_in_1m, tokens_out_1m, cost_1h, request_count_1h}
+
+    for entry in token_entries:
+        ts = entry.get('timestamp', 0)
+        provider = (entry.get('provider') or 'unknown').lower()
+        if not provider or provider == 'unknown':
+            # Try to infer from model name
+            model = (entry.get('model') or '').lower()
+            if 'claude' in model or 'haiku' in model or 'sonnet' in model or 'opus' in model:
+                provider = 'anthropic'
+            elif 'gemini' in model or 'gemma' in model:
+                provider = 'google'
+            elif 'gpt' in model or 'o1' in model or 'o3' in model or 'o4' in model:
+                provider = 'openai'
+            else:
+                provider = 'other'
+
+        if provider not in providers:
+            providers[provider] = {
+                'rpm_1m': 0, 'tokens_in_1m': 0, 'tokens_out_1m': 0,
+                'tokens_in_1h': 0, 'tokens_out_1h': 0,
+                'request_count_1h': 0, 'cost_1h': 0.0,
+                'models': set(),
+            }
+        p = providers[provider]
+        p['models'].add(entry.get('model') or 'unknown')
+
+        if ts >= one_min_ago:
+            p['rpm_1m'] += 1
+            p['tokens_in_1m'] += entry.get('input', 0)
+            p['tokens_out_1m'] += entry.get('output', 0)
+        if ts >= one_hour_ago:
+            p['request_count_1h'] += 1
+            p['tokens_in_1h'] += entry.get('input', 0)
+            p['tokens_out_1h'] += entry.get('output', 0)
+
+    # Add cost data
+    for entry in cost_entries:
+        ts = entry.get('timestamp', 0)
+        provider = (entry.get('provider') or 'unknown').lower()
+        if not provider or provider == 'unknown':
+            model = (entry.get('model') or '').lower()
+            if 'claude' in model or 'haiku' in model or 'sonnet' in model or 'opus' in model:
+                provider = 'anthropic'
+            elif 'gemini' in model or 'gemma' in model:
+                provider = 'google'
+            elif 'gpt' in model or 'o1' in model or 'o3' in model or 'o4' in model:
+                provider = 'openai'
+            else:
+                provider = 'other'
+        if provider in providers and ts >= one_hour_ago:
+            providers[provider]['cost_1h'] += entry.get('usd', 0)
+
+    # Build response with utilization percentages
+    result = []
+    for prov, stats in sorted(providers.items()):
+        limits = DEFAULT_RATE_LIMITS.get(prov, {'rpm': 60, 'tpm_input': 100000, 'tpm_output': 20000, 'label': prov.title()})
+        rpm_pct = round((stats['rpm_1m'] / limits['rpm']) * 100, 1) if limits['rpm'] > 0 else 0
+        tpm_in_pct = round((stats['tokens_in_1m'] / limits['tpm_input']) * 100, 1) if limits['tpm_input'] > 0 else 0
+        tpm_out_pct = round((stats['tokens_out_1m'] / limits['tpm_output']) * 100, 1) if limits['tpm_output'] > 0 else 0
+        overall_pct = max(rpm_pct, tpm_in_pct, tpm_out_pct)
+
+        result.append({
+            'provider': prov,
+            'label': limits.get('label', prov.title()),
+            'models': sorted(list(stats['models'])),
+            'rpm': {'current': stats['rpm_1m'], 'limit': limits['rpm'], 'pct': rpm_pct},
+            'tpm_input': {'current': stats['tokens_in_1m'], 'limit': limits['tpm_input'], 'pct': tpm_in_pct},
+            'tpm_output': {'current': stats['tokens_out_1m'], 'limit': limits['tpm_output'], 'pct': tpm_out_pct},
+            'hour': {
+                'requests': stats['request_count_1h'],
+                'tokens_in': stats['tokens_in_1h'],
+                'tokens_out': stats['tokens_out_1h'],
+                'cost_usd': round(stats['cost_1h'], 4),
+            },
+            'utilization_pct': overall_pct,
+            'status': 'red' if overall_pct >= 90 else ('amber' if overall_pct >= 70 else 'green'),
+        })
+
+    # Sort by utilization descending (most stressed provider first)
+    result.sort(key=lambda x: x['utilization_pct'], reverse=True)
+    return jsonify({'providers': result, 'timestamp': now})
 
 
 @bp_health.route('/api/health-stream')

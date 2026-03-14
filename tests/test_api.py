@@ -264,3 +264,36 @@ class TestHeartbeatStatus:
         assert "heartbeat" in d, "system-health should include heartbeat key"
         hb = d["heartbeat"]
         assert_keys(hb, "status", "interval_seconds")
+
+
+# ---------------------------------------------------------------------------
+# Rate Limit Monitor
+# ---------------------------------------------------------------------------
+
+class TestRateLimits:
+    def test_rate_limits_endpoint(self, api, base_url):
+        """Rate limits endpoint returns 200 with expected keys."""
+        d = assert_ok(get(api, base_url, "/api/rate-limits"))
+        assert_keys(d, "providers", "timestamp")
+
+    def test_providers_is_list(self, api, base_url):
+        """Providers should be a list (possibly empty)."""
+        d = assert_ok(get(api, base_url, "/api/rate-limits"))
+        assert isinstance(d["providers"], list)
+
+    def test_provider_structure(self, api, base_url):
+        """If providers exist, each should have the expected shape."""
+        d = assert_ok(get(api, base_url, "/api/rate-limits"))
+        for p in d["providers"]:
+            assert_keys(p, "provider", "label", "rpm", "tpm_input", "tpm_output",
+                        "hour", "utilization_pct", "status")
+            assert p["status"] in ("green", "amber", "red")
+            assert_keys(p["rpm"], "current", "limit", "pct")
+            assert_keys(p["tpm_input"], "current", "limit", "pct")
+            assert_keys(p["hour"], "requests", "tokens_in", "tokens_out", "cost_usd")
+
+    def test_timestamp_is_recent(self, api, base_url):
+        """Timestamp should be a recent unix timestamp."""
+        import time
+        d = assert_ok(get(api, base_url, "/api/rate-limits"))
+        assert abs(time.time() - d["timestamp"]) < 10
