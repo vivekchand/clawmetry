@@ -593,10 +593,21 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
             expr = sched.get("interval", "") if kind == "interval" else (
                    f"at {sched.get('at', '')}" if kind == "at" else
                    sched.get("cron", "") if kind == "cron" else "")
+            state = j.get("state", {})
             events.append({
                 "type": "cron_state", "session_id": "",
                 "data": {"job_id": j.get("id",""), "name": j.get("name",""),
-                         "enabled": j.get("enabled", True), "expr": expr}
+                         "enabled": j.get("enabled", True), "expr": expr,
+                         "schedule": sched,
+                         "task": (j.get("task") or "")[:200],
+                         "state": {
+                             "lastStatus": state.get("lastStatus"),
+                             "lastRunAtMs": state.get("lastRunAtMs"),
+                             "nextRunAtMs": state.get("nextRunAtMs"),
+                             "lastDurationMs": state.get("lastDurationMs"),
+                             "lastError": state.get("lastError"),
+                             "consecutiveFailures": state.get("consecutiveFailures"),
+                         }}
             })
 
         if events:
