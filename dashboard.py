@@ -19940,8 +19940,21 @@ def api_health():
         checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
                        'detail': 'OTLP ready - no data received yet'})
     else:
-        checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
-                       'detail': 'Not installed - pip install clawmetry[otel]'})
+        # Check if the package is actually installed but dashboard wasn't restarted
+        _otel_installed_but_not_loaded = False
+        try:
+            import importlib
+            importlib.import_module('opentelemetry.proto')
+            _otel_installed_but_not_loaded = True
+        except ImportError:
+            pass
+
+        if _otel_installed_but_not_loaded:
+            checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
+                           'detail': 'Installed but not loaded - restart the dashboard to activate OTLP'})
+        else:
+            checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
+                           'detail': 'Not installed - pip install clawmetry[otel]  then restart dashboard'})
 
     return jsonify({'checks': checks})
 

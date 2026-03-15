@@ -2,6 +2,7 @@
 from __future__ import annotations
 import sys
 import os
+import time
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
@@ -484,6 +485,37 @@ def _cmd_status(args) -> None:
         r = subprocess.run(["systemctl", "--user", "is-active", "clawmetry-sync"], capture_output=True, text=True)
         running = r.stdout.strip() == "active"
         print(f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}")
+
+    # OTLP status
+    print()
+    try:
+        from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2 as _  # noqa: F401
+        from opentelemetry.proto.collector.trace.v1 import trace_service_pb2 as _  # noqa: F401
+        print("  OTLP proto:  ✅  Installed (opentelemetry-proto)")
+    except ImportError:
+        print("  OTLP proto:  ○   Not installed")
+        print("               pip install clawmetry[otel]")
+
+    # Dashboard status
+    try:
+        import urllib.request, json as _json
+        req = urllib.request.Request("http://localhost:8900/api/otel-status", method="GET")
+        req.add_header("Accept", "application/json")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            otel_data = _json.loads(resp.read())
+            if otel_data.get("available"):
+                if otel_data.get("hasData"):
+                    lr = otel_data.get("lastReceived", 0)
+                    ago = int(time.time() - lr) if lr else 0
+                    print(f"  OTLP recv:   ✅  Receiving data (last {ago}s ago)")
+                else:
+                    print("  OTLP recv:   ⚠️   Ready, no data yet")
+                    print("               Configure diagnostics.otel.endpoint in openclaw.json")
+            else:
+                print("  OTLP recv:   ⚠️   Dashboard running but OTLP not loaded")
+                print("               Restart the dashboard after pip install clawmetry[otel]")
+    except Exception:
+        pass  # dashboard not running, skip
 
     if LOG_FILE.exists():
         print(f"  Log:         {LOG_FILE}")
