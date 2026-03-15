@@ -4493,6 +4493,101 @@ def _get_heartbeat_status():
     }
 
 
+# ── Token Velocity Alert ────────────────────────────────────────────────
+# Detect runaway agent loops via abnormal token consumption rate spikes.
+_velocity_alert_active = False
+_velocity_alert_since = 0
+_velocity_alert_message = ''
+_VELOCITY_DEFAULTS = {
+    'velocity_enabled': True,
+    'velocity_tokens_per_2min': 5000,
+    'velocity_cost_per_5min': 0.50,
+    'velocity_consecutive_tools': 20,
+}
+
+
+def _check_token_velocity():
+    """Check if token consumption rate indicates a runaway loop.
+    Returns (is_alert, alert_message) tuple."""
+    now = time.time()
+    cfg = _get_budget_config()
+
+    if not cfg.get('velocity_enabled', _VELOCITY_DEFAULTS['velocity_enabled']):
+        return False, ''
+
+    tokens_threshold = float(cfg.get('velocity_tokens_per_2min', _VELOCITY_DEFAULTS['velocity_tokens_per_2min']))
+    cost_threshold = float(cfg.get('velocity_cost_per_5min', _VELOCITY_DEFAULTS['velocity_cost_per_5min']))
+
+    alerts = []
+
+    # Check 1: Token velocity (sliding 2-min window)
+    if tokens_threshold > 0:
+        two_min_ago = now - 120
+        tokens_in_window = 0
+        with _metrics_lock:
+            for entry in metrics_store['tokens']:
+                if entry.get('timestamp', 0) >= two_min_ago:
+                    tokens_in_window += entry.get('total', 0)
+        if tokens_in_window > tokens_threshold:
+            alerts.append(
+                f'Token velocity spike: {tokens_in_window:,.0f} tokens in 2 min '
+                f'(threshold: {tokens_threshold:,.0f})'
+            )
+
+    # Check 2: Cost velocity (sliding 5-min window)
+    if cost_threshold > 0:
+        five_min_ago = now - 300
+        cost_in_window = 0
+        with _metrics_lock:
+            for entry in metrics_store['cost']:
+                if entry.get('timestamp', 0) >= five_min_ago:
+                    cost_in_window += entry.get('usd', 0)
+        if cost_in_window > cost_threshold:
+            alerts.append(
+                f'Cost velocity spike: ${cost_in_window:.2f} in 5 min '
+                f'(threshold: ${cost_threshold:.2f})'
+            )
+
+    if alerts:
+        return True, ' | '.join(alerts)
+    return False, ''
+
+
+def _get_velocity_status():
+    """Return current token velocity metrics for the API."""
+    now = time.time()
+    cfg = _get_budget_config()
+
+    two_min_ago = now - 120
+    five_min_ago = now - 300
+    tokens_2min = 0
+    cost_5min = 0
+
+    with _metrics_lock:
+        for entry in metrics_store['tokens']:
+            if entry.get('timestamp', 0) >= two_min_ago:
+                tokens_2min += entry.get('total', 0)
+        for entry in metrics_store['cost']:
+            if entry.get('timestamp', 0) >= five_min_ago:
+                cost_5min += entry.get('usd', 0)
+
+    tokens_threshold = float(cfg.get('velocity_tokens_per_2min', _VELOCITY_DEFAULTS['velocity_tokens_per_2min']))
+    cost_threshold = float(cfg.get('velocity_cost_per_5min', _VELOCITY_DEFAULTS['velocity_cost_per_5min']))
+
+    return {
+        'enabled': cfg.get('velocity_enabled', _VELOCITY_DEFAULTS['velocity_enabled']),
+        'alert_active': _velocity_alert_active,
+        'alert_since': _velocity_alert_since if _velocity_alert_active else None,
+        'alert_message': _velocity_alert_message if _velocity_alert_active else None,
+        'tokens_2min': tokens_2min,
+        'tokens_2min_threshold': tokens_threshold,
+        'tokens_2min_pct': round(tokens_2min / tokens_threshold * 100, 1) if tokens_threshold > 0 else 0,
+        'cost_5min': round(cost_5min, 4),
+        'cost_5min_threshold': cost_threshold,
+        'cost_5min_pct': round(cost_5min / cost_threshold * 100, 1) if cost_threshold > 0 else 0,
+    }
+
+
 # ── OTLP Metrics Store ─────────────────────────────────────────────────
 METRICS_FILE = None  # Set via CLI/env, defaults to {WORKSPACE}/.clawmetry-metrics.json
 _metrics_lock = threading.Lock()
@@ -4784,6 +4879,10 @@ def _get_budget_config():
         'warning_threshold_pct': 80,
         'telegram_bot_token': '',
         'telegram_chat_id': '',
+        'velocity_enabled': True,
+        'velocity_tokens_per_2min': 5000,
+        'velocity_cost_per_5min': 0.50,
+        'velocity_consecutive_tools': 20,
     }
     try:
         with _fleet_db_lock:
@@ -5129,6 +5228,24 @@ def _budget_monitor_loop():
                         message=f'Spending anomaly: today ${daily_spent:.2f} is {(daily_spent/week_avg):.1f}x the 7-day average (${week_avg:.2f}/day)',
                         channels=['banner', 'telegram'],
                     )
+
+            # Token velocity check: detect runaway agent loops
+            velocity_alert, velocity_msg = _check_token_velocity()
+            global _velocity_alert_active, _velocity_alert_since, _velocity_alert_message
+            if velocity_alert:
+                if not _velocity_alert_active:
+                    _velocity_alert_since = now
+                _velocity_alert_active = True
+                _velocity_alert_message = velocity_msg
+                _fire_alert(
+                    rule_id='token_velocity',
+                    alert_type='velocity',
+                    message=velocity_msg,
+                    channels=['banner', 'telegram'],
+                )
+            else:
+                _velocity_alert_active = False
+                _velocity_alert_message = ''
 
             # Custom alert rules
             rules = _get_alert_rules()
@@ -6962,6 +7079,13 @@ function clawmetryLogout(){
   <span id="heartbeat-banner-msg" style="flex:1;"></span>
   <button onclick="document.getElementById('heartbeat-banner').style.display='none'" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
 </div>
+<!-- Token Velocity Alert Banner -->
+<div id="velocity-banner" style="display:none;padding:10px 16px;border-bottom:2px solid #dc2626;font-size:13px;font-weight:600;align-items:center;gap:10px;background:#450a0a;color:#fca5a5;">
+  <span style="font-size:18px;">&#x1F525;</span>
+  <span id="velocity-banner-msg" style="flex:1;"></span>
+  <span id="velocity-banner-stats" style="font-size:11px;color:#f87171;margin-left:8px;"></span>
+  <button onclick="dismissVelocityAlert()" style="background:#991b1b;color:#fecaca;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+</div>
 
 <!-- Budget Settings Modal -->
 <div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
@@ -6975,6 +7099,7 @@ function clawmetryLogout(){
       <div class="modal-tab" onclick="switchBudgetTab('alerts',this)">Alert Rules</div>
       <div class="modal-tab" onclick="switchBudgetTab('telegram',this)">Telegram</div>
       <div class="modal-tab" onclick="switchBudgetTab('history',this)">History</div>
+      <div class="modal-tab" onclick="switchBudgetTab('velocity',this)">Velocity</div>
     </div>
     <!-- Budget Limits Tab -->
     <div id="budget-tab-limits">
@@ -7055,6 +7180,31 @@ function clawmetryLogout(){
     <!-- History Tab -->
     <div id="budget-tab-history" style="display:none;">
       <div id="alert-history-list" style="font-size:13px;color:var(--text-secondary);max-height:400px;overflow-y:auto;">Loading...</div>
+    </div>
+    <!-- Velocity Tab -->
+    <div id="budget-tab-velocity" style="display:none;">
+      <div style="display:grid;gap:12px;">
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">
+          Detect runaway agent loops by monitoring token consumption rate. Alerts fire when tokens or cost exceed thresholds within a sliding window.
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input id="velocity-enabled" type="checkbox" checked style="cursor:pointer;">
+          <label for="velocity-enabled" style="font-size:13px;color:var(--text-secondary);cursor:pointer;">Enable velocity alerts</label>
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Token threshold (per 2 min window)</label>
+          <input id="velocity-tokens" type="number" step="100" min="0" value="5000" placeholder="5000" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Cost threshold (per 5 min window, USD)</label>
+          <input id="velocity-cost" type="number" step="0.05" min="0" value="0.50" placeholder="0.50" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <button onclick="saveVelocityConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:10px;font-size:14px;font-weight:600;cursor:pointer;">Save Velocity Settings</button>
+        <div id="velocity-live-stats" style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Live Velocity</div>
+          <div id="velocity-stats-content" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -7801,13 +7951,14 @@ function openBudgetModal() {
 function switchBudgetTab(tab, el) {
   document.querySelectorAll('#budget-modal-tabs .modal-tab').forEach(function(t){t.classList.remove('active');});
   if(el) el.classList.add('active');
-  ['limits','alerts','telegram','history'].forEach(function(t){
+  ['limits','alerts','telegram','history','velocity'].forEach(function(t){
     var d = document.getElementById('budget-tab-'+t);
     if(d) d.style.display = t===tab ? 'block' : 'none';
   });
   if(tab==='alerts') loadAlertRules();
   if(tab==='telegram') loadTelegramConfig();
   if(tab==='history') loadAlertHistory();
+  if(tab==='velocity') loadVelocityConfig();
 }
 
 async function loadBudgetConfig() {
@@ -7971,6 +8122,80 @@ async function ackAllAlerts() {
 // Check alerts every 30s
 setInterval(checkActiveAlerts, 30000);
 setTimeout(checkActiveAlerts, 3000);
+
+
+// === Token Velocity Alert ===
+async function checkVelocityStatus() {
+  try {
+    var data = await fetch('/api/velocity/status').then(function(r){return r.json();});
+    var banner = document.getElementById('velocity-banner');
+    if (data.alert_active) {
+      banner.style.display = 'flex';
+      document.getElementById('velocity-banner-msg').textContent = data.alert_message || 'Token velocity spike detected!';
+      var pct = Math.max(data.tokens_2min_pct || 0, data.cost_5min_pct || 0);
+      document.getElementById('velocity-banner-stats').textContent =
+        'Tokens: ' + (data.tokens_2min || 0).toLocaleString() + '/2min | Cost: $' + (data.cost_5min || 0).toFixed(2) + '/5min';
+    } else {
+      banner.style.display = 'none';
+    }
+  } catch(e) {}
+}
+
+async function dismissVelocityAlert() {
+  document.getElementById('velocity-banner').style.display = 'none';
+  try { await fetch('/api/velocity/dismiss', {method:'POST'}); } catch(e) {}
+}
+
+async function loadVelocityConfig() {
+  try {
+    var cfg = await fetch('/api/budget/config').then(function(r){return r.json();});
+    document.getElementById('velocity-enabled').checked = cfg.velocity_enabled !== false;
+    document.getElementById('velocity-tokens').value = cfg.velocity_tokens_per_2min || 5000;
+    document.getElementById('velocity-cost').value = cfg.velocity_cost_per_5min || 0.50;
+    // Load live stats
+    var data = await fetch('/api/velocity/status').then(function(r){return r.json();});
+    var el = document.getElementById('velocity-stats-content');
+    var tokPct = data.tokens_2min_pct || 0;
+    var costPct = data.cost_5min_pct || 0;
+    var tokColor = tokPct > 80 ? '#ef4444' : tokPct > 50 ? '#f59e0b' : '#22c55e';
+    var costColor = costPct > 80 ? '#ef4444' : costPct > 50 ? '#f59e0b' : '#22c55e';
+    el.innerHTML =
+      '<div style="display:flex;justify-content:space-between;margin-bottom:6px;">' +
+      '<span>Tokens (2 min):</span><span style="color:' + tokColor + ';font-weight:600;">' +
+      (data.tokens_2min || 0).toLocaleString() + ' / ' + (data.tokens_2min_threshold || 0).toLocaleString() +
+      ' (' + tokPct.toFixed(0) + '%)</span></div>' +
+      '<div style="height:6px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden;margin-bottom:8px;">' +
+      '<div style="height:100%;width:' + Math.min(tokPct, 100) + '%;background:' + tokColor + ';border-radius:3px;"></div></div>' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:6px;">' +
+      '<span>Cost (5 min):</span><span style="color:' + costColor + ';font-weight:600;">$' +
+      (data.cost_5min || 0).toFixed(2) + ' / $' + (data.cost_5min_threshold || 0).toFixed(2) +
+      ' (' + costPct.toFixed(0) + '%)</span></div>' +
+      '<div style="height:6px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden;">' +
+      '<div style="height:100%;width:' + Math.min(costPct, 100) + '%;background:' + costColor + ';border-radius:3px;"></div></div>' +
+      (data.alert_active ? '<div style="margin-top:8px;padding:6px 10px;background:#450a0a;border:1px solid #dc2626;border-radius:6px;color:#fca5a5;font-size:12px;">&#x1F525; Alert active since ' + new Date((data.alert_since || 0) * 1000).toLocaleTimeString() + '</div>' : '');
+  } catch(e) {
+    document.getElementById('velocity-stats-content').textContent = 'Failed to load';
+  }
+}
+
+async function saveVelocityConfig() {
+  try {
+    await fetch('/api/budget/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        velocity_enabled: document.getElementById('velocity-enabled').checked,
+        velocity_tokens_per_2min: parseFloat(document.getElementById('velocity-tokens').value) || 5000,
+        velocity_cost_per_5min: parseFloat(document.getElementById('velocity-cost').value) || 0.50
+      })
+    });
+    loadVelocityConfig();
+  } catch(e) {}
+}
+
+// Check velocity every 30 seconds
+setInterval(checkVelocityStatus, 30000);
+setTimeout(checkVelocityStatus, 5000);
 
 // === Heartbeat Gap Alerting ===
 async function checkHeartbeatStatus() {
@@ -16300,7 +16525,9 @@ def api_budget_config():
         allowed = ['daily_limit', 'weekly_limit', 'monthly_limit',
                     'auto_pause_enabled', 'auto_pause_threshold_pct',
                     'warning_threshold_pct',
-                    'telegram_bot_token', 'telegram_chat_id']
+                    'telegram_bot_token', 'telegram_chat_id',
+                    'velocity_enabled', 'velocity_tokens_per_2min',
+                    'velocity_cost_per_5min', 'velocity_consecutive_tools']
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
             return jsonify({'error': 'No valid fields provided'}), 400
@@ -16354,6 +16581,21 @@ def api_budget_test_telegram():
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@bp_budget.route('/api/velocity/status')
+def api_velocity_status():
+    """Get current token velocity metrics and alert state."""
+    return jsonify(_get_velocity_status())
+
+
+@bp_budget.route('/api/velocity/dismiss', methods=['POST'])
+def api_velocity_dismiss():
+    """Dismiss current velocity alert."""
+    global _velocity_alert_active, _velocity_alert_message
+    _velocity_alert_active = False
+    _velocity_alert_message = ''
+    return jsonify({'ok': True})
 
 
 @bp_alerts.route('/api/alerts/rules', methods=['GET', 'POST'])
