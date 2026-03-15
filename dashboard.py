@@ -61,7 +61,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.45"
+__version__ = "0.12.46"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -9978,15 +9978,78 @@ async function loadMemory() {
     return;
   }
   var data = await fetch('/api/memory-files').then(r => r.json());
-  var html = '';
+  var el = document.getElementById('memory-list');
+  // Add hover CSS once
+  if (!document.getElementById('mem-ide-css')) {
+    var cs = document.createElement('style');
+    cs.id = 'mem-ide-css';
+    cs.textContent = '.mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}';
+    document.head.appendChild(cs);
+  }
+  // IDE layout: sidebar + content viewer
+  el.style.cssText = 'display:flex;height:calc(100vh - 140px);gap:0;padding:0;overflow:hidden;border-radius:8px;border:1px solid var(--border-primary)';
+  el.innerHTML = '<div id="mem-sidebar" style="width:260px;min-width:200px;border-right:1px solid var(--border-primary);overflow-y:auto;background:var(--bg-secondary);flex-shrink:0">' +
+    '<div style="padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-muted);border-bottom:1px solid var(--border-primary)">Explorer</div>' +
+    '<div id="mem-tree" style="padding:4px 0"></div></div>' +
+    '<div id="mem-content" style="flex:1;overflow-y:auto;background:var(--bg-primary);padding:0">' +
+    '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:13px">' +
+    '<div style="text-align:center"><div style="font-size:32px;margin-bottom:8px">📂</div>Select a file to view</div></div></div>';
+  // Hide old file-viewer
+  var oldViewer = document.getElementById('file-viewer');
+  if (oldViewer) oldViewer.style.display = 'none';
+  var sidebar = document.getElementById('mem-tree');
+  var viewer = document.getElementById('mem-content');
+  // Group files: root vs folders
+  var roots = [], folders = {};
   data.forEach(function(f) {
-    var size = f.size > 1024 ? (f.size/1024).toFixed(1) + ' KB' : f.size + ' B';
-    html += '<div class="memory-item" onclick="viewFile(\'' + escHtml(f.path) + '\')">';
-    html += '<span class="memory-name" style="color:#60a0ff;">' + escHtml(f.path) + '</span>';
-    html += '<span class="memory-size">' + size + '</span>';
-    html += '</div>';
+    var parts = f.path.split('/');
+    var name = f.path;
+    if (parts.length <= 1) { roots.push(f); }
+    else { var dir = parts.slice(0, -1).join('/'); if (!folders[dir]) folders[dir] = []; folders[dir].push(f); }
   });
-  document.getElementById('memory-list').innerHTML = html || 'No memory files';
+  var html = '';
+  roots.forEach(function(f) {
+    var icon = f.path.endsWith('.md') ? '📝' : '📄';
+    var sz = f.size > 1024 ? (f.size/1024).toFixed(1) + 'K' : f.size + 'B';
+    html += '<div class="mem-file" data-path="' + escHtml(f.path) + '" style="display:flex;align-items:center;gap:6px;padding:5px 14px;cursor:pointer;font-size:12px;color:var(--text-secondary)">' +
+      '<span style="flex-shrink:0">' + icon + '</span>' +
+      '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(f.path) + '</span>' +
+      '<span style="color:var(--text-muted);font-size:10px;flex-shrink:0">' + sz + '</span></div>';
+  });
+  Object.keys(folders).sort().forEach(function(dir) {
+    html += '<div style="padding:8px 14px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);display:flex;align-items:center;gap:4px"><span>📁</span>' + escHtml(dir) + '</div>';
+    folders[dir].forEach(function(f) {
+      var icon = f.path.endsWith('.md') ? '📝' : '📄';
+      var short = f.path.split('/').pop();
+      var sz = f.size > 1024 ? (f.size/1024).toFixed(1) + 'K' : f.size + 'B';
+      html += '<div class="mem-file" data-path="' + escHtml(f.path) + '" style="display:flex;align-items:center;gap:6px;padding:5px 14px 5px 28px;cursor:pointer;font-size:12px;color:var(--text-secondary)">' +
+        '<span style="flex-shrink:0">' + icon + '</span>' +
+        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(short) + '</span>' +
+        '<span style="color:var(--text-muted);font-size:10px;flex-shrink:0">' + sz + '</span></div>';
+    });
+  });
+  sidebar.innerHTML = html || '<div style="padding:16px;color:var(--text-muted)">No files</div>';
+  // Click to load file content in viewer
+  sidebar.querySelectorAll('.mem-file').forEach(function(row) {
+    row.onclick = async function() {
+      sidebar.querySelectorAll('.mem-file').forEach(function(r) { r.classList.remove('active'); });
+      this.classList.add('active');
+      var p = this.dataset.path;
+      viewer.innerHTML = '<div style="padding:8px 16px;border-bottom:1px solid var(--border-primary);display:flex;align-items:center;gap:8px;background:var(--bg-secondary);position:sticky;top:0;z-index:1">' +
+        '<span style="font-size:12px">📝</span><span style="font-size:12px;font-weight:600;color:var(--text-primary)">' + escHtml(p) + '</span>' +
+        '<span style="margin-left:auto;font-size:10px;color:var(--text-muted)">Loading...</span></div>' +
+        '<pre style="margin:0;padding:16px;font-family:monospace;font-size:12px;line-height:1.6;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word">Loading...</pre>';
+      try {
+        var d = await fetch('/api/file?path=' + encodeURIComponent(p)).then(function(r) { return r.json(); });
+        if (d.error) { viewer.querySelector('pre').textContent = 'Error: ' + d.error; return; }
+        var content = d.content || '';
+        viewer.innerHTML = '<div style="padding:8px 16px;border-bottom:1px solid var(--border-primary);display:flex;align-items:center;gap:8px;background:var(--bg-secondary);position:sticky;top:0;z-index:1">' +
+          '<span style="font-size:12px">📝</span><span style="font-size:12px;font-weight:600;color:var(--text-primary)">' + escHtml(p) + '</span>' +
+          '<span style="margin-left:auto;font-size:10px;color:var(--text-muted)">' + content.length + ' chars</span></div>' +
+          '<pre style="margin:0;padding:16px;font-family:monospace;font-size:12px;line-height:1.6;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word">' + escHtml(content) + '</pre>';
+      } catch(e) { viewer.querySelector('pre').textContent = 'Failed: ' + e.message; }
+    };
+  });
 }
 
 // ===== Mission Control Summary Bar =====
