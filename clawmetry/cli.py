@@ -177,39 +177,32 @@ def _verify_key_ownership(api_key: str) -> None:
 
     print()
     print("  🔐 Verify account ownership")
-    email = _input("  📧 Enter your email: ").strip()
-    if not email:
-        print("  ❌  Email required.")
-        sys.exit(1)
-
-    print(f"  📨 Sending code to {email}…", end="", flush=True)
-    r = _api("/api/auth/email-otp", {"action": "send", "email": email})
+    print("  📨 Sending verification code…", end="", flush=True)
+    r = _api("/api/auth/email-otp", {"action": "send_by_key", "api_key": api_key})
     if r.get("error"):
         print(f" ❌  {r['error']}")
         sys.exit(1)
-    print(" ✅")
+    _masked = r.get("masked_email", "your email")
+    print(f" ✅")
+    print(f"  📧 Code sent to {_masked}")
     print()
 
     for attempt in range(3):
         otp = _input("  🔑 Enter the 6-digit code: ").strip()
         if not otp:
             continue
+        # Verify using the masked email — server resolves from key
+        # We need the real email for verify, so use a key-based verify too
         print("  Verifying…", end="", flush=True)
-        r2 = _api("/api/auth/email-otp", {"action": "verify", "email": email, "otp": otp})
+        r2 = _api("/api/auth/email-otp", {"action": "verify_by_key", "api_key": api_key, "otp": otp})
         if r2.get("error"):
             print(f" ❌  {r2['error']}")
             if attempt < 2:
                 print("  Try again.")
             continue
-        # Verify the returned key matches the one being connected
-        verified_key = r2.get("api_key", "")
-        if verified_key == api_key:
-            print(" ✅  Verified!")
-            print()
-            return
-        else:
-            print(" ❌  This email doesn't match the API key.")
-            sys.exit(1)
+        print(" ✅  Verified!")
+        print()
+        return
 
     print("  ❌  Verification failed.")
     sys.exit(1)
