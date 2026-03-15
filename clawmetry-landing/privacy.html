@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — ClawMetry</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',system-ui,sans-serif;background:#0b0f1a;color:#cbd5e1;line-height:1.8;padding:0}
+.container{max-width:720px;margin:0 auto;padding:40px 24px 80px}
+nav{padding:16px 24px;border-bottom:1px solid rgba(255,255,255,0.06)}
+nav a{color:#e2e8f0;text-decoration:none;font-weight:600;font-size:15px;display:inline-flex;align-items:center;gap:6px}
+nav img{width:24px;height:24px;border-radius:4px}
+h1{color:#f1f5f9;font-size:32px;font-weight:700;margin:40px 0 8px}
+h2{color:#e2e8f0;font-size:20px;font-weight:600;margin:36px 0 12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06)}
+h3{color:#e2e8f0;font-size:16px;font-weight:600;margin:24px 0 8px}
+p{margin:0 0 16px;font-size:15px}
+ul{margin:0 0 16px 24px}
+li{margin:0 0 8px;font-size:15px}
+.date{color:#64748b;font-size:13px;margin-bottom:32px}
+.highlight{background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.2);border-radius:10px;padding:20px 24px;margin:24px 0}
+.highlight p{margin:0;color:#86efac}
+strong{color:#e2e8f0}
+a{color:#E5443A}
+code{background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px;font-size:13px}
+.back{display:inline-block;margin-top:40px;color:#E5443A;text-decoration:none;font-size:14px;font-weight:500}
+</style>
+</head>
+<body>
+<nav><a href="/"><img src="/favicon.svg" alt="">ClawMetry</a></nav>
+<div class="container">
+
+<h1>Privacy Policy</h1>
+<p class="date">Effective: March 16, 2026 &middot; Last updated: March 16, 2026</p>
+
+<div class="highlight">
+<p><strong>The short version:</strong> Your agent data is end-to-end encrypted on your machine before it ever leaves. We cannot read it, access it, or use it. We store only your email, name, and billing info to run the service.</p>
+</div>
+
+<h2>1. Who We Are</h2>
+<p>ClawMetry Cloud is operated by <strong>Instalabs LLC</strong>, registered at 1111B S Governors Ave STE 20032, Dover, DE 19904, United States.</p>
+<p>When we say "ClawMetry," "we," "us," or "our," we mean Instalabs LLC.</p>
+
+<h2>2. End-to-End Encryption: Your Data Is Yours</h2>
+<p>ClawMetry Cloud uses <strong>client-side end-to-end encryption (E2E)</strong>. Here is exactly what that means:</p>
+<ul>
+<li>A secret encryption key is generated <strong>on your machine</strong> during setup and never leaves it.</li>
+<li>All agent data (sessions, memory files, logs, cron states, system snapshots) is <strong>encrypted locally</strong> before being transmitted to our cloud.</li>
+<li>The encrypted data is stored in <strong>Google Cloud SQL</strong> (PostgreSQL). We store only ciphertext.</li>
+<li>When you view your dashboard at <code>app.clawmetry.com</code>, the data is <strong>decrypted in your browser</strong> using your secret key.</li>
+<li><strong>We cannot decrypt, read, inspect, or use your agent data.</strong> Not our engineers, not our support team, not anyone.</li>
+</ul>
+
+<h3>What happens if you lose your secret key?</h3>
+<p>Your data becomes permanently inaccessible. We cannot recover it for you because we never had the key. Keep your secret key safe.</p>
+
+<h2>3. What We Do Store (Unencrypted)</h2>
+<p>To operate the service, we store the following <strong>in plain text</strong>:</p>
+<ul>
+<li><strong>Email address</strong> you use to sign in</li>
+<li><strong>Account metadata:</strong> plan type, trial start/end dates, subscription status</li>
+<li><strong>Node identifiers:</strong> node IDs, custom display names you set, online/offline status, last-seen timestamps</li>
+<li><strong>API key hashes:</strong> SHA-256 hashes of your API keys (we never store the raw key)</li>
+<li><strong>Billing data:</strong> managed entirely by Stripe (see Section 6)</li>
+</ul>
+<p>We do <strong>not</strong> store: passwords (we use OTP-based authentication), your secret encryption key, or any unencrypted agent data.</p>
+
+<h2>4. How We Use Your Information</h2>
+<p>We use the unencrypted data listed above solely to:</p>
+<ul>
+<li>Authenticate you and manage your account</li>
+<li>Route encrypted data to the correct account</li>
+<li>Process payments and manage subscriptions</li>
+<li>Send transactional emails (OTP codes, billing receipts)</li>
+<li>Monitor service health and uptime</li>
+</ul>
+<p>We do <strong>not</strong> sell, share, rent, or trade your personal information with third parties for marketing purposes. Ever.</p>
+
+<h2>5. Two-Factor Authentication</h2>
+<p>ClawMetry Cloud uses OTP-based two-factor authentication for all account access. When you sign in, a one-time code is sent to your email. There are no passwords to steal or leak.</p>
+
+<h2>6. Payment Processing</h2>
+<p>All payments are processed by <strong>Stripe, Inc.</strong> We do not store credit card numbers, bank account details, or other payment credentials on our servers. Stripe's privacy policy applies to payment data: <a href="https://stripe.com/privacy" target="_blank">stripe.com/privacy</a>.</p>
+
+<h2>7. Infrastructure and Security</h2>
+<ul>
+<li><strong>Hosting:</strong> Google Cloud Platform (Cloud Run, europe-west1 region)</li>
+<li><strong>Database:</strong> Google Cloud SQL (PostgreSQL) with encryption at rest</li>
+<li><strong>Uptime target:</strong> 99.5% availability</li>
+<li><strong>Data location:</strong> EU (europe-west1, Belgium)</li>
+<li>All connections use TLS 1.2+ encryption in transit</li>
+<li>Database connections are restricted to authenticated Cloud Run services only</li>
+</ul>
+
+<h2>8. Data Retention</h2>
+<ul>
+<li><strong>Active accounts:</strong> Encrypted agent data is retained as long as your account is active and your nodes are syncing.</li>
+<li><strong>Inactive nodes:</strong> Data from nodes that have not sent a heartbeat in 24 hours may be automatically purged.</li>
+<li><strong>Account deletion:</strong> When you delete your account or disconnect a node, all associated encrypted data is permanently deleted from our servers.</li>
+<li><strong>Cancellation:</strong> You can cancel your subscription at any time. After cancellation, your data is retained for 30 days in case you resubscribe, then permanently deleted.</li>
+</ul>
+
+<h2>9. Open Source Transparency</h2>
+<p>The ClawMetry sync daemon and dashboard are <strong>open source</strong> (<a href="https://github.com/vivekchand/clawmetry" target="_blank">GitHub</a>). You can inspect exactly what data is collected, how it is encrypted, and what is transmitted. The encryption implementation is fully auditable.</p>
+
+<h2>10. Your Rights</h2>
+<p>You have the right to:</p>
+<ul>
+<li><strong>Access</strong> your personal data (email, account info)</li>
+<li><strong>Delete</strong> your account and all associated data</li>
+<li><strong>Export</strong> your data (the open-source sync daemon stores everything locally)</li>
+<li><strong>Cancel</strong> your subscription at any time with no penalties</li>
+<li><strong>Disconnect</strong> any node at any time, which stops data syncing immediately</li>
+</ul>
+<p>To exercise any of these rights, email us at <a href="mailto:hello@clawmetry.com">hello@clawmetry.com</a>.</p>
+
+<h2>11. Cookies</h2>
+<p>We use minimal cookies:</p>
+<ul>
+<li><strong>Authentication token:</strong> stored in localStorage (not a cookie) to keep you signed in</li>
+<li><strong>Analytics:</strong> Google Analytics and Microsoft Clarity for understanding product usage (no agent data is shared with these services)</li>
+</ul>
+
+<h2>12. Children's Privacy</h2>
+<p>ClawMetry is a developer tool and is not directed at children under 13. We do not knowingly collect information from children.</p>
+
+<h2>13. Changes to This Policy</h2>
+<p>We may update this policy from time to time. We will notify you of material changes by email or through the dashboard. The "last updated" date at the top reflects the most recent revision.</p>
+
+<h2>14. Contact</h2>
+<p>For privacy questions or concerns:</p>
+<ul>
+<li><strong>Email:</strong> <a href="mailto:hello@clawmetry.com">hello@clawmetry.com</a></li>
+<li><strong>Entity:</strong> Instalabs LLC</li>
+<li><strong>Address:</strong> 1111B S Governors Ave STE 20032, Dover, DE 19904, United States</li>
+</ul>
+
+<a href="/" class="back">&larr; Back to ClawMetry</a>
+</div>
+</body>
+</html>

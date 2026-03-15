@@ -2551,6 +2551,14 @@ def roadmap():
 def how_it_works_v2():
     return send_from_directory(".", "how-it-works-v2.html")
 
+@app.route("/privacy")
+def privacy():
+    return send_from_directory(".", "privacy.html")
+
+@app.route("/terms")
+def terms():
+    return send_from_directory(".", "terms.html")
+
 @app.route("/how-it-works")
 def how_it_works():
     return send_from_directory(".", "how-it-works.html")
