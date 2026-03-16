@@ -1541,6 +1541,10 @@ DASHBOARD_HTML = r"""
   .nav { background: color-mix(in srgb, var(--bg-secondary) 90%, transparent); border-bottom: 1px solid var(--border-primary); padding: 8px 16px; display: flex; align-items: center; gap: 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; box-shadow: 0 1px 2px rgba(16,24,40,0.06); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
   .nav h1 { font-size: 18px; font-weight: 700; color: var(--text-primary); white-space: nowrap; letter-spacing: -0.3px; }
   .nav h1 span { color: var(--text-accent); }
+  .version-badge { font-size: 11px; color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 2px 8px; white-space: nowrap; cursor: default; transition: all 0.2s; user-select: none; }
+  .version-badge.update-available { color: #22c55e; border-color: rgba(34,197,94,0.4); cursor: pointer; }
+  .version-badge.update-available:hover { background: rgba(34,197,94,0.1); }
+  .version-badge.updating { color: #f59e0b; border-color: rgba(245,158,11,0.4); cursor: wait; }
   .theme-toggle { background: var(--button-bg); border: none; border-radius: 8px; padding: 8px 12px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; margin-left: 12px; transition: all 0.15s; box-shadow: var(--card-shadow); }
   .theme-toggle:hover { background: var(--button-hover); color: var(--text-secondary); }
   .theme-toggle:active { transform: scale(0.98); }
@@ -2490,6 +2494,40 @@ function clawmetryLogout(){
     return _origFetch.call(this,url,opts);
   };
 })();
+
+// ── Version badge + one-click update ──
+(function(){
+  function checkVersion(){
+    fetch('/api/version').then(function(r){return r.json();}).then(function(d){
+      var badges=document.querySelectorAll('.version-badge');
+      badges.forEach(function(badge){
+        if(d.update_available){
+          badge.textContent='v'+d.current+' -> v'+d.latest+' \u2B06';
+          badge.className='version-badge update-available';
+          badge.title='Click to update ClawMetry to v'+d.latest;
+          badge.onclick=function(){triggerUpdate(d.latest,badges);};
+        }else{
+          badge.textContent='v'+d.current;
+        }
+      });
+    }).catch(function(){});
+  }
+  function triggerUpdate(latest,badges){
+    if(!confirm('Update ClawMetry to v'+latest+'? Dashboard will restart.'))return;
+    badges.forEach(function(b){b.textContent='Updating...';b.className='version-badge updating';b.onclick=null;});
+    fetch('/api/update',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
+      if(d.ok){
+        badges.forEach(function(b){b.textContent='Restarting...';});
+        setTimeout(function(){window.location.reload();},5000);
+      }else{
+        badges.forEach(function(b){b.textContent='Update failed';b.className='version-badge';});
+      }
+    }).catch(function(){
+      badges.forEach(function(b){b.textContent='Update failed';b.className='version-badge';});
+    });
+  }
+  checkVersion();
+})();
 </script>
 <div class="boot-overlay" id="boot-overlay">
   <div class="boot-card">
@@ -2507,6 +2545,7 @@ function clawmetryLogout(){
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
   <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="https://clawmetry.com/favicon.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
+  <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
   <!-- Budget & Alerts hidden until mature -->
   <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
@@ -5703,6 +5742,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_usage)
+    app.register_blueprint(bp_version)
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -5941,6 +5981,10 @@ DASHBOARD_HTML = r"""
   .nav { background: color-mix(in srgb, var(--bg-secondary) 90%, transparent); border-bottom: 1px solid var(--border-primary); padding: 8px 16px; display: flex; align-items: center; gap: 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; box-shadow: 0 1px 2px rgba(16,24,40,0.06); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
   .nav h1 { font-size: 18px; font-weight: 700; color: var(--text-primary); white-space: nowrap; letter-spacing: -0.3px; }
   .nav h1 span { color: var(--text-accent); }
+  .version-badge { font-size: 11px; color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 2px 8px; white-space: nowrap; cursor: default; transition: all 0.2s; user-select: none; }
+  .version-badge.update-available { color: #22c55e; border-color: rgba(34,197,94,0.4); cursor: pointer; }
+  .version-badge.update-available:hover { background: rgba(34,197,94,0.1); }
+  .version-badge.updating { color: #f59e0b; border-color: rgba(245,158,11,0.4); cursor: wait; }
   .theme-toggle { background: var(--button-bg); border: none; border-radius: 8px; padding: 8px 12px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; margin-left: 12px; transition: all 0.15s; box-shadow: var(--card-shadow); }
   .theme-toggle:hover { background: var(--button-hover); color: var(--text-secondary); }
   .theme-toggle:active { transform: scale(0.98); }
@@ -6891,6 +6935,40 @@ function clawmetryLogout(){
     return _origFetch.call(this,url,opts);
   };
 })();
+
+// ── Version badge + one-click update ──
+(function(){
+  function checkVersion(){
+    fetch('/api/version').then(function(r){return r.json();}).then(function(d){
+      var badges=document.querySelectorAll('.version-badge');
+      badges.forEach(function(badge){
+        if(d.update_available){
+          badge.textContent='v'+d.current+' -> v'+d.latest+' \u2B06';
+          badge.className='version-badge update-available';
+          badge.title='Click to update ClawMetry to v'+d.latest;
+          badge.onclick=function(){triggerUpdate(d.latest,badges);};
+        }else{
+          badge.textContent='v'+d.current;
+        }
+      });
+    }).catch(function(){});
+  }
+  function triggerUpdate(latest,badges){
+    if(!confirm('Update ClawMetry to v'+latest+'? Dashboard will restart.'))return;
+    badges.forEach(function(b){b.textContent='Updating...';b.className='version-badge updating';b.onclick=null;});
+    fetch('/api/update',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
+      if(d.ok){
+        badges.forEach(function(b){b.textContent='Restarting...';});
+        setTimeout(function(){window.location.reload();},5000);
+      }else{
+        badges.forEach(function(b){b.textContent='Update failed';b.className='version-badge';});
+      }
+    }).catch(function(){
+      badges.forEach(function(b){b.textContent='Update failed';b.className='version-badge';});
+    });
+  }
+  checkVersion();
+})();
 </script>
 <div class="boot-overlay" id="boot-overlay">
   <div class="boot-card">
@@ -6908,6 +6986,7 @@ function clawmetryLogout(){
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
   <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="https://clawmetry.com/favicon.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
+  <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
   <!-- Budget & Alerts hidden until mature -->
   <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
@@ -14477,7 +14556,81 @@ bp_overview = _Blueprint('overview', __name__)
 bp_sessions = _Blueprint('sessions', __name__)
 bp_security = _Blueprint('security', __name__)
 bp_usage = _Blueprint('usage', __name__)
+bp_version = _Blueprint('version', __name__)
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ── Version check & self-update routes ────────────────────────────────────────
+_pypi_cache = {"ts": 0, "version": None}
+
+@bp_version.route('/api/version')
+def api_version():
+    """Return current and latest version info."""
+    import time as _time, json as _json
+    current = __version__
+    latest = current
+    update_available = False
+    now = _time.time()
+    # Cache PyPI check for 1 hour
+    if _pypi_cache["version"] and (now - _pypi_cache["ts"]) < 3600:
+        latest = _pypi_cache["version"]
+    else:
+        try:
+            import urllib.request as _ur
+            req = _ur.Request("https://pypi.org/pypi/clawmetry/json",
+                              headers={"User-Agent": "clawmetry/" + current})
+            with _ur.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read().decode())
+                latest = data.get("info", {}).get("version", current)
+                _pypi_cache["version"] = latest
+                _pypi_cache["ts"] = now
+        except Exception:
+            pass
+    if latest != current:
+        # Compare version tuples
+        try:
+            cur_parts = [int(x) for x in current.split(".")]
+            lat_parts = [int(x) for x in latest.split(".")]
+            update_available = lat_parts > cur_parts
+        except Exception:
+            update_available = latest != current
+    return {"current": current, "latest": latest, "update_available": update_available}
+
+
+@bp_version.route('/api/update', methods=['POST'])
+def api_update():
+    """Self-update clawmetry via pip, then schedule process restart."""
+    import subprocess as _sp, threading as _thr
+    old_version = __version__
+    try:
+        _sp.check_call(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "clawmetry"],
+            timeout=120,
+            stdout=_sp.DEVNULL,
+            stderr=_sp.STDOUT,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}, 500
+    # Re-read new version from pip metadata
+    new_version = old_version
+    try:
+        out = _sp.check_output(
+            [sys.executable, "-m", "pip", "show", "clawmetry"],
+            timeout=10,
+        ).decode()
+        for line in out.splitlines():
+            if line.startswith("Version:"):
+                new_version = line.split(":", 1)[1].strip()
+                break
+    except Exception:
+        pass
+    # Schedule restart after response is sent
+    def _restart():
+        import os as _os
+        _os._exit(0)
+    _thr.Timer(2.0, _restart).start()
+    return {"ok": True, "old_version": old_version, "new_version": new_version}
+
+# ──────────────────────────────────────────────────────────────────────────────
 
 @bp_gateway.route('/api/gw/config', methods=['GET', 'POST'])
 def api_gw_config():
@@ -14748,7 +14901,7 @@ def auth_token():
 
 @bp_auth.route('/')
 def index():
-    resp = make_response(render_template_string(DASHBOARD_HTML))
+    resp = make_response(render_template_string(DASHBOARD_HTML, version=__version__))
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     return resp
 
