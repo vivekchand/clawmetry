@@ -358,3 +358,35 @@ class TestBrainActivity:
                 break
         r.close()
         assert b"connected" in first_chunk or b"data:" in first_chunk or b":\n" in first_chunk
+
+
+class TestMemoryAnalytics:
+    """Tests for memory analytics & bloat detection (GH #203)."""
+
+    def test_memory_analytics_returns_200(self, api, base_url):
+        """Memory analytics endpoint returns 200."""
+        d = assert_ok(get(api, base_url, "/api/memory-analytics"))
+        assert_keys(d, "totalBytes", "totalKB", "estTokens", "fileCount",
+                     "files", "topFiles", "contextBudgets", "recommendations",
+                     "hasBloat", "hasWarnings", "thresholds")
+
+    def test_memory_analytics_context_budgets(self, api, base_url):
+        """Context budgets contain all three model tiers."""
+        d = assert_ok(get(api, base_url, "/api/memory-analytics"))
+        budgets = d["contextBudgets"]
+        for key in ("claude_200k", "gpt4_128k", "gemini_1m"):
+            assert key in budgets, f"Missing budget tier '{key}'"
+            assert_keys(budgets[key], "limit", "memoryTokens", "percentUsed", "status")
+
+    def test_memory_analytics_custom_thresholds(self, api, base_url):
+        """Custom warn/crit thresholds are reflected."""
+        d = assert_ok(get(api, base_url, "/api/memory-analytics?warn_kb=4&crit_kb=8"))
+        assert d["thresholds"]["warnKB"] == 4
+        assert d["thresholds"]["critKB"] == 8
+
+    def test_memory_analytics_files_have_status(self, api, base_url):
+        """Each file entry has status (ok/warning/critical)."""
+        d = assert_ok(get(api, base_url, "/api/memory-analytics"))
+        for f in d["files"]:
+            assert_keys(f, "path", "sizeBytes", "sizeKB", "estTokens", "status")
+            assert f["status"] in ("ok", "warning", "critical")

@@ -2876,6 +2876,7 @@ function clawmetryLogout(){
   <div class="refresh-bar">
     <button class="refresh-btn" onclick="loadMemory()">↻ Refresh</button>
   </div>
+  <div id="memory-analytics-panel" style="margin-bottom:12px"></div>
   <div class="card" id="memory-list">Loading...</div>
   <div class="file-viewer" id="file-viewer">
     <div class="file-viewer-header">
@@ -7303,6 +7304,7 @@ function clawmetryLogout(){
   <div class="refresh-bar">
     <button class="refresh-btn" onclick="loadMemory()">↻ Refresh</button>
   </div>
+  <div id="memory-analytics-panel" style="margin-bottom:12px"></div>
   <div class="card" id="memory-list">Loading...</div>
   <div class="file-viewer" id="file-viewer">
     <div class="file-viewer-header">
@@ -9971,12 +9973,92 @@ async function loadLogs() {
   renderLogs('logs-full', data.lines);
 }
 
+async function loadMemoryAnalytics() {
+  var panel = document.getElementById('memory-analytics-panel');
+  if (!panel || window.CLOUD_MODE) return;
+  try {
+    var d = await fetch('/api/memory-analytics').then(function(r){return r.json()});
+    var statusColor = d.hasBloat ? '#ef4444' : (d.hasWarnings ? '#f59e0b' : '#22c55e');
+    var statusLabel = d.hasBloat ? '⚠ Bloat detected' : (d.hasWarnings ? '⚡ Growing' : '✓ Healthy');
+    var html = '<div class="card" style="padding:16px;margin-bottom:0">';
+    // Stats row
+    html += '<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:12px">';
+    html += '<div style="font-size:14px;font-weight:700;color:var(--text-primary)">🧠 Memory Analytics</div>';
+    html += '<div style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;background:' + statusColor + '22;color:' + statusColor + '">';
+    html += '<span style="width:6px;height:6px;border-radius:50%;background:' + statusColor + '"></span>' + statusLabel + '</div>';
+    html += '<div style="margin-left:auto;display:flex;gap:16px;font-size:12px;color:var(--text-muted)">';
+    html += '<span>' + d.fileCount + ' files</span>';
+    html += '<span>' + d.totalKB + ' KB total</span>';
+    html += '<span>~' + d.estTokens.toLocaleString() + ' tokens</span>';
+    html += '</div></div>';
+    // Context budget bars
+    var budgets = d.contextBudgets || {};
+    var budgetNames = {'claude_200k':'Claude 200K','gpt4_128k':'GPT-4 128K','gemini_1m':'Gemini 1M'};
+    html += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">';
+    for (var k in budgetNames) {
+      if (!budgets[k]) continue;
+      var b = budgets[k];
+      var bColor = b.status === 'critical' ? '#ef4444' : (b.status === 'warning' ? '#f59e0b' : '#22c55e');
+      html += '<div style="flex:1;min-width:160px;padding:8px 12px;border-radius:8px;background:var(--bg-secondary);border:1px solid var(--border-primary)">';
+      html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">' + budgetNames[k] + ' context used</div>';
+      html += '<div style="height:6px;border-radius:3px;background:var(--bg-tertiary,#1e293b);overflow:hidden">';
+      html += '<div style="height:100%;width:' + Math.min(b.percentUsed, 100) + '%;background:' + bColor + ';border-radius:3px;transition:width 0.3s"></div></div>';
+      html += '<div style="font-size:10px;color:' + bColor + ';margin-top:2px">' + b.percentUsed + '% (' + b.memoryTokens.toLocaleString() + ' / ' + b.limit.toLocaleString() + ')</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+    // Top files bar chart
+    if (d.topFiles && d.topFiles.length > 0) {
+      var maxSize = d.topFiles[0].sizeBytes || 1;
+      html += '<div style="margin-bottom:8px">';
+      html += '<div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:6px">Largest files</div>';
+      d.topFiles.forEach(function(tf) {
+        var pct = Math.max((tf.sizeBytes / maxSize) * 100, 2);
+        var fColor = tf.status === 'critical' ? '#ef4444' : (tf.status === 'warning' ? '#f59e0b' : '#3b82f6');
+        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">';
+        html += '<span style="font-size:11px;color:var(--text-secondary);width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0" title="' + tf.path + '">' + tf.path + '</span>';
+        html += '<div style="flex:1;height:14px;border-radius:3px;background:var(--bg-tertiary,#1e293b);overflow:hidden">';
+        html += '<div style="height:100%;width:' + pct + '%;background:' + fColor + ';border-radius:3px"></div></div>';
+        html += '<span style="font-size:10px;color:var(--text-muted);width:50px;text-align:right;flex-shrink:0">' + tf.sizeKB + 'K</span>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    // Recommendations
+    if (d.recommendations && d.recommendations.length > 0) {
+      html += '<div style="margin-top:8px;padding:8px 12px;border-radius:6px;background:' + (d.hasBloat ? '#ef444415' : '#f59e0b15') + ';border:1px solid ' + (d.hasBloat ? '#ef444433' : '#f59e0b33') + '">';
+      html += '<div style="font-size:11px;font-weight:600;color:' + (d.hasBloat ? '#ef4444' : '#f59e0b') + ';margin-bottom:4px">Recommendations</div>';
+      d.recommendations.forEach(function(r) {
+        html += '<div style="font-size:11px;color:var(--text-secondary);margin-bottom:2px">• ' + escHtml(r.message) + '</div>';
+      });
+      html += '</div>';
+    }
+    // Daily growth sparkline (if data available)
+    if (d.dailyGrowth && d.dailyGrowth.length > 1) {
+      var maxBytes = Math.max.apply(null, d.dailyGrowth.map(function(g){return g.bytes})) || 1;
+      var points = d.dailyGrowth.map(function(g, i) {
+        var x = (i / (d.dailyGrowth.length - 1)) * 280;
+        var y = 36 - (g.bytes / maxBytes) * 32;
+        return x + ',' + y;
+      }).join(' ');
+      html += '<div style="margin-top:10px">';
+      html += '<div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px">Daily memory files (last 30 days)</div>';
+      html += '<svg width="100%" viewBox="0 0 290 40" style="max-width:400px">';
+      html += '<polyline points="' + points + '" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+      html += '</svg></div>';
+    }
+    html += '</div>';
+    panel.innerHTML = html;
+  } catch(e) { panel.innerHTML = ''; }
+}
+
 async function loadMemory() {
   if (window.CLOUD_MODE) {
     var el = document.getElementById('memory-list');
     if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">Memory files are stored locally on the agent machine and are not synced to cloud.</div>';
     return;
   }
+  loadMemoryAnalytics();
   var data = await fetch('/api/memory-files').then(r => r.json());
   var el = document.getElementById('memory-list');
   // Add hover CSS once
@@ -15938,6 +16020,101 @@ def api_view_file():
         return jsonify({'path': path, 'content': content})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@bp_memory.route('/api/memory-analytics')
+def api_memory_analytics():
+    """Memory usage analytics with bloat detection and recommendations."""
+    workspace = WORKSPACE or os.getcwd()
+    memory_dir = MEMORY_DIR or os.path.join(workspace, "memory")
+
+    # Configurable thresholds (bytes)
+    bloat_warn_kb = int(request.args.get('warn_kb', 8))
+    bloat_crit_kb = int(request.args.get('crit_kb', 16))
+
+    files = _get_memory_files()
+    total_bytes = sum(f.get('size', 0) for f in files)
+    root_files = [f for f in files if '/' not in f['path']]
+    daily_files = [f for f in files if f['path'].startswith('memory/')]
+
+    # Estimate tokens (rough: 1 token ~ 4 chars ~ 4 bytes for English text)
+    est_tokens = total_bytes // 4
+
+    # Per-file analysis with bloat flags
+    analysis = []
+    recommendations = []
+    for f in files:
+        entry = {
+            'path': f['path'],
+            'sizeBytes': f['size'],
+            'sizeKB': round(f['size'] / 1024, 1),
+            'estTokens': f['size'] // 4,
+            'status': 'ok',
+        }
+        kb = f['size'] / 1024
+        if kb >= bloat_crit_kb:
+            entry['status'] = 'critical'
+            recommendations.append({
+                'file': f['path'],
+                'severity': 'critical',
+                'message': f"{f['path']} is {kb:.1f}KB ({f['size'] // 4} est. tokens). "
+                           f"Consider pruning to keep context window budget lean.",
+            })
+        elif kb >= bloat_warn_kb:
+            entry['status'] = 'warning'
+            recommendations.append({
+                'file': f['path'],
+                'severity': 'warning',
+                'message': f"{f['path']} is {kb:.1f}KB. Growing large, review for stale content.",
+            })
+        analysis.append(entry)
+
+    # Daily memory dir growth (count files per date from filenames)
+    daily_growth = []
+    if os.path.isdir(memory_dir):
+        date_sizes = {}
+        for f in daily_files:
+            basename = f['path'].replace('memory/', '')
+            date_part = basename.replace('.md', '')[:10]  # YYYY-MM-DD
+            if len(date_part) == 10 and date_part[4] == '-':
+                date_sizes[date_part] = date_sizes.get(date_part, 0) + f['size']
+        for d in sorted(date_sizes.keys())[-30:]:
+            daily_growth.append({'date': d, 'bytes': date_sizes[d]})
+
+    # Context budget estimation
+    # Common context windows: 200K tokens (Claude), 128K (GPT-4), 1M (Gemini)
+    context_budgets = {}
+    for name, limit in [('claude_200k', 200000), ('gpt4_128k', 128000), ('gemini_1m', 1000000)]:
+        pct = round((est_tokens / limit) * 100, 1) if limit > 0 else 0
+        context_budgets[name] = {
+            'limit': limit,
+            'memoryTokens': est_tokens,
+            'percentUsed': min(pct, 100),
+            'status': 'critical' if pct > 25 else ('warning' if pct > 10 else 'ok'),
+        }
+
+    # Largest files
+    top_files = sorted(analysis, key=lambda x: x['sizeBytes'], reverse=True)[:5]
+
+    has_bloat = any(r['severity'] == 'critical' for r in recommendations)
+    has_warnings = any(r['severity'] == 'warning' for r in recommendations)
+
+    return jsonify({
+        'totalBytes': total_bytes,
+        'totalKB': round(total_bytes / 1024, 1),
+        'estTokens': est_tokens,
+        'fileCount': len(files),
+        'rootFileCount': len(root_files),
+        'dailyFileCount': len(daily_files),
+        'files': analysis,
+        'topFiles': top_files,
+        'dailyGrowth': daily_growth,
+        'contextBudgets': context_budgets,
+        'recommendations': recommendations,
+        'hasBloat': has_bloat,
+        'hasWarnings': has_warnings,
+        'thresholds': {'warnKB': bloat_warn_kb, 'critKB': bloat_crit_kb},
+    })
 
 
 # ── OTLP Receiver Endpoints ─────────────────────────────────────────────
