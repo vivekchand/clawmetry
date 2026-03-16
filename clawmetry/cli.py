@@ -313,9 +313,8 @@ def _register_launchd(config: dict) -> None:
     from clawmetry.sync import CONFIG_DIR, LOG_FILE
     label = "com.clawmetry.sync"
     plist_path = __import__("pathlib").Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-    # Resolve python3 at registration time, but use -m so pip upgrades take effect
-    import shutil
-    python = shutil.which("python3") or sys.executable
+    # Use the current interpreter (venv-aware) so the daemon finds clawmetry
+    python = sys.executable
     plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -356,8 +355,8 @@ def _register_systemd(config: dict) -> None:
     service_dir = __import__("pathlib").Path.home() / ".config" / "systemd" / "user"
     service_dir.mkdir(parents=True, exist_ok=True)
     service_path = service_dir / f"{label}.service"
-    import shutil
-    python = shutil.which("python3") or sys.executable
+    # Use the current interpreter (venv-aware) so the daemon finds clawmetry
+    python = sys.executable
 
     unit = f"""[Unit]
 Description=ClawMetry Cloud Sync Daemon
