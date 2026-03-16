@@ -320,6 +320,44 @@ class TestSecurity:
 
 
 # ---------------------------------------------------------------------------
+# Security Posture
+# ---------------------------------------------------------------------------
+
+class TestSecurityPosture:
+    def test_posture_endpoint(self, api, base_url):
+        """Security posture endpoint returns 200."""
+        d = assert_ok(get(api, base_url, "/api/security/posture"))
+
+    def test_posture_response_structure(self, api, base_url):
+        """Posture response has score, checks, and counters."""
+        d = assert_ok(get(api, base_url, "/api/security/posture"))
+        assert_keys(d, "score", "checks", "passed", "failed", "warnings", "total")
+        assert isinstance(d["checks"], list)
+        assert d["score"] in ("A", "B", "C", "D", "F", "U"), (
+            f"Unexpected score: {d['score']}"
+        )
+
+    def test_posture_checks_have_fields(self, api, base_url):
+        """Each posture check has required fields."""
+        d = assert_ok(get(api, base_url, "/api/security/posture"))
+        for c in d["checks"]:
+            assert_keys(c, "id", "label", "status", "detail", "severity", "weight")
+            assert c["status"] in ("pass", "warn", "fail"), (
+                f"Invalid check status: {c['status']}"
+            )
+            assert c["severity"] in ("critical", "high", "medium", "low"), (
+                f"Invalid check severity: {c['severity']}"
+            )
+
+    def test_posture_counters_consistent(self, api, base_url):
+        """Passed + warnings + failed = total."""
+        d = assert_ok(get(api, base_url, "/api/security/posture"))
+        assert d["passed"] + d["warnings"] + d["failed"] == d["total"], (
+            f"Counters inconsistent: {d['passed']}+{d['warnings']}+{d['failed']} != {d['total']}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Brain Activity
 # ---------------------------------------------------------------------------
 

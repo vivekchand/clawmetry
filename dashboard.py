@@ -61,7 +61,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.47"
+__version__ = "0.12.48"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -3249,12 +3249,33 @@ function clawmetryLogout(){
 <div class="page" id="page-security">
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128737;&#65039; Security -- Threat Detection &amp; Anomaly Alerts</span>
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128737;&#65039; Security</span>
       <div style="display:flex;gap:8px;align-items:center;">
         <span id="security-scan-time" style="font-size:11px;color:var(--text-muted);"></span>
-        <button class="refresh-btn" onclick="loadSecurityPage()">&#8635; Scan</button>
+        <button class="refresh-btn" onclick="loadSecurityPage();loadSecurityPosture();">&#8635; Scan</button>
       </div>
     </div>
+    <!-- Security Posture Score -->
+    <div id="security-posture-panel" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;">
+        <div id="posture-score-badge" style="width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fff;background:#64748b;flex-shrink:0;">?</div>
+        <div style="flex:1;">
+          <div style="font-size:13px;font-weight:700;color:var(--text-primary);">Security Posture</div>
+          <div id="posture-score-label" style="font-size:11px;color:var(--text-muted);margin-top:2px;">Scanning configuration...</div>
+          <div style="margin-top:6px;background:var(--bg-primary);border-radius:4px;height:6px;overflow:hidden;">
+            <div id="posture-score-bar" style="height:100%;width:0%;background:#64748b;border-radius:4px;transition:width 0.5s ease;"></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;flex-shrink:0;">
+          <div style="text-align:center;"><div id="posture-passed" style="font-size:18px;font-weight:700;color:#22c55e;">-</div><div style="font-size:10px;color:var(--text-muted);">Passed</div></div>
+          <div style="text-align:center;"><div id="posture-warnings" style="font-size:18px;font-weight:700;color:#f59e0b;">-</div><div style="font-size:10px;color:var(--text-muted);">Warnings</div></div>
+          <div style="text-align:center;"><div id="posture-failed" style="font-size:18px;font-weight:700;color:#ef4444;">-</div><div style="font-size:10px;color:var(--text-muted);">Failed</div></div>
+        </div>
+      </div>
+      <div id="posture-checks-list" style="display:grid;gap:6px;"></div>
+    </div>
+    <!-- Threat Detection -->
+    <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Threat Detection &amp; Anomaly Alerts</div>
     <div id="security-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
       <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
         <div style="font-size:24px;font-weight:700;color:#ef4444;" id="sec-critical-count">0</div>
@@ -3606,7 +3627,7 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'subagents') loadSubAgentsPage(false);
   if (name === 'brain') loadBrainPage();
-  if (name === 'security') loadSecurityPage();
+  if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -7676,12 +7697,33 @@ function clawmetryLogout(){
 <div class="page" id="page-security">
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128737;&#65039; Security -- Threat Detection &amp; Anomaly Alerts</span>
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128737;&#65039; Security</span>
       <div style="display:flex;gap:8px;align-items:center;">
         <span id="security-scan-time" style="font-size:11px;color:var(--text-muted);"></span>
-        <button class="refresh-btn" onclick="loadSecurityPage()">&#8635; Scan</button>
+        <button class="refresh-btn" onclick="loadSecurityPage();loadSecurityPosture();">&#8635; Scan</button>
       </div>
     </div>
+    <!-- Security Posture Score -->
+    <div id="security-posture-panel" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;">
+        <div id="posture-score-badge" style="width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fff;background:#64748b;flex-shrink:0;">?</div>
+        <div style="flex:1;">
+          <div style="font-size:13px;font-weight:700;color:var(--text-primary);">Security Posture</div>
+          <div id="posture-score-label" style="font-size:11px;color:var(--text-muted);margin-top:2px;">Scanning configuration...</div>
+          <div style="margin-top:6px;background:var(--bg-primary);border-radius:4px;height:6px;overflow:hidden;">
+            <div id="posture-score-bar" style="height:100%;width:0%;background:#64748b;border-radius:4px;transition:width 0.5s ease;"></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;flex-shrink:0;">
+          <div style="text-align:center;"><div id="posture-passed" style="font-size:18px;font-weight:700;color:#22c55e;">-</div><div style="font-size:10px;color:var(--text-muted);">Passed</div></div>
+          <div style="text-align:center;"><div id="posture-warnings" style="font-size:18px;font-weight:700;color:#f59e0b;">-</div><div style="font-size:10px;color:var(--text-muted);">Warnings</div></div>
+          <div style="text-align:center;"><div id="posture-failed" style="font-size:18px;font-weight:700;color:#ef4444;">-</div><div style="font-size:10px;color:var(--text-muted);">Failed</div></div>
+        </div>
+      </div>
+      <div id="posture-checks-list" style="display:grid;gap:6px;"></div>
+    </div>
+    <!-- Threat Detection -->
+    <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Threat Detection &amp; Anomaly Alerts</div>
     <div id="security-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
       <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
         <div style="font-size:24px;font-weight:700;color:#ef4444;" id="sec-critical-count">0</div>
@@ -8059,7 +8101,7 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'subagents') loadSubAgentsPage(false);
   if (name === 'brain') loadBrainPage();
-  if (name === 'security') loadSecurityPage();
+  if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -9062,6 +9104,55 @@ async function loadSecCatalog() {
     el.innerHTML = html;
   } catch(e) {
     el.innerHTML = '<div style="color:var(--text-error);font-size:11px;">Failed to load: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+async function loadSecurityPosture() {
+  if (window.CLOUD_MODE) return;
+  try {
+    var data = await fetchJsonWithTimeout('/api/security/posture', 8000);
+    var badge = document.getElementById('posture-score-badge');
+    var label = document.getElementById('posture-score-label');
+    var bar = document.getElementById('posture-score-bar');
+    var passedEl = document.getElementById('posture-passed');
+    var warnEl = document.getElementById('posture-warnings');
+    var failedEl = document.getElementById('posture-failed');
+    var listEl = document.getElementById('posture-checks-list');
+    if (!badge) return;
+    badge.textContent = data.score || '?';
+    badge.style.background = data.score_color || '#64748b';
+    label.textContent = (data.score_label || 'Unknown') + ' (' + (data.score_pct || 0) + '%)' + (data.config_path ? ' — ' + data.config_path : '');
+    bar.style.width = (data.score_pct || 0) + '%';
+    bar.style.background = data.score_color || '#64748b';
+    passedEl.textContent = data.passed || 0;
+    warnEl.textContent = data.warnings || 0;
+    failedEl.textContent = data.failed || 0;
+    var checks = data.checks || [];
+    var html = '';
+    var statusIcons = {'pass': '&#9989;', 'warn': '&#9888;&#65039;', 'fail': '&#10060;'};
+    var statusColors = {'pass': '#22c55e', 'warn': '#f59e0b', 'fail': '#ef4444'};
+    // Show failed first, then warnings, then passed
+    checks.sort(function(a,b) {
+      var order = {'fail': 0, 'warn': 1, 'pass': 2};
+      return (order[a.status] || 2) - (order[b.status] || 2);
+    });
+    checks.forEach(function(c) {
+      var icon = statusIcons[c.status] || '&#10067;';
+      var color = statusColors[c.status] || '#64748b';
+      html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;border-left:3px solid ' + color + ';">';
+      html += '<span style="font-size:14px;flex-shrink:0;">' + icon + '</span>';
+      html += '<div style="flex:1;min-width:0;">';
+      html += '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + escHtml(c.label) + ' <span style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(c.status) + '</span></div>';
+      html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + escHtml(c.detail) + '</div>';
+      if (c.remediation) {
+        html += '<div style="font-size:10px;color:#3b82f6;margin-top:3px;font-family:monospace;background:rgba(59,130,246,0.08);padding:3px 6px;border-radius:3px;">&#128736; ' + escHtml(c.remediation) + '</div>';
+      }
+      html += '</div></div>';
+    });
+    listEl.innerHTML = html;
+  } catch(e) {
+    var panel = document.getElementById('security-posture-panel');
+    if (panel) panel.innerHTML = '<div style="color:var(--text-error);padding:10px;font-size:12px;">Posture scan failed: ' + escHtml(String(e)) + '</div>';
   }
 }
 
@@ -19762,6 +19853,278 @@ def api_security_signatures():
             'pattern_count': len(sig['patterns']),
         })
     return jsonify({'signatures': sigs, 'total': len(sigs)})
+
+
+def _scan_security_posture():
+    """Scan OpenClaw configuration for security misconfigurations.
+
+    Returns a list of checks with pass/fail/warn status, remediation hints,
+    and an overall A-F security score.
+    """
+    checks = []
+
+    # --- Locate openclaw.json config ---
+    config_data = None
+    config_path = None
+    for cf in [
+        os.path.expanduser('~/.openclaw/openclaw.json'),
+        os.path.expanduser('~/.clawdbot/openclaw.json'),
+        os.path.expanduser('~/.clawdbot/clawdbot.json'),
+    ]:
+        try:
+            with open(cf) as f:
+                config_data = json.load(f)
+                config_path = cf
+                break
+        except Exception:
+            continue
+
+    if config_data is None:
+        return {
+            'score': 'U',
+            'score_label': 'Unknown',
+            'score_color': '#64748b',
+            'checks': [{'id': 'config_found', 'label': 'Configuration file', 'status': 'fail',
+                         'detail': 'No openclaw.json found', 'remediation': 'Ensure OpenClaw is installed and configured.',
+                         'severity': 'critical', 'weight': 20}],
+            'passed': 0, 'failed': 1, 'warnings': 0, 'total': 1,
+        }
+
+    gateway = config_data.get('gateway', {})
+    plugins = config_data.get('plugins', {})
+
+    # Check 1: Gateway auth token configured
+    auth_token = gateway.get('auth', {}).get('token') or gateway.get('authToken') or os.environ.get('OPENCLAW_AUTH_TOKEN')
+    if auth_token and len(str(auth_token)) >= 8:
+        checks.append({
+            'id': 'auth_enabled', 'label': 'Gateway authentication', 'status': 'pass',
+            'detail': 'Auth token is configured (length: {})'.format(len(str(auth_token))),
+            'remediation': None, 'severity': 'critical', 'weight': 25,
+        })
+    else:
+        checks.append({
+            'id': 'auth_enabled', 'label': 'Gateway authentication', 'status': 'fail',
+            'detail': 'No auth token configured. Anyone on the network can control your agent.',
+            'remediation': 'Set gateway.auth.token in openclaw.json to a strong random string (32+ chars).',
+            'severity': 'critical', 'weight': 25,
+        })
+
+    # Check 2: Auth token strength (not default/weak)
+    weak_tokens = {'test', 'password', '12345678', 'changeme', 'openclaw', 'clawdbot', 'default', 'admin'}
+    if auth_token:
+        token_str = str(auth_token).lower()
+        if token_str in weak_tokens or len(token_str) < 16:
+            checks.append({
+                'id': 'auth_strength', 'label': 'Auth token strength', 'status': 'warn',
+                'detail': 'Token is too short or uses a common/default value.',
+                'remediation': 'Use a cryptographically random token: openssl rand -hex 32',
+                'severity': 'high', 'weight': 15,
+            })
+        else:
+            checks.append({
+                'id': 'auth_strength', 'label': 'Auth token strength', 'status': 'pass',
+                'detail': 'Token appears strong ({} chars)'.format(len(token_str)),
+                'remediation': None, 'severity': 'high', 'weight': 15,
+            })
+
+    # Check 3: Gateway bind address (should be localhost, not 0.0.0.0)
+    bind_host = gateway.get('host') or gateway.get('bind') or '127.0.0.1'
+    if bind_host in ('0.0.0.0', '::'):
+        checks.append({
+            'id': 'bind_address', 'label': 'Gateway bind address', 'status': 'fail',
+            'detail': 'Gateway binds to {} (all interfaces). Exposed to the network.'.format(bind_host),
+            'remediation': 'Set gateway.host to "127.0.0.1" unless you need remote access. Use a reverse proxy with TLS for remote.',
+            'severity': 'critical', 'weight': 20,
+        })
+    else:
+        checks.append({
+            'id': 'bind_address', 'label': 'Gateway bind address', 'status': 'pass',
+            'detail': 'Gateway binds to {} (local only)'.format(bind_host),
+            'remediation': None, 'severity': 'critical', 'weight': 20,
+        })
+
+    # Check 4: Exec tool permissions
+    tools_config = config_data.get('tools', {})
+    exec_policy = tools_config.get('exec', {})
+    exec_security = exec_policy.get('security') or exec_policy.get('mode') or 'full'
+    if exec_security == 'full':
+        checks.append({
+            'id': 'exec_permissions', 'label': 'Exec tool permissions', 'status': 'warn',
+            'detail': 'Exec security is "full" (unrestricted shell access).',
+            'remediation': 'Consider "allowlist" mode with specific commands, or "deny" for high-risk environments.',
+            'severity': 'high', 'weight': 10,
+        })
+    elif exec_security == 'deny':
+        checks.append({
+            'id': 'exec_permissions', 'label': 'Exec tool permissions', 'status': 'pass',
+            'detail': 'Exec tool is disabled (deny mode).',
+            'remediation': None, 'severity': 'high', 'weight': 10,
+        })
+    else:
+        checks.append({
+            'id': 'exec_permissions', 'label': 'Exec tool permissions', 'status': 'pass',
+            'detail': 'Exec security mode: {}'.format(exec_security),
+            'remediation': None, 'severity': 'high', 'weight': 10,
+        })
+
+    # Check 5: TLS / HTTPS for gateway
+    gw_port = gateway.get('port', 18789)
+    gw_tls = gateway.get('tls', {})
+    has_tls = bool(gw_tls.get('cert') or gw_tls.get('key') or gw_tls.get('enabled'))
+    if has_tls:
+        checks.append({
+            'id': 'tls_enabled', 'label': 'TLS encryption', 'status': 'pass',
+            'detail': 'TLS is configured for the gateway.',
+            'remediation': None, 'severity': 'high', 'weight': 10,
+        })
+    elif bind_host in ('0.0.0.0', '::'):
+        checks.append({
+            'id': 'tls_enabled', 'label': 'TLS encryption', 'status': 'fail',
+            'detail': 'No TLS configured and gateway is network-exposed. Traffic is unencrypted.',
+            'remediation': 'Configure gateway.tls.cert and gateway.tls.key, or use a reverse proxy (nginx/caddy) with TLS.',
+            'severity': 'high', 'weight': 10,
+        })
+    else:
+        checks.append({
+            'id': 'tls_enabled', 'label': 'TLS encryption', 'status': 'pass',
+            'detail': 'TLS not needed (gateway is localhost only).',
+            'remediation': None, 'severity': 'high', 'weight': 10,
+        })
+
+    # Check 6: Plugin/channel security (telegram/discord tokens not in plaintext env)
+    plugin_entries = plugins.get('entries', {})
+    exposed_secrets = []
+    for pname, pconf in plugin_entries.items():
+        if isinstance(pconf, dict):
+            for key in ['token', 'apiKey', 'api_key', 'secret', 'webhook_secret']:
+                val = pconf.get(key)
+                if val and isinstance(val, str) and not val.startswith('$') and not val.startswith('env:'):
+                    exposed_secrets.append('{}.{}'.format(pname, key))
+    if exposed_secrets:
+        checks.append({
+            'id': 'secrets_in_config', 'label': 'Secrets in config file', 'status': 'warn',
+            'detail': '{} secret(s) stored as plaintext in config: {}'.format(len(exposed_secrets), ', '.join(exposed_secrets[:3])),
+            'remediation': 'Use environment variables instead. E.g., set TELEGRAM_TOKEN env var and reference as "$TELEGRAM_TOKEN" in config.',
+            'severity': 'medium', 'weight': 5,
+        })
+    else:
+        checks.append({
+            'id': 'secrets_in_config', 'label': 'Secrets in config file', 'status': 'pass',
+            'detail': 'No plaintext secrets detected in plugin config.',
+            'remediation': None, 'severity': 'medium', 'weight': 5,
+        })
+
+    # Check 7: Workspace permissions (AGENTS.md, SOUL.md not world-readable)
+    oc_home = os.path.expanduser('~/.openclaw')
+    if os.path.isdir(oc_home):
+        try:
+            mode = oct(os.stat(oc_home).st_mode)[-3:]
+            if mode[-1] != '0':  # world-readable
+                checks.append({
+                    'id': 'workspace_perms', 'label': 'Workspace permissions', 'status': 'warn',
+                    'detail': 'OpenClaw home directory is world-readable (mode: {})'.format(mode),
+                    'remediation': 'Run: chmod 700 ~/.openclaw',
+                    'severity': 'medium', 'weight': 5,
+                })
+            else:
+                checks.append({
+                    'id': 'workspace_perms', 'label': 'Workspace permissions', 'status': 'pass',
+                    'detail': 'Workspace directory permissions are restrictive (mode: {})'.format(mode),
+                    'remediation': None, 'severity': 'medium', 'weight': 5,
+                })
+        except Exception:
+            checks.append({
+                'id': 'workspace_perms', 'label': 'Workspace permissions', 'status': 'warn',
+                'detail': 'Could not check workspace permissions.',
+                'remediation': 'Run: chmod 700 ~/.openclaw',
+                'severity': 'medium', 'weight': 5,
+            })
+    else:
+        checks.append({
+            'id': 'workspace_perms', 'label': 'Workspace permissions', 'status': 'pass',
+            'detail': 'Default workspace directory not found (custom location or containerized).',
+            'remediation': None, 'severity': 'medium', 'weight': 5,
+        })
+
+    # Check 8: Node/remote access configuration
+    nodes_config = config_data.get('nodes', {})
+    auto_approve = nodes_config.get('autoApprove', False)
+    if auto_approve:
+        checks.append({
+            'id': 'node_auto_approve', 'label': 'Node auto-approve', 'status': 'warn',
+            'detail': 'Nodes are auto-approved without manual review.',
+            'remediation': 'Set nodes.autoApprove to false so you review each device before granting access.',
+            'severity': 'medium', 'weight': 5,
+        })
+    else:
+        checks.append({
+            'id': 'node_auto_approve', 'label': 'Node auto-approve', 'status': 'pass',
+            'detail': 'Node pairing requires manual approval.',
+            'remediation': None, 'severity': 'medium', 'weight': 5,
+        })
+
+    # Check 9: Elevated exec permissions
+    elevated = tools_config.get('elevated', {}) or exec_policy.get('elevated', {})
+    elevated_enabled = elevated.get('enabled', False) if isinstance(elevated, dict) else bool(elevated)
+    if elevated_enabled:
+        checks.append({
+            'id': 'elevated_exec', 'label': 'Elevated (sudo) exec', 'status': 'warn',
+            'detail': 'Elevated/sudo exec is enabled. Agent can run commands as root.',
+            'remediation': 'Disable unless absolutely necessary. Use specific sudoers rules instead of blanket elevation.',
+            'severity': 'high', 'weight': 10,
+        })
+    else:
+        checks.append({
+            'id': 'elevated_exec', 'label': 'Elevated (sudo) exec', 'status': 'pass',
+            'detail': 'Elevated exec is disabled.',
+            'remediation': None, 'severity': 'high', 'weight': 10,
+        })
+
+    # --- Calculate score ---
+    total_weight = sum(c['weight'] for c in checks)
+    earned = sum(c['weight'] for c in checks if c['status'] == 'pass')
+    # warnings get half credit
+    earned += sum(c['weight'] * 0.5 for c in checks if c['status'] == 'warn')
+    pct = (earned / total_weight * 100) if total_weight > 0 else 0
+
+    if pct >= 90:
+        score, label, color = 'A', 'Excellent', '#22c55e'
+    elif pct >= 75:
+        score, label, color = 'B', 'Good', '#84cc16'
+    elif pct >= 60:
+        score, label, color = 'C', 'Fair', '#f59e0b'
+    elif pct >= 40:
+        score, label, color = 'D', 'Poor', '#f97316'
+    else:
+        score, label, color = 'F', 'Critical', '#ef4444'
+
+    passed = sum(1 for c in checks if c['status'] == 'pass')
+    failed = sum(1 for c in checks if c['status'] == 'fail')
+    warnings = sum(1 for c in checks if c['status'] == 'warn')
+
+    return {
+        'score': score,
+        'score_label': label,
+        'score_color': color,
+        'score_pct': round(pct, 1),
+        'checks': checks,
+        'passed': passed,
+        'failed': failed,
+        'warnings': warnings,
+        'total': len(checks),
+        'config_path': config_path,
+        'scanned_at': datetime.now().isoformat(),
+    }
+
+
+@bp_security.route('/api/security/posture')
+def api_security_posture():
+    """Scan OpenClaw configuration for security misconfigurations and return a posture score."""
+    try:
+        result = _scan_security_posture()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e), 'score': 'U', 'checks': []}), 500
 
 
 @bp_health.route('/api/heatmap')
