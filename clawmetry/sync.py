@@ -1636,6 +1636,30 @@ def run_daemon() -> None:
     enc    = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
     log.info(f"Starting sync daemon — node={config['node_id']} → {INGEST_URL} ({enc})")
 
+    # ── OpenClaw installation check (closes #128) ──
+    import shutil
+    _oc_found = (
+        shutil.which("openclaw")
+        or shutil.which("openclaw-gateway")
+        or any(p.exists() for p in [
+            Path.home() / ".openclaw" / "agents" / "main" / "sessions",
+            Path("/data/agents/main/sessions"),
+            Path("/app/agents/main/sessions"),
+            Path("/opt/openclaw/agents/main/sessions"),
+        ])
+    )
+    oc_home_env = os.environ.get("OPENCLAW_HOME", "")
+    if oc_home_env and (Path(oc_home_env) / "agents" / "main" / "sessions").exists():
+        _oc_found = True
+    if not _oc_found:
+        log.warning(
+            "⚠️  OpenClaw not detected on this machine. "
+            "ClawMetry needs OpenClaw to monitor. "
+            "Install it: npm install -g openclaw  |  "
+            "Docs: https://openclaw.ai/docs  |  "
+            "Set OPENCLAW_HOME if installed in a custom location."
+        )
+
     # ── First-run: full synchronous sync so customer sees data immediately ──
     send_heartbeat(config)
     log.info("Initial heartbeat sent")

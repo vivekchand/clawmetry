@@ -313,9 +313,8 @@ def _register_launchd(config: dict) -> None:
     from clawmetry.sync import CONFIG_DIR, LOG_FILE
     label = "com.clawmetry.sync"
     plist_path = __import__("pathlib").Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-    # Resolve python3 at registration time, but use -m so pip upgrades take effect
-    import shutil
-    python = shutil.which("python3") or sys.executable
+    # Always use the running Python (venv-aware), not system python3
+    python = sys.executable
     plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -356,8 +355,8 @@ def _register_systemd(config: dict) -> None:
     service_dir = __import__("pathlib").Path.home() / ".config" / "systemd" / "user"
     service_dir.mkdir(parents=True, exist_ok=True)
     service_path = service_dir / f"{label}.service"
-    import shutil
-    python = shutil.which("python3") or sys.executable
+    # Always use the running Python (venv-aware), not system python3
+    python = sys.executable
 
     unit = f"""[Unit]
 Description=ClawMetry Cloud Sync Daemon
@@ -422,6 +421,44 @@ def _cmd_disconnect(args) -> None:
     print("Disconnected from ClawMetry Cloud.")
 
 
+def _detect_openclaw() -> bool:
+    """Check if OpenClaw is installed on this machine."""
+    import shutil
+    from pathlib import Path
+
+    # Check if openclaw binary exists in PATH
+    if shutil.which("openclaw") or shutil.which("openclaw-gateway"):
+        return True
+
+    # Check common session directory locations
+    home = Path.home()
+    candidates = [
+        home / ".openclaw" / "agents" / "main" / "sessions",
+        Path("/data/agents/main/sessions"),
+        Path("/app/agents/main/sessions"),
+        Path("/opt/openclaw/agents/main/sessions"),
+    ]
+    oc_home = os.environ.get("OPENCLAW_HOME", "")
+    if oc_home:
+        candidates.insert(0, Path(oc_home) / "agents" / "main" / "sessions")
+
+    if any(p.exists() for p in candidates):
+        return True
+
+    # Check if openclaw npm package is installed globally
+    if shutil.which("npm"):
+        import subprocess
+        try:
+            r = subprocess.run(["npm", "list", "-g", "openclaw", "--depth=0"],
+                               capture_output=True, text=True, timeout=5)
+            if "openclaw" in r.stdout and "empty" not in r.stdout:
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
 def _cmd_status(args) -> None:
     """clawmetry status — show local + cloud sync status."""
     import platform
@@ -480,6 +517,24 @@ def _cmd_status(args) -> None:
         r = subprocess.run(["systemctl", "--user", "is-active", "clawmetry-sync"], capture_output=True, text=True)
         running = r.stdout.strip() == "active"
         print(f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}")
+
+    # OpenClaw detection (closes #128)
+    if not _detect_openclaw():
+        YELLOW = '\033[0;33m'
+        CYAN = '\033[0;36m'
+        NC = '\033[0m'
+        print(f"\n  {YELLOW}⚠️  OpenClaw not detected on this machine{NC}")
+        print()
+        print("  ClawMetry needs OpenClaw to monitor. Install it:")
+        print()
+        print(f"    {CYAN}npm install -g openclaw{NC}          # via npm")
+        print()
+        print("  Then start OpenClaw:")
+        print(f"    {CYAN}openclaw{NC}                         # interactive setup")
+        print(f"    {CYAN}openclaw gateway start{NC}           # start the agent")
+        print()
+        print(f"  Docs: https://openclaw.ai/docs")
+        print(f"  Set {CYAN}OPENCLAW_HOME{NC} if installed in a custom location.")
 
     if LOG_FILE.exists():
         print(f"  Log:         {LOG_FILE}")
