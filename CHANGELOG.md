@@ -1,3 +1,9 @@
+## [0.12.57] — 2026-03-17
+
+### Added
+- Click-to-expand brain stream events (click any row to see full detail text)
+- Hover highlight on brain event rows
+
 ## [0.12.56] — 2026-03-17
 
 ### Fixed
