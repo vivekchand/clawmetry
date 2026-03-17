@@ -276,32 +276,19 @@ def _cmd_connect(args) -> None:
             sys.exit(1)
 
     from clawmetry.sync import generate_encryption_key
-    import hashlib as _hl_key, base64 as _b64_key
-
-    def _normalize_key(raw_key):
-        """If key is already a valid base64 AES key (16/24/32 bytes), use as-is.
-        Otherwise treat it as a passphrase and derive a 256-bit key via SHA-256."""
-        try:
-            decoded = _b64_key.urlsafe_b64decode(raw_key + "==")
-            if len(decoded) in (16, 24, 32):
-                return raw_key  # already valid
-        except Exception:
-            pass
-        # Derive 256-bit key from passphrase
-        derived = _hl_key.sha256(raw_key.encode()).digest()
-        return _b64_key.urlsafe_b64encode(derived).decode().rstrip('=')
 
     # Always prompt for encryption key — be transparent
+    # Store the raw passphrase as-is; normalization happens at encrypt/decrypt time
     print()
     print("🔐 Encryption key protects your data end-to-end.")
     if _saved_enc_key:
         masked = _saved_enc_key[:6] + '…' + _saved_enc_key[-4:]
         print(f"  Existing key: {masked}")
         custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
-        enc_key = _normalize_key(custom_key) if custom_key else _normalize_key(_saved_enc_key)
+        enc_key = custom_key if custom_key else _saved_enc_key
     else:
         custom_key = _input("  Enter a custom secret key (or press Enter to auto-generate): ").strip()
-        enc_key = _normalize_key(custom_key) if custom_key else generate_encryption_key()
+        enc_key = custom_key if custom_key else generate_encryption_key()
 
     config = {
         "api_key": api_key,
