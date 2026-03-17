@@ -428,3 +428,39 @@ class TestMemoryAnalytics:
         for f in d["files"]:
             assert_keys(f, "path", "sizeBytes", "sizeKB", "estTokens", "status")
             assert f["status"] in ("ok", "warning", "critical")
+
+
+# ---------------------------------------------------------------------------
+# Cost Attribution (GH #201)
+# ---------------------------------------------------------------------------
+
+class TestCostAttribution:
+    """Tests for per-plugin/tool cost attribution (GH #201)."""
+
+    def test_endpoint_accessible(self, api, base_url):
+        """Cost attribution endpoint returns 200."""
+        r = get(api, base_url, "/api/cost-attribution")
+        assert_ok(r)
+
+    def test_response_structure(self, api, base_url):
+        """Response has required top-level keys."""
+        d = assert_ok(get(api, base_url, "/api/cost-attribution"))
+        assert_keys(d, "categories", "tools", "totalCost", "totalTokens", "source")
+
+    def test_categories_structure(self, api, base_url):
+        """Each category entry has the expected fields."""
+        d = assert_ok(get(api, base_url, "/api/cost-attribution"))
+        for cat in d["categories"]:
+            assert_keys(cat, "name", "cost", "tokens", "turns", "percentage", "color")
+
+    def test_tools_structure(self, api, base_url):
+        """Each tool entry has the expected fields."""
+        d = assert_ok(get(api, base_url, "/api/cost-attribution"))
+        for tool in d["tools"]:
+            assert_keys(tool, "name", "category", "cost", "tokens", "calls")
+
+    def test_daily_present(self, api, base_url):
+        """Daily breakdown is present and has entries."""
+        d = assert_ok(get(api, base_url, "/api/cost-attribution"))
+        assert "daily" in d
+        assert isinstance(d["daily"], list)

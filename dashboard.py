@@ -2860,6 +2860,14 @@ function clawmetryLogout(){
   </div>
 </div>
 
+  <!-- Cost Attribution Section -->
+  <div class="section-title" style="margin-top:20px;">🔌 Cost Attribution by Tool Category</div>
+  <div class="card" id="cost-attribution-panel" style="min-height:60px;">
+    <div style="color:var(--text-muted);font-size:13px;">Loading attribution data...</div>
+  </div>
+  <div id="cost-attr-tools-detail" style="display:none;margin-top:8px;">
+    <div class="card" id="cost-attr-tools-table-wrap"></div>
+  </div>
 <!-- CRONS -->
 <div class="page" id="page-crons">
   <div class="refresh-bar">
@@ -7349,6 +7357,14 @@ function clawmetryLogout(){
   </div>
 </div>
 
+  <!-- Cost Attribution Section -->
+  <div class="section-title" style="margin-top:20px;">🔌 Cost Attribution by Tool Category</div>
+  <div class="card" id="cost-attribution-panel" style="min-height:60px;">
+    <div style="color:var(--text-muted);font-size:13px;">Loading attribution data...</div>
+  </div>
+  <div id="cost-attr-tools-detail" style="display:none;margin-top:8px;">
+    <div class="card" id="cost-attr-tools-table-wrap"></div>
+  </div>
 <!-- CRONS -->
 <div class="page" id="page-crons">
   <div class="refresh-bar">
@@ -10645,8 +10661,90 @@ async function loadUsage() {
     } else {
       otelExtra.style.display = 'none';
     }
+    // Load cost attribution panel
+    loadCostAttribution();
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
+  }
+}
+
+async function loadCostAttribution() {
+  var panel = document.getElementById('cost-attribution-panel');
+  if (!panel) return;
+  try {
+    var data = await fetch('/api/cost-attribution').then(function(r) { return r.json(); });
+    if (!data.categories || data.categories.length === 0) {
+      panel.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px;">No cost attribution data yet. Usage data will appear as sessions accumulate.</div>';
+      return;
+    }
+    function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+    function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
+
+    // Build SVG donut chart
+    var size = 180, cx = 90, cy = 90, r = 70, stroke = 24;
+    var total = data.categories.reduce(function(s, c) { return s + c.cost; }, 0) || 1;
+    var svgParts = ['<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">'];
+    var circumference = 2 * Math.PI * r;
+    var offset = 0;
+    data.categories.forEach(function(cat) {
+      var pct = cat.cost / total;
+      var dashLen = pct * circumference;
+      svgParts.push('<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="none" stroke="' + (cat.color || '#6b7280') + '" stroke-width="' + stroke + '" stroke-dasharray="' + dashLen + ' ' + (circumference - dashLen) + '" stroke-dashoffset="' + (-offset) + '" transform="rotate(-90 ' + cx + ' ' + cy + ')" />');
+      offset += dashLen;
+    });
+    svgParts.push('<text x="' + cx + '" y="' + (cy - 6) + '" text-anchor="middle" fill="var(--text-primary)" font-size="16" font-weight="700">' + fmtCost(data.totalCost) + '</text>');
+    svgParts.push('<text x="' + cx + '" y="' + (cy + 12) + '" text-anchor="middle" fill="var(--text-muted)" font-size="11">total</text>');
+    svgParts.push('</svg>');
+
+    // Build legend + table
+    var legendHtml = '';
+    data.categories.forEach(function(cat) {
+      legendHtml += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;">';
+      legendHtml += '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + (cat.color || '#6b7280') + ';flex-shrink:0;"></span>';
+      legendHtml += '<span style="flex:1;color:var(--text-primary);">' + cat.name + '</span>';
+      legendHtml += '<span style="color:var(--text-secondary);min-width:60px;text-align:right;">' + fmtCost(cat.cost) + '</span>';
+      legendHtml += '<span style="color:var(--text-muted);min-width:50px;text-align:right;">' + cat.percentage.toFixed(1) + '%</span>';
+      legendHtml += '</div>';
+    });
+
+    var html = '<div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;">';
+    html += '<div style="flex-shrink:0;">' + svgParts.join('') + '</div>';
+    html += '<div style="flex:1;min-width:200px;">';
+    html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;font-weight:600;">CATEGORY BREAKDOWN</div>';
+    html += legendHtml;
+    html += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border-primary);font-size:12px;color:var(--text-muted);">';
+    html += fmtTokens(data.totalTokens) + ' tokens across ' + data.categories.reduce(function(s,c){return s+c.turns;},0) + ' turns';
+    html += '</div>';
+    html += '</div></div>';
+    html += '<div style="margin-top:12px;text-align:center;">';
+    html += '<button onclick="toggleToolDetail()" style="background:none;border:1px solid var(--border-secondary);border-radius:6px;padding:4px 12px;color:var(--text-secondary);cursor:pointer;font-size:12px;">▶ Show per-tool breakdown</button>';
+    html += '</div>';
+    panel.innerHTML = html;
+
+    // Build per-tool detail table
+    var toolWrap = document.getElementById('cost-attr-tools-table-wrap');
+    if (toolWrap && data.tools.length > 0) {
+      var tHtml = '<table class="usage-table"><thead><tr><th>Tool</th><th>Category</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>';
+      data.tools.forEach(function(t) {
+        tHtml += '<tr><td><code style="font-size:12px;">' + t.name + '</code></td><td>' + t.category + '</td><td>' + t.calls + '</td><td>' + fmtTokens(t.tokens) + '</td><td>' + fmtCost(t.cost) + '</td></tr>';
+      });
+      tHtml += '</tbody></table>';
+      toolWrap.innerHTML = tHtml;
+    }
+  } catch(e) {
+    panel.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px;">Cost attribution unavailable</div>';
+  }
+}
+
+function toggleToolDetail() {
+  var el = document.getElementById('cost-attr-tools-detail');
+  if (!el) return;
+  if (el.style.display === 'none') {
+    el.style.display = '';
+    event.target.textContent = '▼ Hide per-tool breakdown';
+  } else {
+    el.style.display = 'none';
+    event.target.textContent = '▶ Show per-tool breakdown';
   }
 }
 
@@ -17438,6 +17536,168 @@ def api_usage_export():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ── Cost Attribution Cache ─────────────────────────────────────────────────
+_cost_attr_cache = {'data': None, 'ts': 0}
+_COST_ATTR_CACHE_TTL = 30  # seconds
+
+# Tool → Category mapping
+_TOOL_CATEGORIES = {
+    'read': 'File & Shell', 'write': 'File & Shell', 'edit': 'File & Shell', 'exec': 'File & Shell',
+    'web_search': 'Web Research', 'web_fetch': 'Web Research',
+    'browser': 'Browser Automation',
+    'message': 'Communication', 'tts': 'Communication',
+    'sessions_spawn': 'Sub-Agents', 'sessions_send': 'Sub-Agents', 'subagents': 'Sub-Agents',
+    'sessions_list': 'Sub-Agents', 'sessions_history': 'Sub-Agents',
+    'image': 'Media & Analysis', 'pdf': 'Media & Analysis', 'canvas': 'Media & Analysis',
+    'session_status': 'System', 'agents_list': 'System', 'nodes': 'System', 'process': 'System',
+}
+
+_CATEGORY_COLORS = {
+    'Reasoning': '#8b5cf6', 'File & Shell': '#10b981', 'Web Research': '#3b82f6',
+    'Browser Automation': '#f59e0b', 'Communication': '#ec4899', 'Sub-Agents': '#06b6d4',
+    'Media & Analysis': '#f97316', 'System': '#6b7280',
+}
+
+
+@bp_usage.route('/api/cost-attribution')
+def api_cost_attribution():
+    """Per-plugin/tool cost attribution from session JSONL files."""
+    import time as _time
+    now = _time.time()
+    if _cost_attr_cache['data'] is not None and (now - _cost_attr_cache['ts']) < _COST_ATTR_CACHE_TTL:
+        return jsonify(_cost_attr_cache['data'])
+
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.moltbot/agents/main/sessions')
+    cat_cost = {}      # category -> cost
+    cat_tokens = {}    # category -> tokens
+    cat_turns = {}     # category -> turns
+    tool_cost = {}     # tool_name -> cost
+    tool_tokens = {}   # tool_name -> tokens
+    tool_calls = {}    # tool_name -> call count
+    daily_cats = {}    # date -> {category -> cost}
+
+    if os.path.isdir(sessions_dir):
+        for fname in os.listdir(sessions_dir):
+            if not fname.endswith('.jsonl'):
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            try:
+                with open(fpath, 'r') as f:
+                    for line in f:
+                        try:
+                            obj = json.loads(line.strip())
+                            if obj.get('type') != 'message':
+                                continue
+                            message = obj.get('message', {})
+                            if message.get('role') != 'assistant':
+                                continue
+                            usage = message.get('usage')
+                            if not usage or not isinstance(usage, dict):
+                                continue
+
+                            cost_data = usage.get('cost', {})
+                            total_cost = float(cost_data.get('total', 0)) if isinstance(cost_data, dict) else 0.0
+                            total_tokens = usage.get('totalTokens', 0) or 0
+
+                            # Extract tool names from content
+                            content = message.get('content', [])
+                            tools_in_turn = []
+                            if isinstance(content, list):
+                                for item in content:
+                                    if isinstance(item, dict) and item.get('type') == 'toolCall':
+                                        tname = item.get('name', 'unknown')
+                                        tools_in_turn.append(tname)
+
+                            # Get date
+                            ts = obj.get('timestamp')
+                            day = None
+                            if ts:
+                                try:
+                                    if isinstance(ts, str):
+                                        dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                                    else:
+                                        dt = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
+                                    day = dt.strftime('%Y-%m-%d')
+                                except Exception:
+                                    pass
+
+                            if tools_in_turn:
+                                share = 1.0 / len(tools_in_turn)
+                                cost_per = total_cost * share
+                                tokens_per = total_tokens * share
+                                for tname in tools_in_turn:
+                                    cat = _TOOL_CATEGORIES.get(tname, 'Other')
+                                    cat_cost[cat] = cat_cost.get(cat, 0) + cost_per
+                                    cat_tokens[cat] = cat_tokens.get(cat, 0) + tokens_per
+                                    cat_turns[cat] = cat_turns.get(cat, 0) + share
+                                    tool_cost[tname] = tool_cost.get(tname, 0) + cost_per
+                                    tool_tokens[tname] = tool_tokens.get(tname, 0) + tokens_per
+                                    tool_calls[tname] = tool_calls.get(tname, 0) + 1
+                                    if day:
+                                        daily_cats.setdefault(day, {})
+                                        daily_cats[day][cat] = daily_cats[day].get(cat, 0) + cost_per
+                            else:
+                                cat = 'Reasoning'
+                                cat_cost[cat] = cat_cost.get(cat, 0) + total_cost
+                                cat_tokens[cat] = cat_tokens.get(cat, 0) + total_tokens
+                                cat_turns[cat] = cat_turns.get(cat, 0) + 1
+                                if day:
+                                    daily_cats.setdefault(day, {})
+                                    daily_cats[day][cat] = daily_cats[day].get(cat, 0) + total_cost
+
+                        except (json.JSONDecodeError, ValueError, KeyError):
+                            continue
+            except Exception:
+                continue
+
+    grand_cost = sum(cat_cost.values()) or 1e-9
+    grand_tokens = sum(cat_tokens.values())
+
+    categories = sorted([
+        {
+            'name': name,
+            'cost': round(cat_cost.get(name, 0), 4),
+            'tokens': int(cat_tokens.get(name, 0)),
+            'turns': int(cat_turns.get(name, 0)),
+            'percentage': round(cat_cost.get(name, 0) / grand_cost * 100, 1),
+            'color': _CATEGORY_COLORS.get(name, '#6b7280'),
+        }
+        for name in set(list(cat_cost.keys()))
+    ], key=lambda x: -x['cost'])
+
+    tools = sorted([
+        {
+            'name': name,
+            'category': _TOOL_CATEGORIES.get(name, 'Other'),
+            'cost': round(tool_cost.get(name, 0), 4),
+            'tokens': int(tool_tokens.get(name, 0)),
+            'calls': tool_calls.get(name, 0),
+        }
+        for name in tool_cost
+    ], key=lambda x: -x['cost'])
+
+    # Last 14 days of daily breakdown
+    today = datetime.now()
+    daily = []
+    for i in range(13, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime('%Y-%m-%d')
+        daily.append({'date': ds, 'categories': daily_cats.get(ds, {})})
+
+    result = {
+        'categories': categories,
+        'tools': tools,
+        'daily': daily,
+        'totalCost': round(sum(cat_cost.values()), 4),
+        'totalTokens': int(grand_tokens),
+        'source': 'transcripts',
+    }
+    _cost_attr_cache['data'] = result
+    _cost_attr_cache['ts'] = _time.time()
+    return jsonify(result)
+
 
 @bp_sessions.route('/api/transcripts')
 def api_transcripts():
