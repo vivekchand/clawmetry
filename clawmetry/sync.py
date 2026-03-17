@@ -30,7 +30,8 @@ LOG_FILE    = CONFIG_DIR / "sync.log"
 
 POLL_INTERVAL = 15    # seconds between sync cycles
 STREAM_INTERVAL = 2   # seconds between real-time stream pushes
-BATCH_SIZE    = 10    # events per encrypted POST
+BATCH_SIZE    = 200   # events per encrypted POST (was 10; fewer HTTP requests = faster sync)
+MAX_EVENTS_PER_CYCLE = 5000  # cap per sync cycle so initial sync doesn't block the main loop
 
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 log = logging.getLogger("clawmetry-sync")
@@ -428,8 +429,14 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
         except Exception:
             pass
 
-    jsonl_files = sorted(glob.glob(os.path.join(sessions_dir, "*.jsonl")))
+    jsonl_files = glob.glob(os.path.join(sessions_dir, "*.jsonl"))
+    # Sort newest-first so recent sessions sync before old ones
+    jsonl_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+
     for fpath in jsonl_files:
+        if total >= MAX_EVENTS_PER_CYCLE:
+            break  # continue next cycle; progress is saved per-file
+
         fname    = os.path.basename(fpath)
         last_line = last_ids.get(fname, 0)
         batch: list[dict] = []
@@ -440,28 +447,36 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
                 all_lines = f.readlines()
 
             new_lines = all_lines[last_line:]
+            line_cursor = last_line
             for i, raw in enumerate(new_lines, start=last_line):
                 raw = raw.strip()
                 if not raw:
+                    line_cursor = i + 1
                     continue
                 try:
                     obj = json.loads(raw)
                 except Exception:
+                    line_cursor = i + 1
                     continue
 
                 # Full content — encrypted before leaving machine
                 batch.append(obj)
+                line_cursor = i + 1
 
                 if len(batch) >= BATCH_SIZE:
                     _flush_session_batch(batch, fname, api_key, enc_key, node_id, subagent_id)
                     total += len(batch)
                     batch = []
+                    # Save progress after each batch so restarts don't re-upload
+                    last_ids[fname] = line_cursor
+                    if total >= MAX_EVENTS_PER_CYCLE:
+                        break
 
             if batch:
                 _flush_session_batch(batch, fname, api_key, enc_key, node_id, subagent_id)
                 total += len(batch)
 
-            last_ids[fname] = len(all_lines)
+            last_ids[fname] = len(all_lines) if total < MAX_EVENTS_PER_CYCLE else line_cursor
 
         except Exception as e:
             log.warning(f"Session sync error ({fname}): {e}")
@@ -1665,6 +1680,7 @@ def run_daemon() -> None:
             log.warning(f"  Memory sync error: {e}")
         try:
             ev = sync_sessions(config, state, paths)
+            save_state(state)  # persist progress so restarts don't re-upload
             log.info(f"  Sessions: {ev} events synced")
         except Exception as e:
             log.warning(f"  Session sync error: {e}")
