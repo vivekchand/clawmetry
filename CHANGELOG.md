@@ -1,3 +1,9 @@
+## [0.12.52] — 2026-03-17
+
+### Improved
+- Always show encryption key prompt during onboard and connect (full transparency)
+- Existing key shown masked with option to keep or replace
+
 ## [0.12.51] — 2026-03-17
 
 ### Added
