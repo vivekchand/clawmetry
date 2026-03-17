@@ -1,3 +1,8 @@
+## [0.12.53] — 2026-03-17
+
+### Fixed
+- NameError crash on encryption key prompt (`_input` not defined in `_cmd_connect`)
+
 ## [0.12.52] — 2026-03-17
 
 ### Improved
