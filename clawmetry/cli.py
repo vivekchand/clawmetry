@@ -262,7 +262,16 @@ def _cmd_connect(args) -> None:
 
     from clawmetry.sync import generate_encryption_key
     # Reuse existing encryption key on reconnect (only generate new on first connect)
-    enc_key = _saved_enc_key or generate_encryption_key()
+    if _saved_enc_key:
+        enc_key = _saved_enc_key
+    else:
+        print()
+        print("🔐 Encryption key protects your data end-to-end.")
+        custom_key = _input("  Enter a custom secret key (or press Enter to auto-generate): ").strip()
+        if custom_key:
+            enc_key = custom_key
+        else:
+            enc_key = generate_encryption_key()
 
     config = {
         "api_key": api_key,
