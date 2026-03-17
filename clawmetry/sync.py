@@ -74,10 +74,24 @@ def generate_encryption_key() -> str:
     return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
 
 
+def _normalize_encryption_key(key_str: str) -> str:
+    """Ensure key is a valid base64url AES key. If not, derive one via SHA-256."""
+    import hashlib as _hl_norm
+    try:
+        raw = base64.urlsafe_b64decode(key_str + "==")
+        if len(raw) in (16, 24, 32):
+            return key_str
+    except Exception:
+        pass
+    derived = _hl_norm.sha256(key_str.encode()).digest()
+    return base64.urlsafe_b64encode(derived).decode().rstrip('=')
+
+
 def _get_aesgcm(key_b64: str):
-    """Return an AESGCM cipher from a base64url key."""
+    """Return an AESGCM cipher from a base64url key (auto-derives if passphrase)."""
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        key_b64 = _normalize_encryption_key(key_b64)
         raw = base64.urlsafe_b64decode(key_b64 + "==")
         return AESGCM(raw)
     except ImportError:
