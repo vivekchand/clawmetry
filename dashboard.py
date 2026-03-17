@@ -1556,7 +1556,10 @@ DASHBOARD_HTML = r"""
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; }
   /* Brain tab */
-  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; }
+  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
+  .brain-event:hover { background:rgba(255,255,255,0.02); }
+  .brain-event.expanded { flex-wrap:wrap; }
+  .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; }
   .brain-time { color:var(--text-muted); min-width:70px; }
   .brain-source { min-width:120px; max-width:200px; font-weight:600; word-break:break-all; flex-shrink:0; }
   .brain-type { padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; min-width:60px; text-align:center; display:inline-block; }
@@ -1570,7 +1573,7 @@ DASHBOARD_HTML = r"""
   .badge-done { background:rgba(34,197,94,0.2); color:#22c55e; }
   .badge-error { background:rgba(239,68,68,0.2); color:#ef4444; }
   .badge-tool { background:rgba(148,163,184,0.2); color:#94a3b8; }
-  .brain-detail { color:var(--text-secondary); flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .brain-detail { color:var(--text-secondary); flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; word-break:break-all; }
     .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
@@ -5996,7 +5999,10 @@ DASHBOARD_HTML = r"""
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; }
   /* Brain tab */
-  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; }
+  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
+  .brain-event:hover { background:rgba(255,255,255,0.02); }
+  .brain-event.expanded { flex-wrap:wrap; }
+  .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; }
   .brain-time { color:var(--text-muted); min-width:70px; }
   .brain-source { min-width:120px; max-width:200px; font-weight:600; word-break:break-all; flex-shrink:0; }
   .brain-type { padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; min-width:60px; text-align:center; display:inline-block; }
@@ -6010,7 +6016,7 @@ DASHBOARD_HTML = r"""
   .badge-done { background:rgba(34,197,94,0.2); color:#22c55e; }
   .badge-error { background:rgba(239,68,68,0.2); color:#ef4444; }
   .badge-tool { background:rgba(148,163,184,0.2); color:#94a3b8; }
-  .brain-detail { color:var(--text-secondary); flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .brain-detail { color:var(--text-secondary); flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; word-break:break-all; }
     .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
@@ -8911,7 +8917,7 @@ function renderBrainStream(events) {
     var color = ev.color || brainSourceColor(ev.source || 'main');
     var evType = ev.type || 'TOOL';
     var icon = _brainTypeIcons[evType] || '🔧';
-    html += '<div class="brain-event">';
+    html += '<div class="brain-event" onclick="this.classList.toggle(\'expanded\')">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
     html += '<span class="brain-source" style="color:' + color + ';flex-shrink:0;">' + escHtml(ev.sourceLabel || ev.source || 'main') + '</span>';
     html += '<span class="brain-type" style="background:rgba(100,100,100,0.15);color:' + color + ';padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;min-width:70px;text-align:center;display:inline-block;white-space:nowrap;">' + icon + ' ' + escHtml(evType) + '</span>';
