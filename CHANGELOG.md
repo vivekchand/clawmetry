@@ -1,3 +1,8 @@
+## [0.12.55] — 2026-03-17
+
+### Fixed
+- Store raw passphrase in config instead of derived hash (show what the user typed, not gibberish)
+
 ## [0.12.54] — 2026-03-17
 
 ### Fixed
