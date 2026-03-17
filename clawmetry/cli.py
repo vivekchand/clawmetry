@@ -213,6 +213,21 @@ def _verify_key_ownership(api_key: str) -> None:
 
 def _cmd_connect(args) -> None:
     """clawmetry connect — validate key, save config, start daemon."""
+    # Support piped stdin (curl | bash) — read from /dev/tty if needed
+    _tty = None
+    if not sys.stdin.isatty():
+        try:
+            _tty = open('/dev/tty', 'r')
+        except OSError:
+            pass
+
+    def _input(prompt):
+        if _tty is not None:
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            return _tty.readline().rstrip('\n')
+        return input(prompt)
+
     # Read existing config BEFORE stopping daemon (preserve node_id + encryption_key)
     _saved_node_id = ''
     _saved_enc_key = ''
