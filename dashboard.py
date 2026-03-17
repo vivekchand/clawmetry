@@ -20338,12 +20338,20 @@ def _scan_security_posture():
 
     Returns a list of checks with pass/fail/warn status, remediation hints,
     and an overall A-F security score.
+
+    Supports three config detection strategies:
+    1. Local filesystem (native install)
+    2. Docker container (reads config via docker exec/cp)
+    3. Live gateway API (works for any deployment, including Hostinger/VPS Docker)
     """
     checks = []
+    is_docker = False
 
     # --- Locate openclaw.json config ---
     config_data = None
     config_path = None
+
+    # Strategy 1: Local filesystem
     for cf in [
         os.path.expanduser('~/.openclaw/openclaw.json'),
         os.path.expanduser('~/.clawdbot/openclaw.json'),
@@ -20357,16 +20365,95 @@ def _scan_security_posture():
         except Exception:
             continue
 
+    # Strategy 2: Docker container (if not found locally)
+    if config_data is None:
+        try:
+            import subprocess as _sp
+            # Find OpenClaw containers
+            out = _sp.run(
+                ["docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}"],
+                capture_output=True, text=True, timeout=5)
+            if out.returncode == 0:
+                for line in out.stdout.strip().splitlines():
+                    parts = line.split("\t")
+                    if len(parts) < 3:
+                        continue
+                    cid, name, image = parts[0], parts[1], parts[2]
+                    if not any(k in (name + image).lower() for k in ["openclaw", "clawd", "claw"]):
+                        continue
+                    # Try to read config from inside container
+                    for container_path in [
+                        "/root/.openclaw/openclaw.json",
+                        "/home/node/.openclaw/openclaw.json",
+                        "/data/openclaw.json",
+                        "/app/openclaw.json",
+                    ]:
+                        try:
+                            cat_out = _sp.run(
+                                ["docker", "exec", cid, "cat", container_path],
+                                capture_output=True, text=True, timeout=5)
+                            if cat_out.returncode == 0 and cat_out.stdout.strip():
+                                config_data = json.loads(cat_out.stdout)
+                                config_path = f"docker:{cid[:12]}:{container_path}"
+                                is_docker = True
+                                break
+                        except Exception:
+                            continue
+                    if config_data:
+                        break
+        except (FileNotFoundError, Exception):
+            pass  # Docker not available
+
+    # Strategy 3: Live gateway API (works for any deployment including remote Docker)
+    if config_data is None:
+        try:
+            gw_cfg = _load_gw_config()
+            gw_url = gw_cfg.get('url', GATEWAY_URL)
+            gw_token = gw_cfg.get('token', GATEWAY_TOKEN)
+            if gw_url and gw_token:
+                import urllib.request
+                req = urllib.request.Request(
+                    f"{gw_url}/api/config",
+                    headers={"Authorization": f"Bearer {gw_token}", "Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    if resp.status == 200:
+                        config_data = json.loads(resp.read().decode())
+                        config_path = f"gateway:{gw_url}"
+                        # Check if gateway reports Docker environment
+                        runtime = config_data.get('runtime', {})
+                        if runtime.get('container') or os.path.exists('/.dockerenv'):
+                            is_docker = True
+        except Exception:
+            pass
+
     if config_data is None:
         return {
             'score': 'U',
             'score_label': 'Unknown',
             'score_color': '#64748b',
             'checks': [{'id': 'config_found', 'label': 'Configuration file', 'status': 'fail',
-                         'detail': 'No openclaw.json found', 'remediation': 'Ensure OpenClaw is installed and configured.',
+                         'detail': 'No openclaw.json found (checked local files, Docker containers, and gateway API)',
+                         'remediation': 'Ensure OpenClaw is installed and configured. For Docker: verify the container is running. For remote: configure GATEWAY_URL and GATEWAY_TOKEN.',
                          'severity': 'critical', 'weight': 20}],
             'passed': 0, 'failed': 1, 'warnings': 0, 'total': 1,
         }
+
+    # Config found — add pass check with source info
+    source_label = 'local file' if not config_path.startswith(('docker:', 'gateway:')) else (
+        'Docker container' if config_path.startswith('docker:') else 'gateway API')
+    checks.append({
+        'id': 'config_found', 'label': 'Configuration file', 'status': 'pass',
+        'detail': f'Config loaded from {source_label} ({config_path})',
+        'remediation': None, 'severity': 'critical', 'weight': 20,
+    })
+
+    # Docker-specific checks
+    if is_docker:
+        checks.append({
+            'id': 'docker_isolation', 'label': 'Container isolation', 'status': 'pass',
+            'detail': 'OpenClaw is running inside a Docker container (network/filesystem isolation).',
+            'remediation': None, 'severity': 'high', 'weight': 5,
+        })
 
     gateway = config_data.get('gateway', {})
     plugins = config_data.get('plugins', {})
@@ -20406,8 +20493,15 @@ def _scan_security_posture():
             })
 
     # Check 3: Gateway bind address (should be localhost, not 0.0.0.0)
+    # In Docker, binding to 0.0.0.0 is expected (Docker manages port exposure)
     bind_host = gateway.get('host') or gateway.get('bind') or '127.0.0.1'
-    if bind_host in ('0.0.0.0', '::'):
+    if bind_host in ('0.0.0.0', '::') and is_docker:
+        checks.append({
+            'id': 'bind_address', 'label': 'Gateway bind address', 'status': 'pass',
+            'detail': 'Gateway binds to {} inside Docker container (Docker manages network exposure via port mapping).'.format(bind_host),
+            'remediation': None, 'severity': 'critical', 'weight': 20,
+        })
+    elif bind_host in ('0.0.0.0', '::'):
         checks.append({
             'id': 'bind_address', 'label': 'Gateway bind address', 'status': 'fail',
             'detail': 'Gateway binds to {} (all interfaces). Exposed to the network.'.format(bind_host),
@@ -20454,6 +20548,13 @@ def _scan_security_posture():
             'id': 'tls_enabled', 'label': 'TLS encryption', 'status': 'pass',
             'detail': 'TLS is configured for the gateway.',
             'remediation': None, 'severity': 'high', 'weight': 10,
+        })
+    elif bind_host in ('0.0.0.0', '::') and is_docker:
+        checks.append({
+            'id': 'tls_enabled', 'label': 'TLS encryption', 'status': 'warn',
+            'detail': 'No TLS configured on gateway (Docker). TLS is typically handled by the hosting provider or reverse proxy.',
+            'remediation': 'Verify your hosting provider (Hostinger, etc.) or reverse proxy terminates TLS before reaching the container.',
+            'severity': 'high', 'weight': 10,
         })
     elif bind_host in ('0.0.0.0', '::'):
         checks.append({
@@ -20591,6 +20692,7 @@ def _scan_security_posture():
         'warnings': warnings,
         'total': len(checks),
         'config_path': config_path,
+        'is_docker': is_docker,
         'scanned_at': datetime.now().isoformat(),
     }
 
