@@ -1,3 +1,10 @@
+## [0.12.51] — 2026-03-17
+
+### Added
+- Prompt for custom encryption key during `clawmetry connect` (press Enter to auto-generate)
+
+---
+
 ## [0.12.45] — 2026-03-15
 
 ### Fixed
