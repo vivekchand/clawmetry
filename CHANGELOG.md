@@ -1,3 +1,8 @@
+## [0.12.56] — 2026-03-17
+
+### Fixed
+- Initial sync no longer hangs on large session directories (batch size 10 → 200, 5K event cap per cycle, newest-first, incremental state saving)
+
 ## [0.12.55] — 2026-03-17
 
 ### Fixed
