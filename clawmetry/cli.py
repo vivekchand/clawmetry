@@ -261,18 +261,17 @@ def _cmd_connect(args) -> None:
             sys.exit(1)
 
     from clawmetry.sync import generate_encryption_key
-    _fresh_onboard = getattr(args, '_fresh_onboard', False)
-    # On fresh onboard: always prompt. On reconnect: reuse existing key silently.
-    if _saved_enc_key and not _fresh_onboard:
-        enc_key = _saved_enc_key
+    # Always prompt for encryption key — be transparent
+    print()
+    print("🔐 Encryption key protects your data end-to-end.")
+    if _saved_enc_key:
+        masked = _saved_enc_key[:6] + '…' + _saved_enc_key[-4:]
+        print(f"  Existing key: {masked}")
+        custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
+        enc_key = custom_key if custom_key else _saved_enc_key
     else:
-        print()
-        print("🔐 Encryption key protects your data end-to-end.")
         custom_key = _input("  Enter a custom secret key (or press Enter to auto-generate): ").strip()
-        if custom_key:
-            enc_key = custom_key
-        else:
-            enc_key = _saved_enc_key or generate_encryption_key()
+        enc_key = custom_key if custom_key else generate_encryption_key()
 
     config = {
         "api_key": api_key,
@@ -548,7 +547,7 @@ def _cmd_onboard(args) -> None:
     if choice in ('y', 'yes'):
         print()
         import argparse as _ap
-        _fake_args = _ap.Namespace(key=None, foreground=False, custom_node_id=None, _fresh_onboard=True)
+        _fake_args = _ap.Namespace(key=None, foreground=False, custom_node_id=None)
         _cmd_connect(_fake_args)
 
         print(f"\n  {BOLD('All done!')}\n")
