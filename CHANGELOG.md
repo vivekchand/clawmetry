@@ -1,3 +1,9 @@
+## [0.12.54] — 2026-03-17
+
+### Fixed
+- Support arbitrary passphrases as encryption keys (auto-derives 256-bit AES key via SHA-256)
+- Existing configs with raw passphrases self-heal on next sync
+
 ## [0.12.53] — 2026-03-17
 
 ### Fixed
