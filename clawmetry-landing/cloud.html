@@ -299,11 +299,11 @@
 
     <!-- Social proof (dynamic from /api/hero-stats) -->
     <div style="display:flex;justify-content:center;gap:24px;flex-wrap:wrap;margin-top:40px;">
-      <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:8px 16px;">
+      <a href="https://clickpy.clickhouse.com/dashboard/clawmetry" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:8px 16px;text-decoration:none;transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(229,68,58,0.3)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'">
         <span style="font-size:18px;">📦</span>
         <span id="cloud-downloads-val" style="font-size:14px;font-weight:700;color:#E2E8F0;">...</span>
         <span style="font-size:13px;color:#64748B;">installs</span>
-      </div>
+      </a>
       <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:8px 16px;">
         <span style="font-size:18px;">🌍</span>
         <span id="cloud-countries-val" style="font-size:14px;font-weight:700;color:#E2E8F0;">...</span>
@@ -326,7 +326,7 @@
       if(d.stars){var el=document.getElementById('cloud-stars-val');if(el)el.textContent=d.stars;}
       if(d.countries){var el=document.getElementById('cloud-countries-val');if(el)el.textContent=Math.max(50,parseInt(d.countries,10))+'+';}
     }).catch(function(){
-      var el=document.getElementById('cloud-downloads-val');if(el)el.textContent='56k+';
+      var el=document.getElementById('cloud-downloads-val');if(el)el.textContent='75k+';
       var el2=document.getElementById('cloud-countries-val');if(el2)el2.textContent='100+';
       var el3=document.getElementById('cloud-stars-val');if(el3)el3.textContent='149';
     });

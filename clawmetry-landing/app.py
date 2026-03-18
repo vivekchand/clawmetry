@@ -2360,13 +2360,13 @@ def api_hero_stats():
         daily = _load_daily_stats()
         if daily:
             if "downloads" not in result:
-                result["downloads"] = daily.get("downloads", "56k")
+                result["downloads"] = daily.get("downloads", "75k")
                 result["downloads_exact"] = daily.get("downloads_exact", 56000)
             if "countries" not in result:
                 result["countries"] = daily.get("countries", "100")
             log.info("[hero-stats] using daily cache for missing fields")
     if "downloads" not in result:
-        result["downloads"] = "56k"
+        result["downloads"] = "75k"
         result["downloads_exact"] = 56000
     if "countries" not in result:
         result["countries"] = "100"
