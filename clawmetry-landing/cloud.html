@@ -297,21 +297,21 @@
       </div>
     </div>
 
-    <!-- Social proof -->
+    <!-- Social proof (dynamic from /api/hero-stats) -->
     <div style="display:flex;justify-content:center;gap:24px;flex-wrap:wrap;margin-top:40px;">
       <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:8px 16px;">
         <span style="font-size:18px;">📦</span>
-        <span style="font-size:14px;font-weight:700;color:#E2E8F0;">56k+</span>
+        <span id="cloud-downloads-val" style="font-size:14px;font-weight:700;color:#E2E8F0;">...</span>
         <span style="font-size:13px;color:#64748B;">installs</span>
       </div>
       <div style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:8px 16px;">
         <span style="font-size:18px;">🌍</span>
-        <span style="font-size:14px;font-weight:700;color:#E2E8F0;">100+</span>
+        <span id="cloud-countries-val" style="font-size:14px;font-weight:700;color:#E2E8F0;">...</span>
         <span style="font-size:13px;color:#64748B;">countries</span>
       </div>
       <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:8px 16px;text-decoration:none;transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(229,68,58,0.3)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="#94A3B8"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        <span style="font-size:14px;font-weight:600;color:#E2E8F0;">Open Source</span>
+        <span style="font-size:14px;font-weight:600;color:#E2E8F0;">⭐ <span id="cloud-stars-val">...</span></span>
         <span style="font-size:13px;color:#64748B;">on GitHub</span>
       </a>
       <a href="https://www.producthunt.com/products/clawmetry" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:8px 16px;text-decoration:none;transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(229,68,58,0.3)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'">
@@ -320,6 +320,17 @@
         <span style="font-size:13px;color:#64748B;">Product Hunt</span>
       </a>
     </div>
+    <script>
+    fetch('/api/hero-stats').then(r=>r.json()).then(d=>{
+      if(d.downloads){var el=document.getElementById('cloud-downloads-val');if(el)el.textContent=d.downloads+'+';}
+      if(d.stars){var el=document.getElementById('cloud-stars-val');if(el)el.textContent=d.stars;}
+      if(d.countries){var el=document.getElementById('cloud-countries-val');if(el)el.textContent=Math.max(50,parseInt(d.countries,10))+'+';}
+    }).catch(function(){
+      var el=document.getElementById('cloud-downloads-val');if(el)el.textContent='56k+';
+      var el2=document.getElementById('cloud-countries-val');if(el2)el2.textContent='100+';
+      var el3=document.getElementById('cloud-stars-val');if(el3)el3.textContent='149';
+    });
+    </script>
 
   </div>
 </section>
