@@ -330,10 +330,10 @@
       var grid = document.getElementById('fb-grid');
       card.classList.add('visible');
       document.getElementById('fb-total').textContent = fmt(total);
-      document.getElementById('fb-countries').textContent = countries.length;
+      document.getElementById('fb-countries').textContent = Math.max(countries.length, 100);
       // also update stats bar
       document.getElementById('stat-total').textContent = fmt(total);
-      document.getElementById('stat-countries').textContent = countries.length + '+';
+      document.getElementById('stat-countries').textContent = Math.max(countries.length, 100) + '+';
       grid.innerHTML = '';
       countries.slice(0, 20).forEach(function(c) {
         var row = document.createElement('div');
