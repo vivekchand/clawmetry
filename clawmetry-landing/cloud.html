@@ -374,27 +374,86 @@
   <h2 class="section-title">Up and running in two commands</h2>
   <p class="section-sub">Install ClawMetry, connect your node. That's it.</p>
 
-  <div class="terminal">
-    <div class="terminal-bar">
-      <div class="terminal-dot red"></div>
-      <div class="terminal-dot yellow"></div>
-      <div class="terminal-dot green"></div>
-      <span style="margin-left:8px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-dim);">terminal</span>
-    </div>
-    <div class="terminal-body">
-      <div class="t-comment"># Install ClawMetry</div>
-      <div><span class="t-prompt">$ </span><span class="t-cmd">curl -fsSL https://clawmetry.com/install.sh | bash</span> <span style="color:rgba(255,255,255,0.25);font-size:13px;">or pip install clawmetry</span></div>
-      <div style="margin-top:4px;" class="t-comment"># Connect your node to the cloud</div>
-      <div><span class="t-prompt">$ </span><span class="t-cmd">clawmetry connect</span></div>
-      <div style="margin-top:8px;padding:10px 14px;background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.15);border-radius:8px;font-size:13px;">
-        <span class="t-out">✓ Node connected.</span> <span class="t-dim">Opening app.clawmetry.com...</span>
+<div style="max-width:680px;margin:0 auto;background:linear-gradient(180deg, #141922 0%, #0d1117 100%);border:1px solid rgba(255,255,255,0.08);border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <div style="display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);gap:12px;">
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          <div style="width:12px;height:12px;border-radius:50%;background:#ff5f57;"></div>
+          <div style="width:12px;height:12px;border-radius:50%;background:#febc2e;"></div>
+          <div style="width:12px;height:12px;border-radius:50%;background:#28c840;"></div>
+        </div>
+        <div style="display:flex;gap:2px;margin-left:8px;flex-wrap:wrap;">
+          <button onclick="showCloudTab('oneliner')" id="ctab-oneliner" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#28c840;color:#000;font-family:'JetBrains Mono',monospace;transition:all 0.15s;">One-liner</button>
+          <button onclick="showCloudTab('pip')" id="ctab-pip" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">pip</button>
+          <button onclick="showCloudTab('powershell')" id="ctab-powershell" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">PowerShell</button>
+          <button onclick="showCloudTab('cmd')" id="ctab-cmd" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">CMD</button>
+          <button onclick="showCloudTab('macos')" id="ctab-macos" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">macOS</button>
+        </div>
+        <div style="margin-left:auto;display:flex;align-items:center;">
+          <button id="cloud-copy-btn" onclick="copyCloudCmd()" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:rgba(255,255,255,0.5);cursor:pointer;padding:5px 8px;display:flex;align-items:center;transition:all 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.06)'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+        </div>
+      </div>
+      <div style="padding:20px 24px;font-family:'JetBrains Mono',monospace;font-size:14px;line-height:2;">
+        <div id="cpanel-oneliner">
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Install + connect to cloud</div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">curl -fsSL https://clawmetry.com/install.sh | bash</span></div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">clawmetry connect</span></div>
+          <div style="margin-top:6px;padding:8px 12px;background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.15);border-radius:6px;font-size:13px;"><span style="color:#34D399;">&#10003; Node connected.</span> <span style="color:#64748B;">Opening app.clawmetry.com...</span></div>
+        </div>
+        <div id="cpanel-pip" style="display:none;">
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Install + connect to cloud</div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">pip install clawmetry</span></div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">clawmetry connect</span></div>
+          <div style="margin-top:6px;padding:8px 12px;background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.15);border-radius:6px;font-size:13px;"><span style="color:#34D399;">&#10003; Node connected.</span> <span style="color:#64748B;">Opening app.clawmetry.com...</span></div>
+        </div>
+        <div id="cpanel-powershell" style="display:none;">
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Install + connect to cloud</div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">iwr -useb https://clawmetry.com/install.ps1 | iex</span></div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">clawmetry connect</span></div>
+          <div style="margin-top:6px;padding:8px 12px;background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.15);border-radius:6px;font-size:13px;"><span style="color:#34D399;">&#10003; Node connected.</span> <span style="color:#64748B;">Opening app.clawmetry.com...</span></div>
+        </div>
+        <div id="cpanel-cmd" style="display:none;">
+          <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Install + connect to cloud</div>
+          <div><span style="color:rgba(255,255,255,0.4);">&gt; </span><span style="color:#28c840;">pip install clawmetry</span></div>
+          <div><span style="color:rgba(255,255,255,0.4);">&gt; </span><span style="color:#28c840;">clawmetry connect</span></div>
+          <div style="margin-top:6px;padding:8px 12px;background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.15);border-radius:6px;font-size:13px;"><span style="color:#34D399;">&#10003; Node connected.</span> <span style="color:#64748B;">Opening app.clawmetry.com...</span></div>
+        </div>
+        <div id="cpanel-macos" style="display:none;text-align:center;padding:8px 0 4px;">
+          <div style="font-size:17px;font-weight:700;color:#fff;margin-bottom:8px;">ClawMetry for Mac</div>
+          <div style="font-size:13px;color:rgba(255,255,255,0.45);margin-bottom:20px;line-height:1.6;">Native menubar app. Download and it guides you through setup.</div>
+          <a href="/mac" style="display:inline-flex;align-items:center;gap:10px;padding:13px 32px;background:#E5443A;color:#fff;border-radius:30px;font-size:15px;font-weight:700;text-decoration:none;transition:opacity 0.15s;" onmouseover="this.style.opacity='0.88'" onmouseout="this.style.opacity='1'"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download for macOS</a>
+          <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:14px;font-family:'JetBrains Mono',monospace;">Requires macOS 14+ &nbsp;&middot;&nbsp; Apple Silicon + Intel</div>
+        </div>
       </div>
     </div>
-  </div>
-
-  <p style="text-align:center;color:var(--text-dim);font-size:13px;margin-top:18px;">
-    Opens <strong style="color:var(--text-muted);">app.clawmetry.com</strong> with your node connected and live data streaming in.
-  </p>
+    <p style="text-align:center;color:var(--text-dim);font-size:13px;margin-top:16px;">macOS, Linux, Windows. Two commands to full cloud visibility.</p>
+    <script>
+    var cloudCmds = {
+      oneliner: 'curl -fsSL https://clawmetry.com/install.sh | bash && clawmetry connect',
+      pip: 'pip install clawmetry && clawmetry connect',
+      powershell: 'iwr -useb https://clawmetry.com/install.ps1 | iex; clawmetry connect',
+      cmd: 'pip install clawmetry && clawmetry connect'
+    };
+    var cloudActiveTab = 'oneliner';
+    function showCloudTab(id) {
+      cloudActiveTab = id;
+      ['oneliner','pip','powershell','cmd','macos'].forEach(function(t) {
+        var panel = document.getElementById('cpanel-'+t);
+        if(panel) panel.style.display = t===id ? 'block' : 'none';
+        var tab = document.getElementById('ctab-'+t);
+        if(tab) {
+          tab.style.background = t===id ? '#28c840' : 'transparent';
+          tab.style.color = t===id ? '#000' : 'rgba(255,255,255,0.5)';
+          tab.style.fontWeight = t===id ? '600' : '500';
+        }
+      });
+    }
+    function copyCloudCmd() {
+      var cmd = cloudCmds[cloudActiveTab];
+      if(cmd) navigator.clipboard.writeText(cmd);
+      var btn = document.getElementById('cloud-copy-btn');
+      if(btn) { btn.innerHTML = '<span style="font-size:11px;color:#28c840;">Copied!</span>'; setTimeout(function(){ btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'; }, 1500); }
+    }
+    </script>
 </section>
 
 <!-- PRICING TEASER -->
