@@ -158,6 +158,7 @@ metrics_store = {
     "runs": [],         # [{timestamp, duration_ms, model, channel}]
     "messages": [],     # [{timestamp, channel, outcome, duration_ms}]
     "webhooks": [],     # [{timestamp, channel, type}]
+    "queues": [],       # [{timestamp, channel, depth}]
 }
 MAX_STORE_ENTRIES = 10_000
 STORE_RETENTION_DAYS = 14
@@ -966,6 +967,14 @@ def _process_otlp_metrics(pb_data):
                             'timestamp': ts,
                             'channel': attrs.get('channel', resource_attrs.get('channel', '')),
                             'type': wtype,
+                        })
+                elif name == 'openclaw.queue.lane.depth':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('queues', {
+                            'timestamp': ts,
+                            'channel': attrs.get('channel', attrs.get('lane', resource_attrs.get('channel', ''))),
+                            'depth': _get_dp_value(dp),
                         })
 
 
@@ -2567,6 +2576,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('channels')">Channels</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3368,6 +3378,33 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-security -->
 
+<!-- CHANNELS -->
+<div class="page" id="page-channels">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128225; Channels</span>
+      <button class="refresh-btn" onclick="loadChannelsPage();">&#8635; Refresh</button>
+    </div>
+    <div id="channels-summary" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="ch-total-count">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Active Channels</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="ch-total-messages">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Total Messages</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;" id="ch-total-errors" style="color:#22c55e;">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Webhook Errors</div>
+      </div>
+    </div>
+    <div id="channels-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;">
+      <div style="color:var(--text-muted);padding:30px;text-align:center;grid-column:1/-1;">Loading channel metrics...</div>
+    </div>
+  </div>
+</div><!-- end page-channels -->
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -3679,6 +3716,7 @@ function switchTab(name) {
   if (name === 'subagents') loadSubAgentsPage(false);
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
+  if (name === 'channels') loadChannelsPage();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -4668,6 +4706,7 @@ metrics_store = {
     "runs": [],         # [{timestamp, duration_ms, model, channel}]
     "messages": [],     # [{timestamp, channel, outcome, duration_ms}]
     "webhooks": [],     # [{timestamp, channel, type}]
+    "queues": [],       # [{timestamp, channel, depth}]
 }
 MAX_STORE_ENTRIES = 10_000
 STORE_RETENTION_DAYS = 14
@@ -5491,6 +5530,14 @@ def _process_otlp_metrics(pb_data):
                             'timestamp': ts,
                             'channel': attrs.get('channel', resource_attrs.get('channel', '')),
                             'type': wtype,
+                        })
+                elif name == 'openclaw.queue.lane.depth':
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('queues', {
+                            'timestamp': ts,
+                            'channel': attrs.get('channel', attrs.get('lane', resource_attrs.get('channel', ''))),
+                            'depth': _get_dp_value(dp),
                         })
 
 
@@ -7111,6 +7158,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('channels')">Channels</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -7958,6 +8006,33 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-security -->
 
+<!-- CHANNELS -->
+<div class="page" id="page-channels">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128225; Channels</span>
+      <button class="refresh-btn" onclick="loadChannelsPage();">&#8635; Refresh</button>
+    </div>
+    <div id="channels-summary" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="ch-total-count">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Active Channels</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="ch-total-messages">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Total Messages</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;" id="ch-total-errors" style="color:#22c55e;">0</div>
+        <div style="font-size:11px;color:var(--text-muted);">Webhook Errors</div>
+      </div>
+    </div>
+    <div id="channels-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;">
+      <div style="color:var(--text-muted);padding:30px;text-align:center;grid-column:1/-1;">Loading channel metrics...</div>
+    </div>
+  </div>
+</div><!-- end page-channels -->
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -8295,6 +8370,7 @@ function switchTab(name) {
   if (name === 'subagents') loadSubAgentsPage(false);
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
+  if (name === 'channels') loadChannelsPage();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -9372,6 +9448,83 @@ async function loadSecurityPage(silent) {
   if (_securityRefreshTimer) clearTimeout(_securityRefreshTimer);
   if (document.getElementById('page-security') && document.getElementById('page-security').classList.contains('active')) {
     _securityRefreshTimer = setTimeout(function() { loadSecurityPage(true); }, 30000);
+  }
+}
+
+var _channelsRefreshTimer = null;
+async function loadChannelsPage() {
+  try {
+    var data = await fetchJsonWithTimeout('/api/channel-metrics', 10000);
+    var channels = data.channels || [];
+    document.getElementById('ch-total-count').textContent = channels.length;
+    var totalMsgs = 0, totalErrors = 0;
+    channels.forEach(function(c) { totalMsgs += c.messages; totalErrors += c.webhook_errors; });
+    document.getElementById('ch-total-messages').textContent = totalMsgs;
+    var errEl = document.getElementById('ch-total-errors');
+    errEl.textContent = totalErrors;
+    errEl.style.color = totalErrors > 0 ? '#ef4444' : '#22c55e';
+
+    var grid = document.getElementById('channels-grid');
+    if (channels.length === 0) {
+      grid.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);grid-column:1/-1;"><div style="font-size:48px;margin-bottom:16px;">&#128225;</div><div style="font-size:16px;">No Channel Data Yet</div><div style="font-size:12px;margin-top:8px;">Channel metrics will appear here when OTLP data is being received from your OpenClaw gateway.</div></div>';
+      return;
+    }
+
+    var html = '';
+    channels.forEach(function(c) {
+      var errColor = c.webhook_error_rate > 5 ? '#ef4444' : c.webhook_error_rate > 1 ? '#f59e0b' : '#22c55e';
+      var qColor = c.queue_depth > 50 ? '#ef4444' : c.queue_depth > 10 ? '#f59e0b' : '#22c55e';
+      var channelIcon = {'telegram':'&#9992;','discord':'&#128172;','signal':'&#128274;','whatsapp':'&#128172;','slack':'&#35;','irc':'&#62;','webchat':'&#127760;','imessage':'&#128172;','googlechat':'&#128172;'}[c.channel] || '&#128225;';
+
+      html += '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px;">';
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">';
+      html += '<span style="font-size:20px;">' + channelIcon + '</span>';
+      html += '<span style="font-size:14px;font-weight:700;color:var(--text-primary);text-transform:capitalize;">' + escHtml(c.channel) + '</span>';
+      if (c.queue_depth > 0) html += '<span style="margin-left:auto;font-size:11px;padding:2px 8px;border-radius:10px;background:' + qColor + '20;color:' + qColor + ';font-weight:600;">Queue: ' + c.queue_depth + '</span>';
+      html += '</div>';
+
+      // Stats grid
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">';
+      // Messages
+      html += '<div style="background:var(--bg-primary);border-radius:6px;padding:8px 10px;">';
+      html += '<div style="font-size:18px;font-weight:700;color:var(--text-primary);">' + c.messages + '</div>';
+      html += '<div style="font-size:10px;color:var(--text-muted);">Messages</div>';
+      if (c.message_p50 > 0) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">p50: ' + c.message_p50 + 'ms / p99: ' + c.message_p99 + 'ms</div>';
+      html += '</div>';
+      // Tokens
+      html += '<div style="background:var(--bg-primary);border-radius:6px;padding:8px 10px;">';
+      html += '<div style="font-size:18px;font-weight:700;color:var(--text-primary);">' + (c.tokens > 1000 ? Math.round(c.tokens/1000) + 'K' : c.tokens) + '</div>';
+      html += '<div style="font-size:10px;color:var(--text-muted);">Tokens</div>';
+      if (c.cost > 0) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">$' + c.cost.toFixed(4) + '</div>';
+      html += '</div>';
+      html += '</div>';
+
+      // Webhook stats
+      html += '<div style="display:flex;gap:12px;align-items:center;padding:6px 0;border-top:1px solid var(--border);">';
+      html += '<div style="font-size:11px;color:var(--text-muted);">Webhooks:</div>';
+      html += '<span style="font-size:11px;color:var(--text-primary);">' + c.webhook_received + ' received</span>';
+      html += '<span style="font-size:11px;color:' + errColor + ';font-weight:600;">' + c.webhook_errors + ' errors (' + c.webhook_error_rate + '%)</span>';
+      html += '</div>';
+
+      // Run stats
+      if (c.runs > 0) {
+        html += '<div style="display:flex;gap:12px;align-items:center;padding:6px 0;border-top:1px solid var(--border);">';
+        html += '<div style="font-size:11px;color:var(--text-muted);">Runs:</div>';
+        html += '<span style="font-size:11px;color:var(--text-primary);">' + c.runs + ' total</span>';
+        html += '<span style="font-size:11px;color:var(--text-muted);">p50: ' + c.run_p50 + 'ms / p99: ' + c.run_p99 + 'ms</span>';
+        html += '</div>';
+      }
+
+      html += '</div>';
+    });
+    grid.innerHTML = html;
+  } catch(e) {
+    document.getElementById('channels-grid').innerHTML = '<div style="color:var(--text-error);padding:20px;grid-column:1/-1;">Failed to load channel metrics: ' + escHtml(String(e)) + '</div>';
+  }
+
+  if (_channelsRefreshTimer) clearTimeout(_channelsRefreshTimer);
+  if (document.getElementById('page-channels') && document.getElementById('page-channels').classList.contains('active')) {
+    _channelsRefreshTimer = setTimeout(loadChannelsPage, 30000);
   }
 }
 
@@ -20959,6 +21112,106 @@ def api_health():
                        'detail': 'Not installed - pip install clawmetry[otel]'})
 
     return jsonify({'checks': checks})
+
+
+@bp_health.route('/api/channel-metrics')
+def api_channel_metrics():
+    """Return per-channel aggregated metrics from OTLP store."""
+    channels = {}
+
+    def _ensure(ch):
+        if not ch:
+            return
+        if ch not in channels:
+            channels[ch] = {
+                'name': ch,
+                'tokens': 0, 'cost': 0.0,
+                'messages': 0, 'message_durations': [],
+                'webhook_received': 0, 'webhook_errors': 0, 'webhook_durations': [],
+                'queue_depths': [],
+                'runs': 0, 'run_durations': [],
+            }
+
+    with _metrics_lock:
+        for e in metrics_store.get('tokens', []):
+            ch = e.get('channel', '')
+            if ch:
+                _ensure(ch)
+                channels[ch]['tokens'] += e.get('total', 0)
+        for e in metrics_store.get('cost', []):
+            ch = e.get('channel', '')
+            if ch:
+                _ensure(ch)
+                channels[ch]['cost'] += e.get('usd', 0)
+        for e in metrics_store.get('runs', []):
+            ch = e.get('channel', '')
+            if ch:
+                _ensure(ch)
+                channels[ch]['runs'] += 1
+                d = e.get('duration_ms', 0)
+                if d:
+                    channels[ch]['run_durations'].append(d)
+        for e in metrics_store.get('messages', []):
+            ch = e.get('channel', '')
+            if ch:
+                _ensure(ch)
+                channels[ch]['messages'] += 1
+                d = e.get('duration_ms', 0)
+                if d:
+                    channels[ch]['message_durations'].append(d)
+        for e in metrics_store.get('webhooks', []):
+            ch = e.get('channel', '')
+            if ch:
+                _ensure(ch)
+                t = e.get('type', '')
+                if t == 'received':
+                    channels[ch]['webhook_received'] += 1
+                elif t == 'error':
+                    channels[ch]['webhook_errors'] += 1
+                elif t == 'duration':
+                    channels[ch]['webhook_durations'].append(e.get('duration_ms', 0))
+        for e in metrics_store.get('queues', []):
+            ch = e.get('channel', '')
+            if ch:
+                _ensure(ch)
+                channels[ch]['queue_depths'].append(e.get('depth', 0))
+
+    result = []
+    for ch, data in sorted(channels.items()):
+        msg_durs = sorted(data['message_durations'])
+        wh_durs = sorted(data['webhook_durations'])
+        run_durs = sorted(data['run_durations'])
+        q_depths = data['queue_depths']
+
+        def _p(arr, pct):
+            if not arr:
+                return 0
+            idx = int(len(arr) * pct / 100)
+            return round(arr[min(idx, len(arr) - 1)], 1)
+
+        wh_total = data['webhook_received'] + data['webhook_errors']
+        wh_error_rate = round(data['webhook_errors'] / wh_total * 100, 1) if wh_total > 0 else 0
+
+        result.append({
+            'channel': ch,
+            'tokens': data['tokens'],
+            'cost': round(data['cost'], 4),
+            'messages': data['messages'],
+            'message_p50': _p(msg_durs, 50),
+            'message_p99': _p(msg_durs, 99),
+            'webhook_received': data['webhook_received'],
+            'webhook_errors': data['webhook_errors'],
+            'webhook_error_rate': wh_error_rate,
+            'webhook_p50': _p(wh_durs, 50),
+            'webhook_p99': _p(wh_durs, 99),
+            'queue_depth': round(q_depths[-1], 1) if q_depths else 0,
+            'queue_depth_avg': round(sum(q_depths) / len(q_depths), 1) if q_depths else 0,
+            'runs': data['runs'],
+            'run_p50': _p(run_durs, 50),
+            'run_p99': _p(run_durs, 99),
+        })
+
+    return jsonify({'channels': result})
 
 
 @bp_health.route('/api/heartbeat-status')

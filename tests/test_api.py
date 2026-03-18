@@ -92,6 +92,28 @@ class TestChannels:
         assert isinstance(d["channels"], list)
 
 
+class TestChannelMetrics:
+    def test_status(self, api, base_url):
+        r = get(api, base_url, "/api/channel-metrics")
+        assert_ok(r)
+
+    def test_returns_channels_list(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/channel-metrics"))
+        assert "channels" in d
+        assert isinstance(d["channels"], list)
+
+    def test_channel_entry_shape(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/channel-metrics"))
+        for ch in d["channels"]:
+            assert "channel" in ch
+            assert "tokens" in ch
+            assert "messages" in ch
+            assert "webhook_error_rate" in ch
+            assert "queue_depth" in ch
+            assert "message_p50" in ch
+            assert "message_p99" in ch
+
+
 class TestHealth:
     def test_status(self, api, base_url):
         r = get(api, base_url, "/api/health")
