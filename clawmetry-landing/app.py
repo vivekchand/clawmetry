@@ -2344,6 +2344,8 @@ def api_hero_stats():
                          timeout=10, headers={"User-Agent": "ClawMetry/1.0"})
         r.raise_for_status()
         total = sum(row["downloads"] for row in r.json().get("data", []) if row.get("category") == "with_mirrors")
+        # Never show a number lower than 75k (pypistats returns rolling windows, not lifetime)
+        total = max(total, 75000)
         result["downloads"] = f"{round(total / 1000)}k" if total >= 1000 else str(total)
         result["downloads_exact"] = total
     except Exception as e:
@@ -2361,13 +2363,13 @@ def api_hero_stats():
         if daily:
             if "downloads" not in result:
                 result["downloads"] = daily.get("downloads", "75k")
-                result["downloads_exact"] = daily.get("downloads_exact", 56000)
+                result["downloads_exact"] = daily.get("downloads_exact", 75000)
             if "countries" not in result:
                 result["countries"] = daily.get("countries", "100")
             log.info("[hero-stats] using daily cache for missing fields")
     if "downloads" not in result:
         result["downloads"] = "75k"
-        result["downloads_exact"] = 56000
+        result["downloads_exact"] = 75000
     if "countries" not in result:
         result["countries"] = "100"
     # GitHub stars
