@@ -418,6 +418,15 @@ def _cmd_status(args) -> None:
         running = r.stdout.strip() == "active"
         print(f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}")
 
+    # OTLP support
+    print()
+    try:
+        from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2  # noqa: F401
+        print("  OTLP:        ✅  Available (opentelemetry-proto installed)")
+    except ImportError:
+        print("  OTLP:        ❌  Not available (pip install clawmetry[otel])")
+    print("               ℹ️  Restart dashboard after installing for changes to take effect")
+
     if LOG_FILE.exists():
         print(f"  Log:         {LOG_FILE}")
         # Last 3 lines

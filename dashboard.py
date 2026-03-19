@@ -51,7 +51,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.9.21"
+__version__ = "0.9.22"
 
 # ── Turso Cloud Sync (optional) ─────────────────────────────────────────
 try:
@@ -13993,7 +13993,7 @@ def main():
     print(f"  Sessions:   {SESSIONS_DIR}")
     print(f"  Logs:       {LOG_DIR}")
     print(f"  Metrics:    {_metrics_file_path()}")
-    print(f"  OTLP:       {'✅ Ready (opentelemetry-proto installed)' if _HAS_OTEL_PROTO else '❌ Not available (pip install clawmetry[otel])'}")
+    print(f"  OTLP:       {'✅ Ready (opentelemetry-proto installed)' if _HAS_OTEL_PROTO else '❌ Not available (pip install clawmetry[otel] then restart dashboard)'}")
     print(f'  Turso:      {"✓ Connected (" + TURSO_URL[:25] + "...)" if _sb_enabled else "❌ Not configured (set TURSO_URL + TURSO_TOKEN)"}')
     print(f"  User:       {USER_NAME}")
     print(f"  Mode:       {'🛠️  Dev (auto-reload ON)' if args.debug else '🚀 Prod (auto-reload OFF)'}")
