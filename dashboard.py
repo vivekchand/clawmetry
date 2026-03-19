@@ -15392,6 +15392,7 @@ def api_overview():
         'model': model_name,
         'provider': _infer_provider_from_model(model_name),
         'sessionCount': len(sessions),
+        'sessions': len(sessions),  # alias for E2E health checks
         'mainSessionUpdated': main.get('updatedAt'),
         'mainTokens': main.get('totalTokens', 0),
         'contextWindow': main.get('contextTokens', 200000),
@@ -16365,7 +16366,10 @@ def api_brain_stream():
 def api_flow_events():
     """SSE endpoint — emits typed flow events (msg_in, msg_out, tool_call, tool_result).
     No auth required. Tails gateway.log + active session JSONL on disk.
+    Pass ?health=1 to get a quick JSON health check instead of SSE stream.
     """
+    if request.args.get('health'):
+        return jsonify({'status': 'ok'})
     import glob as _glob
 
     def _find_active_jsonl():
