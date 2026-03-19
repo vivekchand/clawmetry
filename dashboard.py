@@ -15175,6 +15175,10 @@ def _check_auth():
         return  # Fleet API uses its own X-Fleet-Key authentication
     if not request.path.startswith('/api/'):
         return  # HTML, static, etc. are fine
+    # Localhost requests are trusted — dashboard is local-only by design
+    remote = request.remote_addr or ''
+    if remote in ('127.0.0.1', '::1', 'localhost'):
+        return
     if not GATEWAY_TOKEN:
         return jsonify({'error': 'Gateway token not configured. Please set up your gateway token first.', 'needsSetup': True}), 401
     token = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
@@ -15388,10 +15392,12 @@ def api_overview():
         infra['storage'] = 'Disk'
 
     model_name = main.get('model') or 'unknown'
+    active_sessions = [s for s in sessions if s.get('active') or s.get('isActive')]
     return jsonify({
         'model': model_name,
         'provider': _infer_provider_from_model(model_name),
         'sessionCount': len(sessions),
+        'activeSessions': len(active_sessions),
         'mainSessionUpdated': main.get('updatedAt'),
         'mainTokens': main.get('totalTokens', 0),
         'contextWindow': main.get('contextTokens', 200000),
@@ -16365,7 +16371,12 @@ def api_brain_stream():
 def api_flow_events():
     """SSE endpoint — emits typed flow events (msg_in, msg_out, tool_call, tool_result).
     No auth required. Tails gateway.log + active session JSONL on disk.
+    Pass ?json=1 for a simple JSON health-check response instead of SSE.
     """
+    # Health-check / E2E mode: return JSON immediately instead of streaming
+    if request.args.get('json') == '1' or request.accept_mimetypes.best == 'application/json':
+        return jsonify({'ok': True, 'mode': 'flow-events'})
+
     import glob as _glob
 
     def _find_active_jsonl():
@@ -16443,6 +16454,9 @@ def api_flow_events():
             with open(jsonl_path, 'rb') as f:
                 f.seek(0, 2)
                 jsonl_pos = f.tell()
+
+        # Flush headers immediately with a keepalive comment
+        yield ': keepalive\n\n'
 
         try:
             while True:
