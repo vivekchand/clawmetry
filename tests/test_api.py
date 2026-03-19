@@ -471,3 +471,33 @@ class TestMemoryAnalytics:
         for f in d["files"]:
             assert_keys(f, "path", "sizeBytes", "sizeKB", "estTokens", "status")
             assert f["status"] in ("ok", "warning", "critical")
+
+
+class TestStuckSessions:
+    """Tests for stuck session alerts (GH #29)."""
+
+    def test_stuck_sessions_returns_200(self, api, base_url):
+        """Stuck sessions endpoint returns 200 with expected structure."""
+        d = assert_ok(get(api, base_url, "/api/stuck-sessions"))
+        assert "stuck" in d, "Missing 'stuck' key"
+        assert "count" in d, "Missing 'count' key"
+        assert isinstance(d["stuck"], list), "'stuck' should be a list"
+        assert isinstance(d["count"], int), "'count' should be an int"
+
+    def test_stuck_sessions_count_matches_list(self, api, base_url):
+        """count field matches length of stuck list."""
+        d = assert_ok(get(api, base_url, "/api/stuck-sessions"))
+        assert d["count"] == len(d["stuck"]), "count does not match length of stuck list"
+
+    def test_stuck_sessions_custom_threshold(self, api, base_url):
+        """Custom threshold_ms parameter is accepted."""
+        d = assert_ok(get(api, base_url, "/api/stuck-sessions?threshold_ms=900000"))
+        assert "stuck" in d
+
+    def test_stuck_sessions_entries_have_required_fields(self, api, base_url):
+        """Each stuck session entry has all required fields."""
+        d = assert_ok(get(api, base_url, "/api/stuck-sessions"))
+        for s in d["stuck"]:
+            assert_keys(s, "sessionKey", "sessionId", "displayName", "idleMs", "idleMinutes", "updatedAt")
+            assert s["idleMs"] >= 0
+            assert s["idleMinutes"] >= 0

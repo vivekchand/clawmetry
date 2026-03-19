@@ -7218,6 +7218,13 @@ function clawmetryLogout(){
   <button onclick="document.getElementById('heartbeat-banner').style.display='none'" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
 </div>
 
+<!-- Stuck Session Banner -->
+<div id="stuck-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg,#78350f 0%,#92400e 100%);border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:600;align-items:center;gap:10px;">
+  <span style="font-size:18px;">&#x23F3;</span>
+  <span id="stuck-banner-msg" style="flex:1;"></span>
+  <button onclick="dismissStuckBanner()" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+</div>
+
 <!-- Budget Settings Modal -->
 <div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
   <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
@@ -8307,6 +8314,69 @@ async function checkHeartbeatStatus() {
 }
 setInterval(checkHeartbeatStatus, 30000);
 setTimeout(checkHeartbeatStatus, 5000);
+
+// === Stuck Session Alerts ===
+var _stuckSessions = {};
+var _stuckDismissed = false;
+
+function showStuckAlert(sessionKey, idleMs) {
+  _stuckSessions[sessionKey] = { idleMs: idleMs, ts: Date.now() };
+  _stuckDismissed = false;
+  _updateStuckBanner();
+}
+
+function clearStuckAlert(sessionKey) {
+  delete _stuckSessions[sessionKey];
+  _updateStuckBanner();
+}
+
+function dismissStuckBanner() {
+  _stuckDismissed = true;
+  var b = document.getElementById('stuck-banner');
+  if (b) b.style.display = 'none';
+}
+
+function _updateStuckBanner() {
+  var keys = Object.keys(_stuckSessions);
+  var banner = document.getElementById('stuck-banner');
+  if (!banner) return;
+  if (keys.length === 0 || _stuckDismissed) {
+    banner.style.display = 'none';
+    if (keys.length === 0) _stuckDismissed = false;
+    return;
+  }
+  var msgs = keys.map(function(sid) {
+    var info = _stuckSessions[sid];
+    var mins = Math.round(info.idleMs / 60000);
+    var label = sid.split(':').pop().substring(0, 12);
+    return label + ' (' + mins + 'min idle)';
+  });
+  var msgEl = document.getElementById('stuck-banner-msg');
+  if (msgEl) msgEl.innerHTML = keys.length === 1
+    ? '&#x23F3; Agent stuck: ' + escHtml(msgs[0])
+    : '&#x23F3; ' + keys.length + ' agents stuck: ' + escHtml(msgs.join(', '));
+  banner.style.display = 'flex';
+}
+
+async function checkStuckSessions() {
+  if (window.CLOUD_MODE) return;
+  try {
+    var data = await fetch('/api/stuck-sessions').then(function(r) { return r.json(); });
+    var serverStuck = {};
+    (data.stuck || []).forEach(function(s) {
+      serverStuck[s.sessionKey] = true;
+      showStuckAlert(s.sessionKey, s.idleMs);
+    });
+    // Clear sessions no longer stuck
+    Object.keys(_stuckSessions).forEach(function(sid) {
+      if (!serverStuck[sid]) clearStuckAlert(sid);
+    });
+  } catch(e) {}
+}
+
+// Poll for stuck sessions every 2 minutes
+setInterval(checkStuckSessions, 2 * 60 * 1000);
+setTimeout(checkStuckSessions, 10000);
 
 // === Telegram Config Functions ===
 async function loadTelegramConfig() {
@@ -11792,6 +11862,21 @@ function processFlowEvent(line) {
     flowThrottles['tool-end'] = now;
     addFlowFeedItem('✔️ Tool completed', '#50c070');
     return;
+  }
+
+  // Stuck session detection from log stream
+  if (msg.includes('session.stuck') || (msg.includes('stuck') && msg.includes('session'))) {
+    var keyMatch = msg.match(/session[_.]?key[=: ]+([a-z0-9:_-]+)/i) || msg.match(/key=([a-z0-9:_-]+)/i);
+    var ageMatch = msg.match(/age[_ms=: ]+(\d+)/i) || msg.match(/(\d+)\s*ms/);
+    var sessionKey = keyMatch ? keyMatch[1] : 'unknown';
+    var ageMs = ageMatch ? parseInt(ageMatch[1]) : 15 * 60 * 1000;
+    showStuckAlert(sessionKey, ageMs);
+    return;
+  }
+  // Clear stuck alert when session reaches terminal state
+  if (msg.includes('session state') && (msg.includes('done') || msg.includes('idle') || msg.includes('terminal') || msg.includes('complete'))) {
+    var keyMatch = msg.match(/session[_.]?key[=: ]+([a-z0-9:_-]+)/i) || msg.match(/key=([a-z0-9:_-]+)/i);
+    if (keyMatch) clearStuckAlert(keyMatch[1]);
   }
 }
 
@@ -18217,6 +18302,48 @@ def api_subagent_activity(session_id):
         return jsonify({'error': str(e), 'events': []}), 500
 
     return jsonify({'events': events, 'fileSize': fsize if 'fsize' in dir() else 0})
+
+
+@bp_sessions.route('/api/stuck-sessions')
+def api_stuck_sessions():
+    """Return sessions that appear stuck (active sub-agents idle for > STUCK_THRESHOLD_MIN minutes)."""
+    STUCK_THRESHOLD_MS = int(request.args.get('threshold_ms', 15 * 60 * 1000))  # default 15 min
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    index_path = os.path.join(sessions_dir, 'sessions.json')
+    stuck = []
+    now = time.time() * 1000
+
+    try:
+        with open(index_path, 'r') as f:
+            index = json.load(f)
+    except Exception:
+        return jsonify({'stuck': [], 'count': 0})
+
+    for key, meta in index.items():
+        if ':subagent:' not in key:
+            continue
+        updated_at = meta.get('updatedAt', 0)
+        if not updated_at:
+            continue
+        idle_ms = now - updated_at
+        # Only flag sessions that are "recent enough to be considered active" but have gone quiet
+        # Active = created within last 2h, but no update for STUCK_THRESHOLD_MS
+        created_at = meta.get('createdAt', updated_at)
+        session_age_ms = now - created_at
+        if idle_ms >= STUCK_THRESHOLD_MS and session_age_ms < 2 * 60 * 60 * 1000:
+            sid = meta.get('sessionId', '')
+            label = meta.get('label') or key.split(':')[-1][:12]
+            stuck.append({
+                'sessionKey': key,
+                'sessionId': sid,
+                'displayName': label,
+                'idleMs': int(idle_ms),
+                'idleMinutes': int(idle_ms / 60000),
+                'updatedAt': updated_at,
+            })
+
+    stuck.sort(key=lambda x: x['idleMs'], reverse=True)
+    return jsonify({'stuck': stuck, 'count': len(stuck)})
 
 
 def _summarize_tool_input(name, inp):
