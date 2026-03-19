@@ -2559,8 +2559,7 @@ function clawmetryLogout(){
   <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="https://clawmetry.com/favicon.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
-  <!-- Budget & Alerts hidden until mature -->
-  <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
+  <div class="theme-toggle" id="budget-btn" onclick="openBudgetModal()" title="Budget &amp; Alerts" style="cursor:pointer;">&#128176;</div>
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="zoom-controls">
@@ -2788,6 +2787,47 @@ function clawmetryLogout(){
           <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
           <div style="font-size:13px;">Loading tasks...</div>
         </div>
+      </div>
+      <!-- 💰 Budget Burn Rate Widget -->
+      <div id="budget-burn-widget" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;margin-top:10px;display:none;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span style="font-size:13px;font-weight:700;color:var(--text-primary);">💰 Cost Burn Rate</span>
+          <button onclick="openBudgetModal()" style="font-size:10px;padding:2px 8px;border:1px solid var(--border-primary);border-radius:4px;background:transparent;color:var(--text-muted);cursor:pointer;">Configure</button>
+        </div>
+        <div style="display:flex;gap:12px;margin-bottom:8px;">
+          <div style="flex:1;text-align:center;">
+            <div style="font-size:11px;color:var(--text-muted);">Today</div>
+            <div id="burn-today" style="font-size:15px;font-weight:700;color:var(--text-primary);">$0.00</div>
+          </div>
+          <div style="flex:1;text-align:center;">
+            <div style="font-size:11px;color:var(--text-muted);">Daily Avg</div>
+            <div id="burn-daily-avg" style="font-size:15px;font-weight:700;color:var(--text-primary);">$0.00</div>
+          </div>
+          <div style="flex:1;text-align:center;">
+            <div style="font-size:11px;color:var(--text-muted);">Proj. Month</div>
+            <div id="burn-projected" style="font-size:15px;font-weight:700;color:var(--accent);">$0.00</div>
+          </div>
+        </div>
+        <div id="burn-limits-wrap" style="display:none;">
+          <div id="burn-daily-bar-wrap" style="margin-bottom:6px;display:none;">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:2px;">
+              <span>Daily limit</span><span id="burn-daily-bar-label">$0 / $0</span>
+            </div>
+            <div style="background:var(--bg-primary);border-radius:4px;height:6px;overflow:hidden;">
+              <div id="burn-daily-bar" style="height:100%;border-radius:4px;background:var(--text-success);transition:width 0.3s;width:0%"></div>
+            </div>
+          </div>
+          <div id="burn-monthly-bar-wrap" style="margin-bottom:4px;display:none;">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:2px;">
+              <span>Monthly limit</span><span id="burn-monthly-bar-label">$0 / $0</span>
+            </div>
+            <div style="background:var(--bg-primary);border-radius:4px;height:6px;overflow:hidden;">
+              <div id="burn-monthly-bar" style="height:100%;border-radius:4px;background:var(--text-success);transition:width 0.3s;width:0%"></div>
+            </div>
+          </div>
+        </div>
+        <div id="burn-paused-banner" style="display:none;text-align:center;font-size:11px;color:var(--accent);padding:4px;border:1px solid var(--accent);border-radius:4px;margin-top:4px;">⏸ Agent activity paused — budget limit reached</div>
+        <div id="burn-sparkline" style="margin-top:6px;"></div>
       </div>
       <!-- 🧠 Brain Panel: Main Agent Activity (below Active Tasks) -->
       <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;margin-top:14px;display:flex;flex-direction:column;overflow:hidden;">
@@ -3897,6 +3937,68 @@ function setFlowTextAll(idSuffix, text, maxLen) {
   });
 }
 
+
+async function loadBurnRate() {
+  try {
+    var d = await fetch('/api/budget/burn-rate').then(function(r){return r.json();});
+    var widget = document.getElementById('budget-burn-widget');
+    if (!widget) return;
+    // Only show widget if there's actual spend data
+    var hasSpend = d.today > 0 || d.daily_avg > 0;
+    if (!hasSpend) return;
+    widget.style.display = '';
+    document.getElementById('burn-today').textContent = '$' + (d.today || 0).toFixed(4);
+    document.getElementById('burn-daily-avg').textContent = '$' + (d.daily_avg || 0).toFixed(4);
+    var proj = document.getElementById('burn-projected');
+    proj.textContent = '$' + (d.projected_monthly || 0).toFixed(2);
+    proj.style.color = d.projected_monthly > 20 ? 'var(--accent)' : d.projected_monthly > 5 ? '#f59e0b' : 'var(--text-success)';
+
+    // Budget progress bars
+    var limitsWrap = document.getElementById('burn-limits-wrap');
+    var hasDailyLimit = d.daily_limit > 0;
+    var hasMonthlyLimit = d.monthly_limit > 0;
+    if (hasDailyLimit || hasMonthlyLimit) {
+      limitsWrap.style.display = '';
+      if (hasDailyLimit) {
+        document.getElementById('burn-daily-bar-wrap').style.display = '';
+        document.getElementById('burn-daily-bar-label').textContent = '$' + (d.daily_spent||0).toFixed(4) + ' / $' + d.daily_limit;
+        var dpct = Math.min(d.daily_pct || 0, 100);
+        var dbar = document.getElementById('burn-daily-bar');
+        dbar.style.width = dpct + '%';
+        dbar.style.background = dpct >= 90 ? '#ef4444' : dpct >= 70 ? '#f59e0b' : 'var(--text-success)';
+      }
+      if (hasMonthlyLimit) {
+        document.getElementById('burn-monthly-bar-wrap').style.display = '';
+        document.getElementById('burn-monthly-bar-label').textContent = '$' + (d.monthly_spent||0).toFixed(2) + ' / $' + d.monthly_limit;
+        var mpct = Math.min(d.monthly_pct || 0, 100);
+        var mbar = document.getElementById('burn-monthly-bar');
+        mbar.style.width = mpct + '%';
+        mbar.style.background = mpct >= 90 ? '#ef4444' : mpct >= 70 ? '#f59e0b' : 'var(--text-success)';
+      }
+    }
+
+    // Paused banner
+    document.getElementById('burn-paused-banner').style.display = d.paused ? '' : 'none';
+
+    // Mini sparkline (7-day bars)
+    var sparkEl = document.getElementById('burn-sparkline');
+    if (sparkEl && d.history && d.history.length > 0) {
+      var maxCost = Math.max.apply(null, d.history.map(function(h){return h.cost;}));
+      if (maxCost > 0) {
+        var bars = d.history.map(function(h) {
+          var pct = maxCost > 0 ? (h.cost / maxCost * 100) : 0;
+          var isToday = h.days_ago === 0;
+          return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">' +
+            '<div style="width:100%;height:' + Math.max(2, pct * 0.24) + 'px;border-radius:2px 2px 0 0;background:' +
+            (isToday ? 'var(--accent)' : 'var(--border-secondary, #333)') + ';min-height:2px;"></div>' +
+            '<span style="font-size:9px;color:var(--text-faint,#555);">' + h.label + '</span></div>';
+        }).join('');
+        sparkEl.innerHTML = '<div style="display:flex;gap:3px;align-items:flex-end;height:36px;padding:0 2px;">' + bars + '</div>';
+      }
+    }
+  } catch(e) { /* burn rate not critical */ }
+}
+
 async function loadAll() {
   try {
     // Render overview quickly; do not block on heavy usage aggregation.
@@ -3907,6 +4009,7 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    loadBurnRate().catch(function(e){console.warn('burn rate failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -7141,8 +7244,7 @@ function clawmetryLogout(){
   <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="https://clawmetry.com/favicon.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
-  <!-- Budget & Alerts hidden until mature -->
-  <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
+  <div class="theme-toggle" id="budget-btn" onclick="openBudgetModal()" title="Budget &amp; Alerts" style="cursor:pointer;">&#128176;</div>
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="zoom-controls">
@@ -7416,6 +7518,47 @@ function clawmetryLogout(){
           <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
           <div style="font-size:13px;">Loading tasks...</div>
         </div>
+      </div>
+      <!-- 💰 Budget Burn Rate Widget -->
+      <div id="budget-burn-widget" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;margin-top:10px;display:none;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span style="font-size:13px;font-weight:700;color:var(--text-primary);">💰 Cost Burn Rate</span>
+          <button onclick="openBudgetModal()" style="font-size:10px;padding:2px 8px;border:1px solid var(--border-primary);border-radius:4px;background:transparent;color:var(--text-muted);cursor:pointer;">Configure</button>
+        </div>
+        <div style="display:flex;gap:12px;margin-bottom:8px;">
+          <div style="flex:1;text-align:center;">
+            <div style="font-size:11px;color:var(--text-muted);">Today</div>
+            <div id="burn-today" style="font-size:15px;font-weight:700;color:var(--text-primary);">$0.00</div>
+          </div>
+          <div style="flex:1;text-align:center;">
+            <div style="font-size:11px;color:var(--text-muted);">Daily Avg</div>
+            <div id="burn-daily-avg" style="font-size:15px;font-weight:700;color:var(--text-primary);">$0.00</div>
+          </div>
+          <div style="flex:1;text-align:center;">
+            <div style="font-size:11px;color:var(--text-muted);">Proj. Month</div>
+            <div id="burn-projected" style="font-size:15px;font-weight:700;color:var(--accent);">$0.00</div>
+          </div>
+        </div>
+        <div id="burn-limits-wrap" style="display:none;">
+          <div id="burn-daily-bar-wrap" style="margin-bottom:6px;display:none;">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:2px;">
+              <span>Daily limit</span><span id="burn-daily-bar-label">$0 / $0</span>
+            </div>
+            <div style="background:var(--bg-primary);border-radius:4px;height:6px;overflow:hidden;">
+              <div id="burn-daily-bar" style="height:100%;border-radius:4px;background:var(--text-success);transition:width 0.3s;width:0%"></div>
+            </div>
+          </div>
+          <div id="burn-monthly-bar-wrap" style="margin-bottom:4px;display:none;">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-bottom:2px;">
+              <span>Monthly limit</span><span id="burn-monthly-bar-label">$0 / $0</span>
+            </div>
+            <div style="background:var(--bg-primary);border-radius:4px;height:6px;overflow:hidden;">
+              <div id="burn-monthly-bar" style="height:100%;border-radius:4px;background:var(--text-success);transition:width 0.3s;width:0%"></div>
+            </div>
+          </div>
+        </div>
+        <div id="burn-paused-banner" style="display:none;text-align:center;font-size:11px;color:var(--accent);padding:4px;border:1px solid var(--accent);border-radius:4px;margin-top:4px;">⏸ Agent activity paused — budget limit reached</div>
+        <div id="burn-sparkline" style="margin-top:6px;"></div>
       </div>
       <!-- 🧠 Brain Panel: Main Agent Activity (below Active Tasks) -->
       <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;margin-top:14px;display:flex;flex-direction:column;overflow:hidden;">
@@ -8561,6 +8704,7 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    loadBurnRate().catch(function(e){console.warn('burn rate failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -17084,6 +17228,64 @@ def api_budget_test_telegram():
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@bp_budget.route('/api/budget/burn-rate')
+def api_budget_burn_rate():
+    """Return spending burn rate with 7-day daily history and projected monthly cost."""
+    now = time.time()
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    config = _get_budget_config()
+
+    # Build 7-day daily buckets
+    daily_buckets = {}
+    for d in range(7):
+        day_ts = today_start - d * 86400
+        daily_buckets[d] = {'ts': day_ts, 'cost': 0.0, 'label': (datetime.now() - timedelta(days=d)).strftime('%a')}
+
+    with _metrics_lock:
+        for entry in metrics_store['cost']:
+            ts = entry.get('timestamp', 0)
+            usd = entry.get('usd', 0)
+            age_days = (now - ts) / 86400
+            if age_days < 7:
+                bucket = int(age_days)
+                if bucket in daily_buckets:
+                    daily_buckets[bucket]['cost'] += usd
+
+    history = [
+        {'label': daily_buckets[d]['label'], 'cost': round(daily_buckets[d]['cost'], 4), 'days_ago': d}
+        for d in range(6, -1, -1)
+    ]
+
+    # Burn rate: average of last 7 days with any spend (avoid skewing with zero days)
+    nonzero_days = [h['cost'] for h in history if h['cost'] > 0]
+    if nonzero_days:
+        daily_avg = sum(nonzero_days) / len(nonzero_days)
+    else:
+        daily_avg = daily_buckets[0]['cost']  # just today
+
+    projected_monthly = daily_avg * 30
+
+    # Budget headroom
+    daily_limit = config.get('daily_limit', 0)
+    monthly_limit = config.get('monthly_limit', 0)
+    status = _get_budget_status()
+
+    return jsonify({
+        'daily_avg': round(daily_avg, 4),
+        'today': round(daily_buckets[0]['cost'], 4),
+        'projected_monthly': round(projected_monthly, 2),
+        'history': history,
+        'daily_limit': daily_limit,
+        'monthly_limit': monthly_limit,
+        'daily_spent': status.get('daily_spent', 0),
+        'monthly_spent': status.get('monthly_spent', 0),
+        'daily_pct': status.get('daily_pct', 0),
+        'monthly_pct': status.get('monthly_pct', 0),
+        'paused': status.get('paused', False),
+        'auto_pause_enabled': config.get('auto_pause_enabled', False),
+    })
 
 
 @bp_alerts.route('/api/alerts/rules', methods=['GET', 'POST'])

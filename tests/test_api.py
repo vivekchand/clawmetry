@@ -471,3 +471,48 @@ class TestMemoryAnalytics:
         for f in d["files"]:
             assert_keys(f, "path", "sizeBytes", "sizeKB", "estTokens", "status")
             assert f["status"] in ("ok", "warning", "critical")
+
+
+class TestBudgetBurnRate:
+    """Tests for cost alerting & budget enforcement (GH #200)."""
+
+    def test_burn_rate_returns_200(self, api, base_url):
+        """Budget burn-rate endpoint returns 200."""
+        d = assert_ok(get(api, base_url, "/api/budget/burn-rate"))
+        assert_keys(d, "daily_avg", "today", "projected_monthly",
+                    "history", "daily_limit", "monthly_limit",
+                    "daily_spent", "monthly_spent", "daily_pct", "monthly_pct",
+                    "paused", "auto_pause_enabled")
+
+    def test_burn_rate_history_is_7_days(self, api, base_url):
+        """History contains exactly 7 entries."""
+        d = assert_ok(get(api, base_url, "/api/budget/burn-rate"))
+        assert len(d["history"]) == 7, f"Expected 7 history entries, got {len(d['history'])}"
+
+    def test_burn_rate_history_has_labels(self, api, base_url):
+        """Each history entry has label, cost, and days_ago fields."""
+        d = assert_ok(get(api, base_url, "/api/budget/burn-rate"))
+        for entry in d["history"]:
+            assert_keys(entry, "label", "cost", "days_ago")
+            assert isinstance(entry["cost"], (int, float))
+            assert entry["days_ago"] >= 0
+
+    def test_burn_rate_values_are_non_negative(self, api, base_url):
+        """All cost values are non-negative."""
+        d = assert_ok(get(api, base_url, "/api/budget/burn-rate"))
+        assert d["daily_avg"] >= 0
+        assert d["today"] >= 0
+        assert d["projected_monthly"] >= 0
+        assert d["daily_spent"] >= 0
+        assert d["monthly_spent"] >= 0
+
+    def test_budget_status_returns_200(self, api, base_url):
+        """Budget status endpoint still returns 200."""
+        d = assert_ok(get(api, base_url, "/api/budget/status"))
+        assert_keys(d, "daily_spent", "monthly_spent", "paused")
+
+    def test_budget_config_get_returns_200(self, api, base_url):
+        """Budget config GET returns 200 with expected keys."""
+        d = assert_ok(get(api, base_url, "/api/budget/config"))
+        assert_keys(d, "daily_limit", "weekly_limit", "monthly_limit",
+                    "auto_pause_enabled", "warning_threshold_pct")
