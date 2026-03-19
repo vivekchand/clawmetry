@@ -292,6 +292,141 @@
       .arch-arrow { transform: rotate(90deg); padding: 8px 0; }
       .cta-box { padding: 40px 24px; }
     }
+
+    /* ── Version comparison ── */
+    .version-section { border-top: 1px solid var(--border); }
+    .version-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 24px; margin-top: 48px;
+    }
+    @media (max-width: 680px) { .version-grid { grid-template-columns: 1fr; } }
+    .version-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 28px; position: relative;
+    }
+    .version-card.version-cloud {
+      border-color: rgba(59,130,246,0.25);
+      box-shadow: 0 0 32px rgba(59,130,246,0.06);
+    }
+    .version-badge-cloud {
+      position: absolute; top: -1px; right: 20px;
+      background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3);
+      border-top: none; color: var(--blue);
+      font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+      padding: 3px 10px; border-radius: 0 0 8px 8px;
+    }
+    .version-card-header {
+      display: flex; align-items: center; gap: 14px; margin-bottom: 20px;
+    }
+    .version-icon { font-size: 32px; }
+    .version-title { font-size: 18px; font-weight: 700; }
+    .version-price { font-size: 13px; color: var(--green); font-weight: 600; margin-top: 2px; }
+    .version-list { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+    .version-list li { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text-muted); }
+    .vcheck { font-size: 13px; font-weight: 700; width: 16px; flex-shrink: 0; }
+    .vcheck-green { color: var(--green); }
+    .vcheck-blue { color: var(--blue); }
+    .vcheck-dim { color: var(--text-dim); }
+    .btn-cloud {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.3);
+      color: var(--blue); padding: 10px 20px; border-radius: 10px;
+      font-size: 14px; font-weight: 600; transition: all 0.2s;
+    }
+    .btn-cloud:hover { background: rgba(59,130,246,0.2); border-color: rgba(59,130,246,0.5); }
+
+    /* ── Cloud arch section ── */
+    .cloud-arch-section { border-top: 1px solid var(--border); }
+    .cloud-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.2);
+      border-radius: 100px; padding: 4px 14px; margin-bottom: 12px;
+      font-size: 12px; font-weight: 600; color: var(--blue); letter-spacing: 0.04em; text-transform: uppercase;
+    }
+
+    /* Fleet diagram layout */
+    .fleet-diagram {
+      display: flex; align-items: center; justify-content: center;
+      gap: 0; margin-top: 48px; flex-wrap: wrap; row-gap: 32px;
+    }
+    .fleet-left { flex-shrink: 0; }
+    .fleet-grid {
+      display: grid; grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    .fleet-node {
+      background: var(--bg-card); border: 1px solid rgba(59,130,246,0.2);
+      border-radius: 10px; padding: 10px 12px;
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-muted); white-space: nowrap;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .fleet-node:hover {
+      border-color: rgba(59,130,246,0.5);
+      box-shadow: 0 0 12px rgba(59,130,246,0.08);
+    }
+    .fleet-node-more {
+      border-style: dashed; opacity: 0.7;
+    }
+    .fleet-icon { font-size: 14px; }
+    .fleet-label { flex: 1; font-weight: 500; }
+    .fleet-lock { font-size: 12px; opacity: 0.8; }
+
+    /* Connector columns */
+    .fleet-connector-col {
+      display: flex; flex-direction: column; align-items: center;
+      padding: 0 12px; flex-shrink: 0;
+    }
+    .fleet-connector-label {
+      font-size: 10px; font-weight: 600; color: var(--blue);
+      letter-spacing: 0.08em; text-transform: uppercase; margin-top: 6px; opacity: 0.7;
+    }
+    .fleet-connector-line { display: flex; align-items: center; justify-content: center; }
+
+    /* Animated dash lines */
+    @keyframes dashMove {
+      from { stroke-dashoffset: 20; }
+      to { stroke-dashoffset: 0; }
+    }
+    .dash-anim {
+      animation: dashMove 1.2s linear infinite;
+    }
+
+    /* Cloud box */
+    .fleet-center, .fleet-right { flex-shrink: 0; }
+    .fleet-cloud-box, .fleet-browser-box {
+      background: var(--bg-card); border: 1px solid rgba(59,130,246,0.3);
+      border-radius: 14px; padding: 20px 24px; text-align: center;
+      box-shadow: 0 0 28px rgba(59,130,246,0.08);
+    }
+    .fleet-browser-box {
+      border-color: rgba(59,130,246,0.2);
+      box-shadow: none;
+    }
+    .fleet-cloud-icon { font-size: 28px; margin-bottom: 8px; }
+    .fleet-cloud-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+    .fleet-cloud-sub { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+
+    /* Callouts */
+    .cloud-callouts {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 16px; margin-top: 40px;
+    }
+    @media (max-width: 680px) { .cloud-callouts { grid-template-columns: 1fr; } }
+    .cloud-callout {
+      background: rgba(59,130,246,0.04); border: 1px solid rgba(59,130,246,0.12);
+      border-radius: 12px; padding: 20px; text-align: center;
+    }
+    .callout-icon { font-size: 24px; margin-bottom: 10px; }
+    .callout-title { font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+    .callout-sub { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
+
+    /* Responsive: stack fleet diagram */
+    @media (max-width: 860px) {
+      .fleet-diagram { flex-direction: column; align-items: center; }
+      .fleet-connector-col { transform: rotate(90deg); padding: 8px 0; }
+      .fleet-grid { grid-template-columns: repeat(3, 1fr); }
+    }
   </style>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
@@ -321,14 +456,63 @@
 
 <!-- Hero -->
 <div class="hero">
-  <div class="hero-badge">How it works today</div>
+  <div class="hero-badge">Self-Hosted &amp; Cloud</div>
   <h1>One command.<br><span>Full visibility.</span></h1>
-  <p>Install ClawMetry and get a live dashboard of everything your OpenClaw agents are doing - tool calls, sub-agents, cron jobs, token costs. No account. No config. Just run it.</p>
+  <p>Install ClawMetry locally for free, or connect a fleet of Mac Minis to ClawMetry Cloud — E2E encrypted, one dashboard for everything.</p>
   <div class="hero-cta">
     <a href="/#get-started" class="btn-primary">Get started free</a>
     <a href="/showcase" class="btn-secondary">See it in action</a>
   </div>
 </div>
+
+<!-- Which version is right for you? -->
+<section class="version-section">
+  <div class="section-inner">
+    <div class="section-label">Choose your setup</div>
+    <h2 class="section-title">Which version is right for you?</h2>
+    <div class="version-grid">
+      <div class="version-card version-oss">
+        <div class="version-card-header">
+          <div class="version-icon">🦞</div>
+          <div>
+            <div class="version-title">OSS / Self-Hosted</div>
+            <div class="version-price">Free &amp; open source</div>
+          </div>
+        </div>
+        <ul class="version-list">
+          <li><span class="vcheck vcheck-green">✓</span> Free, forever</li>
+          <li><span class="vcheck vcheck-green">✓</span> Open source on GitHub</li>
+          <li><span class="vcheck vcheck-green">✓</span> Runs entirely local — one machine</li>
+          <li><span class="vcheck vcheck-green">✓</span> Your data never leaves your box</li>
+          <li><span class="vcheck vcheck-green">✓</span> No account required</li>
+          <li><span class="vcheck vcheck-dim">–</span> Single node only</li>
+          <li><span class="vcheck vcheck-dim">–</span> No remote access</li>
+        </ul>
+        <a href="/#get-started" class="btn-secondary" style="display:inline-flex;margin-top:20px;">Get started free</a>
+      </div>
+      <div class="version-card version-cloud">
+        <div class="version-badge-cloud">Coming soon</div>
+        <div class="version-card-header">
+          <div class="version-icon">☁️</div>
+          <div>
+            <div class="version-title">ClawMetry Cloud</div>
+            <div class="version-price" style="color:var(--blue);">Managed fleet</div>
+          </div>
+        </div>
+        <ul class="version-list">
+          <li><span class="vcheck vcheck-blue">✓</span> Managed &amp; always on</li>
+          <li><span class="vcheck vcheck-blue">✓</span> End-to-end encrypted</li>
+          <li><span class="vcheck vcheck-blue">✓</span> Multi-node fleet (10+ Mac Minis)</li>
+          <li><span class="vcheck vcheck-blue">✓</span> Access dashboard from anywhere</li>
+          <li><span class="vcheck vcheck-blue">✓</span> Team access &amp; sharing</li>
+          <li><span class="vcheck vcheck-blue">✓</span> Zero plaintext on our servers</li>
+          <li><span class="vcheck vcheck-blue">✓</span> One view for all nodes</li>
+        </ul>
+        <a href="#cloud-arch" class="btn-cloud" style="display:inline-flex;margin-top:20px;">See how it works ↓</a>
+      </div>
+    </div>
+  </div>
+</section>
 
 <!-- How it actually works -->
 <section class="arch-section">
@@ -369,6 +553,116 @@
 
     <div style="text-align:center;margin-top:20px;">
       <div class="arch-note">Runs locally on the same machine as OpenClaw. Your data never leaves your box.</div>
+    </div>
+  </div>
+</section>
+
+<!-- Cloud Fleet Architecture -->
+<section class="cloud-arch-section" id="cloud-arch">
+  <div class="section-inner">
+    <div class="cloud-badge">ClawMetry Cloud</div>
+    <h2 class="section-title">Monitor a fleet of Mac Minis — from anywhere</h2>
+    <p class="section-sub">Each node encrypts its data locally before sending. ClawMetry Cloud never sees plaintext. You see every machine in one dashboard, wherever you are.</p>
+
+    <div class="fleet-diagram">
+      <!-- Left: nodes grid -->
+      <div class="fleet-left">
+        <div class="fleet-grid">
+          <div class="fleet-node">
+            <span class="fleet-icon">🖥️</span>
+            <span class="fleet-label">Mac Mini 1</span>
+            <span class="fleet-lock">🔒</span>
+          </div>
+          <div class="fleet-node">
+            <span class="fleet-icon">🖥️</span>
+            <span class="fleet-label">Mac Mini 2</span>
+            <span class="fleet-lock">🔒</span>
+          </div>
+          <div class="fleet-node">
+            <span class="fleet-icon">🖥️</span>
+            <span class="fleet-label">Mac Mini 3</span>
+            <span class="fleet-lock">🔒</span>
+          </div>
+          <div class="fleet-node">
+            <span class="fleet-icon">🖥️</span>
+            <span class="fleet-label">Mac Mini 4</span>
+            <span class="fleet-lock">🔒</span>
+          </div>
+          <div class="fleet-node">
+            <span class="fleet-icon">🖥️</span>
+            <span class="fleet-label">Mac Mini 5</span>
+            <span class="fleet-lock">🔒</span>
+          </div>
+          <div class="fleet-node fleet-node-more">
+            <span class="fleet-icon">🖥️</span>
+            <span class="fleet-label">Mac Mini 10+</span>
+            <span class="fleet-lock">🔒</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Middle connector: nodes → cloud -->
+      <div class="fleet-connector-col">
+        <div class="fleet-connector-line">
+          <svg width="80" height="120" viewBox="0 0 80 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M 70 10 Q 80 60 70 110" stroke="rgba(59,130,246,0.15)" stroke-width="1" fill="none"/>
+            <line x1="70" y1="10" x2="10" y2="10" stroke="rgba(59,130,246,0.4)" stroke-width="1.5" stroke-dasharray="4 3" class="dash-anim"/>
+            <line x1="70" y1="34" x2="10" y2="34" stroke="rgba(59,130,246,0.4)" stroke-width="1.5" stroke-dasharray="4 3" class="dash-anim" style="animation-delay:0.2s"/>
+            <line x1="70" y1="58" x2="10" y2="58" stroke="rgba(59,130,246,0.4)" stroke-width="1.5" stroke-dasharray="4 3" class="dash-anim" style="animation-delay:0.4s"/>
+            <line x1="70" y1="82" x2="10" y2="82" stroke="rgba(59,130,246,0.4)" stroke-width="1.5" stroke-dasharray="4 3" class="dash-anim" style="animation-delay:0.6s"/>
+            <line x1="70" y1="106" x2="10" y2="106" stroke="rgba(59,130,246,0.4)" stroke-width="1.5" stroke-dasharray="4 3" class="dash-anim" style="animation-delay:0.8s"/>
+            <line x1="70" y1="130" x2="10" y2="130" stroke="rgba(59,130,246,0.4)" stroke-width="1.5" stroke-dasharray="4 3" class="dash-anim" style="animation-delay:1.0s"/>
+            <polygon points="75,60 65,54 65,66" fill="rgba(59,130,246,0.7)"/>
+          </svg>
+        </div>
+        <div class="fleet-connector-label">E2E encrypted</div>
+      </div>
+
+      <!-- Center: cloud box -->
+      <div class="fleet-center">
+        <div class="fleet-cloud-box">
+          <div class="fleet-cloud-icon">☁️</div>
+          <div class="fleet-cloud-title">ClawMetry Cloud</div>
+          <div class="fleet-cloud-sub">Zero plaintext<br>on our servers</div>
+        </div>
+      </div>
+
+      <!-- Right connector: cloud → browser -->
+      <div class="fleet-connector-col">
+        <svg width="80" height="40" viewBox="0 0 80 40" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;margin:auto;">
+          <line x1="0" y1="20" x2="60" y2="20" stroke="rgba(59,130,246,0.5)" stroke-width="1.5" stroke-dasharray="4 3" class="dash-anim" style="animation-delay:0.5s"/>
+          <polygon points="70,20 58,13 58,27" fill="rgba(59,130,246,0.8)"/>
+        </svg>
+        <div class="fleet-connector-label">anywhere</div>
+      </div>
+
+      <!-- Right: browser -->
+      <div class="fleet-right">
+        <div class="fleet-browser-box">
+          <div class="fleet-cloud-icon">🌐</div>
+          <div class="fleet-cloud-title">Your dashboard</div>
+          <div class="fleet-cloud-sub">Any browser,<br>anywhere</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Callouts -->
+    <div class="cloud-callouts">
+      <div class="cloud-callout">
+        <div class="callout-icon">🔐</div>
+        <div class="callout-title">E2E Encrypted</div>
+        <div class="callout-sub">Data is encrypted on-device before it leaves your Mac Mini</div>
+      </div>
+      <div class="cloud-callout">
+        <div class="callout-icon">🚫</div>
+        <div class="callout-title">Zero plaintext on our servers</div>
+        <div class="callout-sub">ClawMetry Cloud only ever sees ciphertext. Only you can decrypt.</div>
+      </div>
+      <div class="cloud-callout">
+        <div class="callout-icon">🗺️</div>
+        <div class="callout-title">Any node, one view</div>
+        <div class="callout-sub">All your Mac Minis in one dashboard. Switch between nodes instantly.</div>
+      </div>
     </div>
   </div>
 </section>
