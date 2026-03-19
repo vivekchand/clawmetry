@@ -16360,12 +16360,16 @@ def api_brain_stream():
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
-@bp_logs.route('/api/flow-events')
-@bp_logs.route('/api/flow')
+@bp_logs.route('/api/flow-events', methods=['GET', 'HEAD'])
+@bp_logs.route('/api/flow', methods=['GET', 'HEAD'])
 def api_flow_events():
     """SSE endpoint — emits typed flow events (msg_in, msg_out, tool_call, tool_result).
     No auth required. Tails gateway.log + active session JSONL on disk.
+    HEAD requests return 200 immediately (for health checks).
     """
+    if request.method == 'HEAD':
+        return Response('', status=200, mimetype='text/event-stream',
+                        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
     import glob as _glob
 
     def _find_active_jsonl():
