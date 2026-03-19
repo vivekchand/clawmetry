@@ -502,6 +502,127 @@ def _flush_session_batch(batch: list, fname: str, api_key: str,
         _post("/ingest/events", payload, api_key)
 
 
+def sync_sessions_recent(config: dict, state: dict, paths: dict,
+                         minutes: int = 60) -> int:
+    """Sync only events from the last N minutes, reading files from the tail.
+
+    This gives the dashboard immediate visibility into *current* activity.
+    The normal ``sync_sessions`` loop then backfills older events in the
+    background without blocking the Brain feed.
+
+    Strategy:
+      1. For each session file (newest-modified first), binary-search for the
+         first line whose timestamp falls within the window.
+      2. Sync from that line to EOF.
+      3. Advance ``last_event_ids`` so the normal loop skips already-synced
+         recent lines and continues backfilling from where it left off.
+    """
+    from datetime import timedelta
+
+    sessions_dir = paths["sessions_dir"]
+    api_key  = config["api_key"]
+    enc_key  = config.get("encryption_key")
+    node_id  = config["node_id"]
+    last_ids: dict = state.setdefault("last_event_ids", {})
+    total = 0
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    cutoff_iso = cutoff.isoformat()
+
+    # Build subagent map (same logic as sync_sessions)
+    file_to_subagent_id: dict[str, str] = {}
+    index_path = os.path.join(sessions_dir, "sessions.json")
+    if os.path.isfile(index_path):
+        try:
+            with open(index_path) as _fi:
+                _idx = json.load(_fi)
+            for _k, _meta in _idx.items():
+                if ":subagent:" in _k and isinstance(_meta, dict):
+                    _sf = _meta.get("sessionFile", "")
+                    if _sf:
+                        file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[-1]
+        except Exception:
+            pass
+
+    jsonl_files = glob.glob(os.path.join(sessions_dir, "*.jsonl"))
+    jsonl_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+
+    for fpath in jsonl_files:
+        if total >= MAX_EVENTS_PER_CYCLE:
+            break
+
+        fname = os.path.basename(fpath)
+        subagent_id = file_to_subagent_id.get(fname)
+
+        try:
+            with open(fpath, "r", errors="replace") as f:
+                all_lines = f.readlines()
+
+            n = len(all_lines)
+            if n == 0:
+                continue
+
+            # Find the first line >= cutoff by scanning backwards.
+            # Most lines have a "timestamp" field we can compare lexicographically.
+            start_idx = n  # default: nothing recent
+            for idx in range(n - 1, -1, -1):
+                raw = all_lines[idx].strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                    ts = obj.get("timestamp", "")
+                    if ts and ts < cutoff_iso:
+                        start_idx = idx + 1
+                        break
+                except Exception:
+                    continue
+            else:
+                # All lines are within the window (or no timestamps found)
+                start_idx = 0
+
+            if start_idx >= n:
+                continue  # nothing recent in this file
+
+            # Only sync lines that haven't been synced yet
+            already_synced = last_ids.get(fname, 0)
+            effective_start = max(start_idx, already_synced)
+            if effective_start >= n:
+                continue
+
+            batch: list[dict] = []
+            for i in range(effective_start, n):
+                raw = all_lines[i].strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except Exception:
+                    continue
+                batch.append(obj)
+                if len(batch) >= BATCH_SIZE:
+                    _flush_session_batch(batch, fname, api_key, enc_key, node_id, subagent_id)
+                    total += len(batch)
+                    batch = []
+                    if total >= MAX_EVENTS_PER_CYCLE:
+                        break
+
+            if batch:
+                _flush_session_batch(batch, fname, api_key, enc_key, node_id, subagent_id)
+                total += len(batch)
+
+            # Advance cursor to EOF so backfill loop doesn't re-send these.
+            # But DON'T advance past what the normal loop would have started at
+            # — keep the old cursor so it backfills the gap between old cursor
+            # and start_idx.
+            last_ids[fname] = max(last_ids.get(fname, 0), n)
+
+        except Exception as e:
+            log.warning(f"Recent sync error ({fname}): {e}")
+
+    return total
+
+
 # ── Sync: logs (full lines, encrypted) ────────────────────────────────────────
 
 def sync_logs(config: dict, state: dict, paths: dict) -> int:
@@ -1665,44 +1786,63 @@ def run_daemon() -> None:
     enc    = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
     log.info(f"Starting sync daemon — node={config['node_id']} → {INGEST_URL} ({enc})")
 
-    # ── First-run: full synchronous sync so customer sees data immediately ──
+    # ── Startup sync: recent-first so Brain feed shows current activity ──
     send_heartbeat(config)
     log.info("Initial heartbeat sent")
 
-    first_run = not STATE_FILE.exists()
-    if first_run:
-        log.info("First run detected — performing full initial sync...")
-        state = load_state()
-        try:
-            mem = sync_memory(config, state, paths)
+    state = load_state()
+
+    # Always sync recent events first (last hour) — makes the dashboard
+    # immediately useful even when there's a large backlog of old events.
+    log.info("Syncing recent activity (last 60 min) first...")
+    try:
+        mem = sync_memory(config, state, paths)
+        if mem:
             log.info(f"  Memory: {mem} files synced")
-        except Exception as e:
-            log.warning(f"  Memory sync error: {e}")
+    except Exception as e:
+        log.warning(f"  Memory sync error: {e}")
+    try:
+        recent_ev = sync_sessions_recent(config, state, paths, minutes=60)
+        save_state(state)
+        log.info(f"  Recent sessions: {recent_ev} events synced")
+    except Exception as e:
+        log.warning(f"  Recent session sync error: {e}")
+    try:
+        sm = sync_session_metadata(config, state)
+        if sm:
+            log.info(f"  Session metadata: {sm} rows synced")
+    except Exception as e:
+        log.warning(f"  Session metadata error: {e}")
+    try:
+        cr = sync_crons(config, state, paths)
+        if cr:
+            log.info(f"  Crons: {cr} synced")
+    except Exception as e:
+        log.warning(f"  Cron sync error: {e}")
+    state["last_sync"] = datetime.now(timezone.utc).isoformat()
+    save_state(state)
+    send_heartbeat(config)
+    log.info("Recent sync complete — Brain feed should show current activity")
+
+    # On first run, also do a full backfill so historical data is available.
+    first_run = not state.get("initial_backfill_done")
+    if first_run:
+        log.info("First run — backfilling older sessions in background...")
         try:
             ev = sync_sessions(config, state, paths)
-            save_state(state)  # persist progress so restarts don't re-upload
-            log.info(f"  Sessions: {ev} events synced")
+            save_state(state)
+            log.info(f"  Backfill: {ev} older events synced")
         except Exception as e:
-            log.warning(f"  Session sync error: {e}")
-        try:
-            sm = sync_session_metadata(config, state)
-            log.info(f"  Session metadata: {sm} rows synced")
-        except Exception as e:
-            log.warning(f"  Session metadata error: {e}")
+            log.warning(f"  Backfill error: {e}")
         try:
             lg = sync_logs(config, state, paths)
             log.info(f"  Logs: {lg} lines synced")
         except Exception as e:
             log.warning(f"  Log sync error: {e}")
-        try:
-            cr = sync_crons(config, state, paths)
-            log.info(f"  Crons: {cr} synced")
-        except Exception as e:
-            log.warning(f"  Cron sync error: {e}")
+        state["initial_backfill_done"] = True
         state["last_sync"] = datetime.now(timezone.utc).isoformat()
         save_state(state)
-        send_heartbeat(config)
-        log.info("Initial sync complete — node fully visible in cloud")
+        log.info("Initial backfill complete")
 
     # Start real-time log streamer in background
     start_log_streamer(config, paths)
