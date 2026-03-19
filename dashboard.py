@@ -16208,6 +16208,7 @@ def api_brain_stream():
 
 
 @bp_logs.route('/api/flow-events')
+@bp_logs.route('/api/flow')
 def api_flow_events():
     """SSE endpoint — emits typed flow events (msg_in, msg_out, tool_call, tool_result).
     No auth required. Tails gateway.log + active session JSONL on disk.
@@ -16399,6 +16400,7 @@ def api_logs_stream():
 
 
 @bp_memory.route('/api/memory-files')
+@bp_memory.route('/api/memory')
 def api_memory_files():
     return jsonify(_get_memory_files())
 
