@@ -2632,6 +2632,68 @@ def install_ps1():
 def cloud():
     return send_from_directory(".", "cloud.html")
 
+
+
+@app.route("/hidden/pitch-deck")
+def pitch_deck_page():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawMetry - Investor Pitch Deck</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Inter, -apple-system, sans-serif; background: #0B0F1A; color: #E2E8F0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 40px 24px; }
+  .card { max-width: 540px; width: 100%; text-align: center; }
+  .logo { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 32px; }
+  .logo span { color: #E5443A; }
+  h1 { font-size: 32px; font-weight: 800; margin-bottom: 12px; letter-spacing: -1px; }
+  .sub { color: #64748B; font-size: 15px; margin-bottom: 40px; line-height: 1.6; }
+  .btn { display: inline-flex; align-items: center; gap: 10px; padding: 16px 36px; border-radius: 12px; font-size: 16px; font-weight: 700; text-decoration: none; transition: all 0.2s; margin: 6px; }
+  .btn-primary { background: #E5443A; color: #fff; box-shadow: 0 0 20px rgba(229,68,58,0.3); }
+  .btn-primary:hover { filter: brightness(1.15); box-shadow: 0 0 30px rgba(229,68,58,0.4); transform: translateY(-1px); }
+  .btn-secondary { background: transparent; color: #E2E8F0; border: 1px solid rgba(255,255,255,0.12); }
+  .btn-secondary:hover { border-color: rgba(229,68,58,0.3); color: #E5443A; }
+  .stats { display: flex; justify-content: center; gap: 32px; margin-bottom: 40px; flex-wrap: wrap; }
+  .stat .num { font-size: 28px; font-weight: 800; color: #E5443A; }
+  .stat .label { font-size: 12px; color: #64748B; margin-top: 4px; }
+  .meta { color: #4A5568; font-size: 12px; margin-top: 32px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Claw<span>Metry</span></div>
+  <h1>Investor Pitch Deck</h1>
+  <p class="sub">Real-time observability for AI agents. The Datadog for OpenClaw.</p>
+  <div class="stats">
+    <div class="stat"><div class="num">75k+</div><div class="label">Installs</div></div>
+    <div class="stat"><div class="num">100+</div><div class="label">Countries</div></div>
+    <div class="stat"><div class="num">133</div><div class="label">Cloud Users</div></div>
+    <div class="stat"><div class="num">#5</div><div class="label">Product Hunt</div></div>
+  </div>
+  <div>
+    <a href="/pitch-deck.pdf" class="btn btn-primary" download>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download PDF
+    </a>
+    <a href="/pitch-deck.html" class="btn btn-secondary" target="_blank">View Online</a>
+  </div>
+  <p class="meta">Vivek Chand &middot; vivek@clawmetry.com &middot; clawmetry.com</p>
+</div>
+</body>
+</html>"""
+
+@app.route("/pitch-deck.pdf")
+def pitch_deck_pdf():
+    return send_from_directory(".", "pitch-deck.pdf", mimetype="application/pdf")
+
+@app.route("/pitch-deck.html")
+def pitch_deck_html():
+    return send_from_directory(".", "pitch-deck.html")
+
 @app.route("/<path:path>")
 def static_files(path):
     # Don't serve admin routes as static
