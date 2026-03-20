@@ -471,3 +471,43 @@ class TestMemoryAnalytics:
         for f in d["files"]:
             assert_keys(f, "path", "sizeBytes", "sizeKB", "estTokens", "status")
             assert f["status"] in ("ok", "warning", "critical")
+
+
+class TestServiceStatus:
+    """Tests for service status indicators (GH #254)."""
+
+    def test_service_status_returns_200(self, api, base_url):
+        """Service status endpoint returns 200."""
+        d = assert_ok(get(api, base_url, "/api/service-status"))
+        assert_keys(d, "gateway", "channels", "sync", "resources", "uptime", "timestamp")
+
+    def test_service_status_gateway_has_status(self, api, base_url):
+        """Gateway status has status and port fields."""
+        d = assert_ok(get(api, base_url, "/api/service-status"))
+        gw = d["gateway"]
+        assert "status" in gw, "Gateway missing 'status'"
+        assert "port" in gw, "Gateway missing 'port'"
+        assert gw["status"] in ("healthy", "degraded", "down", "unknown"), \
+            f"Unexpected gateway status: {gw['status']}"
+
+    def test_service_status_channels_is_list(self, api, base_url):
+        """Channels field is a list."""
+        d = assert_ok(get(api, base_url, "/api/service-status"))
+        assert isinstance(d["channels"], list), "channels should be a list"
+
+    def test_service_status_sync_has_status(self, api, base_url):
+        """Sync daemon status has status and detail fields."""
+        d = assert_ok(get(api, base_url, "/api/service-status"))
+        sync = d["sync"]
+        assert "status" in sync, "Sync missing 'status'"
+        assert "detail" in sync, "Sync missing 'detail'"
+        assert sync["status"] in ("healthy", "down", "unknown"), \
+            f"Unexpected sync status: {sync['status']}"
+
+    def test_service_status_timestamp_is_recent(self, api, base_url):
+        """Timestamp is a recent Unix timestamp."""
+        import time
+        d = assert_ok(get(api, base_url, "/api/service-status"))
+        ts = d["timestamp"]
+        assert isinstance(ts, int), "timestamp should be int"
+        assert abs(ts - time.time()) < 60, "timestamp should be within 60s of now"
