@@ -409,8 +409,9 @@
     }
     .mobile-subnav {
       display: flex; gap: 0; overflow-x: auto; padding: 0 4px;
-      border-bottom: 1px solid rgba(255,255,255,0.1); background: #111827;
+      border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(17,24,39,0.95);
       -webkit-overflow-scrolling: touch; scrollbar-width: none;
+      position: sticky; top: 56px; z-index: 99; backdrop-filter: blur(12px);
     }
     .mobile-subnav::-webkit-scrollbar { display: none; }
     .mobile-subnav a {
