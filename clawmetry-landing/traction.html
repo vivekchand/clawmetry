@@ -79,7 +79,19 @@
       .metrics { grid-template-columns: repeat(2, 1fr); }
       .metric-number { font-size: 28px; }
     }
-  </style>
+  
+    @media (max-width: 768px) {
+      .nav-links, .nav-links { gap: 10px; }
+      .nav-links a { font-size: 12px; }
+      .nav-links .nav-gh, .nav-link-hide { display: none; }
+      .nav-logo-text { font-size: 15px; }
+      .nav-inner { padding: 0 12px; }
+    }
+    @media (max-width: 480px) {
+      .nav-links a { font-size: 11px; }
+      .nav-links { gap: 6px; }
+    }
+</style>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
@@ -212,7 +224,7 @@
     <div class="timeline-item"><div class="timeline-date">Feb 13</div><div class="timeline-text">Open-sourced on GitHub. External PRs started coming in.</div></div>
     <div class="timeline-item"><div class="timeline-date">Feb 14</div><div class="timeline-text">OpenClaw creator joins OpenAI. Ecosystem accelerates.</div></div>
     <div class="timeline-item"><div class="timeline-date">Feb 18</div><div class="timeline-text">ClawMetry Product Hunt launch. #5 on the day. 198 upvotes.</div></div>
-    <div class="timeline-item"><div class="timeline-date">Feb 20</div><div class="timeline-text">Andrej Karpathy buys a Mac mini to tinker with OpenClaw — but wants visibility into what it is doing with his data.</div></div>
+    <div class="timeline-item"><div class="timeline-date">Feb 20</div><div class="timeline-text">Andrej Karpathy buys a Mac mini to tinker with OpenClaw. but wants visibility into what it is doing with his data.</div></div>
     <div class="timeline-item"><div class="timeline-date">Now</div><div class="timeline-text">Building Mac + iOS app, managed cloud, and governance layer.</div></div>
   </div>
 

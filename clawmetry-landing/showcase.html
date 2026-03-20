@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Showcase — What People Are Building with ClawMetry</title>
+  <title>Showcase. What People Are Building with ClawMetry</title>
   <meta name="description" content="See what the community is building with ClawMetry. Real stories from developers using ClawMetry to monitor AI agents, track token costs, and get full visibility into their OpenClaw setups.">
   <link rel="canonical" href="https://clawmetry.com/showcase">
   <link rel="icon" href="/favicon.ico">
@@ -100,7 +100,7 @@
       column-gap: 20px;
     }
 
-    /* ── Cards — same design as landing tt-card ── */
+    /* ── Cards. same design as landing tt-card ── */
     .tt-card {
       break-inside: avoid;
       display: block;
@@ -183,7 +183,19 @@
       .cards-grid { columns: 1; }
       .submit-box { padding: 32px 20px; }
     }
-  </style>
+  
+    @media (max-width: 768px) {
+      .nav-links, .nav-links { gap: 10px; }
+      .nav-links a { font-size: 12px; }
+      .nav-links .nav-gh, .nav-link-hide { display: none; }
+      .nav-logo-text { font-size: 15px; }
+      .nav-inner { padding: 0 12px; }
+    }
+    @media (max-width: 480px) {
+      .nav-links a { font-size: 11px; }
+      .nav-links { gap: 6px; }
+    }
+</style>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">

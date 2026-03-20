@@ -6,16 +6,16 @@
   <title>Pricing - ClawMetry</title>
   <meta name="description" content="ClawMetry is free and open source forever. Cloud Pro ($5/node/month) gets you remote access from anywhere - same features, no LAN required.">
   <link rel="canonical" href="https://clawmetry.com/pricing">
-  <meta property="og:title" content="ClawMetry Pricing — Free & Open Source Forever">
+  <meta property="og:title" content="ClawMetry Pricing. Free & Open Source Forever">
   <meta property="og:description" content="ClawMetry is free and open source. Cloud Pro ($5/node/month) gives you remote access from anywhere. No credit card required to start.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://clawmetry.com/pricing">
   <meta property="og:image" content="https://clawmetry.com/dashboard-overview-og.png">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="ClawMetry Pricing — Free Agent Observability">
+  <meta name="twitter:title" content="ClawMetry Pricing. Free Agent Observability">
   <meta name="twitter:description" content="Free open-source plan forever. Cloud Pro at $5/node/month. pip install clawmetry to get started.">
   <meta name="twitter:image" content="https://clawmetry.com/dashboard-overview-og.png">
-  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"ClawMetry","description":"Real-time AI agent observability dashboard for OpenClaw","url":"https://clawmetry.com","offers":[{"@type":"Offer","name":"Free Open Source","price":"0","priceCurrency":"USD","description":"Self-hosted, full features, free forever"},{"@type":"Offer","name":"Cloud Pro","price":"5","priceCurrency":"USD","priceSpecification":{"billingDuration":"P1M","description":"Per node per month — 1 node = $5/month, 5 nodes = $25/month"},"description":"Remote access from anywhere, end-to-end encrypted, $5/node/month"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"ClawMetry","description":"Real-time AI agent observability dashboard for OpenClaw","url":"https://clawmetry.com","offers":[{"@type":"Offer","name":"Free Open Source","price":"0","priceCurrency":"USD","description":"Self-hosted, full features, free forever"},{"@type":"Offer","name":"Cloud Pro","price":"5","priceCurrency":"USD","priceSpecification":{"billingDuration":"P1M","description":"Per node per month. 1 node = $5/month, 5 nodes = $25/month"},"description":"Remote access from anywhere, end-to-end encrypted, $5/node/month"}]}</script>
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
@@ -195,7 +195,19 @@
       .pcard.featured { order: -1; }
     }
     @media (max-width: 640px) { .nav-links { display: none; } }
-  </style>
+  
+    @media (max-width: 768px) {
+      .nav-links, .nav-links { gap: 10px; }
+      .nav-links a { font-size: 12px; }
+      .nav-links .nav-gh, .nav-link-hide { display: none; }
+      .nav-logo-text { font-size: 15px; }
+      .nav-inner { padding: 0 12px; }
+    }
+    @media (max-width: 480px) {
+      .nav-links a { font-size: 11px; }
+      .nav-links { gap: 6px; }
+    }
+</style>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
@@ -342,7 +354,7 @@
 
     <div class="faq-item">
       <div class="faq-q" onclick="this.parentElement.classList.toggle('open')">What counts as a node?</div>
-      <div class="faq-a">Pricing is $5/node/month. Add as many nodes as you need — each one is $5/month. 1 node = $5/month, 5 nodes = $25/month.</div>
+      <div class="faq-a">Pricing is $5/node/month. Add as many nodes as you need. each one is $5/month. 1 node = $5/month, 5 nodes = $25/month.</div>
     </div>
 
     <div class="faq-item">

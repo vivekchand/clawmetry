@@ -254,7 +254,19 @@
       .footer-inner { flex-direction: column; text-align: center; }
       .nav-links .nav-link-hide { display: none; }
     }
-  </style>
+  
+    @media (max-width: 768px) {
+      .nav-links, .nav-links { gap: 10px; }
+      .nav-links a { font-size: 12px; }
+      .nav-links .nav-gh, .nav-link-hide { display: none; }
+      .nav-logo-text { font-size: 15px; }
+      .nav-inner { padding: 0 12px; }
+    }
+    @media (max-width: 480px) {
+      .nav-links a { font-size: 11px; }
+      .nav-links { gap: 6px; }
+    }
+</style>
 </head>
 <body>
 
