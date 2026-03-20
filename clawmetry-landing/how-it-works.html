@@ -442,9 +442,12 @@
 
     /* Responsive: stack fleet diagram */
     @media (max-width: 860px) {
-      .fleet-diagram { flex-direction: column; align-items: center; }
+      .fleet-diagram { flex-direction: column; align-items: center; text-align: center; }
       .fleet-connector-col { transform: rotate(90deg); padding: 8px 0; }
-      .fleet-grid { grid-template-columns: repeat(3, 1fr); }
+      .fleet-grid { grid-template-columns: repeat(2, 1fr); max-width: 320px; margin: 0 auto; }
+      .fleet-left { display: flex; justify-content: center; width: 100%; }
+      .callout-grid { grid-template-columns: 1fr !important; }
+      .cloud-arch-section .section-inner { padding: 0 16px; }
     }
   </style>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
