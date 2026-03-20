@@ -4707,6 +4707,10 @@ metrics_store = {
     "messages": [],     # [{timestamp, channel, outcome, duration_ms}]
     "webhooks": [],     # [{timestamp, channel, type}]
     "queues": [],       # [{timestamp, channel, depth}]
+    "sessions": [],     # [{timestamp, session_id, state, stuck}]  openclaw.session.state
+    "gw_health": [],    # [{timestamp, source, value}]  openclaw.diagnostic.heartbeat
+    "retries": [],      # [{timestamp, session_id, attempt}]  openclaw.run.attempt
+    "dequeues": [],     # [{timestamp, lane, enqueue_ts}] for wait-time computation
 }
 MAX_STORE_ENTRIES = 10_000
 STORE_RETENTION_DAYS = 14
@@ -5538,6 +5542,34 @@ def _process_otlp_metrics(pb_data):
                             'timestamp': ts,
                             'channel': attrs.get('channel', attrs.get('lane', resource_attrs.get('channel', ''))),
                             'depth': _get_dp_value(dp),
+                        })
+                elif name in ('openclaw.session.state', 'openclaw.session.stuck'):
+                    # Track session state changes and stuck-session events (issue #36)
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('sessions', {
+                            'timestamp': ts,
+                            'session_id': attrs.get('session_id', attrs.get('session', resource_attrs.get('session_id', ''))),
+                            'state': attrs.get('state', attrs.get('new', '')),
+                            'stuck': 'stuck' in name,
+                        })
+                elif name == 'openclaw.diagnostic.heartbeat':
+                    # Gateway health pulse — used to drive header health indicator (issue #36)
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('gw_health', {
+                            'timestamp': ts,
+                            'source': attrs.get('source', resource_attrs.get('source', 'gateway')),
+                            'value': _get_dp_value(dp),
+                        })
+                elif name == 'openclaw.run.attempt':
+                    # Run retry counter — surface retry count on session cards (issue #36)
+                    for dp in _get_data_points(metric):
+                        attrs = _get_dp_attrs(dp)
+                        _add_metric('retries', {
+                            'timestamp': ts,
+                            'session_id': attrs.get('session_id', attrs.get('session', resource_attrs.get('session_id', ''))),
+                            'attempt': int(_get_dp_value(dp) or 0),
                         })
 
 
@@ -7652,6 +7684,25 @@ function clawmetryLogout(){
     <div class="flow-stat"><span class="flow-stat-label">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
     <div class="flow-stat"><span class="flow-stat-label">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
     <div class="flow-stat"><span class="flow-stat-label">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
+    <div class="flow-stat" id="flow-stat-gw-health" title="Gateway diagnostic heartbeat status (openclaw.diagnostic.heartbeat)">
+      <span class="flow-stat-label">Gateway Health</span>
+      <span class="flow-stat-value" id="flow-gw-health" style="font-size:14px;">&#8212;</span>
+    </div>
+    <div class="flow-stat" id="flow-stat-queue-wait" title="Average queue wait time (lane enqueue &#x2192; dequeue)" style="display:none;">
+      <span class="flow-stat-label">Queue Wait</span>
+      <span class="flow-stat-value" id="flow-queue-wait" style="font-size:16px;">&#8212;</span>
+    </div>
+    <div class="flow-stat" id="flow-stat-retries" title="Run retry count this session" style="display:none;">
+      <span class="flow-stat-label">Retries</span>
+      <span class="flow-stat-value" id="flow-retry-count" style="font-size:18px;color:#f59e0b;">0</span>
+    </div>
+  </div>
+  <!-- Stuck session alert banner (issue #36) -->
+  <div id="flow-stuck-alert" style="display:none;align-items:center;gap:10px;background:#ef444420;border:1px solid #ef4444;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:13px;color:#ef4444;">
+    <span>&#x26A0;&#xFE0F;</span>
+    <span><strong>Stuck session detected</strong> &#x2014; agent has been processing without output</span>
+    <span class="stuck-ts" style="margin-left:auto;font-size:11px;color:#ef4444aa;"></span>
+    <button onclick="document.getElementById('flow-stuck-alert').style.display='none'" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;">&times;</button>
   </div>
   <div class="flow-container">
     <svg id="flow-svg" viewBox="0 0 980 550" preserveAspectRatio="xMidYMid meet">
@@ -11441,6 +11492,49 @@ function updateFlowStats() {
       var tok = document.getElementById('flow-tokens');
       if (tok) tok.textContent = (d.mainTokens / 1000).toFixed(0) + 'K';
     }).catch(function(){});
+    // Poll diagnostic events for gateway health + stuck sessions (issue #36)
+    fetch('/api/diagnostic-events').then(function(r){return r.json();}).then(function(d) {
+      var gwEl = document.getElementById('flow-gw-health');
+      if (gwEl) {
+        if (d.gateway_healthy === true) {
+          gwEl.textContent = '\u2705 Healthy';
+          gwEl.style.color = '#22c55e';
+          gwEl.style.fontSize = '13px';
+        } else if (d.gateway_last_heartbeat) {
+          gwEl.textContent = '\u26a0\ufe0f Degraded';
+          gwEl.style.color = '#f59e0b';
+          gwEl.style.fontSize = '13px';
+        } else {
+          gwEl.textContent = '\u2014';
+          gwEl.style.color = '';
+          gwEl.style.fontSize = '14px';
+        }
+      }
+      // Show queue wait stat if data available
+      if (d.queue_avg_wait_ms > 0) {
+        var qwStat = document.getElementById('flow-stat-queue-wait');
+        if (qwStat) qwStat.style.display = '';
+        var qwEl = document.getElementById('flow-queue-wait');
+        if (qwEl) qwEl.textContent = d.queue_avg_wait_ms > 1000 ? (d.queue_avg_wait_ms/1000).toFixed(1)+'s' : d.queue_avg_wait_ms+'ms';
+      }
+      // Show retry count if retries occurred
+      if (d.retries && d.retries.length > 0) {
+        var retStat = document.getElementById('flow-stat-retries');
+        if (retStat) retStat.style.display = '';
+        var retEl = document.getElementById('flow-retry-count');
+        if (retEl) retEl.textContent = d.retries.length;
+      }
+      // Surface stuck sessions
+      if (d.stuck_sessions && d.stuck_sessions.length > 0) {
+        var stuckBanner = document.getElementById('flow-stuck-alert');
+        if (stuckBanner && stuckBanner.style.display === 'none') {
+          stuckBanner.style.display = 'flex';
+          var tsEl = stuckBanner.querySelector('.stuck-ts');
+          if (tsEl) tsEl.textContent = new Date().toLocaleTimeString();
+          setTimeout(function(){ stuckBanner.style.display = 'none'; }, 30000);
+        }
+      }
+    }).catch(function(){});
   }
 }
 
@@ -11784,13 +11878,58 @@ function processFlowEvent(line) {
   if (msg.includes('lane enqueue') && msg.includes('main')) {
     if (now - (flowThrottles['lane']||0) < 2000) return;
     flowThrottles['lane'] = now;
+    // Record enqueue timestamp for wait-time computation (issue #36)
+    window._laneEnqueueTs = Date.now();
     addFlowFeedItem('📥 Task queued', '#8090b0');
+    return;
+  }
+  // lane dequeue: compute and display queue wait time (issue #36)
+  if (msg.includes('lane dequeue') && msg.includes('main')) {
+    if (now - (flowThrottles['lane-deq']||0) < 2000) return;
+    flowThrottles['lane-deq'] = now;
+    var waitMs = window._laneEnqueueTs ? (Date.now() - window._laneEnqueueTs) : 0;
+    window._laneEnqueueTs = null;
+    var waitLabel = waitMs > 1000 ? (waitMs / 1000).toFixed(1) + 's' : waitMs + 'ms';
+    addFlowFeedItem('▶️ Dequeued (wait: ' + waitLabel + ')', '#a0b0c0');
+    // Update queue wait indicator if element exists
+    var qwEl = document.getElementById('flow-queue-wait');
+    if (qwEl && waitMs > 0) qwEl.textContent = waitLabel;
     return;
   }
   if (msg.includes('tool end') || msg.includes('tool_end')) {
     if (now - (flowThrottles['tool-end']||0) < 300) return;
     flowThrottles['tool-end'] = now;
     addFlowFeedItem('✔️ Tool completed', '#50c070');
+    return;
+  }
+  // run.attempt retry detection from log tail (issue #36)
+  if (msg.includes('run.attempt') || (msg.includes('run attempt') && msg.includes('retry'))) {
+    if (now - (flowThrottles['run-retry']||0) < 1000) return;
+    flowThrottles['run-retry'] = now;
+    var attemptMatch = msg.match(/attempt[: =]+([0-9]+)/i);
+    var attemptNum = attemptMatch ? attemptMatch[1] : '?';
+    addFlowFeedItem('🔁 Retry attempt #' + attemptNum, '#f59e0b');
+    // Bump retry badge counter
+    var rBadge = document.getElementById('flow-retry-count');
+    if (rBadge) {
+      var cur = parseInt(rBadge.textContent) || 0;
+      rBadge.textContent = cur + 1;
+      rBadge.style.display = '';
+    }
+    return;
+  }
+  // openclaw.session.stuck from log tail (issue #36)
+  if (msg.includes('session.stuck') || (msg.includes('session') && msg.includes('stuck'))) {
+    if (now - (flowThrottles['session-stuck']||0) < 5000) return;
+    flowThrottles['session-stuck'] = now;
+    addFlowFeedItem('⚠️ Stuck session detected', '#ef4444');
+    // Show stuck session alert banner
+    var stuckBanner = document.getElementById('flow-stuck-alert');
+    if (stuckBanner) {
+      stuckBanner.style.display = 'flex';
+      stuckBanner.querySelector && stuckBanner.querySelector('.stuck-ts') && (stuckBanner.querySelector('.stuck-ts').textContent = new Date().toLocaleTimeString());
+      setTimeout(function(){ stuckBanner.style.display = 'none'; }, 30000);
+    }
     return;
   }
 }
@@ -15312,6 +15451,55 @@ def api_channels():
     if not configured:
         configured = ['telegram', 'signal', 'whatsapp']
     return jsonify({'channels': configured})
+
+
+@bp_overview.route('/api/diagnostic-events')
+def api_diagnostic_events():
+    """Return recent diagnostic events: session states, gateway health, retries, queue wait times (issue #36)."""
+    now = time.time()
+    window = 300  # last 5 minutes
+
+    # Gateway health: last heartbeat timestamp and value
+    gw_events = [e for e in metrics_store.get('gw_health', []) if now - e.get('timestamp', 0) < window]
+    gw_last_beat = max((e['timestamp'] for e in gw_events), default=None)
+    gw_healthy = gw_last_beat is not None and (now - gw_last_beat) < 120
+
+    # Stuck sessions from OTLP
+    stuck_events = [e for e in metrics_store.get('sessions', []) if e.get('stuck') and now - e.get('timestamp', 0) < window]
+
+    # Session state changes (last 5 min)
+    session_states = {}
+    for e in metrics_store.get('sessions', []):
+        if now - e.get('timestamp', 0) < window and e.get('session_id'):
+            session_states[e['session_id']] = e.get('state', '')
+
+    # Retry counts (last 5 min)
+    retry_map = {}
+    for e in metrics_store.get('retries', []):
+        if now - e.get('timestamp', 0) < window and e.get('session_id'):
+            sid = e['session_id']
+            retry_map[sid] = max(retry_map.get(sid, 0), e.get('attempt', 0))
+    retries = [{'session_id': k, 'attempt': v} for k, v in retry_map.items() if v > 1]
+
+    # Queue wait times from dequeue events (enqueue_ts was stored at enqueue)
+    dequeue_waits = []
+    for e in metrics_store.get('dequeues', []):
+        if now - e.get('timestamp', 0) < window:
+            enq_ts = e.get('enqueue_ts')
+            if enq_ts:
+                wait_ms = int((e['timestamp'] - enq_ts) * 1000)
+                dequeue_waits.append({'lane': e.get('lane', 'main'), 'wait_ms': wait_ms})
+    avg_wait_ms = int(sum(d['wait_ms'] for d in dequeue_waits) / len(dequeue_waits)) if dequeue_waits else 0
+
+    return jsonify({
+        'gateway_healthy': gw_healthy,
+        'gateway_last_heartbeat': gw_last_beat,
+        'stuck_sessions': [{'session_id': e.get('session_id', ''), 'ts': e.get('timestamp')} for e in stuck_events],
+        'session_states': session_states,
+        'retries': retries,
+        'queue_avg_wait_ms': avg_wait_ms,
+        'queue_wait_count': len(dequeue_waits),
+    })
 
 
 @bp_overview.route('/api/overview')
