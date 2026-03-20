@@ -1,3 +1,16 @@
+## [0.12.61] — 2026-03-20
+
+### Added
+- **Cron management UI**: full CRUD for cron jobs from the dashboard (GH #253)
+  - Run Now button with confirmation dialog for on-demand job execution
+  - Enable/Disable toggle per job with instant UI feedback
+  - Edit and Delete buttons now active (previously disabled pending gateway testing)
+  - New Job button to create cron jobs from the dashboard
+  - Auto-refresh every 30s with checkbox toggle to pause it
+  - Human-readable schedule descriptions alongside cron expressions (e.g., `*/30 * * * *` shows "every 30 minutes")
+  - Multi-node cron status panel: shows online/offline status and cron summary for each registered fleet node
+  - Execution history with heatmap calendar (click any job to expand)
+
 ## [0.12.60] — 2026-03-19
 
 ### Added

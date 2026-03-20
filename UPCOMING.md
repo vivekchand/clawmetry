@@ -10,10 +10,10 @@
 - Auto-pause gateway when budget exceeded
 - Spending history and trend charts
 
-### Cron Job Management (CRUD)
-- Create, edit, delete, enable/disable cron jobs from the dashboard
-- Run jobs on demand
-- View execution history and logs per job
+### ~~Cron Job Management (CRUD)~~ SHIPPED in v0.12.61
+- ~~Create, edit, delete, enable/disable cron jobs from the dashboard~~
+- ~~Run jobs on demand~~
+- ~~View execution history and logs per job~~
 
 ### Session Explorer
 - Click into any session to view full conversation history
