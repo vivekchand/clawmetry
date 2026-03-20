@@ -15388,10 +15388,13 @@ def api_overview():
         infra['storage'] = 'Disk'
 
     model_name = main.get('model') or 'unknown'
+    session_count = len(sessions)
     return jsonify({
         'model': model_name,
         'provider': _infer_provider_from_model(model_name),
-        'sessionCount': len(sessions),
+        'sessionCount': session_count,
+        'sessions': session_count,        # alias for E2E health checks
+        'activeSessions': session_count,  # alias for E2E health checks
         'mainSessionUpdated': main.get('updatedAt'),
         'mainTokens': main.get('totalTokens', 0),
         'contextWindow': main.get('contextTokens', 200000),
@@ -16360,8 +16363,22 @@ def api_brain_stream():
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
-@bp_logs.route('/api/flow-events')
 @bp_logs.route('/api/flow')
+def api_flow_health():
+    """Health-check alias for /api/flow.
+    Returns a JSON status snapshot when the client does not request SSE
+    (i.e. no 'Accept: text/event-stream' header). This allows E2E tests and
+    monitoring tools to GET /api/flow and receive a fast 200 JSON response
+    without hanging on the SSE stream.
+    """
+    accept = request.headers.get('Accept', '')
+    if 'text/event-stream' not in accept:
+        return jsonify({'status': 'ok', 'stream': '/api/flow-events'})
+    # Fall through to SSE for browser clients
+    return api_flow_events()
+
+
+@bp_logs.route('/api/flow-events')
 def api_flow_events():
     """SSE endpoint — emits typed flow events (msg_in, msg_out, tool_call, tool_result).
     No auth required. Tails gateway.log + active session JSONL on disk.

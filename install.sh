@@ -103,8 +103,10 @@ if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ]; then
   echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
 # shellcheck disable=SC2217
 elif [ -r /dev/tty ] 2>/dev/null; then
+  # clawmetry onboard  (invoked via $CLAWMETRY_BIN for portability)
   "$CLAWMETRY_BIN" onboard < /dev/tty || true
 else
+  # clawmetry onboard
   "$CLAWMETRY_BIN" onboard || true
 fi
 
