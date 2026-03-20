@@ -1680,6 +1680,34 @@ DASHBOARD_HTML = r"""
   .cron-error-popover .ep-close:hover { color: #fff; }
   .cron-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #16a34a; color: #fff; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600; z-index: 2000; box-shadow: 0 4px 16px rgba(0,0,0,0.3); transition: opacity 0.3s; }
   .cron-confirm-modal { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
+  /* Quick Actions panel */
+  .qa-action-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; cursor: pointer; transition: all 0.18s ease; user-select: none; position: relative; }
+  .qa-action-card:hover { border-color: var(--accent-primary, #6366f1); box-shadow: 0 0 0 2px rgba(99,102,241,0.18), var(--card-shadow); transform: translateY(-1px); }
+  .qa-action-card.qa-pending { opacity: 0.7; pointer-events: none; }
+  .qa-action-icon { font-size: 28px; margin-bottom: 8px; }
+  .qa-action-label { font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }
+  .qa-action-desc { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+  .qa-action-status { font-size: 11px; min-height: 14px; font-weight: 600; }
+  .qa-action-status.pending { color: #f59e0b; }
+  .qa-action-status.success { color: #22c55e; }
+  .qa-action-status.error { color: #ef4444; }
+  .qa-confirm-modal { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; }
+  .qa-confirm-box { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 14px; padding: 24px 28px; max-width: 380px; width: 90%; text-align: center; box-shadow: 0 12px 40px rgba(0,0,0,0.45); }
+  .qa-confirm-box h3 { font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 0 0 10px 0; }
+  .qa-confirm-box p { font-size: 13px; color: var(--text-secondary); margin: 0 0 18px 0; line-height: 1.5; }
+  .qa-confirm-box .qa-confirm-btns { display: flex; gap: 10px; justify-content: center; }
+  .qa-confirm-box button { padding: 9px 20px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .qa-confirm-yes { color: #fff; }
+  .qa-confirm-no { background: var(--button-bg, rgba(255,255,255,0.08)); color: var(--text-secondary); }
+  .qa-log-entry { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-bottom: 1px solid var(--border-primary); }
+  .qa-log-entry:last-child { border-bottom: none; }
+  .qa-log-ts { font-size: 10px; color: var(--text-muted); white-space: nowrap; padding-top: 1px; min-width: 80px; }
+  .qa-log-action { font-weight: 600; color: var(--text-primary); font-size: 12px; }
+  .qa-log-result { font-size: 11px; margin-top: 2px; }
+  .qa-log-result.success { color: #22c55e; }
+  .qa-log-result.error { color: #ef4444; }
+  .qa-log-result.pending { color: #f59e0b; }
+
   .cron-confirm-box { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 24px; max-width: 360px; text-align: center; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
   .cron-confirm-box p { margin-bottom: 16px; font-size: 14px; color: var(--text-primary); }
   .cron-confirm-box button { padding: 8px 20px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; margin: 0 6px; }
@@ -2577,6 +2605,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('channels')">Channels</div>
+    <div class="nav-tab" onclick="switchTab('actions')">Actions</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3405,6 +3434,74 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-channels -->
 
+<!-- QUICK ACTIONS -->
+<div class="page" id="page-actions">
+  <div class="refresh-bar" style="margin-bottom:6px;">
+    <button class="refresh-btn" onclick="loadActionsLog()" style="padding:4px 12px;font-size:12px;">&#8635; Refresh Log</button>
+    <span style="font-size:11px;color:var(--text-muted);margin-left:8px;" id="actions-auth-status"></span>
+  </div>
+
+  <!-- Auth warning banner -->
+  <div id="actions-auth-warning" style="display:none;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#f87171;">
+    &#9888; Authentication required to dispatch actions. Please connect your gateway token first.
+  </div>
+
+  <!-- Action Buttons Grid -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:20px;">
+
+    <div class="qa-action-card" onclick="qaConfirmAction('restart_gateway','Restart Gateway','Restart the OpenClaw gateway process on this node. Active sessions will be interrupted.','#f59e0b')" id="qa-btn-restart_gateway">
+      <div class="qa-action-icon">&#128260;</div>
+      <div class="qa-action-label">Restart Gateway</div>
+      <div class="qa-action-desc">Restart the gateway process</div>
+      <div class="qa-action-status" id="qa-status-restart_gateway"></div>
+    </div>
+
+    <div class="qa-action-card" onclick="qaConfirmAction('clear_cache','Clear Cache','Clear all in-memory caches. The dashboard will reload fresh data on next request.','#3b82f6')" id="qa-btn-clear_cache">
+      <div class="qa-action-icon">&#128465;</div>
+      <div class="qa-action-label">Clear Cache</div>
+      <div class="qa-action-desc">Flush all in-memory caches</div>
+      <div class="qa-action-status" id="qa-status-clear_cache"></div>
+    </div>
+
+    <div class="qa-action-card" onclick="qaConfirmAction('rotate_logs','Rotate Logs','Rotate the current log files. Old logs will be archived with a timestamp.','#8b5cf6')" id="qa-btn-rotate_logs">
+      <div class="qa-action-icon">&#128196;</div>
+      <div class="qa-action-label">Rotate Logs</div>
+      <div class="qa-action-desc">Archive and rotate log files</div>
+      <div class="qa-action-status" id="qa-status-rotate_logs"></div>
+    </div>
+
+    <div class="qa-action-card" onclick="qaConfirmAction('health_check','Run Health Check','Run a full system health check and refresh all diagnostics.','#22c55e')" id="qa-btn-health_check">
+      <div class="qa-action-icon">&#128293;</div>
+      <div class="qa-action-label">Run Health Check</div>
+      <div class="qa-action-desc">Full system diagnostics</div>
+      <div class="qa-action-status" id="qa-status-health_check"></div>
+    </div>
+
+  </div>
+
+  <!-- Custom Action -->
+  <div class="card" style="margin-bottom:20px;padding:16px;">
+    <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">&#128295; Custom Action</div>
+    <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">
+      <input id="qa-custom-input" type="text" placeholder="Enter custom action name (e.g. sync_config)" style="flex:1;min-width:180px;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;outline:none;" onkeydown="if(event.key==='Enter')qaCustomDispatch()">
+      <input id="qa-custom-params" type="text" placeholder="Params JSON (optional)" style="flex:2;min-width:200px;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;outline:none;">
+      <button onclick="qaCustomDispatch()" style="padding:8px 16px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Dispatch</button>
+    </div>
+    <div id="qa-custom-status" style="margin-top:8px;font-size:12px;min-height:16px;"></div>
+  </div>
+
+  <!-- Action Log -->
+  <div class="card" style="padding:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:13px;font-weight:700;color:var(--text-primary);">&#128203; Recent Actions</span>
+      <button onclick="qaClearLog()" style="padding:3px 10px;background:transparent;border:1px solid var(--border-secondary);border-radius:6px;color:var(--text-muted);font-size:11px;cursor:pointer;">Clear</button>
+    </div>
+    <div id="qa-action-log" style="font-size:12px;color:var(--text-secondary);">
+      <div style="color:var(--text-muted);padding:12px 0;text-align:center;">No actions dispatched yet.</div>
+    </div>
+  </div>
+</div><!-- end page-actions -->
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -3717,6 +3814,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'channels') loadChannelsPage();
+  if (name === 'actions') loadActionsPage();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -4668,6 +4766,217 @@ def _detect_security_metadata():
     if security:
         return security
     return None
+
+
+def _detect_channel_status():
+    """Detect configured channels and their activity status.
+
+    Returns list of dicts: {name, status, last_seen_ago, message_count_24h}
+    status: 'active' | 'configured' | 'unknown'
+    """
+    channels = {}
+    # Load configured channels from openclaw.json
+    config_paths = [
+        os.path.expanduser('~/.openclaw/openclaw.json'),
+        os.path.expanduser('~/.openclaw/moltbot.json'),
+        os.path.expanduser('~/.openclaw/clawdbot.json'),
+        os.path.expanduser('~/.clawdbot/clawdbot.json'),
+    ]
+    for cp in config_paths:
+        try:
+            with open(cp) as _f:
+                _cfg = json.load(_f)
+            ch_cfg = _cfg.get('channels', {})
+            if isinstance(ch_cfg, dict):
+                for ch_name, ch_val in ch_cfg.items():
+                    if isinstance(ch_val, dict):
+                        enabled = ch_val.get('enabled', True)
+                        if enabled is not False:
+                            channels[ch_name] = {
+                                'name': ch_name,
+                                'status': 'configured',
+                                'last_seen_ago': None,
+                                'message_count_24h': 0,
+                            }
+            break
+        except Exception:
+            pass
+
+    # Enrich with recent OTLP session activity
+    try:
+        with _metrics_lock:
+            for ev in metrics_store.get('messages', []):
+                ch = ev.get('channel', '')
+                if ch:
+                    if ch not in channels:
+                        channels[ch] = {
+                            'name': ch,
+                            'status': 'active',
+                            'last_seen_ago': None,
+                            'message_count_24h': 0,
+                        }
+                    channels[ch]['status'] = 'active'
+                    channels[ch]['message_count_24h'] += 1
+    except Exception:
+        pass
+
+    # Scan session JSONL files for channel activity in last 24h
+    now_ts = time.time()
+    cutoff = now_ts - 86400
+    try:
+        sessions_dir = os.path.join(WORKSPACE, 'sessions') if WORKSPACE else None
+        if not sessions_dir:
+            sessions_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
+        if os.path.isdir(sessions_dir):
+            for fname in sorted(os.listdir(sessions_dir))[-30:]:
+                if not fname.endswith('.jsonl'):
+                    continue
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    with open(fpath, 'r') as sf:
+                        for line in sf:
+                            try:
+                                ev = json.loads(line)
+                                ch = ev.get('channel', '') or ev.get('channel_name', '')
+                                if not ch:
+                                    continue
+                                ev_ts = ev.get('timestamp', 0) or ev.get('ts', 0)
+                                if isinstance(ev_ts, str):
+                                    try:
+                                        from datetime import datetime as _dtt
+                                        ev_ts = _dtt.fromisoformat(ev_ts.replace('Z', '+00:00')).timestamp()
+                                    except Exception:
+                                        ev_ts = 0
+                                if ev_ts and ev_ts > cutoff:
+                                    if ch not in channels:
+                                        channels[ch] = {
+                                            'name': ch,
+                                            'status': 'active',
+                                            'last_seen_ago': None,
+                                            'message_count_24h': 0,
+                                        }
+                                    channels[ch]['message_count_24h'] += 1
+                                    ago = int(now_ts - ev_ts)
+                                    if channels[ch]['last_seen_ago'] is None or ago < channels[ch]['last_seen_ago']:
+                                        channels[ch]['last_seen_ago'] = ago
+                                    if channels[ch]['status'] == 'configured':
+                                        channels[ch]['status'] = 'active'
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    return sorted(channels.values(), key=lambda x: (-x['message_count_24h'], x['name']))
+
+
+def _get_service_status():
+    """Get comprehensive service status for the at-a-glance status bar."""
+    # --- Gateway ---
+    gw_port = _detect_gateway_port()
+    gateway = {'status': 'unknown', 'port': gw_port, 'detail': ''}
+    try:
+        _s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _s.settimeout(2)
+        ok = _s.connect_ex(('127.0.0.1', gw_port)) == 0
+        _s.close()
+        if ok:
+            gateway = {'status': 'healthy', 'port': gw_port, 'detail': f'Port {gw_port} open'}
+        else:
+            try:
+                _r = subprocess.run(
+                    ['pgrep', '-f', 'openclaw|moltbot|clawdbot'],
+                    capture_output=True, text=True
+                )
+                if _r.returncode == 0:
+                    gateway = {'status': 'degraded', 'port': gw_port, 'detail': 'Process running, port closed'}
+                else:
+                    gateway = {'status': 'down', 'port': gw_port, 'detail': 'Not running'}
+            except Exception:
+                gateway = {'status': 'down', 'port': gw_port, 'detail': 'Not running'}
+    except Exception as _e:
+        gateway = {'status': 'unknown', 'port': gw_port, 'detail': str(_e)[:60]}
+
+    # --- Channels ---
+    channels = _detect_channel_status()
+
+    # --- Sync daemon ---
+    sync = {'status': 'unknown', 'detail': 'Not detected (local mode)'}
+    try:
+        _sr = subprocess.run(
+            ['pgrep', '-f', r'clawmetry.*sync|sync.*clawmetry|clawmetry-sync'],
+            capture_output=True, text=True
+        )
+        if _sr.returncode == 0:
+            pids = [p for p in _sr.stdout.strip().split('\n') if p]
+            sync = {'status': 'healthy', 'detail': f'{len(pids)} worker(s) running'}
+        else:
+            _ss = subprocess.run(
+                ['systemctl', 'is-active', 'clawmetry-sync'],
+                capture_output=True, text=True
+            )
+            _svc = _ss.stdout.strip() if _ss.returncode is not None else ''
+            if _svc == 'active':
+                sync = {'status': 'healthy', 'detail': 'systemd service active'}
+            elif _svc in ('inactive', 'failed'):
+                sync = {'status': 'down', 'detail': f'systemd: {_svc}'}
+    except Exception:
+        pass
+
+    # --- Resources ---
+    resources = {}
+    try:
+        import psutil as _psu
+        _cpu = _psu.cpu_percent(interval=0.05)
+        _mem = _psu.virtual_memory()
+        resources['cpu_pct'] = round(_cpu, 1)
+        resources['ram_used_mb'] = int(_mem.used / 1024 / 1024)
+        resources['ram_total_mb'] = int(_mem.total / 1024 / 1024)
+        resources['ram_pct'] = round(_mem.percent, 1)
+        resources['cpu_status'] = 'critical' if _cpu > 90 else ('warning' if _cpu > 70 else 'healthy')
+        resources['ram_status'] = 'critical' if _mem.percent > 90 else ('warning' if _mem.percent > 75 else 'healthy')
+    except ImportError:
+        try:
+            _fm = subprocess.run(['free', '-m'], capture_output=True, text=True)
+            _fparts = _fm.stdout.strip().split('\n')[1].split()
+            _um = int(_fparts[2])
+            _tm = int(_fparts[1])
+            _pct = _um / _tm * 100
+            resources['ram_used_mb'] = _um
+            resources['ram_total_mb'] = _tm
+            resources['ram_pct'] = round(_pct, 1)
+            resources['ram_status'] = 'critical' if _pct > 90 else ('warning' if _pct > 75 else 'healthy')
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # --- Uptime ---
+    uptime_str = ''
+    try:
+        with open('/proc/uptime', 'r') as _uf:
+            _secs = float(_uf.read().split()[0])
+        _d = int(_secs // 86400)
+        _h = int((_secs % 86400) // 3600)
+        _m = int((_secs % 3600) // 60)
+        if _d > 0:
+            uptime_str = f'{_d}d {_h}h {_m}m'
+        elif _h > 0:
+            uptime_str = f'{_h}h {_m}m'
+        else:
+            uptime_str = f'{_m}m'
+    except Exception:
+        pass
+
+    return {
+        'gateway': gateway,
+        'channels': channels,
+        'sync': sync,
+        'resources': resources,
+        'uptime': uptime_str,
+        'timestamp': int(time.time()),
+    }
 
 
 def _get_heartbeat_status():
@@ -5873,6 +6182,7 @@ def detect_config(args=None):
         USER_NAME = "You"
 
     # ── Register blueprints (Phase 4) ───────────────────────────────────────
+    app.register_blueprint(bp_actions)
     app.register_blueprint(bp_alerts)
     app.register_blueprint(bp_auth)
     app.register_blueprint(bp_brain)
@@ -6261,6 +6571,34 @@ DASHBOARD_HTML = r"""
   .cron-error-popover .ep-close:hover { color: #fff; }
   .cron-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #16a34a; color: #fff; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600; z-index: 2000; box-shadow: 0 4px 16px rgba(0,0,0,0.3); transition: opacity 0.3s; }
   .cron-confirm-modal { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
+  /* Quick Actions panel */
+  .qa-action-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; cursor: pointer; transition: all 0.18s ease; user-select: none; position: relative; }
+  .qa-action-card:hover { border-color: var(--accent-primary, #6366f1); box-shadow: 0 0 0 2px rgba(99,102,241,0.18), var(--card-shadow); transform: translateY(-1px); }
+  .qa-action-card.qa-pending { opacity: 0.7; pointer-events: none; }
+  .qa-action-icon { font-size: 28px; margin-bottom: 8px; }
+  .qa-action-label { font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }
+  .qa-action-desc { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+  .qa-action-status { font-size: 11px; min-height: 14px; font-weight: 600; }
+  .qa-action-status.pending { color: #f59e0b; }
+  .qa-action-status.success { color: #22c55e; }
+  .qa-action-status.error { color: #ef4444; }
+  .qa-confirm-modal { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; }
+  .qa-confirm-box { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 14px; padding: 24px 28px; max-width: 380px; width: 90%; text-align: center; box-shadow: 0 12px 40px rgba(0,0,0,0.45); }
+  .qa-confirm-box h3 { font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 0 0 10px 0; }
+  .qa-confirm-box p { font-size: 13px; color: var(--text-secondary); margin: 0 0 18px 0; line-height: 1.5; }
+  .qa-confirm-box .qa-confirm-btns { display: flex; gap: 10px; justify-content: center; }
+  .qa-confirm-box button { padding: 9px 20px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .qa-confirm-yes { color: #fff; }
+  .qa-confirm-no { background: var(--button-bg, rgba(255,255,255,0.08)); color: var(--text-secondary); }
+  .qa-log-entry { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-bottom: 1px solid var(--border-primary); }
+  .qa-log-entry:last-child { border-bottom: none; }
+  .qa-log-ts { font-size: 10px; color: var(--text-muted); white-space: nowrap; padding-top: 1px; min-width: 80px; }
+  .qa-log-action { font-weight: 600; color: var(--text-primary); font-size: 12px; }
+  .qa-log-result { font-size: 11px; margin-top: 2px; }
+  .qa-log-result.success { color: #22c55e; }
+  .qa-log-result.error { color: #ef4444; }
+  .qa-log-result.pending { color: #f59e0b; }
+
   .cron-confirm-box { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 24px; max-width: 360px; text-align: center; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
   .cron-confirm-box p { margin-bottom: 16px; font-size: 14px; color: var(--text-primary); }
   .cron-confirm-box button { padding: 8px 20px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; margin: 0 6px; }
@@ -7159,6 +7497,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('channels')">Channels</div>
+    <div class="nav-tab" onclick="switchTab('actions')">Actions</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -8033,6 +8372,74 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-channels -->
 
+<!-- QUICK ACTIONS -->
+<div class="page" id="page-actions">
+  <div class="refresh-bar" style="margin-bottom:6px;">
+    <button class="refresh-btn" onclick="loadActionsLog()" style="padding:4px 12px;font-size:12px;">&#8635; Refresh Log</button>
+    <span style="font-size:11px;color:var(--text-muted);margin-left:8px;" id="actions-auth-status"></span>
+  </div>
+
+  <!-- Auth warning banner -->
+  <div id="actions-auth-warning" style="display:none;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#f87171;">
+    &#9888; Authentication required to dispatch actions. Please connect your gateway token first.
+  </div>
+
+  <!-- Action Buttons Grid -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:20px;">
+
+    <div class="qa-action-card" onclick="qaConfirmAction('restart_gateway','Restart Gateway','Restart the OpenClaw gateway process on this node. Active sessions will be interrupted.','#f59e0b')" id="qa-btn-restart_gateway">
+      <div class="qa-action-icon">&#128260;</div>
+      <div class="qa-action-label">Restart Gateway</div>
+      <div class="qa-action-desc">Restart the gateway process</div>
+      <div class="qa-action-status" id="qa-status-restart_gateway"></div>
+    </div>
+
+    <div class="qa-action-card" onclick="qaConfirmAction('clear_cache','Clear Cache','Clear all in-memory caches. The dashboard will reload fresh data on next request.','#3b82f6')" id="qa-btn-clear_cache">
+      <div class="qa-action-icon">&#128465;</div>
+      <div class="qa-action-label">Clear Cache</div>
+      <div class="qa-action-desc">Flush all in-memory caches</div>
+      <div class="qa-action-status" id="qa-status-clear_cache"></div>
+    </div>
+
+    <div class="qa-action-card" onclick="qaConfirmAction('rotate_logs','Rotate Logs','Rotate the current log files. Old logs will be archived with a timestamp.','#8b5cf6')" id="qa-btn-rotate_logs">
+      <div class="qa-action-icon">&#128196;</div>
+      <div class="qa-action-label">Rotate Logs</div>
+      <div class="qa-action-desc">Archive and rotate log files</div>
+      <div class="qa-action-status" id="qa-status-rotate_logs"></div>
+    </div>
+
+    <div class="qa-action-card" onclick="qaConfirmAction('health_check','Run Health Check','Run a full system health check and refresh all diagnostics.','#22c55e')" id="qa-btn-health_check">
+      <div class="qa-action-icon">&#128293;</div>
+      <div class="qa-action-label">Run Health Check</div>
+      <div class="qa-action-desc">Full system diagnostics</div>
+      <div class="qa-action-status" id="qa-status-health_check"></div>
+    </div>
+
+  </div>
+
+  <!-- Custom Action -->
+  <div class="card" style="margin-bottom:20px;padding:16px;">
+    <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">&#128295; Custom Action</div>
+    <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">
+      <input id="qa-custom-input" type="text" placeholder="Enter custom action name (e.g. sync_config)" style="flex:1;min-width:180px;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;outline:none;" onkeydown="if(event.key==='Enter')qaCustomDispatch()">
+      <input id="qa-custom-params" type="text" placeholder="Params JSON (optional)" style="flex:2;min-width:200px;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;outline:none;">
+      <button onclick="qaCustomDispatch()" style="padding:8px 16px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">Dispatch</button>
+    </div>
+    <div id="qa-custom-status" style="margin-top:8px;font-size:12px;min-height:16px;"></div>
+  </div>
+
+  <!-- Action Log -->
+  <div class="card" style="padding:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:13px;font-weight:700;color:var(--text-primary);">&#128203; Recent Actions</span>
+      <button onclick="qaClearLog()" style="padding:3px 10px;background:transparent;border:1px solid var(--border-secondary);border-radius:6px;color:var(--text-muted);font-size:11px;cursor:pointer;">Clear</button>
+    </div>
+    <div id="qa-action-log" style="font-size:12px;color:var(--text-secondary);">
+      <div style="color:var(--text-muted);padding:12px 0;text-align:center;">No actions dispatched yet.</div>
+    </div>
+  </div>
+</div><!-- end page-actions -->
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -8371,6 +8778,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'channels') loadChannelsPage();
+  if (name === 'actions') loadActionsPage();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -14714,6 +15122,146 @@ function _updateCloudStatus() {
     document.getElementById('cloud-connected-badge').style.display = 'none';
   });
 }
+
+// ── Quick Actions Panel ──────────────────────────────────────────────
+var _qaActionLog = [];
+var _qaIsAuthed = false;
+
+function loadActionsPage() {
+  _qaCheckAuth();
+  loadActionsLog();
+}
+
+function _qaCheckAuth() {
+  var stored = localStorage.getItem('cm_token');
+  fetch('/api/auth/check' + (stored ? '?token=' + encodeURIComponent(stored) : ''))
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      _qaIsAuthed = !d.authRequired || d.valid;
+      var warn = document.getElementById('actions-auth-warning');
+      var status = document.getElementById('actions-auth-status');
+      if (warn) warn.style.display = _qaIsAuthed ? 'none' : '';
+      if (status) status.textContent = _qaIsAuthed ? 'Authenticated' : 'Not authenticated';
+    })
+    .catch(function() { _qaIsAuthed = false; });
+}
+
+function qaConfirmAction(actionId, label, description, color) {
+  if (!_qaIsAuthed) { _qaCheckAuth(); return; }
+  var modal = document.createElement('div');
+  modal.className = 'qa-confirm-modal';
+  modal.innerHTML = '<div class="qa-confirm-box">' +
+    '<h3>' + label + '</h3>' +
+    '<p>' + description + '</p>' +
+    '<div class="qa-confirm-btns">' +
+    '<button class="qa-confirm-yes" style="background:' + color + '" onclick="qaDispatchAction(\'' + actionId + '\',\'' + label + '\',{});this.closest(\'.qa-confirm-modal\').remove()">Confirm</button>' +
+    '<button class="qa-confirm-no" onclick="this.closest(\'.qa-confirm-modal\').remove()">Cancel</button>' +
+    '</div></div>';
+  document.body.appendChild(modal);
+  modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+}
+
+function qaCustomDispatch() {
+  var nameEl = document.getElementById('qa-custom-input');
+  var paramsEl = document.getElementById('qa-custom-params');
+  var statusEl = document.getElementById('qa-custom-status');
+  var actionName = nameEl ? nameEl.value.trim() : '';
+  if (!actionName) { if (statusEl) { statusEl.textContent = 'Please enter an action name.'; statusEl.style.color = '#ef4444'; } return; }
+  var params = {};
+  var paramsRaw = paramsEl ? paramsEl.value.trim() : '';
+  if (paramsRaw) {
+    try { params = JSON.parse(paramsRaw); }
+    catch(e) { if (statusEl) { statusEl.textContent = 'Invalid JSON in params.'; statusEl.style.color = '#ef4444'; } return; }
+  }
+  if (statusEl) { statusEl.textContent = 'Dispatching...'; statusEl.style.color = '#f59e0b'; }
+  qaDispatchAction(actionName, actionName, params, function(result) {
+    if (statusEl) {
+      statusEl.textContent = result.ok ? ('Done: ' + (result.message || 'OK')) : ('Error: ' + (result.error || 'Failed'));
+      statusEl.style.color = result.ok ? '#22c55e' : '#ef4444';
+    }
+  });
+}
+
+function qaDispatchAction(actionId, label, params, cb) {
+  var btn = document.getElementById('qa-btn-' + actionId);
+  var statusEl = document.getElementById('qa-status-' + actionId);
+  if (btn) btn.classList.add('qa-pending');
+  if (statusEl) { statusEl.textContent = 'Running...'; statusEl.className = 'qa-action-status pending'; }
+
+  var logEntry = { ts: Date.now(), action: label, id: actionId, status: 'pending', message: '' };
+  _qaActionLog.unshift(logEntry);
+  _renderActionLog();
+
+  var stored = localStorage.getItem('cm_token') || '';
+  fetch('/api/actions/dispatch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + stored },
+    body: JSON.stringify({ action: actionId, params: params || {} })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    logEntry.status = d.ok ? 'success' : 'error';
+    logEntry.message = d.message || d.error || (d.ok ? 'Done' : 'Failed');
+    if (btn) btn.classList.remove('qa-pending');
+    if (statusEl) { statusEl.textContent = logEntry.message; statusEl.className = 'qa-action-status ' + logEntry.status; }
+    _renderActionLog();
+    if (cb) cb(d);
+    // If health_check succeeded, refresh system health
+    if (actionId === 'health_check' && d.ok) setTimeout(function() { if (typeof loadSystemHealth === 'function') loadSystemHealth(); }, 1000);
+  })
+  .catch(function(e) {
+    logEntry.status = 'error';
+    logEntry.message = 'Network error: ' + e.message;
+    if (btn) btn.classList.remove('qa-pending');
+    if (statusEl) { statusEl.textContent = logEntry.message; statusEl.className = 'qa-action-status error'; }
+    _renderActionLog();
+    if (cb) cb({ ok: false, error: e.message });
+  });
+}
+
+function loadActionsLog() {
+  fetch('/api/actions/log', {
+    headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('cm_token') || '') }
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (d.log) {
+      _qaActionLog = d.log.map(function(e) {
+        return { ts: e.ts * 1000, action: e.action, id: e.action_id || e.action, status: e.status, message: e.message || '' };
+      });
+      _renderActionLog();
+    }
+  })
+  .catch(function() {});
+}
+
+function _renderActionLog() {
+  var container = document.getElementById('qa-action-log');
+  if (!container) return;
+  if (!_qaActionLog.length) {
+    container.innerHTML = '<div style="color:var(--text-muted);padding:12px 0;text-align:center;">No actions dispatched yet.</div>';
+    return;
+  }
+  container.innerHTML = _qaActionLog.slice(0, 50).map(function(e) {
+    var ts = new Date(e.ts).toLocaleTimeString();
+    return '<div class="qa-log-entry">' +
+      '<span class="qa-log-ts">' + ts + '</span>' +
+      '<div><div class="qa-log-action">' + escHtml(e.action) + '</div>' +
+      '<div class="qa-log-result ' + e.status + '">' + escHtml(e.message) + '</div></div>' +
+      '</div>';
+  }).join('');
+}
+
+function qaClearLog() {
+  _qaActionLog = [];
+  _renderActionLog();
+  // Also clear server-side log
+  fetch('/api/actions/log/clear', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('cm_token') || '') }
+  }).catch(function() {});
+}
+// ── End Quick Actions ────────────────────────────────────────────────
 _updateCloudStatus();
 </script>
 
@@ -14954,6 +15502,7 @@ bp_alerts = _Blueprint('alerts', __name__)
 bp_auth = _Blueprint('auth', __name__)
 bp_brain = _Blueprint('brain', __name__)
 bp_budget = _Blueprint('budget', __name__)
+bp_actions = _Blueprint('actions', __name__)
 bp_channels = _Blueprint('channels', __name__)
 bp_components = _Blueprint('components', __name__)
 bp_config = _Blueprint('config', __name__)
@@ -14972,6 +15521,184 @@ bp_usage = _Blueprint('usage', __name__)
 bp_version = _Blueprint('version', __name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+# ── Quick Actions Routes ───────────────────────────────────────────────────────
+import threading as _qa_threading
+
+_qa_action_log = []  # In-memory log: [{ts, action, action_id, status, message, user}]
+_qa_action_log_lock = _qa_threading.Lock()
+_QA_LOG_MAX = 200
+
+_BUILTIN_ACTIONS = {
+    'restart_gateway': 'Restart Gateway',
+    'clear_cache': 'Clear Cache',
+    'rotate_logs': 'Rotate Logs',
+    'health_check': 'Run Health Check',
+}
+
+
+def _qa_log_entry(action_id, label, status, message, user='dashboard'):
+    """Append an entry to the in-memory action log."""
+    with _qa_action_log_lock:
+        _qa_action_log.insert(0, {
+            'ts': time.time(),
+            'action': label,
+            'action_id': action_id,
+            'status': status,
+            'message': message,
+            'user': user,
+        })
+        if len(_qa_action_log) > _QA_LOG_MAX:
+            del _qa_action_log[_QA_LOG_MAX:]
+
+
+def _qa_do_restart_gateway():
+    """Attempt to restart the OpenClaw gateway."""
+    # Try via WebSocket RPC first
+    result = _gw_ws_rpc('gateway.restart', {})
+    if result is not None:
+        return True, 'Gateway restart command sent via WebSocket RPC'
+    # Fallback: send signal to gateway process
+    cfg = _load_gw_config()
+    gw_url = cfg.get('url', GATEWAY_URL or '')
+    tok = cfg.get('token', GATEWAY_TOKEN or '')
+    if gw_url and tok:
+        try:
+            import urllib.request as _ur
+            req = _ur.Request(
+                gw_url.rstrip('/') + '/api/gateway/restart',
+                data=b'{}',
+                headers={'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json'},
+                method='POST'
+            )
+            _ur.urlopen(req, timeout=5)
+            return True, 'Gateway restart requested via HTTP'
+        except Exception as e:
+            return False, f'Restart failed: {e}'
+    return False, 'No gateway connection available'
+
+
+def _qa_do_clear_cache():
+    """Clear in-memory caches."""
+    cleared = []
+    # Clear session cache
+    try:
+        global _sessions_cache, _sessions_cache_ts
+        _sessions_cache = None
+        _sessions_cache_ts = 0
+        cleared.append('sessions')
+    except Exception:
+        pass
+    # Clear WS connection so it reconnects fresh
+    try:
+        global _ws_client, _ws_connected
+        if _ws_client:
+            _ws_client.close()
+        _ws_connected = False
+        _ws_client = None
+        cleared.append('gateway-ws')
+    except Exception:
+        pass
+    return True, 'Cleared: ' + ', '.join(cleared) if cleared else 'Cache cleared'
+
+
+def _qa_do_rotate_logs():
+    """Rotate log files."""
+    rotated = []
+    workspace = WORKSPACE or os.path.expanduser('~/.openclaw')
+    log_dirs = [
+        os.path.join(workspace, 'logs'),
+        os.path.expanduser('~/.openclaw/logs'),
+    ]
+    for log_dir in log_dirs:
+        if not os.path.isdir(log_dir):
+            continue
+        for fname in os.listdir(log_dir):
+            if fname.endswith('.log') and not fname.endswith('.bak'):
+                src = os.path.join(log_dir, fname)
+                ts = time.strftime('%Y%m%d-%H%M%S')
+                dst = src + '.' + ts + '.bak'
+                try:
+                    os.rename(src, dst)
+                    # Create fresh empty log
+                    open(src, 'w').close()
+                    rotated.append(fname)
+                except Exception:
+                    pass
+    if rotated:
+        return True, 'Rotated: ' + ', '.join(rotated[:5]) + (f' and {len(rotated)-5} more' if len(rotated) > 5 else '')
+    return True, 'No log files found to rotate (workspace: ' + workspace + ')'
+
+
+def _qa_do_health_check():
+    """Trigger a health check refresh."""
+    try:
+        # Call our own health endpoint internally
+        with app.test_client() as c:
+            tok = GATEWAY_TOKEN or ''
+            r = c.get('/api/system-health', headers={'Authorization': 'Bearer ' + tok})
+            data = json.loads(r.data)
+            status = data.get('status', 'unknown')
+            return True, f'Health check complete: {status}'
+    except Exception as e:
+        return False, f'Health check error: {e}'
+
+
+@bp_actions.route('/api/actions/dispatch', methods=['POST'])
+def api_actions_dispatch():
+    """Dispatch a quick action."""
+    data = request.get_json(silent=True) or {}
+    action_id = data.get('action', '').strip()
+    params = data.get('params', {})
+    if not action_id:
+        return jsonify({'ok': False, 'error': 'action is required'}), 400
+
+    label = _BUILTIN_ACTIONS.get(action_id, action_id)
+
+    # Dispatch
+    try:
+        if action_id == 'restart_gateway':
+            ok, msg = _qa_do_restart_gateway()
+        elif action_id == 'clear_cache':
+            ok, msg = _qa_do_clear_cache()
+        elif action_id == 'rotate_logs':
+            ok, msg = _qa_do_rotate_logs()
+        elif action_id == 'health_check':
+            ok, msg = _qa_do_health_check()
+        else:
+            # Custom action: try gateway RPC
+            rpc_result = _gw_ws_rpc('actions.dispatch', {'action': action_id, 'params': params})
+            if rpc_result is not None:
+                ok = True
+                msg = rpc_result.get('message', 'Action dispatched via gateway')
+            else:
+                ok = False
+                msg = f'Unknown action "{action_id}" and no gateway connection'
+    except Exception as e:
+        ok = False
+        msg = f'Action failed: {e}'
+
+    status = 'success' if ok else 'error'
+    _qa_log_entry(action_id, label, status, msg)
+    return jsonify({'ok': ok, 'message': msg if ok else None, 'error': msg if not ok else None})
+
+
+@bp_actions.route('/api/actions/log')
+def api_actions_log():
+    """Return recent action log."""
+    with _qa_action_log_lock:
+        log = list(_qa_action_log[:50])
+    return jsonify({'log': log})
+
+
+@bp_actions.route('/api/actions/log/clear', methods=['POST'])
+def api_actions_log_clear():
+    """Clear the action log."""
+    with _qa_action_log_lock:
+        _qa_action_log.clear()
+    return jsonify({'ok': True})
+
+# ── End Quick Actions Routes ──────────────────────────────────────────────────
 # ── Version check & self-update routes ────────────────────────────────────────
 _pypi_cache = {"ts": 0, "version": None}
 
@@ -21276,6 +22003,12 @@ def api_system_health():
         'inference': _detect_inference_metadata(),
         'security': _detect_security_metadata(),
     })
+
+
+@bp_health.route('/api/service-status')
+def api_service_status():
+    """Compact service status for the at-a-glance status bar."""
+    return jsonify(_get_service_status())
 
 
 @bp_health.route('/api/health')
