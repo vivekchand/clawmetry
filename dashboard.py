@@ -480,7 +480,35 @@ def _budget_init_db():
             ON alert_history(fired_at DESC);
         CREATE INDEX IF NOT EXISTS idx_alert_history_rule
             ON alert_history(rule_id, fired_at DESC);
+        CREATE TABLE IF NOT EXISTS alert_channels (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            webhook_url TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
     """)
+    # Migration: ensure alert_channels uses v2 schema with webhook_url (not config)
+    try:
+        cols = [r[1] for r in db.execute("PRAGMA table_info(alert_channels)").fetchall()]
+        needs_recreate = cols and ('config' in cols or 'webhook_url' not in cols)
+        if needs_recreate:
+            # v1 schema detected — drop and recreate with v2 schema
+            db.execute("DROP TABLE IF EXISTS alert_channels")
+            db.execute("""CREATE TABLE alert_channels (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                webhook_url TEXT NOT NULL,
+                enabled INTEGER DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )""")
+            db.commit()
+    except Exception as e:
+        print(f"Warning: alert_channels migration failed: {e}")
     db.close()
 
 
@@ -824,6 +852,8 @@ def _fire_alert(rule_id, alert_type, message, channels=None):
             _send_telegram_alert(message)
         elif ch == "webhook":
             pass  # webhook sending handled by custom alert rules
+    # Also dispatch to configured Slack/Discord/webhook channels
+    _dispatch_alert_to_channels(message)
 
 
 def _send_telegram_alert(message):
@@ -895,6 +925,84 @@ def _send_webhook_alert(url, alert_data, payload_type="generic"):
         _ur.urlopen(req, timeout=10)
     except Exception:
         pass
+
+
+def _send_slack_alert(webhook_url, message, alert_type='alert'):
+    """Send alert to a Slack incoming webhook URL."""
+    if not webhook_url:
+        return
+    try:
+        import urllib.request as _ur
+        colour = {'alert': '#E01E5A', 'warning': '#ECB22E', 'info': '#2EB67D'}.get(alert_type, '#E01E5A')
+        payload = json.dumps({
+            'attachments': [{
+                'color': colour,
+                'fallback': f'[ClawMetry] {message}',
+                'text': f'*ClawMetry Alert*\n{message}',
+                'footer': 'ClawMetry',
+                'ts': int(time.time()),
+            }]
+        }).encode()
+        req = _ur.Request(webhook_url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        _ur.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"Warning: Slack alert failed: {e}")
+
+
+def _send_discord_alert(webhook_url, message, alert_type='alert'):
+    """Send alert to a Discord webhook URL."""
+    if not webhook_url:
+        return
+    try:
+        import urllib.request as _ur
+        colour = {'alert': 0xE01E5A, 'warning': 0xECB22E, 'info': 0x2EB67D}.get(alert_type, 0xE01E5A)
+        payload = json.dumps({
+            'embeds': [{
+                'title': 'ClawMetry Alert',
+                'description': message,
+                'color': colour,
+                'timestamp': datetime.utcnow().isoformat(),
+                'footer': {'text': 'ClawMetry'},
+            }]
+        }).encode()
+        req = _ur.Request(webhook_url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        _ur.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"Warning: Discord alert failed: {e}")
+
+
+def _get_alert_channels():
+    """Get all configured alert channel destinations."""
+    try:
+        with _fleet_db_lock:
+            db = _fleet_db()
+            rows = db.execute("SELECT * FROM alert_channels ORDER BY created_at DESC").fetchall()
+            db.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def _dispatch_alert_to_channels(message, alert_type='alert'):
+    """Dispatch an alert message to all enabled alert channels (Slack, Discord, webhook)."""
+    channels = _get_alert_channels()
+    for ch in channels:
+        if not ch.get('enabled'):
+            continue
+        ch_type = ch.get('type', '')
+        url = ch.get('webhook_url', '')
+        if not url:
+            continue
+        try:
+            if ch_type == 'slack':
+                _send_slack_alert(url, message, alert_type)
+            elif ch_type == 'discord':
+                _send_discord_alert(url, message, alert_type)
+            elif ch_type == 'webhook':
+                _send_webhook_alert(url, {'type': alert_type, 'message': message, 'timestamp': time.time()})
+        except Exception as e:
+            print(f"Warning: Alert dispatch to {ch_type} failed: {e}")
+
 
 
 def _get_alert_rules():
@@ -3258,6 +3366,7 @@ function clawmetryLogout(){
       <div class="modal-tab active" onclick="switchBudgetTab('limits',this)">Budget Limits</div>
       <div class="modal-tab" onclick="switchBudgetTab('alerts',this)">Alert Rules</div>
       <div class="modal-tab" onclick="switchBudgetTab('telegram',this)">Telegram</div>
+      <div class="modal-tab" onclick="switchBudgetTab('integrations',this)">&#128279; Integrations</div>
       <div class="modal-tab" onclick="switchBudgetTab('history',this)">History</div>
     </div>
     <!-- Budget Limits Tab -->
@@ -3352,6 +3461,24 @@ function clawmetryLogout(){
           <button onclick="testTelegram()" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;">Send Test</button>
         </div>
         <div id="tg-status" style="font-size:12px;color:var(--text-muted);"></div>
+      </div>
+    </div>
+    <!-- Integrations Tab -->
+    <div id="budget-tab-integrations" style="display:none;">
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">Configure Slack, Discord, or custom webhook destinations for all ClawMetry alerts.</p>
+      <div id="alert-channels-list" style="margin-bottom:16px;"></div>
+      <div style="border:1px solid var(--border-primary);border-radius:8px;padding:14px;">
+        <h4 style="font-size:13px;font-weight:700;margin-bottom:10px;color:var(--text-primary);">&#10133; Add Integration</h4>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <select id="new-channel-type" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--input-bg,var(--bg-secondary));color:var(--text-primary);font-size:13px;">
+            <option value="slack">Slack (Incoming Webhook)</option>
+            <option value="discord">Discord (Webhook)</option>
+            <option value="webhook">Generic Webhook</option>
+          </select>
+          <input id="new-channel-name" type="text" placeholder="Name (e.g. #alerts)" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--input-bg,var(--bg-secondary));color:var(--text-primary);font-size:13px;">
+          <input id="new-channel-url" type="url" placeholder="Webhook URL" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--input-bg,var(--bg-secondary));color:var(--text-primary);font-size:13px;">
+          <button onclick="addAlertChannel()" style="padding:7px 16px;background:var(--text-accent);border:none;border-radius:6px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;">Add Integration</button>
+        </div>
       </div>
     </div>
     <!-- History Tab -->
@@ -4389,12 +4516,13 @@ function openBudgetModal() {
 function switchBudgetTab(tab, el) {
   document.querySelectorAll('#budget-modal-tabs .modal-tab').forEach(function(t){t.classList.remove('active');});
   if(el) el.classList.add('active');
-  ['limits','alerts','telegram','history'].forEach(function(t){
+  ['limits','alerts','telegram','integrations','history'].forEach(function(t){
     var d = document.getElementById('budget-tab-'+t);
     if(d) d.style.display = t===tab ? 'block' : 'none';
   });
   if(tab==='alerts') { loadAlertRules(); loadWebhookConfig(); }
   if(tab==='telegram') loadTelegramConfig();
+  if(tab==='integrations') loadAlertChannels();
   if(tab==='history') loadAlertHistory();
 }
 
@@ -6367,7 +6495,35 @@ def _budget_init_db():
             ON alert_history(fired_at DESC);
         CREATE INDEX IF NOT EXISTS idx_alert_history_rule
             ON alert_history(rule_id, fired_at DESC);
+        CREATE TABLE IF NOT EXISTS alert_channels (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            webhook_url TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
     """)
+    # Migration: ensure alert_channels uses v2 schema with webhook_url (not config)
+    try:
+        cols = [r[1] for r in db.execute("PRAGMA table_info(alert_channels)").fetchall()]
+        needs_recreate = cols and ('config' in cols or 'webhook_url' not in cols)
+        if needs_recreate:
+            # v1 schema detected — drop and recreate with v2 schema
+            db.execute("DROP TABLE IF EXISTS alert_channels")
+            db.execute("""CREATE TABLE alert_channels (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                webhook_url TEXT NOT NULL,
+                enabled INTEGER DEFAULT 1,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )""")
+            db.commit()
+    except Exception as e:
+        print(f"Warning: alert_channels migration failed: {e}")
     db.close()
 
 
@@ -6707,6 +6863,8 @@ def _fire_alert(rule_id, alert_type, message, channels=None):
             _send_telegram_alert(message)
         elif ch == "webhook":
             pass  # webhook sending handled by custom alert rules
+    # Also dispatch to configured Slack/Discord/webhook channels
+    _dispatch_alert_to_channels(message)
 
 
 def _send_telegram_alert(message):
@@ -6778,6 +6936,84 @@ def _send_webhook_alert(url, alert_data, payload_type="generic"):
         _ur.urlopen(req, timeout=10)
     except Exception:
         pass
+
+
+def _send_slack_alert(webhook_url, message, alert_type='alert'):
+    """Send alert to a Slack incoming webhook URL."""
+    if not webhook_url:
+        return
+    try:
+        import urllib.request as _ur
+        colour = {'alert': '#E01E5A', 'warning': '#ECB22E', 'info': '#2EB67D'}.get(alert_type, '#E01E5A')
+        payload = json.dumps({
+            'attachments': [{
+                'color': colour,
+                'fallback': f'[ClawMetry] {message}',
+                'text': f'*ClawMetry Alert*\n{message}',
+                'footer': 'ClawMetry',
+                'ts': int(time.time()),
+            }]
+        }).encode()
+        req = _ur.Request(webhook_url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        _ur.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"Warning: Slack alert failed: {e}")
+
+
+def _send_discord_alert(webhook_url, message, alert_type='alert'):
+    """Send alert to a Discord webhook URL."""
+    if not webhook_url:
+        return
+    try:
+        import urllib.request as _ur
+        colour = {'alert': 0xE01E5A, 'warning': 0xECB22E, 'info': 0x2EB67D}.get(alert_type, 0xE01E5A)
+        payload = json.dumps({
+            'embeds': [{
+                'title': 'ClawMetry Alert',
+                'description': message,
+                'color': colour,
+                'timestamp': datetime.utcnow().isoformat(),
+                'footer': {'text': 'ClawMetry'},
+            }]
+        }).encode()
+        req = _ur.Request(webhook_url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        _ur.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"Warning: Discord alert failed: {e}")
+
+
+def _get_alert_channels():
+    """Get all configured alert channel destinations."""
+    try:
+        with _fleet_db_lock:
+            db = _fleet_db()
+            rows = db.execute("SELECT * FROM alert_channels ORDER BY created_at DESC").fetchall()
+            db.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def _dispatch_alert_to_channels(message, alert_type='alert'):
+    """Dispatch an alert message to all enabled alert channels (Slack, Discord, webhook)."""
+    channels = _get_alert_channels()
+    for ch in channels:
+        if not ch.get('enabled'):
+            continue
+        ch_type = ch.get('type', '')
+        url = ch.get('webhook_url', '')
+        if not url:
+            continue
+        try:
+            if ch_type == 'slack':
+                _send_slack_alert(url, message, alert_type)
+            elif ch_type == 'discord':
+                _send_discord_alert(url, message, alert_type)
+            elif ch_type == 'webhook':
+                _send_webhook_alert(url, {'type': alert_type, 'message': message, 'timestamp': time.time()})
+        except Exception as e:
+            print(f"Warning: Alert dispatch to {ch_type} failed: {e}")
+
 
 
 def _get_alert_rules():
@@ -9067,6 +9303,7 @@ function clawmetryLogout(){
       <div class="modal-tab active" onclick="switchBudgetTab('limits',this)">Budget Limits</div>
       <div class="modal-tab" onclick="switchBudgetTab('alerts',this)">Alert Rules</div>
       <div class="modal-tab" onclick="switchBudgetTab('telegram',this)">Telegram</div>
+      <div class="modal-tab" onclick="switchBudgetTab('integrations',this)">&#128279; Integrations</div>
       <div class="modal-tab" onclick="switchBudgetTab('history',this)">History</div>
     </div>
     <!-- Budget Limits Tab -->
@@ -9143,6 +9380,24 @@ function clawmetryLogout(){
           <button onclick="testTelegram()" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;">Send Test</button>
         </div>
         <div id="tg-status" style="font-size:12px;color:var(--text-muted);"></div>
+      </div>
+    </div>
+    <!-- Integrations Tab -->
+    <div id="budget-tab-integrations" style="display:none;">
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">Configure Slack, Discord, or custom webhook destinations for all ClawMetry alerts.</p>
+      <div id="alert-channels-list" style="margin-bottom:16px;"></div>
+      <div style="border:1px solid var(--border-primary);border-radius:8px;padding:14px;">
+        <h4 style="font-size:13px;font-weight:700;margin-bottom:10px;color:var(--text-primary);">&#10133; Add Integration</h4>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <select id="new-channel-type" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--input-bg,var(--bg-secondary));color:var(--text-primary);font-size:13px;">
+            <option value="slack">Slack (Incoming Webhook)</option>
+            <option value="discord">Discord (Webhook)</option>
+            <option value="webhook">Generic Webhook</option>
+          </select>
+          <input id="new-channel-name" type="text" placeholder="Name (e.g. #alerts)" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--input-bg,var(--bg-secondary));color:var(--text-primary);font-size:13px;">
+          <input id="new-channel-url" type="url" placeholder="Webhook URL" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--input-bg,var(--bg-secondary));color:var(--text-primary);font-size:13px;">
+          <button onclick="addAlertChannel()" style="padding:7px 16px;background:var(--text-accent);border:none;border-radius:6px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;">Add Integration</button>
+        </div>
       </div>
     </div>
     <!-- History Tab -->
@@ -10116,12 +10371,13 @@ function openBudgetModal() {
 function switchBudgetTab(tab, el) {
   document.querySelectorAll('#budget-modal-tabs .modal-tab').forEach(function(t){t.classList.remove('active');});
   if(el) el.classList.add('active');
-  ['limits','alerts','telegram','history'].forEach(function(t){
+  ['limits','alerts','telegram','integrations','history'].forEach(function(t){
     var d = document.getElementById('budget-tab-'+t);
     if(d) d.style.display = t===tab ? 'block' : 'none';
   });
   if(tab==='alerts') { loadAlertRules(); loadWebhookConfig(); }
   if(tab==='telegram') loadTelegramConfig();
+  if(tab==='integrations') loadAlertChannels();
   if(tab==='history') loadAlertHistory();
 }
 
@@ -22030,6 +22286,92 @@ def api_alerts_velocity():
       - reasons: human-readable list of triggered thresholds
     """
     return jsonify(_compute_velocity_status())
+
+
+
+@bp_alerts.route('/api/alerts/channels', methods=['GET', 'POST'])
+def api_alert_channels():
+    """List or create alert channel integrations (Slack, Discord, webhook)."""
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        ch_type = data.get('type', '').lower()
+        name = data.get('name', '').strip()
+        webhook_url = data.get('webhook_url', '').strip()
+        enabled = data.get('enabled', True)
+        if ch_type not in ('slack', 'discord', 'webhook'):
+            return jsonify({'error': 'type must be slack, discord, or webhook'}), 400
+        if not webhook_url:
+            return jsonify({'error': 'webhook_url is required'}), 400
+        if not name:
+            name = ch_type.capitalize()
+        import uuid
+        ch_id = str(uuid.uuid4())[:8]
+        now = time.time()
+        with _fleet_db_lock:
+            db = _fleet_db()
+            db.execute(
+                "INSERT INTO alert_channels (id, name, type, webhook_url, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ch_id, name, ch_type, webhook_url, 1 if enabled else 0, now, now)
+            )
+            db.commit()
+            db.close()
+        return jsonify({'ok': True, 'id': ch_id})
+    return jsonify({'channels': _get_alert_channels()})
+
+
+@bp_alerts.route('/api/alerts/channels/<ch_id>', methods=['PUT', 'DELETE'])
+def api_alert_channel(ch_id):
+    """Update or delete an alert channel integration."""
+    if request.method == 'DELETE':
+        with _fleet_db_lock:
+            db = _fleet_db()
+            db.execute("DELETE FROM alert_channels WHERE id = ?", (ch_id,))
+            db.commit()
+            db.close()
+        return jsonify({'ok': True})
+    data = request.get_json(silent=True) or {}
+    sets, vals = [], []
+    for field in ['name', 'webhook_url']:
+        if field in data:
+            sets.append(f"{field} = ?")
+            vals.append(data[field])
+    if 'enabled' in data:
+        sets.append("enabled = ?")
+        vals.append(1 if data['enabled'] else 0)
+    if not sets:
+        return jsonify({'error': 'No fields to update'}), 400
+    sets.append("updated_at = ?")
+    vals.append(time.time())
+    vals.append(ch_id)
+    with _fleet_db_lock:
+        db = _fleet_db()
+        db.execute(f"UPDATE alert_channels SET {', '.join(sets)} WHERE id = ?", vals)
+        db.commit()
+        db.close()
+    return jsonify({'ok': True})
+
+
+@bp_alerts.route('/api/alerts/channels/<ch_id>/test', methods=['POST'])
+def api_alert_channel_test(ch_id):
+    """Send a test alert to a specific channel."""
+    channels = _get_alert_channels()
+    ch = next((c for c in channels if c.get('id') == ch_id), None)
+    if not ch:
+        return jsonify({'error': 'Channel not found'}), 404
+    msg = 'This is a test alert from ClawMetry. If you see this, your integration is working!'
+    ch_type = ch.get('type', '')
+    url = ch.get('webhook_url', '')
+    try:
+        if ch_type == 'slack':
+            _send_slack_alert(url, msg, 'info')
+        elif ch_type == 'discord':
+            _send_discord_alert(url, msg, 'info')
+        elif ch_type == 'webhook':
+            _send_webhook_alert(url, {'type': 'test', 'message': msg, 'timestamp': time.time()})
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 # ── History / Time-Series API ────────────────────────────────────────────
