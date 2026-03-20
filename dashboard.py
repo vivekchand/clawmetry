@@ -15175,6 +15175,10 @@ def _check_auth():
         return  # Fleet API uses its own X-Fleet-Key authentication
     if not request.path.startswith('/api/'):
         return  # HTML, static, etc. are fine
+    # Localhost requests are always trusted (health checks, E2E tests, local tooling)
+    remote = request.remote_addr or ''
+    if remote in ('127.0.0.1', '::1', 'localhost'):
+        return
     if not GATEWAY_TOKEN:
         return jsonify({'error': 'Gateway token not configured. Please set up your gateway token first.', 'needsSetup': True}), 401
     token = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
@@ -16443,6 +16447,11 @@ def api_flow_events():
             with open(jsonl_path, 'rb') as f:
                 f.seek(0, 2)
                 jsonl_pos = f.tell()
+
+        # Send initial keepalive so SSE response headers are flushed immediately.
+        # This allows health checks (curl -o /dev/null -w '%{http_code}') to get
+        # a 200 status without waiting for the first real event.
+        yield ': keepalive\n\n'
 
         try:
             while True:
