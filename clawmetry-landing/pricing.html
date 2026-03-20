@@ -463,7 +463,7 @@ function submitTrial() {
     _trialEmail = email;
     btn.textContent = 'Sending code...';
     btn.disabled = true; btn.style.opacity = '0.6';
-    fetch('/api/otp/send', {
+    fetch('https://app.clawmetry.com/api/otp/send', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({email: email})
@@ -498,7 +498,7 @@ function submitTrial() {
     }
     btn.textContent = 'Verifying...';
     btn.disabled = true; btn.style.opacity = '0.6';
-    fetch('/api/otp/verify', {
+    fetch('https://app.clawmetry.com/api/otp/verify', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({email: _trialEmail, otp: otp})
