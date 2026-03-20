@@ -16444,6 +16444,9 @@ def api_flow_events():
                 f.seek(0, 2)
                 jsonl_pos = f.tell()
 
+        # Send initial keepalive so SSE response headers are flushed immediately
+        yield ': keepalive\n\n'
+
         try:
             while True:
                 if time.time() - started > SSE_MAX_SECONDS:
