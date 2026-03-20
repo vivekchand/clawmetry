@@ -98,9 +98,11 @@ echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
 
 # ── Onboarding ───────────────────────────────────────────────────────────────
+# Connects this node to ClawMetry Cloud: clawmetry onboard
 
 if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ]; then
   echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
+  echo -e "  ${DIM}Run manually: clawmetry onboard${NC}"
 # shellcheck disable=SC2217
 elif [ -r /dev/tty ] 2>/dev/null; then
   "$CLAWMETRY_BIN" onboard < /dev/tty || true
