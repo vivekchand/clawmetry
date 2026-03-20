@@ -1996,6 +1996,40 @@ DASHBOARD_HTML = r"""
   .chat-msg.assistant .chat-content-truncated::after { background: linear-gradient(transparent, rgba(26,58,42,0.9)); }
   .chat-msg.tool .chat-content-truncated::after { background: linear-gradient(transparent, rgba(26,26,36,0.9)); }
 
+
+  /* === Session Replay Controls === */
+  .replay-controls { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .replay-scrubber-row { display: flex; align-items: center; gap: 10px; }
+  .replay-scrubber-row input[type=range] { flex: 1; accent-color: var(--text-accent); cursor: pointer; }
+  .replay-pos-label { font-size: 12px; color: var(--text-muted); white-space: nowrap; min-width: 70px; text-align: right; }
+  .replay-btn-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .replay-btn { padding: 4px 12px; border: 1px solid var(--border-primary); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: 12px; cursor: pointer; transition: background 0.15s; }
+  .replay-btn:hover { background: var(--bg-hover); }
+  .replay-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .replay-filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .replay-filter-label { font-size: 11px; color: var(--text-muted); margin-right: 2px; }
+  .replay-filter-pill { padding: 3px 10px; border-radius: 12px; border: 1px solid var(--border-primary); background: var(--bg-primary); color: var(--text-muted); font-size: 11px; cursor: pointer; transition: all 0.15s; }
+  .replay-filter-pill.active { background: var(--text-accent); color: #fff; border-color: var(--text-accent); }
+  .replay-current-msg { border: 2px solid var(--text-accent) !important; box-shadow: 0 0 8px rgba(59,130,246,0.3); }
+  .replay-hidden { display: none !important; }
+
+
+  /* === Session Replay Controls === */
+  .replay-controls { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .replay-scrubber-row { display: flex; align-items: center; gap: 10px; }
+  .replay-scrubber-row input[type=range] { flex: 1; accent-color: var(--text-accent); cursor: pointer; }
+  .replay-pos-label { font-size: 12px; color: var(--text-muted); white-space: nowrap; min-width: 70px; text-align: right; }
+  .replay-btn-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .replay-btn { padding: 4px 12px; border: 1px solid var(--border-primary); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: 12px; cursor: pointer; transition: background 0.15s; }
+  .replay-btn:hover { background: var(--bg-hover); }
+  .replay-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .replay-filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .replay-filter-label { font-size: 11px; color: var(--text-muted); margin-right: 2px; }
+  .replay-filter-pill { padding: 3px 10px; border-radius: 12px; border: 1px solid var(--border-primary); background: var(--bg-primary); color: var(--text-muted); font-size: 11px; cursor: pointer; transition: all 0.15s; }
+  .replay-filter-pill.active { background: var(--text-accent); color: #fff; border-color: var(--text-accent); }
+  .replay-current-msg { border: 2px solid var(--text-accent) !important; box-shadow: 0 0 8px rgba(59,130,246,0.3); }
+  .replay-hidden { display: none !important; }
+
   /* === Mini Dashboard Widgets === */
   .tool-spark { font-size: 11px; color: var(--text-muted); padding: 3px 8px; background: var(--bg-secondary); border-radius: 6px; border: 1px solid var(--border-secondary); }
   .tool-spark span { color: var(--text-accent); font-weight: 600; }
@@ -2956,6 +2990,26 @@ function clawmetryLogout(){
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>
+    <div class="replay-controls" id="replay-controls" style="display:none">
+      <div class="replay-scrubber-row">
+        <button class="replay-btn" onclick="replayStep(-1)" id="replay-prev">&#9664; Prev</button>
+        <input type="range" id="replay-scrubber" min="0" max="0" value="0" oninput="replayScrub(this.value)">
+        <button class="replay-btn" onclick="replayStep(1)" id="replay-next">Next &#9654;</button>
+        <span class="replay-pos-label" id="replay-pos">0 / 0</span>
+      </div>
+      <div class="replay-btn-row">
+        <button class="replay-btn" onclick="replayShowAll()">Show All</button>
+        <button class="replay-btn" onclick="replayClear()">Clear Step</button>
+      </div>
+      <div class="replay-filter-row">
+        <span class="replay-filter-label">Filter:</span>
+        <span class="replay-filter-pill active" data-filter="all" onclick="replayToggleFilter(this)">All</span>
+        <span class="replay-filter-pill" data-filter="user" onclick="replayToggleFilter(this)">User</span>
+        <span class="replay-filter-pill" data-filter="agent" onclick="replayToggleFilter(this)">Agent</span>
+        <span class="replay-filter-pill" data-filter="tool" onclick="replayToggleFilter(this)">Tools</span>
+        <span class="replay-filter-pill" data-filter="thinking" onclick="replayToggleFilter(this)">Thinking</span>
+      </div>
+    </div>
     <div class="chat-messages" id="transcript-messages"></div>
   </div>
 </div>
@@ -7584,6 +7638,26 @@ function clawmetryLogout(){
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>
+    <div class="replay-controls" id="replay-controls" style="display:none">
+      <div class="replay-scrubber-row">
+        <button class="replay-btn" onclick="replayStep(-1)" id="replay-prev">&#9664; Prev</button>
+        <input type="range" id="replay-scrubber" min="0" max="0" value="0" oninput="replayScrub(this.value)">
+        <button class="replay-btn" onclick="replayStep(1)" id="replay-next">Next &#9654;</button>
+        <span class="replay-pos-label" id="replay-pos">0 / 0</span>
+      </div>
+      <div class="replay-btn-row">
+        <button class="replay-btn" onclick="replayShowAll()">Show All</button>
+        <button class="replay-btn" onclick="replayClear()">Clear Step</button>
+      </div>
+      <div class="replay-filter-row">
+        <span class="replay-filter-label">Filter:</span>
+        <span class="replay-filter-pill active" data-filter="all" onclick="replayToggleFilter(this)">All</span>
+        <span class="replay-filter-pill" data-filter="user" onclick="replayToggleFilter(this)">User</span>
+        <span class="replay-filter-pill" data-filter="agent" onclick="replayToggleFilter(this)">Agent</span>
+        <span class="replay-filter-pill" data-filter="tool" onclick="replayToggleFilter(this)">Tools</span>
+        <span class="replay-filter-pill" data-filter="thinking" onclick="replayToggleFilter(this)">Thinking</span>
+      </div>
+    </div>
     <div class="chat-messages" id="transcript-messages"></div>
   </div>
 </div>
@@ -11022,7 +11096,12 @@ function exportUsageData() {
   window.open('/api/usage/export', '_blank');
 }
 
-// ===== Transcripts =====
+// ===== Transcripts + Session Replay (issue #32) =====
+var _replayEvents = [];       // all parsed events for current session
+var _replayFiltered = [];     // events passing current filter
+var _replayCursor = -1;       // -1 = show all; >= 0 = step mode index
+var _replayFilter = 'all';    // current active filter
+
 async function loadTranscripts() {
   try {
     var data = await fetch('/api/transcripts').then(r => r.json());
@@ -11051,59 +11130,242 @@ function showTranscriptList() {
   document.getElementById('transcript-list').style.display = '';
   document.getElementById('transcript-viewer').style.display = 'none';
   document.getElementById('transcript-back-btn').style.display = 'none';
+  _replayEvents = [];
+  _replayFiltered = [];
+  _replayCursor = -1;
 }
 
 async function viewTranscript(sessionId) {
   document.getElementById('transcript-list').style.display = 'none';
   document.getElementById('transcript-viewer').style.display = '';
   document.getElementById('transcript-back-btn').style.display = '';
+  document.getElementById('replay-controls').style.display = 'none';
   document.getElementById('transcript-messages').innerHTML = '<div style="padding:20px;color:#666;">Loading transcript...</div>';
+  _replayEvents = [];
+  _replayFiltered = [];
+  _replayCursor = -1;
   try {
-    var data = await fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json());
-    // Metadata
-    var metaHtml = '<div class="stat-row"><span class="stat-label">Session</span><span class="stat-val">' + escHtml(data.name) + '</span></div>';
-    metaHtml += '<div class="stat-row"><span class="stat-label">Messages</span><span class="stat-val">' + data.messageCount + '</span></div>';
-    if (data.model) metaHtml += '<div class="stat-row"><span class="stat-label">Model</span><span class="stat-val"><span class="badge model">' + escHtml(data.model) + '</span></span></div>';
-    if (data.totalTokens) metaHtml += '<div class="stat-row"><span class="stat-label">Tokens</span><span class="stat-val"><span class="badge tokens">' + (data.totalTokens/1000).toFixed(0) + 'K</span></span></div>';
-    if (data.duration) metaHtml += '<div class="stat-row"><span class="stat-label">Duration</span><span class="stat-val">' + data.duration + '</span></div>';
+    // Fetch both the flat transcript (for meta) and structured events (for replay)
+    var [metaData, evtData] = await Promise.all([
+      fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json()),
+      fetch('/api/transcript-events/' + encodeURIComponent(sessionId)).then(r => r.json()).catch(() => null)
+    ]);
+
+    // Metadata row — add clickable stats for jump-to
+    var metaHtml = '<div class="stat-row"><span class="stat-label">Session</span><span class="stat-val">' + escHtml(metaData.name) + '</span></div>';
+    metaHtml += '<div class="stat-row"><span class="stat-label">Messages</span><span class="stat-val">' + metaData.messageCount + '</span></div>';
+    if (metaData.model) metaHtml += '<div class="stat-row"><span class="stat-label">Model</span><span class="stat-val"><span class="badge model">' + escHtml(metaData.model) + '</span></span></div>';
+    if (metaData.totalTokens) metaHtml += '<div class="stat-row"><span class="stat-label">Tokens</span><span class="stat-val"><span class="badge tokens" style="cursor:pointer" title="Jump to first token event" onclick="replayJumpToType('agent')">' + (metaData.totalTokens/1000).toFixed(0) + 'K</span></span></div>';
+    if (metaData.duration) metaHtml += '<div class="stat-row"><span class="stat-label">Duration</span><span class="stat-val">' + metaData.duration + '</span></div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
-    // Messages
-    var msgsHtml = '';
-    data.messages.forEach(function(m, idx) {
-      var role = m.role || 'unknown';
-      var cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
-      var content = m.content || '';
-      var needsTruncate = content.length > 800;
-      var displayContent = needsTruncate ? content.substring(0, 800) : content;
-      msgsHtml += '<div class="chat-msg ' + cls + '">';
-      msgsHtml += '<div class="chat-role">' + escHtml(role) + '</div>';
-      if (needsTruncate) {
-        msgsHtml += '<div class="chat-content-truncated" id="msg-' + idx + '-short">' + escHtml(displayContent) + '</div>';
-        msgsHtml += '<div id="msg-' + idx + '-full" style="display:none;white-space:pre-wrap;">' + escHtml(content) + '</div>';
-        msgsHtml += '<div class="chat-expand" onclick="toggleMsg(' + idx + ')">Show more (' + content.length + ' chars)</div>';
-      } else {
-        msgsHtml += '<div style="white-space:pre-wrap;">' + escHtml(content) + '</div>';
-      }
-      if (m.timestamp) msgsHtml += '<div class="chat-ts">' + new Date(m.timestamp).toLocaleString() + '</div>';
-      msgsHtml += '</div>';
-    });
-    document.getElementById('transcript-messages').innerHTML = msgsHtml || '<div style="color:#555;padding:16px;">No messages in this transcript</div>';
+
+    // Render structured events if available (enables replay), else fall back to flat messages
+    if (evtData && evtData.events && evtData.events.length > 0) {
+      _replayEvents = evtData.events;
+      _replayFilter = 'all';
+      _replayCursor = -1;
+      _replayApplyFilter();
+      _replayRender();
+      // Show replay controls
+      document.getElementById('replay-controls').style.display = '';
+      document.getElementById('replay-scrubber').min = 0;
+      document.getElementById('replay-scrubber').max = Math.max(0, _replayFiltered.length - 1);
+      document.getElementById('replay-scrubber').value = 0;
+      _replayUpdatePos();
+    } else {
+      // Fallback: render flat message list
+      _renderFlatMessages(metaData.messages || []);
+    }
   } catch(e) {
     document.getElementById('transcript-messages').innerHTML = '<div style="color:#e74c3c;padding:16px;">Failed to load transcript</div>';
   }
 }
 
-function toggleMsg(idx) {
-  var short = document.getElementById('msg-' + idx + '-short');
-  var full = document.getElementById('msg-' + idx + '-full');
+// Build event type class for CSS
+function _replayEventClass(evt) {
+  var t = evt.type || 'unknown';
+  if (t === 'user') return 'user';
+  if (t === 'agent') return 'assistant';
+  if (t === 'thinking') return 'system';
+  return 'tool'; // exec, read, tool, result
+}
+
+// Determine filter group for an event
+function _replayEventGroup(evt) {
+  var t = evt.type || '';
+  if (t === 'user') return 'user';
+  if (t === 'agent') return 'agent';
+  if (t === 'thinking') return 'thinking';
+  return 'tool'; // exec, read, tool, result
+}
+
+// Build HTML for a single replay event
+function _replayEventHtml(evt, idx) {
+  var cls = _replayEventClass(evt);
+  var label = evt.type || 'event';
+  if (evt.toolName) label = evt.toolName;
+  var text = evt.text || evt.command || evt.args || '';
+  var needsTruncate = text.length > 800;
+  var group = _replayEventGroup(evt);
+  var html = '<div class="chat-msg ' + cls + '" data-replay-idx="' + idx + '" data-replay-group="' + group + '">';
+  html += '<div class="chat-role">' + escHtml(label) + '</div>';
+  if (evt.command) {
+    html += '<div style="white-space:pre-wrap;font-family:monospace;">' + escHtml(evt.command.substring(0, 800)) + '</div>';
+  } else if (evt.file) {
+    html += '<div style="font-size:12px;color:#aaa;">' + escHtml(evt.file) + '</div>';
+    if (evt.args) html += '<div style="white-space:pre-wrap;font-size:11px;max-height:120px;overflow:auto;">' + escHtml(evt.args.substring(0, 400)) + '</div>';
+  } else if (needsTruncate) {
+    html += '<div class="chat-content-truncated" id="re-' + idx + '-short">' + escHtml(text.substring(0, 800)) + '</div>';
+    html += '<div id="re-' + idx + '-full" style="display:none;white-space:pre-wrap;">' + escHtml(text) + '</div>';
+    html += '<div class="chat-expand" onclick="toggleReplayMsg(' + idx + ')">Show more (' + text.length + ' chars)</div>';
+  } else if (text) {
+    html += '<div style="white-space:pre-wrap;">' + escHtml(text) + '</div>';
+  }
+  if (evt.timestamp) html += '<div class="chat-ts">' + new Date(evt.timestamp).toLocaleTimeString() + '</div>';
+  html += '</div>';
+  return html;
+}
+
+// Apply current filter and rebuild _replayFiltered
+function _replayApplyFilter() {
+  if (_replayFilter === 'all') {
+    _replayFiltered = _replayEvents.slice();
+  } else {
+    _replayFiltered = _replayEvents.filter(function(e) { return _replayEventGroup(e) === _replayFilter; });
+  }
+}
+
+// Render all filtered events (step mode off)
+function _replayRender() {
+  var html = '';
+  _replayFiltered.forEach(function(evt, idx) { html += _replayEventHtml(evt, idx); });
+  document.getElementById('transcript-messages').innerHTML = html || '<div style="padding:16px;color:#666;">No events matching filter</div>';
+  if (_replayCursor >= 0) _replayHighlight(_replayCursor);
+}
+
+// Highlight event at cursor and scroll to it
+function _replayHighlight(idx) {
+  // Remove old highlight
+  var old = document.querySelector('.replay-current-msg');
+  if (old) old.classList.remove('replay-current-msg');
+  var el = document.querySelector('[data-replay-idx="' + idx + '"]');
+  if (el) {
+    el.classList.add('replay-current-msg');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+function _replayUpdatePos() {
+  var total = _replayFiltered.length;
+  var cur = _replayCursor >= 0 ? _replayCursor + 1 : '—';
+  document.getElementById('replay-pos').textContent = cur + ' / ' + total;
+  document.getElementById('replay-scrubber').max = Math.max(0, total - 1);
+  if (_replayCursor >= 0) document.getElementById('replay-scrubber').value = _replayCursor;
+  document.getElementById('replay-prev').disabled = _replayCursor <= 0;
+  document.getElementById('replay-next').disabled = _replayCursor >= total - 1;
+}
+
+// Step forward or back
+function replayStep(delta) {
+  var total = _replayFiltered.length;
+  if (total === 0) return;
+  if (_replayCursor < 0) _replayCursor = delta > 0 ? 0 : total - 1;
+  else _replayCursor = Math.max(0, Math.min(total - 1, _replayCursor + delta));
+  _replayHighlight(_replayCursor);
+  _replayUpdatePos();
+}
+
+// Scrubber dragged
+function replayScrub(val) {
+  _replayCursor = parseInt(val, 10);
+  _replayHighlight(_replayCursor);
+  _replayUpdatePos();
+}
+
+// Show all (exit step mode)
+function replayShowAll() {
+  _replayCursor = -1;
+  var old = document.querySelector('.replay-current-msg');
+  if (old) old.classList.remove('replay-current-msg');
+  _replayUpdatePos();
+}
+
+// Clear step (alias)
+function replayClear() { replayShowAll(); }
+
+// Toggle a filter pill
+function replayToggleFilter(el) {
+  var filter = el.getAttribute('data-filter');
+  _replayFilter = filter;
+  _replayCursor = -1;
+  // Update pill UI
+  document.querySelectorAll('.replay-filter-pill').forEach(function(p) { p.classList.remove('active'); });
+  el.classList.add('active');
+  _replayApplyFilter();
+  _replayRender();
+  _replayUpdatePos();
+}
+
+// Jump to first event of a given type (called from stat badges)
+function replayJumpToType(group) {
+  _replayFilter = group;
+  _replayCursor = 0;
+  document.querySelectorAll('.replay-filter-pill').forEach(function(p) {
+    p.classList.toggle('active', p.getAttribute('data-filter') === group);
+  });
+  _replayApplyFilter();
+  _replayRender();
+  _replayHighlight(0);
+  _replayUpdatePos();
+}
+
+function toggleReplayMsg(idx) {
+  var short = document.getElementById('re-' + idx + '-short');
+  var full = document.getElementById('re-' + idx + '-full');
+  if (!short || !full) return;
   if (short.style.display === 'none') {
     short.style.display = '';
     full.style.display = 'none';
-    short.nextElementSibling.nextElementSibling.textContent = 'Show more';
   } else {
     short.style.display = 'none';
     full.style.display = '';
-    event.target.textContent = 'Show less';
+  }
+}
+
+// Fallback: flat message list (when events API unavailable)
+function _renderFlatMessages(messages) {
+  var msgsHtml = '';
+  messages.forEach(function(m, idx) {
+    var role = m.role || 'unknown';
+    var cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
+    var content = m.content || '';
+    var needsTruncate = content.length > 800;
+    var displayContent = needsTruncate ? content.substring(0, 800) : content;
+    msgsHtml += '<div class="chat-msg ' + cls + '">';
+    msgsHtml += '<div class="chat-role">' + escHtml(role) + '</div>';
+    if (needsTruncate) {
+      msgsHtml += '<div class="chat-content-truncated" id="msg-' + idx + '-short">' + escHtml(displayContent) + '</div>';
+      msgsHtml += '<div id="msg-' + idx + '-full" style="display:none;white-space:pre-wrap;">' + escHtml(content) + '</div>';
+      msgsHtml += '<div class="chat-expand" onclick="toggleMsg(' + idx + ')">Show more (' + content.length + ' chars)</div>';
+    } else {
+      msgsHtml += '<div style="white-space:pre-wrap;">' + escHtml(content) + '</div>';
+    }
+    if (m.timestamp) msgsHtml += '<div class="chat-ts">' + new Date(m.timestamp).toLocaleString() + '</div>';
+    msgsHtml += '</div>';
+  });
+  document.getElementById('transcript-messages').innerHTML = msgsHtml || '<div style="color:#555;padding:16px;">No messages in this transcript</div>';
+}
+
+function toggleMsg(idx) {
+  var short = document.getElementById('msg-' + idx + '-short');
+  var full = document.getElementById('msg-' + idx + '-full');
+  if (!short || !full) return;
+  if (short.style.display === 'none') {
+    short.style.display = '';
+    full.style.display = 'none';
+  } else {
+    short.style.display = 'none';
+    full.style.display = '';
   }
 }
 

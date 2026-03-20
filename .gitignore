@@ -25,3 +25,5 @@ Thumbs.db
 
 # Logs
 *.log
+clawmetry-landing/
+.clawmetry-fleet.db
