@@ -2883,10 +2883,14 @@ function clawmetryLogout(){
 
 <!-- CRONS -->
 <div class="page" id="page-crons">
-  <div class="refresh-bar">
+  <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
-    <!-- New Cron Job button disabled until gateway CRUD is properly tested -->
+    <button class="refresh-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;">+ New Job</button>
+    <label class="modal-auto-refresh" style="margin-left:auto;">
+      <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
+    </label>
   </div>
+  <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
   <div class="card" id="crons-list">Loading...</div>
 </div>
 
@@ -3706,6 +3710,8 @@ function switchTab(name) {
   var tabs = document.querySelectorAll('.nav-tab');
   tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
   if (!document.querySelector('.nav-tab.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+  // Stop cron auto-refresh when leaving crons tab
+  if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
@@ -7511,10 +7517,14 @@ function clawmetryLogout(){
 
 <!-- CRONS -->
 <div class="page" id="page-crons">
-  <div class="refresh-bar">
+  <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
-    <!-- New Cron Job button disabled until gateway CRUD is properly tested -->
+    <button class="refresh-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;">+ New Job</button>
+    <label class="modal-auto-refresh" style="margin-left:auto;">
+      <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
+    </label>
   </div>
+  <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
   <div class="card" id="crons-list">Loading...</div>
 </div>
 
@@ -8360,6 +8370,8 @@ function switchTab(name) {
   var tabs = document.querySelectorAll('.nav-tab');
   tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
   if (!document.querySelector('.nav-tab.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+  // Stop cron auto-refresh when leaving crons tab
+  if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
@@ -10022,11 +10034,68 @@ async function loadSessions() {
 
 var _cronJobs = [];
 var _cronExpanded = {};
+var _cronAutoRefreshTimer = null;
+
+function toggleCronAutoRefresh() {
+  var cb = document.getElementById('cron-auto-refresh');
+  if (!cb) return;
+  if (cb.checked) {
+    if (!_cronAutoRefreshTimer) _cronAutoRefreshTimer = setInterval(loadCrons, 30000);
+  } else {
+    if (_cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
+  }
+}
 
 async function loadCrons() {
   var data = await fetch('/api/crons').then(r => r.json());
   _cronJobs = data.jobs || [];
   renderCrons();
+  // Load multi-node cron status from fleet nodes
+  loadCronsMultiNode();
+  // Start auto-refresh if checkbox is checked and timer not running
+  var cb = document.getElementById('cron-auto-refresh');
+  if (cb && cb.checked && !_cronAutoRefreshTimer) {
+    _cronAutoRefreshTimer = setInterval(loadCrons, 30000);
+  }
+}
+
+async function loadCronsMultiNode() {
+  var panel = document.getElementById('crons-multi-node');
+  if (!panel) return;
+  try {
+    var d = await fetch('/api/nodes').then(function(r){return r.json();});
+    var nodes = d.nodes || [];
+    if (nodes.length === 0) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+    var html = '<div class="card" style="padding:14px;">';
+    html += '<div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">&#x1F310; Multi-Node Cron Status</div>';
+    html += '<div style="display:flex;gap:10px;flex-wrap:wrap;">';
+    nodes.forEach(function(n) {
+      var m = n.latest_metrics || {};
+      var cronSummary = (m.crons) || null;
+      var statusColor = n.status === 'online' ? '#22c55e' : '#ef4444';
+      var errCount = cronSummary ? (cronSummary.error_count || 0) : 0;
+      var totalCount = cronSummary ? (cronSummary.total || 0) : 0;
+      html += '<div style="background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;padding:10px 14px;min-width:180px;">';
+      html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">';
+      html += '<span style="width:8px;height:8px;border-radius:50%;background:'+statusColor+';display:inline-block;"></span>';
+      html += '<span style="font-size:13px;font-weight:600;color:var(--text-primary);">'+escHtml(n.name||n.node_id)+'</span>';
+      html += '</div>';
+      if (cronSummary) {
+        html += '<div style="font-size:11px;color:var(--text-muted);">'+totalCount+' jobs';
+        if (errCount > 0) html += ' &middot; <span style="color:#ef4444;">'+errCount+' errors</span>';
+        html += '</div>';
+        if (cronSummary.last_run_at) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Last run: '+timeAgo(new Date(cronSummary.last_run_at).getTime())+'</div>';
+      } else {
+        html += '<div style="font-size:11px;color:var(--text-muted);">No cron data</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div></div>';
+    panel.innerHTML = html;
+  } catch(e) {
+    panel.style.display = 'none';
+  }
 }
 
 function renderCrons() {
@@ -10079,12 +10148,10 @@ function renderCrons() {
 
     // Action buttons
     html += '<div class="cron-actions" onclick="event.stopPropagation()">';
-    // Run Now disabled until gateway CRUD is properly tested
-    // html += '<button class="cron-btn-run" onclick="cronRunNow(\'' + escHtml(j.id) + '\')">&#x25B6; Run Now</button>';
-    // CRUD buttons disabled until gateway integration is properly tested
-    // html += '<button class="cron-btn-toggle" onclick="cronToggle(\'' + escHtml(j.id) + '\',' + !isEnabled + ')">' + (isEnabled ? '&#x23F8; Disable' : '&#x25B6; Enable') + '</button>';
-    // html += '<button class="cron-btn-edit" onclick="cronEdit(\'' + escHtml(j.id) + '\')">&#x270F; Edit</button>';
-    // html += '<button class="cron-btn-delete" onclick="cronConfirmDelete(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F5D1; Delete</button>';
+    html += '<button class="cron-btn-run" onclick="cronRunNow(\'' + escHtml(j.id) + '\')">&#x25B6; Run Now</button>';
+    html += '<button class="cron-btn-toggle" onclick="cronToggle(\'' + escHtml(j.id) + '\',' + !isEnabled + ')">' + (isEnabled ? '&#x23F8; Disable' : '&#x25B6; Enable') + '</button>';
+    html += '<button class="cron-btn-edit" onclick="cronEdit(\'' + escHtml(j.id) + '\')">&#x270F; Edit</button>';
+    html += '<button class="cron-btn-delete" onclick="cronConfirmDelete(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F5D1; Delete</button>';
     html += '</div>';
 
     // Expanded section
@@ -10391,10 +10458,56 @@ function showCronToast(msg) {
 }
 
 function formatSchedule(s) {
-  if (s.kind === 'cron') return 'cron: ' + s.expr + (s.tz ? ' (' + s.tz + ')' : '');
-  if (s.kind === 'every') return 'every ' + (s.everyMs/60000) + ' min';
+  if (s.kind === 'cron') {
+    var expr = s.expr;
+    var human = cronToHuman(expr);
+    var label = 'cron: ' + expr;
+    if (human) label += ' \u2014 ' + human;
+    if (s.tz) label += ' (' + s.tz + ')';
+    return label;
+  }
+  if (s.kind === 'every') {
+    var mins = s.everyMs / 60000;
+    if (mins >= 60) return 'every ' + (mins/60).toFixed(0) + 'h';
+    return 'every ' + mins + ' min';
+  }
   if (s.kind === 'at') return 'once at ' + formatTime(s.atMs);
   return JSON.stringify(s);
+}
+
+function cronToHuman(expr) {
+  // Translate common cron expressions to human-readable text
+  if (!expr) return '';
+  var parts = expr.trim().split(/\s+/);
+  if (parts.length < 5) return '';
+  var min = parts[0], hr = parts[1], dom = parts[2], mon = parts[3], dow = parts[4];
+  var days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  // Every minute
+  if (expr === '* * * * *') return 'every minute';
+  // Every N minutes
+  var evMin = min.match(/^\*\/(\d+)$/);
+  if (evMin && hr === '*' && dom === '*' && mon === '*' && dow === '*') return 'every ' + evMin[1] + ' minutes';
+  // Every hour at minute X
+  if (hr === '*' && dom === '*' && mon === '*' && dow === '*' && /^\d+$/.test(min)) return 'every hour at :' + min.padStart(2,'0');
+  // Every N hours
+  var evHr = hr.match(/^\*\/(\d+)$/);
+  if (evHr && dom === '*' && mon === '*' && dow === '*') {
+    if (min === '0') return 'every ' + evHr[1] + ' hours';
+    return 'every ' + evHr[1] + ' hours at :' + min.padStart(2,'0');
+  }
+  // Daily
+  if (dom === '*' && mon === '*' && dow === '*' && /^\d+$/.test(hr) && /^\d+$/.test(min)) {
+    return 'daily at ' + hr.padStart(2,'0') + ':' + min.padStart(2,'0');
+  }
+  // Weekdays
+  if (dow === '1-5' && /^\d+$/.test(hr) && /^\d+$/.test(min)) return 'weekdays at ' + hr.padStart(2,'0') + ':' + min.padStart(2,'0');
+  if (dow === '0,6' && /^\d+$/.test(hr) && /^\d+$/.test(min)) return 'weekends at ' + hr.padStart(2,'0') + ':' + min.padStart(2,'0');
+  // Single day of week
+  var dowSingle = dow.match(/^(\d)$/);
+  if (dowSingle && /^\d+$/.test(hr) && /^\d+$/.test(min)) return (days[parseInt(dowSingle[1])]||'day') + 's at ' + hr.padStart(2,'0') + ':' + min.padStart(2,'0');
+  // Weekly (multiple days)
+  if (/^[\d,]+$/.test(dow) && /^\d+$/.test(hr)) return 'weekly at ' + hr.padStart(2,'0') + ':' + min.padStart(2,'0');
+  return '';
 }
 
 async function loadLogs() {
