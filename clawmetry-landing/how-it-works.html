@@ -680,20 +680,123 @@
           <div class="terminal-dot td-red"></div>
           <div class="terminal-dot td-yellow"></div>
           <div class="terminal-dot td-green"></div>
+          <span style="margin-left:8px;font-size:11px;color:rgba(255,255,255,0.3);font-family:monospace;">terminal</span>
         </div>
-        <div class="terminal-body">
-          <div class="t-dim"># Install</div>
-          <div class="t-cmd">pip install clawmetry</div>
-          <br>
-          <div class="t-dim"># Start the dashboard</div>
-          <div class="t-cmd">clawmetry</div>
-          <br>
-          <div class="t-ok">✓ Connected to OpenClaw workspace</div>
-          <div class="t-ok">✓ Reading sessions + cron jobs</div>
-          <div class="t-ok">✓ Dashboard running</div>
-          <div class="t-url">  → http://localhost:8900</div>
-        </div>
+        <div class="terminal-body" id="anim-term" style="min-height:320px;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.9;"></div>
       </div>
+      <script>
+      (function(){
+        var lines = [
+          {type:'cmd', text:'curl -fsSL https://clawmetry.com/install.sh | bash', delay:40},
+          {type:'blank', delay:400},
+          {type:'out', text:'\u{1F99E} ClawMetry  AI Observability for OpenClaw', delay:0, style:'color:#E5443A;font-weight:700'},
+          {type:'out', text:'\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500', delay:0, style:'color:rgba(255,255,255,0.15)'},
+          {type:'out', text:'\u2192 Detected macOS (Apple Silicon)', delay:300},
+          {type:'out', text:'\u2192 Creating virtual environment...', delay:600},
+          {type:'out', text:'\u2192 Installing clawmetry from PyPI...', delay:800},
+          {type:'ok', text:'\u2713 ClawMetry 0.12.58 installed', delay:1000},
+          {type:'blank', delay:200},
+          {type:'out', text:'Your dashboard is ready at', delay:0},
+          {type:'out', text:'app.clawmetry.com', delay:0, style:'color:#60A5FA;font-weight:600;font-size:15px'},
+          {type:'blank', delay:200},
+          {type:'out', text:'E2E encrypted. Only you can read it.', delay:0, style:'color:rgba(255,255,255,0.4)'},
+          {type:'blank', delay:200},
+          {type:'out', text:'  [Y] Start 7-day trial (then $5/node/mo)', delay:0, style:'color:#22c55e'},
+          {type:'out', text:'  [n] Run locally for now', delay:0, style:'color:rgba(255,255,255,0.35)'},
+          {type:'blank', delay:500},
+          {type:'cmd', text:'Y', delay:200, prompt:'\u2192 [Y/n]: '},
+          {type:'blank', delay:300},
+          {type:'cmd', text:'vivek@example.com', delay:50, prompt:'\u{1F4E7} Enter your email: '},
+          {type:'out', text:'\u{1F4E8} Sending code... \u2705', delay:800},
+          {type:'cmd', text:'465585', delay:100, prompt:'\u{1F511} Enter code: '},
+          {type:'out', text:'Verifying... \u2705  Welcome back!', delay:600, style:'color:#22c55e'},
+          {type:'blank', delay:300},
+          {type:'out', text:'Connecting to ClawMetry Cloud... \u2705', delay:800, style:'color:#22c55e'},
+          {type:'blank', delay:200},
+          {type:'ok', text:'All done! Open app.clawmetry.com to see your dashboard.', delay:0},
+        ];
+
+        var el = document.getElementById('anim-term');
+        var cursor = document.createElement('span');
+        cursor.style.cssText = 'display:inline-block;width:8px;height:16px;background:#E5443A;animation:blink 1s step-end infinite;vertical-align:text-bottom;margin-left:2px';
+        if(!document.getElementById('cm-blink-style')){
+          var s=document.createElement('style');s.id='cm-blink-style';
+          s.textContent='@keyframes blink{50%{opacity:0}}';
+          document.head.appendChild(s);
+        }
+
+        function typeText(container, text, speed, cb) {
+          var i = 0;
+          container.appendChild(cursor);
+          function next() {
+            if (i < text.length) {
+              cursor.insertAdjacentText('beforebegin', text[i]);
+              i++;
+              setTimeout(next, speed + Math.random() * speed * 0.5);
+            } else {
+              if(cursor.parentNode) cursor.parentNode.removeChild(cursor);
+              if(cb) cb();
+            }
+          }
+          next();
+        }
+
+        function runSequence() {
+          el.innerHTML = '';
+          var idx = 0;
+
+          function nextLine() {
+            if (idx >= lines.length) {
+              setTimeout(runSequence, 5000);
+              return;
+            }
+            var line = lines[idx++];
+
+            if (line.type === 'blank') {
+              el.appendChild(document.createElement('br'));
+              setTimeout(nextLine, line.delay || 100);
+              return;
+            }
+
+            var div = document.createElement('div');
+
+            if (line.type === 'cmd') {
+              var prompt = document.createElement('span');
+              prompt.style.color = 'rgba(255,255,255,0.35)';
+              prompt.textContent = line.prompt || '$ ';
+              div.appendChild(prompt);
+              var cmdSpan = document.createElement('span');
+              cmdSpan.style.color = '#28c840';
+              div.appendChild(cmdSpan);
+              el.appendChild(div);
+              typeText(cmdSpan, line.text, line.delay || 40, function() {
+                setTimeout(nextLine, 300);
+              });
+              return;
+            }
+
+            if (line.type === 'ok') {
+              div.style.cssText = 'color:#22c55e;font-weight:600;' + (line.style || '');
+            } else {
+              div.style.cssText = 'color:#94a3b8;' + (line.style || '');
+            }
+            div.textContent = line.text;
+            el.appendChild(div);
+            setTimeout(nextLine, line.delay || 100);
+          }
+          nextLine();
+        }
+
+        // Start when visible
+        var observer = new IntersectionObserver(function(entries) {
+          if (entries[0].isIntersecting) {
+            observer.disconnect();
+            runSequence();
+          }
+        }, {threshold: 0.3});
+        observer.observe(el);
+      })();
+      </script>
 
       <div class="install-steps">
         <div class="install-step">
