@@ -546,7 +546,7 @@ def _cmd_onboard(args) -> None:
         print(f"  {DIM('Run  clawmetry status  to check sync health.')}\n")
         return
 
-    print(f"\n  {BOLD('Your dashboard is ready at')}")
+    print(f"\n  {BOLD('Connect to ClawMetry Cloud to monitor from anywhere:')}")
     print(f"  {BOLD('app.clawmetry.com')}")
     print(f"\n  {DIM('E2E encrypted. Only you can read it.')}\n")
     print(f"      {BOLD('[Y]')} Start 7-day trial {DIM('(then $5/node/mo)')}")
