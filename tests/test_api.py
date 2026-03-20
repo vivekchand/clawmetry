@@ -471,3 +471,118 @@ class TestMemoryAnalytics:
         for f in d["files"]:
             assert_keys(f, "path", "sizeBytes", "sizeKB", "estTokens", "status")
             assert f["status"] in ("ok", "warning", "critical")
+
+
+class TestAlertChannels:
+    """Tests for Webhook & Slack/Discord alerting integrations (GH #204)."""
+
+    def test_list_channels_empty(self, api, base_url):
+        """Alert channels list returns an empty list initially."""
+        d = assert_ok(get(api, base_url, "/api/alerts/channels"))
+        assert "channels" in d, "Response must have 'channels' key"
+        assert isinstance(d["channels"], list)
+
+    def test_create_slack_channel(self, api, base_url):
+        """Can create a Slack webhook integration."""
+        payload = {
+            "type": "slack",
+            "name": "test-slack",
+            "webhook_url": "https://hooks.slack.com/services/test/test/test",
+            "enabled": True,
+        }
+        r = api.post(f"{base_url}/api/alerts/channels", json=payload)
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+        d = r.json()
+        assert d.get("ok"), f"Expected ok=True, got {d}"
+        assert "id" in d, "Response must include channel id"
+
+    def test_create_discord_channel(self, api, base_url):
+        """Can create a Discord webhook integration."""
+        payload = {
+            "type": "discord",
+            "name": "test-discord",
+            "webhook_url": "https://discord.com/api/webhooks/test/test",
+            "enabled": True,
+        }
+        r = api.post(f"{base_url}/api/alerts/channels", json=payload)
+        assert r.status_code == 200
+        d = r.json()
+        assert d.get("ok")
+
+    def test_create_generic_webhook(self, api, base_url):
+        """Can create a generic webhook integration."""
+        payload = {
+            "type": "webhook",
+            "name": "test-webhook",
+            "webhook_url": "https://example.com/hook",
+        }
+        r = api.post(f"{base_url}/api/alerts/channels", json=payload)
+        assert r.status_code == 200
+        d = r.json()
+        assert d.get("ok")
+
+    def test_invalid_channel_type_rejected(self, api, base_url):
+        """Invalid channel type returns 400."""
+        r = api.post(f"{base_url}/api/alerts/channels", json={
+            "type": "pagerduty",
+            "webhook_url": "https://example.com",
+        })
+        assert r.status_code == 400
+
+    def test_missing_webhook_url_rejected(self, api, base_url):
+        """Missing webhook_url returns 400."""
+        r = api.post(f"{base_url}/api/alerts/channels", json={"type": "slack"})
+        assert r.status_code == 400
+
+    def test_created_channels_appear_in_list(self, api, base_url):
+        """Channels created via POST appear in GET list."""
+        api.post(f"{base_url}/api/alerts/channels", json={
+            "type": "webhook",
+            "name": "list-test",
+            "webhook_url": "https://example.com/list-test",
+        })
+        d = assert_ok(get(api, base_url, "/api/alerts/channels"))
+        names = [c.get("name") for c in d["channels"]]
+        assert "list-test" in names
+
+    def test_channel_entry_schema(self, api, base_url):
+        """Each channel entry has required fields."""
+        api.post(f"{base_url}/api/alerts/channels", json={
+            "type": "discord",
+            "name": "schema-test",
+            "webhook_url": "https://discord.com/api/webhooks/schema/test",
+        })
+        d = assert_ok(get(api, base_url, "/api/alerts/channels"))
+        for ch in d["channels"]:
+            assert_keys(ch, "id", "name", "type", "webhook_url", "enabled")
+
+    def test_delete_channel(self, api, base_url):
+        """Can delete a channel integration."""
+        r = api.post(f"{base_url}/api/alerts/channels", json={
+            "type": "webhook",
+            "name": "delete-test",
+            "webhook_url": "https://example.com/delete-test",
+        })
+        ch_id = r.json().get("id")
+        assert ch_id
+        dr = api.delete(f"{base_url}/api/alerts/channels/{ch_id}")
+        assert dr.status_code == 200
+        d = assert_ok(get(api, base_url, "/api/alerts/channels"))
+        ids = [c.get("id") for c in d["channels"]]
+        assert ch_id not in ids
+
+    def test_update_channel_enabled_state(self, api, base_url):
+        """Can enable/disable a channel via PUT."""
+        r = api.post(f"{base_url}/api/alerts/channels", json={
+            "type": "slack",
+            "name": "update-test",
+            "webhook_url": "https://hooks.slack.com/test/update",
+        })
+        ch_id = r.json().get("id")
+        assert ch_id
+        ur = api.put(f"{base_url}/api/alerts/channels/{ch_id}", json={"enabled": False})
+        assert ur.status_code == 200
+        d = assert_ok(get(api, base_url, "/api/alerts/channels"))
+        ch = next((c for c in d["channels"] if c.get("id") == ch_id), None)
+        assert ch is not None
+        assert ch.get("enabled") in (0, False)
