@@ -146,6 +146,12 @@ _budget_paused_at = 0
 _budget_paused_reason = ''
 _budget_alert_cooldowns = {}  # rule_id -> last_fired_timestamp
 _AGENT_DOWN_SECONDS = 300  # 5 min with no OTLP data = agent down alert
+
+# ── Token Velocity Tracking ────────────────────────────────────────────
+_velocity_window = []  # [{timestamp, tokens, cost_usd, session_id}]
+_VELOCITY_WINDOW_SECONDS = 120  # sliding 2-minute window
+_session_costs_live = {}  # session_id -> cumulative cost (reset daily)
+_session_costs_live_day = ''  # date string for daily reset
 _ALERTS_CONFIG_FILE = os.path.expanduser('~/.openclaw/clawmetry-alerts.json')
 _security_posture_hash = ''
 _ALERTS_CONFIG_FILE = os.path.expanduser('~/.openclaw/clawmetry-alerts.json')
@@ -253,6 +259,31 @@ def _add_metric(category, entry):
         if len(metrics_store[category]) > MAX_STORE_ENTRIES:
             metrics_store[category] = metrics_store[category][-MAX_STORE_ENTRIES:]
         _otel_last_received = time.time()
+
+    # Track token velocity for spike detection
+    if category in ('tokens', 'cost'):
+        ts = entry.get('timestamp', time.time())
+        tokens = entry.get('total', 0) if category == 'tokens' else 0
+        cost_usd = entry.get('usd', 0) if category == 'cost' else 0
+        session_id = entry.get('session_id', entry.get('channel', 'unknown'))
+        _velocity_window.append({
+            'timestamp': ts,
+            'tokens': tokens,
+            'cost_usd': cost_usd,
+            'session_id': session_id,
+        })
+        # Prune old entries from velocity window
+        cutoff = time.time() - _VELOCITY_WINDOW_SECONDS
+        while _velocity_window and _velocity_window[0]['timestamp'] < cutoff:
+            _velocity_window.pop(0)
+        # Track per-session cumulative cost
+        today = datetime.now().strftime('%Y-%m-%d')
+        global _session_costs_live_day
+        if today != _session_costs_live_day:
+            _session_costs_live.clear()
+            _session_costs_live_day = today
+        if cost_usd > 0:
+            _session_costs_live[session_id] = _session_costs_live.get(session_id, 0) + cost_usd
     # Check budget on cost entries
     if category == 'cost':
         try:
@@ -959,6 +990,20 @@ def _budget_monitor_loop():
                         hour=0, minute=0, second=0, microsecond=0).timestamp()) / 3600)
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
                         msg = f'Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost/avg_hourly):.1f}x average)'
+                        fired = True
+                elif rtype == 'session_cost':
+                    # Per-session cost alert: any session exceeds $threshold
+                    for sid, scost in list(_session_costs_live.items()):
+                        if scost >= threshold:
+                            msg = f'Session cost alert: session {sid} has spent ${scost:.2f} (threshold: ${threshold:.2f})'
+                            fired = True
+                            break
+                elif rtype == 'token_velocity':
+                    # Token velocity: tokens in sliding 2-min window > threshold
+                    window_tokens = sum(v['tokens'] for v in _velocity_window)
+                    window_cost = sum(v['cost_usd'] for v in _velocity_window)
+                    if window_tokens >= threshold:
+                        msg = f'Token velocity spike: {window_tokens:,} tokens in last 2 min (threshold: {int(threshold):,}). Cost: ${window_cost:.2f}'
                         fired = True
 
                 if fired:
@@ -2805,6 +2850,8 @@ function clawmetryLogout(){
           <select id="alert-type" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
             <option value="threshold">Threshold (daily $ amount)</option>
             <option value="spike">Spike (hourly rate multiplier)</option>
+            <option value="session_cost">Session cost ($ per session)</option>
+            <option value="token_velocity">Token velocity (tokens per 2 min)</option>
           </select>
           <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -3834,7 +3881,7 @@ async function loadAlertRules() {
       try { channels = JSON.parse(r.channels); } catch(e) { channels = [r.channels]; }
       html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;">';
       html += '<span style="font-weight:600;">' + escHtml(r.type) + '</span>';
-      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : '$'+r.threshold) + '</span>';
+      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : r.type==='token_velocity' ? r.threshold.toLocaleString()+' tok/2min' : '$'+r.threshold) + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + channels.join(', ') + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + r.cooldown_min + 'min cooldown</span>';
       html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-error);font-size:16px;" data-rule-id="'+r.id+'" onclick="deleteAlertRule(this.dataset.ruleId)" title="Delete">&#x1f5d1;</span>';
@@ -6209,6 +6256,20 @@ def _budget_monitor_loop():
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
                         msg = f'Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost/avg_hourly):.1f}x average)'
                         fired = True
+                elif rtype == 'session_cost':
+                    # Per-session cost alert: any session exceeds $threshold
+                    for sid, scost in list(_session_costs_live.items()):
+                        if scost >= threshold:
+                            msg = f'Session cost alert: session {sid} has spent ${scost:.2f} (threshold: ${threshold:.2f})'
+                            fired = True
+                            break
+                elif rtype == 'token_velocity':
+                    # Token velocity: tokens in sliding 2-min window > threshold
+                    window_tokens = sum(v['tokens'] for v in _velocity_window)
+                    window_cost = sum(v['cost_usd'] for v in _velocity_window)
+                    if window_tokens >= threshold:
+                        msg = f'Token velocity spike: {window_tokens:,} tokens in last 2 min (threshold: {int(threshold):,}). Cost: ${window_cost:.2f}'
+                        fired = True
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
@@ -8133,6 +8194,8 @@ function clawmetryLogout(){
           <select id="alert-type" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
             <option value="threshold">Threshold (daily $ amount)</option>
             <option value="spike">Spike (hourly rate multiplier)</option>
+            <option value="session_cost">Session cost ($ per session)</option>
+            <option value="token_velocity">Token velocity (tokens per 2 min)</option>
           </select>
           <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -9147,7 +9210,7 @@ async function loadAlertRules() {
       try { channels = JSON.parse(r.channels); } catch(e) { channels = [r.channels]; }
       html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;">';
       html += '<span style="font-weight:600;">' + escHtml(r.type) + '</span>';
-      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : '$'+r.threshold) + '</span>';
+      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : r.type==='token_velocity' ? r.threshold.toLocaleString()+' tok/2min' : '$'+r.threshold) + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + channels.join(', ') + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + r.cooldown_min + 'min cooldown</span>';
       html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-error);font-size:16px;" data-rule-id="'+r.id+'" onclick="deleteAlertRule(this.dataset.ruleId)" title="Delete">&#x1f5d1;</span>';
@@ -18590,7 +18653,7 @@ def api_alert_rules():
         channels = data.get('channels', ['banner'])
         cooldown = data.get('cooldown_min', 30)
         enabled = data.get('enabled', True)
-        if rtype not in ('threshold', 'spike', 'anomaly', 'agent_down'):
+        if rtype not in ('threshold', 'spike', 'anomaly', 'agent_down', 'session_cost', 'token_velocity'):
             return jsonify({'error': 'Invalid alert type'}), 400
         if not isinstance(threshold, (int, float)) or threshold <= 0:
             return jsonify({'error': 'Threshold must be a positive number'}), 400
@@ -18669,6 +18732,26 @@ def api_alert_ack(alert_id):
 def api_alerts_active():
     """Get active (unacknowledged) alerts."""
     return jsonify({'alerts': _get_active_alerts()})
+
+
+@bp_alerts.route('/api/alerts/velocity')
+def api_alert_velocity():
+    """Get current token velocity stats."""
+    now = time.time()
+    window_tokens = sum(v['tokens'] for v in _velocity_window)
+    window_cost = sum(v['cost_usd'] for v in _velocity_window)
+    window_sessions = {}
+    for v in _velocity_window:
+        sid = v.get('session_id', 'unknown')
+        window_sessions[sid] = window_sessions.get(sid, 0) + v['tokens']
+    top_sessions = sorted(_session_costs_live.items(), key=lambda x: x[1], reverse=True)[:10]
+    return jsonify({
+        'window_seconds': _VELOCITY_WINDOW_SECONDS,
+        'window_tokens': window_tokens,
+        'window_cost_usd': round(window_cost, 4),
+        'window_sessions': window_sessions,
+        'top_session_costs': [{'session_id': s, 'cost_usd': round(c, 4)} for s, c in top_sessions],
+    })
 
 
 @bp_alerts.route('/api/alerts/webhook', methods=['GET', 'POST'])
