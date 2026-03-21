@@ -1,3 +1,8 @@
+## [0.12.62] — 2026-03-21
+
+### Fixed
+- **PyPI release sync**: Re-release 0.12.62 to include localhost auth bypass (committed in 0.12.61 source but not published); API endpoints now accessible without token for localhost requests
+
 ## [0.12.60] — 2026-03-19
 
 ### Added
