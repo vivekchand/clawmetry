@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><title>ClawMetry - Pitch Deck: Multi-Claw Platform</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', -apple-system, sans-serif; background: #0B0F1A; color: #E2E8F0; }
+  .slide {
+    width: 100%; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    padding: 60px 80px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    position: relative;
+  }
+  .slide-num {
+    position: absolute; top: 24px; right: 32px;
+    font-size: 12px; color: #4A5568; font-weight: 500; letter-spacing: 1px;
+  }
+  .version-tag {
+    position: absolute; top: 24px; left: 32px;
+    font-size: 10px; color: #E5443A; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    background: rgba(229,68,58,0.1); border: 1px solid rgba(229,68,58,0.2); border-radius: 4px; padding: 4px 10px;
+  }
+  .accent { color: #E5443A; }
+  .muted { color: #64748B; }
+  .label {
+    font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    color: #E5443A; margin-bottom: 16px;
+  }
+  h1 { font-size: 52px; font-weight: 800; line-height: 1.15; letter-spacing: -1.5px; }
+  h2 { font-size: 36px; font-weight: 800; letter-spacing: -1px; margin-bottom: 24px; }
+  h3 { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+  p { font-size: 18px; color: #94A3B8; line-height: 1.7; }
+  .tagline { font-size: 22px; color: #94A3B8; margin-top: 16px; max-width: 640px; line-height: 1.6; }
+  .big-number { font-size: 72px; font-weight: 800; color: #E5443A; letter-spacing: -2px; line-height: 1; }
+  .big-label { font-size: 15px; color: #64748B; margin-top: 8px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; width: 100%; max-width: 900px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; width: 100%; max-width: 960px; }
+  .grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 20px; width: 100%; max-width: 960px; }
+  .card {
+    background: #131929; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 32px;
+  }
+  .card .num { font-size: 48px; font-weight: 800; color: #E5443A; letter-spacing: -1px; }
+  .card .desc { font-size: 14px; color: #64748B; margin-top: 6px; line-height: 1.5; }
+  .problem-box {
+    background: rgba(229,68,58,0.08); border: 1px solid rgba(229,68,58,0.2);
+    border-radius: 12px; padding: 28px; max-width: 860px; width: 100%;
+    font-size: 20px; line-height: 1.7; color: #CBD5E0; margin-top: 24px;
+  }
+  .solution-box {
+    background: rgba(34,197,94,0.05); border: 1px solid rgba(34,197,94,0.15);
+    border-radius: 12px; padding: 28px; max-width: 860px; width: 100%;
+    font-size: 20px; line-height: 1.7; color: #CBD5E0; margin-top: 24px;
+  }
+  .feature-row { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 20px; }
+  .feature-icon { font-size: 24px; flex-shrink: 0; margin-top: 2px; }
+  .feature-text h4 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .feature-text p { font-size: 14px; color: #64748B; }
+  .use-of-funds { width: 100%; max-width: 820px; }
+  .fund-row { display: flex; justify-content: space-between; align-items: center; padding: 18px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .fund-name { font-size: 16px; font-weight: 600; }
+  .fund-pct { font-size: 22px; font-weight: 800; color: #E5443A; }
+  .fund-desc { font-size: 13px; color: #64748B; margin-top: 2px; }
+  .ask-box {
+    background: linear-gradient(135deg, rgba(229,68,58,0.12), rgba(229,68,58,0.04));
+    border: 1px solid rgba(229,68,58,0.3);
+    border-radius: 20px; padding: 48px; text-align: center; max-width: 680px; width: 100%;
+  }
+  .team-card { background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px; text-align: center; }
+  .team-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .team-role { font-size: 14px; color: #E5443A; font-weight: 600; margin-bottom: 8px; }
+  .team-bio { font-size: 13px; color: #64748B; line-height: 1.6; }
+  .logo { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
+  .logo span { color: #E5443A; }
+  .bar-row { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+  .bar-label { min-width: 140px; font-size: 14px; color: #94A3B8; }
+  .bar-track { flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; }
+  .bar-fill { height: 8px; border-radius: 4px; background: #E5443A; }
+  .bar-val { min-width: 60px; font-size: 14px; font-weight: 700; text-align: right; }
+  .roadmap-item {
+    background: #131929; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; padding: 24px; position: relative;
+  }
+  .roadmap-item.active { border-color: rgba(229,68,58,0.4); background: rgba(229,68,58,0.06); }
+  .roadmap-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 4px; display: inline-block; margin-bottom: 12px;
+  }
+  .badge-live { background: rgba(34,197,94,0.15); color: #22C55E; }
+  .badge-next { background: rgba(59,130,246,0.15); color: #3B82F6; }
+  .badge-future { background: rgba(139,92,246,0.15); color: #8B5CF6; }
+</style>
+</head>
+<body>
+
+<!-- SLIDE 1: COVER -->
+<div class="slide" style="background: radial-gradient(ellipse at 60% 40%, rgba(229,68,58,0.12) 0%, transparent 70%);">
+  <div class="slide-num">01 / 11</div>
+  <div class="version-tag">V2: Multi-Claw Platform</div>
+  <div style="max-width: 840px; width: 100%;">
+    <div class="logo" style="margin-bottom: 32px;">Claw<span>Metry</span></div>
+    <h1>The Universal Observability<br>Platform for AI Agents</h1>
+    <p class="tagline">Starting with OpenClaw (326k stars). Expanding to every agent framework. The Datadog moment for AI agents is here.</p>
+    <div style="margin-top: 48px; display: flex; gap: 48px;">
+      <div>
+        <div class="big-number" id="pd-installs">75k+</div>
+        <div class="big-label">Installs in 4 weeks</div>
+      </div>
+      <div>
+        <div class="big-number">375k+</div>
+        <div class="big-label">Combined framework stars</div>
+      </div>
+      <div>
+        <div class="big-number">#5</div>
+        <div class="big-label">Product Hunt</div>
+      </div>
+    </div>
+    <div style="margin-top: 40px; font-size: 14px; color: #4A5568;">Vivek Chand &middot; vivek@clawmetry.com &middot; clawmetry.com</div>
+  </div>
+</div>
+
+<!-- SLIDE 2: THE OPPORTUNITY -->
+<div class="slide">
+  <div class="slide-num">02 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Opportunity</div>
+    <h2>AI agent frameworks are exploding. None have observability.</h2>
+    <p style="max-width: 700px; margin-bottom: 40px;">2026 is the year AI agents went mainstream. Multiple frameworks are racing to be the standard. All of them generate agent activity that needs monitoring, cost tracking, and auditing. None of them have built-in observability.</p>
+    <div class="grid-4">
+      <div class="card" style="text-align: center;">
+        <div class="num" style="font-size: 36px;">326k</div>
+        <div class="desc">OpenClaw stars</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num" style="font-size: 36px;">25k</div>
+        <div class="desc">PicoClaw stars</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num" style="font-size: 36px;">24k</div>
+        <div class="desc">NanoClaw stars</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num" style="font-size: 36px;">&#8734;</div>
+        <div class="desc">Claude Code, Cursor, etc.</div>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: rgba(229,68,58,0.06); border: 1px solid rgba(229,68,58,0.15); border-radius: 12px;">
+      <p style="font-size: 16px; color: #CBD5E0;"><strong style="color: #E5443A;">The Datadog parallel:</strong> Datadog started with AWS-only monitoring. Then expanded to Azure, GCP, and every cloud. That expansion drove a $50B valuation. ClawMetry is doing the same for AI agent frameworks.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 3: PROBLEM -->
+<div class="slide">
+  <div class="slide-num">03 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Problem</div>
+    <h2>Every agent framework has the same blind spot</h2>
+    <div class="problem-box">
+      Whether you use OpenClaw, NanoClaw, PicoClaw, Claude Code, or Cursor, the problem is identical: your agents run autonomously, and you have zero visibility into what they are doing, what they cost, or whether they are working correctly. Each framework has its own log format, its own state management, its own gaps.
+    </div>
+    <div style="margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 860px;">
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">&#128465;&#65039;</div>
+        <h3 style="font-size: 16px;">Fragmented tooling</h3>
+        <p style="font-size: 14px;">Different frameworks, different formats. No unified view across your agent fleet.</p>
+      </div>
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">&#128176;</div>
+        <h3 style="font-size: 16px;">Cost chaos across models</h3>
+        <p style="font-size: 14px;">Each framework calls different models. No consolidated cost tracking exists.</p>
+      </div>
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">&#128679;</div>
+        <h3 style="font-size: 16px;">No cross-framework audit</h3>
+        <p style="font-size: 14px;">Enterprises run multiple agent frameworks. Compliance requires unified audit trails.</p>
+      </div>
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">&#128640;</div>
+        <h3 style="font-size: 16px;">Frameworks ship fast, skip ops</h3>
+        <p style="font-size: 14px;">Agent frameworks focus on capabilities, not operations. Observability is always an afterthought.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 4: SOLUTION -->
+<div class="slide">
+  <div class="slide-num">04 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Solution</div>
+    <h2>One platform. Every agent framework.</h2>
+    <div class="solution-box">
+      ClawMetry is building the universal observability layer for AI agents. Today we deeply integrate with OpenClaw. Tomorrow: NanoClaw, PicoClaw, Claude Code, Cursor, and any new framework. Plugin architecture means adding a new framework takes days, not months.
+    </div>
+    <div style="margin-top: 32px; max-width: 860px;">
+      <div class="feature-row">
+        <div class="feature-icon">&#128268;</div>
+        <div class="feature-text">
+          <h4>Plugin architecture</h4>
+          <p>Each agent framework is a plugin. Core observability engine is framework-agnostic. New integrations ship fast.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">&#127760;</div>
+        <div class="feature-text">
+          <h4>Unified dashboard</h4>
+          <p>One view for all your agents regardless of framework. Costs, activity, audit trail, all in one place.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">&#9889;</div>
+        <div class="feature-text">
+          <h4>Real-time Flow visualization</h4>
+          <p>Live animated view of agent activity. Works across any integrated framework.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">&#128274;</div>
+        <div class="feature-text">
+          <h4>E2E encrypted cloud</h4>
+          <p>Zero-knowledge architecture. Your multi-framework agent data is encrypted before it leaves your machine.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 5: TRACTION -->
+<div class="slide">
+  <div class="slide-num">05 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Traction</div>
+    <h2>OpenClaw is the wedge. The numbers prove it works.</h2>
+    <div class="grid-3" style="margin-bottom: 40px;">
+      <div class="card" style="text-align: center;">
+        <div class="num" id="pd-traction-installs">75k+</div>
+        <div class="desc">Total installs in 4 weeks, zero marketing spend</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num" id="pd-traction-countries">100+</div>
+        <div class="desc">Countries with active installations</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num">133</div>
+        <div class="desc">Cloud users, 19 connected nodes</div>
+      </div>
+    </div>
+    <div style="max-width: 820px; width: 100%;">
+      <div class="bar-row">
+        <div class="bar-label">Week 1 (Feb 18)</div>
+        <div class="bar-track"><div class="bar-fill" style="width:15%"></div></div>
+        <div class="bar-val">~8k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 2</div>
+        <div class="bar-track"><div class="bar-fill" style="width:40%"></div></div>
+        <div class="bar-val">~22k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 3</div>
+        <div class="bar-track"><div class="bar-fill" style="width:65%"></div></div>
+        <div class="bar-val">~37k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 4 (Mar 18)</div>
+        <div class="bar-track"><div class="bar-fill" style="width:100%"></div></div>
+        <div class="bar-val" id="pd-bar-latest">75k+</div>
+      </div>
+    </div>
+    <p style="margin-top: 24px; font-size: 15px; color: #4A5568;">OpenClaw plugin validated. Same playbook replicates for every new framework integration.</p>
+  </div>
+</div>
+
+<!-- SLIDE 6: PLATFORM ROADMAP / LAUNCH -->
+<div class="slide">
+  <div class="slide-num">06 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Platform Roadmap</div>
+    <h2>From one framework to all of them</h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 32px;">
+      <div class="roadmap-item active">
+        <div class="roadmap-badge badge-live">Live Now</div>
+        <h3 style="font-size: 18px; margin-bottom: 8px;">OpenClaw</h3>
+        <p style="font-size: 14px; color: #64748B;">326k stars. Deep filesystem integration. 75k+ installs. Cloud launched March 18.</p>
+      </div>
+      <div class="roadmap-item">
+        <div class="roadmap-badge badge-next">Q3 2026</div>
+        <h3 style="font-size: 18px; margin-bottom: 8px;">NanoClaw + PicoClaw</h3>
+        <p style="font-size: 14px; color: #64748B;">24k + 25k stars. Similar architecture. Plugin development estimated at 4-6 weeks each.</p>
+      </div>
+      <div class="roadmap-item">
+        <div class="roadmap-badge badge-future">Q4 2026+</div>
+        <h3 style="font-size: 18px; margin-bottom: 8px;">Claude Code + Cursor</h3>
+        <p style="font-size: 14px; color: #64748B;">Proprietary agents. API-based integration. Expands TAM beyond open source community.</p>
+      </div>
+    </div>
+    <div style="display: flex; gap: 40px; align-items: center;">
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">#5</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">Product Hunt (OSS)</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">#10</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">Product Hunt (Cloud)</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">1M+</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">PH Daily newsletter reach</div>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: rgba(229,68,58,0.06); border: 1px solid rgba(229,68,58,0.15); border-radius: 12px;">
+      <p style="font-size: 15px; color: #CBD5E0;"><strong style="color: #E5443A;">Revenue multiplier:</strong> Each new framework integration doubles the addressable market. OpenClaw alone = $50M TAM. All frameworks combined = $500M+.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 7: BUSINESS MODEL -->
+<div class="slide">
+  <div class="slide-num">07 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Business Model</div>
+    <h2>OpenClaw is the wedge. The platform is the business.</h2>
+    <div style="display: flex; gap: 16px; align-items: center; margin-bottom: 40px; font-size: 16px; color: #94A3B8; flex-wrap: wrap;">
+      <div style="background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 20px;">Any agent framework</div>
+      <div style="color: #E5443A;">&#8594;</div>
+      <div style="background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 20px;">ClawMetry plugin</div>
+      <div style="color: #E5443A;">&#8594;</div>
+      <div style="background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 20px;">Local dashboard</div>
+      <div style="color: #E5443A;">&#8594;</div>
+      <div style="background: rgba(229,68,58,0.1); border: 1px solid rgba(229,68,58,0.3); border-radius: 8px; padding: 12px 20px; color: #E5443A; font-weight: 700;">$5/node/mo cloud</div>
+    </div>
+    <div class="grid-3">
+      <div class="card" style="text-align: center;">
+        <div style="font-size: 36px; margin-bottom: 12px;">&#127793;</div>
+        <h3 style="font-size: 16px;">Wedge: OpenClaw</h3>
+        <p style="font-size: 14px;">Proven product-market fit with 75k installs. Template for every future framework integration.</p>
+      </div>
+      <div class="card" style="text-align: center; border-color: rgba(229,68,58,0.2);">
+        <div style="font-size: 36px; margin-bottom: 12px;">&#128268;</div>
+        <h3 style="font-size: 16px;">Expand: Plugin per framework</h3>
+        <p style="font-size: 14px;">Each plugin brings a new user base. Same cloud monetization. Revenue compounds with each integration.</p>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div style="font-size: 36px; margin-bottom: 12px;">&#127970;</div>
+        <h3 style="font-size: 16px;">Scale: Enterprise multi-agent</h3>
+        <p style="font-size: 14px;">Enterprises run multiple frameworks. ClawMetry is the only unified view. Custom pricing per org.</p>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: #131929; border-radius: 12px; border: 1px solid rgba(255,255,255,0.06);">
+      <p style="font-size: 15px;"><span style="color: #E2E8F0; font-weight: 700;">Path to $1M ARR:</span> <span style="color: #64748B;">OpenClaw alone at 3% conversion = $400k ARR. Adding NanoClaw + PicoClaw = $700k+. Claude Code + Cursor enterprise = $1M+ ARR within 18 months.</span></p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 8: MARKET -->
+<div class="slide">
+  <div class="slide-num">08 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Market</div>
+    <h2>The Datadog moment for AI agents</h2>
+    <div class="grid-2" style="margin-bottom: 32px;">
+      <div class="card">
+        <div style="font-size: 13px; color: #64748B; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Total Addressable Market</div>
+        <div class="num">$12B</div>
+        <div class="desc">AI observability and agent monitoring by 2028. Growing 40% YoY as agent adoption accelerates across all frameworks.</div>
+      </div>
+      <div class="card">
+        <div style="font-size: 13px; color: #64748B; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Multi-Framework SAM</div>
+        <div class="num">$500M+</div>
+        <div class="desc">375k+ combined stars across OpenClaw, NanoClaw, PicoClaw. Plus proprietary agents (Claude Code, Cursor).</div>
+      </div>
+    </div>
+    <div style="padding: 24px; background: rgba(229,68,58,0.05); border: 1px solid rgba(229,68,58,0.15); border-radius: 12px;">
+      <h3 style="margin-bottom: 16px; font-size: 18px;">The Datadog playbook</h3>
+      <div class="feature-row">
+        <div class="feature-icon">&#9729;&#65039;</div>
+        <div class="feature-text">
+          <p style="font-size: 15px; color: #CBD5E0;"><strong>Datadog started with AWS.</strong> One cloud, deep integration, proved the model. Then expanded to Azure, GCP, and 600+ integrations. Now worth $50B.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">&#129302;</div>
+        <div class="feature-text">
+          <p style="font-size: 15px; color: #CBD5E0;"><strong>ClawMetry starts with OpenClaw.</strong> One framework, deep integration, proven traction. Then expand to every agent framework. Same playbook, new category.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">&#128200;</div>
+        <div class="feature-text">
+          <p style="font-size: 15px; color: #CBD5E0;"><strong>Comparable exits:</strong> Datadog ($50B), Grafana Labs ($6B), New Relic (acquired $6.5B). Agent observability is the next $10B+ category.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 9: FOUNDER -->
+<div class="slide">
+  <div class="slide-num">09 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Founder</div>
+    <h2>Platform builder with an exit under his belt</h2>
+    <div class="grid-2">
+      <div class="team-card">
+        <div style="font-size: 48px; margin-bottom: 16px;">&#128104;&#8205;&#128187;</div>
+        <div class="team-name">Vivek Chand</div>
+        <div class="team-role">Founder & CEO, ClawMetry</div>
+        <div class="team-bio">
+          AI Engineering @ Booking.com, managing 15,000+ agent systems at scale.<br><br>
+          Previously built ClassKlap (500k+ students, acquired).<br><br>
+          Shipped ClawMetry from 0 to <span id="pd-bio-installs">75k</span> installs solo. Now building the team to go multi-framework. Based in Amsterdam.
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Platform thinking from day one</h3>
+          <p style="font-size: 14px;">Built ClawMetry with plugin architecture from the start. The OpenClaw integration is plugin #1, not a monolith.</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Knows how to scale products</h3>
+          <p style="font-size: 14px;">ClassKlap: 0 to 500k students. ClawMetry: 0 to 75k installs in 4 weeks. Pattern-matched execution.</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Multi-framework experience</h3>
+          <p style="font-size: 14px;">Works with multiple AI agent frameworks at Booking.com daily. Understands the cross-framework pain firsthand.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 10: USE OF FUNDS -->
+<div class="slide">
+  <div class="slide-num">10 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Use of Funds</div>
+    <h2>$750k to build the multi-framework platform</h2>
+    <div class="use-of-funds">
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Platform Engineering</div>
+          <div class="fund-desc">Plugin SDK, NanoClaw + PicoClaw integrations, Claude Code connector, mobile app</div>
+        </div>
+        <div class="fund-pct">50%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">GTM & Partnerships</div>
+          <div class="fund-desc">Framework partnerships, developer relations, cross-community presence</div>
+        </div>
+        <div class="fund-pct">20%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Infrastructure</div>
+          <div class="fund-desc">Multi-tenant cloud scaling, SOC2, security audit, multi-region</div>
+        </div>
+        <div class="fund-pct">15%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Operations & Runway</div>
+          <div class="fund-desc">18 months runway, legal, accounting, tooling</div>
+        </div>
+        <div class="fund-pct">15%</div>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: #131929; border-radius: 12px; border: 1px solid rgba(255,255,255,0.06);">
+      <p style="font-size: 15px; color: #94A3B8;"><span style="color: #E2E8F0; font-weight: 700;">18-month milestones:</span> 3 framework integrations live, 500+ paying cloud users, plugin SDK public, $75k+ MRR, enterprise pilot with 5 design partners</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 11: ASK -->
+<div class="slide" style="background: radial-gradient(ellipse at 40% 60%, rgba(229,68,58,0.10) 0%, transparent 60%);">
+  <div class="slide-num">11 / 11</div>
+  <div class="ask-box">
+    <div class="label" style="text-align: center;">The Ask</div>
+    <h2 style="font-size: 48px; text-align: center; margin-bottom: 16px;">$750k<br><span class="muted" style="font-size: 24px; font-weight: 400;">Pre-seed</span></h2>
+    <p style="text-align: center; max-width: 480px; margin: 0 auto 32px;">18 months to go from OpenClaw-first to the universal agent observability platform. The wedge is proven. Now we expand.</p>
+    <div style="display: flex; justify-content: center; gap: 40px; margin-bottom: 32px;">
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">375k+</div>
+        <div style="font-size: 12px; color: #64748B;">Combined stars</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">75k+</div>
+        <div style="font-size: 12px; color: #64748B;">Installs (OpenClaw)</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">$50B</div>
+        <div style="font-size: 12px; color: #64748B;">Datadog comp</div>
+      </div>
+    </div>
+    <div style="font-size: 15px; color: #E5443A; font-weight: 600;">vivek@clawmetry.com &middot; clawmetry.com</div>
+  </div>
+</div>
+
+<script>
+fetch('/api/hero-stats').then(r=>r.json()).then(d=>{
+  var dl = d.downloads || '75k';
+  var ct = d.countries || '100';
+  var e1 = document.getElementById('pd-installs'); if(e1) e1.textContent = dl + '+';
+  var e2 = document.getElementById('pd-traction-installs'); if(e2) e2.textContent = dl + '+';
+  var e3 = document.getElementById('pd-traction-countries'); if(e3) e3.textContent = ct + '+';
+  var e4 = document.getElementById('pd-bar-latest'); if(e4) e4.textContent = dl + '+';
+  var e5 = document.getElementById('pd-bio-installs'); if(e5) e5.textContent = dl;
+}).catch(function(){});
+</script>
+</body>
+</html>

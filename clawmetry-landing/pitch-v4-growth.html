@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><title>ClawMetry - Pitch Deck: Growth & Metrics</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', -apple-system, sans-serif; background: #0B0F1A; color: #E2E8F0; }
+  .slide {
+    width: 100%; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    padding: 60px 80px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    position: relative;
+  }
+  .slide-num {
+    position: absolute; top: 24px; right: 32px;
+    font-size: 12px; color: #4A5568; font-weight: 500; letter-spacing: 1px;
+  }
+  .version-tag {
+    position: absolute; top: 24px; left: 32px;
+    font-size: 10px; color: #E5443A; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    background: rgba(229,68,58,0.1); border: 1px solid rgba(229,68,58,0.2); border-radius: 4px; padding: 4px 10px;
+  }
+  .accent { color: #E5443A; }
+  .muted { color: #64748B; }
+  .label {
+    font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    color: #E5443A; margin-bottom: 16px;
+  }
+  h1 { font-size: 52px; font-weight: 800; line-height: 1.15; letter-spacing: -1.5px; }
+  h2 { font-size: 36px; font-weight: 800; letter-spacing: -1px; margin-bottom: 24px; }
+  h3 { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+  p { font-size: 18px; color: #94A3B8; line-height: 1.7; }
+  .tagline { font-size: 22px; color: #94A3B8; margin-top: 16px; max-width: 640px; line-height: 1.6; }
+  .big-number { font-size: 72px; font-weight: 800; color: #E5443A; letter-spacing: -2px; line-height: 1; }
+  .big-label { font-size: 15px; color: #64748B; margin-top: 8px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; width: 100%; max-width: 900px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; width: 100%; max-width: 960px; }
+  .grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 20px; width: 100%; max-width: 960px; }
+  .card {
+    background: #131929; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 32px;
+  }
+  .card .num { font-size: 48px; font-weight: 800; color: #E5443A; letter-spacing: -1px; }
+  .card .desc { font-size: 14px; color: #64748B; margin-top: 6px; line-height: 1.5; }
+  .problem-box {
+    background: rgba(229,68,58,0.08); border: 1px solid rgba(229,68,58,0.2);
+    border-radius: 12px; padding: 28px; max-width: 860px; width: 100%;
+    font-size: 20px; line-height: 1.7; color: #CBD5E0; margin-top: 24px;
+  }
+  .solution-box {
+    background: rgba(34,197,94,0.05); border: 1px solid rgba(34,197,94,0.15);
+    border-radius: 12px; padding: 28px; max-width: 860px; width: 100%;
+    font-size: 20px; line-height: 1.7; color: #CBD5E0; margin-top: 24px;
+  }
+  .feature-row { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 20px; }
+  .feature-icon { font-size: 24px; flex-shrink: 0; margin-top: 2px; }
+  .feature-text h4 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .feature-text p { font-size: 14px; color: #64748B; }
+  .use-of-funds { width: 100%; max-width: 820px; }
+  .fund-row { display: flex; justify-content: space-between; align-items: center; padding: 18px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .fund-name { font-size: 16px; font-weight: 600; }
+  .fund-pct { font-size: 22px; font-weight: 800; color: #E5443A; }
+  .fund-desc { font-size: 13px; color: #64748B; margin-top: 2px; }
+  .ask-box {
+    background: linear-gradient(135deg, rgba(229,68,58,0.12), rgba(229,68,58,0.04));
+    border: 1px solid rgba(229,68,58,0.3);
+    border-radius: 20px; padding: 48px; text-align: center; max-width: 680px; width: 100%;
+  }
+  .team-card { background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px; text-align: center; }
+  .team-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .team-role { font-size: 14px; color: #E5443A; font-weight: 600; margin-bottom: 8px; }
+  .team-bio { font-size: 13px; color: #64748B; line-height: 1.6; }
+  .logo { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
+  .logo span { color: #E5443A; }
+  .bar-row { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+  .bar-label { min-width: 140px; font-size: 14px; color: #94A3B8; }
+  .bar-track { flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; }
+  .bar-fill { height: 8px; border-radius: 4px; background: #E5443A; }
+  .bar-val { min-width: 60px; font-size: 14px; font-weight: 700; text-align: right; }
+  .metric-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .metric-name { font-size: 15px; color: #94A3B8; }
+  .metric-val { font-size: 18px; font-weight: 700; color: #E2E8F0; }
+  .metric-val.accent { color: #E5443A; }
+  .scenario-card {
+    background: #131929; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; padding: 24px; text-align: center;
+  }
+  .scenario-card.highlight { border-color: rgba(229,68,58,0.3); background: rgba(229,68,58,0.06); }
+  .scenario-label { font-size: 11px; color: #64748B; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; }
+  .scenario-val { font-size: 32px; font-weight: 800; color: #E5443A; }
+  .scenario-desc { font-size: 13px; color: #64748B; margin-top: 8px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<!-- SLIDE 1: COVER -->
+<div class="slide" style="background: radial-gradient(ellipse at 60% 40%, rgba(229,68,58,0.12) 0%, transparent 70%);">
+  <div class="slide-num">01 / 11</div>
+  <div class="version-tag">V4: Growth & Metrics</div>
+  <div style="max-width: 840px; width: 100%;">
+    <div class="logo" style="margin-bottom: 32px;">Claw<span>Metry</span></div>
+    <h1>Zero CAC. Organic Growth.<br>Clear Path to $1M ARR.</h1>
+    <p class="tagline">75k installs in 4 weeks with zero marketing spend. 100+ countries. The numbers tell the story.</p>
+    <div style="margin-top: 48px; display: flex; gap: 48px;">
+      <div>
+        <div class="big-number" id="pd-installs">75k+</div>
+        <div class="big-label">Installs (4 weeks)</div>
+      </div>
+      <div>
+        <div class="big-number">$0</div>
+        <div class="big-label">Customer acquisition cost</div>
+      </div>
+      <div>
+        <div class="big-number" id="pd-cover-countries">100+</div>
+        <div class="big-label">Countries</div>
+      </div>
+    </div>
+    <div style="margin-top: 40px; font-size: 14px; color: #4A5568;">Vivek Chand &middot; vivek@clawmetry.com &middot; clawmetry.com</div>
+  </div>
+</div>
+
+<!-- SLIDE 2: THE OPPORTUNITY (NUMBERS) -->
+<div class="slide">
+  <div class="slide-num">02 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Opportunity</div>
+    <h2>The numbers behind the OpenClaw explosion</h2>
+    <p style="max-width: 700px; margin-bottom: 40px;">OpenClaw is not just popular. It is the fastest-growing open source project of 2026 by every measurable metric. This growth creates a massive, untapped market for tooling.</p>
+    <div class="grid-4">
+      <div class="card" style="text-align: center;">
+        <div class="num" style="font-size: 32px;">326k</div>
+        <div class="desc">GitHub stars</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num" style="font-size: 32px;">2.5M</div>
+        <div class="desc">Monthly npm downloads</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num" style="font-size: 32px;">3 mo</div>
+        <div class="desc">Time to 326k stars</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num" style="font-size: 32px;">$0</div>
+        <div class="desc">Observability tooling</div>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: rgba(229,68,58,0.06); border: 1px solid rgba(229,68,58,0.15); border-radius: 12px;">
+      <p style="font-size: 16px; color: #CBD5E0;"><strong style="color: #E5443A;">Growth context:</strong> React took 4 years to reach 100k stars. Docker took 3 years. Kubernetes took 5 years. OpenClaw hit 326k in 3 months. This is unprecedented developer adoption velocity.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 3: PROBLEM -->
+<div class="slide">
+  <div class="slide-num">03 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Problem</div>
+    <h2>Millions of agents running blind</h2>
+    <div class="problem-box">
+      2.5M monthly npm downloads means millions of active agents. Every single one generates token costs, executes tool calls, and accesses system resources. Zero visibility exists. The pain is universal, measurable, and growing with every new install.
+    </div>
+    <div style="margin-top: 32px; max-width: 860px; width: 100%;">
+      <div class="metric-row">
+        <div class="metric-name">Monthly agent installations (npm)</div>
+        <div class="metric-val accent">2.5M+</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Average token spend per active user/month (est.)</div>
+        <div class="metric-val">$20-50</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">% of users who know their actual agent costs</div>
+        <div class="metric-val accent">~0%</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Existing purpose-built observability tools</div>
+        <div class="metric-val accent">0</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Enterprise compliance requirement for agent auditing</div>
+        <div class="metric-val">Mandatory by 2027</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 4: SOLUTION -->
+<div class="slide">
+  <div class="slide-num">04 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Solution</div>
+    <h2>ClawMetry: measurable value from day one</h2>
+    <div class="solution-box">
+      ClawMetry provides real-time observability for AI agents. Open source for local use, $5/node/month for cloud access. Users see immediate value: token cost savings average 20-30% when users gain visibility into what their agents are spending.
+    </div>
+    <div style="margin-top: 32px; max-width: 860px; width: 100%;">
+      <div class="metric-row">
+        <div class="metric-name">Time from install to first insight</div>
+        <div class="metric-val" style="color: #22C55E;">< 60 seconds</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Setup complexity</div>
+        <div class="metric-val" style="color: #22C55E;">2 commands</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Free tier limitations</div>
+        <div class="metric-val" style="color: #22C55E;">None (full local dashboard)</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Cloud price per node</div>
+        <div class="metric-val accent">$5/month</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Trial period</div>
+        <div class="metric-val">7 days, no CC</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Encryption standard</div>
+        <div class="metric-val">AES-256-GCM E2E</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 5: TRACTION -->
+<div class="slide">
+  <div class="slide-num">05 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Traction</div>
+    <h2>Week-over-week growth: 2x compounding</h2>
+    <div class="grid-3" style="margin-bottom: 32px;">
+      <div class="card" style="text-align: center;">
+        <div class="num" id="pd-traction-installs">75k+</div>
+        <div class="desc">Total installs (4 weeks)</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num" id="pd-traction-countries">100+</div>
+        <div class="desc">Countries</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num">133</div>
+        <div class="desc">Cloud users (19 nodes)</div>
+      </div>
+    </div>
+    <div style="max-width: 820px; width: 100%;">
+      <h3 style="font-size: 16px; color: #94A3B8; margin-bottom: 20px;">CUMULATIVE INSTALL GROWTH</h3>
+      <div class="bar-row">
+        <div class="bar-label">Week 1 (Feb 18)</div>
+        <div class="bar-track"><div class="bar-fill" style="width:11%"></div></div>
+        <div class="bar-val">~8k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 2</div>
+        <div class="bar-track"><div class="bar-fill" style="width:29%"></div></div>
+        <div class="bar-val">~22k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 3</div>
+        <div class="bar-track"><div class="bar-fill" style="width:49%"></div></div>
+        <div class="bar-val">~37k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 4 (Mar 18)</div>
+        <div class="bar-track"><div class="bar-fill" style="width:100%"></div></div>
+        <div class="bar-val" id="pd-bar-latest">75k+</div>
+      </div>
+    </div>
+    <div style="margin-top: 24px; max-width: 820px; width: 100%;">
+      <h3 style="font-size: 16px; color: #94A3B8; margin-bottom: 20px;">WEEKLY NET NEW INSTALLS</h3>
+      <div class="bar-row">
+        <div class="bar-label">Week 1</div>
+        <div class="bar-track"><div class="bar-fill" style="width:21%; background: #22C55E;"></div></div>
+        <div class="bar-val">~8k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 2</div>
+        <div class="bar-track"><div class="bar-fill" style="width:37%; background: #22C55E;"></div></div>
+        <div class="bar-val">~14k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 3</div>
+        <div class="bar-track"><div class="bar-fill" style="width:39%; background: #22C55E;"></div></div>
+        <div class="bar-val">~15k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 4</div>
+        <div class="bar-track"><div class="bar-fill" style="width:100%; background: #22C55E;"></div></div>
+        <div class="bar-val">~38k</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 6: CONVERSION FUNNEL & LAUNCH -->
+<div class="slide">
+  <div class="slide-num">06 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Conversion Funnel</div>
+    <h2>From installs to revenue: the funnel</h2>
+    <div style="max-width: 860px; width: 100%; margin-bottom: 32px;">
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+        <div style="width: 100%; height: 48px; background: rgba(229,68,58,0.15); border-radius: 8px; display: flex; align-items: center; padding: 0 20px; justify-content: space-between;">
+          <span style="font-size: 15px; font-weight: 600;">pip install clawmetry</span>
+          <span style="font-size: 18px; font-weight: 800; color: #E5443A;">75,000+</span>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+        <div style="width: 60%; height: 48px; background: rgba(229,68,58,0.12); border-radius: 8px; display: flex; align-items: center; padding: 0 20px; justify-content: space-between;">
+          <span style="font-size: 15px; font-weight: 600;">Active local users (est.)</span>
+          <span style="font-size: 18px; font-weight: 800; color: #E5443A;">~15,000</span>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+        <div style="width: 15%; min-width: 280px; height: 48px; background: rgba(229,68,58,0.10); border-radius: 8px; display: flex; align-items: center; padding: 0 20px; justify-content: space-between;">
+          <span style="font-size: 15px; font-weight: 600;">Cloud signups</span>
+          <span style="font-size: 18px; font-weight: 800; color: #E5443A;">133</span>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 10%; min-width: 280px; height: 48px; background: rgba(229,68,58,0.25); border: 1px solid rgba(229,68,58,0.4); border-radius: 8px; display: flex; align-items: center; padding: 0 20px; justify-content: space-between;">
+          <span style="font-size: 15px; font-weight: 600;">Connected nodes (paying)</span>
+          <span style="font-size: 18px; font-weight: 800; color: #E5443A;">19</span>
+        </div>
+      </div>
+    </div>
+    <div style="display: flex; gap: 40px; align-items: center; margin-bottom: 24px;">
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">#5</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">Product Hunt (OSS)</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">#10</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">Product Hunt (Cloud)</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">1M+</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">PH Daily newsletter reach</div>
+      </div>
+    </div>
+    <div style="padding: 20px; background: #131929; border-radius: 12px; border: 1px solid rgba(255,255,255,0.06);">
+      <p style="font-size: 15px; color: #94A3B8;"><strong style="color: #E2E8F0;">Note:</strong> Cloud launched 2 days ago (March 18). Funnel is forming. Early signal: 133 signups in 48 hours with no paid acquisition.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 7: BUSINESS MODEL & REVENUE PROJECTIONS -->
+<div class="slide">
+  <div class="slide-num">07 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Business Model</div>
+    <h2>Revenue projection: 3 scenarios to $1M ARR</h2>
+    <div class="grid-3" style="margin-bottom: 32px;">
+      <div class="scenario-card">
+        <div class="scenario-label">Conservative (1% conv.)</div>
+        <div class="scenario-val">$135k</div>
+        <div class="scenario-desc">750 users x 1 node avg<br>= $45k ARR at current base<br>Growing to $135k at 150k installs</div>
+      </div>
+      <div class="scenario-card highlight">
+        <div class="scenario-label">Base Case (3% conv.)</div>
+        <div class="scenario-val">$810k</div>
+        <div class="scenario-desc">4,500 users x 1.5 nodes avg<br>= $405k ARR at current base<br>Growing to $810k at 150k installs</div>
+      </div>
+      <div class="scenario-card">
+        <div class="scenario-label">Optimistic (5% conv.)</div>
+        <div class="scenario-val">$2.7M</div>
+        <div class="scenario-desc">7,500 users x 3 nodes avg<br>= $1.35M ARR at current base<br>Growing to $2.7M at 150k installs</div>
+      </div>
+    </div>
+    <div style="max-width: 860px; width: 100%;">
+      <h3 style="font-size: 16px; color: #94A3B8; margin-bottom: 16px;">UNIT ECONOMICS</h3>
+      <div class="metric-row">
+        <div class="metric-name">Customer Acquisition Cost (CAC)</div>
+        <div class="metric-val" style="color: #22C55E;">$0 (organic)</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Average Revenue Per User (ARPU)</div>
+        <div class="metric-val">$15/mo (3 nodes avg)</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Estimated LTV (24-month retention)</div>
+        <div class="metric-val">$360</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">LTV:CAC Ratio</div>
+        <div class="metric-val" style="color: #22C55E;">Infinite (CAC = $0)</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Gross Margin (cloud hosting)</div>
+        <div class="metric-val">~85%</div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Industry OSS-to-paid conversion</div>
+        <div class="metric-val">3-8%</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 8: MARKET & COMPS -->
+<div class="slide">
+  <div class="slide-num">08 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Market</div>
+    <h2>Comparable companies and exits</h2>
+    <div style="max-width: 860px; width: 100%; margin-bottom: 32px;">
+      <div class="metric-row" style="border-bottom: 2px solid rgba(255,255,255,0.1);">
+        <div class="metric-name" style="font-weight: 700; color: #E2E8F0;">Company</div>
+        <div style="display: flex; gap: 40px;">
+          <div class="metric-name" style="font-weight: 700; color: #E2E8F0; min-width: 100px; text-align: right;">Valuation</div>
+          <div class="metric-name" style="font-weight: 700; color: #E2E8F0; min-width: 100px; text-align: right;">Category</div>
+        </div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Datadog</div>
+        <div style="display: flex; gap: 40px;">
+          <div class="metric-val accent" style="min-width: 100px; text-align: right;">$50B</div>
+          <div class="metric-name" style="min-width: 100px; text-align: right;">Cloud monitoring</div>
+        </div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Grafana Labs</div>
+        <div style="display: flex; gap: 40px;">
+          <div class="metric-val accent" style="min-width: 100px; text-align: right;">$6B</div>
+          <div class="metric-name" style="min-width: 100px; text-align: right;">OSS observability</div>
+        </div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">New Relic</div>
+        <div style="display: flex; gap: 40px;">
+          <div class="metric-val accent" style="min-width: 100px; text-align: right;">$6.5B</div>
+          <div class="metric-name" style="min-width: 100px; text-align: right;">APM (acquired)</div>
+        </div>
+      </div>
+      <div class="metric-row">
+        <div class="metric-name">Highlight.io</div>
+        <div style="display: flex; gap: 40px;">
+          <div class="metric-val accent" style="min-width: 100px; text-align: right;">$30M</div>
+          <div class="metric-name" style="min-width: 100px; text-align: right;">Series A (OSS monitoring)</div>
+        </div>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div style="font-size: 13px; color: #64748B; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Total Addressable Market</div>
+        <div class="num">$12B</div>
+        <div class="desc">AI observability and monitoring by 2028, growing 40% YoY</div>
+      </div>
+      <div class="card">
+        <div style="font-size: 13px; color: #64748B; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Serviceable Market</div>
+        <div class="num">$50M+</div>
+        <div class="desc">OpenClaw ecosystem at current adoption rates with 5% conversion</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 9: FOUNDER -->
+<div class="slide">
+  <div class="slide-num">09 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Founder</div>
+    <h2>Track record of scaling from zero</h2>
+    <div class="grid-2">
+      <div class="team-card">
+        <div style="font-size: 48px; margin-bottom: 16px;">&#128104;&#8205;&#128187;</div>
+        <div class="team-name">Vivek Chand</div>
+        <div class="team-role">Founder & CEO, ClawMetry</div>
+        <div class="team-bio">
+          AI Engineering @ Booking.com, managing 15,000+ agent systems at scale.<br><br>
+          Previously built ClassKlap (500k+ students, acquired).<br><br>
+          Shipped ClawMetry from 0 to <span id="pd-bio-installs">75k</span> installs in 4 weeks. Solo. $0 spend. Based in Amsterdam.
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Growth track record</h3>
+          <div style="font-size: 14px; color: #64748B; line-height: 1.8;">
+            ClassKlap: 0 &#8594; 500k students<br>
+            ClawMetry: 0 &#8594; 75k installs (4 weeks)<br>
+            Both: zero marketing budget
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Capital efficient</h3>
+          <p style="font-size: 14px;">Built entire product (Python SDK, React dashboard, GCP infra, Stripe billing) solo in 4 weeks. $0 external cost.</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Previous exit</h3>
+          <p style="font-size: 14px;">ClassKlap acquired. Knows what it takes to build, grow, and sell a product company.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 10: USE OF FUNDS -->
+<div class="slide">
+  <div class="slide-num">10 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Use of Funds</div>
+    <h2>$750k to convert installs to $1M ARR</h2>
+    <div class="use-of-funds">
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Product & Engineering</div>
+          <div class="fund-desc">Second engineer, conversion optimization, enterprise features, mobile app, API</div>
+        </div>
+        <div class="fund-pct">45%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Growth & Conversion</div>
+          <div class="fund-desc">Funnel optimization, community presence, developer content, trial-to-paid experiments</div>
+        </div>
+        <div class="fund-pct">25%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Infrastructure</div>
+          <div class="fund-desc">GCP scaling, multi-region, SOC2 compliance, 99.9% SLA</div>
+        </div>
+        <div class="fund-pct">15%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Operations & Runway</div>
+          <div class="fund-desc">18 months runway, legal (EU entity), accounting, tooling</div>
+        </div>
+        <div class="fund-pct">15%</div>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: #131929; border-radius: 12px; border: 1px solid rgba(255,255,255,0.06);">
+      <p style="font-size: 15px; color: #94A3B8;"><span style="color: #E2E8F0; font-weight: 700;">18-month targets:</span> 150k+ total installs, 500 paying cloud customers, $75k+ MRR, 3% install-to-paid conversion, enterprise pilot program launched</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 11: ASK -->
+<div class="slide" style="background: radial-gradient(ellipse at 40% 60%, rgba(229,68,58,0.10) 0%, transparent 60%);">
+  <div class="slide-num">11 / 11</div>
+  <div class="ask-box">
+    <div class="label" style="text-align: center;">The Ask</div>
+    <h2 style="font-size: 48px; text-align: center; margin-bottom: 16px;">$750k<br><span class="muted" style="font-size: 24px; font-weight: 400;">Pre-seed</span></h2>
+    <p style="text-align: center; max-width: 480px; margin: 0 auto 32px;">18 months runway. Zero CAC. 75k+ install base growing 2x weekly. Clear path to $1M ARR at industry-standard conversion rates.</p>
+    <div style="display: flex; justify-content: center; gap: 40px; margin-bottom: 32px;">
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">$0</div>
+        <div style="font-size: 12px; color: #64748B;">CAC</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">85%</div>
+        <div style="font-size: 12px; color: #64748B;">Gross margin</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">$1M+</div>
+        <div style="font-size: 12px; color: #64748B;">ARR target</div>
+      </div>
+    </div>
+    <div style="font-size: 15px; color: #E5443A; font-weight: 600;">vivek@clawmetry.com &middot; clawmetry.com</div>
+  </div>
+</div>
+
+<script>
+fetch('/api/hero-stats').then(r=>r.json()).then(d=>{
+  var dl = d.downloads || '75k';
+  var ct = d.countries || '100';
+  var e1 = document.getElementById('pd-installs'); if(e1) e1.textContent = dl + '+';
+  var e2 = document.getElementById('pd-cover-countries'); if(e2) e2.textContent = ct + '+';
+  var e3 = document.getElementById('pd-traction-installs'); if(e3) e3.textContent = dl + '+';
+  var e4 = document.getElementById('pd-traction-countries'); if(e4) e4.textContent = ct + '+';
+  var e5 = document.getElementById('pd-bar-latest'); if(e5) e5.textContent = dl + '+';
+  var e6 = document.getElementById('pd-bio-installs'); if(e6) e6.textContent = dl;
+}).catch(function(){});
+</script>
+</body>
+</html>

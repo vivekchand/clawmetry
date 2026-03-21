@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><title>ClawMetry - Pitch Deck: OpenClaw-First</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', -apple-system, sans-serif; background: #0B0F1A; color: #E2E8F0; }
+  .slide {
+    width: 100%; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    padding: 60px 80px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    position: relative;
+  }
+  .slide-num {
+    position: absolute; top: 24px; right: 32px;
+    font-size: 12px; color: #4A5568; font-weight: 500; letter-spacing: 1px;
+  }
+  .version-tag {
+    position: absolute; top: 24px; left: 32px;
+    font-size: 10px; color: #E5443A; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    background: rgba(229,68,58,0.1); border: 1px solid rgba(229,68,58,0.2); border-radius: 4px; padding: 4px 10px;
+  }
+  .accent { color: #E5443A; }
+  .muted { color: #64748B; }
+  .label {
+    font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    color: #E5443A; margin-bottom: 16px;
+  }
+  h1 { font-size: 52px; font-weight: 800; line-height: 1.15; letter-spacing: -1.5px; }
+  h2 { font-size: 36px; font-weight: 800; letter-spacing: -1px; margin-bottom: 24px; }
+  h3 { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+  p { font-size: 18px; color: #94A3B8; line-height: 1.7; }
+  .tagline { font-size: 22px; color: #94A3B8; margin-top: 16px; max-width: 640px; line-height: 1.6; }
+  .big-number { font-size: 72px; font-weight: 800; color: #E5443A; letter-spacing: -2px; line-height: 1; }
+  .big-label { font-size: 15px; color: #64748B; margin-top: 8px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; width: 100%; max-width: 900px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; width: 100%; max-width: 960px; }
+  .card {
+    background: #131929; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 32px;
+  }
+  .card .num { font-size: 48px; font-weight: 800; color: #E5443A; letter-spacing: -1px; }
+  .card .desc { font-size: 14px; color: #64748B; margin-top: 6px; line-height: 1.5; }
+  .problem-box {
+    background: rgba(229,68,58,0.08); border: 1px solid rgba(229,68,58,0.2);
+    border-radius: 12px; padding: 28px; max-width: 860px; width: 100%;
+    font-size: 20px; line-height: 1.7; color: #CBD5E0; margin-top: 24px;
+  }
+  .solution-box {
+    background: rgba(34,197,94,0.05); border: 1px solid rgba(34,197,94,0.15);
+    border-radius: 12px; padding: 28px; max-width: 860px; width: 100%;
+    font-size: 20px; line-height: 1.7; color: #CBD5E0; margin-top: 24px;
+  }
+  .feature-row { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 20px; }
+  .feature-icon { font-size: 24px; flex-shrink: 0; margin-top: 2px; }
+  .feature-text h4 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .feature-text p { font-size: 14px; color: #64748B; }
+  .use-of-funds { width: 100%; max-width: 820px; }
+  .fund-row { display: flex; justify-content: space-between; align-items: center; padding: 18px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .fund-name { font-size: 16px; font-weight: 600; }
+  .fund-pct { font-size: 22px; font-weight: 800; color: #E5443A; }
+  .fund-desc { font-size: 13px; color: #64748B; margin-top: 2px; }
+  .ask-box {
+    background: linear-gradient(135deg, rgba(229,68,58,0.12), rgba(229,68,58,0.04));
+    border: 1px solid rgba(229,68,58,0.3);
+    border-radius: 20px; padding: 48px; text-align: center; max-width: 680px; width: 100%;
+  }
+  .team-card { background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px; text-align: center; }
+  .team-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .team-role { font-size: 14px; color: #E5443A; font-weight: 600; margin-bottom: 8px; }
+  .team-bio { font-size: 13px; color: #64748B; line-height: 1.6; }
+  .logo { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
+  .logo span { color: #E5443A; }
+  .bar-row { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+  .bar-label { min-width: 140px; font-size: 14px; color: #94A3B8; }
+  .bar-track { flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; }
+  .bar-fill { height: 8px; border-radius: 4px; background: #E5443A; }
+  .bar-val { min-width: 60px; font-size: 14px; font-weight: 700; text-align: right; }
+  .highlight-card {
+    background: rgba(229,68,58,0.06); border: 1px solid rgba(229,68,58,0.2);
+    border-radius: 16px; padding: 32px;
+  }
+</style>
+</head>
+<body>
+
+<!-- SLIDE 1: COVER -->
+<div class="slide" style="background: radial-gradient(ellipse at 60% 40%, rgba(229,68,58,0.12) 0%, transparent 70%);">
+  <div class="slide-num">01 / 11</div>
+  <div class="version-tag">V1: OpenClaw-First</div>
+  <div style="max-width: 840px; width: 100%;">
+    <div class="logo" style="margin-bottom: 32px;">Claw<span>Metry</span></div>
+    <h1>The Only Observability Tool<br>Built for OpenClaw</h1>
+    <p class="tagline">326k stars. 2.5M monthly downloads. Zero observability tools. Until now. ClawMetry owns the OpenClaw monitoring vertical.</p>
+    <div style="margin-top: 48px; display: flex; gap: 48px;">
+      <div>
+        <div class="big-number" id="pd-installs">75k+</div>
+        <div class="big-label">Installs in 4 weeks</div>
+      </div>
+      <div>
+        <div class="big-number">326k</div>
+        <div class="big-label">OpenClaw GitHub stars</div>
+      </div>
+      <div>
+        <div class="big-number">#5</div>
+        <div class="big-label">Product Hunt</div>
+      </div>
+    </div>
+    <div style="margin-top: 40px; font-size: 14px; color: #4A5568;">Vivek Chand &middot; vivek@clawmetry.com &middot; clawmetry.com</div>
+  </div>
+</div>
+
+<!-- SLIDE 2: THE OPPORTUNITY -->
+<div class="slide">
+  <div class="slide-num">02 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Opportunity</div>
+    <h2>OpenClaw is the fastest-growing OSS project of 2026</h2>
+    <p style="max-width: 700px; margin-bottom: 40px;">From zero to 326k GitHub stars in 3 months. The creator joined OpenAI on February 14, legitimizing the platform as a core part of the AI agent ecosystem. This is not a fad. This is infrastructure.</p>
+    <div class="grid-3">
+      <div class="card">
+        <div class="num">326k+</div>
+        <div class="desc">GitHub stars in 3 months. Faster than React, Docker, or Kubernetes at the same stage.</div>
+      </div>
+      <div class="card">
+        <div class="num">2.5M+</div>
+        <div class="desc">Monthly npm downloads. Real usage, not vanity stars.</div>
+      </div>
+      <div class="card">
+        <div class="num">0</div>
+        <div class="desc">Purpose-built observability tools for OpenClaw. We are the first and only.</div>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: rgba(229,68,58,0.06); border: 1px solid rgba(229,68,58,0.15); border-radius: 12px;">
+      <p style="font-size: 16px; color: #CBD5E0;"><strong style="color: #E5443A;">Key signal:</strong> OpenClaw's creator joined OpenAI on Feb 14, 2026. This signals long-term institutional backing and guarantees continued growth of the ecosystem.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 3: PROBLEM -->
+<div class="slide">
+  <div class="slide-num">03 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Problem</div>
+    <h2>326k stars, zero visibility into what agents actually do</h2>
+    <div class="problem-box">
+      Every OpenClaw user deploys autonomous agents that browse, code, email, and execute shell commands. But the moment an agent starts running, you lose all visibility. No logs. No cost tracking. No audit trail. OpenClaw ships with zero built-in observability.
+    </div>
+    <div style="margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 860px;">
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">🔍</div>
+        <h3 style="font-size: 16px;">OpenClaw has no built-in monitoring</h3>
+        <p style="font-size: 14px;">The platform focuses on agent capabilities, not observability. That gap is our opportunity.</p>
+      </div>
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">💸</div>
+        <h3 style="font-size: 16px;">Token costs are invisible</h3>
+        <p style="font-size: 14px;">Users discover $200 bills after the fact. No per-session, per-model cost attribution exists.</p>
+      </div>
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">🔐</div>
+        <h3 style="font-size: 16px;">No security audit trail</h3>
+        <p style="font-size: 14px;">Agents run with full system access. No record of what files were touched or commands executed.</p>
+      </div>
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">🏢</div>
+        <h3 style="font-size: 16px;">Enterprise adoption is blocked</h3>
+        <p style="font-size: 14px;">Compliance teams cannot approve agents they cannot audit. Observability is a prerequisite.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 4: SOLUTION -->
+<div class="slide">
+  <div class="slide-num">04 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Solution</div>
+    <h2>ClawMetry: purpose-built observability for OpenClaw</h2>
+    <div class="solution-box">
+      We do not compete with Datadog. We own the OpenClaw vertical. ClawMetry is the only tool that deeply integrates with OpenClaw's internals to provide real-time agent monitoring, cost tracking, and security auditing. Open source locally, E2E encrypted cloud for remote access.
+    </div>
+    <div style="margin-top: 32px; max-width: 860px;">
+      <div class="feature-row">
+        <div class="feature-icon">⚡</div>
+        <div class="feature-text">
+          <h4>Deep OpenClaw integration</h4>
+          <p>Reads OpenClaw's internal state, memory files, and session data. Not a generic APM bolted on top.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">🧠</div>
+        <div class="feature-text">
+          <h4>Brain Tab: full agent transcript</h4>
+          <p>Every tool call, every decision, every output. Searchable and timestamped.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">💰</div>
+        <div class="feature-text">
+          <h4>Token cost attribution</h4>
+          <p>Per-session, per-model, per-sub-agent cost breakdowns. Know what each task actually costs.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">🔐</div>
+        <div class="feature-text">
+          <h4>Zero-knowledge cloud sync</h4>
+          <p>AES-256-GCM encryption on-device before upload. Your agent data is never readable by our servers.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 5: TRACTION -->
+<div class="slide">
+  <div class="slide-num">05 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Traction</div>
+    <h2>75,000 installs. Zero marketing spend.</h2>
+    <div class="grid-3" style="margin-bottom: 40px;">
+      <div class="card" style="text-align: center;">
+        <div class="num" id="pd-traction-installs">75k+</div>
+        <div class="desc">Total installs in 4 weeks. 100% organic from OpenClaw community.</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num" id="pd-traction-countries">100+</div>
+        <div class="desc">Countries with active installations</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num">133</div>
+        <div class="desc">Cloud users, 19 connected nodes</div>
+      </div>
+    </div>
+    <div style="max-width: 820px; width: 100%;">
+      <div class="bar-row">
+        <div class="bar-label">Week 1 (Feb 18)</div>
+        <div class="bar-track"><div class="bar-fill" style="width:15%"></div></div>
+        <div class="bar-val">~8k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 2</div>
+        <div class="bar-track"><div class="bar-fill" style="width:40%"></div></div>
+        <div class="bar-val">~22k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 3</div>
+        <div class="bar-track"><div class="bar-fill" style="width:65%"></div></div>
+        <div class="bar-val">~37k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 4 (Mar 18)</div>
+        <div class="bar-track"><div class="bar-fill" style="width:100%"></div></div>
+        <div class="bar-val" id="pd-bar-latest">75k+</div>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: rgba(229,68,58,0.06); border: 1px solid rgba(229,68,58,0.15); border-radius: 12px;">
+      <p style="font-size: 15px; color: #CBD5E0;"><strong style="color: #E5443A;">Why this matters:</strong> Every single install came from the OpenClaw community. We are not fighting for attention. The ecosystem brings users to us.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 6: LAUNCH -->
+<div class="slide">
+  <div class="slide-num">06 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Cloud Launch - March 18, 2026</div>
+    <h2>The OpenClaw community validated cloud demand</h2>
+    <div class="grid-2">
+      <div class="card">
+        <div style="font-size: 13px; font-weight: 700; color: #E5443A; margin-bottom: 16px; letter-spacing: 1px; text-transform: uppercase;">Open Source (free)</div>
+        <div style="font-size: 28px; font-weight: 800; margin-bottom: 4px;">75k+</div>
+        <div style="font-size: 13px; color: #64748B; margin-bottom: 20px;">pip install clawmetry</div>
+        <ul style="list-style: none; font-size: 14px; color: #94A3B8; line-height: 2;">
+          <li>&#10003; Local dashboard with all 7 tabs</li>
+          <li>&#10003; Full feature set, forever free</li>
+          <li>&#10003; Deep OpenClaw filesystem integration</li>
+          <li>&#10003; Community-driven, MIT license</li>
+        </ul>
+      </div>
+      <div class="card" style="border-color: rgba(229,68,58,0.3);">
+        <div style="font-size: 13px; font-weight: 700; color: #E5443A; margin-bottom: 16px; letter-spacing: 1px; text-transform: uppercase;">Cloud (paid)</div>
+        <div style="font-size: 28px; font-weight: 800; margin-bottom: 4px;">$5 / node / month</div>
+        <div style="font-size: 13px; color: #64748B; margin-bottom: 20px;">7-day free trial, no CC required</div>
+        <ul style="list-style: none; font-size: 14px; color: #94A3B8; line-height: 2;">
+          <li>&#10003; Access from any device, anywhere</li>
+          <li>&#10003; E2E encrypted cloud sync</li>
+          <li>&#10003; Multi-node fleet view</li>
+          <li>&#10003; Cloud-hosted on GCP</li>
+        </ul>
+      </div>
+    </div>
+    <div style="margin-top: 32px; display: flex; gap: 40px; align-items: center;">
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">#5</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">Product Hunt (OSS)</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">#10</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">Product Hunt (Cloud)</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">1M+</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">PH Daily newsletter reach</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 7: BUSINESS MODEL -->
+<div class="slide">
+  <div class="slide-num">07 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Business Model</div>
+    <h2>OpenClaw installs are our top-of-funnel</h2>
+    <div style="display: flex; gap: 16px; align-items: center; margin-bottom: 40px; font-size: 16px; color: #94A3B8; flex-wrap: wrap;">
+      <div style="background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 20px;">OpenClaw user</div>
+      <div style="color: #E5443A;">&#8594;</div>
+      <div style="background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 20px;">pip install clawmetry</div>
+      <div style="color: #E5443A;">&#8594;</div>
+      <div style="background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 20px;">Loves local dashboard</div>
+      <div style="color: #E5443A;">&#8594;</div>
+      <div style="background: rgba(229,68,58,0.1); border: 1px solid rgba(229,68,58,0.3); border-radius: 8px; padding: 12px 20px; color: #E5443A; font-weight: 700;">$5/node/mo cloud</div>
+    </div>
+    <div class="grid-3">
+      <div class="card" style="text-align: center;">
+        <div style="font-size: 36px; margin-bottom: 12px;">&#127760;</div>
+        <h3 style="font-size: 16px;">Ecosystem Lock-in</h3>
+        <p style="font-size: 14px;">Every OpenClaw user is a potential customer. As OpenClaw grows, so does our TAM. Automatically.</p>
+      </div>
+      <div class="card" style="text-align: center; border-color: rgba(229,68,58,0.2);">
+        <div style="font-size: 36px; margin-bottom: 12px;">&#9729;&#65039;</div>
+        <h3 style="font-size: 16px;">Cloud: $5/node/mo</h3>
+        <p style="font-size: 14px;">Remote access is the killer feature. Multi-node users pay more. Revenue scales linearly with agent adoption.</p>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div style="font-size: 36px; margin-bottom: 12px;">&#127970;</div>
+        <h3 style="font-size: 16px;">Enterprise (2027)</h3>
+        <p style="font-size: 14px;">SSO, compliance, audit logs, multi-team. Every enterprise running OpenClaw agents needs this.</p>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: #131929; border-radius: 12px; border: 1px solid rgba(255,255,255,0.06);">
+      <p style="font-size: 15px;"><span style="color: #E2E8F0; font-weight: 700;">Winner-take-all dynamics:</span> <span style="color: #64748B;">The first tool deeply integrated with OpenClaw becomes the default. Switching costs increase as users build workflows around our dashboard. We intend to be the default.</span></p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 8: MARKET -->
+<div class="slide">
+  <div class="slide-num">08 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Market</div>
+    <h2>We do not compete with Datadog. We own a vertical.</h2>
+    <div class="grid-2" style="margin-bottom: 32px;">
+      <div class="card">
+        <div style="font-size: 13px; color: #64748B; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">OpenClaw Ecosystem TAM</div>
+        <div class="num">$50M+</div>
+        <div class="desc">326k+ stars, millions of deployments projected. If 5% pay $5/node/mo across 3 nodes = massive recurring revenue.</div>
+      </div>
+      <div class="card">
+        <div style="font-size: 13px; color: #64748B; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">AI Observability Market</div>
+        <div class="num">$12B</div>
+        <div class="desc">By 2028, growing 40% YoY. Every AI agent deployment eventually needs monitoring and cost tracking.</div>
+      </div>
+    </div>
+    <div style="padding: 24px; background: rgba(229,68,58,0.05); border: 1px solid rgba(229,68,58,0.15); border-radius: 12px;">
+      <h3 style="margin-bottom: 16px; font-size: 18px;">Why OpenClaw-first wins</h3>
+      <div class="feature-row">
+        <div class="feature-icon">&#127942;</div>
+        <div class="feature-text">
+          <p style="font-size: 15px; color: #CBD5E0;"><strong>First-mover advantage.</strong> No other tool is purpose-built for OpenClaw. Generic APMs cannot match our depth of integration.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">&#128200;</div>
+        <div class="feature-text">
+          <p style="font-size: 15px; color: #CBD5E0;"><strong>Ecosystem tailwinds.</strong> OpenClaw's creator joining OpenAI guarantees continued growth. We ride the wave without spending on marketing.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">&#128274;</div>
+        <div class="feature-text">
+          <p style="font-size: 15px; color: #CBD5E0;"><strong>Winner-take-all.</strong> Observability tools have strong network effects and switching costs. The default tool for OpenClaw will capture 80%+ of the market.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 9: FOUNDER -->
+<div class="slide">
+  <div class="slide-num">09 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Founder</div>
+    <h2>Built by an OpenClaw power user</h2>
+    <div class="grid-2">
+      <div class="team-card">
+        <div style="font-size: 48px; margin-bottom: 16px;">&#128104;&#8205;&#128187;</div>
+        <div class="team-name">Vivek Chand</div>
+        <div class="team-role">Founder & CEO, ClawMetry</div>
+        <div class="team-bio">
+          AI Engineering @ Booking.com, managing 15,000+ agent systems at scale.<br><br>
+          Previously built ClassKlap (500k+ students, acquired).<br><br>
+          Built ClawMetry because he needed it. Shipped from 0 to <span id="pd-bio-installs">75k</span> installs solo, zero marketing. Based in Amsterdam.
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Deep in the OpenClaw ecosystem</h3>
+          <p style="font-size: 14px;">Uses OpenClaw daily at work and personally. ClawMetry was born from real pain, not market research.</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Previous exit: ClassKlap</h3>
+          <p style="font-size: 14px;">Built an edtech product used by 500k+ students. Successfully acquired. Knows what it takes to build and sell.</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Community trust</h3>
+          <p style="font-size: 14px;">ClawMetry is already the most-recommended OpenClaw tool on Reddit, Discord, and Twitter. Trusted by the community.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 10: USE OF FUNDS -->
+<div class="slide">
+  <div class="slide-num">10 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Use of Funds</div>
+    <h2>$750k to become the default OpenClaw tool</h2>
+    <div class="use-of-funds">
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Product & Engineering</div>
+          <div class="fund-desc">Second engineer, deeper OpenClaw integrations, enterprise features, mobile app</div>
+        </div>
+        <div class="fund-pct">45%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">OpenClaw Community & GTM</div>
+          <div class="fund-desc">Official OpenClaw partnerships, community presence, developer evangelism, plugin ecosystem</div>
+        </div>
+        <div class="fund-pct">25%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Infrastructure</div>
+          <div class="fund-desc">GCP scaling, SOC2 compliance, security audit, multi-region deployment</div>
+        </div>
+        <div class="fund-pct">15%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Operations & Runway</div>
+          <div class="fund-desc">18 months runway, legal (EU entity), accounting</div>
+        </div>
+        <div class="fund-pct">15%</div>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: #131929; border-radius: 12px; border: 1px solid rgba(255,255,255,0.06);">
+      <p style="font-size: 15px; color: #94A3B8;"><span style="color: #E2E8F0; font-weight: 700;">Goal:</span> Become the recommended observability tool in OpenClaw's official documentation. First-party ecosystem status is the ultimate moat.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 11: ASK -->
+<div class="slide" style="background: radial-gradient(ellipse at 40% 60%, rgba(229,68,58,0.10) 0%, transparent 60%);">
+  <div class="slide-num">11 / 11</div>
+  <div class="ask-box">
+    <div class="label" style="text-align: center;">The Ask</div>
+    <h2 style="font-size: 48px; text-align: center; margin-bottom: 16px;">$750k<br><span class="muted" style="font-size: 24px; font-weight: 400;">Pre-seed</span></h2>
+    <p style="text-align: center; max-width: 480px; margin: 0 auto 32px;">18 months to own the OpenClaw observability vertical. 326k stars and growing. Zero competitors. First-mover in a winner-take-all market.</p>
+    <div style="display: flex; justify-content: center; gap: 40px; margin-bottom: 32px;">
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">326k</div>
+        <div style="font-size: 12px; color: #64748B;">OpenClaw stars</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">75k+</div>
+        <div style="font-size: 12px; color: #64748B;">ClawMetry installs</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">0</div>
+        <div style="font-size: 12px; color: #64748B;">Competitors</div>
+      </div>
+    </div>
+    <div style="font-size: 15px; color: #E5443A; font-weight: 600;">vivek@clawmetry.com &middot; clawmetry.com</div>
+  </div>
+</div>
+
+<script>
+fetch('/api/hero-stats').then(r=>r.json()).then(d=>{
+  var dl = d.downloads || '75k';
+  var ct = d.countries || '100';
+  var e1 = document.getElementById('pd-installs'); if(e1) e1.textContent = dl + '+';
+  var e2 = document.getElementById('pd-traction-installs'); if(e2) e2.textContent = dl + '+';
+  var e3 = document.getElementById('pd-traction-countries'); if(e3) e3.textContent = ct + '+';
+  var e4 = document.getElementById('pd-bar-latest'); if(e4) e4.textContent = dl + '+';
+  var e5 = document.getElementById('pd-bio-installs'); if(e5) e5.textContent = dl;
+}).catch(function(){});
+</script>
+</body>
+</html>

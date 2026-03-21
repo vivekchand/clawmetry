@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><title>ClawMetry - Pitch Deck Investability Scorecard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', -apple-system, sans-serif; background: #0B0F1A; color: #E2E8F0; padding: 60px 40px; }
+  .header { text-align: center; margin-bottom: 60px; }
+  .logo { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 16px; }
+  .logo span { color: #E5443A; }
+  h1 { font-size: 42px; font-weight: 800; letter-spacing: -1.5px; margin-bottom: 12px; }
+  h2 { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 16px; }
+  p { font-size: 16px; color: #94A3B8; line-height: 1.6; }
+  .accent { color: #E5443A; }
+  .muted { color: #64748B; }
+  .label {
+    font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    color: #E5443A; margin-bottom: 12px;
+  }
+  .grid-4 {
+    display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 24px;
+    max-width: 1200px; margin: 0 auto 60px;
+  }
+  .deck-card {
+    background: #131929; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px; padding: 32px; position: relative; transition: border-color 0.2s;
+  }
+  .deck-card:hover { border-color: rgba(229,68,58,0.3); }
+  .deck-num {
+    font-size: 10px; color: #E5443A; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    background: rgba(229,68,58,0.1); border: 1px solid rgba(229,68,58,0.2);
+    border-radius: 4px; padding: 4px 10px; display: inline-block; margin-bottom: 16px;
+  }
+  .deck-title { font-size: 20px; font-weight: 800; margin-bottom: 6px; }
+  .deck-angle { font-size: 14px; color: #E5443A; font-weight: 600; margin-bottom: 16px; }
+  .deck-section { margin-bottom: 20px; }
+  .deck-section-label { font-size: 11px; color: #4A5568; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
+  .deck-section-text { font-size: 13px; color: #94A3B8; line-height: 1.5; }
+  .stars { color: #E5443A; letter-spacing: 2px; font-size: 14px; }
+  .stars-empty { color: #2D3748; }
+  .rating-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; }
+  .rating-label { font-size: 12px; color: #64748B; }
+  .rating-stars { font-size: 13px; }
+  .download-btn {
+    display: block; width: 100%; text-align: center; padding: 12px;
+    background: rgba(229,68,58,0.1); border: 1px solid rgba(229,68,58,0.3);
+    border-radius: 10px; color: #E5443A; font-weight: 700; font-size: 13px;
+    text-decoration: none; transition: background 0.2s; margin-top: 20px;
+    letter-spacing: 0.5px;
+  }
+  .download-btn:hover { background: rgba(229,68,58,0.2); }
+  .summary-section {
+    max-width: 1200px; margin: 0 auto 60px;
+    background: #131929; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px; padding: 40px;
+  }
+  .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 24px; }
+  .summary-item { padding: 20px; background: rgba(255,255,255,0.02); border-radius: 12px; border: 1px solid rgba(255,255,255,0.04); }
+  .summary-item h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+  .summary-item p { font-size: 14px; color: #64748B; line-height: 1.6; }
+  @media (max-width: 1024px) { .grid-4 { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 640px) { .grid-4 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Claw<span>Metry</span></div>
+  <h1>Pitch Deck Investability Scorecard</h1>
+  <p style="max-width: 600px; margin: 0 auto;">Four versions of the ClawMetry pitch deck, each tailored for a different investor perspective. Choose the right angle for the right audience.</p>
+</div>
+
+<div class="grid-4">
+
+  <!-- VERSION 1 -->
+  <div class="deck-card">
+    <div class="deck-num">Version 1</div>
+    <div class="deck-title">OpenClaw-First</div>
+    <div class="deck-angle">"We own the OpenClaw vertical"</div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Best Suited For</div>
+      <div class="deck-section-text">Ecosystem-focused investors, OSS-native VCs, angel investors who understand developer tools and community dynamics</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Key Differentiator</div>
+      <div class="deck-section-text">Only tool purpose-built for the fastest-growing OSS project of 2026. Winner-take-all positioning.</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Risk Addressed</div>
+      <div class="deck-section-text">"Why you?" -- because nobody else is building for OpenClaw specifically, and first-mover advantage matters in tooling.</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Ratings</div>
+      <div class="rating-row">
+        <div class="rating-label">Market Timing</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Traction Proof</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Technical Moat</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Revenue Clarity</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Team Credibility</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;</span></div>
+      </div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Recommended For</div>
+      <div class="deck-section-text">OSS Capital, Heavybit, angels from the OpenClaw/AI agent community, Y Combinator partners</div>
+    </div>
+
+    <a href="/pitch-v1-openclaw.html" class="download-btn">View Deck &#8594;</a>
+  </div>
+
+  <!-- VERSION 2 -->
+  <div class="deck-card">
+    <div class="deck-num">Version 2</div>
+    <div class="deck-title">Multi-Claw Platform</div>
+    <div class="deck-angle">"OpenClaw is the wedge. The platform is the business."</div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Best Suited For</div>
+      <div class="deck-section-text">Platform-thesis VCs, investors who love "start narrow, expand wide" narratives, Datadog/infrastructure-minded investors</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Key Differentiator</div>
+      <div class="deck-section-text">Positions ClawMetry as the universal agent observability layer. Not just one framework -- all of them. Massive TAM expansion story.</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Risk Addressed</div>
+      <div class="deck-section-text">"What if OpenClaw fades?" -- the platform thesis means ClawMetry wins regardless of which framework dominates.</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Ratings</div>
+      <div class="rating-row">
+        <div class="rating-label">Market Timing</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Traction Proof</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Technical Moat</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Revenue Clarity</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Team Credibility</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;</span></div>
+      </div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Recommended For</div>
+      <div class="deck-section-text">A16Z, Sequoia scouts, Accel, infrastructure-focused VCs, investors who backed Datadog/Grafana early</div>
+    </div>
+
+    <a href="/pitch-v2-platform.html" class="download-btn">View Deck &#8594;</a>
+  </div>
+
+  <!-- VERSION 3 -->
+  <div class="deck-card">
+    <div class="deck-num">Version 3</div>
+    <div class="deck-title">Product Depth</div>
+    <div class="deck-angle">"We read OpenClaw's brain. Nobody else can."</div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Best Suited For</div>
+      <div class="deck-section-text">Technical investors, CTOs-turned-angels, security-focused VCs, investors who evaluate product differentiation deeply</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Key Differentiator</div>
+      <div class="deck-section-text">Zero-knowledge E2E encryption, 7 tabs of deep observability, prompt injection detection roadmap. Not generic APM.</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Risk Addressed</div>
+      <div class="deck-section-text">"Can Datadog just copy this?" -- deep filesystem integration and zero-knowledge architecture create a moat that takes months to replicate.</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Ratings</div>
+      <div class="rating-row">
+        <div class="rating-label">Market Timing</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Traction Proof</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Technical Moat</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Revenue Clarity</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Team Credibility</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span></div>
+      </div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Recommended For</div>
+      <div class="deck-section-text">Technical angels (ex-CTOs), security-focused funds, Insight Partners, investors who backed Snyk/Wiz early</div>
+    </div>
+
+    <a href="/pitch-v3-product.html" class="download-btn">View Deck &#8594;</a>
+  </div>
+
+  <!-- VERSION 4 -->
+  <div class="deck-card">
+    <div class="deck-num">Version 4</div>
+    <div class="deck-title">Growth & Metrics</div>
+    <div class="deck-angle">"Zero CAC, organic growth, clear path to $1M ARR"</div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Best Suited For</div>
+      <div class="deck-section-text">Metrics-driven investors, spreadsheet-first VCs, investors who want to see unit economics and revenue projections before anything else</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Key Differentiator</div>
+      <div class="deck-section-text">$0 CAC, infinite LTV:CAC ratio, 85% gross margin, detailed revenue scenarios from conservative to optimistic.</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Risk Addressed</div>
+      <div class="deck-section-text">"Where is the revenue?" -- shows clear conversion funnel, realistic scenarios, and comparable company exits proving the category.</div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Ratings</div>
+      <div class="rating-row">
+        <div class="rating-label">Market Timing</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Traction Proof</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Technical Moat</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Revenue Clarity</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;&#9733;</span></div>
+      </div>
+      <div class="rating-row">
+        <div class="rating-label">Team Credibility</div>
+        <div class="rating-stars"><span class="stars">&#9733;&#9733;&#9733;&#9733;</span><span class="stars-empty">&#9733;</span></div>
+      </div>
+    </div>
+
+    <div class="deck-section">
+      <div class="deck-section-label">Recommended For</div>
+      <div class="deck-section-text">SaaS-focused pre-seed funds, Seedcamp, Point Nine, metrics-first angels, investors from Datadog/MongoDB background</div>
+    </div>
+
+    <a href="/pitch-v4-growth.html" class="download-btn">View Deck &#8594;</a>
+  </div>
+
+</div>
+
+<!-- STRATEGY GUIDE -->
+<div class="summary-section">
+  <div class="label">Strategy Guide</div>
+  <h2>How to use these decks</h2>
+  <div class="summary-grid">
+    <div class="summary-item">
+      <h3>&#127919; First Meeting with a VC</h3>
+      <p>Start with <strong>V1 (OpenClaw-First)</strong> if they know the OSS/AI ecosystem, or <strong>V4 (Growth & Metrics)</strong> if they are generalists who want numbers first.</p>
+    </div>
+    <div class="summary-item">
+      <h3>&#128200; Follow-up / Deep Dive</h3>
+      <p>After initial interest, send <strong>V3 (Product Depth)</strong> for technical due diligence or <strong>V2 (Platform)</strong> for vision-oriented conversations about where the company goes next.</p>
+    </div>
+    <div class="summary-item">
+      <h3>&#129302; Technical Angels / CTOs</h3>
+      <p>Lead with <strong>V3 (Product Depth)</strong>. Technical investors care about moat, architecture, and security. The zero-knowledge E2E encryption story is compelling to this audience.</p>
+    </div>
+    <div class="summary-item">
+      <h3>&#127970; Enterprise / Infrastructure VCs</h3>
+      <p>Lead with <strong>V2 (Multi-Claw Platform)</strong>. The Datadog parallel is immediately legible to infrastructure investors. The "start with one, expand to all" playbook is proven.</p>
+    </div>
+  </div>
+</div>
+
+<!-- OVERALL SCORES TABLE -->
+<div class="summary-section">
+  <div class="label">Score Summary</div>
+  <h2>At a glance</h2>
+  <table style="width: 100%; border-collapse: collapse; margin-top: 24px;">
+    <thead>
+      <tr style="border-bottom: 2px solid rgba(255,255,255,0.1);">
+        <th style="text-align: left; padding: 12px 8px; font-size: 12px; color: #4A5568; letter-spacing: 1px; text-transform: uppercase;">Dimension</th>
+        <th style="text-align: center; padding: 12px 8px; font-size: 12px; color: #4A5568; letter-spacing: 1px;">V1: OpenClaw</th>
+        <th style="text-align: center; padding: 12px 8px; font-size: 12px; color: #4A5568; letter-spacing: 1px;">V2: Platform</th>
+        <th style="text-align: center; padding: 12px 8px; font-size: 12px; color: #4A5568; letter-spacing: 1px;">V3: Product</th>
+        <th style="text-align: center; padding: 12px 8px; font-size: 12px; color: #4A5568; letter-spacing: 1px;">V4: Growth</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+        <td style="padding: 12px 8px; font-size: 14px; color: #94A3B8;">Market Timing</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;</td>
+      </tr>
+      <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+        <td style="padding: 12px 8px; font-size: 14px; color: #94A3B8;">Traction Proof</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;&#9733;</td>
+      </tr>
+      <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+        <td style="padding: 12px 8px; font-size: 14px; color: #94A3B8;">Technical Moat</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;</td>
+      </tr>
+      <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+        <td style="padding: 12px 8px; font-size: 14px; color: #94A3B8;">Revenue Clarity</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;&#9733;</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px 8px; font-size: 14px; color: #94A3B8;">Team Credibility</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;&#9733;</td>
+        <td style="text-align: center; padding: 12px 8px; color: #E5443A;">&#9733;&#9733;&#9733;&#9733;</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div style="text-align: center; padding: 40px; color: #4A5568; font-size: 14px;">
+  <div class="logo" style="margin-bottom: 8px;">Claw<span>Metry</span></div>
+  vivek@clawmetry.com &middot; clawmetry.com &middot; $750k Pre-seed
+</div>
+
+</body>
+</html>

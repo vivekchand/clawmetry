@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><title>ClawMetry - Pitch Deck: Product Depth</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', -apple-system, sans-serif; background: #0B0F1A; color: #E2E8F0; }
+  .slide {
+    width: 100%; min-height: 100vh;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    padding: 60px 80px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    position: relative;
+  }
+  .slide-num {
+    position: absolute; top: 24px; right: 32px;
+    font-size: 12px; color: #4A5568; font-weight: 500; letter-spacing: 1px;
+  }
+  .version-tag {
+    position: absolute; top: 24px; left: 32px;
+    font-size: 10px; color: #E5443A; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    background: rgba(229,68,58,0.1); border: 1px solid rgba(229,68,58,0.2); border-radius: 4px; padding: 4px 10px;
+  }
+  .accent { color: #E5443A; }
+  .muted { color: #64748B; }
+  .label {
+    font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    color: #E5443A; margin-bottom: 16px;
+  }
+  h1 { font-size: 52px; font-weight: 800; line-height: 1.15; letter-spacing: -1.5px; }
+  h2 { font-size: 36px; font-weight: 800; letter-spacing: -1px; margin-bottom: 24px; }
+  h3 { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+  p { font-size: 18px; color: #94A3B8; line-height: 1.7; }
+  .tagline { font-size: 22px; color: #94A3B8; margin-top: 16px; max-width: 640px; line-height: 1.6; }
+  .big-number { font-size: 72px; font-weight: 800; color: #E5443A; letter-spacing: -2px; line-height: 1; }
+  .big-label { font-size: 15px; color: #64748B; margin-top: 8px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; width: 100%; max-width: 900px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; width: 100%; max-width: 960px; }
+  .card {
+    background: #131929; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 32px;
+  }
+  .card .num { font-size: 48px; font-weight: 800; color: #E5443A; letter-spacing: -1px; }
+  .card .desc { font-size: 14px; color: #64748B; margin-top: 6px; line-height: 1.5; }
+  .problem-box {
+    background: rgba(229,68,58,0.08); border: 1px solid rgba(229,68,58,0.2);
+    border-radius: 12px; padding: 28px; max-width: 860px; width: 100%;
+    font-size: 20px; line-height: 1.7; color: #CBD5E0; margin-top: 24px;
+  }
+  .solution-box {
+    background: rgba(34,197,94,0.05); border: 1px solid rgba(34,197,94,0.15);
+    border-radius: 12px; padding: 28px; max-width: 860px; width: 100%;
+    font-size: 20px; line-height: 1.7; color: #CBD5E0; margin-top: 24px;
+  }
+  .feature-row { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 20px; }
+  .feature-icon { font-size: 24px; flex-shrink: 0; margin-top: 2px; }
+  .feature-text h4 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .feature-text p { font-size: 14px; color: #64748B; }
+  .use-of-funds { width: 100%; max-width: 820px; }
+  .fund-row { display: flex; justify-content: space-between; align-items: center; padding: 18px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .fund-name { font-size: 16px; font-weight: 600; }
+  .fund-pct { font-size: 22px; font-weight: 800; color: #E5443A; }
+  .fund-desc { font-size: 13px; color: #64748B; margin-top: 2px; }
+  .ask-box {
+    background: linear-gradient(135deg, rgba(229,68,58,0.12), rgba(229,68,58,0.04));
+    border: 1px solid rgba(229,68,58,0.3);
+    border-radius: 20px; padding: 48px; text-align: center; max-width: 680px; width: 100%;
+  }
+  .team-card { background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px; text-align: center; }
+  .team-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .team-role { font-size: 14px; color: #E5443A; font-weight: 600; margin-bottom: 8px; }
+  .team-bio { font-size: 13px; color: #64748B; line-height: 1.6; }
+  .logo { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
+  .logo span { color: #E5443A; }
+  .bar-row { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+  .bar-label { min-width: 140px; font-size: 14px; color: #94A3B8; }
+  .bar-track { flex: 1; height: 8px; background: rgba(255,255,255,0.06); border-radius: 4px; }
+  .bar-fill { height: 8px; border-radius: 4px; background: #E5443A; }
+  .bar-val { min-width: 60px; font-size: 14px; font-weight: 700; text-align: right; }
+  .tab-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 860px; width: 100%; }
+  .tab-card {
+    background: #131929; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; padding: 20px;
+  }
+  .tab-card h4 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+  .tab-card p { font-size: 13px; color: #64748B; line-height: 1.5; }
+  .tab-num { font-size: 11px; color: #E5443A; font-weight: 700; letter-spacing: 1px; margin-bottom: 8px; }
+  .security-box {
+    background: rgba(59,130,246,0.05); border: 1px solid rgba(59,130,246,0.15);
+    border-radius: 12px; padding: 28px; max-width: 860px; width: 100%;
+  }
+</style>
+</head>
+<body>
+
+<!-- SLIDE 1: COVER -->
+<div class="slide" style="background: radial-gradient(ellipse at 60% 40%, rgba(229,68,58,0.12) 0%, transparent 70%);">
+  <div class="slide-num">01 / 11</div>
+  <div class="version-tag">V3: Product Depth</div>
+  <div style="max-width: 840px; width: 100%;">
+    <div class="logo" style="margin-bottom: 32px;">Claw<span>Metry</span></div>
+    <h1>We Read OpenClaw's Brain.<br>Nobody Else Can.</h1>
+    <p class="tagline">7 tabs of deep observability. Zero-knowledge encryption. One-command setup. The most technically differentiated agent monitoring tool ever built.</p>
+    <div style="margin-top: 48px; display: flex; gap: 48px;">
+      <div>
+        <div class="big-number" id="pd-installs">75k+</div>
+        <div class="big-label">Installs in 4 weeks</div>
+      </div>
+      <div>
+        <div class="big-number">7</div>
+        <div class="big-label">Deep observability tabs</div>
+      </div>
+      <div>
+        <div class="big-number">E2E</div>
+        <div class="big-label">AES-256-GCM encrypted</div>
+      </div>
+    </div>
+    <div style="margin-top: 40px; font-size: 14px; color: #4A5568;">Vivek Chand &middot; vivek@clawmetry.com &middot; clawmetry.com</div>
+  </div>
+</div>
+
+<!-- SLIDE 2: THE OPPORTUNITY -->
+<div class="slide">
+  <div class="slide-num">02 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Opportunity</div>
+    <h2>AI agents are too powerful to run without monitoring</h2>
+    <p style="max-width: 700px; margin-bottom: 40px;">OpenClaw agents browse the web, execute shell commands, read and write files, send emails, and manage entire workflows autonomously. They are the most capable and the most dangerous software most people have ever deployed. Deep observability is not optional. It is mandatory.</p>
+    <div class="grid-3">
+      <div class="card">
+        <div class="num">326k+</div>
+        <div class="desc">OpenClaw GitHub stars. Millions of agents running with full system access.</div>
+      </div>
+      <div class="card">
+        <div class="num">$0</div>
+        <div class="desc">Existing tools that deeply integrate with OpenClaw's internals.</div>
+      </div>
+      <div class="card">
+        <div class="num">100%</div>
+        <div class="desc">Of enterprise deployments will require agent audit trails by 2027.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 3: PROBLEM -->
+<div class="slide">
+  <div class="slide-num">03 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Problem</div>
+    <h2>Generic APMs cannot monitor AI agents</h2>
+    <div class="problem-box">
+      Traditional monitoring tools (Datadog, New Relic, Grafana) track HTTP requests and server metrics. AI agents are different. They think, decide, call tools, spawn sub-agents, read memory, and execute multi-step plans. Generic APMs see network traffic. They cannot see reasoning, decisions, or tool call chains. You need a fundamentally different approach.
+    </div>
+    <div style="margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 860px;">
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">&#128683;</div>
+        <h3 style="font-size: 16px;">Generic APMs see requests, not reasoning</h3>
+        <p style="font-size: 14px;">HTTP traces do not capture why an agent decided to execute a bash command or which memory it accessed.</p>
+      </div>
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">&#128683;</div>
+        <h3 style="font-size: 16px;">No tool call chain visibility</h3>
+        <p style="font-size: 14px;">Agents call 10+ tools per session. Generic tools see each as an isolated event, missing the decision tree.</p>
+      </div>
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">&#128683;</div>
+        <h3 style="font-size: 16px;">No sub-agent awareness</h3>
+        <p style="font-size: 14px;">Agents spawn sub-agents that spawn sub-agents. Generic APMs have no concept of agent hierarchies.</p>
+      </div>
+      <div class="card">
+        <div style="font-size: 20px; margin-bottom: 8px;">&#128683;</div>
+        <h3 style="font-size: 16px;">No token cost attribution</h3>
+        <p style="font-size: 14px;">LLM API calls have variable costs. No generic tool tracks per-session, per-model token spending.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 4: SOLUTION - PRODUCT DEEP DIVE -->
+<div class="slide">
+  <div class="slide-num">04 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">The Solution</div>
+    <h2>7 tabs of deep agent observability</h2>
+    <div class="tab-grid" style="margin-top: 24px;">
+      <div class="tab-card" style="border-color: rgba(229,68,58,0.3);">
+        <div class="tab-num">TAB 1</div>
+        <h4>&#9889; Flow: Live Agent Visualization</h4>
+        <p>Real-time animated view of every tool call, message, and sub-agent spawn as it happens. Watch your agent think.</p>
+      </div>
+      <div class="tab-card" style="border-color: rgba(229,68,58,0.3);">
+        <div class="tab-num">TAB 2</div>
+        <h4>&#129504; Brain: Full Transcript</h4>
+        <p>Every tool call, decision, and output. Searchable, filterable, timestamped. The complete thought process recorded.</p>
+      </div>
+      <div class="tab-card">
+        <div class="tab-num">TAB 3</div>
+        <h4>&#128176; Tokens: Cost Attribution</h4>
+        <p>Per-session, per-model, per-sub-agent cost breakdowns. Know what every task costs before the bill arrives.</p>
+      </div>
+      <div class="tab-card">
+        <div class="tab-num">TAB 4</div>
+        <h4>&#128024; Memory Browser</h4>
+        <p>Browse the agent's memory files, workspace, and state. See what it remembers and what it has learned.</p>
+      </div>
+      <div class="tab-card">
+        <div class="tab-num">TAB 5</div>
+        <h4>&#127795; Sub-Agent Trees</h4>
+        <p>Visualize parent-child agent hierarchies. Track delegation chains and see which sub-agent did what.</p>
+      </div>
+      <div class="tab-card">
+        <div class="tab-num">TAB 6</div>
+        <h4>&#9200; Cron Jobs</h4>
+        <p>Monitor scheduled agent tasks. See history, next runs, success/failure rates for automated agent work.</p>
+      </div>
+    </div>
+    <div style="margin-top: 16px; padding: 20px; background: rgba(229,68,58,0.06); border: 1px solid rgba(229,68,58,0.15); border-radius: 12px; max-width: 860px; width: 100%;">
+      <p style="font-size: 15px; color: #CBD5E0;"><strong style="color: #E5443A;">One-command setup:</strong> <code style="background: #0B0F1A; padding: 2px 8px; border-radius: 4px; font-size: 14px;">pip install clawmetry</code> then <code style="background: #0B0F1A; padding: 2px 8px; border-radius: 4px; font-size: 14px;">clawmetry connect</code>. Full observability in under 60 seconds.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 5: TRACTION -->
+<div class="slide">
+  <div class="slide-num">05 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Traction</div>
+    <h2>75,000 installs. The product sells itself.</h2>
+    <div class="grid-3" style="margin-bottom: 40px;">
+      <div class="card" style="text-align: center;">
+        <div class="num" id="pd-traction-installs">75k+</div>
+        <div class="desc">Total installs in 4 weeks, zero marketing</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num" id="pd-traction-countries">100+</div>
+        <div class="desc">Countries with active users</div>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div class="num">133</div>
+        <div class="desc">Cloud users, 19 connected nodes</div>
+      </div>
+    </div>
+    <div style="max-width: 820px; width: 100%;">
+      <div class="bar-row">
+        <div class="bar-label">Week 1 (Feb 18)</div>
+        <div class="bar-track"><div class="bar-fill" style="width:15%"></div></div>
+        <div class="bar-val">~8k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 2</div>
+        <div class="bar-track"><div class="bar-fill" style="width:40%"></div></div>
+        <div class="bar-val">~22k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 3</div>
+        <div class="bar-track"><div class="bar-fill" style="width:65%"></div></div>
+        <div class="bar-val">~37k</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Week 4 (Mar 18)</div>
+        <div class="bar-track"><div class="bar-fill" style="width:100%"></div></div>
+        <div class="bar-val" id="pd-bar-latest">75k+</div>
+      </div>
+    </div>
+    <p style="margin-top: 24px; font-size: 15px; color: #4A5568;">Zero marketing spend. Product depth creates word-of-mouth. Users share screenshots of the Flow tab and Brain tab constantly.</p>
+  </div>
+</div>
+
+<!-- SLIDE 6: SECURITY & ENCRYPTION -->
+<div class="slide">
+  <div class="slide-num">06 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Security Architecture</div>
+    <h2>Zero-knowledge cloud. Your data stays yours.</h2>
+    <div class="security-box" style="margin-bottom: 32px;">
+      <p style="font-size: 18px; color: #CBD5E0; line-height: 1.7;">ClawMetry uses AES-256-GCM end-to-end encryption. All agent data is encrypted on your machine before upload. Our servers store only ciphertext. Even if our database is compromised, your agent activity remains unreadable. This is not a feature. It is the architecture.</p>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h3 style="font-size: 16px; margin-bottom: 12px;">&#128274; Encryption flow</h3>
+        <div style="font-size: 14px; color: #64748B; line-height: 1.8;">
+          1. Agent data generated locally<br>
+          2. Encrypted with AES-256-GCM on your machine<br>
+          3. Ciphertext sent to ClawMetry cloud<br>
+          4. Decrypted only in your browser<br>
+          5. Key never leaves your device
+        </div>
+      </div>
+      <div class="card">
+        <h3 style="font-size: 16px; margin-bottom: 12px;">&#128302; Security roadmap</h3>
+        <div style="font-size: 14px; color: #64748B; line-height: 1.8;">
+          &#10003; E2E AES-256-GCM (live)<br>
+          &#10003; Zero-knowledge architecture (live)<br>
+          &#9744; Prompt injection detection (Q3 2026)<br>
+          &#9744; Source-sink analysis per OpenAI research<br>
+          &#9744; SOC2 compliance (Q4 2026)
+        </div>
+      </div>
+    </div>
+    <div style="margin-top: 24px; display: flex; gap: 40px; align-items: center;">
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">#5</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">Product Hunt (OSS)</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">#10</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">Product Hunt (Cloud)</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 32px; font-weight: 800; color: #E5443A;">AES-256</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">GCM encryption standard</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 7: BUSINESS MODEL -->
+<div class="slide">
+  <div class="slide-num">07 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Business Model</div>
+    <h2>Product depth drives conversion</h2>
+    <div style="display: flex; gap: 16px; align-items: center; margin-bottom: 40px; font-size: 16px; color: #94A3B8; flex-wrap: wrap;">
+      <div style="background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 20px;">pip install</div>
+      <div style="color: #E5443A;">&#8594;</div>
+      <div style="background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 20px;">See 7 tabs locally</div>
+      <div style="color: #E5443A;">&#8594;</div>
+      <div style="background: #131929; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px 20px;">Want remote access</div>
+      <div style="color: #E5443A;">&#8594;</div>
+      <div style="background: rgba(229,68,58,0.1); border: 1px solid rgba(229,68,58,0.3); border-radius: 8px; padding: 12px 20px; color: #E5443A; font-weight: 700;">$5/node/mo</div>
+    </div>
+    <div class="grid-3">
+      <div class="card" style="text-align: center;">
+        <div style="font-size: 36px; margin-bottom: 12px;">&#127919;</div>
+        <h3 style="font-size: 16px;">Product-led growth</h3>
+        <p style="font-size: 14px;">The product is so deep that users share it organically. Flow tab screenshots go viral. Brain tab transcripts get referenced.</p>
+      </div>
+      <div class="card" style="text-align: center; border-color: rgba(229,68,58,0.2);">
+        <div style="font-size: 36px; margin-bottom: 12px;">&#9729;&#65039;</div>
+        <h3 style="font-size: 16px;">Cloud: $5/node/mo</h3>
+        <p style="font-size: 14px;">Remote access to all 7 tabs. E2E encrypted. Multi-node fleet view. 7-day trial, no CC required.</p>
+      </div>
+      <div class="card" style="text-align: center;">
+        <div style="font-size: 36px; margin-bottom: 12px;">&#128737;&#65039;</div>
+        <h3 style="font-size: 16px;">Enterprise (2027)</h3>
+        <p style="font-size: 14px;">SSO, prompt injection detection, compliance reporting, audit exports. Security depth becomes the moat.</p>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: #131929; border-radius: 12px; border: 1px solid rgba(255,255,255,0.06);">
+      <p style="font-size: 15px;"><span style="color: #E2E8F0; font-weight: 700;">Competitive moat:</span> <span style="color: #64748B;">Deep filesystem integration with OpenClaw internals. Generic APMs would need to reverse-engineer months of work. Our product depth is our defensibility.</span></p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 8: MARKET -->
+<div class="slide">
+  <div class="slide-num">08 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Market</div>
+    <h2>Agent security and observability is a new requirement</h2>
+    <div class="grid-2" style="margin-bottom: 32px;">
+      <div class="card">
+        <div style="font-size: 13px; color: #64748B; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Total Addressable Market</div>
+        <div class="num">$12B</div>
+        <div class="desc">AI observability, agent monitoring, and AI security by 2028. Driven by enterprise compliance requirements.</div>
+      </div>
+      <div class="card">
+        <div style="font-size: 13px; color: #64748B; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Agent Security Opportunity</div>
+        <div class="num">$3B+</div>
+        <div class="desc">Prompt injection detection, agent audit trails, and compliance reporting. New category emerging in 2026-2027.</div>
+      </div>
+    </div>
+    <div style="padding: 24px; background: rgba(229,68,58,0.05); border: 1px solid rgba(229,68,58,0.15); border-radius: 12px;">
+      <h3 style="margin-bottom: 16px; font-size: 18px;">Why depth wins</h3>
+      <div class="feature-row">
+        <div class="feature-icon">&#128024;</div>
+        <div class="feature-text">
+          <p style="font-size: 15px; color: #CBD5E0;"><strong>Deep integration is the moat.</strong> ClawMetry reads OpenClaw's filesystem, memory, session state, and tool call chains. A competitor would need months to replicate this depth.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">&#128274;</div>
+        <div class="feature-text">
+          <p style="font-size: 15px; color: #CBD5E0;"><strong>Zero-knowledge is a selling point.</strong> Enterprises will not send agent data to a third party without E2E encryption. We have it from day one.</p>
+        </div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-icon">&#128302;</div>
+        <div class="feature-text">
+          <p style="font-size: 15px; color: #CBD5E0;"><strong>Prompt injection detection.</strong> Our roadmap includes source-sink analysis per OpenAI's research paper. This positions ClawMetry as a security tool, not just monitoring.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 9: FOUNDER -->
+<div class="slide">
+  <div class="slide-num">09 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Founder</div>
+    <h2>Built by an engineer who ships deep products</h2>
+    <div class="grid-2">
+      <div class="team-card">
+        <div style="font-size: 48px; margin-bottom: 16px;">&#128104;&#8205;&#128187;</div>
+        <div class="team-name">Vivek Chand</div>
+        <div class="team-role">Founder & CEO, ClawMetry</div>
+        <div class="team-bio">
+          AI Engineering @ Booking.com, managing 15,000+ agent systems at scale.<br><br>
+          Previously built ClassKlap (500k+ students, acquired).<br><br>
+          Built every tab, every feature, the encryption layer, and the cloud infrastructure. Solo. <span id="pd-bio-installs">75k</span> installs. Based in Amsterdam.
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Full-stack product depth</h3>
+          <p style="font-size: 14px;">Built the entire product: Python SDK, React dashboard, GCP infrastructure, E2E encryption, Stripe billing. One person, 4 weeks.</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Security-first mindset</h3>
+          <p style="font-size: 14px;">Implemented AES-256-GCM E2E encryption from day one. Not bolted on after launch. Architecture-level security decision.</p>
+        </div>
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 8px;">Previous exit: ClassKlap</h3>
+          <p style="font-size: 14px;">Built an edtech platform used by 500k+ students. Successfully acquired. Proven ability to ship and sell deep products.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 10: USE OF FUNDS -->
+<div class="slide">
+  <div class="slide-num">10 / 11</div>
+  <div style="max-width: 860px; width: 100%;">
+    <div class="label">Use of Funds</div>
+    <h2>$750k to deepen the moat</h2>
+    <div class="use-of-funds">
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Product Engineering</div>
+          <div class="fund-desc">Second engineer, prompt injection detection, mobile app, API ecosystem, new tabs</div>
+        </div>
+        <div class="fund-pct">50%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Security & Compliance</div>
+          <div class="fund-desc">SOC2 certification, security audit, compliance reporting features, enterprise readiness</div>
+        </div>
+        <div class="fund-pct">20%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Infrastructure</div>
+          <div class="fund-desc">Multi-region GCP deployment, performance optimization, 99.9% SLA</div>
+        </div>
+        <div class="fund-pct">15%</div>
+      </div>
+      <div class="fund-row">
+        <div>
+          <div class="fund-name">Operations & Runway</div>
+          <div class="fund-desc">18 months runway, legal (EU entity), accounting, tooling</div>
+        </div>
+        <div class="fund-pct">15%</div>
+      </div>
+    </div>
+    <div style="margin-top: 32px; padding: 24px; background: #131929; border-radius: 12px; border: 1px solid rgba(255,255,255,0.06);">
+      <p style="font-size: 15px; color: #94A3B8;"><span style="color: #E2E8F0; font-weight: 700;">12-month milestones:</span> Prompt injection detection shipped, SOC2 certified, 10 tabs of observability, mobile app, 500 paying customers, $75k+ MRR</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 11: ASK -->
+<div class="slide" style="background: radial-gradient(ellipse at 40% 60%, rgba(229,68,58,0.10) 0%, transparent 60%);">
+  <div class="slide-num">11 / 11</div>
+  <div class="ask-box">
+    <div class="label" style="text-align: center;">The Ask</div>
+    <h2 style="font-size: 48px; text-align: center; margin-bottom: 16px;">$750k<br><span class="muted" style="font-size: 24px; font-weight: 400;">Pre-seed</span></h2>
+    <p style="text-align: center; max-width: 480px; margin: 0 auto 32px;">18 months to build the deepest agent observability platform in the world. Product depth is the moat. Security is the differentiator.</p>
+    <div style="display: flex; justify-content: center; gap: 40px; margin-bottom: 32px;">
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">7 tabs</div>
+        <div style="font-size: 12px; color: #64748B;">Deep observability</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">E2E</div>
+        <div style="font-size: 12px; color: #64748B;">Zero-knowledge</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 24px; font-weight: 800;">75k+</div>
+        <div style="font-size: 12px; color: #64748B;">Installs</div>
+      </div>
+    </div>
+    <div style="font-size: 15px; color: #E5443A; font-weight: 600;">vivek@clawmetry.com &middot; clawmetry.com</div>
+  </div>
+</div>
+
+<script>
+fetch('/api/hero-stats').then(r=>r.json()).then(d=>{
+  var dl = d.downloads || '75k';
+  var ct = d.countries || '100';
+  var e1 = document.getElementById('pd-installs'); if(e1) e1.textContent = dl + '+';
+  var e2 = document.getElementById('pd-traction-installs'); if(e2) e2.textContent = dl + '+';
+  var e3 = document.getElementById('pd-traction-countries'); if(e3) e3.textContent = ct + '+';
+  var e4 = document.getElementById('pd-bar-latest'); if(e4) e4.textContent = dl + '+';
+  var e5 = document.getElementById('pd-bio-installs'); if(e5) e5.textContent = dl;
+}).catch(function(){});
+</script>
+</body>
+</html>

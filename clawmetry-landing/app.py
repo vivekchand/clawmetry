@@ -2674,12 +2674,20 @@ def pitch_deck_page():
     <div class="stat"><div class="num">133</div><div class="label">Cloud Users</div></div>
     <div class="stat"><div class="num">#5</div><div class="label">Product Hunt</div></div>
   </div>
-  <div>
+  <div style="margin-bottom:32px;">
     <a href="/pitch-deck.pdf" class="btn btn-primary" download>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       Download PDF
     </a>
     <a href="/pitch-deck.html" class="btn btn-secondary" target="_blank">View Online</a>
+  </div>
+  <div style="text-align:left;max-width:400px;margin:0 auto;">
+    <p style="font-size:13px;color:#64748B;margin-bottom:12px;text-align:center;">4 versions, each for a different investor type:</p>
+    <a href="/hidden/pitch-v1" target="_blank" style="display:block;padding:10px 16px;border:1px solid rgba(255,255,255,0.08);border-radius:8px;margin-bottom:8px;color:#E2E8F0;font-size:14px;font-weight:500;text-decoration:none;transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(229,68,58,0.3)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'">V1: OpenClaw Ecosystem <span style="color:#64748B;font-size:12px;">OSS VCs, YC</span></a>
+    <a href="/hidden/pitch-v2" target="_blank" style="display:block;padding:10px 16px;border:1px solid rgba(255,255,255,0.08);border-radius:8px;margin-bottom:8px;color:#E2E8F0;font-size:14px;font-weight:500;text-decoration:none;transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(229,68,58,0.3)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'">V2: Multi-Claw Platform <span style="color:#64748B;font-size:12px;">a16z, Sequoia</span></a>
+    <a href="/hidden/pitch-v3" target="_blank" style="display:block;padding:10px 16px;border:1px solid rgba(255,255,255,0.08);border-radius:8px;margin-bottom:8px;color:#E2E8F0;font-size:14px;font-weight:500;text-decoration:none;transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(229,68,58,0.3)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'">V3: Product Depth <span style="color:#64748B;font-size:12px;">Technical angels</span></a>
+    <a href="/hidden/pitch-v4" target="_blank" style="display:block;padding:10px 16px;border:1px solid rgba(255,255,255,0.08);border-radius:8px;margin-bottom:8px;color:#E2E8F0;font-size:14px;font-weight:500;text-decoration:none;transition:border-color 0.2s;" onmouseover="this.style.borderColor='rgba(229,68,58,0.3)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'">V4: Growth Metrics <span style="color:#64748B;font-size:12px;">Seedcamp, Point Nine</span></a>
+    <a href="/hidden/pitch-scorecard" target="_blank" style="display:block;padding:10px 16px;border:1px solid rgba(229,68,58,0.15);border-radius:8px;color:#E5443A;font-size:14px;font-weight:600;text-decoration:none;text-align:center;">Investability Scorecard</a>
   </div>
   <p class="meta">Vivek Chand &middot; vivek@clawmetry.com &middot; clawmetry.com</p>
 </div>
@@ -2693,6 +2701,28 @@ def pitch_deck_pdf():
 @app.route("/pitch-deck.html")
 def pitch_deck_html():
     return send_from_directory(".", "pitch-deck.html")
+
+
+
+@app.route("/hidden/pitch-v1")
+def pitch_v1():
+    return send_from_directory(".", "pitch-v1-openclaw.html")
+
+@app.route("/hidden/pitch-v2")
+def pitch_v2():
+    return send_from_directory(".", "pitch-v2-platform.html")
+
+@app.route("/hidden/pitch-v3")
+def pitch_v3():
+    return send_from_directory(".", "pitch-v3-product.html")
+
+@app.route("/hidden/pitch-v4")
+def pitch_v4():
+    return send_from_directory(".", "pitch-v4-growth.html")
+
+@app.route("/hidden/pitch-scorecard")
+def pitch_scorecard():
+    return send_from_directory(".", "pitch-scorecard.html")
 
 @app.route("/<path:path>")
 def static_files(path):
