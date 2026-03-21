@@ -2738,6 +2738,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('channels')">Channels</div>
+    <div class="nav-tab" onclick="switchTab('context')">Context</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3609,6 +3610,56 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-channels -->
 
+<!-- CONTEXT INSPECTOR (GH #9) -->
+<div class="page" id="page-context">
+  <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <button class="refresh-btn" onclick="loadContextInspector()">&#8635; Refresh</button>
+    <span style="font-size:12px;color:var(--text-muted);">Context coverage &amp; lint for multi-agent workflows</span>
+    <span id="ctx-refresh-time" style="font-size:11px;color:var(--text-muted);margin-left:auto;"></span>
+  </div>
+
+  <!-- Summary stats -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="ctx-total-agents">-</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Total Agents</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;" id="ctx-avg-coverage" style="color:var(--text-primary);">-</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Avg Coverage %</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:#f87171;" id="ctx-total-warnings">-</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Lint Warnings</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:#60a0ff;" id="ctx-files-found">-</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Context Files Found</div>
+    </div>
+  </div>
+
+  <!-- Two-column layout: context files + lint warnings -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+    <!-- Context Files Card -->
+    <div class="card" style="padding:16px;">
+      <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px;">&#128196; Workspace Context Files</div>
+      <div id="ctx-files-list" style="font-size:12px;"></div>
+    </div>
+    <!-- Lint Warnings Card -->
+    <div class="card" style="padding:16px;">
+      <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px;">&#9888;&#65039; Lint Warnings</div>
+      <div id="ctx-lint-list" style="font-size:12px;"></div>
+    </div>
+  </div>
+
+  <!-- Agent tree with coverage scores -->
+  <div class="card" style="padding:16px;">
+    <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px;">&#129438; Agent Context Tree</div>
+    <div id="ctx-agent-list" style="font-size:12px;"></div>
+  </div>
+</div><!-- end page-context -->
+
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -3984,6 +4035,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'channels') loadChannelsPage();
+  if (name === 'context') loadContextInspector();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -6682,6 +6734,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
+    app.register_blueprint(bp_context)
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -7953,6 +8006,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('channels')">Channels</div>
+    <div class="nav-tab" onclick="switchTab('context')">Context</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -8859,6 +8913,57 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-channels -->
 
+<!-- CONTEXT INSPECTOR (GH #9) -->
+<div class="page" id="page-context">
+  <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <button class="refresh-btn" onclick="loadContextInspector()">&#8635; Refresh</button>
+    <span style="font-size:12px;color:var(--text-muted);">Context coverage &amp; lint for multi-agent workflows</span>
+    <span id="ctx-refresh-time" style="font-size:11px;color:var(--text-muted);margin-left:auto;"></span>
+  </div>
+
+  <!-- Summary stats -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:var(--text-primary);" id="ctx-total-agents">-</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Total Agents</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;" id="ctx-avg-coverage" style="color:var(--text-primary);">-</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Avg Coverage %</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:#f87171;" id="ctx-total-warnings">-</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Lint Warnings</div>
+    </div>
+    <div class="card" style="padding:14px;text-align:center;">
+      <div style="font-size:24px;font-weight:700;color:#60a0ff;" id="ctx-files-found">-</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Context Files Found</div>
+    </div>
+  </div>
+
+  <!-- Two-column layout: context files + lint warnings -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+    <!-- Context Files Card -->
+    <div class="card" style="padding:16px;">
+      <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px;">&#128196; Workspace Context Files</div>
+      <div id="ctx-files-list" style="font-size:12px;"></div>
+    </div>
+    <!-- Lint Warnings Card -->
+    <div class="card" style="padding:16px;">
+      <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px;">&#9888;&#65039; Lint Warnings</div>
+      <div id="ctx-lint-list" style="font-size:12px;"></div>
+    </div>
+  </div>
+
+  <!-- Agent tree with coverage scores -->
+  <div class="card" style="padding:16px;">
+    <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px;">&#129438; Agent Context Tree</div>
+    <div id="ctx-agent-list" style="font-size:12px;"></div>
+  </div>
+</div><!-- end page-context -->
+
+
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -9290,6 +9395,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'channels') loadChannelsPage();
+  if (name === 'context') loadContextInspector();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -10446,6 +10552,74 @@ async function loadChannelsPage() {
   if (_channelsRefreshTimer) clearTimeout(_channelsRefreshTimer);
   if (document.getElementById('page-channels') && document.getElementById('page-channels').classList.contains('active')) {
     _channelsRefreshTimer = setTimeout(loadChannelsPage, 30000);
+  }
+}
+
+async function loadContextInspector() {
+  try {
+    var data = await fetch('/api/context-inspector').then(function(r){return r.json();});
+    if (data.error) throw new Error(data.error);
+
+    var s = data.summary || {};
+    document.getElementById('ctx-total-agents').textContent = s.totalAgents || 0;
+
+    var avgEl = document.getElementById('ctx-avg-coverage');
+    var avg = s.avgCoverage || 0;
+    avgEl.textContent = avg + '%';
+    avgEl.style.color = avg >= 70 ? '#4ade80' : avg >= 40 ? '#f0c040' : '#f87171';
+
+    document.getElementById('ctx-total-warnings').textContent = s.totalWarnings || 0;
+    document.getElementById('ctx-files-found').textContent = (s.contextFilesFound || 0) + ' / ' + (data.contextFiles || []).length;
+
+    // Context files list
+    var filesHtml = '';
+    (data.contextFiles || []).forEach(function(f) {
+      var icon = f.exists ? '&#9989;' : '&#10060;';
+      var clr = f.exists ? 'var(--text-primary)' : '#888';
+      var size = f.exists ? ' <span style="color:#888;">(' + f.sizeKB + ' KB)</span>' : ' <span style="color:#666;">missing</span>';
+      filesHtml += '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--bg-border);">' +
+        '<span>' + icon + '</span><span style="flex:1;color:' + clr + ';">' + f.name + '</span>' + size + '</div>';
+    });
+    var memCt = s.memoryFileCount || 0;
+    filesHtml += '<div style="margin-top:8px;font-size:11px;color:#888;">memory/ — ' + memCt + ' file' + (memCt !== 1 ? 's' : '') + '</div>';
+    document.getElementById('ctx-files-list').innerHTML = filesHtml || '<span style="color:#666;">No workspace files found</span>';
+
+    // Lint warnings
+    var lintHtml = '';
+    (data.lintWarnings || []).forEach(function(w) {
+      var sev = w.severity || 'info';
+      var sevColor = sev === 'error' ? '#f87171' : sev === 'warn' ? '#f0c040' : '#60a0ff';
+      var sevIcon = sev === 'error' ? '&#128308;' : sev === 'warn' ? '&#128993;' : '&#128309;';
+      lintHtml += '<div style="display:flex;gap:6px;padding:5px 0;border-bottom:1px solid var(--bg-border);align-items:flex-start;">' +
+        '<span style="flex-shrink:0;">' + sevIcon + '</span>' +
+        '<span style="color:' + sevColor + ';font-size:11px;">' + w.message + '</span>' +
+        '</div>';
+    });
+    document.getElementById('ctx-lint-list').innerHTML = lintHtml || '<div style="color:#4ade80;font-size:12px;padding:8px 0;">&#10003; No lint warnings</div>';
+
+    // Agent tree
+    var agentHtml = '';
+    (data.agents || []).sort(function(a, b) { return (b.lastActiveMs || 0) - (a.lastActiveMs || 0); }).forEach(function(a) {
+      var cov = a.coverageScore || 0;
+      var covColor = cov >= 70 ? '#4ade80' : cov >= 40 ? '#f0c040' : '#f87171';
+      var indent = (a.depth || 0) * 20;
+      var tag = a.depth > 0 ? '<span style="font-size:10px;background:rgba(168,85,247,0.2);color:#a855f7;border-radius:3px;padding:1px 5px;margin-right:6px;">sub</span>' : '';
+      var missing = (a.missingContextFiles || []).length > 0 ?
+        '<span style="font-size:10px;color:#f87171;margin-left:6px;">missing: ' + a.missingContextFiles.join(', ') + '</span>' : '';
+      var task = a.spawnTaskSnippet ? '<div style="margin-top:4px;font-size:11px;color:#888;white-space:pre-wrap;">' + a.spawnTaskSnippet.replace(/</g,'&lt;').substring(0, 200) + (a.spawnTaskSnippet.length > 200 ? '…' : '') + '</div>' : '';
+      agentHtml += '<div style="padding:8px 4px 8px ' + (8 + indent) + 'px;border-bottom:1px solid var(--bg-border);">' +
+        '<div style="display:flex;align-items:center;gap:8px;">' +
+        tag +
+        '<span style="font-weight:600;color:var(--text-primary);">' + a.displayName + '</span>' +
+        missing +
+        '<span style="margin-left:auto;font-size:12px;font-weight:700;color:' + covColor + ';">' + cov + '%</span>' +
+        '</div>' + task + '</div>';
+    });
+    document.getElementById('ctx-agent-list').innerHTML = agentHtml || '<div style="padding:16px;text-align:center;color:#666;">No sessions found</div>';
+
+    document.getElementById('ctx-refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    document.getElementById('ctx-agent-list').innerHTML = '<div style="padding:16px;color:#f87171;">Error: ' + e.message + '</div>';
   }
 }
 
@@ -15919,6 +16093,7 @@ bp_sessions = _Blueprint('sessions', __name__)
 bp_security = _Blueprint('security', __name__)
 bp_usage = _Blueprint('usage', __name__)
 bp_version = _Blueprint('version', __name__)
+bp_context = _Blueprint('context', __name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Version check & self-update routes ────────────────────────────────────────
@@ -23273,6 +23448,220 @@ def api_automation_analysis():
             'error': str(e),
             'lastAnalysis': datetime.now(timezone.utc).isoformat()
         })
+
+
+# ── Context Inspector (GH #9) ─────────────────────────────────────────
+
+@bp_context.route('/api/context-inspector')
+def api_context_inspector():
+    """Context Inspector: shows context inheritance, coverage scores, and lint warnings
+    for multi-agent workflows.  Reads workspace files + session transcripts.
+    """
+    try:
+        result = _build_context_inspector_data()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e), 'agents': [], 'lintWarnings': [], 'summary': {}}), 500
+
+
+def _build_context_inspector_data():
+    """Analyse workspace context files and session transcripts to produce the
+    Context Inspector payload.
+
+    Returns:
+        {
+          agents: [{sessionId, displayName, depth, parentId, contextFiles,
+                    coverageScore, lintWarnings, spawnTaskSnippet, tokensIn}],
+          lintWarnings: [{sessionId, message, severity}],
+          summary: {totalAgents, avgCoverage, totalWarnings, contextFilesFound},
+          contextFiles: [{name, sizeKB, exists}],
+          generatedAt: ISO string,
+        }
+    """
+    import math
+
+    workspace = WORKSPACE or os.path.expanduser('~')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+
+    # ── 1. Discover workspace context files ──────────────────────────────
+    KNOWN_CONTEXT_FILES = [
+        'SOUL.md', 'AGENTS.md', 'MEMORY.md', 'USER.md', 'IDENTITY.md',
+        'HEARTBEAT.md', 'CODING.md', 'TOOLS.md',
+    ]
+    context_files_info = []
+    existing_context_files = set()
+    for fname in KNOWN_CONTEXT_FILES:
+        fpath = os.path.join(workspace, fname)
+        exists = os.path.isfile(fpath)
+        size_kb = 0.0
+        if exists:
+            try:
+                size_kb = round(os.path.getsize(fpath) / 1024, 1)
+                existing_context_files.add(fname.lower())
+            except OSError:
+                pass
+        context_files_info.append({'name': fname, 'sizeKB': size_kb, 'exists': exists})
+
+    # Also check memory/ subdirectory
+    mem_dir = os.path.join(workspace, 'memory')
+    memory_file_count = 0
+    if os.path.isdir(mem_dir):
+        try:
+            memory_file_count = sum(1 for f in os.listdir(mem_dir) if f.endswith('.md'))
+        except OSError:
+            pass
+
+    # ── 2. Parse sessions.json to build agent tree ──────────────────────
+    index_path = os.path.join(sessions_dir, 'sessions.json')
+    sessions_raw = []
+    try:
+        with open(index_path) as f:
+            idx = json.load(f)
+            sessions_raw = list(idx.values()) if isinstance(idx, dict) else idx
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+
+    # Limit to 50 most recent to keep response fast
+    sessions_raw = sorted(sessions_raw, key=lambda s: s.get('lastActiveMs', 0), reverse=True)[:50]
+
+    # ── 3. For each session read the first few lines to extract spawn task ─
+    def _extract_spawn_task(sess_id):
+        """Return first user message text (truncated) — this is the task the agent got."""
+        fpath = os.path.join(sessions_dir, sess_id + '.jsonl')
+        if not os.path.isfile(fpath):
+            return ''
+        try:
+            with open(fpath) as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line.strip())
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if obj.get('type') == 'message':
+                        msg = obj.get('message', {})
+                        if msg.get('role') == 'user':
+                            content = msg.get('content', '')
+                            if isinstance(content, str):
+                                return content[:300]
+                            if isinstance(content, list):
+                                for block in content:
+                                    if isinstance(block, dict) and block.get('type') == 'text':
+                                        return block.get('text', '')[:300]
+        except OSError:
+            pass
+        return ''
+
+    def _compute_coverage_score(sess, task_text):
+        """Heuristic 0-100 coverage score.
+
+        Checks:
+        - Is there a task description at all?           +20
+        - SOUL.md mentioned / present in workspace?     +20
+        - AGENTS.md / MEMORY.md present?                +15 each
+        - Task length ≥ 50 chars (enough context)?      +15
+        - memory/ has recent files?                     +15
+        """
+        score = 0
+        if task_text:
+            score += 20
+        txt_lower = task_text.lower()
+        if 'soul' in txt_lower or 'soul.md' in existing_context_files:
+            score += 20
+        if 'agents.md' in existing_context_files:
+            score += 15
+        if 'memory.md' in existing_context_files:
+            score += 15
+        if len(task_text) >= 50:
+            score += 15
+        if memory_file_count > 0:
+            score += 15
+        return min(score, 100)
+
+    def _lint_task(sess_id, sess, task_text):
+        """Return list of lint warning strings for this agent's spawn context."""
+        warnings = []
+        txt_lower = task_text.lower()
+        # Warn if task mentions user-specific data but no memory files
+        user_data_hints = ['vivek', 'user', 'my ', "i'm", 'password', 'email', 'phone']
+        if any(h in txt_lower for h in user_data_hints) and 'user.md' not in existing_context_files:
+            warnings.append({'severity': 'warn', 'message': 'Task references user data but USER.md not found in workspace'})
+        # Warn if sub-agent task is very short (context starvation risk)
+        depth = sess.get('depth', 0) or 0
+        if depth > 0 and len(task_text) < 50:
+            warnings.append({'severity': 'error', 'message': f'Sub-agent (depth {depth}) has a very short task — possible context starvation (<50 chars)'})
+        # Warn if no SOUL.md
+        if 'soul.md' not in existing_context_files:
+            warnings.append({'severity': 'warn', 'message': 'SOUL.md not found — agent identity/persona context is missing'})
+        # Warn if no MEMORY.md
+        if 'memory.md' not in existing_context_files:
+            warnings.append({'severity': 'info', 'message': 'MEMORY.md not found — long-term memory context unavailable'})
+        return warnings
+
+    # ── 4. Build agent list ───────────────────────────────────────────────
+    agents = []
+    all_lint_warnings = []
+
+    for sess in sessions_raw:
+        sess_id = sess.get('sessionId') or sess.get('key', '')
+        if not sess_id:
+            continue
+
+        display = sess.get('displayName') or sess_id[:16]
+        depth = int(sess.get('depth', 0) or 0)
+        parent_id = sess.get('spawnedBy') or sess.get('parentKey') or None
+        tokens_in = sess.get('inputTokens') or sess.get('totalTokens', 0) or 0
+
+        task_text = _extract_spawn_task(sess_id)
+        coverage = _compute_coverage_score(sess, task_text)
+        lint = _lint_task(sess_id, sess, task_text)
+
+        # Collect files referenced in the task text (simple heuristic)
+        referenced = [f for f in KNOWN_CONTEXT_FILES if f.lower() in task_text.lower()]
+        missing = [f for f in referenced if f.lower() not in existing_context_files]
+
+        agent_entry = {
+            'sessionId': sess_id,
+            'displayName': display,
+            'depth': depth,
+            'parentId': parent_id,
+            'coverageScore': coverage,
+            'lintWarnings': lint,
+            'spawnTaskSnippet': task_text[:200] if task_text else '',
+            'referencedContextFiles': referenced,
+            'missingContextFiles': missing,
+            'tokensIn': tokens_in,
+            'lastActiveMs': sess.get('lastActiveMs', 0),
+            'model': sess.get('model') or sess.get('modelRef', 'unknown'),
+        }
+        agents.append(agent_entry)
+
+        for w in lint:
+            all_lint_warnings.append({'sessionId': sess_id, 'displayName': display, **w})
+
+    # Deduplicate global lint warnings (same message across sessions)
+    seen_msgs = set()
+    deduped_warnings = []
+    for w in all_lint_warnings:
+        key = w['message']
+        if key not in seen_msgs:
+            seen_msgs.add(key)
+            deduped_warnings.append(w)
+
+    avg_coverage = round(sum(a['coverageScore'] for a in agents) / len(agents), 1) if agents else 0
+
+    return {
+        'agents': agents,
+        'lintWarnings': deduped_warnings,
+        'summary': {
+            'totalAgents': len(agents),
+            'avgCoverage': avg_coverage,
+            'totalWarnings': len(all_lint_warnings),
+            'contextFilesFound': len(existing_context_files),
+            'memoryFileCount': memory_file_count,
+        },
+        'contextFiles': context_files_info,
+        'generatedAt': datetime.now(timezone.utc).isoformat(),
+    }
 
 
 # ── Data Helpers ────────────────────────────────────────────────────────

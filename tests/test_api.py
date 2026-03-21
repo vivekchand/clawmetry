@@ -471,3 +471,47 @@ class TestMemoryAnalytics:
         for f in d["files"]:
             assert_keys(f, "path", "sizeBytes", "sizeKB", "estTokens", "status")
             assert f["status"] in ("ok", "warning", "critical")
+
+
+class TestContextInspector:
+    """Tests for Context Inspector (GH #9)."""
+
+    def test_context_inspector_returns_200(self, api, base_url):
+        """Context Inspector endpoint returns 200."""
+        d = assert_ok(get(api, base_url, "/api/context-inspector"))
+        assert_keys(d, "agents", "lintWarnings", "summary", "contextFiles", "generatedAt")
+
+    def test_context_inspector_summary_fields(self, api, base_url):
+        """Summary contains all required fields."""
+        d = assert_ok(get(api, base_url, "/api/context-inspector"))
+        s = d["summary"]
+        assert_keys(s, "totalAgents", "avgCoverage", "totalWarnings", "contextFilesFound", "memoryFileCount")
+        assert isinstance(s["totalAgents"], int)
+        assert isinstance(s["avgCoverage"], (int, float))
+        assert 0 <= s["avgCoverage"] <= 100
+
+    def test_context_inspector_context_files(self, api, base_url):
+        """contextFiles list covers all known workspace files."""
+        d = assert_ok(get(api, base_url, "/api/context-inspector"))
+        files = d["contextFiles"]
+        assert len(files) >= 5, "Expected at least 5 known context files"
+        for f in files:
+            assert_keys(f, "name", "sizeKB", "exists")
+            assert isinstance(f["exists"], bool)
+
+    def test_context_inspector_agent_fields(self, api, base_url):
+        """Each agent entry has required fields with valid values."""
+        d = assert_ok(get(api, base_url, "/api/context-inspector"))
+        for agent in d["agents"][:10]:
+            assert_keys(agent, "sessionId", "displayName", "depth", "coverageScore",
+                        "lintWarnings", "spawnTaskSnippet")
+            assert 0 <= agent["coverageScore"] <= 100, "Coverage score out of range"
+            assert isinstance(agent["depth"], int)
+            assert isinstance(agent["lintWarnings"], list)
+
+    def test_context_inspector_lint_warnings_format(self, api, base_url):
+        """Lint warnings have severity and message."""
+        d = assert_ok(get(api, base_url, "/api/context-inspector"))
+        for w in d["lintWarnings"]:
+            assert_keys(w, "severity", "message")
+            assert w["severity"] in ("info", "warn", "error"), f"Unknown severity: {w['severity']}"
