@@ -98,7 +98,7 @@ echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
 
 # ── Onboarding ───────────────────────────────────────────────────────────────
-# Runs: clawmetry onboard  (or clawmetry connect for existing installs)
+# Runs: clawmetry onboard
 
 if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ]; then
   echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
