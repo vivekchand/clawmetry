@@ -487,7 +487,10 @@
       <a href="https://github.com/vivekchand/clawmetry/stargazers" target="_blank" rel="noopener" style="font-size:13px;color:#6b7280;text-decoration:none;"><strong id="hero-stars-val" style="color:#fff;">107</strong> &#x2B50;</a>
       <a href="https://clawmetry.com/globe" target="_blank" rel="noopener" style="font-size:13px;color:#6b7280;text-decoration:none;"><strong id="hero-countries-val" style="color:#fff;">50+</strong> countries</a>
     </div>
-    <div style="margin-top:16px;text-align:center;">
+    <div style="margin-top:14px;text-align:center;">
+      <a href="#" onclick="openHomeDemo();return false;" style="display:inline-flex;align-items:center;gap:6px;color:#94a3b8;font-size:14px;text-decoration:none;font-weight:500;transition:color 0.2s;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#94a3b8'"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>How it works</a>
+    </div>
+    <div style="margin-top:10px;text-align:center;">
       <a href="https://github.com/vivekchand/clawmetry" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;color:#94a3b8;font-size:14px;text-decoration:none;font-weight:500;transition:color 0.2s;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#94a3b8'"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>View on GitHub &#x2192;</a>
     </div>
     <div style="margin-top:20px;text-align:center;">
@@ -1468,6 +1471,25 @@ document.getElementById('subscribe-form').addEventListener('submit',function(e){
 </script>
 <script>
 (function(){var r=new URLSearchParams(window.location.search).get('ref');if(r)localStorage.setItem('cm_ref',r);})();
+</script>
+
+<!-- Home demo video modal -->
+<div id="home-demo-modal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:9999;background:rgba(0,0,0,0.85);backdrop-filter:blur(8px);align-items:center;justify-content:center;cursor:pointer;" onclick="closeHomeDemo()">
+  <div style="width:90%;max-width:900px;aspect-ratio:16/9;position:relative;" onclick="event.stopPropagation()">
+    <iframe id="home-demo-iframe" width="100%" height="100%" src="" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen style="border-radius:12px;"></iframe>
+    <button onclick="closeHomeDemo()" style="position:absolute;top:-40px;right:0;background:none;border:none;color:#fff;font-size:28px;cursor:pointer;padding:8px;">&times;</button>
+  </div>
+</div>
+<script>
+function openHomeDemo(){
+  document.getElementById('home-demo-iframe').src='https://www.youtube.com/embed/8out4EIIf_E?autoplay=1';
+  document.getElementById('home-demo-modal').style.display='flex';
+}
+function closeHomeDemo(){
+  document.getElementById('home-demo-iframe').src='';
+  document.getElementById('home-demo-modal').style.display='none';
+}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeHomeDemo();});
 </script>
 </body>
 </html>
