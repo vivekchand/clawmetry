@@ -274,10 +274,15 @@
 </div>
 
 <!-- Legend -->
-<div class="legend">
+<div class="legend" style="display:flex;align-items:center;justify-content:center;gap:24px;flex-wrap:wrap;">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div> Live</div>
   <div class="legend-item"><div class="legend-dot" style="background:var(--accent)"></div> In progress</div>
   <div class="legend-item"><div class="legend-dot" style="background:var(--orange)"></div> Coming soon</div>
   <div class="legend-item"><div class="legend-dot" style="background:var(--text-dim)"></div> Planned</div>
+  <button onclick="openFeatureModal()" style="background:var(--accent);color:#fff;border:none;padding:8px 18px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:opacity 0.2s;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    Request a Feature
+  </button>
 </div>
 
 <!-- Roadmap cards -->
@@ -791,6 +796,58 @@ function castVote(btn) {
   track("page_visit");
   window.cmTrack = track;
 })();
+</script>
+
+<!-- Feature Request Modal -->
+<div id="feature-modal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:9999;background:rgba(0,0,0,0.8);backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:20px;" onclick="closeFeatureModal()">
+  <div style="background:#131929;border:1px solid rgba(255,255,255,0.1);border-radius:16px;padding:36px;max-width:480px;width:100%;" onclick="event.stopPropagation()">
+    <h2 style="font-size:20px;font-weight:700;margin-bottom:4px;color:#f1f5f9;">Request a Feature</h2>
+    <p style="font-size:14px;color:#64748b;margin-bottom:24px;">Tell us what you want ClawMetry to do next.</p>
+    <textarea id="feature-text" placeholder="Describe the feature you'd like..." style="width:100%;box-sizing:border-box;min-height:120px;padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:#0d1117;color:#e2e8f0;font-size:14px;font-family:inherit;resize:vertical;outline:none;margin-bottom:12px;" onfocus="this.style.borderColor='rgba(229,68,58,0.3)'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'"></textarea>
+    <input id="feature-email" type="email" placeholder="Your email (optional)" style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:#0d1117;color:#e2e8f0;font-size:14px;font-family:inherit;outline:none;margin-bottom:16px;" onfocus="this.style.borderColor='rgba(229,68,58,0.3)'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'">
+    <p id="feature-error" style="display:none;color:#f43f5e;font-size:13px;margin-bottom:12px;"></p>
+    <p id="feature-success" style="display:none;color:#22c55e;font-size:13px;margin-bottom:12px;"></p>
+    <div style="display:flex;gap:10px;">
+      <button id="feature-submit-btn" onclick="submitFeature()" style="flex:1;background:#E5443A;color:#fff;border:none;padding:12px;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;">Submit</button>
+      <button onclick="closeFeatureModal()" style="background:transparent;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);padding:12px 20px;border-radius:10px;font-size:14px;cursor:pointer;">Cancel</button>
+    </div>
+  </div>
+</div>
+<script>
+function openFeatureModal(){
+  document.getElementById('feature-modal').style.display='flex';
+  document.getElementById('feature-text').value='';
+  document.getElementById('feature-email').value='';
+  document.getElementById('feature-error').style.display='none';
+  document.getElementById('feature-success').style.display='none';
+  setTimeout(function(){document.getElementById('feature-text').focus();},100);
+}
+function closeFeatureModal(){
+  document.getElementById('feature-modal').style.display='none';
+}
+function submitFeature(){
+  var text=document.getElementById('feature-text').value.trim();
+  var email=document.getElementById('feature-email').value.trim();
+  var err=document.getElementById('feature-error');
+  var ok=document.getElementById('feature-success');
+  var btn=document.getElementById('feature-submit-btn');
+  err.style.display='none';ok.style.display='none';
+  if(!text){err.textContent='Please describe the feature.';err.style.display='block';return;}
+  btn.textContent='Submitting...';btn.disabled=true;
+  fetch('/api/track',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event_type:'feature_request',visitor_id:'roadmap',page:'/roadmap',metadata:{feature:text,email:email}})})
+  .then(function(r){return r.json();})
+  .then(function(){
+    ok.textContent='Thank you! We will review your request.';ok.style.display='block';
+    btn.textContent='Submit';btn.disabled=false;
+    document.getElementById('feature-text').value='';
+    setTimeout(closeFeatureModal,2000);
+  })
+  .catch(function(){
+    err.textContent='Failed to submit. Email vivek@clawmetry.com instead.';err.style.display='block';
+    btn.textContent='Submit';btn.disabled=false;
+  });
+}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeFeatureModal();});
 </script>
 </body>
 </html>
