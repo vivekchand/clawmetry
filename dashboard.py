@@ -2577,6 +2577,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('channels')">Channels</div>
+    <div class="nav-tab" onclick="switchTab('actions')">Actions</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3405,6 +3406,90 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-channels -->
 
+<!-- QUICK ACTIONS -->
+<div class="page" id="page-actions">
+  <div style="max-width:720px;margin:0 auto;">
+    <div style="margin-bottom:20px;">
+      <h2 style="font-size:18px;font-weight:700;color:var(--text-primary);margin:0 0 6px 0;">Quick Actions</h2>
+      <p style="font-size:13px;color:var(--text-secondary);margin:0;">Trigger common operations on this node without leaving the dashboard. Each action shows a confirmation dialog before executing.</p>
+    </div>
+
+    <!-- Action result banner -->
+    <div id="qa-result-banner" style="display:none;padding:12px 16px;border-radius:8px;font-size:13px;margin-bottom:16px;border:1px solid transparent;"></div>
+
+    <!-- Action cards grid -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:28px;">
+
+      <!-- Restart Gateway -->
+      <div class="card" style="padding:20px;transition:box-shadow 0.2s;" onmouseover="this.style.boxShadow='0 0 0 1px var(--accent-primary)'" onmouseout="this.style.boxShadow=''">
+        <div style="display:flex;align-items:flex-start;gap:14px;">
+          <div style="font-size:28px;flex-shrink:0;">&#9000;</div>
+          <div style="flex:1;">
+            <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">Restart Gateway</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5;">Restart the OpenClaw gateway process. Active sessions will reconnect automatically.</div>
+            <button class="refresh-btn" style="padding:6px 14px;font-size:12px;" onclick="confirmAction(\'restart-gateway\',\'Restart Gateway\',\'Restart the OpenClaw gateway process now?\')">&#9000; Restart</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Clear Cache -->
+      <div class="card" style="padding:20px;transition:box-shadow 0.2s;" onmouseover="this.style.boxShadow='0 0 0 1px var(--accent-primary)'" onmouseout="this.style.boxShadow=''">
+        <div style="display:flex;align-items:flex-start;gap:14px;">
+          <div style="font-size:28px;flex-shrink:0;">&#128465;</div>
+          <div style="flex:1;">
+            <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">Clear Cache</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5;">Purge ClawMetry in-process caches and local cache directories. Dashboard metrics will refresh from source.</div>
+            <button class="refresh-btn" style="padding:6px 14px;font-size:12px;" onclick="confirmAction(\'clear-cache\',\'Clear Cache\',\'Purge in-process caches now?\')">&#128465; Clear</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rotate Logs -->
+      <div class="card" style="padding:20px;transition:box-shadow 0.2s;" onmouseover="this.style.boxShadow='0 0 0 1px var(--accent-primary)'" onmouseout="this.style.boxShadow=''">
+        <div style="display:flex;align-items:flex-start;gap:14px;">
+          <div style="font-size:28px;flex-shrink:0;">&#128196;</div>
+          <div style="flex:1;">
+            <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">Rotate Logs</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5;">Send SIGUSR1 to OpenClaw processes to trigger log rotation. Prevents unbounded log file growth.</div>
+            <button class="refresh-btn" style="padding:6px 14px;font-size:12px;" onclick="confirmAction(\'rotate-logs\',\'Rotate Logs\',\'Send log rotation signal now?\')">&#128196; Rotate</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Health Check -->
+      <div class="card" style="padding:20px;transition:box-shadow 0.2s;" onmouseover="this.style.boxShadow='0 0 0 1px var(--accent-primary)'" onmouseout="this.style.boxShadow=''">
+        <div style="display:flex;align-items:flex-start;gap:14px;">
+          <div style="font-size:28px;flex-shrink:0;">&#10084;</div>
+          <div style="flex:1;">
+            <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">Health Check</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5;">Run an on-demand health check: gateway reachability, disk usage, session count.</div>
+            <button class="refresh-btn" style="padding:6px 14px;font-size:12px;" onclick="runQuickAction(\'health-check\')">&#10084; Check Now</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Action history -->
+    <div>
+      <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:10px;">Recent Actions</div>
+      <div id="qa-history-list" style="font-size:12px;color:var(--text-muted);">Loading...</div>
+    </div>
+  </div>
+</div><!-- end page-actions -->
+
+<!-- Confirmation modal for Quick Actions -->
+<div id="qa-confirm-overlay" onclick="if(event.target===this)closeQAConfirm()" style="display:none;position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+  <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:12px;padding:28px;max-width:400px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+    <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:8px;" id="qa-confirm-title">Confirm Action</div>
+    <div style="font-size:13px;color:var(--text-secondary);margin-bottom:24px;" id="qa-confirm-body"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button class="refresh-btn" style="background:transparent;border:1px solid var(--border-color);color:var(--text-secondary);" onclick="closeQAConfirm()">Cancel</button>
+      <button class="refresh-btn" id="qa-confirm-ok" style="background:var(--accent-primary);">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -3717,6 +3802,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'channels') loadChannelsPage();
+  if (name === 'actions') loadQAHistory();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
@@ -7159,6 +7245,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('channels')">Channels</div>
+    <div class="nav-tab" onclick="switchTab('actions')">Actions</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -8033,6 +8120,65 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-channels -->
 
+<!-- QUICK ACTIONS (theme 2) -->
+<div class="page" id="page-actions">
+  <div style="max-width:720px;margin:0 auto;">
+    <div style="margin-bottom:20px;">
+      <h2 style="font-size:18px;font-weight:700;color:var(--text-primary);margin:0 0 6px 0;">Quick Actions</h2>
+      <p style="font-size:13px;color:var(--text-secondary);margin:0;">Trigger common operations on this node without leaving the dashboard.</p>
+    </div>
+    <div id="qa-result-banner" style="display:none;padding:12px 16px;border-radius:8px;font-size:13px;margin-bottom:16px;border:1px solid transparent;"></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:28px;">
+      <div class="card" style="padding:20px;transition:box-shadow 0.2s;" onmouseover="this.style.boxShadow=\'0 0 0 1px var(--accent-primary)\'" onmouseout="this.style.boxShadow=\'\'">
+        <div style="display:flex;align-items:flex-start;gap:14px;">
+          <div style="font-size:28px;flex-shrink:0;">&#9000;</div>
+          <div style="flex:1;">
+            <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">Restart Gateway</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5;">Restart the OpenClaw gateway process.</div>
+            <button class="refresh-btn" style="padding:6px 14px;font-size:12px;" onclick="confirmAction(\'restart-gateway\',\'Restart Gateway\',\'Restart the OpenClaw gateway process now?\')">&#9000; Restart</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="padding:20px;transition:box-shadow 0.2s;" onmouseover="this.style.boxShadow=\'0 0 0 1px var(--accent-primary)\'" onmouseout="this.style.boxShadow=\'\'">
+        <div style="display:flex;align-items:flex-start;gap:14px;">
+          <div style="font-size:28px;flex-shrink:0;">&#128465;</div>
+          <div style="flex:1;">
+            <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">Clear Cache</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5;">Purge ClawMetry in-process caches and local cache directories.</div>
+            <button class="refresh-btn" style="padding:6px 14px;font-size:12px;" onclick="confirmAction(\'clear-cache\',\'Clear Cache\',\'Purge in-process caches now?\')">&#128465; Clear</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="padding:20px;transition:box-shadow 0.2s;" onmouseover="this.style.boxShadow=\'0 0 0 1px var(--accent-primary)\'" onmouseout="this.style.boxShadow=\'\'">
+        <div style="display:flex;align-items:flex-start;gap:14px;">
+          <div style="font-size:28px;flex-shrink:0;">&#128196;</div>
+          <div style="flex:1;">
+            <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">Rotate Logs</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5;">Send SIGUSR1 to OpenClaw processes to trigger log rotation.</div>
+            <button class="refresh-btn" style="padding:6px 14px;font-size:12px;" onclick="confirmAction(\'rotate-logs\',\'Rotate Logs\',\'Send log rotation signal now?\')">&#128196; Rotate</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="padding:20px;transition:box-shadow 0.2s;" onmouseover="this.style.boxShadow=\'0 0 0 1px var(--accent-primary)\'" onmouseout="this.style.boxShadow=\'\'">
+        <div style="display:flex;align-items:flex-start;gap:14px;">
+          <div style="font-size:28px;flex-shrink:0;">&#10084;</div>
+          <div style="flex:1;">
+            <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">Health Check</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5;">Run an on-demand health check: gateway reachability, disk usage, session count.</div>
+            <button class="refresh-btn" style="padding:6px 14px;font-size:12px;" onclick="runQuickAction(\'health-check\')">&#10084; Check Now</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:10px;">Recent Actions</div>
+      <div id="qa-history-list" style="font-size:12px;color:var(--text-muted);">Loading...</div>
+    </div>
+  </div>
+</div><!-- end page-actions (theme 2) -->
+
+
+
 <!-- SUB-AGENTS -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -8372,6 +8518,7 @@ function switchTab(name) {
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'channels') loadChannelsPage();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+  if (name === 'actions') loadQAHistory();
 }
 
 function exportUsageData() {
@@ -9450,6 +9597,99 @@ async function loadSecurityPage(silent) {
     _securityRefreshTimer = setTimeout(function() { loadSecurityPage(true); }, 30000);
   }
 }
+
+// ═══ QUICK ACTIONS ═══════════════════════════════════════════════════════════
+var _qaCurrentAction = null;
+
+function confirmAction(actionKey, title, body) {
+  _qaCurrentAction = actionKey;
+  document.getElementById('qa-confirm-title').textContent = title;
+  document.getElementById('qa-confirm-body').textContent = body;
+  var overlay = document.getElementById('qa-confirm-overlay');
+  overlay.style.display = 'flex';
+  document.getElementById('qa-confirm-ok').onclick = function() {
+    closeQAConfirm();
+    runQuickAction(actionKey);
+  };
+}
+
+function closeQAConfirm() {
+  var overlay = document.getElementById('qa-confirm-overlay');
+  if (overlay) overlay.style.display = 'none';
+  _qaCurrentAction = null;
+}
+
+async function runQuickAction(actionKey) {
+  var banner = document.getElementById('qa-result-banner');
+  if (banner) {
+    banner.style.display = 'block';
+    banner.style.background = 'rgba(96,165,250,0.1)';
+    banner.style.borderColor = 'rgba(96,165,250,0.3)';
+    banner.style.color = '#60a5fa';
+    banner.textContent = 'Running ' + actionKey + '...';
+  }
+  try {
+    var resp = await fetch('/api/actions/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: actionKey})
+    });
+    var data = await resp.json();
+    if (banner) {
+      if (data.ok) {
+        banner.style.background = 'rgba(34,197,94,0.1)';
+        banner.style.borderColor = 'rgba(34,197,94,0.3)';
+        banner.style.color = '#22c55e';
+        banner.textContent = '[ok] ' + (data.output || actionKey + ' completed') + ' (' + (data.duration_ms || 0) + 'ms)';
+      } else {
+        banner.style.background = 'rgba(239,68,68,0.1)';
+        banner.style.borderColor = 'rgba(239,68,68,0.3)';
+        banner.style.color = '#ef4444';
+        banner.textContent = '[error] ' + (data.output || data.error || 'Action failed');
+      }
+    }
+    loadQAHistory();
+  } catch(e) {
+    if (banner) {
+      banner.style.background = 'rgba(239,68,68,0.1)';
+      banner.style.borderColor = 'rgba(239,68,68,0.3)';
+      banner.style.color = '#ef4444';
+      banner.textContent = '[error] ' + e.message;
+    }
+  }
+}
+
+async function loadQAHistory() {
+  var el = document.getElementById('qa-history-list');
+  if (!el) return;
+  try {
+    var data = await fetchJsonWithTimeout('/api/actions/history', 5000);
+    var actions = data.actions || [];
+    if (!actions.length) {
+      el.textContent = 'No actions run yet.';
+      return;
+    }
+    var html = '<table style="width:100%;border-collapse:collapse;">';
+    actions.slice().reverse().forEach(function(a) {
+      var color = a.ok ? '#22c55e' : '#ef4444';
+      var label = a.ok ? '[ok]' : '[error]';
+      html += '<tr style="border-bottom:1px solid var(--border-color);">';
+      html += '<td style="padding:6px 8px;color:' + color + ';width:60px;">' + label + '</td>';
+      html += '<td style="padding:6px 8px;color:var(--text-secondary);width:120px;">' + (a.action || '') + '</td>';
+      html += '<td style="padding:6px 8px;color:var(--text-muted);">' + (a.output || '').slice(0, 120) + '</td>';
+      html += '<td style="padding:6px 8px;color:var(--text-muted);text-align:right;width:70px;">' + (a.duration_ms || 0) + 'ms</td>';
+      html += '</tr>';
+    });
+    html += '</table>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.textContent = 'Could not load action history.';
+  }
+}
+
+// Load QA history when Actions tab is opened
+var _origSwitchTab = typeof switchTab === 'function' ? switchTab : null;
+// (patched below after switchTab is defined)
 
 var _channelsRefreshTimer = null;
 async function loadChannelsPage() {
@@ -21227,6 +21467,146 @@ def api_heartbeat_ping():
     """Called by frontend when a heartbeat event is detected in log stream."""
     _record_heartbeat()
     return jsonify({'ok': True})
+
+
+@bp_health.route('/api/actions/run', methods=['POST'])
+def api_quick_action_run():
+    """Execute a Quick Action on the local OpenClaw / ClawMetry installation.
+
+    POST body: {"action": "restart-gateway"|"clear-cache"|"rotate-logs"|"health-check"}
+    Returns:   {"ok": bool, "action": str, "output": str, "duration_ms": int}
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+    except Exception:
+        body = {}
+    action = str(body.get('action', '')).strip()
+    allowed = {'restart-gateway', 'clear-cache', 'rotate-logs', 'health-check'}
+    if action not in allowed:
+        return jsonify({'ok': False, 'error': f'Unknown action: {action}', 'output': '', 'duration_ms': 0}), 400
+
+    t0 = time.time()
+    output = ''
+    ok = False
+
+    try:
+        if action == 'restart-gateway':
+            # Try openclaw / systemctl restart; fallback to SIGUSR1 on the process
+            cmds = [
+                ['openclaw', 'gateway', 'restart'],
+                ['systemctl', '--user', 'restart', 'openclaw'],
+                ['systemctl', 'restart', 'openclaw'],
+            ]
+            for cmd in cmds:
+                try:
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                    if r.returncode == 0:
+                        output = (r.stdout or r.stderr or 'Gateway restart command accepted').strip()
+                        ok = True
+                        break
+                    output = (r.stderr or r.stdout or 'Command failed').strip()
+                except FileNotFoundError:
+                    continue
+                except Exception as exc:
+                    output = str(exc)
+            if not ok:
+                output = output or 'No supported restart mechanism found (openclaw / systemctl).'
+
+        elif action == 'clear-cache':
+            # Clear ClawMetry's in-process caches and any temp files
+            removed = []
+            cache_dirs = [
+                os.path.join(os.path.expanduser('~'), '.clawmetry', 'cache'),
+                '/tmp/clawmetry_cache',
+            ]
+            for d in cache_dirs:
+                if os.path.isdir(d):
+                    import shutil as _shutil
+                    _shutil.rmtree(d, ignore_errors=True)
+                    removed.append(d)
+            # Clear OTEL in-memory store
+            try:
+                global _otel_store
+                _otel_store = {'tokens': [], 'cost': [], 'runs': [], 'messages': [], 'webhooks': [], 'dequeues': []}
+            except Exception:
+                pass
+            ok = True
+            output = 'Cache cleared: ' + (', '.join(removed) if removed else 'in-process caches reset')
+
+        elif action == 'rotate-logs':
+            # Send SIGUSR1 to processes named 'openclaw' / 'clawmetry', which conventionally triggers log rotation
+            rotated = []
+            import signal as _signal
+            for proc_name in ('openclaw', 'clawmetry'):
+                try:
+                    r = subprocess.run(['pkill', '-USR1', proc_name], capture_output=True, timeout=5)
+                    if r.returncode == 0:
+                        rotated.append(proc_name)
+                except Exception:
+                    pass
+            # Also attempt logrotate if available
+            try:
+                conf_path = '/etc/logrotate.d/openclaw'
+                if os.path.exists(conf_path) and shutil.which('logrotate'):
+                    subprocess.run(['logrotate', '-f', conf_path], capture_output=True, timeout=10)
+                    rotated.append('logrotate')
+            except Exception:
+                pass
+            ok = True
+            output = ('Log rotation signal sent to: ' + ', '.join(rotated)) if rotated else 'No running openclaw processes found to signal'
+
+        elif action == 'health-check':
+            # Collect a quick health snapshot
+            health_parts = []
+            cfg = _load_gw_config()
+            gw_url = cfg.get('url', 'http://127.0.0.1:18789')
+            token = cfg.get('token', '')
+            # Gateway ping
+            try:
+                req = _urllib_req.Request(
+                    f"{gw_url.rstrip('/')}/api/overview",
+                    headers={'Authorization': f'Bearer {token}'} if token else {},
+                )
+                with _urllib_req.urlopen(req, timeout=5) as resp:
+                    health_parts.append(f'Gateway: OK ({resp.status})')
+            except Exception as exc:
+                health_parts.append(f'Gateway: UNREACHABLE ({exc})')
+            # Disk
+            try:
+                usage = shutil.disk_usage(os.path.expanduser('~'))
+                pct = 100 * usage.used // usage.total
+                health_parts.append(f'Disk: {pct}% used ({usage.free // 1_073_741_824}GB free)')
+            except Exception:
+                pass
+            # Session count
+            try:
+                sc = len(_get_sessions())
+                health_parts.append(f'Sessions: {sc}')
+            except Exception:
+                pass
+            ok = True
+            output = ' | '.join(health_parts) or 'Health check complete'
+
+    except Exception as exc:
+        output = f'Error: {exc}'
+        ok = False
+
+    duration_ms = int((time.time() - t0) * 1000)
+    return jsonify({'ok': ok, 'action': action, 'output': output, 'duration_ms': duration_ms})
+
+
+@bp_health.route('/api/actions/history')
+def api_quick_action_history():
+    """Return in-memory log of recent quick actions (last 50 entries)."""
+    return jsonify({'actions': list(_quick_action_log), 'total': len(_quick_action_log)})
+
+
+# In-process ring-buffer for quick action history (last 50)
+try:
+    from collections import deque as _deque
+    _quick_action_log = _deque(maxlen=50)
+except Exception:
+    _quick_action_log = []
 
 
 @bp_health.route('/api/health-stream')

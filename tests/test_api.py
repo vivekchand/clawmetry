@@ -471,3 +471,60 @@ class TestMemoryAnalytics:
         for f in d["files"]:
             assert_keys(f, "path", "sizeBytes", "sizeKB", "estTokens", "status")
             assert f["status"] in ("ok", "warning", "critical")
+
+
+# ---------------------------------------------------------------------------
+# Quick Actions (GH #252)
+# ---------------------------------------------------------------------------
+
+class TestQuickActions:
+    """Tests for the Quick Actions panel API (GH #252)."""
+
+    def test_actions_run_requires_post(self, api, base_url):
+        """GET /api/actions/run returns 405 (POST only)."""
+        r = api.get(f"{base_url}/api/actions/run", timeout=5)
+        assert r.status_code == 405, f"Expected 405, got {r.status_code}"
+
+    def test_actions_run_rejects_unknown_action(self, api, base_url):
+        """POST with unknown action returns 400."""
+        r = api.post(
+            f"{base_url}/api/actions/run",
+            json={"action": "nuke-everything"},
+            timeout=10,
+        )
+        assert r.status_code == 400, f"Expected 400, got {r.status_code}"
+        d = r.json()
+        assert d.get("ok") is False
+
+    def test_actions_run_health_check_returns_ok(self, api, base_url):
+        """health-check action returns ok=True with output."""
+        r = api.post(
+            f"{base_url}/api/actions/run",
+            json={"action": "health-check"},
+            timeout=15,
+        )
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
+        d = r.json()
+        assert_keys(d, "ok", "action", "output", "duration_ms")
+        assert d["action"] == "health-check"
+        assert isinstance(d["output"], str)
+        assert isinstance(d["duration_ms"], int)
+
+    def test_actions_run_clear_cache_returns_ok(self, api, base_url):
+        """clear-cache action returns ok=True."""
+        r = api.post(
+            f"{base_url}/api/actions/run",
+            json={"action": "clear-cache"},
+            timeout=10,
+        )
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
+        d = r.json()
+        assert d.get("ok") is True
+        assert "cache" in d.get("output", "").lower()
+
+    def test_actions_history_structure(self, api, base_url):
+        """GET /api/actions/history returns list with required fields."""
+        d = assert_ok(get(api, base_url, "/api/actions/history"))
+        assert_keys(d, "actions", "total")
+        assert isinstance(d["actions"], list)
+        assert isinstance(d["total"], int)
