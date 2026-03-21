@@ -2724,6 +2724,34 @@ def pitch_v4():
 def pitch_scorecard():
     return send_from_directory(".", "pitch-scorecard.html")
 
+
+
+@app.route('/api/feature-request', methods=['POST'])
+def api_feature_request():
+    import json as _json
+    data = request.get_json(silent=True) or {}
+    feature = (data.get('feature') or '').strip()
+    email = (data.get('email') or '').strip()
+    if not feature:
+        return jsonify({'error': 'No feature described'}), 400
+    # Send email to Vivek
+    resend_key = os.environ.get('RESEND_API_KEY', '')
+    if resend_key:
+        try:
+            import urllib.request as _ur
+            body = _json.dumps({
+                'from': 'ClawMetry <vivek@clawmetry.com>',
+                'to': ['vivekchand19@gmail.com'],
+                'subject': 'Feature Request from Roadmap',
+                'text': 'New feature request from the roadmap page:\n\nFeature: ' + feature + '\n\nEmail: ' + (email or 'not provided') + '\n\nView roadmap: https://clawmetry.com/roadmap'
+            }).encode()
+            req = _ur.Request('https://api.resend.com/emails', data=body,
+                headers={'Authorization': 'Bearer ' + resend_key, 'Content-Type': 'application/json'}, method='POST')
+            _ur.urlopen(req, timeout=10)
+        except Exception:
+            pass
+    return jsonify({'ok': True})
+
 @app.route("/<path:path>")
 def static_files(path):
     # Don't serve admin routes as static

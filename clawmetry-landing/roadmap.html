@@ -834,8 +834,12 @@ function submitFeature(){
   err.style.display='none';ok.style.display='none';
   if(!text){err.textContent='Please describe the feature.';err.style.display='block';return;}
   btn.textContent='Submitting...';btn.disabled=true;
-  fetch('/api/track',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event_type:'feature_request',visitor_id:'roadmap',page:'/roadmap',metadata:{feature:text,email:email}})})
-  .then(function(r){return r.json();})
+  // Track + send email notification
+  Promise.all([
+    fetch('/api/track',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event_type:'feature_request',visitor_id:'roadmap',page:'/roadmap',metadata:{feature:text,email:email}})}),
+    fetch('https://app.clawmetry.com/api/otp/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'feature-notify@clawmetry.com',source:'feature_request',feature:text,user_email:email})}).catch(function(){}),
+    fetch('/api/feature-request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({feature:text,email:email})}).catch(function(){})
+  ])
   .then(function(){
     ok.textContent='Thank you! We will review your request.';ok.style.display='block';
     btn.textContent='Submit';btn.disabled=false;
