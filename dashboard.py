@@ -10107,7 +10107,7 @@ async function loadSecCatalog() {
 async function loadSecurityPosture() {
   if (window.CLOUD_MODE) return;
   try {
-    var data = await fetchJsonWithTimeout('/api/security/posture', 8000);
+    var data = await fetchJsonWithTimeout('/api/security/posture', 25000);
     var badge = document.getElementById('posture-score-badge');
     var label = document.getElementById('posture-score-label');
     var bar = document.getElementById('posture-score-bar');
@@ -21672,7 +21672,7 @@ def _scan_security_posture():
                         try:
                             cat_out = _sp.run(
                                 ["docker", "exec", cid, "cat", container_path],
-                                capture_output=True, text=True, timeout=5)
+                                capture_output=True, text=True, timeout=8)
                             if cat_out.returncode == 0 and cat_out.stdout.strip():
                                 config_data = json.loads(cat_out.stdout)
                                 config_path = f"docker:{cid[:12]}:{container_path}"
@@ -21696,7 +21696,7 @@ def _scan_security_posture():
                 req = urllib.request.Request(
                     f"{gw_url}/api/config",
                     headers={"Authorization": f"Bearer {gw_token}", "Accept": "application/json"})
-                with urllib.request.urlopen(req, timeout=5) as resp:
+                with urllib.request.urlopen(req, timeout=8) as resp:
                     if resp.status == 200:
                         config_data = json.loads(resp.read().decode())
                         config_path = f"gateway:{gw_url}"
