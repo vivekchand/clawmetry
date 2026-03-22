@@ -8055,6 +8055,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('channels')">Channels</div>
     <div class="nav-tab" onclick="switchTab('context')">Context</div>
+    <div class="nav-tab" onclick="switchTab('logs')">Logs</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -9086,6 +9087,34 @@ function clawmetryLogout(){
     </div>
   </div>
 </div>
+</div>
+
+<div class="page" id="page-logs">
+  <div class="refresh-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <button class="refresh-btn" onclick="loadLogs()">&#8635; Refresh</button>
+    <label style="font-size:12px;color:var(--text-secondary);">Lines:
+      <input id="log-lines" type="number" value="200" min="10" max="2000" step="10"
+        style="width:60px;margin-left:4px;padding:3px 6px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">
+    </label>
+    <input id="log-filter" type="text" placeholder="Filter logs…" oninput="filterLogLines()"
+      style="padding:5px 10px;border-radius:7px;border:1px solid var(--border-primary);background:var(--bg-secondary);color:var(--text-primary);font-size:12px;width:180px;">
+    <div style="display:flex;gap:4px;flex-wrap:wrap;">
+      <button class="time-btn active" id="log-filter-all"   onclick="setLogLevel('all',this)">All</button>
+      <button class="time-btn"        id="log-filter-info"  onclick="setLogLevel('info',this)">Info</button>
+      <button class="time-btn"        id="log-filter-warn"  onclick="setLogLevel('warn',this)">Warn</button>
+      <button class="time-btn"        id="log-filter-error" onclick="setLogLevel('error',this)">Error</button>
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;margin-left:auto;">
+      <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+    </label>
+    <span id="log-stream-status" style="font-size:11px;color:var(--text-muted);">&#9679; Connecting…</span>
+  </div>
+  <div class="card" style="padding:0;overflow:hidden;margin-top:8px;">
+    <div id="logs-full"
+      style="font-family:monospace;font-size:12px;padding:12px 16px;max-height:calc(100vh - 180px);overflow-y:auto;background:var(--bg-secondary);border-radius:8px;">
+      <div style="color:var(--text-muted);text-align:center;padding:24px;">Loading logs…</div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -12582,7 +12611,13 @@ function startLogStream() {
   if (window.CLOUD_MODE) return;
   if (logStream) logStream.close();
   streamBuffer = [];
+  var statusEl = document.getElementById('log-stream-status');
+  if (statusEl) statusEl.textContent = '\u25cf Connecting\u2026';
   logStream = new EventSource('/api/logs-stream' + (localStorage.getItem('clawmetry-token') ? '?token=' + encodeURIComponent(localStorage.getItem('clawmetry-token')) : ''));
+  logStream.onopen = function() {
+    var s = document.getElementById('log-stream-status');
+    if (s) { s.textContent = '\u25cf Live'; s.style.color = '#22c55e'; }
+  };
   logStream.onmessage = function(e) {
     var data = JSON.parse(e.data);
     streamBuffer.push(data.line);
@@ -12590,9 +12625,11 @@ function startLogStream() {
     appendLogLine('ov-logs', data.line);
     appendLogLine('logs-full', data.line);
     processFlowEvent(data.line);
-    document.getElementById('refresh-time').textContent = 'Live • ' + new Date().toLocaleTimeString();
+    document.getElementById('refresh-time').textContent = 'Live \u2022 ' + new Date().toLocaleTimeString();
   };
   logStream.onerror = function() {
+    var s = document.getElementById('log-stream-status');
+    if (s) { s.textContent = '\u25cf Reconnecting\u2026'; s.style.color = '#f59e0b'; }
     setTimeout(startLogStream, 5000);
   };
 }
@@ -12640,9 +12677,52 @@ function appendLogLine(elId, line) {
   div.innerHTML = '<span class="' + parsed.cls + '">' + parsed.html + '</span>';
   el.appendChild(div);
   while (el.children.length > MAX_STREAM_LINES) el.removeChild(el.firstChild);
-  if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
-    el.scrollTop = el.scrollHeight;
+  // Apply live filter for logs-full
+  if (elId === 'logs-full') {
+    var span = el.lastElementChild ? el.lastElementChild.querySelector('span') : null;
+    var cls = span ? span.className : '';
+    var text = el.lastElementChild ? el.lastElementChild.textContent.toLowerCase() : '';
+    var query = (document.getElementById('log-filter') ? document.getElementById('log-filter').value : '').toLowerCase();
+    var levelOk = _logLevelFilter === 'all'
+      || (_logLevelFilter === 'error' && cls === 'err')
+      || (_logLevelFilter === 'warn'  && (cls === 'warn' || cls === 'err'))
+      || (_logLevelFilter === 'info'  && (cls === 'info' || cls === 'warn' || cls === 'err'));
+    if (!levelOk || (query && !text.includes(query))) el.lastElementChild.style.display = 'none';
   }
+  var autoScroll = document.getElementById('log-autoscroll');
+  if (!autoScroll || autoScroll.checked) {
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }
+}
+
+
+// ===== Log Tab Helpers =====
+var _logLevelFilter = 'all';
+
+function setLogLevel(level, btn) {
+  _logLevelFilter = level;
+  document.querySelectorAll('#page-logs .time-btn').forEach(function(b) { b.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  filterLogLines();
+}
+
+function filterLogLines() {
+  var el = document.getElementById('logs-full');
+  if (!el) return;
+  var query = (document.getElementById('log-filter') ? document.getElementById('log-filter').value : '').toLowerCase();
+  Array.from(el.children).forEach(function(div) {
+    var span = div.querySelector('span');
+    var cls = span ? span.className : '';
+    var text = div.textContent.toLowerCase();
+    var levelOk = _logLevelFilter === 'all'
+      || (_logLevelFilter === 'error' && cls === 'err')
+      || (_logLevelFilter === 'warn'  && (cls === 'warn' || cls === 'err'))
+      || (_logLevelFilter === 'info'  && (cls === 'info' || cls === 'warn' || cls === 'err'));
+    var queryOk = !query || text.includes(query);
+    div.style.display = levelOk && queryOk ? '' : 'none';
+  });
 }
 
 // ===== Flow Visualization Engine =====
