@@ -2,6 +2,11 @@
 - fix: robust Ollama detection -- PATH fallback + HTTP ping to localhost:11434
 - feat: sync daemon heartbeat includes ollama status (installed, running, models)
 
+## [0.12.65] — 2026-03-22
+
+### Fixed
+- Remove stale tests for deleted API routes (`/api/channel-metrics`, `/api/subagents`, `/api/context-inspector`)
+
 ## [0.12.64] — 2026-03-22
 
 ### Removed
