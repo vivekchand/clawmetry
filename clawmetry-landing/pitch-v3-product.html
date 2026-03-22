@@ -508,6 +508,7 @@ fetch('/api/hero-stats').then(r=>r.json()).then(d=>{
   var e3 = document.getElementById('pd-traction-countries'); if(e3) e3.textContent = ct + '+';
   var e4 = document.getElementById('pd-bar-latest'); if(e4) e4.textContent = dl + '+';
   var e5 = document.getElementById('pd-bio-installs'); if(e5) e5.textContent = dl;
+  document.querySelectorAll('.pd-dl').forEach(function(el){ if(!el.id) el.textContent = (d.downloads||'75k')+'+'; });
 }).catch(function(){});
 </script>
 </body>
