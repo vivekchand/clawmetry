@@ -2,6 +2,15 @@
 - fix: robust Ollama detection -- PATH fallback + HTTP ping to localhost:11434
 - feat: sync daemon heartbeat includes ollama status (installed, running, models)
 
+## [0.12.66] — 2026-03-22
+
+### Removed
+- Agents, Context, and Channels tabs from OSS dashboard (simplifies to 7 core tabs)
+- Backend routes: `/api/subagents`, `/api/context-inspector`, `/api/channel-metrics`
+
+### Fixed
+- CI: removed stale tests for deleted routes
+
 ## [0.12.65] — 2026-03-22
 
 ### Fixed
