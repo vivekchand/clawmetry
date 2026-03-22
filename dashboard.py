@@ -3501,13 +3501,14 @@ function clawmetryLogout(){
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
     <div class="brain-view-toggle">
-      <button id="brain-view-list-btn" class="brain-view-btn active" onclick="setBrainViewMode('list',this)">List</button>
-      <button id="brain-view-graph-btn" class="brain-view-btn" onclick="setBrainViewMode('graph',this)">Graph</button>
+      
     </div>
     <!-- Source filter chips -->
-    <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+    <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
       <button class="brain-chip active" data-source="all" onclick="setBrainFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
     </div>
+    <!-- Type filter chips (separate container to prevent duplication) -->
+    <div id="brain-type-chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px;"></div>
     <!-- Event stream -->
     <div id="brain-feed" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -4613,28 +4614,7 @@ function _brainGraphEnsureCanvas() {
 }
 
 function setBrainViewMode(mode, btn) {
-  _brainViewMode = mode === 'graph' ? 'graph' : 'list';
-  var feed = document.getElementById('brain-feed');
-  var graphWrap = document.getElementById('brain-graph-wrap');
-  var graphCanvas = document.getElementById('brain-graph-canvas');
-  var listBtn = document.getElementById('brain-view-list-btn');
-  var graphBtn = document.getElementById('brain-view-graph-btn');
-  if (listBtn) listBtn.classList.toggle('active', _brainViewMode === 'list');
-  if (graphBtn) graphBtn.classList.toggle('active', _brainViewMode === 'graph');
-  if (feed) feed.style.display = _brainViewMode === 'graph' ? 'none' : '';
-  if (graphWrap) graphWrap.style.display = _brainViewMode === 'graph' ? '' : 'none';
-  if (graphCanvas) graphCanvas.style.display = _brainViewMode === 'graph' ? 'block' : 'none';
-  if (_brainViewMode === 'graph') {
-    _brainGraphEnsureCanvas();
-    syncBrainGraph(_brainAllEvents);
-    _startBrainGraphLoop();
-    if (!_brainGraphResizeBound) {
-      _brainGraphResizeBound = true;
-      window.addEventListener('resize', function() {
-        if (_brainViewMode === 'graph') _brainGraphEnsureCanvas();
-      });
-    }
-  }
+  _brainViewMode = 'list';
 }
 
 function syncBrainGraph(events) {
@@ -8669,13 +8649,14 @@ function clawmetryLogout(){
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
     <div class="brain-view-toggle">
-      <button id="brain-view-list-btn" class="brain-view-btn active" onclick="setBrainViewMode('list',this)">List</button>
-      <button id="brain-view-graph-btn" class="brain-view-btn" onclick="setBrainViewMode('graph',this)">Graph</button>
+      
     </div>
     <!-- Source filter chips -->
-    <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+    <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
       <button class="brain-chip active" data-source="all" onclick="setBrainFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
     </div>
+    <!-- Type filter chips (separate container to prevent duplication) -->
+    <div id="brain-type-chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px;"></div>
     <!-- Event stream -->
     <div id="brain-feed" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -9807,22 +9788,20 @@ function renderBrainFilterChips(sources) {
 }
 
 function renderBrainTypeChips(events) {
-  var container = document.getElementById('brain-filter-chips');
+  var container = document.getElementById('brain-type-chips');
   if (!container || !events) return;
   var typeColors = {'USER':'#60a5fa','AGENT':'#a855f7','EXEC':'#f59e0b','THINK':'#94a3b8','TOOL':'#f97316','WRITE':'#10b981','SEARCH':'#06b6d4','BROWSER':'#ec4899','SPAWN':'#8b5cf6','MSG':'#22c55e','READ':'#6ee7b7','CONTEXT':'#64748b','RESULT':'#6ee7b7'};
   var typeCounts = {};
   events.forEach(function(ev) { typeCounts[ev.type] = (typeCounts[ev.type]||0) + 1; });
   var types = Object.keys(typeCounts).sort();
-  if (types.length < 2) return;
-  var html = '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">';
-  html += '<button class="brain-type-chip" data-type="all" onclick="setBrainTypeFilter(\'all\',this)" style="padding:2px 9px;border-radius:10px;border:1px solid #666;background:' + (_brainTypeFilter === 'all' ? 'rgba(100,100,200,0.15)' : 'transparent') + ';color:#888;font-size:10px;cursor:pointer;font-weight:' + (_brainTypeFilter === 'all' ? '600' : '400') + ';">All types</button>';
+  if (types.length < 2) { container.innerHTML = ''; return; }
+  var html = '<button class="brain-type-chip" data-type="all" onclick="setBrainTypeFilter(\'all\',this)" style="padding:2px 9px;border-radius:10px;border:1px solid #666;background:' + (_brainTypeFilter === 'all' ? 'rgba(100,100,200,0.15)' : 'transparent') + ';color:#888;font-size:10px;cursor:pointer;font-weight:' + (_brainTypeFilter === 'all' ? '600' : '400') + ';">All types</button>';
   types.forEach(function(t) {
     var col = typeColors[t] || '#888';
     var isActive = _brainTypeFilter === t;
     html += '<button class="brain-type-chip" data-type="' + t + '" onclick="setBrainTypeFilter(\'' + t + '\',this)" style="padding:2px 9px;border-radius:10px;border:1px solid ' + col + ';background:' + (isActive ? col + '22' : 'transparent') + ';color:' + col + ';font-size:10px;cursor:pointer;font-weight:' + (isActive ? '600' : '400') + ';">' + t + ' (' + typeCounts[t] + ')</button>';
   });
-  html += '</div>';
-  container.innerHTML += html;
+  container.innerHTML = html;
 }
 
 function renderBrainStream(events) {
