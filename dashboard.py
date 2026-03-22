@@ -61,7 +61,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.61"
+__version__ = "0.12.62"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -23442,7 +23442,7 @@ def api_cost_optimizer():
         # Cost data from existing helpers
         costs = _get_cost_summary()
         expensive_ops = _get_expensive_operations()
-        ollama_installed = shutil.which('ollama') is not None
+        ollama_installed = _detect_ollama()
 
         # Run llmfit
         llmfit_raw = {}
@@ -23594,8 +23594,7 @@ def api_cost_optimization():
         llmfit_data = _get_llmfit_recommendations()
         
         # Check if ollama binary is installed
-        import shutil
-        ollama_installed = shutil.which('ollama') is not None
+        ollama_installed = _detect_ollama()
         
         # Build savings opportunities
         savings = _generate_savings_opportunities()
@@ -24331,6 +24330,40 @@ def _get_cost_summary():
     return costs
 
 
+def _detect_ollama():
+    """Detect Ollama installation using multiple strategies."""
+    import shutil
+    # Strategy 1: shutil.which (respects PATH)
+    if shutil.which('ollama'):
+        return True
+    # Strategy 2: Check common installation paths
+    common_paths = [
+        '/opt/homebrew/bin/ollama',      # macOS Homebrew (Apple Silicon)
+        '/usr/local/bin/ollama',          # macOS Homebrew (Intel) / Linux manual
+        '/usr/bin/ollama',               # Linux package manager
+        os.path.expanduser('~/.ollama/ollama'),  # Custom install
+    ]
+    # Windows paths
+    if os.name == 'nt':
+        common_paths.extend([
+            os.path.expandvars(r'%LOCALAPPDATA%\Programs\Ollama\ollama.exe'),
+            os.path.expandvars(r'%LOCALAPPDATA%\Ollama\ollama.exe'),
+        ])
+    for p in common_paths:
+        if os.path.isfile(p):
+            return True
+    # Strategy 3: Try HTTP ping (ollama might be running even if binary not in PATH)
+    try:
+        import urllib.request
+        req = urllib.request.Request('http://localhost:11434/api/version', method='GET')
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if resp.status == 200:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _check_ollama_availability():
     """Check if Ollama is running and what models are available."""
     try:
@@ -24355,7 +24388,11 @@ def _check_ollama_availability():
             }
     except Exception:
         pass
-    
+
+    # Fallback: use robust detection (binary found or HTTP reachable)
+    if _detect_ollama():
+        return {'available': True, 'count': 0, 'models': []}
+
     return {'available': False, 'count': 0, 'models': []}
 
 

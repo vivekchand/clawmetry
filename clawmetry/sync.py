@@ -685,6 +685,49 @@ def _flush_log_batch(entries: list, fname: str, api_key: str,
 
 # ── Heartbeat ─────────────────────────────────────────────────────────────────
 
+def _detect_ollama_for_heartbeat():
+    """Detect Ollama status for heartbeat reporting."""
+    import shutil
+    result = {"installed": False, "running": False, "models": []}
+
+    # Check if binary exists
+    ollama_bin = shutil.which('ollama')
+    if not ollama_bin:
+        common_paths = [
+            '/opt/homebrew/bin/ollama',
+            '/usr/local/bin/ollama',
+            '/usr/bin/ollama',
+            os.path.expanduser('~/.ollama/ollama'),
+        ]
+        if os.name == 'nt':
+            common_paths.extend([
+                os.path.expandvars(r'%LOCALAPPDATA%\Programs\Ollama\ollama.exe'),
+                os.path.expandvars(r'%LOCALAPPDATA%\Ollama\ollama.exe'),
+            ])
+        for p in common_paths:
+            if os.path.isfile(p):
+                ollama_bin = p
+                break
+
+    if ollama_bin:
+        result["installed"] = True
+
+    # Check if running + get models
+    try:
+        import json as _json
+        req = urllib.request.Request('http://localhost:11434/api/tags', method='GET')
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                result["running"] = True
+                data = _json.loads(resp.read())
+                result["models"] = [m.get("name", "") for m in data.get("models", [])[:10]]
+                result["installed"] = True  # If running, definitely installed
+    except Exception:
+        pass
+
+    return result
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure."""
     payload = {
@@ -693,6 +736,7 @@ def send_heartbeat(config: dict) -> bool:
         "platform": platform.system(),
         "version": _get_version(),
         "e2e": bool(config.get("encryption_key")),
+        "ollama": _detect_ollama_for_heartbeat(),
     }
     last_err = None
     for attempt in range(3):
