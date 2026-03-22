@@ -1752,7 +1752,7 @@ DASHBOARD_HTML = r"""
   .badge-done { background:rgba(34,197,94,0.2); color:#22c55e; }
   .badge-error { background:rgba(239,68,68,0.2); color:#ef4444; }
   .badge-tool { background:rgba(148,163,184,0.2); color:#94a3b8; }
-  .brain-detail { color:var(--text-secondary); flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; word-break:break-all; }
+  .brain-detail { color:var(--text-secondary); flex:1; min-width:0; white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere; }
   .brain-view-toggle { display:flex; gap:6px; margin-bottom:12px; }
   .brain-view-btn { padding:4px 12px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--text-muted); font-size:11px; font-weight:600; cursor:pointer; }
   .brain-view-btn.active { border-color:#a855f7; background:rgba(168,85,247,0.2); color:#a855f7; }
@@ -6856,7 +6856,7 @@ DASHBOARD_HTML = r"""
   .badge-done { background:rgba(34,197,94,0.2); color:#22c55e; }
   .badge-error { background:rgba(239,68,68,0.2); color:#ef4444; }
   .badge-tool { background:rgba(148,163,184,0.2); color:#94a3b8; }
-  .brain-detail { color:var(--text-secondary); flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; word-break:break-all; }
+  .brain-detail { color:var(--text-secondary); flex:1; min-width:0; white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere; }
   .brain-view-toggle { display:flex; gap:6px; margin-bottom:12px; }
   .brain-view-btn { padding:4px 12px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--text-muted); font-size:11px; font-weight:600; cursor:pointer; }
   .brain-view-btn.active { border-color:#a855f7; background:rgba(168,85,247,0.2); color:#a855f7; }
