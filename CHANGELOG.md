@@ -2,6 +2,12 @@
 - fix: robust Ollama detection -- PATH fallback + HTTP ping to localhost:11434
 - feat: sync daemon heartbeat includes ollama status (installed, running, models)
 
+## [0.12.68] — 2026-03-22
+
+### Fixed
+- Remove duplicate type filter pills in Brain tab — type chips now use a dedicated container with `innerHTML =` instead of `+=`
+- Remove non-working Graph view toggle from Brain tab — live list feed is now the default with no toggle
+
 ## [0.12.66] — 2026-03-22
 
 ### Removed
