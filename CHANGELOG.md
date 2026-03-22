@@ -2,6 +2,17 @@
 - fix: robust Ollama detection -- PATH fallback + HTTP ping to localhost:11434
 - feat: sync daemon heartbeat includes ollama status (installed, running, models)
 
+## [0.12.64] — 2026-03-22
+
+### Removed
+- **Agents tab** — removed sub-agent gantt/timeline view (confusing, stale sessions with no active/idle filter)
+- **Context tab** — removed workspace context inspector (not actionable for most users)
+- **Channels tab** — removed per-channel OTLP metrics tab (requires OTLP setup, shows empty state for most)
+- Corresponding backend API routes: `/api/subagents`, `/api/subagent/<id>/activity`, `/api/context-inspector`, `/api/channel-metrics`
+- OTLP queue lane depth metrics storage (channels-only feature)
+
+Simplifies OSS dashboard to 7 core tabs: **Flow, Brain, Overview, Crons, Tokens, Memory, Security**
+
 ## [0.12.60] — 2026-03-19
 
 ### Added
