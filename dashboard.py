@@ -4669,6 +4669,13 @@ async function loadActivityStream() {
 // ===== Sub-Agent Live Activity System =====
 var _saAutoRefreshTimer = null;
 var _saSelectedId = null;
+var _saCollapsedSet = {};  // keys of collapsed parent agents
+
+function toggleSACollapse(key, e) {
+  if (e) { e.stopPropagation(); e.preventDefault(); }
+  if (_saCollapsedSet[key]) { delete _saCollapsedSet[key]; } else { _saCollapsedSet[key] = true; }
+  loadSubAgentsPage(true);
+}
 
 function toggleSAAutoRefresh() {
   if (document.getElementById('sa-auto-refresh').checked) {
@@ -10027,6 +10034,13 @@ async function loadActivityStream() {
 // ===== Sub-Agent Live Activity System =====
 var _saAutoRefreshTimer = null;
 var _saSelectedId = null;
+var _saCollapsedSet = {};  // keys of collapsed parent agents
+
+function toggleSACollapse(key, e) {
+  if (e) { e.stopPropagation(); e.preventDefault(); }
+  if (_saCollapsedSet[key]) { delete _saCollapsedSet[key]; } else { _saCollapsedSet[key] = true; }
+  loadSubAgentsPage(true);
+}
 
 function toggleSAAutoRefresh() {
   if (document.getElementById('sa-auto-refresh').checked) {
@@ -10855,22 +10869,46 @@ async function loadSubAgentsPage(silent) {
     svg += '</svg>';
     document.getElementById('sa-gantt').innerHTML = svg;
 
-    // ===== TREE LIST (secondary) =====
-    var listHtml = '';
+    // ===== TREE LIST (secondary) — collapsible tree =====
+    // Filter ordered list: skip nodes whose ancestor is collapsed
+    var visibleOrdered = [];
     ordered.forEach(function(item) {
+      // Check if any ancestor in the path is collapsed
+      var hidden = false;
+      // Walk up from this item's depth to find if any parent key is collapsed
+      if (item.depth > 0) {
+        // Find parent agent by looking backwards in ordered (not visibleOrdered)
+        var itemIdx = ordered.indexOf(item);
+        for (var pi = itemIdx - 1; pi >= 0; pi--) {
+          if (ordered[pi].depth < item.depth) {
+            if (_saCollapsedSet[ordered[pi].agent.key]) { hidden = true; break; }
+            if (ordered[pi].depth === 0) break;
+          }
+        }
+      }
+      if (!hidden) visibleOrdered.push(item);
+    });
+
+    var listHtml = '';
+    visibleOrdered.forEach(function(item) {
       var agent = item.agent;
       var isSelected = _saSelectedId === agent.sessionId;
       var color = statusColor[agent.status] || '#888';
       var kidCount = (children[agent.key] || []).length;
+      var isCollapsed = !!_saCollapsedSet[agent.key];
       var durationSec = Math.round((agent._end - agent._start) / 1000);
       var durStr = durationSec < 60 ? durationSec + 's' : Math.floor(durationSec/60) + 'm' + (durationSec%60>0?(durationSec%60)+'s':'');
+      var safeKey = escHtml(agent.key).replace(/'/g, "\\'");
       listHtml += '<div class="subagent-row" style="cursor:pointer;padding-left:' + (10 + item.depth * 18) + 'px;' + (isSelected ? 'background:rgba(96,160,255,0.1);border-left:3px solid #60a0ff;' : '') + '" onclick="openSAActivity(\'' + agent.sessionId + '\',\'' + agent.displayName.replace(/'/g,"\\'") + '\',\'' + agent.status + '\')">';
-      listHtml += '<div class="subagent-indicator ' + agent.status + '"></div>';
+      if (kidCount > 0) {
+        listHtml += '<span onclick="toggleSACollapse(\'' + safeKey + '\',event)" title="' + (isCollapsed?'Expand':'Collapse') + ' children" style="flex-shrink:0;cursor:pointer;font-size:9px;color:#8888ff;background:#1e2048;padding:1px 4px;border-radius:4px;margin-right:4px;user-select:none;">' + (isCollapsed ? '&#9654;' : '&#9660;') + ' ' + kidCount + '</span>';
+      } else {
+        listHtml += '<div class="subagent-indicator ' + agent.status + '"></div>';
+      }
       listHtml += '<div class="subagent-info" style="flex:1;min-width:0;">';
       listHtml += '<div style="display:flex;justify-content:space-between;align-items:center;gap:4px;">';
       listHtml += '<span style="font-size:' + (item.depth===0?'12':'11') + 'px;font-weight:' + (item.depth===0?'600':'400') + ';color:' + (agent.status==='active'?'#e0e0e0':'#aaa') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">';
       listHtml += '<span style="color:' + color + ';margin-right:4px;">&#9679;</span>' + escHtml(agent.displayName);
-      if (kidCount > 0) listHtml += ' <span style="font-size:9px;color:#8888ff;background:#1e2048;padding:1px 5px;border-radius:8px;">' + kidCount + '</span>';
       listHtml += '</span>';
       listHtml += '<span style="font-size:10px;color:#666;white-space:nowrap;flex-shrink:0;">' + agent.runtime + ' &nbsp;' + durStr + '</span>';
       listHtml += '</div>';
