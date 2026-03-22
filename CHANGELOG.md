@@ -2,6 +2,12 @@
 - fix: robust Ollama detection -- PATH fallback + HTTP ping to localhost:11434
 - feat: sync daemon heartbeat includes ollama status (installed, running, models)
 
+## [0.12.69] — 2026-03-22
+
+### Fixed
+- Updated logo to new lobster SVG, embedded as base64 data URI (works offline)
+- Brain stream now shows full content — removed single-line ellipsis truncation, wraps by default
+
 ## [0.12.68] — 2026-03-22
 
 ### Fixed
