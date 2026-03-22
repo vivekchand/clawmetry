@@ -581,8 +581,8 @@ WELCOME_SIGNUP_HTML_TMPL = """\
               <span style="display:inline-block;background:#e5443a;color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;">2</span>
             </td>
             <td valign="top" style="padding:14px 16px 14px 4px;">
-              <p style="margin:0 0 4px;font-size:12px;color:#64748b;">Connect — run this and follow the prompts</p>
-              <code style="font-size:12px;color:#10b981;">clawmetry connect</code>
+              <p style="margin:0 0 4px;font-size:12px;color:#64748b;">Onboard — run this and follow the prompts</p>
+              <code style="font-size:12px;color:#10b981;">clawmetry onboard</code>
             </td>
           </tr>
         </table>
@@ -1108,8 +1108,8 @@ def managed_request():
       <code style="color:#10b981;font-size:13px;display:block;word-break:break-all;">curl -fsSL https://clawmetry.com/install.sh | bash</code>
     </div>
     <div style="background:#111827;border:1px solid #1e2d40;border-radius:8px;padding:16px;margin:0 0 24px;">
-      <p style="margin:0 0 6px;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;">Step 2 — Connect</p>
-      <code style="color:#10b981;font-size:13px;display:block;">clawmetry connect</code>
+      <p style="margin:0 0 6px;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;">Step 2 — Onboard</p>
+      <code style="color:#10b981;font-size:13px;display:block;">clawmetry onboard</code>
     </div>
     <div style="text-align:center;margin:24px 0;">
       <a href="https://app.clawmetry.com" style="display:inline-block;background:#E5443A;color:#fff;font-weight:700;font-size:15px;padding:12px 32px;border-radius:8px;text-decoration:none;">Open Your Dashboard &#x2192;</a>
@@ -1563,7 +1563,7 @@ def api_connect():
         <p style="font-size:14px;color:#374151;margin:0 0 6px;font-weight:600;">Next steps:</p>
         <ol style="font-size:14px;color:#374151;padding-left:20px;line-height:2;">
           <li>Install: <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px;">curl -fsSL https://clawmetry.com/install.sh | bash</code></li>
-          <li>Run: <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px;">clawmetry connect</code> and paste your API key</li>
+          <li>Run: <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px;">clawmetry onboard</code> and paste your API key</li>
           <li>Open <a href="https://app.clawmetry.com" style="color:#E5443A;">app.clawmetry.com</a> and enter the secret key from your terminal for E2E encryption</li>
         </ol>
         <p style="font-size:13px;color:#94a3b8;margin-top:20px;">Questions? Reply to this email.</p>
