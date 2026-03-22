@@ -3476,13 +3476,18 @@ function clawmetryLogout(){
     </svg>
   </div>
 
-  <!-- Live activity feed under the flow diagram -->
+  <!-- Live Tool Call Stream -->
   <div style="margin-top:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:12px 16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <span style="font-size:13px;font-weight:600;color:#aaa;">📡 Live Activity Feed</span>
-      <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+      <span style="font-size:13px;font-weight:600;color:#aaa;">&#128295; Live Tool Call Stream</span>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <input id="tool-stream-filter" type="text" placeholder="Filter by tool&hellip;" oninput="applyToolStreamFilter()" style="font-size:11px;padding:3px 8px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:#aaa;width:130px;outline:none;">
+        <button id="tool-stream-pause-btn" onclick="toggleToolStreamPause()" style="font-size:11px;padding:3px 10px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:#aaa;cursor:pointer;">&#9646;&#9646; Pause</button>
+        <button onclick="clearToolStream()" style="font-size:11px;padding:3px 10px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:#aaa;cursor:pointer;">&#10005; Clear</button>
+        <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
+      </div>
     </div>
-    <div id="flow-live-feed" style="max-height:120px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.5;color:#777;">
+    <div id="flow-live-feed" style="max-height:350px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.6;color:#777;">
       <div style="color:#555;">Waiting for activity...</div>
     </div>
   </div>
@@ -8624,13 +8629,18 @@ function clawmetryLogout(){
     </svg>
   </div>
 
-  <!-- Live activity feed under the flow diagram -->
+  <!-- Live Tool Call Stream -->
   <div style="margin-top:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:12px 16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <span style="font-size:13px;font-weight:600;color:#aaa;">📡 Live Activity Feed</span>
-      <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+      <span style="font-size:13px;font-weight:600;color:#aaa;">&#128295; Live Tool Call Stream</span>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <input id="tool-stream-filter" type="text" placeholder="Filter by tool&hellip;" oninput="applyToolStreamFilter()" style="font-size:11px;padding:3px 8px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:#aaa;width:130px;outline:none;">
+        <button id="tool-stream-pause-btn" onclick="toggleToolStreamPause()" style="font-size:11px;padding:3px 10px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:#aaa;cursor:pointer;">&#9646;&#9646; Pause</button>
+        <button onclick="clearToolStream()" style="font-size:11px;padding:3px 10px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:#aaa;cursor:pointer;">&#10005; Clear</button>
+        <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
+      </div>
     </div>
-    <div id="flow-live-feed" style="max-height:120px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.5;color:#777;">
+    <div id="flow-live-feed" style="max-height:350px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.6;color:#777;">
       <div style="color:#555;">Waiting for activity...</div>
     </div>
   </div>
@@ -11959,21 +11969,25 @@ function _startFlowSse() {
       _flowSseDebounce[dk] = now;
       if (type === 'msg_in') {
         triggerInbound(evt.channel || 'tg');
-        addFlowFeedItem('📨 Message via ' + (evt.channel || 'telegram'), '#c0a0ff');
+        addFlowFeedItem('📨 Message via ' + (evt.channel || 'telegram'), '#c0a0ff', 'inbound');
         flowStats.msgTimestamps.push(now);
       } else if (type === 'msg_out') {
         triggerOutbound(evt.channel || 'tg');
-        addFlowFeedItem('📤 Replied via ' + (evt.channel || 'telegram'), '#50e080');
+        addFlowFeedItem('📤 Replied via ' + (evt.channel || 'telegram'), '#50e080', 'reply');
       } else if (type === 'tool_call') {
         var toolName = evt.tool || 'exec';
         triggerToolCall(toolName);
         var toolNames = {exec:'running a command',browser:'browsing the web',search:'searching the web',cron:'scheduling',tts:'generating speech',memory:'accessing memory'};
-        addFlowFeedItem('⚡ AI is ' + (toolNames[toolName] || 'using ' + toolName), '#f0c040');
+        addFlowFeedItem('⚡ ' + (toolName || 'tool') + ': ' + (toolNames[toolName] || 'using ' + toolName), '#f0c040', 'tool');
         flowStats.events++;
       } else if (type === 'tool_result') {
-        // return bubble already handled by triggerToolCall
+        var resultTool = evt.tool || 'tool';
+        var resultSnippet = evt.result ? String(evt.result).substring(0, 80).replace(/\n/g, ' ') : '';
+        var resultText = '✓ ' + resultTool + (resultSnippet ? ': ' + resultSnippet : ' done');
+        addFlowFeedItem(resultText, '#50c070', 'result');
+        flowStats.events++;
       } else if (type === 'heartbeat') {
-        addFlowFeedItem('💓 Heartbeat', '#555');
+        addFlowFeedItem('💓 Heartbeat', '#555', 'heartbeat');
       }
     } catch(e2) {}
   };
@@ -12264,22 +12278,70 @@ function triggerInfraStorage() {
 
 // Live feed for Flow tab - shows recent events in plain English
 var _flowFeedItems = [];
-var _flowFeedMax = 30;
-function addFlowFeedItem(text, color) {
+var _flowFeedMax = 200;
+var _toolStreamPaused = false;
+var _toolStreamFilter = '';
+
+function toggleToolStreamPause() {
+  _toolStreamPaused = !_toolStreamPaused;
+  var btn = document.getElementById('tool-stream-pause-btn');
+  if (btn) btn.textContent = _toolStreamPaused ? '▶ Resume' : '⏸ Pause';
+}
+
+function clearToolStream() {
+  _flowFeedItems = [];
+  flowStats.events = 0;
+  var el = document.getElementById('flow-live-feed');
+  if (el) el.innerHTML = '<div style="color:#555;">Stream cleared.</div>';
+  var countEl = document.getElementById('flow-feed-count');
+  if (countEl) countEl.textContent = '0 events';
+}
+
+function applyToolStreamFilter() {
+  var inp = document.getElementById('tool-stream-filter');
+  _toolStreamFilter = inp ? inp.value.toLowerCase().trim() : '';
+  renderToolStream();
+}
+
+var _toolCategoryColors = {
+  tool: '#f0c040', reply: '#50e080', inbound: '#c0a0ff', system: '#8090b0',
+  error: '#e74c3c', heartbeat: '#4a7090', result: '#50c070', ai: '#a080f0'
+};
+
+function addFlowFeedItem(text, color, category) {
+  if (_toolStreamPaused) return;
   var now = new Date();
   var time = now.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  _flowFeedItems.push({time: time, text: text, color: color || '#888'});
+  var cat = category || 'system';
+  _flowFeedItems.push({time: time, text: text, color: color || '#888', cat: cat});
   if (_flowFeedItems.length > _flowFeedMax) _flowFeedItems.shift();
-  var el = document.getElementById('flow-live-feed');
-  if (!el) return;
-  var html = '';
-  for (var i = _flowFeedItems.length - 1; i >= Math.max(0, _flowFeedItems.length - 15); i--) {
-    var item = _flowFeedItems[i];
-    html += '<div><span style="color:#555;">' + item.time + '</span> <span style="color:' + item.color + ';">' + item.text + '</span></div>';
-  }
-  el.innerHTML = html;
+  renderToolStream();
   var countEl = document.getElementById('flow-feed-count');
   if (countEl) countEl.textContent = flowStats.events + ' events';
+}
+
+function renderToolStream() {
+  var el = document.getElementById('flow-live-feed');
+  if (!el) return;
+  var filter = _toolStreamFilter;
+  var filtered = filter
+    ? _flowFeedItems.filter(function(item) { return item.text.toLowerCase().includes(filter) || item.cat.toLowerCase().includes(filter); })
+    : _flowFeedItems;
+  if (filtered.length === 0) {
+    el.innerHTML = filter ? '<div style="color:#555;">No matching events.</div>' : '<div style="color:#555;">Waiting for activity...</div>';
+    return;
+  }
+  var html = '';
+  for (var i = filtered.length - 1; i >= Math.max(0, filtered.length - 60); i--) {
+    var item = filtered[i];
+    var catColor = _toolCategoryColors[item.cat] || '#666';
+    html += '<div style="display:flex;gap:6px;align-items:baseline;padding:1px 0;">'
+      + '<span style="color:#444;flex-shrink:0;">' + item.time + '</span>'
+      + '<span style="color:' + catColor + ';font-size:9px;flex-shrink:0;text-transform:uppercase;letter-spacing:0.5px;min-width:42px;">' + item.cat + '</span>'
+      + '<span style="color:' + item.color + ';word-break:break-word;">' + item.text + '</span>'
+      + '</div>';
+  }
+  el.innerHTML = html;
 }
 
 var flowThrottles = {};
@@ -12310,13 +12372,13 @@ function processFlowEvent(line) {
     if (msg.includes('signal')) ch = 'sig';
     else if (msg.includes('whatsapp')) ch = 'wa';
     triggerInbound(ch);
-    addFlowFeedItem('📨 New message arrived via ' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal'), '#c0a0ff');
+    addFlowFeedItem('📨 New message via ' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal'), '#c0a0ff', 'inbound');
     flowStats.msgTimestamps.push(now);
     return;
   }
   if (msg.includes('inbound') || msg.includes('dispatching') || msg.includes('message received')) {
     triggerInbound('tg');
-    addFlowFeedItem('📨 Incoming message received', '#c0a0ff');
+    addFlowFeedItem('📨 Incoming message received', '#c0a0ff', 'inbound');
     flowStats.msgTimestamps.push(now);
     return;
   }
@@ -12346,7 +12408,7 @@ function processFlowEvent(line) {
     if (now - (flowThrottles['tool-'+flowTool]||0) < 300) return;
     flowThrottles['tool-'+flowTool] = now;
     var toolNames = {exec:'running a command',browser:'browsing the web',search:'searching the web',cron:'scheduling a task',tts:'generating speech',memory:'accessing memory'};
-    addFlowFeedItem('⚡ AI is ' + (toolNames[flowTool] || 'using ' + flowTool), '#f0c040');
+    addFlowFeedItem('⚡ ' + flowTool + ': ' + (toolNames[flowTool] || 'using ' + flowTool), '#f0c040', 'tool');
     triggerToolCall(flowTool); return;
   }
 
@@ -12370,7 +12432,7 @@ function processFlowEvent(line) {
     var ch = 'tg';
     if (msg.includes('signal')) ch = 'sig';
     else if (msg.includes('whatsapp')) ch = 'wa';
-    addFlowFeedItem('✉️ AI sent a reply via ' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal'), '#50e080');
+    addFlowFeedItem('✉️ Reply sent via ' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal'), '#50e080', 'reply');
     triggerOutbound(ch);
     return;
   }
@@ -12382,8 +12444,8 @@ function processFlowEvent(line) {
     var ch = 'tg';
     if (msg.includes('messagechannel=signal')) ch = 'sig';
     else if (msg.includes('messagechannel=whatsapp')) ch = 'wa';
-    else if (msg.includes('messagechannel=heartbeat')) { addFlowFeedItem('💓 Heartbeat run started', '#4a7090'); fetch('/api/heartbeat-ping',{method:'POST',headers:{'Authorization':'Bearer '+(localStorage.getItem('clawmetry-token')||'')}}); return; }
-    addFlowFeedItem('🧠 AI run started (' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal') + ')', '#a080f0');
+    else if (msg.includes('messagechannel=heartbeat')) { addFlowFeedItem('💓 Heartbeat run started', '#4a7090', 'heartbeat'); fetch('/api/heartbeat-ping',{method:'POST',headers:{'Authorization':'Bearer '+(localStorage.getItem('clawmetry-token')||'')}}); return; }
+    addFlowFeedItem('🧠 AI run started (' + (ch === 'tg' ? 'Telegram' : ch === 'wa' ? 'WhatsApp' : 'Signal') + ')', '#a080f0', 'ai');
     triggerInbound(ch);
     flowStats.msgTimestamps.push(now);
     return;
@@ -12391,25 +12453,25 @@ function processFlowEvent(line) {
   if (msg.includes('embedded run agent end') || msg.includes('embedded run prompt end')) {
     if (now - (flowThrottles['run-end']||0) < 1000) return;
     flowThrottles['run-end'] = now;
-    addFlowFeedItem('[ok] AI processing complete', '#50e080');
+    addFlowFeedItem('[ok] AI processing complete', '#50e080', 'ai');
     return;
   }
   if (msg.includes('session state') && msg.includes('new=processing')) {
     if (now - (flowThrottles['session-active']||0) < 2000) return;
     flowThrottles['session-active'] = now;
-    addFlowFeedItem('⚡ Session activated', '#f0c040');
+    addFlowFeedItem('⚡ Session activated', '#f0c040', 'system');
     return;
   }
   if (msg.includes('lane enqueue') && msg.includes('main')) {
     if (now - (flowThrottles['lane']||0) < 2000) return;
     flowThrottles['lane'] = now;
-    addFlowFeedItem('📥 Task queued', '#8090b0');
+    addFlowFeedItem('📥 Task queued', '#8090b0', 'system');
     return;
   }
   if (msg.includes('tool end') || msg.includes('tool_end')) {
     if (now - (flowThrottles['tool-end']||0) < 300) return;
     flowThrottles['tool-end'] = now;
-    addFlowFeedItem('✔️ Tool completed', '#50c070');
+    addFlowFeedItem('✔️ Tool completed', '#50c070', 'result');
     return;
   }
 }
