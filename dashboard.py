@@ -3515,7 +3515,7 @@ function clawmetryLogout(){
         <span style="font-size:11px;color:var(--text-muted);">Live event stream (newest first)</span>
         <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">↑ new events</span>
       </div>
-      <div id="brain-stream" style="max-height:600px;overflow-y:auto;">
+      <div id="brain-stream" style="max-height:calc(100vh - 320px);overflow-y:auto;">
         <div style="color:var(--text-muted);padding:20px">Loading...</div>
       </div>
     </div>
@@ -8663,7 +8663,7 @@ function clawmetryLogout(){
         <span style="font-size:11px;color:var(--text-muted);">Live event stream (newest first)</span>
         <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">↑ new events</span>
       </div>
-      <div id="brain-stream" style="max-height:600px;overflow-y:auto;">
+      <div id="brain-stream" style="max-height:calc(100vh - 320px);overflow-y:auto;">
         <div style="color:var(--text-muted);padding:20px">Loading...</div>
       </div>
     </div>
