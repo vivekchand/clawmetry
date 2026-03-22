@@ -33,13 +33,26 @@ Opens at **http://localhost:8900** and you're done.
 
 ## Screenshots
 
-| Flow | Overview | Sub-Agent |
-|------|----------|-----------|
-| ![Flow](https://clawmetry.com/screenshots/flow.png) | ![Overview](https://clawmetry.com/screenshots/overview.png) | ![Sub-Agent](https://clawmetry.com/screenshots/subagent.png) |
+### 🧠 Brain — Live agent event stream
+![Brain tab](screenshots/brain.png)
 
-| Summary | Crons | Memory |
-|---------|-------|--------|
-| ![Summary](https://clawmetry.com/screenshots/summary.png) | ![Crons](https://clawmetry.com/screenshots/crons.png?v=2) | ![Memory](https://clawmetry.com/screenshots/memory.png) |
+### 📊 Overview — Token usage & session summary
+![Overview tab](screenshots/overview.png)
+
+### ⚡ Flow — Real-time tool call feed
+![Flow tab](screenshots/flow.png)
+
+### ⏰ Crons — Scheduled job monitor
+![Crons tab](screenshots/crons.png)
+
+### 💰 Tokens — Cost breakdown by model & session
+![Tokens tab](screenshots/tokens.png)
+
+### 🧬 Memory — Workspace file browser
+![Memory tab](screenshots/memory.png)
+
+### 🔐 Security — Posture & audit log
+![Security tab](screenshots/security.png)
 
 ## Install
 
