@@ -3501,8 +3501,7 @@ function clawmetryLogout(){
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
     <div class="brain-view-toggle">
-      <button id="brain-view-list-btn" class="brain-view-btn active" onclick="setBrainViewMode('list',this)">List</button>
-      <button id="brain-view-graph-btn" class="brain-view-btn" onclick="setBrainViewMode('graph',this)">Graph</button>
+      
     </div>
     <!-- Source filter chips -->
     <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
@@ -4613,28 +4612,7 @@ function _brainGraphEnsureCanvas() {
 }
 
 function setBrainViewMode(mode, btn) {
-  _brainViewMode = mode === 'graph' ? 'graph' : 'list';
-  var feed = document.getElementById('brain-feed');
-  var graphWrap = document.getElementById('brain-graph-wrap');
-  var graphCanvas = document.getElementById('brain-graph-canvas');
-  var listBtn = document.getElementById('brain-view-list-btn');
-  var graphBtn = document.getElementById('brain-view-graph-btn');
-  if (listBtn) listBtn.classList.toggle('active', _brainViewMode === 'list');
-  if (graphBtn) graphBtn.classList.toggle('active', _brainViewMode === 'graph');
-  if (feed) feed.style.display = _brainViewMode === 'graph' ? 'none' : '';
-  if (graphWrap) graphWrap.style.display = _brainViewMode === 'graph' ? '' : 'none';
-  if (graphCanvas) graphCanvas.style.display = _brainViewMode === 'graph' ? 'block' : 'none';
-  if (_brainViewMode === 'graph') {
-    _brainGraphEnsureCanvas();
-    syncBrainGraph(_brainAllEvents);
-    _startBrainGraphLoop();
-    if (!_brainGraphResizeBound) {
-      _brainGraphResizeBound = true;
-      window.addEventListener('resize', function() {
-        if (_brainViewMode === 'graph') _brainGraphEnsureCanvas();
-      });
-    }
-  }
+  _brainViewMode = 'list';
 }
 
 function syncBrainGraph(events) {
@@ -8669,8 +8647,7 @@ function clawmetryLogout(){
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
     <div class="brain-view-toggle">
-      <button id="brain-view-list-btn" class="brain-view-btn active" onclick="setBrainViewMode('list',this)">List</button>
-      <button id="brain-view-graph-btn" class="brain-view-btn" onclick="setBrainViewMode('graph',this)">Graph</button>
+      
     </div>
     <!-- Source filter chips -->
     <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
