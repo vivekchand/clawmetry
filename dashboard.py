@@ -8053,7 +8053,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('subagents')">Agents</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
-    <div class="nav-tab" onclick="switchTab('channels')">Channels</div>
+    <!-- Channels tab hidden until functional -->
     <div class="nav-tab" onclick="switchTab('context')">Context</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
