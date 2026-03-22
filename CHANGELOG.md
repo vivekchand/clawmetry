@@ -2,6 +2,14 @@
 - fix: robust Ollama detection -- PATH fallback + HTTP ping to localhost:11434
 - feat: sync daemon heartbeat includes ollama status (installed, running, models)
 
+## [0.12.71] — 2026-03-22
+
+### Fixed
+- Security posture scan timeout — JS client timeout increased 8s → 25s, gateway API timeout 5s → 8s (fixes "Posture scan failed: timeout" error)
+
+### Added
+- Screenshots of all OSS dashboard tabs in README (Brain, Overview, Flow, Tokens, Memory, Security)
+
 ## [0.12.69] — 2026-03-22
 
 ### Fixed
