@@ -22,6 +22,13 @@ import urllib.error
 from pathlib import Path
 from datetime import datetime, timezone
 
+
+def _get_openclaw_dir():
+    """Return the OpenClaw config directory, respecting CLAWMETRY_OPENCLAW_DIR env var."""
+    return os.environ.get('CLAWMETRY_OPENCLAW_DIR', os.path.expanduser('~/.openclaw'))
+
+
+
 INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
 CONFIG_DIR  = Path.home() / ".clawmetry"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -369,7 +376,7 @@ def detect_paths() -> dict:
         log.info(f"Using Docker-detected paths: {docker_paths}")
 
     sessions_candidates = [
-        home / ".openclaw" / "agents" / "main" / "sessions",
+        Path(_get_openclaw_dir()) / "agents" / "main" / "sessions",
         Path("/data/agents/main/sessions"),
         Path("/app/agents/main/sessions"),
         Path("/root/.openclaw/agents/main/sessions"),
@@ -386,11 +393,11 @@ def detect_paths() -> dict:
         log.warning("  Install: npm install -g openclaw  (https://openclaw.ai/docs)")
         log.warning("  Daemon will keep retrying every 60s.")
 
-    log_candidates = [Path("/tmp/openclaw"), home / ".openclaw" / "logs", Path("/data/logs")]
+    log_candidates = [Path("/tmp/openclaw"), Path(_get_openclaw_dir()) / "logs", Path("/data/logs")]
     log_dir = docker_paths.get("log_dir") or next((str(p) for p in log_candidates if p.exists()), "/tmp/openclaw")
 
     workspace_candidates = [
-        home / ".openclaw" / "workspace",
+        Path(_get_openclaw_dir()) / "workspace",
         Path("/data/workspace"),
         Path("/app/workspace"),
     ]
@@ -774,8 +781,8 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
     # Find cron jobs.json
     home = Path.home()
     cron_candidates = [
-        home / ".openclaw" / "cron" / "jobs.json",
-        home / ".openclaw" / "agents" / "main" / "cron" / "jobs.json",
+        Path(_get_openclaw_dir()) / "cron" / "jobs.json",
+        Path(_get_openclaw_dir()) / "agents" / "main" / "cron" / "jobs.json",
     ]
     cron_file = next((str(p) for p in cron_candidates if p.exists()), None)
     if not cron_file:
@@ -838,7 +845,7 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
     try:
         home = Path.home()
         sessions_candidates = [
-            home / ".openclaw" / "agents" / "main" / "sessions",
+            Path(_get_openclaw_dir()) / "agents" / "main" / "sessions",
             Path("/data/agents/main/sessions"),
         ]
         sessions_dir = next((p for p in sessions_candidates if p.exists()), None)
@@ -1135,7 +1142,7 @@ def _build_brain_data():
     try:
         import collections
         home = str(Path.home())
-        session_dir = os.path.join(home, ".openclaw", "agents", "main", "sessions")
+        session_dir = os.path.join(_get_openclaw_dir(), "agents", "main", "sessions")
         if not os.path.isdir(session_dir):
             return {"stats": {}, "calls": []}
 
@@ -1282,7 +1289,7 @@ def _build_tool_stats():
     try:
         import collections, glob
         home = str(Path.home())
-        session_dir = os.path.join(home, ".openclaw", "agents", "main", "sessions")
+        session_dir = os.path.join(_get_openclaw_dir(), "agents", "main", "sessions")
         if not os.path.isdir(session_dir):
             return {}
         
@@ -1386,7 +1393,7 @@ def _build_channel_list(config):
     """Build list of configured channels."""
     try:
         home = str(Path.home())
-        oc_config = os.path.join(home, ".openclaw", "openclaw.json")
+        oc_config = os.path.join(_get_openclaw_dir(), "openclaw.json")
         if not os.path.isfile(oc_config):
             return []
         data = json.load(open(oc_config))
@@ -1413,8 +1420,8 @@ def _build_channel_data(config):
     try:
         home = str(Path.home())
         today = datetime.now().strftime("%Y-%m-%d")
-        gw_log = os.path.join(home, ".openclaw", "logs", "gateway.log")
-        session_dir = os.path.join(home, ".openclaw", "agents", "main", "sessions")
+        gw_log = os.path.join(_get_openclaw_dir(), "logs", "gateway.log")
+        session_dir = os.path.join(_get_openclaw_dir(), "agents", "main", "sessions")
         channels = {}
 
         known_channels = {"telegram", "imessage", "whatsapp", "signal", "discord",
@@ -1510,8 +1517,8 @@ def _build_cron_jobs(paths):
     import json as _j2
     home = str(Path.home())
     cron_candidates = [
-        os.path.join(home, ".openclaw", "cron", "jobs.json"),
-        os.path.join(home, ".openclaw", "agents", "main", "cron", "jobs.json"),
+        os.path.join(_get_openclaw_dir(), "cron", "jobs.json"),
+        os.path.join(_get_openclaw_dir(), "agents", "main", "cron", "jobs.json"),
     ]
     cron_file = next((p for p in cron_candidates if os.path.isfile(p)), None)
     if not cron_file:
@@ -1663,8 +1670,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     try:
         home = os.path.expanduser("~")
         cron_candidates = [
-            os.path.join(home, ".openclaw", "cron", "jobs.json"),
-            os.path.join(home, ".openclaw", "agents", "main", "cron", "jobs.json"),
+            os.path.join(_get_openclaw_dir(), "cron", "jobs.json"),
+            os.path.join(_get_openclaw_dir(), "agents", "main", "cron", "jobs.json"),
             os.path.join(paths.get("workspace", ""), "..", "crons.json"),
         ]
         cron_path = next((p for p in cron_candidates if os.path.isfile(p)), None)
@@ -1950,7 +1957,7 @@ def _build_gateway_data(paths: dict = None) -> dict:
     try:
         from datetime import datetime as _dt
         today = _dt.now().strftime("%Y-%m-%d")
-        gw_log = os.path.expanduser("~/.openclaw/logs/gateway.log")
+        gw_log = os.path.join(_get_openclaw_dir(), "logs", "gateway.log")
 
         routes = []
         stats = {"today_messages": 0, "today_heartbeats": 0, "today_crons": 0,

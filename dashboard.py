@@ -1388,6 +1388,10 @@ def detect_config(args=None):
     """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
     global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
 
+    # 0a. --openclaw-dir: set OpenClaw config directory (Issue #322 - Docker config bleed)
+    if args and getattr(args, 'openclaw_dir', None):
+        os.environ['CLAWMETRY_OPENCLAW_DIR'] = os.path.expanduser(args.openclaw_dir)
+
     # 0. --data-dir: set defaults from OpenClaw data directory (e.g. /path/.openclaw)
     data_dir = None
     if args and getattr(args, 'data_dir', None):
@@ -1515,10 +1519,11 @@ def _detect_gateway_port():
             pass
     # Try reading from gateway config
     # Try JSON configs first (openclaw.json / moltbot.json / clawdbot.json)
+    _oc_dir = _get_openclaw_dir()
     json_paths = [
-        os.path.expanduser('~/.openclaw/openclaw.json'),
-        os.path.expanduser('~/.openclaw/moltbot.json'),
-        os.path.expanduser('~/.openclaw/clawdbot.json'),
+        os.path.join(_oc_dir, 'openclaw.json'),
+        os.path.join(_oc_dir, 'moltbot.json'),
+        os.path.join(_oc_dir, 'clawdbot.json'),
         os.path.expanduser('~/.clawdbot/clawdbot.json'),
     ]
     for jp in json_paths:
@@ -1575,10 +1580,11 @@ def _detect_gateway_token():
     except Exception:
         pass
     # 3. Config files
+    _oc_dir = _get_openclaw_dir()
     json_paths = [
-        os.path.expanduser('~/.openclaw/openclaw.json'),
-        os.path.expanduser('~/.openclaw/moltbot.json'),
-        os.path.expanduser('~/.openclaw/clawdbot.json'),
+        os.path.join(_oc_dir, 'openclaw.json'),
+        os.path.join(_oc_dir, 'moltbot.json'),
+        os.path.join(_oc_dir, 'clawdbot.json'),
         os.path.expanduser('~/.clawdbot/clawdbot.json'),
     ]
     for jp in json_paths:
@@ -6480,6 +6486,10 @@ def detect_config(args=None):
     """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
     global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
 
+    # 0a. --openclaw-dir: set OpenClaw config directory (Issue #322 - Docker config bleed)
+    if args and getattr(args, 'openclaw_dir', None):
+        os.environ['CLAWMETRY_OPENCLAW_DIR'] = os.path.expanduser(args.openclaw_dir)
+
     # 0. --data-dir: set defaults from OpenClaw data directory (e.g. /path/.openclaw)
     data_dir = None
     if args and getattr(args, 'data_dir', None):
@@ -6625,10 +6635,11 @@ def _detect_gateway_port():
             pass
     # Try reading from gateway config
     # Try JSON configs first (openclaw.json / moltbot.json / clawdbot.json)
+    _oc_dir = _get_openclaw_dir()
     json_paths = [
-        os.path.expanduser('~/.openclaw/openclaw.json'),
-        os.path.expanduser('~/.openclaw/moltbot.json'),
-        os.path.expanduser('~/.openclaw/clawdbot.json'),
+        os.path.join(_oc_dir, 'openclaw.json'),
+        os.path.join(_oc_dir, 'moltbot.json'),
+        os.path.join(_oc_dir, 'clawdbot.json'),
         os.path.expanduser('~/.clawdbot/clawdbot.json'),
     ]
     for jp in json_paths:
@@ -6685,10 +6696,11 @@ def _detect_gateway_token():
     except Exception:
         pass
     # 3. Config files
+    _oc_dir = _get_openclaw_dir()
     json_paths = [
-        os.path.expanduser('~/.openclaw/openclaw.json'),
-        os.path.expanduser('~/.openclaw/moltbot.json'),
-        os.path.expanduser('~/.openclaw/clawdbot.json'),
+        os.path.join(_oc_dir, 'openclaw.json'),
+        os.path.join(_oc_dir, 'moltbot.json'),
+        os.path.join(_oc_dir, 'clawdbot.json'),
         os.path.expanduser('~/.clawdbot/clawdbot.json'),
     ]
     for jp in json_paths:
@@ -15390,6 +15402,11 @@ import uuid as _uuid
 
 _GW_CONFIG_FILE = os.path.expanduser('~/.clawmetry-gateway.json')
 
+
+def _get_openclaw_dir():
+    """Return the OpenClaw config directory, respecting CLAWMETRY_OPENCLAW_DIR env var and --openclaw-dir CLI flag."""
+    return os.environ.get('CLAWMETRY_OPENCLAW_DIR', os.path.expanduser('~/.openclaw'))
+
 # ── WebSocket RPC Client ────────────────────────────────────────────────
 _ws_client = None
 _ws_lock = threading.Lock()
@@ -15474,16 +15491,24 @@ def _gw_ws_rpc(method, params=None):
 
 
 def _load_gw_config():
-    """Load gateway config from globals, env, or file."""
+    """Load gateway config from globals, env, or file.
+
+    Token resolution order (Issue #321 - avoid stale cached tokens):
+      1. Environment variable (OPENCLAW_GATEWAY_TOKEN)
+      2. Live OpenClaw config (openclaw.json -> gateway.auth.token)
+      3. Running gateway process /proc env
+      4. CLI/env globals already set
+      5. Cached ~/.clawmetry-gateway.json (backward compat fallback)
+    """
     global GATEWAY_URL, GATEWAY_TOKEN
-    # 1. Auto-detect from live gateway config (most authoritative)
+    # 1. Auto-detect from live OpenClaw config (most authoritative - reads directly)
     token = _detect_gateway_token()
     port = _detect_gateway_port()
     if token:
         GATEWAY_TOKEN = token
         if not GATEWAY_URL:
             GATEWAY_URL = f'http://127.0.0.1:{port}'
-        # Update cache file with fresh token
+        # Update cache file with fresh token (backward compat, not used for reads)
         try:
             cache = {}
             try:
@@ -15502,7 +15527,7 @@ def _load_gw_config():
     # 2. Already set via CLI/env
     if GATEWAY_URL and GATEWAY_TOKEN:
         return {'url': GATEWAY_URL, 'token': GATEWAY_TOKEN}
-    # 3. Fallback to cache file
+    # 3. Fallback to cache file (only if live config unavailable)
     try:
         with open(_GW_CONFIG_FILE) as f:
             cfg = json.load(f)
@@ -24591,6 +24616,7 @@ def main():
     shared.add_argument('--host', '-H', type=str, default='127.0.0.1', help='Host (default: 127.0.0.1)')
     shared.add_argument('--workspace', '-w', type=str, help='Agent workspace directory')
     shared.add_argument('--data-dir', '-d', type=str, help='OpenClaw data directory (e.g. ~/.openclaw).')
+    shared.add_argument('--openclaw-dir', type=str, help='OpenClaw config directory (default: ~/.openclaw). Env: CLAWMETRY_OPENCLAW_DIR')
     shared.add_argument('--log-dir', '-l', type=str, help='Log directory')
     shared.add_argument('--sessions-dir', '-s', type=str, help='Sessions directory (transcript .jsonl files)')
     shared.add_argument('--metrics-file', '-m', type=str, help='Path to metrics persistence JSON file')

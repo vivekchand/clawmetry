@@ -3,6 +3,14 @@ from __future__ import annotations
 import sys
 import os
 
+
+def _get_openclaw_dir():
+    """Return the OpenClaw config directory, respecting CLAWMETRY_OPENCLAW_DIR env var."""
+    import os
+    return os.environ.get('CLAWMETRY_OPENCLAW_DIR', os.path.expanduser('~/.openclaw'))
+
+
+
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
     sys.path.insert(0, _root)
@@ -845,6 +853,7 @@ def main() -> None:
                     setattr(sys, _attr, _io.StringIO())
 
     parser = argparse.ArgumentParser(prog="clawmetry", add_help=False)
+    parser.add_argument('--openclaw-dir', type=str, help='OpenClaw config directory (default: ~/.openclaw). Env: CLAWMETRY_OPENCLAW_DIR')
     sub = parser.add_subparsers(dest="cmd")
 
     # onboard — first-time setup wizard (called by install.sh)
@@ -897,6 +906,10 @@ def main() -> None:
     _subcmds = ("onboard", "connect", "disconnect", "status", "proxy", "update")
     if len(sys.argv) > 1 and sys.argv[1] in _subcmds:
         args = parser.parse_args()
+        # Issue #322: Set OpenClaw config directory from CLI flag
+        if getattr(args, 'openclaw_dir', None):
+            os.environ['CLAWMETRY_OPENCLAW_DIR'] = os.path.expanduser(args.openclaw_dir)
+
         if args.cmd == "onboard":
             _cmd_onboard(args)
         elif args.cmd == "connect":
