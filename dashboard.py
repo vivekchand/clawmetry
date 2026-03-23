@@ -6601,6 +6601,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
+    app.register_blueprint(bp_skills)
     # Init anomaly DB table
     _anomaly_init_db()
     # ────────────────────────────────────────────────────────────────────────
@@ -15970,6 +15971,7 @@ bp_sessions = _Blueprint('sessions', __name__)
 bp_security = _Blueprint('security', __name__)
 bp_usage = _Blueprint('usage', __name__)
 bp_version = _Blueprint('version', __name__)
+bp_skills = _Blueprint('skills', __name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Version check & self-update routes ────────────────────────────────────────
@@ -19727,6 +19729,80 @@ def api_usage_by_plugin():
         })
     rows.sort(key=lambda r: r['total_tokens'], reverse=True)
     return jsonify({'plugins': rows})
+
+
+# ── Skill cost attribution (ClawHub) ─────────────────────────────────────────
+try:
+    from clawmetry.skills import get_skill_leaderboard_cached as _get_skill_leaderboard
+    _HAS_SKILL_MODULE = True
+except ImportError:
+    _HAS_SKILL_MODULE = False
+    def _get_skill_leaderboard(sessions_dir):  # noqa
+        return {'leaderboard': [], 'executions': [], 'summary': {}, 'generated_at': ''}
+
+
+@bp_skills.route('/api/skills/leaderboard')
+def api_skills_leaderboard():
+    """
+    Return per-skill cost attribution leaderboard.
+
+    Detects skill usage by finding `read` tool calls to SKILL.md paths in
+    session transcripts, then attributes token costs to each skill.
+
+    Response:
+      {
+        "leaderboard": [
+          {
+            "skill_name": "coding-agent",
+            "total_cost": 0.042,
+            "total_tokens": 5600,
+            "executions": 3,
+            "avg_cost": 0.014,
+            "avg_tokens": 1867,
+            "avg_turns": 4.3,
+            "success_rate": 100.0,
+            "unique_sessions": 2,
+            "models": ["claude-sonnet-4-5"],
+            "clawmetry_skill": { <ClawHub schema> }
+          }
+        ],
+        "summary": { ... },
+        "generated_at": "<ISO>"
+      }
+    """
+    sessions_dir = _get_sessions_dir()
+    data = _get_skill_leaderboard(sessions_dir)
+    return jsonify(data)
+
+
+@bp_skills.route('/api/skills/executions')
+def api_skills_executions():
+    """
+    Return a flat list of individual skill execution records (newest first).
+    Each record includes the clawmetry_skill ClawHub metadata block.
+
+    Query params:
+      skill  — filter to a specific skill name
+      limit  — max records to return (default 100)
+    """
+    sessions_dir = _get_sessions_dir()
+    data = _get_skill_leaderboard(sessions_dir)
+    executions = data.get('executions', [])
+
+    skill_filter = request.args.get('skill', '').strip().lower()
+    if skill_filter:
+        executions = [e for e in executions if e.get('skill_name', '').lower() == skill_filter]
+
+    try:
+        limit = int(request.args.get('limit', 100))
+    except (ValueError, TypeError):
+        limit = 100
+    limit = max(1, min(limit, 500))
+
+    return jsonify({
+        'executions': executions[:limit],
+        'total': len(executions),
+    })
 
 
 @bp_usage.route('/api/usage/export')
