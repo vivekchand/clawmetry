@@ -10902,6 +10902,196 @@ function showCronToast(msg) {
   setTimeout(function() { t.style.opacity = '0'; setTimeout(function() { t.remove(); }, 300); }, 3000);
 }
 
+// ── Cron Health Monitor ─────────────────────────────────────────────────────
+
+async function loadCronHealth() {
+  var panel = document.getElementById('cron-health-panel');
+  var content = document.getElementById('cron-health-content');
+  if (!panel || !content) return;
+  panel.style.display = 'block';
+  content.innerHTML = '<div style="padding:16px;color:var(--text-muted);text-align:center;">Loading health data...</div>';
+  try {
+    var data = await fetch('/api/cron/health').then(function(r) { return r.json(); });
+    renderCronHealth(data.jobs || []);
+  } catch(e) {
+    content.innerHTML = '<div style="padding:16px;color:var(--text-error);">Failed to load health data: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function renderCronHealth(jobs) {
+  var content = document.getElementById('cron-health-content');
+  if (!content) return;
+  if (!jobs || jobs.length === 0) {
+    content.innerHTML = '<div style="padding:16px;color:var(--text-muted);text-align:center;">No cron jobs found.</div>';
+    return;
+  }
+
+  var html = '<div style="overflow-x:auto;">';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+  html += '<thead><tr style="border-bottom:1px solid var(--border-primary);color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">';
+  html += '<th style="padding:8px 16px;text-align:left;font-weight:600;">Job</th>';
+  html += '<th style="padding:8px 12px;text-align:center;font-weight:600;">Status</th>';
+  html += '<th style="padding:8px 12px;text-align:center;font-weight:600;">Success Rate (7d)</th>';
+  html += '<th style="padding:8px 12px;text-align:center;font-weight:600;">Runs (7d)</th>';
+  html += '<th style="padding:8px 12px;text-align:center;font-weight:600;">Trend</th>';
+  html += '<th style="padding:8px 12px;text-align:right;font-weight:600;">Total Cost</th>';
+  html += '<th style="padding:8px 12px;text-align:right;font-weight:600;">Last Run</th>';
+  html += '<th style="padding:8px 16px;text-align:center;font-weight:600;">Kill Switch</th>';
+  html += '</tr></thead><tbody>';
+
+  jobs.forEach(function(j) {
+    var isEnabled = j.enabled !== false;
+    var lastStatus = j.lastStatus || 'unknown';
+    var statusColor = lastStatus === 'ok' ? '#22c55e' : (lastStatus === 'error' ? '#ef4444' : '#6b7280');
+    var successRate = j.successRate7d;
+    var rateColor = successRate === null ? '#6b7280' : (successRate >= 90 ? '#22c55e' : (successRate >= 70 ? '#f59e0b' : '#ef4444'));
+    var rateText = successRate === null ? 'N/A' : successRate.toFixed(0) + '%';
+    var costText = (typeof j.costUsd === 'number' && j.costUsd > 0) ? '$' + j.costUsd.toFixed(4) : (j.costSessionCount > 0 ? j.costSessionCount + ' sess.' : '-');
+
+    var rowBg = isEnabled ? '' : 'opacity:0.55;';
+    html += '<tr style="border-bottom:1px solid var(--border-secondary);' + rowBg + '">';
+
+    // Name + schedule
+    html += '<td style="padding:10px 16px;max-width:220px;">';
+    html += '<div style="font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(j.name) + '">' + escHtml(j.name) + '</div>';
+    if (j.schedule && j.schedule.expr) {
+      html += '<div style="font-size:11px;color:var(--text-muted);font-family:monospace;">' + escHtml(j.schedule.expr) + (j.schedule.tz ? ' (' + escHtml(j.schedule.tz) + ')' : '') + '</div>';
+    }
+    html += '</td>';
+
+    // Status badge
+    html += '<td style="padding:10px 12px;text-align:center;">';
+    html += '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:' + statusColor + '22;color:' + statusColor + ';">';
+    html += escHtml(isEnabled ? lastStatus : 'disabled') + '</span>';
+    html += '</td>';
+
+    // Success rate
+    html += '<td style="padding:10px 12px;text-align:center;">';
+    html += '<span style="font-size:14px;font-weight:700;color:' + rateColor + ';">' + rateText + '</span>';
+    if (j.errRuns7d > 0) html += '<span style="font-size:11px;color:#ef4444;margin-left:4px;">(' + j.errRuns7d + ' fail)</span>';
+    html += '</td>';
+
+    // Runs 7d
+    html += '<td style="padding:10px 12px;text-align:center;color:var(--text-secondary);">' + (j.totalRuns7d || 0) + '</td>';
+
+    // Sparkline (canvas)
+    var sparkId = 'cron-spark-' + j.jobId.replace(/-/g,'');
+    html += '<td style="padding:10px 12px;text-align:center;">';
+    html += '<canvas id="' + sparkId + '" width="56" height="22" style="display:inline-block;vertical-align:middle;"></canvas>';
+    html += '</td>';
+
+    // Total cost
+    html += '<td style="padding:10px 12px;text-align:right;color:var(--text-secondary);">' + escHtml(costText) + '</td>';
+
+    // Last run
+    html += '<td style="padding:10px 12px;text-align:right;font-size:12px;color:var(--text-muted);">';
+    html += j.lastRunAtMs ? timeAgo(j.lastRunAtMs) : '-';
+    if (j.lastDurationMs) html += '<div style="font-size:11px;">' + (j.lastDurationMs/1000).toFixed(1) + 's</div>';
+    html += '</td>';
+
+    // Kill switch
+    html += '<td style="padding:10px 16px;text-align:center;">';
+    if (isEnabled) {
+      html += '<button onclick="cronKillSwitch(\'' + escHtml(j.jobId) + '\',\'' + escHtml(j.name).replace(/'/g,'&#39;') + '\')" style="padding:4px 10px;font-size:11px;font-weight:600;border-radius:6px;border:1px solid #ef444444;background:#ef444415;color:#ef4444;cursor:pointer;" title="Disable this cron job">&#x23F9; Kill</button>';
+    } else {
+      html += '<span style="font-size:11px;color:var(--text-muted);">Off</span>';
+    }
+    html += '</td>';
+
+    html += '</tr>';
+
+    // Run history sub-row (collapsible)
+    if (j.runHistory && j.runHistory.length > 0) {
+      html += '<tr id="cron-health-history-' + j.jobId.replace(/-/g,'') + '" style="display:none;background:var(--bg-secondary);">';
+      html += '<td colspan="8" style="padding:8px 16px 12px;">';
+      html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;">Recent Runs</div>';
+      j.runHistory.slice(0, 8).forEach(function(r) {
+        var sc = r.status === 'ok' ? '#22c55e' : '#ef4444';
+        var dur = r.durationMs ? (r.durationMs/1000).toFixed(1) + 's' : '';
+        html += '<div style="display:flex;align-items:flex-start;gap:10px;padding:3px 0;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        html += '<span style="color:var(--text-muted);min-width:130px;">' + (r.ts ? new Date(r.ts).toLocaleString() : '-') + '</span>';
+        html += '<span style="min-width:42px;font-weight:600;color:' + sc + ';">' + escHtml(r.status || '?') + '</span>';
+        if (dur) html += '<span style="color:var(--text-muted);min-width:36px;">' + dur + '</span>';
+        if (r.summary) html += '<span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:340px;" title="' + escHtml(r.summary) + '">' + escHtml(r.summary) + '</span>';
+        if (r.error) html += '<span style="color:#ef4444;font-size:11px;">' + escHtml(r.error.substring(0,80)) + '</span>';
+        html += '</div>';
+      });
+      html += '</td></tr>';
+    }
+  });
+
+  html += '</tbody></table></div>';
+  content.innerHTML = html;
+
+  // Draw sparklines
+  jobs.forEach(function(j) {
+    var sparkId = 'cron-spark-' + j.jobId.replace(/-/g,'');
+    var canvas = document.getElementById(sparkId);
+    if (!canvas) return;
+    var spark = j.sparkline || [];
+    drawCronSparkline(canvas, spark);
+    // Add click to toggle run history
+    var rowEl = canvas.closest('tr');
+    if (rowEl) {
+      rowEl.style.cursor = 'pointer';
+      rowEl.onclick = function() {
+        var hid = 'cron-health-history-' + j.jobId.replace(/-/g,'');
+        var hrow = document.getElementById(hid);
+        if (hrow) hrow.style.display = (hrow.style.display === 'none' ? 'table-row' : 'none');
+      };
+    }
+  });
+}
+
+function drawCronSparkline(canvas, spark) {
+  var ctx = canvas.getContext('2d');
+  var w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!spark || spark.length === 0) return;
+
+  var maxVal = Math.max.apply(null, spark.map(function(d){ return d.total || 0; })) || 1;
+  var barW = Math.floor(w / spark.length) - 1;
+
+  spark.forEach(function(d, i) {
+    var total = d.total || 0;
+    var ok = d.ok || 0;
+    if (total === 0) return;
+
+    var barH = Math.max(2, Math.round((total / maxVal) * (h - 2)));
+    var x = i * (barW + 1);
+    var y = h - barH;
+
+    // Failed portion (red background)
+    ctx.fillStyle = '#ef4444';
+    ctx.fillRect(x, y, barW, barH);
+
+    // OK portion (green on top)
+    var okH = Math.round((ok / total) * barH);
+    if (okH > 0) {
+      ctx.fillStyle = '#22c55e';
+      ctx.fillRect(x, y + (barH - okH), barW, okH);
+    }
+  });
+}
+
+async function cronKillSwitch(jobId, jobName) {
+  if (!confirm('Kill cron job "' + jobName + '"?\n\nThis will disable the job immediately. You can re-enable it from the Crons list.')) return;
+  try {
+    var res = await fetch('/api/cron/' + encodeURIComponent(jobId) + '/kill', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+    });
+    var data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Kill failed');
+    showCronToast('⏹ Job "' + jobName + '" disabled.');
+    // Refresh both lists
+    loadCronHealth();
+    loadCrons();
+  } catch(e) {
+    showCronToast('Error: ' + e.message);
+  }
+}
+
 function formatSchedule(s) {
   if (s.kind === 'cron') return 'cron: ' + s.expr + (s.tz ? ' (' + s.tz + ')' : '');
   if (s.kind === 'every') return 'every ' + (s.everyMs/60000) + ' min';
