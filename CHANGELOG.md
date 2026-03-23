@@ -1,3 +1,8 @@
+## [0.12.72] — 2026-03-23
+
+### Changed
+- Bump version to 0.12.72 — sync main branch with PyPI release
+
 ## v0.12.63 (2026-03-22)
 - fix: robust Ollama detection -- PATH fallback + HTTP ping to localhost:11434
 - feat: sync daemon heartbeat includes ollama status (installed, running, models)
