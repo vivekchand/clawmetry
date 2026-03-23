@@ -15495,6 +15495,7 @@ def _load_gw_config():
             cache['url'] = GATEWAY_URL or f'http://127.0.0.1:{port}'
             with open(_GW_CONFIG_FILE, 'w') as f:
                 json.dump(cache, f)
+            os.chmod(_GW_CONFIG_FILE, 0o600)
         except Exception:
             pass
         return {'url': GATEWAY_URL, 'token': GATEWAY_TOKEN}
@@ -15757,6 +15758,7 @@ def api_gw_config():
         try:
             with open(_GW_CONFIG_FILE, 'w') as f:
                 json.dump(cfg, f)
+            os.chmod(_GW_CONFIG_FILE, 0o600)
         except Exception:
             pass
         return jsonify({'ok': True, 'url': gw_url})
