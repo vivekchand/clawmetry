@@ -8799,6 +8799,41 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-security -->
 
+<!-- ANOMALIES -->
+<div class="page" id="page-anomalies">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#9888;&#65039; Anomaly Detection</span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="refresh-btn" onclick="loadAnomalies();">&#8635; Scan</button>
+        <button class="refresh-btn" onclick="ackAllAnomalies();" style="color:var(--text-muted);">Dismiss All</button>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">
+      Alerts when token usage, costs, or session frequency deviate significantly from your rolling 7-day baseline.
+      Anomalies auto-expire after 24 hours.
+    </div>
+    <!-- Summary Counts -->
+    <div id="anomaly-summary"></div>
+    <!-- Thresholds Info -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;display:flex;gap:24px;flex-wrap:wrap;">
+      <div style="font-size:12px;color:var(--text-muted);">
+        <span style="font-weight:600;color:var(--text-secondary);">Token spike:</span> 1 turn uses &gt;3x rolling avg
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);">
+        <span style="font-weight:600;color:var(--text-secondary);">Cost spike:</span> Session/day &gt;2x 7-day avg
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);">
+        <span style="font-weight:600;color:var(--text-secondary);">Session freq:</span> Today &gt;5x typical
+      </div>
+    </div>
+    <!-- Anomaly List -->
+    <div id="anomaly-list">
+      <div style="padding:24px;text-align:center;color:var(--text-muted);">Click Scan to detect anomalies</div>
+    </div>
+  </div>
+</div>
+
 
 
 
@@ -9164,12 +9199,127 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
+  if (name === 'anomalies') loadAnomalies();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
 }
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
 }
+
+// ── Anomaly Detection UI ─────────────────────────────────────────────────────
+
+var _anomalyData = [];
+
+async function loadAnomalies() {
+  var container = document.getElementById('anomaly-list');
+  if (!container) return;
+  container.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">Scanning for anomalies...</div>';
+  try {
+    var data = await fetch('/api/anomalies').then(function(r){return r.json();});
+    _anomalyData = data.anomalies || [];
+    updateAnomalyBadge(_anomalyData.length);
+    renderAnomalySummary(_anomalyData);
+    renderAnomalyList(_anomalyData);
+  } catch(e) {
+    container.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);">Failed to load anomalies: ' + String(e) + '</div>';
+  }
+}
+
+function updateAnomalyBadge(count) {
+  var badge = document.getElementById('anomaly-badge');
+  if (!badge) return;
+  if (count > 0) {
+    badge.style.display = 'inline-block';
+    badge.textContent = count > 99 ? '99+' : String(count);
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderAnomalySummary(anomalies) {
+  var el = document.getElementById('anomaly-summary');
+  if (!el) return;
+  var counts = {critical:0, high:0, medium:0, low:0};
+  (anomalies||[]).forEach(function(a){ if(counts[a.severity]!==undefined) counts[a.severity]++; });
+  el.innerHTML =
+    '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;">' +
+    '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#ef4444;">'+counts.critical+'</div><div style="font-size:11px;color:var(--text-muted);">Critical</div></div>' +
+    '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#f97316;">'+counts.high+'</div><div style="font-size:11px;color:var(--text-muted);">High</div></div>' +
+    '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#f59e0b;">'+counts.medium+'</div><div style="font-size:11px;color:var(--text-muted);">Medium</div></div>' +
+    '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#3b82f6;">'+counts.low+'</div><div style="font-size:11px;color:var(--text-muted);">Low</div></div>' +
+    '</div>';
+}
+
+function renderAnomalyList(anomalies) {
+  var container = document.getElementById('anomaly-list');
+  if (!container) return;
+  if (!anomalies || anomalies.length === 0) {
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);font-size:14px;"><div style="font-size:32px;margin-bottom:8px;">&#10003;</div><div style="font-weight:600;">No anomalies detected</div><div style="font-size:12px;margin-top:4px;">Thresholds: token spike 3x · cost spike 2x · session freq 5x</div></div>';
+    return;
+  }
+  var sevColors = {critical:'#ef4444',high:'#f97316',medium:'#f59e0b',low:'#3b82f6'};
+  var typeLabels = {token_spike:'Token Spike',daily_cost_spike:'Daily Cost Spike',cost_spike:'Session Cost Spike',session_frequency:'Session Frequency'};
+  var html = '';
+  anomalies.forEach(function(a) {
+    var color = sevColors[a.severity] || '#94a3b8';
+    var label = typeLabels[a.type] || a.type;
+    var ts = a.detected_at ? new Date(a.detected_at).toLocaleString() : '';
+    var ratio = a.ratio ? a.ratio.toFixed(1) + 'x' : '';
+    html += '<div id="anomaly-row-' + escHtml(a.id) + '" style="background:var(--bg-secondary);border:1px solid var(--border);border-left:3px solid ' + color + ';border-radius:8px;padding:14px 16px;margin-bottom:10px;">';
+    html += '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">';
+    html += '<div style="flex:1;">';
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
+    html += '<span style="font-size:10px;font-weight:700;text-transform:uppercase;color:' + color + ';background:' + color + '1a;padding:2px 7px;border-radius:4px;">' + escHtml(a.severity) + '</span>';
+    html += '<span style="font-size:11px;font-weight:600;color:var(--text-secondary);">' + escHtml(label) + '</span>';
+    if (ratio) html += '<span style="font-size:11px;color:' + color + ';font-weight:700;">' + escHtml(ratio) + ' above baseline</span>';
+    html += '</div>';
+    html += '<div style="font-size:13px;color:var(--text-primary);margin-bottom:6px;">' + escHtml(a.message) + '</div>';
+    html += '<div style="display:flex;gap:16px;font-size:11px;color:var(--text-muted);">';
+    if (ts) html += '<span>&#128336; ' + ts + '</span>';
+    if (a.session_id) html += '<span>Session: ' + escHtml(a.session_id.substring(0,12)) + '...</span>';
+    html += '</div></div>';
+    html += '<button onclick="ackAnomaly(\'' + escHtml(a.id) + '\')" style="flex-shrink:0;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-primary);color:var(--text-secondary);font-size:12px;cursor:pointer;white-space:nowrap;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'var(--bg-primary)\'">Dismiss</button>';
+    html += '</div></div>';
+  });
+  container.innerHTML = html;
+}
+
+async function ackAnomaly(id) {
+  try {
+    await fetch('/api/anomalies/' + encodeURIComponent(id) + '/ack', {method:'POST'});
+    var row = document.getElementById('anomaly-row-' + id);
+    if (row) { row.style.opacity = '0.3'; row.style.transition = 'opacity 0.3s'; setTimeout(function(){ row.style.display='none'; }, 300); }
+    _anomalyData = _anomalyData.filter(function(a){ return a.id !== id; });
+    updateAnomalyBadge(_anomalyData.length);
+    renderAnomalySummary(_anomalyData);
+    if (_anomalyData.length === 0) setTimeout(function(){ renderAnomalyList([]); }, 400);
+  } catch(e) {}
+}
+
+async function ackAllAnomalies() {
+  try {
+    await fetch('/api/anomalies/ack-all', {method:'POST'});
+    _anomalyData = [];
+    updateAnomalyBadge(0);
+    renderAnomalyList([]);
+    renderAnomalySummary([]);
+  } catch(e) {}
+}
+
+setInterval(async function() {
+  try {
+    var data = await fetch('/api/anomalies/count').then(function(r){return r.json();});
+    updateAnomalyBadge(data.count || 0);
+  } catch(e) {}
+}, 120000);
+
+window.addEventListener('DOMContentLoaded', function() {
+  setTimeout(async function() {
+    try { var data = await fetch('/api/anomalies/count').then(function(r){return r.json();}); updateAnomalyBadge(data.count||0); } catch(e) {}
+  }, 2000);
+});
+
 
 var _sunSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
 var _moonSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
