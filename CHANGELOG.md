@@ -1,3 +1,9 @@
+## [0.12.73] — 2026-03-23
+
+### Added
+- **Model attribution dashboard** — per-turn model tracking (primary vs fallback), fallback rate trend, cost delta analysis, fallback rate alert when > configurable threshold (closes #305)
+- **Cron health monitor** — run history, success rate, cost per run, anomaly detection with kill switch; per-cron cost badges + 7-day sparkline in Cron tab (closes #306)
+
 ## v0.12.63 (2026-03-22)
 - fix: robust Ollama detection -- PATH fallback + HTTP ping to localhost:11434
 - feat: sync daemon heartbeat includes ollama status (installed, running, models)
