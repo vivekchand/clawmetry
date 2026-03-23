@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "clawmetry-nat"
+version = "0.1.0"
+description = "NVIDIA NeMo Agent Toolkit telemetry exporter for ClawMetry — maps NAT workflow events to ClawMetry brain event format"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+  {name = "Vivek Chand", email = "vivek@clawmetry.com"},
+]
+keywords = [
+  "clawmetry", "nemo", "nat", "nvidia", "agent", "telemetry",
+  "observability", "llm", "opentelemetry", "tracing",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: System :: Monitoring",
+]
+
+# No hard dependencies — stdlib only.
+# nvidia-nat is optional (for native NAT plugin registration).
+dependencies = []
+
+[project.optional-dependencies]
+nat = ["nvidia-nat>=1.0"]
+dev = [
+  "pytest>=7.0",
+  "pytest-asyncio>=0.21",
+]
+
+[project.urls]
+Homepage   = "https://clawmetry.com"
+Repository = "https://github.com/vivekchand/clawmetry"
+"Bug Tracker" = "https://github.com/vivekchand/clawmetry/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["clawmetry_nat*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
