@@ -1937,26 +1937,6 @@ def run_daemon() -> None:
     send_heartbeat(config)
     log.info("Recent sync complete — Brain feed should show current activity")
 
-    # On first run, also do a full backfill so historical data is available.
-    first_run = not state.get("initial_backfill_done")
-    if first_run:
-        log.info("First run — backfilling older sessions in background...")
-        try:
-            ev = sync_sessions(config, state, paths)
-            save_state(state)
-            log.info(f"  Backfill: {ev} older events synced")
-        except Exception as e:
-            log.warning(f"  Backfill error: {e}")
-        try:
-            lg = sync_logs(config, state, paths)
-            log.info(f"  Logs: {lg} lines synced")
-        except Exception as e:
-            log.warning(f"  Log sync error: {e}")
-        state["initial_backfill_done"] = True
-        state["last_sync"] = datetime.now(timezone.utc).isoformat()
-        save_state(state)
-        log.info("Initial backfill complete")
-
     # Validate stored log offsets on startup — prevents silent gaps
     # after log rotation, file truncation, or daemon restarts
     _validate_log_offsets(state, paths)
@@ -1964,6 +1944,39 @@ def run_daemon() -> None:
 
     # Start real-time log streamer in background
     start_log_streamer(config, paths)
+
+    # Backfill older sessions in a background thread so the main loop
+    # (and Brain tab) shows current activity immediately. The backfill
+    # thread waits for the first main-loop cycle to complete before
+    # sending historical data — recent events always reach the cloud first.
+    first_run = not state.get("initial_backfill_done")
+    _backfill_done = threading.Event()
+    if first_run:
+        def _backfill_worker():
+            # Give the main loop one full cycle (≈15s) to post recent events
+            time.sleep(20)
+            log.info("Background backfill starting — syncing older sessions...")
+            try:
+                bf_state = load_state()
+                ev = sync_sessions(config, bf_state, paths)
+                bf_state["initial_backfill_done"] = True
+                bf_state["last_sync"] = datetime.now(timezone.utc).isoformat()
+                save_state(bf_state)
+                log.info(f"Background backfill: {ev} older events synced")
+            except Exception as e:
+                log.warning(f"Background backfill error: {e}")
+            try:
+                bf_state = load_state()
+                lg = sync_logs(config, bf_state, paths)
+                save_state(bf_state)
+                log.info(f"Background backfill: {lg} log lines synced")
+            except Exception as e:
+                log.warning(f"Background backfill log error: {e}")
+            _backfill_done.set()
+            log.info("Background backfill complete")
+
+        t = threading.Thread(target=_backfill_worker, daemon=True, name="backfill")
+        t.start()
 
     heartbeat_interval = 60
     snapshot_interval = 60  # system snapshot every 60s, not every 15s
