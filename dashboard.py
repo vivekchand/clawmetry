@@ -3095,6 +3095,10 @@ function clawmetryLogout(){
     <div class="section-title">🤖 Model Breakdown</div>
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
+  <div class="section-title">🎯 Skill Cost Breakdown</div>
+  <div class="card" id="skill-cost-card">
+    <div id="skill-cost-chart" style="margin-bottom:16px;min-height:40px;"></div>
+    <table class="usage-table" id="skill-cost-table"><tbody><tr><td colspan="5" style="color:#666;">Loading...</td></tr></tbody></table>
   </div>
 </div>
 
@@ -6602,6 +6606,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
+    app.register_blueprint(bp_skills)
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -8230,6 +8235,11 @@ function clawmetryLogout(){
       <div id="usage-plugin-legend" style="flex:1;min-width:220px;font-size:12px;color:var(--text-secondary);">Loading...</div>
     </div>
   </div>
+  <div class="section-title">🎯 Skill Cost Breakdown</div>
+  <div class="card" id="skill-cost-card">
+    <div id="skill-cost-chart" style="margin-bottom:16px;min-height:40px;"></div>
+    <table class="usage-table" id="skill-cost-table"><tbody><tr><td colspan="5" style="color:#666;">Loading...</td></tr></tbody></table>
+  </div>
   <div class="section-title">💸 Top Sessions by Cost
     <span style="float:right;font-size:12px;font-weight:400;color:var(--text-muted);">Alert threshold:
       $<input id="session-cost-threshold" type="number" min="0" step="0.01" value="0.50" style="width:60px;padding:2px 6px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:4px;color:var(--text-primary);font-size:12px;" onchange="renderSessionCostChart()">
@@ -8255,7 +8265,6 @@ function clawmetryLogout(){
     <div class="section-title">🤖 Model Breakdown</div>
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
-  </div>
 </div>
 
 <!-- CRONS -->
@@ -11467,9 +11476,10 @@ async function loadHeatmap() {
 // ===== Usage / Token Tracking =====
 async function loadUsage() {
   try {
-    var [data, byPlugin] = await Promise.all([
+    var [data, byPlugin, bySkill] = await Promise.all([
       fetch('/api/usage').then(r => r.json()),
-      fetch('/api/usage/by-plugin').then(r => r.json()).catch(function(){ return {plugins: []}; })
+      fetch('/api/usage/by-plugin').then(r => r.json()).catch(function(){ return {plugins: []}; }),
+      fetch('/api/usage/by-skill').then(r => r.json()).catch(function(){ return {skills: []}; })
     ]);
     function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
     function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
@@ -11539,6 +11549,7 @@ async function loadUsage() {
       otelExtra.style.display = 'none';
     }
     renderPluginPieChart(byPlugin.plugins || []);
+    renderSkillPieChart(bySkill.skills || []);
     // Load session cost breakdown
     fetch('/api/sessions/cost-breakdown').then(r => r.json()).then(function(cbd) {
       window._sessionCostData = cbd.top10 || [];
@@ -11550,6 +11561,39 @@ async function loadUsage() {
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
+  loadSkillCostBreakdown();
+}
+
+function loadSkillCostBreakdown() {
+  // Primary: use the built-in transcript-based attribution (no external module needed)
+  fetch('/api/usage/by-skill')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      renderSkillPieChart(data.skills || []);
+    })
+    .catch(function() {
+      // Fallback: try clawmetry.skills module endpoint if available
+      fetch('/api/skills/leaderboard')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          // Map leaderboard format to by-skill format
+          var mapped = (data.leaderboard || []).map(function(s) {
+            return {
+              skill: s.skill_name,
+              cost_usd: s.total_cost || 0,
+              total_tokens: s.total_tokens || 0,
+              executions: s.executions || 0,
+              avg_cost_usd: s.avg_cost || 0,
+              pct_of_total: 0
+            };
+          });
+          renderSkillPieChart(mapped);
+        })
+        .catch(function() {
+          var el = document.getElementById('usage-skill-legend');
+          if (el) el.innerHTML = '<div style="color:var(--text-muted);">No skill data available yet.</div>';
+        });
+    });
 }
 
 function renderSessionCostChart() {
@@ -11696,6 +11740,70 @@ function renderPluginPieChart(rows) {
     lhtml += '<div style="text-align:right;">';
     lhtml += '<div style="font-size:12px;">' + (r.pct_of_total || 0).toFixed(1) + '%</div>';
     lhtml += '<div style="font-size:11px;color:var(--text-muted);">' + (r.total_tokens || 0).toLocaleString() + ' tok • $' + Number(r.cost_usd || 0).toFixed(4) + '</div>';
+    lhtml += '</div></div>';
+  });
+  legend.innerHTML = lhtml;
+}
+
+function renderSkillPieChart(rows) {
+  var canvas = document.getElementById('usage-skill-pie');
+  var legend = document.getElementById('usage-skill-legend');
+  if (!canvas || !legend) return;
+
+  var data = (rows || []).filter(function(r){ return (r.cost_usd || 0) > 0; }).slice(0, 10);
+  if (!data.length) {
+    var ctxEmpty = canvas.getContext('2d');
+    ctxEmpty.clearRect(0, 0, canvas.width, canvas.height);
+    legend.innerHTML = '<div style="color:var(--text-muted);padding:12px 0;">No skill usage detected yet. Skills are attributed when a SKILL.md file is read during a session.</div>';
+    return;
+  }
+
+  var palette = ['#6366f1','#f59e0b','#22c55e','#ef4444','#0ea5e9','#8b5cf6','#14b8a6','#f97316','#84cc16','#ec4899'];
+  var totalCost = data.reduce(function(acc, r){ return acc + (r.cost_usd || 0); }, 0) || 0.000001;
+  var cx = canvas.width / 2;
+  var cy = canvas.height / 2;
+  var radius = 110;
+  var start = -Math.PI / 2;
+  var ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  data.forEach(function(r, i) {
+    var slice = ((r.cost_usd || 0) / totalCost) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, radius, start, start + slice);
+    ctx.closePath();
+    ctx.fillStyle = palette[i % palette.length];
+    ctx.fill();
+    start += slice;
+  });
+
+  // Center cutout (donut)
+  ctx.beginPath();
+  ctx.arc(cx, cy, 52, 0, Math.PI * 2);
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--bg-secondary') || '#111';
+  ctx.fill();
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-primary') || '#fff';
+  ctx.font = '700 13px Manrope, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Skills', cx, cy - 2);
+  ctx.font = '600 12px Manrope, sans-serif';
+  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-muted') || '#aaa';
+  ctx.fillText('$' + totalCost.toFixed(3), cx, cy + 16);
+
+  var medals = ['\ud83e\udd47', '\ud83e\udd48', '\ud83e\udd49'];
+  var lhtml = '';
+  data.forEach(function(r, i) {
+    var pct = totalCost > 0 ? ((r.cost_usd || 0) / totalCost * 100).toFixed(1) : '0.0';
+    lhtml += '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-secondary);">';
+    lhtml += '<div style="display:flex;align-items:center;gap:8px;min-width:0;">';
+    lhtml += '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + palette[i % palette.length] + ';flex-shrink:0;"></span>';
+    lhtml += '<span style="font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(r.skill) + '">';
+    lhtml += (medals[i] || '') + ' ' + escHtml(r.skill) + '</span>';
+    lhtml += '</div>';
+    lhtml += '<div style="text-align:right;flex-shrink:0;">';
+    lhtml += '<div style="font-size:12px;color:var(--text-accent);font-weight:700;">$' + Number(r.cost_usd || 0).toFixed(4) + '</div>';
+    lhtml += '<div style="font-size:11px;color:var(--text-muted);">' + pct + '% &bull; ' + (r.executions || 0) + ' run' + (r.executions !== 1 ? 's' : '') + '</div>';
     lhtml += '</div></div>';
   });
   legend.innerHTML = lhtml;
@@ -15622,6 +15730,7 @@ bp_sessions = _Blueprint('sessions', __name__)
 bp_security = _Blueprint('security', __name__)
 bp_usage = _Blueprint('usage', __name__)
 bp_version = _Blueprint('version', __name__)
+bp_skills = _Blueprint('skills', __name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Version check & self-update routes ────────────────────────────────────────
@@ -18884,9 +18993,43 @@ def _compute_transcript_analytics():
     sessions_dir = _get_sessions_dir()
     summaries = []
     plugin_stats = defaultdict(lambda: {'tokens': 0.0, 'cost': 0.0, 'calls': 0})
+    skill_stats = defaultdict(lambda: {'tokens': 0.0, 'cost': 0.0, 'executions': 0})
     daily_tokens = {}
     daily_cost = {}
     model_usage = {}
+
+    # Regex to extract skill name from SKILL.md read path
+    import re as _re_skill
+    _skill_path_re = _re_skill.compile(r'skills[/\\]([^/\\]+)[/\\]SKILL\.md', _re_skill.IGNORECASE)
+
+    def _extract_skill_from_read(obj):
+        """Return skill name if this event is a `read` tool call to a SKILL.md path."""
+        message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+        for part in (message.get('content') or []):
+            if not isinstance(part, dict) or part.get('type') != 'toolCall':
+                continue
+            if str(part.get('name', '')).lower() not in ('read',):
+                continue
+            args = part.get('arguments') or part.get('input') or {}
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except Exception:
+                    pass
+            if not isinstance(args, dict):
+                continue
+            path = str(args.get('path') or args.get('file_path') or '')
+            if 'SKILL.MD' not in path.upper():
+                continue
+            m = _skill_path_re.search(path.replace('\\\\', '/'))
+            if m:
+                return m.group(1).lower().strip()
+            # Fallback: parent dir name
+            _parts = path.replace('\\\\', '/').split('/')
+            for _i, _p in enumerate(_parts):
+                if _p.upper() == 'SKILL.MD' and _i > 0:
+                    return _parts[_i - 1].lower().strip()
+        return None
 
     if os.path.isdir(sessions_dir):
         for fname in os.listdir(sessions_dir):
@@ -18903,6 +19046,12 @@ def _compute_transcript_analytics():
             s_end = None
             search_parts = []
             explicit_cron_refs = set()
+
+            # Skill attribution: track active skill + accumulated tokens/cost since load
+            _active_skill = None
+            _skill_tokens_acc = 0.0
+            _skill_cost_acc = 0.0
+            _session_skills_seen = set()
 
             try:
                 with open(fpath, 'r') as f:
@@ -18932,6 +19081,21 @@ def _compute_transcript_analytics():
                         if model:
                             s_model = model
 
+                        # Check for skill read event
+                        skill_loaded = _extract_skill_from_read(obj)
+                        if skill_loaded:
+                            # Flush previous skill accumulation
+                            if _active_skill and _skill_tokens_acc > 0:
+                                skill_stats[_active_skill]['tokens'] += _skill_tokens_acc
+                                skill_stats[_active_skill]['cost'] += _skill_cost_acc
+                            # Start new skill window
+                            _active_skill = skill_loaded
+                            _skill_tokens_acc = 0.0
+                            _skill_cost_acc = 0.0
+                            if skill_loaded not in _session_skills_seen:
+                                skill_stats[skill_loaded]['executions'] += 1
+                                _session_skills_seen.add(skill_loaded)
+
                         usage_metrics = _extract_usage_metrics(obj)
                         tokens = usage_metrics['tokens']
                         cost = usage_metrics['cost']
@@ -18940,6 +19104,11 @@ def _compute_transcript_analytics():
                             s_tokens += tokens
                             if cost > 0:
                                 s_cost += cost
+
+                            # Attribute to active skill window
+                            if _active_skill:
+                                _skill_tokens_acc += float(tokens)
+                                _skill_cost_acc += float(cost) if cost > 0 else 0.0
 
                             plugins = _extract_tool_plugins(obj)
                             if plugins:
@@ -18962,6 +19131,11 @@ def _compute_transcript_analytics():
                                 search_parts.append(json.dumps(obj, default=str).lower())
                             except Exception:
                                 pass
+
+                # Flush final skill window for this session
+                if _active_skill and _skill_tokens_acc > 0:
+                    skill_stats[_active_skill]['tokens'] += _skill_tokens_acc
+                    skill_stats[_active_skill]['cost'] += _skill_cost_acc
 
                 if s_start is None:
                     s_start = fallback_dt
@@ -18996,6 +19170,7 @@ def _compute_transcript_analytics():
     result = {
         'sessions': summaries,
         'plugin_stats': plugin_stats,
+        'skill_stats': skill_stats,
         'daily_tokens': daily_tokens,
         'daily_cost': daily_cost,
         'model_usage': model_usage,
@@ -19177,6 +19352,78 @@ def api_usage_by_plugin():
         })
     rows.sort(key=lambda r: r['total_tokens'], reverse=True)
     return jsonify({'plugins': rows})
+
+
+@bp_usage.route('/api/usage/by-skill')
+def api_usage_by_skill():
+    """Return per-skill cost attribution based on SKILL.md read events in transcripts.
+
+    Skills are detected by tracking `read` tool calls to paths ending in SKILL.md.
+    Token costs after each skill load (until the next skill load) are attributed to
+    that skill.  Returns a ranked leaderboard sorted by total cost descending.
+    """
+    analytics = _compute_transcript_analytics()
+    skill_stats = analytics.get('skill_stats', {})
+    total_tokens = sum(float(v.get('tokens', 0.0) or 0.0) for v in skill_stats.values())
+    total_tokens_base = total_tokens if total_tokens > 0 else 1.0
+
+    rows = []
+    for skill, stats in skill_stats.items():
+        toks = float(stats.get('tokens', 0.0) or 0.0)
+        cost = float(stats.get('cost', 0.0) or 0.0)
+        execs = int(stats.get('executions', 0) or 0)
+        avg_cost = round(cost / execs, 6) if execs > 0 else 0.0
+        rows.append({
+            'skill': skill,
+            'total_tokens': int(round(toks)),
+            'cost_usd': round(cost, 6),
+            'executions': execs,
+            'avg_cost_usd': avg_cost,
+            'pct_of_total': round((toks / total_tokens_base) * 100.0, 2),
+        })
+    rows.sort(key=lambda r: r['cost_usd'], reverse=True)
+    return jsonify({'skills': rows, 'total_tokens': int(round(total_tokens))})
+
+
+# ── Skill cost attribution (ClawHub) ─────────────────────────────────────────
+try:
+    from clawmetry.skills import get_skill_leaderboard_cached as _get_skill_leaderboard
+    _HAS_SKILL_MODULE = True
+except ImportError:
+    _HAS_SKILL_MODULE = False
+    def _get_skill_leaderboard(sessions_dir):  # noqa
+        return {'leaderboard': [], 'executions': [], 'summary': {}, 'generated_at': ''}
+
+
+@bp_skills.route('/api/skills/leaderboard')
+def api_skills_leaderboard():
+    """Return per-skill cost attribution leaderboard."""
+    sessions_dir = _get_sessions_dir()
+    data = _get_skill_leaderboard(sessions_dir)
+    return jsonify(data)
+
+
+@bp_skills.route('/api/skills/executions')
+def api_skills_executions():
+    """Return a flat list of individual skill execution records (newest first)."""
+    sessions_dir = _get_sessions_dir()
+    data = _get_skill_leaderboard(sessions_dir)
+    executions = data.get('executions', [])
+
+    skill_filter = request.args.get('skill', '').strip().lower()
+    if skill_filter:
+        executions = [e for e in executions if e.get('skill_name', '').lower() == skill_filter]
+
+    try:
+        limit = int(request.args.get('limit', 100))
+    except (ValueError, TypeError):
+        limit = 100
+    limit = max(1, min(limit, 500))
+
+    return jsonify({
+        'executions': executions[:limit],
+        'total': len(executions),
+    })
 
 
 @bp_usage.route('/api/usage/export')
