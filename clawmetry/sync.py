@@ -1782,6 +1782,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "runtimeInfo": _build_runtime_info(),
         "machineInfo": _build_machine_info(),
         "channelList": _build_channel_list(config),
+        "ollamaInfo": _detect_ollama_for_heartbeat(),
     }
 
     log.info(f"System snapshot: {len(subagents_list)} subagents ({active_count} active)")
