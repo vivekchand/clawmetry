@@ -52,6 +52,39 @@ def _release_pid_lock() -> None:
         pass
 
 
+def _validate_log_offsets(state: dict, paths: dict) -> None:
+    """Validate stored log offsets on startup.
+
+    Prevents silent data gaps caused by log rotation or file truncation:
+    after a restart the stored offset may be beyond the current file end, or
+    the file may have shrunk and grown back past the offset (so offset < size
+    but the bytes there are new content, not what was originally at that
+    position).  We reset any offset >= current file size to 0 so the daemon
+    re-reads from the start and catches up on missed events.
+    """
+    offsets = state.get("last_log_offsets", {})
+    if not offsets:
+        return
+    log_dir = paths.get("log_dir", "")
+    if not log_dir:
+        return
+    for fname in list(offsets.keys()):
+        fpath = os.path.join(log_dir, fname)
+        try:
+            size = os.path.getsize(fpath)
+            if offsets[fname] > size:
+                log.warning(
+                    f"Stale log offset for {fname}: stored={offsets[fname]}, "
+                    f"file size={size}. Resetting to 0 to catch up on missed events."
+                )
+                offsets[fname] = 0
+        except FileNotFoundError:
+            log.warning(f"Log file {fname} gone — removing stale offset entry.")
+            del offsets[fname]
+        except Exception as e:
+            log.warning(f"Could not validate offset for {fname}: {e}")
+
+
 
 INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
 CONFIG_DIR  = Path.home() / ".clawmetry"
@@ -1923,6 +1956,11 @@ def run_daemon() -> None:
         state["last_sync"] = datetime.now(timezone.utc).isoformat()
         save_state(state)
         log.info("Initial backfill complete")
+
+    # Validate stored log offsets on startup — prevents silent gaps
+    # after log rotation, file truncation, or daemon restarts
+    _validate_log_offsets(state, paths)
+    save_state(state)
 
     # Start real-time log streamer in background
     start_log_streamer(config, paths)
