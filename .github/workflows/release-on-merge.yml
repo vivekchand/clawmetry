@@ -31,12 +31,14 @@ jobs:
       - name: Bump patch version
         id: bump
         run: |
-          OLD=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('dashboard.py').read()).group(1))")
+          # Always bump from latest PyPI version — never from dashboard.py which
+          # can be stale when multiple [RELEASE] PRs merge in quick succession
+          OLD=$(curl -s https://pypi.org/pypi/clawmetry/json | python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
           MAJOR=$(echo $OLD | cut -d. -f1)
           MINOR=$(echo $OLD | cut -d. -f2)
           PATCH=$(echo $OLD | cut -d. -f3)
           NEW="$MAJOR.$MINOR.$((PATCH + 1))"
-          sed -i "s/__version__ = \"$OLD\"/__version__ = \"$NEW\"/" dashboard.py
+          sed -i "s/__version__ = \".*\"/__version__ = \"$NEW\"/" dashboard.py
           echo "old=$OLD" >> $GITHUB_OUTPUT
           echo "new=$NEW" >> $GITHUB_OUTPUT
           echo "Bumped $OLD → $NEW"
