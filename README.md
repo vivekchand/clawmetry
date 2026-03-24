@@ -53,15 +53,15 @@ Opens at **http://localhost:8900** and you're done.
 
 ## Install
 
-**pip (recommended):**
+**One-liner (recommended):**
+```bash
+curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
+```
+
+**pip:**
 ```bash
 pip install clawmetry
 clawmetry
-```
-
-**One-liner:**
-```bash
-curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
 ```
 
 **From source:**
