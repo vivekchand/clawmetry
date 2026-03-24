@@ -27,6 +27,30 @@ def _get_openclaw_dir():
     """Return the OpenClaw config directory, respecting CLAWMETRY_OPENCLAW_DIR env var."""
     return os.environ.get('CLAWMETRY_OPENCLAW_DIR', os.path.expanduser('~/.openclaw'))
 
+# ── Single-instance PID lock ──────────────────────────────────────────────────
+def _pid_file() -> Path:
+    return Path(os.path.expanduser("~/.clawmetry/sync.pid"))
+
+def _acquire_pid_lock() -> bool:
+    """Write PID file. Return False if another instance is already running."""
+    pid_path = _pid_file()
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    if pid_path.exists():
+        try:
+            existing_pid = int(pid_path.read_text().strip())
+            os.kill(existing_pid, 0)
+            return False
+        except (ProcessLookupError, ValueError):
+            pass
+    pid_path.write_text(str(os.getpid()))
+    return True
+
+def _release_pid_lock() -> None:
+    try:
+        _pid_file().unlink(missing_ok=True)
+    except Exception:
+        pass
+
 
 
 INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
@@ -1825,6 +1849,11 @@ def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
 
 
 def run_daemon() -> None:
+    if not _acquire_pid_lock():
+        print("[clawmetry-sync] Another instance is already running. Exiting.", flush=True)
+        sys.exit(0)
+    import atexit
+    atexit.register(_release_pid_lock)
     config = load_config()
     # If node_id looks like email prefix (contains + or @), use hostname instead
     nid = config.get("node_id", "")
