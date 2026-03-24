@@ -1979,28 +1979,38 @@ def run_daemon() -> None:
         t.start()
 
     heartbeat_interval = 60
-    snapshot_interval = 60  # system snapshot every 60s, not every 15s
-    last_heartbeat = time.time()
-    last_snapshot = 0  # force first snapshot immediately
+    snapshot_interval = 60   # system snapshot (subagents, flow metrics) every 60s
+    log_sync_interval  = 60  # log lines are low-priority; streamer covers real-time
+    last_heartbeat  = time.time()
+    last_snapshot   = 0  # force first snapshot immediately
+    last_log_sync   = 0  # force first log sync immediately (catches missed lines)
     consecutive_hb_failures = 0
 
     while True:
         try:
             state = load_state()
-            ev = sync_sessions(config, state, paths)
-            lg = sync_logs(config, state, paths)
-            mem = sync_memory(config, state, paths)
-            crons = sync_crons(config, state, paths)
-            sm = sync_session_metadata(config, state)
-            # System snapshot only every 60s (system info changes slowly)
+
+            # ── High-priority: memory, flow metrics, subagents, recent sessions ──
+            mem  = sync_memory(config, state, paths)
             snap = 0
             now_snap = time.time()
             if now_snap - last_snapshot > snapshot_interval:
-                snap = sync_system_snapshot(config, state, paths)
+                snap = sync_system_snapshot(config, state, paths)  # subagents + flow
                 last_snapshot = now_snap
+            ev = sync_sessions(config, state, paths)
+            sm = sync_session_metadata(config, state)
+            crons = sync_crons(config, state, paths)
+
+            # ── Low-priority: log lines (real-time covered by streamer) ──
+            lg = 0
+            now_log = time.time()
+            if now_log - last_log_sync > log_sync_interval:
+                lg = sync_logs(config, state, paths)
+                last_log_sync = now_log
+
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
             save_state(state)
-            if ev or lg or mem or crons or sm:
+            if ev or lg or mem or crons or sm or snap:
                 log.info(f"Synced {ev} events, {lg} log lines, {mem} memory files, {crons} crons, {sm} session rows ({enc})")
 
             # Re-mirror Docker data if running in Docker mode
