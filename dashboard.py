@@ -14889,12 +14889,54 @@ function processFlowEvent(line) {
     addFlowFeedItem('📥 Task queued', '#8090b0');
     return;
   }
+  if (msg.includes('lane dequeue') && msg.includes('main')) {
+    if (now - (flowThrottles['lane-dq']||0) < 2000) return;
+    flowThrottles['lane-dq'] = now;
+    addFlowFeedItem('▶️ Task dequeued', '#607090');
+    _diagPush({kind:'lane.dequeue', value:1, ts:now});
+    return;
+  }
+  if (msg.includes('run.attempt') || (msg.includes('run attempt') && msg.includes('retry'))) {
+    if (now - (flowThrottles['run-retry']||0) < 1000) return;
+    flowThrottles['run-retry'] = now;
+    var attemptMatch = msg.match(/attempt[=: ]+(\d+)/i);
+    var attempt = attemptMatch ? parseInt(attemptMatch[1]) : 1;
+    addFlowFeedItem('🔄 Run retry (attempt ' + attempt + ')', '#e09040');
+    _diagPush({kind:'run.attempt', value:attempt, ts:now});
+    return;
+  }
+  if (msg.includes('session.stuck') || (msg.includes('session') && msg.includes('stuck'))) {
+    if (now - (flowThrottles['stuck']||0) < 5000) return;
+    flowThrottles['stuck'] = now;
+    addFlowFeedItem('⚠️ Session stuck detected', '#e04040');
+    _diagPush({kind:'session.stuck', value:1, ts:now});
+    _showStuckBanner();
+    return;
+  }
   if (msg.includes('tool end') || msg.includes('tool_end')) {
     if (now - (flowThrottles['tool-end']||0) < 300) return;
     flowThrottles['tool-end'] = now;
     addFlowFeedItem('✔️ Tool completed', '#50c070');
     return;
   }
+}
+
+// === Diagnostic event helpers ===
+var _diagBuffer = [];
+function _diagPush(event) {
+  _diagBuffer.push(event);
+  if (_diagBuffer.length > 200) _diagBuffer = _diagBuffer.slice(-200);
+}
+
+function _showStuckBanner() {
+  var existing = document.getElementById('stuck-session-banner');
+  if (existing) return;
+  var banner = document.createElement('div');
+  banner.id = 'stuck-session-banner';
+  banner.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:9999;background:#e04040;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);display:flex;gap:12px;align-items:center;';
+  banner.innerHTML = '<span>⚠️ Session stuck detected — agent may be looping</span><button onclick="document.getElementById(\'stuck-session-banner\').remove()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:12px;">Dismiss</button>';
+  document.body.appendChild(banner);
+  setTimeout(function() { var b = document.getElementById('stuck-session-banner'); if (b) b.remove(); }, 30000);
 }
 
 // === Overview Split-Screen: Clone flow SVG into overview pane ===
