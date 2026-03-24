@@ -1932,6 +1932,15 @@ def run_daemon() -> None:
             log.info(f"  Crons: {cr} synced")
     except Exception as e:
         log.warning(f"  Cron sync error: {e}")
+    # Sync today's log lines immediately so Brain tab shows the most recent
+    # activity right away — older log history is backfilled later
+    try:
+        lg = sync_logs(config, state, paths)
+        if lg:
+            log.info(f"  Recent logs: {lg} lines synced")
+    except Exception as e:
+        log.warning(f"  Recent log sync error: {e}")
+
     state["last_sync"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
     send_heartbeat(config)
@@ -1983,7 +1992,7 @@ def run_daemon() -> None:
     log_sync_interval  = 60  # log lines are low-priority; streamer covers real-time
     last_heartbeat  = time.time()
     last_snapshot   = 0  # force first snapshot immediately
-    last_log_sync   = 0  # force first log sync immediately (catches missed lines)
+    last_log_sync   = time.time()  # already synced at startup; next run after log_sync_interval
     consecutive_hb_failures = 0
 
     while True:
