@@ -1042,17 +1042,21 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     if not memory_files:
         return 0
 
-    # Check for changes via content hash
+    # Check for changes via content hash; always send all file contents so the
+    # Memory tab can display any file, not just files changed in the last cycle.
     import hashlib
     changed_files = []
+    all_file_contents = []
     file_list = []
     for name, path in memory_files:
         try:
             content_bytes = open(path, "rb").read()
             h = hashlib.md5(content_bytes).hexdigest()
+            text = content_bytes.decode("utf-8", errors="replace")
             file_list.append({"name": name, "size": len(content_bytes), "modified": os.path.getmtime(path)})
+            all_file_contents.append((name, text))
             if h != last_hashes.get(name):
-                changed_files.append((name, content_bytes.decode("utf-8", errors="replace")))
+                changed_files.append(name)
                 last_hashes[name] = h
         except Exception as e:
             log.debug(f"Memory file read error ({name}): {e}")
@@ -1060,11 +1064,12 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     if not changed_files:
         return 0
 
-    # Push memory files as encrypted blob (like session events)
+    # Push memory files as encrypted blob (like session events).
+    # Always include ALL file contents so the Memory tab can render any file.
     payload = {
         "node_id": node_id,
         "memory_state": {"files": file_list},
-        "memory_content": [{"path": name, "content": content[:100000]} for name, content in changed_files],
+        "memory_content": [{"path": name, "content": content[:100000]} for name, content in all_file_contents],
     }
     try:
         if enc_key:
