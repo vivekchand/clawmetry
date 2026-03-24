@@ -34,22 +34,22 @@ Opens at **http://localhost:8900** and you're done.
 ## Screenshots
 
 ### 🧠 Brain — Live agent event stream
-![Brain tab](screenshots/brain.png)
+![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
 
 ### 📊 Overview — Token usage & session summary
-![Overview tab](screenshots/overview.png)
+![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
 ### ⚡ Flow — Real-time tool call feed
-![Flow tab](screenshots/flow.png)
+![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
 ### 💰 Tokens — Cost breakdown by model & session
-![Tokens tab](screenshots/tokens.png)
+![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
 
 ### 🧬 Memory — Workspace file browser
-![Memory tab](screenshots/memory.png)
+![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
 
 ### 🔐 Security — Posture & audit log
-![Security tab](screenshots/security.png)
+![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
 
 ## Install
 
