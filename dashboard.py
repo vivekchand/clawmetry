@@ -2977,6 +2977,7 @@ function clawmetryLogout(){
         <div id="sh-crons" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
         <div id="sh-subagents" style="margin-bottom:14px;"></div>
+        <div id="delegation-chains-panel" style="margin-bottom:14px;"></div>
         <div id="sh-heartbeat-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Heartbeat</div>
         <div id="sh-heartbeat" style="margin-bottom:14px;"></div></div>
         <div id="sh-sandbox-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔒 Sandbox</div>
@@ -8121,6 +8122,7 @@ function clawmetryLogout(){
         <div id="sh-crons" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
         <div id="sh-subagents" style="margin-bottom:14px;"></div>
+        <div id="delegation-chains-panel" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Heartbeat</div>
         <div id="sh-heartbeat" style="margin-bottom:14px;"></div>
         <div id="sh-sandbox-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔒 Sandbox</div>
@@ -10357,11 +10359,12 @@ async function loadSessions() {
     // In cloud mode: /api/sessions and /api/subagents already handle CLOUD_MODE server-side
     // fetch interceptor appends node_id+token so these hit the cloud endpoints correctly
   }
-  var [sessData, saData, anomalyData, costData] = await Promise.all([
+  var [sessData, saData, anomalyData, costData, chainData] = await Promise.all([
     fetch('/api/sessions').then(r => r.json()).catch(function() { return {sessions:[]}; }),
     fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; }),
     fetch('/api/usage/anomalies').then(r => r.json()).catch(function() { return {anomalies:[]}; }),
-    fetch('/api/sessions/cost-breakdown').then(r => r.json()).catch(function() { return {sessions:[]}; })
+    fetch('/api/sessions/cost-breakdown').then(r => r.json()).catch(function() { return {sessions:[]}; }),
+    fetch('/api/delegation-tree').then(r => r.json()).catch(function() { return {chains:[], total_subagents:0, total_chain_cost_usd:0}; })
   ]);
   // Build cost lookup map by session_id suffix
   var costMap = {};
@@ -10455,6 +10458,57 @@ async function loadSessions() {
     });
   }
   
+  // Render delegation chains panel (AgentWeave-inspired provenance view)
+  var chainHtml = '';
+  var chains = (chainData && chainData.chains) || [];
+  if (chains.length > 0) {
+    var totalCost = chainData.total_chain_cost_usd || 0;
+    var totalSA = chainData.total_subagents || 0;
+    chainHtml += '<div style="margin-bottom:16px;">';
+    chainHtml += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">';
+    chainHtml += '<h4 style="margin:0;font-size:13px;font-weight:700;color:var(--text-primary);">🔗 Delegation Chains <span style="font-size:11px;font-weight:400;color:var(--text-muted);">(' + totalSA + ' sub-agents)</span></h4>';
+    chainHtml += '<span style="font-size:11px;color:var(--text-success);font-weight:600;">total chain cost $' + totalCost.toFixed(4) + '</span>';
+    chainHtml += '</div>';
+    chains.slice(0, 8).forEach(function(chain) {
+      var ch = chain.parent_channel || 'unknown';
+      var chIcon = ch === 'telegram' ? '✈️' : ch === 'whatsapp' ? '💬' : ch === 'discord' ? '🎮' : ch === 'main' ? '🖥️' : '🌐';
+      chainHtml += '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;margin-bottom:8px;overflow:hidden;">';
+      chainHtml += '<div style="padding:8px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border-secondary);background:var(--bg-tertiary);">';
+      chainHtml += '<span style="font-size:14px;">' + chIcon + '</span>';
+      chainHtml += '<span style="font-size:12px;font-weight:600;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(chain.parent_display || chain.parent_key) + '</span>';
+      chainHtml += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">' + chain.child_count + ' agents &bull; ';
+      chainHtml += (chain.chain_tokens >= 1000 ? (chain.chain_tokens/1000).toFixed(0)+'K' : chain.chain_tokens) + ' tok';
+      chainHtml += ' &bull; <span style="color:var(--text-success);">$' + chain.chain_cost_usd.toFixed(4) + '</span></span>';
+      chainHtml += '</div>';
+      chain.children.slice(0, 5).forEach(function(child, idx) {
+        var dot = child.status === 'active' ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
+        chainHtml += '<div style="padding:6px 12px 6px 28px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+        chainHtml += '<span style="width:7px;height:7px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></span>';
+        if (idx === 0) chainHtml += '<span style="color:var(--text-muted);font-size:10px;margin-right:-4px;">&#x2514;&#x2500;</span>';
+        else chainHtml += '<span style="color:var(--text-muted);font-size:10px;margin-right:-4px;">&#x251C;&#x2500;</span>';
+        chainHtml += '<span style="color:var(--text-secondary);font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(child.label) + '</span>';
+        chainHtml += '<span style="background:var(--bg-accent);color:var(--bg-primary);padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600;white-space:nowrap;">' + escHtml(child.model) + '</span>';
+        chainHtml += '<span style="color:var(--text-muted);font-size:10px;white-space:nowrap;">';
+        chainHtml += (child.total_tokens >= 1000 ? (child.total_tokens/1000).toFixed(0)+'K' : child.total_tokens) + ' tok';
+        chainHtml += ' &bull; $' + child.cost_usd.toFixed(4) + '</span>';
+        chainHtml += '</div>';
+      });
+      if (chain.children.length > 5) {
+        chainHtml += '<div style="padding:4px 28px;font-size:11px;color:var(--text-muted);">+ ' + (chain.children.length - 5) + ' more sub-agents</div>';
+      }
+      chainHtml += '</div>';
+    });
+    if (chains.length > 8) {
+      chainHtml += '<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:4px 0;">+ ' + (chains.length - 8) + ' more chains</div>';
+    }
+    chainHtml += '</div>';
+    var chainsEl = document.getElementById('delegation-chains-panel');
+    if (chainsEl) chainsEl.innerHTML = chainHtml;
+  } else {
+    var chainsEl = document.getElementById('delegation-chains-panel');
+    if (chainsEl) chainsEl.innerHTML = '';
+  }
+
   document.getElementById('sessions-list').innerHTML = html || '<div style="padding:16px;color:var(--text-muted);">No sessions found</div>';
   mainSessions.forEach(function(s, i) {
     var canvas = document.querySelectorAll('#sessions-list canvas')[i];
@@ -11353,6 +11407,56 @@ async function loadSystemHealth() {
       + '<div style="font-size:24px;font-weight:700;color:' + pctColor + ';">' + sa.successPct + '%</div>'
       + '<div style="font-size:11px;color:var(--text-muted,#7c8a9d);text-transform:uppercase;letter-spacing:0.5px;">Success</div></div></div>';
     document.getElementById('sh-subagents').innerHTML = sahtml;
+
+    // Delegation chain panel (AgentWeave-inspired provenance view)
+    try {
+      var chainData = await fetch('/api/delegation-tree').then(function(r){return r.json();}).catch(function(){return {chains:[]};});
+      var chains = (chainData && chainData.chains) || [];
+      var chainsEl = document.getElementById('delegation-chains-panel');
+      if (chainsEl) {
+        if (chains.length === 0) {
+          chainsEl.innerHTML = '';
+        } else {
+          var totalCost = chainData.total_chain_cost_usd || 0;
+          var totalSA = chainData.total_subagents || 0;
+          var usd_per_tok = 3.0 / 1000000;
+          var chtml = '<div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Delegation Chains</div>';
+          chtml += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
+          chtml += '<span style="font-size:12px;color:var(--text-muted);">' + totalSA + ' sub-agents across ' + chains.length + ' chains</span>';
+          chtml += '<span style="font-size:11px;color:var(--text-success);font-weight:600;">$' + totalCost.toFixed(4) + ' total</span>';
+          chtml += '</div>';
+          chains.slice(0, 5).forEach(function(chain) {
+            var ch = chain.parent_channel || 'unknown';
+            var chIcon = ch === 'telegram' ? '✈️' : ch === 'whatsapp' ? '💬' : ch === 'discord' ? '🎮' : ch === 'main' ? '🖥️' : '🌐';
+            chtml += '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:6px;overflow:hidden;">';
+            chtml += '<div style="padding:6px 10px;display:flex;align-items:center;gap:6px;background:var(--bg-tertiary);border-bottom:1px solid var(--border-secondary);">';
+            chtml += '<span>' + chIcon + '</span>';
+            chtml += '<span style="font-size:11px;font-weight:600;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(chain.parent_display || chain.parent_key) + '</span>';
+            var chainTokStr = chain.chain_tokens >= 1000 ? (chain.chain_tokens/1000).toFixed(0)+'K' : chain.chain_tokens;
+            chtml += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">' + chain.child_count + ' agents &bull; ' + chainTokStr + ' tok &bull; <span style="color:var(--text-success);">$' + chain.chain_cost_usd.toFixed(4) + '</span></span>';
+            chtml += '</div>';
+            chain.children.slice(0, 4).forEach(function(child) {
+              var dot = child.status === 'active' ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
+              var tokStr = child.total_tokens >= 1000 ? (child.total_tokens/1000).toFixed(0)+'K' : child.total_tokens;
+              chtml += '<div style="padding:4px 10px 4px 20px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border-secondary);font-size:11px;">';
+              chtml += '<span style="width:6px;height:6px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></span>';
+              chtml += '<span style="color:var(--text-secondary);font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(child.label) + '</span>';
+              chtml += '<span style="background:var(--bg-accent);color:var(--bg-primary);padding:1px 5px;border-radius:6px;font-size:9px;font-weight:600;white-space:nowrap;">' + escHtml((child.model||'').split('-').slice(0,2).join('-')) + '</span>';
+              chtml += '<span style="color:var(--text-muted);font-size:10px;white-space:nowrap;">' + tokStr + 'tok $' + child.cost_usd.toFixed(4) + '</span>';
+              chtml += '</div>';
+            });
+            if (chain.children.length > 4) {
+              chtml += '<div style="padding:3px 20px;font-size:10px;color:var(--text-muted);">+ ' + (chain.children.length - 4) + ' more</div>';
+            }
+            chtml += '</div>';
+          });
+          if (chains.length > 5) {
+            chtml += '<div style="font-size:10px;color:var(--text-muted);text-align:center;padding:2px 0;">+ ' + (chains.length - 5) + ' more chains</div>';
+          }
+          chainsEl.innerHTML = chtml;
+        }
+      }
+    } catch(e) { /* delegation tree is optional */ }
 
     // Heartbeat status in system health
     try {
@@ -16295,6 +16399,157 @@ def api_sessions():
     if gw_data and 'sessions' in gw_data:
         return jsonify({'sessions': _augment_sessions_with_burn(gw_data['sessions'])})
     return jsonify({'sessions': _augment_sessions_with_burn(_get_sessions())})
+
+
+
+@bp_sessions.route('/api/delegation-tree')
+def api_delegation_tree():
+    """Agent delegation chains -- inspired by AgentWeave provenance tracing.
+
+    Reads sessions.json, groups subagents by their spawnedBy parent key,
+    and returns per-chain token totals and estimated cost.
+    """
+    sessions_dir = _get_sessions_dir()
+    index_path = os.path.join(sessions_dir, 'sessions.json')
+    try:
+        with open(index_path) as f:
+            all_sessions = json.load(f)
+    except Exception:
+        return jsonify({'chains': [], 'total_subagents': 0, 'total_chain_cost_usd': 0.0})
+
+    usd_per_tok = _estimate_usd_per_token()
+    now_ms = time.time() * 1000
+
+    main_sessions = {}
+    subagent_sessions = []
+    for key, val in all_sessions.items():
+        if not isinstance(val, dict):
+            continue
+        if ':subagent:' in key:
+            subagent_sessions.append((key, val))
+        else:
+            main_sessions[key] = val
+
+    chains_map = {}
+    for key, sa in subagent_sessions:
+        parent_key = sa.get('spawnedBy', 'unknown')
+        if parent_key not in chains_map:
+            chains_map[parent_key] = []
+        age_ms = now_ms - sa.get('updatedAt', 0)
+        status = 'active' if age_ms < 120000 else ('idle' if age_ms < 600000 else 'stale')
+        total_tok = int(sa.get('totalTokens') or 0)
+        chains_map[parent_key].append({
+            'key': key,
+            'label': sa.get('label') or key.split(':')[-1],
+            'model': sa.get('model', 'unknown'),
+            'prov_agent_type': 'subagent',
+            'prov_session_turn': 2,
+            'prov_parent_key': parent_key,
+            'prov_total_tokens': total_tok,
+            'input_tokens': int(sa.get('inputTokens') or 0),
+            'output_tokens': int(sa.get('outputTokens') or 0),
+            'total_tokens': total_tok,
+            'cost_usd': round(total_tok * usd_per_tok, 6),
+            'status': status,
+            'updated_at': sa.get('updatedAt', 0),
+        })
+
+    chains = []
+    total_chain_cost = 0.0
+    for parent_key, children in chains_map.items():
+        parts = parent_key.split(':')
+        channel = parts[2] if len(parts) > 2 else 'unknown'
+        display = parts[-1] if len(parts) > 0 else parent_key
+        chain_tokens = sum(c['total_tokens'] for c in children)
+        chain_cost = round(chain_tokens * usd_per_tok, 6)
+        total_chain_cost += chain_cost
+        parent_meta = main_sessions.get(parent_key, {})
+        chains.append({
+            'parent_key': parent_key,
+            'parent_display': parent_meta.get('displayName') or parent_meta.get('subject') or display,
+            'parent_channel': channel,
+            'children': sorted(children, key=lambda x: x['total_tokens'], reverse=True),
+            'chain_tokens': chain_tokens,
+            'chain_cost_usd': chain_cost,
+            'child_count': len(children),
+        })
+
+    chains.sort(key=lambda x: x['chain_tokens'], reverse=True)
+    return jsonify({
+        'chains': chains,
+        'total_subagents': len(subagent_sessions),
+        'total_chain_cost_usd': round(total_chain_cost, 4),
+    })
+
+
+@bp_sessions.route('/api/export/otlp')
+def api_export_otlp():
+    """Export recent sessions as OTLP ResourceSpans JSON.
+
+    Compatible with Grafana Tempo, Jaeger, and any OTLP-capable backend.
+    """
+    import hashlib
+
+    sessions_dir = _get_sessions_dir()
+    index_path = os.path.join(sessions_dir, 'sessions.json')
+    try:
+        with open(index_path) as f:
+            all_sessions = json.load(f)
+    except Exception:
+        return jsonify({'resourceSpans': []})
+
+    cutoff_ms = (time.time() - 86400) * 1000
+    resource_spans = []
+    count = 0
+
+    for key, val in all_sessions.items():
+        if not isinstance(val, dict):
+            continue
+        if val.get('updatedAt', 0) < cutoff_ms:
+            continue
+        if count >= 100:
+            break
+        count += 1
+
+        is_subagent = ':subagent:' in key
+        agent_type = 'subagent' if is_subagent else 'main'
+        session_id = val.get('sessionId', key.split(':')[-1])
+        trace_id = hashlib.md5(session_id.encode()).hexdigest()
+        span_id = trace_id[:16]
+        total_tokens = int(val.get('totalTokens') or 0)
+
+        attrs = [
+            {'key': 'service.name', 'value': {'stringValue': 'clawmetry'}},
+            {'key': 'prov.agent.id', 'value': {'stringValue': key}},
+            {'key': 'prov.agent.type', 'value': {'stringValue': agent_type}},
+            {'key': 'prov.agent.model', 'value': {'stringValue': val.get('model', 'unknown')}},
+            {'key': 'prov.llm.total_tokens', 'value': {'intValue': total_tokens}},
+            {'key': 'prov.session.turn', 'value': {'intValue': 2 if is_subagent else 1}},
+        ]
+        if is_subagent and val.get('spawnedBy'):
+            attrs.append({'key': 'prov.parent.session.id', 'value': {'stringValue': val['spawnedBy']}})
+        if val.get('label'):
+            attrs.append({'key': 'prov.task.label', 'value': {'stringValue': val['label']}})
+
+        updated_ns = int(val.get('updatedAt', 0)) * 1000000
+
+        resource_spans.append({
+            'resource': {'attributes': [
+                {'key': 'service.name', 'value': {'stringValue': 'clawmetry'}},
+            ]},
+            'scopeSpans': [{'scope': {'name': 'clawmetry.agent', 'version': '1.0'}, 'spans': [{
+                'traceId': trace_id,
+                'spanId': span_id,
+                'name': 'agent.turn',
+                'kind': 3,
+                'startTimeUnixNano': updated_ns - 1000000000,
+                'endTimeUnixNano': updated_ns,
+                'attributes': attrs,
+                'status': {'code': 1},
+            }]}]
+        })
+
+    return jsonify({'resourceSpans': resource_spans})
 
 
 @bp_sessions.route('/api/sessions/cost-breakdown')
