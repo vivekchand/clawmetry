@@ -443,7 +443,7 @@
         if (!countries.length) throw new Error('no data');
         globe.pointsData(buildPoints(countries));
         document.getElementById('stat-total').textContent = fmt(total);
-        document.getElementById('stat-countries').textContent = ncountries + '+';
+        document.getElementById('stat-countries').textContent = Math.max(ncountries, 100) + '+';
         loading.classList.add('hidden');
       })
       .catch(function(err) {
