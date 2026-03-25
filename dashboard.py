@@ -512,6 +512,11 @@ def _default_alerts_webhook_config():
         'slack_webhook_url': '',
         'discord_webhook_url': '',
         'cost_spike_alerts': True,
+        'anomaly_session_spike_alerts': True,
+        'anomaly_frequency_spike_alerts': True,
+        'anomaly_daily_multiplier': 2.0,    # alert when today > N x 7-day avg
+        'anomaly_session_multiplier': 2.0,  # alert when session cost > N x rolling avg
+        'anomaly_frequency_multiplier': 5.0, # alert when session count > N x typical
         'agent_error_rate_alerts': True,
         'security_posture_changes': True,
     }
@@ -877,12 +882,14 @@ def _budget_monitor_loop():
                     channels=['banner', 'telegram'],
                 )
 
-            # Anomaly check: today's cost > 2x 7-day average
+            # Adaptive anomaly detection (issue #301): rolling-baseline alerts
             status = _get_budget_status()
             daily_spent = status['daily_spent']
             if daily_spent > 0:
+                cfg_anom = _load_alerts_webhook_config()
+                daily_mult = float(cfg_anom.get('anomaly_daily_multiplier', 2.0))
                 week_avg = status['weekly_spent'] / 7 if status['weekly_spent'] > 0 else 0
-                if week_avg > 0 and daily_spent > week_avg * 2:
+                if week_avg > 0 and daily_spent > week_avg * daily_mult:
                     ratio = (daily_spent / week_avg)
                     _fire_alert(
                         rule_id='anomaly_daily',
@@ -894,10 +901,17 @@ def _budget_monitor_loop():
                         'type': 'cost_spike',
                         'agent': 'main',
                         'cost_usd': round(daily_spent, 4),
-                        'threshold': round(week_avg * 2, 4),
+                        'threshold': round(week_avg * daily_mult, 4),
                         'timestamp': now,
                         'message': f'Cost spike detected: {ratio:.1f}x daily average',
                     })
+
+            # Per-session cost spikes and session frequency anomaly
+            try:
+                _detect_per_session_cost_spikes()
+                _detect_session_frequency_anomaly()
+            except Exception:
+                pass
 
             # Agent error-rate check from webhook channel metrics (last 60 minutes)
             window_start = now - 3600
@@ -2847,6 +2861,12 @@ function clawmetryLogout(){
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-cost-spike"> Cost spike alerts</label>
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-agent-error"> Agent error rate alerts</label>
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-security"> Security posture changes</label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-anomaly-session"> Session cost spike alerts</label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-anomaly-frequency"> Session frequency spike alerts</label>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;">
+            <label style="font-size:12px;color:var(--text-secondary);">Daily cost spike at <input id="alert-anomaly-daily-mult" type="number" step="0.5" min="1" max="20" value="2" style="width:50px;padding:2px 4px;border:1px solid var(--border-primary);border-radius:4px;background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;">x 7-day avg</label>
+            <label style="font-size:12px;color:var(--text-secondary);">Session cost spike at <input id="alert-anomaly-session-mult" type="number" step="0.5" min="1" max="20" value="2" style="width:50px;padding:2px 4px;border:1px solid var(--border-primary);border-radius:4px;background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;">x rolling avg</label>
           </div>
           <div style="display:flex;gap:8px;">
             <button onclick="saveWebhookConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save</button>
@@ -2865,6 +2885,12 @@ function clawmetryLogout(){
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-cost-spike"> Cost spike alerts</label>
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-agent-error"> Agent error rate alerts</label>
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-security"> Security posture changes</label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-anomaly-session"> Session cost spike alerts</label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-anomaly-frequency"> Session frequency spike alerts</label>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;">
+            <label style="font-size:12px;color:var(--text-secondary);">Daily cost spike at <input id="alert-anomaly-daily-mult" type="number" step="0.5" min="1" max="20" value="2" style="width:50px;padding:2px 4px;border:1px solid var(--border-primary);border-radius:4px;background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;">x 7-day avg</label>
+            <label style="font-size:12px;color:var(--text-secondary);">Session cost spike at <input id="alert-anomaly-session-mult" type="number" step="0.5" min="1" max="20" value="2" style="width:50px;padding:2px 4px;border:1px solid var(--border-primary);border-radius:4px;background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;">x rolling avg</label>
           </div>
           <div style="display:flex;gap:8px;">
             <button onclick="saveWebhookConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save</button>
@@ -3741,6 +3767,10 @@ async function loadWebhookConfig() {
     document.getElementById('alert-slack-url').value = cfg.slack_webhook_url || '';
     document.getElementById('alert-discord-url').value = cfg.discord_webhook_url || '';
     document.getElementById('alert-toggle-cost-spike').checked = cfg.cost_spike_alerts !== false;
+    document.getElementById('alert-toggle-anomaly-session').checked = cfg.anomaly_session_spike_alerts !== false;
+    document.getElementById('alert-toggle-anomaly-frequency').checked = cfg.anomaly_frequency_spike_alerts !== false;
+    if (cfg.anomaly_daily_multiplier) document.getElementById('alert-anomaly-daily-mult').value = cfg.anomaly_daily_multiplier;
+    if (cfg.anomaly_session_multiplier) document.getElementById('alert-anomaly-session-mult').value = cfg.anomaly_session_multiplier;
     document.getElementById('alert-toggle-agent-error').checked = cfg.agent_error_rate_alerts !== false;
     document.getElementById('alert-toggle-security').checked = cfg.security_posture_changes !== false;
     document.getElementById('alert-webhook-status').textContent = '';
@@ -3755,6 +3785,10 @@ async function saveWebhookConfig() {
     slack_webhook_url: document.getElementById('alert-slack-url').value.trim(),
     discord_webhook_url: document.getElementById('alert-discord-url').value.trim(),
     cost_spike_alerts: document.getElementById('alert-toggle-cost-spike').checked,
+      anomaly_session_spike_alerts: document.getElementById('alert-toggle-anomaly-session').checked,
+      anomaly_frequency_spike_alerts: document.getElementById('alert-toggle-anomaly-frequency').checked,
+      anomaly_daily_multiplier: parseFloat(document.getElementById('alert-anomaly-daily-mult').value) || 2.0,
+      anomaly_session_multiplier: parseFloat(document.getElementById('alert-anomaly-session-mult').value) || 2.0,
     agent_error_rate_alerts: document.getElementById('alert-toggle-agent-error').checked,
     security_posture_changes: document.getElementById('alert-toggle-security').checked,
   };
@@ -5560,6 +5594,11 @@ def _default_alerts_webhook_config():
         'cost_spike_alerts': True,
         'agent_error_rate_alerts': True,
         'security_posture_changes': True,
+        'anomaly_session_spike_alerts': True,
+        'anomaly_frequency_spike_alerts': True,
+        'anomaly_daily_multiplier': 2.0,    # alert when today > N x 7-day avg
+        'anomaly_session_multiplier': 2.0,  # alert when session cost > N x rolling avg
+        'anomaly_frequency_multiplier': 5.0, # alert when session count > N x typical
     }
 
 
@@ -5936,12 +5975,14 @@ def _budget_monitor_loop():
                         channels=['banner', 'telegram'],
                     )
 
-            # Anomaly check: today's cost > 2x 7-day average
+            # Adaptive anomaly detection (issue #301): rolling-baseline alerts
             status = _get_budget_status()
             daily_spent = status['daily_spent']
             if daily_spent > 0:
+                cfg_anom = _load_alerts_webhook_config()
+                daily_mult = float(cfg_anom.get('anomaly_daily_multiplier', 2.0))
                 week_avg = status['weekly_spent'] / 7 if status['weekly_spent'] > 0 else 0
-                if week_avg > 0 and daily_spent > week_avg * 2:
+                if week_avg > 0 and daily_spent > week_avg * daily_mult:
                     ratio = (daily_spent / week_avg)
                     _fire_alert(
                         rule_id='anomaly_daily',
@@ -5953,10 +5994,17 @@ def _budget_monitor_loop():
                         'type': 'cost_spike',
                         'agent': 'main',
                         'cost_usd': round(daily_spent, 4),
-                        'threshold': round(week_avg * 2, 4),
+                        'threshold': round(week_avg * daily_mult, 4),
                         'timestamp': now,
                         'message': f'Cost spike detected: {ratio:.1f}x daily average',
                     })
+
+            # Per-session cost spikes and session frequency anomaly
+            try:
+                _detect_per_session_cost_spikes()
+                _detect_session_frequency_anomaly()
+            except Exception:
+                pass
 
             # Agent error-rate check from webhook channel metrics (last 60 minutes)
             window_start = now - 3600
@@ -8903,6 +8951,10 @@ async function loadWebhookConfig() {
     document.getElementById('alert-slack-url').value = cfg.slack_webhook_url || '';
     document.getElementById('alert-discord-url').value = cfg.discord_webhook_url || '';
     document.getElementById('alert-toggle-cost-spike').checked = cfg.cost_spike_alerts !== false;
+    document.getElementById('alert-toggle-anomaly-session').checked = cfg.anomaly_session_spike_alerts !== false;
+    document.getElementById('alert-toggle-anomaly-frequency').checked = cfg.anomaly_frequency_spike_alerts !== false;
+    if (cfg.anomaly_daily_multiplier) document.getElementById('alert-anomaly-daily-mult').value = cfg.anomaly_daily_multiplier;
+    if (cfg.anomaly_session_multiplier) document.getElementById('alert-anomaly-session-mult').value = cfg.anomaly_session_multiplier;
     document.getElementById('alert-toggle-agent-error').checked = cfg.agent_error_rate_alerts !== false;
     document.getElementById('alert-toggle-security').checked = cfg.security_posture_changes !== false;
     document.getElementById('alert-webhook-status').textContent = '';
@@ -8918,6 +8970,10 @@ async function saveWebhookConfig() {
     slack_webhook_url: document.getElementById('alert-slack-url').value.trim(),
     discord_webhook_url: document.getElementById('alert-discord-url').value.trim(),
     cost_spike_alerts: document.getElementById('alert-toggle-cost-spike').checked,
+      anomaly_session_spike_alerts: document.getElementById('alert-toggle-anomaly-session').checked,
+      anomaly_frequency_spike_alerts: document.getElementById('alert-toggle-anomaly-frequency').checked,
+      anomaly_daily_multiplier: parseFloat(document.getElementById('alert-anomaly-daily-mult').value) || 2.0,
+      anomaly_session_multiplier: parseFloat(document.getElementById('alert-anomaly-session-mult').value) || 2.0,
     agent_error_rate_alerts: document.getElementById('alert-toggle-agent-error').checked,
     security_posture_changes: document.getElementById('alert-toggle-security').checked,
   };
@@ -18340,7 +18396,9 @@ def api_alerts_webhook():
         data = request.get_json(silent=True) or {}
         allowed = {
             'webhook_url', 'slack_webhook_url', 'discord_webhook_url',
-            'cost_spike_alerts', 'agent_error_rate_alerts', 'security_posture_changes'
+            'cost_spike_alerts', 'agent_error_rate_alerts', 'security_posture_changes',
+            'anomaly_session_spike_alerts', 'anomaly_frequency_spike_alerts',
+            'anomaly_daily_multiplier', 'anomaly_session_multiplier', 'anomaly_frequency_multiplier',
         }
         updates = {k: data[k] for k in data if k in allowed}
         cfg = _save_alerts_webhook_config(updates)
@@ -19156,6 +19214,7 @@ def _compute_transcript_analytics():
             s_model = 'unknown'
             s_start = None
             s_end = None
+            s_turn_tokens = []  # per-turn token counts for spike detection
             search_parts = []
             explicit_cron_refs = set()
 
@@ -19195,6 +19254,10 @@ def _compute_transcript_analytics():
                             s_tokens += tokens
                             if cost > 0:
                                 s_cost += cost
+
+                            # Track per-turn token counts for spike detection
+                            turn_ts_val = ts.timestamp() if ts and hasattr(ts, 'timestamp') else 0
+                            s_turn_tokens.append({'tokens': tokens, 'ts': turn_ts_val})
 
                             plugins = _extract_tool_plugins(obj)
                             if plugins:
@@ -19243,6 +19306,7 @@ def _compute_transcript_analytics():
                     'search_text': search_text,
                     'explicit_cron_refs': explicit_cron_refs,
                     'is_cron_candidate': ('cron' in search_text) or bool(explicit_cron_refs),
+                    'turn_tokens': s_turn_tokens,
                 })
             except Exception:
                 continue
@@ -19259,6 +19323,110 @@ def _compute_transcript_analytics():
     _transcript_analytics_cache['ts'] = now
     return result
 
+
+
+
+def _detect_per_session_cost_spikes():
+    """Detect sessions in the last 24h whose cost exceeds N x rolling 7-day avg.
+
+    Returns list of anomaly dicts (same schema as _compute_session_cost_anomalies).
+    Also fires _fire_alert and _dispatch_configured_webhooks for fresh spikes.
+    """
+    cfg = _load_alerts_webhook_config()
+    if not cfg.get('anomaly_session_spike_alerts', True):
+        return []
+    multiplier = float(cfg.get('anomaly_session_multiplier', 2.0))
+
+    analytics = _compute_transcript_analytics()
+    session_summaries = analytics.get('sessions', [])
+    anomalies = _compute_session_cost_anomalies(session_summaries)
+
+    now_ts = time.time()
+    # Only fire alerts for sessions that started in the last 2 hours (fresh anomalies)
+    recent_cutoff = now_ts - 7200
+    fired_any = False
+    for a in anomalies:
+        ts_ms = a.get('timestamp', 0)
+        ts = ts_ms / 1000.0 if ts_ms > 1e10 else float(ts_ms)
+        if ts < recent_cutoff:
+            continue
+        ratio = a.get('ratio', 0)
+        if ratio < multiplier:
+            continue
+        cost = a.get('cost_usd', 0)
+        avg = a.get('rolling_avg_usd', 0)
+        sid = a.get('session_id', 'unknown')
+        rule_id = f'anomaly_session_{sid}'
+        msg = (
+            f'Session cost spike: session {sid[:8]} cost ${cost:.4f} '
+            f'({ratio:.1f}x rolling avg ${avg:.4f})'
+        )
+        _fire_alert(rule_id=rule_id, alert_type='anomaly', message=msg,
+                    channels=['banner', 'telegram'])
+        _dispatch_configured_webhooks('cost_spike', {
+            'type': 'session_cost_spike',
+            'agent': 'main',
+            'session_id': sid,
+            'cost_usd': round(cost, 6),
+            'rolling_avg_usd': round(avg, 6),
+            'ratio': round(ratio, 3),
+            'threshold': round(avg * multiplier, 6),
+            'timestamp': now_ts,
+            'message': msg,
+        })
+        fired_any = True
+
+    return anomalies
+
+
+def _detect_session_frequency_anomaly():
+    """Alert when today has N x more sessions than the 7-day daily average."""
+    cfg = _load_alerts_webhook_config()
+    if not cfg.get('anomaly_frequency_spike_alerts', True):
+        return
+    multiplier = float(cfg.get('anomaly_frequency_multiplier', 5.0))
+
+    analytics = _compute_transcript_analytics()
+    sessions = analytics.get('sessions', [])
+    if not sessions:
+        return
+
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    day_counts = {}
+    for s in sessions:
+        day = s.get('day', '')
+        if day:
+            day_counts[day] = day_counts.get(day, 0) + 1
+
+    today_count = day_counts.get(today_str, 0)
+    if today_count == 0:
+        return
+
+    # 7-day average (excluding today)
+    past_counts = [v for k, v in day_counts.items() if k != today_str]
+    if len(past_counts) < 3:
+        return  # not enough baseline data
+    past_avg = sum(past_counts) / len(past_counts)
+    if past_avg <= 0:
+        return
+
+    if today_count > past_avg * multiplier:
+        ratio = today_count / past_avg
+        msg = (
+            f'Session frequency spike: {today_count} sessions today '
+            f'({ratio:.1f}x the {len(past_counts)}-day avg of {past_avg:.1f}/day)'
+        )
+        _fire_alert(rule_id='anomaly_session_frequency', alert_type='anomaly',
+                    message=msg, channels=['banner', 'telegram'])
+        _dispatch_configured_webhooks('cost_spike', {
+            'type': 'session_frequency_spike',
+            'agent': 'main',
+            'session_count': today_count,
+            'rolling_avg': round(past_avg, 2),
+            'ratio': round(ratio, 2),
+            'timestamp': time.time(),
+            'message': msg,
+        })
 
 def _compute_session_cost_anomalies(session_summaries):
     """Flag sessions with cost >2x their rolling 7-day session-cost average."""
@@ -19407,6 +19575,143 @@ def api_usage_anomalies():
         'anomalies': anomalies,
         'baseline_7d_avg_usd': round(baseline_avg, 6),
         'threshold_multiplier': 2.0,
+    })
+
+
+def _compute_per_turn_token_anomalies(session_summaries, threshold_multiplier=3.0, window_days=7):
+    """Flag individual turns whose token count exceeds threshold_multiplier × 7-day rolling avg turn size.
+
+    Returns a list of anomaly dicts sorted by ratio descending.
+    """
+    now_ts = time.time()
+    day_ago = now_ts - 86400
+    window_sec = window_days * 86400
+    anomalies = []
+
+    # Build a flat list of (ts, tokens, session_id) for all turns in the rolling window
+    all_turns = []
+    for sess in session_summaries:
+        sess_ts = float(sess.get('start_ts', 0) or 0)
+        if sess_ts < now_ts - window_sec:
+            continue
+        for turn in (sess.get('turn_tokens') or []):
+            t_ts = float(turn.get('ts', 0) or sess_ts)
+            t_tokens = int(turn.get('tokens', 0) or 0)
+            if t_tokens > 0:
+                all_turns.append({'ts': t_ts, 'tokens': t_tokens, 'session_id': sess.get('session_id', '')})
+
+    if not all_turns:
+        return []
+
+    # For each turn in the last 24h, compute ratio vs rolling avg of all prior turns in window
+    all_turns.sort(key=lambda t: t['ts'])
+    for i, turn in enumerate(all_turns):
+        if turn['ts'] < day_ago:
+            continue
+        prior_tokens = [t['tokens'] for t in all_turns[:i] if t['ts'] >= turn['ts'] - window_sec]
+        if len(prior_tokens) < 3:
+            continue
+        avg = sum(prior_tokens) / len(prior_tokens)
+        if avg <= 0:
+            continue
+        ratio = turn['tokens'] / avg
+        if ratio >= threshold_multiplier:
+            anomalies.append({
+                'type': 'token_spike',
+                'session_id': turn['session_id'],
+                'turn_tokens': turn['tokens'],
+                'rolling_avg_tokens': round(avg, 1),
+                'ratio': round(ratio, 3),
+                'timestamp': int(turn['ts'] * 1000),
+            })
+
+    anomalies.sort(key=lambda a: a.get('ratio', 0), reverse=True)
+    return anomalies
+
+
+def _compute_daily_cost_anomaly(daily_cost_map, threshold_multiplier=2.0, window_days=7):
+    """Check if today's cost is > threshold_multiplier × 7-day rolling average.
+
+    Returns an anomaly dict or None.
+    """
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    today_cost = daily_cost_map.get(today_str, 0.0)
+    if today_cost <= 0:
+        return None
+
+    window_costs = []
+    for i in range(1, window_days + 1):
+        d = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+        c = daily_cost_map.get(d, 0.0)
+        if c > 0:
+            window_costs.append(c)
+
+    if len(window_costs) < 2:
+        return None
+
+    avg = sum(window_costs) / len(window_costs)
+    if avg <= 0:
+        return None
+
+    ratio = today_cost / avg
+    if ratio < threshold_multiplier:
+        return None
+
+    return {
+        'type': 'daily_cost_spike',
+        'date': today_str,
+        'today_cost_usd': round(today_cost, 4),
+        'rolling_avg_usd': round(avg, 4),
+        'ratio': round(ratio, 3),
+        'window_days': window_days,
+    }
+
+
+@bp_usage.route('/api/anomalies')
+def api_anomalies():
+    """Consolidated rolling-baseline anomaly detector.
+
+    Returns three detection categories:
+      - session_cost_spikes: sessions where cost > 2x 7-day rolling avg session cost
+      - token_spikes: turns where token count > 3x 7-day rolling avg turn size
+      - daily_cost_spike: today's total cost > 2x 7-day rolling daily avg (or None)
+
+    Query params:
+      session_threshold  float  default 2.0 — session cost spike multiplier
+      token_threshold    float  default 3.0 — per-turn token spike multiplier
+      daily_threshold    float  default 2.0 — daily cost spike multiplier
+    """
+    try:
+        session_thr = float(request.args.get('session_threshold', 2.0))
+        token_thr = float(request.args.get('token_threshold', 3.0))
+        daily_thr = float(request.args.get('daily_threshold', 2.0))
+    except (ValueError, TypeError):
+        return jsonify({'error': 'threshold params must be numeric'}), 400
+
+    analytics = _compute_transcript_analytics()
+    session_summaries = analytics.get('sessions', [])
+    daily_cost_map = analytics.get('daily_cost', {})
+
+    session_spikes = _compute_session_cost_anomalies(session_summaries)
+    # Re-run with custom threshold if different from default 2.0
+    if abs(session_thr - 2.0) > 0.01:
+        session_spikes = [a for a in session_spikes if a.get('ratio', 0) >= session_thr]
+
+    token_spikes = _compute_per_turn_token_anomalies(session_summaries, threshold_multiplier=token_thr)
+    daily_spike = _compute_daily_cost_anomaly(daily_cost_map, threshold_multiplier=daily_thr)
+
+    total = len(session_spikes) + len(token_spikes) + (1 if daily_spike else 0)
+
+    return jsonify({
+        'session_cost_spikes': session_spikes,
+        'token_spikes': token_spikes,
+        'daily_cost_spike': daily_spike,
+        'total_anomalies': total,
+        'thresholds': {
+            'session_cost': session_thr,
+            'token_per_turn': token_thr,
+            'daily_cost': daily_thr,
+        },
     })
 
 
