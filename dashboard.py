@@ -36,6 +36,10 @@ import glob
 import json
 import socket
 from collections import deque, defaultdict
+
+# In-process ring-buffer for quick action history (last 50 entries)
+_quick_action_log = deque(maxlen=50)
+
 import argparse
 import subprocess
 import time
@@ -4283,6 +4287,98 @@ function clawmetryLogout(){
 
 
 <script>
+
+// ═══ QUICK ACTIONS ═══════════════════════════════════════════════════════════
+var _qaCurrentAction = null;
+
+function qaConfirmAction(actionKey, title, body) {
+  _qaCurrentAction = actionKey;
+  document.getElementById('qa-confirm-title').textContent = title;
+  document.getElementById('qa-confirm-body').textContent = body;
+  var overlay = document.getElementById('qa-confirm-overlay');
+  overlay.style.display = 'flex';
+  document.getElementById('qa-confirm-ok').onclick = function() {
+    qaCloseConfirm();
+    qaRunAction(actionKey);
+  };
+}
+
+function qaCloseConfirm() {
+  var overlay = document.getElementById('qa-confirm-overlay');
+  if (overlay) overlay.style.display = 'none';
+  _qaCurrentAction = null;
+}
+
+async function qaRunAction(actionKey) {
+  var banner = document.getElementById('qa-result-banner');
+  if (banner) {
+    banner.style.display = 'block';
+    banner.style.background = 'rgba(96,165,250,0.1)';
+    banner.style.borderColor = 'rgba(96,165,250,0.3)';
+    banner.style.color = '#60a5fa';
+    banner.textContent = 'Running ' + actionKey + '...';
+  }
+  try {
+    var resp = await fetch('/api/actions/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: actionKey})
+    });
+    var data = await resp.json();
+    if (banner) {
+      if (data.ok) {
+        banner.style.background = 'rgba(34,197,94,0.1)';
+        banner.style.borderColor = 'rgba(34,197,94,0.3)';
+        banner.style.color = '#22c55e';
+        banner.textContent = '✓ ' + (data.output || actionKey + ' completed') + ' (' + (data.duration_ms || 0) + 'ms)';
+      } else {
+        banner.style.background = 'rgba(239,68,68,0.1)';
+        banner.style.borderColor = 'rgba(239,68,68,0.3)';
+        banner.style.color = '#ef4444';
+        banner.textContent = '✗ ' + (data.output || data.error || 'Action failed');
+      }
+    }
+    loadQAHistory();
+  } catch(e) {
+    if (banner) {
+      banner.style.background = 'rgba(239,68,68,0.1)';
+      banner.style.borderColor = 'rgba(239,68,68,0.3)';
+      banner.style.color = '#ef4444';
+      banner.textContent = '✗ ' + e.message;
+    }
+  }
+}
+
+async function loadQAHistory() {
+  var el = document.getElementById('qa-history-list');
+  if (!el) return;
+  try {
+    var resp = await fetch('/api/actions/history');
+    var data = await resp.json();
+    var actions = data.actions || [];
+    if (!actions.length) {
+      el.textContent = 'No actions run yet.';
+      return;
+    }
+    var html = '<table style="width:100%;border-collapse:collapse;">';
+    actions.slice().reverse().forEach(function(a) {
+      var color = a.ok ? '#22c55e' : '#ef4444';
+      var label = a.ok ? '✓' : '✗';
+      html += '<tr style="border-bottom:1px solid var(--border-color);">';
+      html += '<td style="padding:6px 8px;color:' + color + ';width:24px;">' + label + '</td>';
+      html += '<td style="padding:6px 8px;color:var(--text-secondary);width:130px;font-weight:600;">' + (a.action || '') + '</td>';
+      html += '<td style="padding:6px 8px;color:var(--text-muted);">' + (a.output || '').slice(0, 120) + '</td>';
+      html += '<td style="padding:6px 8px;color:var(--text-muted);text-align:right;width:65px;">' + (a.duration_ms || 0) + 'ms</td>';
+      html += '</tr>';
+    });
+    html += '</table>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.textContent = 'Could not load action history.';
+  }
+}
+// ═══ END QUICK ACTIONS ═══════════════════════════════════════════════════════
+
 // === Budget & Alert Functions ===
 function openBudgetModal() {
   document.getElementById('budget-modal').style.display = 'flex';
@@ -4594,6 +4690,7 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
+  if (name === 'actions') loadQAHistory();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
@@ -10534,6 +10631,7 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
+  if (name === 'actions') loadQAHistory();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
@@ -32067,6 +32165,7 @@ def _init_data_provider():
         )
     except Exception:
         return None
+
 
 
 def main():
