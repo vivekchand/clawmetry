@@ -287,3 +287,4 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Daemon support: launchd (macOS) + systemd (Linux) — auto-starts on login
 - Architecture overview on startup matching clawmetry.com/how-it-works
 - `clawmetry --help` and `clawmetry help` 
+# v0.12.77
