@@ -245,8 +245,9 @@ def _cmd_connect(args) -> None:
         _cfg_pre = _jcfg_pre.load(open(_cfgpath_pre))
         _saved_node_id = _cfg_pre.get('node_id', '')
         _saved_enc_key = _cfg_pre.get('encryption_key', '')
+        _saved_api_key = _cfg_pre.get('api_key', '')
     except Exception:
-        pass
+        _saved_api_key = ''
 
     _stop_existing_daemon()
     import getpass
@@ -262,8 +263,12 @@ def _cmd_connect(args) -> None:
         sys.exit(1)
 
     # Verify ownership via OTP when key is passed directly (not from interactive flow)
+    # Skip if this key is already verified (saved in config) — enables Docker restarts
     if args.key:
-        _verify_key_ownership(api_key)
+        if _saved_api_key and api_key == _saved_api_key:
+            pass  # Already verified — reconnecting with same key
+        else:
+            _verify_key_ownership(api_key)
 
     custom_name = getattr(args, 'custom_node_id', None) or ''
     machine_hostname = custom_name or socket.gethostname()
@@ -407,10 +412,17 @@ StandardError=append:{LOG_FILE}
 WantedBy=default.target
 """
     service_path.write_text(unit)
-    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-    subprocess.run(["systemctl", "--user", "enable", "--now", label], check=False)
-    print("  Running in the background. Your data is syncing to the cloud.")
-    print('  To stop: clawmetry disconnect')
+    # Check if systemctl is available (not in Docker/containers without systemd)
+    import shutil
+    if shutil.which("systemctl"):
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+        subprocess.run(["systemctl", "--user", "enable", "--now", label], check=False)
+        print("  Running in the background. Your data is syncing to the cloud.")
+        print('  To stop: clawmetry disconnect')
+    else:
+        print("  ⚠️  systemctl not available (container/Docker?).")
+        print("  Falling back to background subprocess…")
+        _start_subprocess()
 
 
 def _start_subprocess() -> None:
