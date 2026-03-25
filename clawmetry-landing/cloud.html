@@ -420,6 +420,7 @@
         </div>
         <div style="display:flex;gap:2px;margin-left:8px;flex-wrap:wrap;">
           <button onclick="showCloudTab('curl')" id="ctab-curl" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#28c840;color:#000;font-family:'JetBrains Mono',monospace;transition:all 0.15s;">curl</button>
+          <button onclick="showCloudTab('agent')" id="ctab-agent" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">&#x1F916; Agent</button>
           <button onclick="showCloudTab('pip')" id="ctab-pip" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">pip</button>
           <button onclick="showCloudTab('powershell')" id="ctab-powershell" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">PowerShell</button>
           <button onclick="showCloudTab('cmd')" id="ctab-cmd" style="padding:5px 14px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;transition:all 0.15s;">CMD</button>
@@ -460,12 +461,22 @@
           <a href="/mac" style="display:inline-flex;align-items:center;gap:10px;padding:13px 32px;background:#E5443A;color:#fff;border-radius:30px;font-size:15px;font-weight:700;text-decoration:none;transition:opacity 0.15s;" onmouseover="this.style.opacity='0.88'" onmouseout="this.style.opacity='1'"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download for macOS</a>
           <div style="font-size:11px;color:rgba(255,255,255,0.3);margin-top:14px;font-family:'JetBrains Mono',monospace;">Requires macOS 14+ &nbsp;&middot;&nbsp; Apple Silicon + Intel</div>
         </div>
+        <div id="cpanel-agent" style="display:none;text-align:center;padding:12px 0 8px;">
+          <div style="font-size:13px;color:rgba(255,255,255,0.4);margin-bottom:20px;font-style:italic;">Already running an OpenClaw agent? Just ask it:</div>
+          <div style="display:inline-block;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:16px 28px;font-size:15px;color:#fff;letter-spacing:0.01em;">
+            &ldquo;Run <code style="color:#28c840;background:rgba(40,200,64,0.15);padding:2px 8px;border-radius:4px;font-size:14px;">pip install clawmetry &amp;&amp; clawmetry connect</code>&rdquo;
+          </div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.3);margin-top:20px;line-height:1.7;">
+            Your agent will install the package, connect your node to the cloud,<br>and open app.clawmetry.com automatically.
+          </div>
+        </div>
       </div>
     </div>
     <p style="text-align:center;color:var(--text-dim);font-size:13px;margin-top:16px;">macOS, Linux, Windows. Two commands to full cloud visibility.</p>
     <script>
     var cloudCmds = {
       curl: 'curl -fsSL https://clawmetry.com/install.sh | bash && clawmetry connect',
+      agent: 'Run pip install clawmetry && clawmetry connect',
       pip: 'pip install clawmetry && clawmetry connect',
       powershell: 'iwr -useb https://clawmetry.com/install.ps1 | iex; clawmetry connect',
       cmd: 'curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd && clawmetry connect',
@@ -474,7 +485,7 @@
     var cloudActiveTab = 'curl';
     function showCloudTab(id) {
       cloudActiveTab = id;
-      ['curl','pip','powershell','cmd','macos'].forEach(function(t) {
+      ['curl','agent','pip','powershell','cmd','macos'].forEach(function(t) {
         var panel = document.getElementById('cpanel-'+t);
         if(panel) panel.style.display = t===id ? 'block' : 'none';
         var tab = document.getElementById('ctab-'+t);
