@@ -53,8 +53,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Upgrade pip
-& "$installDir\Scripts\pip.exe" install --upgrade pip 2>&1 | Out-Null
-
+& "$installDir\Scripts\python.exe" -m pip install --upgrade pip 2>&1 | Out-Null
 # Install clawmetry
 Write-Host "→ Installing clawmetry from PyPI..."
 & "$installDir\Scripts\pip.exe" install --no-cache-dir clawmetry 2>&1 | Out-Null
