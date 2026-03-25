@@ -443,3 +443,58 @@ class TestMemoryAnalytics:
             assert f["status"] in ("ok", "warning", "critical")
 
 
+
+
+class TestHeatmap:
+    """Tests for the 30-day activity heatmap endpoint."""
+
+    def test_heatmap_returns_200(self, api, base_url):
+        """Heatmap endpoint returns 200."""
+        r = api.get(f"{base_url}/api/heatmap", timeout=10)
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
+
+    def test_heatmap_has_required_keys(self, api, base_url):
+        """Response contains 'days' list and 'max' value."""
+        d = assert_ok(get(api, base_url, "/api/heatmap"))
+        assert_keys(d, "days", "max")
+        assert isinstance(d["days"], list), "'days' must be a list"
+        assert isinstance(d["max"], (int, float)), "'max' must be numeric"
+
+    def test_heatmap_returns_30_days(self, api, base_url):
+        """Heatmap covers exactly 30 days."""
+        d = assert_ok(get(api, base_url, "/api/heatmap"))
+        assert len(d["days"]) == 30, f"Expected 30 days, got {len(d['days'])}"
+
+    def test_heatmap_each_day_has_24_hours(self, api, base_url):
+        """Every day entry has exactly 24 hourly buckets."""
+        d = assert_ok(get(api, base_url, "/api/heatmap"))
+        for day in d["days"]:
+            assert "hours" in day, f"Day entry missing 'hours': {day}"
+            assert len(day["hours"]) == 24, (
+                f"Expected 24 hourly buckets, got {len(day['hours'])} for {day.get('label')}"
+            )
+
+    def test_heatmap_day_has_label_and_date(self, api, base_url):
+        """Every day entry has 'label' and 'date' fields."""
+        d = assert_ok(get(api, base_url, "/api/heatmap"))
+        for day in d["days"]:
+            assert_keys(day, "label", "date", "hours")
+
+    def test_heatmap_hours_are_non_negative_ints(self, api, base_url):
+        """All hourly counts are non-negative integers."""
+        d = assert_ok(get(api, base_url, "/api/heatmap"))
+        for day in d["days"]:
+            for count in day["hours"]:
+                assert isinstance(count, int) and count >= 0, (
+                    f"Invalid hourly count {count!r} in {day.get('label')}"
+                )
+
+    def test_heatmap_max_matches_data(self, api, base_url):
+        """'max' equals the maximum hourly event count across all days."""
+        d = assert_ok(get(api, base_url, "/api/heatmap"))
+        computed_max = max(
+            (max(day["hours"]) for day in d["days"]), default=0
+        )
+        assert d["max"] == computed_max, (
+            f"'max' field {d['max']} does not match computed max {computed_max}"
+        )

@@ -2771,6 +2771,92 @@ function clawmetryLogout(){
   <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
 </div>
 
+<!-- Velocity Alert Banner -->
+<div id="velocity-alert-banner" style="display:none;padding:0;border-bottom:3px solid #f97316;">
+  <div style="background:linear-gradient(135deg,#431407,#7c2d12);padding:12px 16px;display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+      <span style="font-size:22px;animation:velocityPulse 1s ease-in-out infinite;">🔥</span>
+      <div>
+        <div style="font-size:13px;font-weight:800;color:#fed7aa;letter-spacing:0.3px;">RUNAWAY AGENT DETECTED</div>
+        <div style="font-size:11px;color:#fb923c;margin-top:1px;">Token velocity threshold exceeded</div>
+      </div>
+    </div>
+    <div id="velocity-alert-details" style="flex:1;min-width:200px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;"></div>
+    <div style="display:flex;gap:8px;flex-shrink:0;align-items:center;">
+      <button onclick="killAgentLoop()" style="background:#ef4444;color:#fff;border:none;border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:5px;">
+        &#x26D4; Kill Loop
+      </button>
+      <button onclick="dismissVelocityAlert()" style="background:rgba(255,255,255,0.12);color:#fed7aa;border:1px solid rgba(249,115,22,0.4);border-radius:8px;padding:7px 12px;font-size:12px;cursor:pointer;">
+        Dismiss
+      </button>
+    </div>
+  </div>
+</div>
+<style>
+@keyframes velocityPulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.15);opacity:0.8} }
+</style>
+<script>
+var _velocityCheckTimer = null;
+
+async function checkVelocityAlerts() {
+  try {
+    var data = await fetch('/api/alerts/velocity').then(function(r){return r.json();});
+    var banner = document.getElementById('velocity-alert-banner');
+    if (!banner) return;
+    if (!data.active || !data.alerts || data.alerts.length === 0) {
+      banner.style.display = 'none';
+      return;
+    }
+    banner.style.display = 'block';
+    var details = document.getElementById('velocity-alert-details');
+    if (!details) return;
+    var html = '';
+    data.alerts.forEach(function(alert) {
+      var icon = alert.type === 'token_velocity' ? '📊' :
+                 alert.type === 'cost_velocity' ? '💰' : '🔄';
+      var color = alert.severity === 'critical' ? '#fca5a5' : '#fdba74';
+      html += '<div style="background:rgba(0,0,0,0.25);border:1px solid rgba(249,115,22,0.3);border-radius:6px;padding:5px 10px;">';
+      html += '<span style="font-size:14px;">' + icon + '</span> ';
+      html += '<span style="font-size:11px;font-weight:700;color:' + color + ';">' + escHtml(alert.title) + '</span>';
+      html += '<div style="font-size:10px;color:#fb923c;margin-top:1px;">' + escHtml(alert.message) + '</div>';
+      html += '</div>';
+    });
+    details.innerHTML = html;
+  } catch(e) {
+    // Silent fail - velocity endpoint may not be ready yet
+  }
+}
+
+async function killAgentLoop() {
+  if (!confirm('Pause the OpenClaw gateway to stop the runaway agent loop?')) return;
+  try {
+    await fetch('/api/budget/pause', {method:'POST'});
+    document.getElementById('velocity-alert-banner').style.display = 'none';
+    var b = document.getElementById('alert-banner');
+    var m = document.getElementById('alert-banner-msg');
+    if (b && m) {
+      m.textContent = 'Gateway paused to stop runaway loop. Resume when ready.';
+      b.style.display = 'flex';
+      var rb = document.getElementById('alert-resume-btn');
+      if (rb) rb.style.display = '';
+    }
+  } catch(e) {}
+}
+
+async function dismissVelocityAlert() {
+  try {
+    await fetch('/api/alerts/velocity/dismiss', {method:'POST'});
+    document.getElementById('velocity-alert-banner').style.display = 'none';
+  } catch(e) {
+    document.getElementById('velocity-alert-banner').style.display = 'none';
+  }
+}
+
+// Start velocity check: every 30s
+_velocityCheckTimer = setInterval(checkVelocityAlerts, 30000);
+setTimeout(checkVelocityAlerts, 5000);
+</script>
+
 <!-- Budget Settings Modal -->
 <div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
   <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
@@ -2986,6 +3072,11 @@ function clawmetryLogout(){
         <div id="sh-inference" style="margin-bottom:14px;"></div></div>
         <div id="sh-security-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🛡️ Security Posture</div>
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📅 Activity Heatmap <span style="font-size:10px;text-transform:none;letter-spacing:0;font-weight:400;color:var(--text-faint);">30 days · hourly</span></div>
+        <div class="heatmap-wrap">
+          <div id="heatmap-grid" class="heatmap-grid"><span style="color:var(--text-muted);font-size:12px;">Loading...</span></div>
+        </div>
+        <div id="heatmap-legend" class="heatmap-legend"></div>
       </div>
     </div>
 
@@ -8131,6 +8222,11 @@ function clawmetryLogout(){
         <div id="sh-inference" style="margin-bottom:14px;"></div></div>
         <div id="sh-security-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🛡️ Security Posture</div>
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📅 Activity Heatmap <span style="font-size:10px;text-transform:none;letter-spacing:0;font-weight:400;color:var(--text-faint);">30 days · hourly</span></div>
+        <div class="heatmap-wrap">
+          <div id="heatmap-grid" class="heatmap-grid"><span style="color:var(--text-muted);font-size:12px;">Loading...</span></div>
+        </div>
+        <div id="heatmap-legend" class="heatmap-legend"></div>
       </div>
     </div>
 
@@ -11535,36 +11631,60 @@ async function loadSystemHealth() {
 }
 function startSystemHealthRefresh() {
   loadSystemHealth();
+  loadHeatmap();
   if (window._sysHealthTimer) clearInterval(window._sysHealthTimer);
   window._sysHealthTimer = setInterval(loadSystemHealth, 30000);
+  // Refresh heatmap every 5 minutes (data changes slowly)
+  if (window._heatmapTimer) clearInterval(window._heatmapTimer);
+  window._heatmapTimer = setInterval(loadHeatmap, 300000);
 }
 
-// ===== Activity Heatmap =====
+// ===== Activity Heatmap (30-day hourly grid) =====
 async function loadHeatmap() {
+  var gridEl = document.getElementById('heatmap-grid');
+  var legendEl = document.getElementById('heatmap-legend');
+  if (!gridEl) return;
   try {
     var data = await fetch('/api/heatmap').then(r => r.json());
-    var grid = document.getElementById('heatmap-grid');
     var maxVal = Math.max(1, data.max);
+    // Hour labels row
     var html = '<div class="heatmap-label"></div>';
-    for (var h = 0; h < 24; h++) { html += '<div class="heatmap-hour-label">' + (h < 10 ? '0' : '') + h + '</div>'; }
+    for (var h = 0; h < 24; h++) {
+      html += '<div class="heatmap-hour-label">' + (h % 6 === 0 ? (h < 10 ? '0' + h : String(h)) : '') + '</div>';
+    }
     data.days.forEach(function(day) {
-      html += '<div class="heatmap-label">' + day.label + '</div>';
+      // Show label only every 5 days to avoid crowding on 30-day view
+      var showLabel = day.label.endsWith('01') || day.label.endsWith('05') ||
+                      day.label.endsWith('10') || day.label.endsWith('15') ||
+                      day.label.endsWith('20') || day.label.endsWith('25') ||
+                      day.label.endsWith('30');
+      html += '<div class="heatmap-label" style="font-size:9px;">' + (showLabel ? day.label : '') + '</div>';
       day.hours.forEach(function(val, hi) {
         var intensity = val / maxVal;
         var color;
         if (val === 0) color = '#12122a';
-        else if (intensity < 0.25) color = '#1a3a2a';
-        else if (intensity < 0.5) color = '#2a6a3a';
-        else if (intensity < 0.75) color = '#4a9a2a';
+        else if (intensity < 0.2) color = '#1a3a2a';
+        else if (intensity < 0.4) color = '#2a6a3a';
+        else if (intensity < 0.6) color = '#3a8a2a';
+        else if (intensity < 0.8) color = '#4a9a2a';
         else color = '#6adb3a';
-        html += '<div class="heatmap-cell" style="background:' + color + ';" title="' + day.label + ' ' + (hi < 10 ? '0' : '') + hi + ':00 - ' + val + ' events"></div>';
+        html += '<div class="heatmap-cell" style="background:' + color + ';" title="' +
+          day.label + ' ' + (hi < 10 ? '0' : '') + hi + ':00\u202f\u2014\u202f' + val + ' event' + (val !== 1 ? 's' : '') +
+          '"></div>';
       });
     });
-    grid.innerHTML = html;
-    var legend = document.getElementById('heatmap-legend');
-    legend.innerHTML = 'Less <div class="heatmap-legend-cell" style="background:#12122a"></div><div class="heatmap-legend-cell" style="background:#1a3a2a"></div><div class="heatmap-legend-cell" style="background:#2a6a3a"></div><div class="heatmap-legend-cell" style="background:#4a9a2a"></div><div class="heatmap-legend-cell" style="background:#6adb3a"></div> More';
+    gridEl.innerHTML = html;
+    if (legendEl) {
+      legendEl.innerHTML = 'Less\u00a0' +
+        '<div class="heatmap-legend-cell" style="background:#12122a"></div>' +
+        '<div class="heatmap-legend-cell" style="background:#1a3a2a"></div>' +
+        '<div class="heatmap-legend-cell" style="background:#2a6a3a"></div>' +
+        '<div class="heatmap-legend-cell" style="background:#4a9a2a"></div>' +
+        '<div class="heatmap-legend-cell" style="background:#6adb3a"></div>' +
+        '\u00a0More\u00a0\u00b7\u00a0' + data.days.length + ' days';
+    }
   } catch(e) {
-    document.getElementById('heatmap-grid').innerHTML = '<span style="color:#555">No activity data</span>';
+    gridEl.innerHTML = '<span style="color:#555">No activity data</span>';
   }
 }
 
@@ -18383,6 +18503,284 @@ def api_alerts_webhook_test():
     return jsonify({'ok': True, 'sent': sent})
 
 
+# ── Token Velocity Alert ────────────────────────────────────────────────
+# Detects runaway agent loops via:
+#   1. Sliding 2-min token window threshold
+#   2. Consecutive tool-call chain without human turn
+#   3. Cost velocity ($/min)
+
+VELOCITY_ALERT_STATE = {
+    'active': False,
+    'alerts': [],           # list of active alert dicts
+    'last_checked': 0,
+}
+VELOCITY_ALERT_LOCK = threading.Lock()
+
+# Configurable defaults (can be overridden via POST /api/alerts/velocity/config)
+_VELOCITY_CONFIG = {
+    'token_window_sec': 120,           # 2-minute sliding window
+    'token_window_threshold': 10000,   # tokens/2min
+    'tool_chain_threshold': 20,        # consecutive tool calls without human turn
+    'cost_per_min_threshold': 0.10,    # $/min
+    'enabled': True,
+    'notify_telegram': True,
+}
+
+def _get_velocity_config():
+    """Load velocity config from DB or return defaults."""
+    cfg = dict(_VELOCITY_CONFIG)
+    try:
+        with _fleet_db_lock:
+            db = _fleet_db()
+            rows = db.execute(
+                "SELECT key, value FROM budget_config WHERE key LIKE 'velocity_%'"
+            ).fetchall()
+            db.close()
+        for row in rows:
+            k = row['key'].replace('velocity_', '', 1)
+            if k in cfg:
+                v = row['value']
+                if isinstance(cfg[k], bool):
+                    cfg[k] = v.lower() in ('true', '1', 'yes')
+                elif isinstance(cfg[k], int):
+                    cfg[k] = int(float(v))
+                elif isinstance(cfg[k], float):
+                    cfg[k] = float(v)
+    except Exception:
+        pass
+    return cfg
+
+
+def _compute_velocity_alerts():
+    """Compute current velocity metrics and return list of active alert dicts."""
+    cfg = _get_velocity_config()
+    if not cfg.get('enabled', True):
+        return []
+
+    now = time.time()
+    alerts = []
+
+    # ── 1. Token velocity (sliding 2-min window) ───────────────────────
+    window_sec = cfg['token_window_sec']
+    window_start = now - window_sec
+    window_tokens = 0
+    with _metrics_lock:
+        for entry in metrics_store.get('tokens', []):
+            if entry.get('timestamp', 0) >= window_start:
+                window_tokens += entry.get('total', 0)
+
+    if window_tokens >= cfg['token_window_threshold']:
+        alerts.append({
+            'type': 'token_velocity',
+            'severity': 'critical',
+            'title': 'Token velocity too high',
+            'message': (
+                f'{window_tokens:,} tokens consumed in the last '
+                f'{window_sec // 60} min '
+                f'(threshold: {cfg["token_window_threshold"]:,})'
+            ),
+            'value': window_tokens,
+            'threshold': cfg['token_window_threshold'],
+            'unit': f'tokens/{window_sec // 60}min',
+        })
+
+    # ── 2. Cost velocity ($/min over last 5 min) ───────────────────────
+    cost_window = 300  # 5-min window for cost rate
+    cost_window_start = now - cost_window
+    window_cost = 0.0
+    with _metrics_lock:
+        for entry in metrics_store.get('cost', []):
+            if entry.get('timestamp', 0) >= cost_window_start:
+                window_cost += entry.get('usd', 0)
+    cost_per_min = (window_cost / (cost_window / 60)) if cost_window > 0 else 0
+
+    if cost_per_min >= cfg['cost_per_min_threshold']:
+        alerts.append({
+            'type': 'cost_velocity',
+            'severity': 'warning',
+            'title': 'Cost velocity alert',
+            'message': (
+                f'Spending at ${cost_per_min:.3f}/min '
+                f'(threshold: ${cfg["cost_per_min_threshold"]:.2f}/min)'
+            ),
+            'value': round(cost_per_min, 4),
+            'threshold': cfg['cost_per_min_threshold'],
+            'unit': '$/min',
+        })
+
+    # ── 3. Consecutive tool-call chain detection ────────────────────────
+    consecutive_tools = _count_consecutive_tool_calls()
+    if consecutive_tools >= cfg['tool_chain_threshold']:
+        alerts.append({
+            'type': 'tool_chain',
+            'severity': 'warning',
+            'title': 'Possible agent loop detected',
+            'message': (
+                f'{consecutive_tools} consecutive tool calls without a human turn '
+                f'(threshold: {cfg["tool_chain_threshold"]})'
+            ),
+            'value': consecutive_tools,
+            'threshold': cfg['tool_chain_threshold'],
+            'unit': 'tool calls',
+        })
+
+    return alerts
+
+
+def _count_consecutive_tool_calls():
+    """Parse the most recent session transcript to count consecutive tool calls
+    without an intervening human (user) turn."""
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    if not os.path.isdir(sessions_dir):
+        return 0
+    try:
+        candidates = []
+        for f in os.listdir(sessions_dir):
+            if not f.endswith('.jsonl'):
+                continue
+            fp = os.path.join(sessions_dir, f)
+            try:
+                st = os.stat(fp)
+                if time.time() - st.st_mtime < 3600:  # active in last hour
+                    candidates.append((fp, st.st_mtime))
+            except Exception:
+                continue
+        if not candidates:
+            return 0
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        best = candidates[0][0]
+
+        with open(best, 'rb') as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            chunk = min(size, 256000)
+            fh.seek(max(0, size - chunk))
+            tail = fh.read().decode('utf-8', errors='replace')
+
+        lines = tail.strip().split('\n')
+
+        # Walk backwards counting tool calls; reset on human turn
+        consecutive = 0
+        max_consecutive = 0
+        for line in reversed(lines):
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            msg = obj.get('message', obj)
+            role = msg.get('role', '')
+            if role == 'user':
+                # Human turn resets counter
+                break
+            if role == 'assistant':
+                content = msg.get('content', [])
+                if isinstance(content, list):
+                    for item in content:
+                        if item.get('type') == 'toolCall':
+                            consecutive += 1
+                elif isinstance(content, str) and content:
+                    # Text-only assistant message — still counts as non-human but not a tool call
+                    pass
+        return consecutive
+    except Exception:
+        return 0
+
+
+def _velocity_check_and_notify():
+    """Background check: compute velocity alerts and send Telegram if new."""
+    global VELOCITY_ALERT_STATE
+    alerts = _compute_velocity_alerts()
+    now = time.time()
+
+    with VELOCITY_ALERT_LOCK:
+        prev_active = VELOCITY_ALERT_STATE.get('active', False)
+        was_types = {a['type'] for a in VELOCITY_ALERT_STATE.get('alerts', [])}
+        VELOCITY_ALERT_STATE['active'] = len(alerts) > 0
+        VELOCITY_ALERT_STATE['alerts'] = alerts
+        VELOCITY_ALERT_STATE['last_checked'] = now
+        new_types = {a['type'] for a in alerts}
+
+    # Send Telegram for new alert types
+    cfg = _get_velocity_config()
+    if cfg.get('notify_telegram', True):
+        for alert in alerts:
+            if alert['type'] not in was_types:
+                _send_telegram_alert(
+                    f'⚠️ Velocity Alert: {alert["title"]}\n{alert["message"]}'
+                )
+
+
+def _velocity_monitor_loop():
+    """Background thread: check velocity every 30 seconds."""
+    while True:
+        time.sleep(30)
+        try:
+            _velocity_check_and_notify()
+        except Exception as e:
+            print(f'[warn] Velocity monitor error: {e}')
+
+
+def _start_velocity_monitor_thread():
+    """Start the background velocity monitor thread."""
+    t = threading.Thread(target=_velocity_monitor_loop, daemon=True)
+    t.start()
+
+
+@bp_alerts.route('/api/alerts/velocity')
+def api_alerts_velocity():
+    """Return current velocity alert state (active alerts + metrics)."""
+    with VELOCITY_ALERT_LOCK:
+        state = dict(VELOCITY_ALERT_STATE)
+
+    # If stale (> 45s), recompute inline
+    if time.time() - state.get('last_checked', 0) > 45:
+        alerts = _compute_velocity_alerts()
+        now = time.time()
+        with VELOCITY_ALERT_LOCK:
+            VELOCITY_ALERT_STATE['active'] = len(alerts) > 0
+            VELOCITY_ALERT_STATE['alerts'] = alerts
+            VELOCITY_ALERT_STATE['last_checked'] = now
+        state = {'active': len(alerts) > 0, 'alerts': alerts, 'last_checked': now}
+
+    return jsonify(state)
+
+
+@bp_alerts.route('/api/alerts/velocity/config', methods=['GET', 'POST'])
+def api_alerts_velocity_config():
+    """Get or update velocity alert configuration."""
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        allowed = {
+            'token_window_sec', 'token_window_threshold',
+            'tool_chain_threshold', 'cost_per_min_threshold',
+            'enabled', 'notify_telegram',
+        }
+        updates = {f'velocity_{k}': str(v) for k, v in data.items() if k in allowed}
+        if updates:
+            now = time.time()
+            with _fleet_db_lock:
+                db = _fleet_db()
+                for k, v in updates.items():
+                    db.execute(
+                        "INSERT OR REPLACE INTO budget_config (key, value, updated_at) "
+                        "VALUES (?, ?, ?)", (k, v, now)
+                    )
+                db.commit()
+                db.close()
+        return jsonify({'ok': True, 'config': _get_velocity_config()})
+    return jsonify(_get_velocity_config())
+
+
+@bp_alerts.route('/api/alerts/velocity/dismiss', methods=['POST'])
+def api_alerts_velocity_dismiss():
+    """Dismiss (clear) velocity alerts."""
+    with VELOCITY_ALERT_LOCK:
+        VELOCITY_ALERT_STATE['active'] = False
+        VELOCITY_ALERT_STATE['alerts'] = []
+        VELOCITY_ALERT_STATE['last_checked'] = time.time()
+    return jsonify({'ok': True})
+
+
 # ── History / Time-Series API ────────────────────────────────────────────
 
 @bp_history.route('/api/history/metrics')
@@ -22385,21 +22783,61 @@ def api_security_posture():
 
 @bp_health.route('/api/heatmap')
 def api_heatmap():
-    """Activity heatmap - events per hour for the last 7 days."""
+    """Activity heatmap - events per hour for the last 30 days (uses session JSONL data)."""
     now = datetime.now()
-    # Initialize 7 days × 24 hours grid
+    days_back = 30
+    # Initialize 30 days x 24 hours grid
     grid = {}
     day_labels = []
-    for i in range(6, -1, -1):
+    for i in range(days_back - 1, -1, -1):
         d = now - timedelta(days=i)
         ds = d.strftime('%Y-%m-%d')
         grid[ds] = [0] * 24
-        day_labels.append({'date': ds, 'label': d.strftime('%a %d')})
+        day_labels.append({'date': ds, 'label': d.strftime('%b %d')})
 
-    # Parse log files for the last 7 days
-    for i in range(7):
+    cutoff = now - timedelta(days=days_back)
+
+    # Primary source: session JSONL files (richer data, longer history)
+    sessions_dir = _get_sessions_dir()
+    if os.path.isdir(sessions_dir):
+        for fname in os.listdir(sessions_dir):
+            if not fname.endswith('.jsonl'):
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            try:
+                mtime = datetime.fromtimestamp(os.path.getmtime(fpath))
+                if mtime < cutoff:
+                    continue
+                with open(fpath, 'r') as f:
+                    for line in f:
+                        try:
+                            obj = json.loads(line.strip())
+                            raw_ts = (obj.get('timestamp') or obj.get('time')
+                                      or obj.get('created_at'))
+                            if raw_ts is None:
+                                continue
+                            if isinstance(raw_ts, (int, float)):
+                                dt = datetime.fromtimestamp(
+                                    raw_ts / 1000 if raw_ts > 1e12 else raw_ts)
+                            else:
+                                dt = datetime.fromisoformat(
+                                    str(raw_ts).replace('Z', '+00:00').replace('+00:00', ''))
+                            if dt < cutoff:
+                                continue
+                            day_key = dt.strftime('%Y-%m-%d')
+                            if day_key in grid:
+                                grid[day_key][dt.hour] += 1
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
+    # Fallback: log files for days with no session data
+    for i in range(days_back):
         d = now - timedelta(days=i)
         ds = d.strftime('%Y-%m-%d')
+        if max(grid.get(ds, [0])) > 0:
+            continue  # already have session data for this day
         log_file = _find_log_file(ds)
         if not log_file:
             continue
@@ -22408,29 +22846,31 @@ def api_heatmap():
                 for line in f:
                     try:
                         obj = json.loads(line.strip())
-                        ts = obj.get('time') or (obj.get('_meta', {}).get('date') if isinstance(obj.get('_meta'), dict) else None)
+                        ts = obj.get('time') or (
+                            obj.get('_meta', {}).get('date')
+                            if isinstance(obj.get('_meta'), dict) else None)
                         if ts:
                             if isinstance(ts, (int, float)):
-                                dt = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
+                                dt = datetime.fromtimestamp(
+                                    ts / 1000 if ts > 1e12 else ts)
                             else:
-                                dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00').replace('+00:00', ''))
-                            hour = dt.hour
+                                dt = datetime.fromisoformat(
+                                    str(ts).replace('Z', '+00:00').replace('+00:00', ''))
                             day_key = dt.strftime('%Y-%m-%d')
                             if day_key in grid:
-                                grid[day_key][hour] += 1
+                                grid[day_key][dt.hour] += 1
                     except Exception:
-                        # Count non-JSON lines too
-                        if ds in grid:
-                            grid[ds][12] += 1  # default to noon
+                        continue
         except Exception:
             pass
 
     max_val = max(max(hours) for hours in grid.values()) if grid else 0
-    days = []
+    result_days = []
     for dl in day_labels:
-        days.append({'label': dl['label'], 'hours': grid.get(dl['date'], [0] * 24)})
+        result_days.append({'date': dl['date'], 'label': dl['label'],
+                            'hours': grid.get(dl['date'], [0] * 24)})
 
-    return jsonify({'days': days, 'max': max_val})
+    return jsonify({'days': result_days, 'max': max_val})
 
 
 @bp_health.route('/api/system-health')
@@ -24761,6 +25201,7 @@ def _run_server(args):
     _detect_heartbeat_interval()
     _start_fleet_maintenance_thread()
     _start_budget_monitor_thread()
+    _start_velocity_monitor_thread()
 
     try:
         print(BANNER.format(version=__version__))
