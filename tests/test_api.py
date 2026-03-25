@@ -443,3 +443,59 @@ class TestMemoryAnalytics:
             assert f["status"] in ("ok", "warning", "critical")
 
 
+
+
+class TestAnomalyDetection:
+    def test_anomalies_endpoint_returns_200(self, api, base_url):
+        """Consolidated anomaly endpoint returns 200."""
+        r = api.get(f"{base_url}/api/anomalies", timeout=15)
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
+
+    def test_anomalies_has_required_keys(self, api, base_url):
+        """Response has all three detection category keys."""
+        r = api.get(f"{base_url}/api/anomalies", timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        for key in ("session_cost_spikes", "token_spikes", "daily_cost_spike", "total_anomalies", "thresholds"):
+            assert key in d, f"Missing key: {key}"
+
+    def test_anomalies_lists_are_lists(self, api, base_url):
+        """session_cost_spikes and token_spikes are lists."""
+        r = api.get(f"{base_url}/api/anomalies", timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        assert isinstance(d["session_cost_spikes"], list), "session_cost_spikes must be a list"
+        assert isinstance(d["token_spikes"], list), "token_spikes must be a list"
+
+    def test_anomalies_daily_spike_nullable(self, api, base_url):
+        """daily_cost_spike is either None or a dict with type key."""
+        r = api.get(f"{base_url}/api/anomalies", timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        ds = d.get("daily_cost_spike")
+        assert ds is None or (isinstance(ds, dict) and ds.get("type") == "daily_cost_spike"), \
+            f"daily_cost_spike must be None or dict with type='daily_cost_spike', got: {ds}"
+
+    def test_anomalies_custom_thresholds(self, api, base_url):
+        """Custom threshold params are reflected in response."""
+        r = api.get(f"{base_url}/api/anomalies?session_threshold=3.0&token_threshold=5.0&daily_threshold=4.0",
+                    timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        thr = d.get("thresholds", {})
+        assert thr.get("session_cost") == 3.0
+        assert thr.get("token_per_turn") == 5.0
+        assert thr.get("daily_cost") == 4.0
+
+    def test_anomalies_invalid_threshold_returns_400(self, api, base_url):
+        """Non-numeric threshold returns 400."""
+        r = api.get(f"{base_url}/api/anomalies?session_threshold=banana", timeout=10)
+        assert r.status_code == 400, f"Expected 400, got {r.status_code}"
+
+    def test_existing_usage_anomalies_still_works(self, api, base_url):
+        """Existing /api/usage/anomalies endpoint still returns 200."""
+        r = api.get(f"{base_url}/api/usage/anomalies", timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        assert "anomalies" in d
+        assert "baseline_7d_avg_usd" in d
