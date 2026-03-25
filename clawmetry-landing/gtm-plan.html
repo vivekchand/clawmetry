@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClawMetry GTM Plan — Go-to-Market Strategy 2026</title>
+  <meta name="description" content="ClawMetry's go-to-market strategy: how we're growing from 217 signups to 10,000 developers in 2026.">
+  <meta name="robots" content="noindex">
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-XDF9MFD8FJ"></script>
+  <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-XDF9MFD8FJ');</script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0f;
+      --surface: #111118;
+      --border: #1e1e2e;
+      --accent: #7c3aed;
+      --accent2: #06b6d4;
+      --accent3: #10b981;
+      --warn: #f59e0b;
+      --red: #ef4444;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --card: #13131f;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      line-height: 1.7;
+      min-height: 100vh;
+    }
+
+    .nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(10,10,15,0.95);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      display: flex; align-items: center; justify-content: space-between;
+      height: 56px;
+    }
+    .nav-logo { font-weight: 700; font-size: 1rem; color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 0.5rem; }
+    .nav-logo span { color: var(--accent); }
+    .nav-badge { background: var(--accent); color: white; font-size: 0.65rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: 0.05em; }
+    .nav-links { display: flex; gap: 1.5rem; }
+    .nav-links a { color: var(--muted); text-decoration: none; font-size: 0.875rem; transition: color 0.2s; }
+    .nav-links a:hover { color: var(--text); }
+
+    .hero {
+      max-width: 900px; margin: 0 auto;
+      padding: 5rem 2rem 3rem;
+      text-align: center;
+    }
+    .hero-tag {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      background: rgba(124,58,237,0.15); border: 1px solid rgba(124,58,237,0.3);
+      color: #a78bfa; font-size: 0.8rem; font-weight: 600;
+      padding: 4px 14px; border-radius: 999px; margin-bottom: 1.5rem;
+      letter-spacing: 0.05em; text-transform: uppercase;
+    }
+    .hero h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 800; line-height: 1.15; margin-bottom: 1.25rem; }
+    .hero h1 span { background: linear-gradient(135deg, #7c3aed, #06b6d4); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .hero p { font-size: 1.15rem; color: var(--muted); max-width: 620px; margin: 0 auto 2rem; }
+
+    .stats-row {
+      display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;
+      margin-bottom: 4rem;
+    }
+    .stat-pill {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1rem 1.5rem; text-align: center; min-width: 130px;
+    }
+    .stat-pill .num { font-size: 1.75rem; font-weight: 800; color: var(--text); }
+    .stat-pill .label { font-size: 0.75rem; color: var(--muted); margin-top: 0.25rem; }
+    .stat-pill.green .num { color: var(--accent3); }
+    .stat-pill.purple .num { color: #a78bfa; }
+    .stat-pill.cyan .num { color: var(--accent2); }
+    .stat-pill.warn .num { color: var(--warn); }
+
+    .container { max-width: 960px; margin: 0 auto; padding: 0 2rem 6rem; }
+
+    .section { margin-bottom: 4rem; }
+    .section-tag {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--accent2); margin-bottom: 0.75rem;
+    }
+    .section-tag::before { content: ''; display: block; width: 20px; height: 2px; background: var(--accent2); border-radius: 2px; }
+    .section h2 { font-size: 1.75rem; font-weight: 700; margin-bottom: 1rem; }
+    .section p { color: var(--muted); margin-bottom: 1.5rem; }
+
+    /* Diagnosis */
+    .diagnosis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    @media (max-width: 640px) { .diagnosis-grid { grid-template-columns: 1fr; } }
+    .diag-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem;
+    }
+    .diag-card h4 { font-size: 0.85rem; font-weight: 700; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }
+    .diag-card ul { list-style: none; }
+    .diag-card li { font-size: 0.875rem; color: var(--muted); padding: 0.3rem 0; display: flex; align-items: flex-start; gap: 0.5rem; }
+    .diag-card li::before { content: '→'; color: var(--accent); flex-shrink: 0; }
+    .diag-card.bad { border-color: rgba(239,68,68,0.3); }
+    .diag-card.bad h4 { color: var(--red); }
+    .diag-card.good { border-color: rgba(16,185,129,0.3); }
+    .diag-card.good h4 { color: var(--accent3); }
+
+    /* Source bar chart */
+    .source-chart { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+    .source-chart h4 { font-size: 0.85rem; font-weight: 600; color: var(--muted); margin-bottom: 1.25rem; }
+    .bar-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem; }
+    .bar-label { width: 130px; font-size: 0.8rem; color: var(--muted); flex-shrink: 0; }
+    .bar-track { flex: 1; background: rgba(255,255,255,0.05); border-radius: 4px; height: 24px; overflow: hidden; position: relative; }
+    .bar-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 10px; font-size: 0.75rem; font-weight: 700; color: white; transition: width 1s ease; }
+    .bar-fill.ads { background: linear-gradient(90deg, #f59e0b, #ef4444); width: 81%; }
+    .bar-fill.organic { background: linear-gradient(90deg, #10b981, #06b6d4); width: 10%; }
+    .bar-fill.ph { background: linear-gradient(90deg, #ff6154, #ff914d); width: 5%; }
+    .bar-fill.roadmap { background: linear-gradient(90deg, #7c3aed, #a78bfa); width: 4%; }
+    .bar-note { font-size: 0.75rem; color: var(--red); flex-shrink: 0; }
+    .bar-note.good { color: var(--accent3); }
+
+    /* Phases */
+    .phases { display: flex; flex-direction: column; gap: 1.5rem; }
+    .phase {
+      background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+      overflow: hidden;
+    }
+    .phase-header {
+      display: flex; align-items: center; gap: 1rem;
+      padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border);
+    }
+    .phase-num {
+      width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 0.9rem; flex-shrink: 0;
+    }
+    .phase-num.p1 { background: rgba(124,58,237,0.2); color: #a78bfa; }
+    .phase-num.p2 { background: rgba(6,182,212,0.2); color: var(--accent2); }
+    .phase-num.p3 { background: rgba(16,185,129,0.2); color: var(--accent3); }
+    .phase-meta { flex: 1; }
+    .phase-meta h3 { font-size: 1rem; font-weight: 700; }
+    .phase-meta .phase-time { font-size: 0.8rem; color: var(--muted); }
+    .phase-kpi {
+      text-align: right; font-size: 0.8rem; color: var(--muted);
+    }
+    .phase-kpi strong { display: block; font-size: 1.1rem; font-weight: 800; color: var(--text); }
+    .phase-body { padding: 1.5rem; }
+    .phase-channels { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; }
+    .channel-card {
+      background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+      border-radius: 10px; padding: 1rem;
+    }
+    .channel-card h5 { font-size: 0.85rem; font-weight: 700; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.4rem; }
+    .channel-card p { font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+    .channel-card .channel-goal { font-size: 0.75rem; color: var(--accent3); font-weight: 600; margin-top: 0.5rem; }
+
+    /* Channels overview */
+    .channel-table { width: 100%; border-collapse: collapse; }
+    .channel-table th { text-align: left; font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); }
+    .channel-table td { padding: 0.875rem 1rem; border-bottom: 1px solid rgba(30,30,46,0.5); font-size: 0.875rem; vertical-align: top; }
+    .channel-table tr:last-child td { border-bottom: none; }
+    .priority-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; }
+    .priority-tag.high { background: rgba(16,185,129,0.2); color: var(--accent3); }
+    .priority-tag.med { background: rgba(245,158,11,0.2); color: var(--warn); }
+    .priority-tag.low { background: rgba(148,163,184,0.1); color: var(--muted); }
+
+    /* ICP */
+    .icp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+    .icp-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem;
+    }
+    .icp-card .icp-icon { font-size: 2rem; margin-bottom: 0.75rem; }
+    .icp-card h4 { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .icp-card p { font-size: 0.82rem; color: var(--muted); }
+    .icp-card .icp-pain { font-size: 0.8rem; margin-top: 0.75rem; padding: 0.5rem 0.75rem; background: rgba(239,68,68,0.08); border-left: 2px solid var(--red); border-radius: 4px; color: #fca5a5; }
+
+    /* Metrics */
+    .metrics-timeline { display: flex; gap: 0; }
+    .metric-month {
+      flex: 1; padding: 1rem; background: var(--card); border: 1px solid var(--border);
+      border-right: none; text-align: center;
+    }
+    .metric-month:first-child { border-radius: 12px 0 0 12px; }
+    .metric-month:last-child { border-right: 1px solid var(--border); border-radius: 0 12px 12px 0; }
+    .metric-month .month-label { font-size: 0.7rem; color: var(--muted); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 0.5rem; }
+    .metric-month .month-num { font-size: 1.4rem; font-weight: 800; }
+    .metric-month .month-sub { font-size: 0.7rem; color: var(--muted); }
+    .metric-month.current { background: rgba(124,58,237,0.1); border-color: rgba(124,58,237,0.4); }
+    .metric-month.current .month-num { color: #a78bfa; }
+    @media (max-width: 640px) { .metrics-timeline { flex-direction: column; } .metric-month { border-right: 1px solid var(--border); border-bottom: none; border-radius: 0 !important; } .metric-month:first-child { border-radius: 12px 12px 0 0 !important; } .metric-month:last-child { border-bottom: 1px solid var(--border); border-radius: 0 0 12px 12px !important; } }
+
+    /* Partnerships */
+    .partners-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+    .partner-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem;
+      display: flex; flex-direction: column; gap: 0.5rem;
+    }
+    .partner-card h4 { font-size: 0.9rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; }
+    .partner-card p { font-size: 0.8rem; color: var(--muted); }
+    .partner-card .partner-ask { font-size: 0.78rem; padding: 0.4rem 0.75rem; background: rgba(124,58,237,0.1); border-radius: 6px; color: #a78bfa; }
+
+    /* Callout */
+    .callout {
+      background: linear-gradient(135deg, rgba(124,58,237,0.15), rgba(6,182,212,0.08));
+      border: 1px solid rgba(124,58,237,0.3);
+      border-radius: 16px; padding: 2rem; margin-top: 1.5rem;
+    }
+    .callout h3 { font-size: 1.2rem; font-weight: 700; margin-bottom: 0.75rem; }
+    .callout p { color: var(--muted); font-size: 0.9rem; }
+    .callout ul { list-style: none; margin-top: 1rem; }
+    .callout li { font-size: 0.875rem; color: var(--muted); padding: 0.3rem 0; display: flex; align-items: flex-start; gap: 0.5rem; }
+    .callout li::before { content: '✓'; color: var(--accent3); font-weight: 700; flex-shrink: 0; }
+
+    /* Risks */
+    .risks { display: flex; flex-direction: column; gap: 0.75rem; }
+    .risk-row {
+      display: flex; align-items: flex-start; gap: 1rem;
+      background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem;
+    }
+    .risk-severity { font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; margin-top: 2px; }
+    .risk-severity.high { background: rgba(239,68,68,0.2); color: var(--red); }
+    .risk-severity.med { background: rgba(245,158,11,0.2); color: var(--warn); }
+    .risk-body h5 { font-size: 0.875rem; font-weight: 600; margin-bottom: 0.25rem; }
+    .risk-body p { font-size: 0.8rem; color: var(--muted); }
+
+    .footer {
+      text-align: center; padding: 3rem 2rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted); font-size: 0.8rem;
+    }
+    .footer a { color: var(--accent2); text-decoration: none; }
+
+    @media print {
+      body { background: white; color: black; }
+      .nav { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="nav">
+  <a href="/" class="nav-logo">Claw<span>Metry</span></a>
+  <div class="nav-links">
+    <a href="/">Home</a>
+    <a href="/roadmap.html">Roadmap</a>
+    <a href="/pitch-deck.html">Pitch Deck</a>
+  </div>
+  <span class="nav-badge">INTERNAL</span>
+</nav>
+
+<div class="hero">
+  <div class="hero-tag">🚀 Go-to-Market Strategy</div>
+  <h1>ClawMetry GTM Plan<br><span>2026</span></h1>
+  <p>From 217 early signups to 10,000 active developers. A concrete, channel-by-channel plan built on what's actually working.</p>
+
+  <div class="stats-row">
+    <div class="stat-pill purple">
+      <div class="num">217</div>
+      <div class="label">Real signups today</div>
+    </div>
+    <div class="stat-pill warn">
+      <div class="num">81%</div>
+      <div class="label">From paid ads</div>
+    </div>
+    <div class="stat-pill green">
+      <div class="num">10K</div>
+      <div class="label">Developer target (6mo)</div>
+    </div>
+    <div class="stat-pill cyan">
+      <div class="num">220K+</div>
+      <div class="label">OpenClaw GitHub stars</div>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- SECTION 1: DIAGNOSIS -->
+  <div class="section">
+    <div class="section-tag">Where We Are</div>
+    <h2>Honest Diagnosis</h2>
+    <p>Before planning where to go, we need to be clear about where we actually are. The numbers are real.</p>
+
+    <div class="source-chart">
+      <h4>Current signup sources (217 real signups)</h4>
+      <div class="bar-row">
+        <div class="bar-label">Google Ads</div>
+        <div class="bar-track"><div class="bar-fill ads">177 (81%)</div></div>
+        <div class="bar-note">Low intent</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Organic / Direct</div>
+        <div class="bar-track"><div class="bar-fill organic">21 (10%)</div></div>
+        <div class="bar-note good">High intent</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">ProductHunt</div>
+        <div class="bar-track"><div class="bar-fill ph">10 (5%)</div></div>
+        <div class="bar-note good">High intent</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Roadmap page</div>
+        <div class="bar-track"><div class="bar-fill roadmap">9 (4%)</div></div>
+        <div class="bar-note good">High intent</div>
+      </div>
+    </div>
+
+    <div class="diagnosis-grid">
+      <div class="diag-card bad">
+        <h4>⚠ What's not working</h4>
+        <ul>
+          <li>Google Ads driving quantity, not quality — most signups don't look like OpenClaw developers</li>
+          <li>No presence in the communities where our actual users live (r/claudeai, OpenClaw Discord, GitHub)</li>
+          <li>No developer word-of-mouth loop — nobody is sharing ClawMetry with their team</li>
+          <li>Product-led growth exists (pip install) but nobody's talking about it publicly</li>
+        </ul>
+      </div>
+      <div class="diag-card good">
+        <h4>✅ What IS working</h4>
+        <ul>
+          <li>ProductHunt & roadmap visitors convert at much higher quality — these are real developers</li>
+          <li>pip install + curl one-liner are genuinely frictionless — when someone finds us, they install fast</li>
+          <li>OpenClaw community (220K+ GitHub stars) is massive and underserved for observability tooling</li>
+          <li>Organic Reddit + GitHub engagement drives real developer trust</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 2: ICP -->
+  <div class="section">
+    <div class="section-tag">Who We're For</div>
+    <h2>Ideal Customer Profile</h2>
+    <p>ClawMetry is not for everyone. These are the three developer archetypes we're building and marketing for in 2026.</p>
+
+    <div class="icp-grid">
+      <div class="icp-card">
+        <div class="icp-icon">🧪</div>
+        <h4>The Solo Hacker</h4>
+        <p>Running 2-5 OpenClaw agents on their personal machine. Exploring AI automation, side projects, personal assistants.</p>
+        <div class="icp-pain">Pain: "I have no idea what my agents are actually doing or costing me."</div>
+      </div>
+      <div class="icp-card">
+        <div class="icp-icon">🏗</div>
+        <h4>The Startup Engineer</h4>
+        <p>Building a product on top of OpenClaw. Small team, no budget for enterprise observability tools. Needs something that just works.</p>
+        <div class="icp-pain">Pain: "We had a runaway agent loop in production. Didn't notice for 6 hours."</div>
+      </div>
+      <div class="icp-card">
+        <div class="icp-icon">🔧</div>
+        <h4>The Platform Engineer</h4>
+        <p>Managing a fleet of agents for their company. Needs multi-node visibility, cost tracking, compliance trail.</p>
+        <div class="icp-pain">Pain: "I need to justify AI agent spend to my CTO. I have no data."</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 3: PHASES -->
+  <div class="section">
+    <div class="section-tag">The Plan</div>
+    <h2>Three-Phase GTM</h2>
+    <p>Community-led first. Product-led second. Partnership-led third. In that order.</p>
+
+    <div class="phases">
+
+      <div class="phase">
+        <div class="phase-header">
+          <div class="phase-num p1">1</div>
+          <div class="phase-meta">
+            <h3>Community Seeding</h3>
+            <div class="phase-time">April – May 2026 (8 weeks)</div>
+          </div>
+          <div class="phase-kpi">
+            <div class="month-sub">Target</div>
+            <strong>1,000 real devs</strong>
+          </div>
+        </div>
+        <div class="phase-body">
+          <div class="phase-channels">
+            <div class="channel-card">
+              <h5>💬 Reddit</h5>
+              <p>Engage authentically in r/claudeai, r/LocalLLM, r/MachineLearning. Add value first. Drop ClawMetry when it's the honest answer.</p>
+              <div class="channel-goal">Target: 3 high-value comments/week</div>
+            </div>
+            <div class="channel-card">
+              <h5>🐙 GitHub</h5>
+              <p>Respond to OpenClaw issues mentioning observability, cost, monitoring. Get listed in OpenClaw's awesome list or docs.</p>
+              <div class="channel-goal">Target: OpenClaw awesome-list inclusion</div>
+            </div>
+            <div class="channel-card">
+              <h5>🎙 Discord</h5>
+              <p>Join OpenClaw, Claude, AI builders Discord servers. Help people with agent issues, build trust before mentioning ClawMetry.</p>
+              <div class="channel-goal">Target: 2-3 Discord servers as regular</div>
+            </div>
+            <div class="channel-card">
+              <h5>🐦 X / Twitter</h5>
+              <p>One weekly "what ClawMetry caught this week" post — real screenshots, real data, no fluff. Tag OpenClaw, Anthropic.</p>
+              <div class="channel-goal">Target: 1 viral tweet (500+ likes)</div>
+            </div>
+            <div class="channel-card">
+              <h5>✍ Dev.to / Medium</h5>
+              <p>3-4 technical articles: "How to monitor your OpenClaw agents", "Token costs spiraling? Here's how to track them"</p>
+              <div class="channel-goal">Target: 2,000 article reads</div>
+            </div>
+            <div class="channel-card">
+              <h5>📦 pip ecosystem</h5>
+              <p>Ensure PyPI page is polished, README is excellent, and first-run experience takes &lt;60 seconds to see value.</p>
+              <div class="channel-goal">Target: 500 pip installs</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-header">
+          <div class="phase-num p2">2</div>
+          <div class="phase-meta">
+            <h3>Product-Led Expansion</h3>
+            <div class="phase-time">June – August 2026 (12 weeks)</div>
+          </div>
+          <div class="phase-kpi">
+            <div class="month-sub">Target</div>
+            <strong>5,000 active users</strong>
+          </div>
+        </div>
+        <div class="phase-body">
+          <div class="phase-channels">
+            <div class="channel-card">
+              <h5>📱 Mobile apps (iOS + Android)</h5>
+              <p>Fleet visibility in your pocket. Push notifications when an agent goes rogue or costs spike. Big WOW moment for existing users.</p>
+              <div class="channel-goal">Target: App Store feature / 500 downloads</div>
+            </div>
+            <div class="channel-card">
+              <h5>🔐 ClawSecure integration</h5>
+              <p>Periodic security scans. "Your agent config has drifted — here's what changed." Positions ClawMetry as essential, not optional.</p>
+              <div class="channel-goal">Target: 200 security scan activations</div>
+            </div>
+            <div class="channel-card">
+              <h5>🤝 Influencer outreach</h5>
+              <p>Partner with AI dev YouTube / newsletter creators (target: Hussain Sharifi's network). Demo-driven content, not sponsored ads.</p>
+              <div class="channel-goal">Target: 2 creator demos (10K+ reach each)</div>
+            </div>
+            <div class="channel-card">
+              <h5>🔗 Integration ecosystem</h5>
+              <p>Native integrations: EasyClaw, n8n, Langchain. Appear in their docs/changelogs. Let their growth pull ours.</p>
+              <div class="channel-goal">Target: 2 official integrations</div>
+            </div>
+            <div class="channel-card">
+              <h5>🎯 ProductHunt (Round 2)</h5>
+              <p>Relaunch with mobile apps + ClawSecure as the story. "ClawMetry 2.0 — Fleet awareness for serious OpenClaw teams"</p>
+              <div class="channel-goal">Target: Top 3 Product of the Day</div>
+            </div>
+            <div class="channel-card">
+              <h5>💌 Email nurture</h5>
+              <p>Activate the 217 existing signups. 4-email drip: "What ClawMetry monitors", "How to read your dashboard", "Real user stories", "What's next".</p>
+              <div class="channel-goal">Target: 40% open rate, 15% activation</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-header">
+          <div class="phase-num p3">3</div>
+          <div class="phase-meta">
+            <h3>Partnership Scale</h3>
+            <div class="phase-time">September – October 2026 (8 weeks)</div>
+          </div>
+          <div class="phase-kpi">
+            <div class="month-sub">Target</div>
+            <strong>10,000 developers</strong>
+          </div>
+        </div>
+        <div class="phase-body">
+          <div class="phase-channels">
+            <div class="channel-card">
+              <h5>🏢 OpenClaw official</h5>
+              <p>Get ClawMetry mentioned in OpenClaw's official docs or highlighted by their team. Even one mention = thousands of users.</p>
+              <div class="channel-goal">Target: OpenClaw docs mention</div>
+            </div>
+            <div class="channel-card">
+              <h5>☁ Cloud managed tier</h5>
+              <p>Launch ClawMetry Cloud (managed hosting). Converts power users to paying customers. Recurring revenue unlocks real GTM budget.</p>
+              <div class="channel-goal">Target: 50 paying teams</div>
+            </div>
+            <div class="channel-card">
+              <h5>🎪 AI conferences</h5>
+              <p>Sponsor or present at AI/dev conferences (Amsterdam AI, WeAreDevelopers). Live demo: "Watch your agents in real time".</p>
+              <div class="channel-goal">Target: 1 conference presence</div>
+            </div>
+            <div class="channel-card">
+              <h5>🌏 China / QQ community</h5>
+              <p>Chinese developer interest is strong. Simplified Chinese README + WeChat developer groups. Huge untapped pool of OpenClaw users.</p>
+              <div class="channel-goal">Target: 500 Chinese developer signups</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- SECTION 4: CHANNEL PRIORITY TABLE -->
+  <div class="section">
+    <div class="section-tag">Channel Strategy</div>
+    <h2>Channel Priority Matrix</h2>
+
+    <div style="background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;">
+      <table class="channel-table">
+        <thead>
+          <tr>
+            <th>Channel</th>
+            <th>Priority</th>
+            <th>Why</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Reddit (r/claudeai, r/LocalLLM)</strong></td>
+            <td><span class="priority-tag high">HIGH</span></td>
+            <td style="color: var(--muted); font-size: 0.82rem;">Our exact ICP lives here. Authentic > ads.</td>
+            <td style="color: var(--muted); font-size: 0.82rem;">3 value-add comments/week. Zero spam.</td>
+          </tr>
+          <tr>
+            <td><strong>GitHub (OpenClaw ecosystem)</strong></td>
+            <td><span class="priority-tag high">HIGH</span></td>
+            <td style="color: var(--muted); font-size: 0.82rem;">220K stars = massive warm audience already looking for this.</td>
+            <td style="color: var(--muted); font-size: 0.82rem;">Awesome-list inclusion. Respond to issues.</td>
+          </tr>
+          <tr>
+            <td><strong>Influencer demos (Hussain Sharifi type)</strong></td>
+            <td><span class="priority-tag high">HIGH</span></td>
+            <td style="color: var(--muted); font-size: 0.82rem;">1 good creator video = more installs than 6 months of ads.</td>
+            <td style="color: var(--muted); font-size: 0.82rem;">Reach out. Offer exclusive early access + demo.</td>
+          </tr>
+          <tr>
+            <td><strong>Technical blog posts</strong></td>
+            <td><span class="priority-tag high">HIGH</span></td>
+            <td style="color: var(--muted); font-size: 0.82rem;">SEO + credibility. Developer trust = written content.</td>
+            <td style="color: var(--muted); font-size: 0.82rem;">1 post/2 weeks on dev.to, cross-post to Medium.</td>
+          </tr>
+          <tr>
+            <td><strong>Email nurture (existing 217)</strong></td>
+            <td><span class="priority-tag med">MED</span></td>
+            <td style="color: var(--muted); font-size: 0.82rem;">Already opted in. Cheapest re-activation possible.</td>
+            <td style="color: var(--muted); font-size: 0.82rem;">4-part drip campaign. Start this week.</td>
+          </tr>
+          <tr>
+            <td><strong>ProductHunt relaunch</strong></td>
+            <td><span class="priority-tag med">MED</span></td>
+            <td style="color: var(--muted); font-size: 0.82rem;">Strong conversion quality (10 real devs from 1 launch).</td>
+            <td style="color: var(--muted); font-size: 0.82rem;">Wait for mobile apps + ClawSecure. Then relaunch.</td>
+          </tr>
+          <tr>
+            <td><strong>Google Ads</strong></td>
+            <td><span class="priority-tag low">PAUSE</span></td>
+            <td style="color: var(--muted); font-size: 0.82rem;">81% of signups, &lt;5% likely quality. Burning budget.</td>
+            <td style="color: var(--muted); font-size: 0.82rem;">Pause broad campaigns. Retarget only (GitHub visitors).</td>
+          </tr>
+          <tr>
+            <td><strong>X / Twitter</strong></td>
+            <td><span class="priority-tag low">LOW</span></td>
+            <td style="color: var(--muted); font-size: 0.82rem;">Good for brand, poor for direct signups without audience.</td>
+            <td style="color: var(--muted); font-size: 0.82rem;">1 tweet/week. Build slowly. Don't prioritize.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- SECTION 5: MILESTONES -->
+  <div class="section">
+    <div class="section-tag">Growth Trajectory</div>
+    <h2>6-Month Milestone Plan</h2>
+
+    <div class="metrics-timeline">
+      <div class="metric-month current">
+        <div class="month-label">Now</div>
+        <div class="month-num">217</div>
+        <div class="month-sub">real signups</div>
+      </div>
+      <div class="metric-month">
+        <div class="month-label">May</div>
+        <div class="month-num">1K</div>
+        <div class="month-sub">community phase</div>
+      </div>
+      <div class="metric-month">
+        <div class="month-label">Jun</div>
+        <div class="month-num">2K</div>
+        <div class="month-sub">mobile launch</div>
+      </div>
+      <div class="metric-month">
+        <div class="month-label">Jul</div>
+        <div class="month-num">4K</div>
+        <div class="month-sub">PH relaunch</div>
+      </div>
+      <div class="metric-month">
+        <div class="month-label">Sep</div>
+        <div class="month-num">7K</div>
+        <div class="month-sub">partnerships</div>
+      </div>
+      <div class="metric-month">
+        <div class="month-label">Oct</div>
+        <div class="month-num">10K</div>
+        <div class="month-sub">developers</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 1rem; font-size: 0.8rem; color: var(--muted); text-align: center;">
+      Key milestones: Mobile apps (June) → ClawMetry Cloud beta (August) → Conference (September)
+    </div>
+  </div>
+
+  <!-- SECTION 6: PARTNERSHIPS -->
+  <div class="section">
+    <div class="section-tag">Leverage</div>
+    <h2>Partnership Targets</h2>
+    <p>The fastest path to 10K developers is borrowing existing audiences. These are the partnerships worth pursuing.</p>
+
+    <div class="partners-grid">
+      <div class="partner-card">
+        <h4>🎬 Hussain Sharifi (AI Influencer)</h4>
+        <p>Visited clawmetry.com already. Has an AI startup / influencer marketing background. Natural fit for a "watch your agents live" demo video.</p>
+        <div class="partner-ask">Ask: 20-min chat → demo → co-created content piece</div>
+      </div>
+      <div class="partner-card">
+        <h4>⚡ EasyClaw</h4>
+        <p>Already positioned ClawMetry as complementary in their community. Integrating means appearing in their docs and changelogs automatically.</p>
+        <div class="partner-ask">Ask: Official integration + mutual mention in docs</div>
+      </div>
+      <div class="partner-card">
+        <h4>🐙 OpenClaw (Core Team)</h4>
+        <p>220K GitHub stars. Even a single mention in their docs or awesome-list would eclipse everything else we're doing combined.</p>
+        <div class="partner-ask">Ask: Listing in community/tools section of official docs</div>
+      </div>
+      <div class="partner-card">
+        <h4>📧 AI Newsletter Creators</h4>
+        <p>Target newsletters with 5K+ developer subscribers focused on Claude, LLM agents, AI tooling. Offer exclusive early access for coverage.</p>
+        <div class="partner-ask">Ask: Featured tool mention or dedicated review</div>
+      </div>
+      <div class="partner-card">
+        <h4>🔐 ClawSecure</h4>
+        <p>Security scans + ClawMetry = complete agent operations stack. Bundle positioning creates a stronger story for both products.</p>
+        <div class="partner-ask">Ask: Deep integration + joint "agent ops" positioning</div>
+      </div>
+      <div class="partner-card">
+        <h4>🏢 Antler / Investors</h4>
+        <p>Raphael's network includes Ronald Janschuurs, Sohrab Hosseini, and Antler ecosystem. Strategic investors often open distribution doors.</p>
+        <div class="partner-ask">Ask: Intro + feedback → potential Amsterdam AI event presence</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 7: IMMEDIATE ACTIONS -->
+  <div class="section">
+    <div class="section-tag">This Week</div>
+    <h2>Immediate Actions (Next 7 Days)</h2>
+
+    <div class="callout">
+      <h3>🎯 Priority actions — start now</h3>
+      <p>These have the highest ratio of effort to impact and can all be done this week:</p>
+      <ul>
+        <li>Message Hussain Sharifi — he visited the site, the timing is perfect. Ask for 20 minutes to explore collaboration.</li>
+        <li>Pause broad Google Ads campaigns — the quality signal is clear. Reallocate budget to retargeting GitHub/PyPI visitors only.</li>
+        <li>Write first technical blog post — "How to monitor your OpenClaw agents with ClawMetry" on dev.to. This is the SEO foundation.</li>
+        <li>Submit to OpenClaw awesome-list — 30-minute task that could drive hundreds of quality signups indefinitely.</li>
+        <li>Draft 4-part email drip for existing 217 signups — they opted in, they want to hear from you. Don't leave them cold.</li>
+        <li>Join r/claudeai and make 3 genuinely helpful comments — not about ClawMetry, just helping. Build presence first.</li>
+        <li>Polish PyPI README — this is the first thing developers see after `pip install clawmetry`. Make it count.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- SECTION 8: RISKS -->
+  <div class="section">
+    <div class="section-tag">Risk Register</div>
+    <h2>Risks to Watch</h2>
+
+    <div class="risks">
+      <div class="risk-row">
+        <span class="risk-severity high">HIGH</span>
+        <div class="risk-body">
+          <h5>OpenClaw builds native observability</h5>
+          <p>If OpenClaw ships a built-in dashboard, it immediately reduces our TAM. Mitigation: position ClawMetry as the community layer — more opinionated, more mobile-friendly, integrates across orchestration tools (not just OpenClaw).</p>
+        </div>
+      </div>
+      <div class="risk-row">
+        <span class="risk-severity high">HIGH</span>
+        <div class="risk-body">
+          <h5>Community fatigue from low-quality promotion</h5>
+          <p>Reddit and Discord communities ban/downvote promotional content instantly. One bad post kills credibility permanently. Mitigation: strict "value first, mention second" policy. No exceptions.</p>
+        </div>
+      </div>
+      <div class="risk-row">
+        <span class="risk-severity med">MED</span>
+        <div class="risk-body">
+          <h5>Slow GitHub star growth limiting credibility</h5>
+          <p>Developers use star count as a quality signal. Sub-200 stars hurts credibility. Mitigation: every community post, every article, every creator mention should link to GitHub directly.</p>
+        </div>
+      </div>
+      <div class="risk-row">
+        <span class="risk-severity med">MED</span>
+        <div class="risk-body">
+          <h5>Mobile app delays blocking Phase 2</h5>
+          <p>Phase 2's biggest hook is mobile fleet visibility. If apps slip, ProductHunt relaunch and influencer story both weaken. Mitigation: scope mobile to MVP feature set only — live dashboard view + cost alerts. No scope creep.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<footer class="footer">
+  <p>ClawMetry GTM Plan — Internal document — <a href="/">clawmetry.com</a></p>
+  <p style="margin-top: 0.5rem;">Questions? <a href="mailto:vivek@clawmetry.com">vivek@clawmetry.com</a></p>
+</footer>
+
+</body>
+</html>
