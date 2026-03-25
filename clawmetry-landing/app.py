@@ -1363,16 +1363,29 @@ def copy_track():
     id_email = identity.get("email", "")
     id_name = identity.get("name", "")
     who = f" by {id_name or id_email}" if id_email else ""
-    notify_vivek(
-        f"🦞 [Install Copy] {tab}{who} [{source}]",
-        f"""<div style="font-family:sans-serif;max-width:500px;">
-        <h2>Install Command Copied!</h2>
-        {f"<p><strong>👤 User:</strong> {id_name} &lt;{id_email}&gt;</p>" if id_email else "<p><strong>👤 User:</strong> Anonymous</p>"}
-        <p><strong>Tab:</strong> {tab}</p><p><strong>Command:</strong> <code>{command}</code></p>
-        <p style="font-size:18px;color:#E5443A;"><strong>Source:</strong> {source}</p>
-        <p><strong>Location:</strong> {visitor['location']}</p>
-        </div>"""
-    )
+    if tab == "agent":
+        _resend_post("/emails", {
+            "from": FROM_EMAIL, "to": [VIVEK_EMAIL],
+            "subject": f"🤖 Agent tab copied{who} [{source}]",
+            "html": f"""<div style="font-family:sans-serif;max-width:500px;">
+            <h2>🤖 Agent Tab Copied!</h2>
+            {f"<p><strong>👤 User:</strong> {id_name} &lt;{id_email}&gt;</p>" if id_email else "<p><strong>👤 User:</strong> Anonymous</p>"}
+            <p><strong>Command:</strong> <code>{command}</code></p>
+            <p style="font-size:18px;color:#E5443A;"><strong>Source:</strong> {source}</p>
+            <p><strong>Location:</strong> {visitor['location']}</p>
+            </div>"""
+        })
+    else:
+        notify_vivek(
+            f"🦞 [Install Copy] {tab}{who} [{source}]",
+            f"""<div style="font-family:sans-serif;max-width:500px;">
+            <h2>Install Command Copied!</h2>
+            {f"<p><strong>👤 User:</strong> {id_name} &lt;{id_email}&gt;</p>" if id_email else "<p><strong>👤 User:</strong> Anonymous</p>"}
+            <p><strong>Tab:</strong> {tab}</p><p><strong>Command:</strong> <code>{command}</code></p>
+            <p style="font-size:18px;color:#E5443A;"><strong>Source:</strong> {source}</p>
+            <p><strong>Location:</strong> {visitor['location']}</p>
+            </div>"""
+        )
     return jsonify({"ok": True})
 
 
