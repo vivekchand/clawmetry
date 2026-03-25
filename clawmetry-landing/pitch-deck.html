@@ -543,7 +543,7 @@
     <p style="text-align: center; max-width: 480px; margin: 0 auto 32px;">18 months to $1M ARR. The install base is already there. The multi-framework expansion is the multiplier. Every company running AI agents will need ClawMetry.</p>
     <div style="display: flex; justify-content: center; gap: 40px; margin-bottom: 32px;">
       <div style="text-align: center;">
-        <div style="font-size: 24px; font-weight: 800;">80k+</div>
+        <div style="font-size: 24px; font-weight: 800;" id="pd-ask-installs">80k+</div>
         <div style="font-size: 12px; color: #64748B;">Installs (4 weeks)</div>
       </div>
       <div style="text-align: center;">
@@ -568,6 +568,7 @@ fetch('/api/hero-stats').then(r=>r.json()).then(d=>{
   var e3 = document.getElementById('pd-traction-countries'); if(e3) e3.textContent = ct + '+';
   var e4 = document.getElementById('pd-bar-latest'); if(e4) e4.textContent = dl + '+';
   var e5 = document.getElementById('pd-bio-installs'); if(e5) e5.textContent = dl;
+  var e6 = document.getElementById('pd-ask-installs'); if(e6) e6.textContent = dl + '+';
 }).catch(function(){});
 </script>
 
