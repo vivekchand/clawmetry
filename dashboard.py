@@ -3125,6 +3125,11 @@ function clawmetryLogout(){
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">All models seen across sessions (by token usage)</div>
     <div id="model-attr-table">Loading...</div>
   </div>
+  <div class="section-title">📉 Fallback Rate — Last 7 Days</div>
+  <div class="card" style="padding:16px 12px;">
+    <canvas id="model-fallback-sparkline" height="80" style="width:100%;display:block;"></canvas>
+    <div id="model-fallback-legend" style="font-size:12px;color:var(--text-muted);margin-top:8px;text-align:center;"></div>
+  </div>
 
 <!-- CRONS -->
 <div class="page" id="page-crons">
@@ -8313,6 +8318,11 @@ function clawmetryLogout(){
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">All models seen across sessions (by token usage)</div>
     <div id="model-attr-table2">Loading...</div>
   </div>
+  <div class="section-title">📉 Fallback Rate — Last 7 Days</div>
+  <div class="card" style="padding:16px 12px;">
+    <canvas id="model-fallback-sparkline2" height="80" style="width:100%;display:block;"></canvas>
+    <div id="model-fallback-legend2" style="font-size:12px;color:var(--text-muted);margin-top:8px;text-align:center;"></div>
+  </div>
 
 <!-- CRONS -->
 <div class="page" id="page-crons">
@@ -11714,7 +11724,7 @@ async function loadUsage() {
 
 async function loadModelAttribution() {
   function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n||0); }
-  function fmtCost(c) { return (c||0) >= 0.01 ? '$' + (c||0).toFixed(2) : (c||0) > 0 ? '<$0.01' : '$0.00'; }
+  function fmtCost(c) { return (c||0) >= 0.01 ? '$' + (c||0).toFixed(4) : (c||0) > 0 ? '<$0.01' : '$0.00'; }
   try {
     var d = await fetch('/api/model-attribution').then(r => r.json());
     var primary = d.primary_model || 'unknown';
@@ -11732,24 +11742,47 @@ async function loadModelAttribution() {
       var fallbackTokEl = document.getElementById('model-attr-fallback-tokens' + sfx);
       var tableEl = document.getElementById('model-attr-table' + sfx);
 
-      if (alertEl) alertEl.style.display = d.alert ? '' : 'none';
+      if (alertEl) {
+        alertEl.style.display = d.alert ? '' : 'none';
+        if (d.alert) alertEl.innerHTML = '⚠️ High fallback rate detected — ' + (d.fallback_rate_24h || d.fallback_rate || 0).toFixed(1) + '% of turns in the last 24h used a non-primary model. Consider checking your model routing config.';
+      }
       if (primaryEl) primaryEl.textContent = primary;
       if (primaryStatsEl) primaryStatsEl.textContent = primarySessions + ' sessions · ' + fmtTokens(d.primary_tokens) + ' tokens · ' + fmtCost(d.primary_cost);
-      if (fallbackRateEl) { fallbackRateEl.textContent = fallbackRate; fallbackRateEl.style.color = d.alert ? '#ff8080' : d.fallback_rate > 5 ? '#ffbb44' : 'var(--text-primary)'; }
-      if (fallbackCountEl) fallbackCountEl.textContent = d.fallback_sessions + ' of ' + d.total_sessions + ' sessions used fallback';
+      if (fallbackRateEl) { fallbackRateEl.textContent = fallbackRate; fallbackRateEl.style.color = d.alert ? '#ff8080' : (d.fallback_rate||0) > 5 ? '#ffbb44' : 'var(--text-primary)'; }
+      if (fallbackCountEl) fallbackCountEl.textContent = (d.fallback_sessions||0) + ' of ' + (d.total_sessions||0) + ' sessions used fallback';
       if (fallbackCostEl) fallbackCostEl.textContent = fmtCost(d.fallback_cost);
-      if (fallbackTokEl) fallbackTokEl.textContent = fmtTokens(d.fallback_tokens) + ' tokens in fallback sessions';
+      if (fallbackTokEl) fallbackTokEl.textContent = fmtTokens(d.fallback_tokens) + ' turns in fallback';
 
-      if (tableEl && d.models && d.models.length > 0) {
-        var rows = '<table class="usage-table" style="width:100%;"><thead><tr><th>Model</th><th style="text-align:right;">Sessions</th><th style="text-align:right;">Tokens</th><th style="text-align:right;">Cost</th><th style="text-align:right;">Type</th></tr></thead><tbody>';
-        d.models.forEach(function(m) {
+      // Prefer richer model_table if available, else fall back to legacy models array
+      var modelRows = d.model_table || [];
+      if (modelRows.length === 0 && d.models && d.models.length > 0) {
+        modelRows = d.models.map(function(m) {
+          return { model: m.model, sessions: m.sessions, turns: m.tokens, total_cost: m.cost, pct_of_turns: 0, avg_cost_per_turn: 0 };
+        });
+      }
+
+      if (tableEl && modelRows.length > 0) {
+        var rows = '<table class="usage-table" style="width:100%;"><thead><tr>'
+          + '<th>Model</th>'
+          + '<th style="text-align:right;">Sessions</th>'
+          + '<th style="text-align:right;">Turns</th>'
+          + '<th style="text-align:right;">Total Cost</th>'
+          + '<th style="text-align:right;">% Turns</th>'
+          + '<th style="text-align:right;">Avg Cost/Turn</th>'
+          + '<th style="text-align:right;">Type</th>'
+          + '</tr></thead><tbody>';
+        modelRows.forEach(function(m) {
           var isPrimary = m.model === primary;
           var typeLabel = isPrimary ? '<span style="color:#60ff80;font-size:11px;">primary</span>' : (m.model === 'unknown' ? '<span style="color:#666;font-size:11px;">unknown</span>' : '<span style="color:#ffbb44;font-size:11px;">fallback</span>');
-          rows += '<tr><td><span class="badge model">' + escHtml(m.model) + '</span></td>'
-               + '<td style="text-align:right;color:var(--text-muted);">' + m.sessions + '</td>'
-               + '<td style="text-align:right;color:var(--text-muted);">' + fmtTokens(m.tokens) + '</td>'
-               + '<td style="text-align:right;color:var(--text-muted);">' + fmtCost(m.cost) + '</td>'
-               + '<td style="text-align:right;">' + typeLabel + '</td></tr>';
+          rows += '<tr>'
+            + '<td><span class="badge model">' + escHtml(m.model) + '</span></td>'
+            + '<td style="text-align:right;color:var(--text-muted);">' + (m.sessions||0) + '</td>'
+            + '<td style="text-align:right;color:var(--text-muted);">' + fmtTokens(m.turns||m.tokens||0) + '</td>'
+            + '<td style="text-align:right;color:var(--text-muted);">' + fmtCost(m.total_cost||m.cost||0) + '</td>'
+            + '<td style="text-align:right;color:var(--text-muted);">' + ((m.pct_of_turns||0).toFixed(1)) + '%</td>'
+            + '<td style="text-align:right;color:var(--text-muted);">' + fmtCost(m.avg_cost_per_turn||0) + '</td>'
+            + '<td style="text-align:right;">' + typeLabel + '</td>'
+            + '</tr>';
         });
         rows += '</tbody></table>';
         tableEl.innerHTML = rows;
@@ -11757,11 +11790,90 @@ async function loadModelAttribution() {
         tableEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No session model data available yet.</span>';
       }
     });
+
+    // Render fallback sparkline if canvas elements exist
+    renderFallbackSparkline('model-fallback-sparkline', 'model-fallback-legend', d.daily_fallback || []);
+    renderFallbackSparkline('model-fallback-sparkline2', 'model-fallback-legend2', d.daily_fallback || []);
+
   } catch(e) {
     ['', '2'].forEach(function(sfx) {
       var el = document.getElementById('model-attr-table' + sfx);
       if (el) el.innerHTML = '<span style="color:var(--text-muted)">Unable to load model attribution data</span>';
     });
+  }
+}
+
+function renderFallbackSparkline(canvasId, legendId, dailyData) {
+  var canvas = document.getElementById(canvasId);
+  var legendEl = document.getElementById(legendId);
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var W = canvas.parentElement ? canvas.parentElement.clientWidth || 400 : 400;
+  var H = 80;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  if (!dailyData || dailyData.length === 0) {
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('No fallback data yet', W/2, H/2);
+    return;
+  }
+
+  var pad = { top: 10, bottom: 24, left: 8, right: 8 };
+  var n = dailyData.length;
+  var stepX = (W - pad.left - pad.right) / Math.max(n - 1, 1);
+  var maxPct = Math.max.apply(null, dailyData.map(function(d){ return d.fallback_pct || 0; }));
+  maxPct = Math.max(maxPct, 20); // min scale 20% for readability
+
+  // Draw 20% threshold line
+  var threshY = pad.top + (1 - 20 / maxPct) * (H - pad.top - pad.bottom);
+  ctx.strokeStyle = 'rgba(239,68,68,0.4)';
+  ctx.setLineDash([4, 3]);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad.left, threshY); ctx.lineTo(W - pad.right, threshY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(239,68,68,0.6)';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('20% threshold', pad.left + 2, threshY - 3);
+
+  // Draw sparkline
+  ctx.beginPath();
+  ctx.strokeStyle = '#6366f1';
+  ctx.lineWidth = 2;
+  dailyData.forEach(function(pt, i) {
+    var x = pad.left + i * stepX;
+    var pct = pt.fallback_pct || 0;
+    var y = pad.top + (1 - pct / maxPct) * (H - pad.top - pad.bottom);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Draw dots and date labels
+  dailyData.forEach(function(pt, i) {
+    var x = pad.left + i * stepX;
+    var pct = pt.fallback_pct || 0;
+    var y = pad.top + (1 - pct / maxPct) * (H - pad.top - pad.bottom);
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = pct > 20 ? '#ef4444' : '#6366f1';
+    ctx.fill();
+    // Date label below
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    var label = (pt.date || '').slice(5); // MM-DD
+    ctx.fillText(label, x, H - 4);
+  });
+
+  if (legendEl) {
+    var avgFallback = dailyData.reduce(function(s, d){ return s + (d.fallback_pct||0); }, 0) / Math.max(dailyData.length, 1);
+    legendEl.textContent = '7-day avg fallback: ' + avgFallback.toFixed(1) + '%  |  today: ' + ((dailyData[dailyData.length-1]||{}).fallback_pct||0).toFixed(1) + '%';
   }
 }
 
@@ -19588,17 +19700,58 @@ def _compute_model_attribution(days=30):
     # Summary: find the "primary" model overall (highest turns)
     primary_model_overall = model_table[0]['model'] if model_table else 'unknown'
 
+    # Calculate aggregate cost/token stats per primary vs fallback for legacy JS shape
+    primary_turns_count = total_turns - total_fallback_turns
+    fallback_turns_count = total_fallback_turns
+
+    # Build legacy `models` list with sessions/tokens/cost per model
+    models_legacy = [
+        {
+            'model': row['model'],
+            'sessions': row['sessions'],
+            'tokens': row['turns'],   # turns used as proxy for tokens in legacy display
+            'cost': row['total_cost'],
+        }
+        for row in model_table
+    ]
+
+    # Fallback sessions = sessions that used any non-primary model
+    primary_sessions_set = model_sessions.get(primary_model_overall, set())
+    all_sessions = set()
+    for s in model_sessions.values():
+        all_sessions.update(s)
+    fallback_sessions_set = all_sessions - primary_sessions_set
+    total_sessions = len(all_sessions)
+
+    # Cost breakdown primary vs fallback
+    primary_cost = model_cost.get(primary_model_overall, 0.0)
+    fallback_cost = sum(c for m, c in model_cost.items() if m != primary_model_overall)
+
+    # Overall fallback rate across all time (not just 24h)
+    fallback_rate_overall = round((fallback_turns_count / max(total_turns, 1)) * 100.0, 1)
+
     return {
+        # New shape
         'model_table': model_table,
         'daily_fallback': daily_fallback,
         'alert': alert,
         'fallback_rate_24h': fallback_rate_24h,
         'summary': {
             'primary_model': primary_model_overall,
-            'primary_turns': total_turns - total_fallback_turns,
-            'fallback_turns': total_fallback_turns,
+            'primary_turns': primary_turns_count,
+            'fallback_turns': fallback_turns_count,
             'total_turns': total_turns,
         },
+        # Legacy shape for existing JS (loadModelAttribution)
+        'primary_model': primary_model_overall,
+        'fallback_rate': fallback_rate_24h if total_turns_24h > 0 else fallback_rate_overall,
+        'total_sessions': total_sessions,
+        'fallback_sessions': len(fallback_sessions_set),
+        'primary_tokens': model_turns.get(primary_model_overall, 0),
+        'primary_cost': round(primary_cost, 6),
+        'fallback_tokens': fallback_turns_count,
+        'fallback_cost': round(fallback_cost, 6),
+        'models': models_legacy,
     }
 
 
