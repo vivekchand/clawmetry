@@ -61,7 +61,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.71"
+__version__ = "0.12.79"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -2752,6 +2752,8 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" id="anomalies-nav-tab" onclick="switchTab('anomalies')" style="position:relative;">&#9888;&#65039; Anomalies<span id="anomaly-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center;line-height:16px;"></span></div>
+    <div class="nav-tab" id="models-nav-tab" onclick="switchTab('models')" style="position:relative;">&#129302; Models<span id="models-fallback-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#f59e0b;color:#fff;border-radius:10px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center;line-height:16px;"></span></div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3596,6 +3598,49 @@ function clawmetryLogout(){
     </div>
   </div>
 </div><!-- end page-security -->
+<!-- MODELS (GH #300) -->
+<div class="page" id="page-models">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadModels()">&#x21bb; Refresh</button>
+    <select id="models-period-select" onchange="loadModels()" style="margin-left:8px;padding:5px 10px;background:var(--bg-tertiary);border:1px solid var(--border-secondary);border-radius:6px;color:var(--text-primary);font-size:12px;">
+      <option value="7">Last 7 days</option>
+      <option value="14">Last 14 days</option>
+      <option value="30">Last 30 days</option>
+      <option value="0">All time</option>
+    </select>
+    <span id="models-fallback-alert-banner" style="display:none;margin-left:12px;padding:4px 10px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);border-radius:6px;font-size:12px;color:#f59e0b;font-weight:600;">&#9888; High fallback rate</span>
+  </div>
+  <div id="models-stat-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;"></div>
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+      <span style="font-size:13px;font-weight:700;color:var(--text-primary);">Turn Distribution by Model</span>
+      <span id="models-switch-badge" style="display:none;margin-left:auto;padding:2px 8px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);border-radius:12px;font-size:11px;color:#f59e0b;"></span>
+    </div>
+    <div id="models-bars" style="display:flex;flex-direction:column;gap:8px;"><div style="color:var(--text-muted);font-size:12px;">Loading...</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+    <div class="card">
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">Per-Session Models (recent 15)</div>
+      <div id="models-sessions" style="font-size:12px;color:var(--text-secondary);max-height:260px;overflow-y:auto;">Loading...</div>
+    </div>
+    <div class="card">
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">Model Switch Events</div>
+      <div id="models-switches" style="font-size:12px;color:var(--text-secondary);max-height:260px;overflow-y:auto;">Loading...</div>
+    </div>
+  </div>
+  <div class="card">
+    <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">&#9888; Fallback Rate Alert</div>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span style="font-size:13px;color:var(--text-secondary);">Alert when fallback rate exceeds</span>
+      <input type="number" id="models-fallback-threshold" value="20" min="0" max="100" step="5"
+        style="width:70px;padding:5px 8px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:6px;color:var(--text-primary);font-size:13px;text-align:center;">
+      <span style="font-size:13px;color:var(--text-secondary);">%</span>
+      <button onclick="loadModels()" style="padding:5px 14px;background:#6366f1;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Apply</button>
+      <span id="models-fallback-status" style="font-size:12px;color:var(--text-muted);"></span>
+    </div>
+  </div>
+</div><!-- end page-models -->
+
 
 
 
@@ -3906,6 +3951,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+  if (name === 'models') loadModels();
 }
 
 function exportUsageData() {
@@ -6095,6 +6141,28 @@ def _budget_monitor_loop():
                                     'type': rtype, 'message': msg, 'timestamp': now
                                 })
 
+
+            # ── Token velocity / runaway-loop check ─────────────────────────
+            try:
+                vel = _check_token_velocity()
+                if vel['is_runaway']:
+                    tok_k = vel['tokens_in_window'] / 1000.0
+                    cost_w = vel['cost_in_window']
+                    sess = vel.get('session_id') or 'unknown'
+                    vel_msg = (
+                        f"Runaway loop detected: {tok_k:.1f}K tokens in "
+                        f"{vel['window_minutes']} min (${cost_w:.3f}). "
+                        f"Session/channel: {sess}"
+                    )
+                    _fire_alert(
+                        rule_id='token_velocity_runaway',
+                        alert_type='spike',
+                        message=vel_msg,
+                        channels=['banner', 'telegram'],
+                    )
+            except Exception as _vel_err:
+                print(f"Warning: Token velocity check failed: {_vel_err}")
+
         except Exception as e:
             print(f"Warning: Budget monitor error: {e}")
 
@@ -6103,6 +6171,77 @@ def _start_budget_monitor_thread():
     """Start the background budget monitor thread."""
     t = threading.Thread(target=_budget_monitor_loop, daemon=True)
     t.start()
+
+def _check_token_velocity(window_minutes=2, threshold_tokens=10000, threshold_cost=0.10):
+    """Detect runaway agent loops via token velocity in a sliding window.
+
+    Scans the in-memory metrics store for token/cost entries within the last
+    ``window_minutes`` minutes, extrapolates the hourly cost rate, and flags
+    a runaway condition if either absolute token count or cost within the
+    window exceeds the supplied thresholds.
+
+    Returns a dict:
+        {
+            "window_minutes": int,
+            "tokens_in_window": int,
+            "cost_in_window": float,
+            "hourly_rate_extrapolated": float,
+            "threshold_tokens": int,
+            "threshold_cost": float,
+            "is_runaway": bool,
+            "session_id": str | None,   # channel with highest token count
+            "checked_at": str,          # ISO-8601 UTC
+        }
+    """
+    now = time.time()
+    window_start = now - window_minutes * 60
+
+    with _metrics_lock:
+        token_entries = list(metrics_store.get('tokens', []))
+        cost_entries = list(metrics_store.get('cost', []))
+
+    # Aggregate tokens in window, track per-channel totals for session attribution
+    tokens_in_window = 0
+    channel_tokens = {}
+    for e in token_entries:
+        if e.get('timestamp', 0) < window_start:
+            continue
+        t_val = e.get('total', e.get('input', 0) + e.get('output', 0))
+        tokens_in_window += t_val
+        ch = e.get('channel') or e.get('model') or 'unknown'
+        channel_tokens[ch] = channel_tokens.get(ch, 0) + t_val
+
+    # Aggregate cost in window
+    cost_in_window = sum(
+        e.get('usd', 0)
+        for e in cost_entries
+        if e.get('timestamp', 0) >= window_start
+    )
+
+    # Extrapolate to hourly rate (window_minutes -> 60 min)
+    scale = 60.0 / window_minutes
+    hourly_rate = cost_in_window * scale
+
+    # Identify busiest channel/session
+    top_session = max(channel_tokens, key=channel_tokens.get) if channel_tokens else None
+
+    is_runaway = (tokens_in_window >= threshold_tokens) or (cost_in_window >= threshold_cost)
+
+    import datetime as _dt
+    checked_at = _dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    return {
+        'window_minutes': window_minutes,
+        'tokens_in_window': int(tokens_in_window),
+        'cost_in_window': round(cost_in_window, 4),
+        'hourly_rate_extrapolated': round(hourly_rate, 4),
+        'threshold_tokens': threshold_tokens,
+        'threshold_cost': threshold_cost,
+        'is_runaway': is_runaway,
+        'session_id': top_session,
+        'checked_at': checked_at,
+    }
+
 
 
 # ── OTLP Protobuf Helpers ──────────────────────────────────────────────
@@ -7856,6 +7995,8 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" id="anomalies-nav-tab" onclick="switchTab('anomalies')" style="position:relative;">&#9888;&#65039; Anomalies<span id="anomaly-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center;line-height:16px;"></span></div>
+    <div class="nav-tab" id="models-nav-tab" onclick="switchTab('models')" style="position:relative;">&#129302; Models<span id="models-fallback-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#f59e0b;color:#fff;border-radius:10px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center;line-height:16px;"></span></div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -7927,6 +8068,13 @@ function clawmetryLogout(){
   <span style="font-size:18px;">&#9888;&#65039;</span>
   <span id="budget-cap-banner-msg" style="flex:1;"></span>
   <button onclick="document.getElementById('budget-cap-banner').style.display='none'" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+</div>
+
+<!-- Runaway Loop Banner -->
+<div id="runaway-banner" style="display:none;padding:10px 16px;border-bottom:2px solid #ef4444;font-size:13px;font-weight:600;align-items:center;gap:10px;background:#450a0a;color:#fca5a5;">
+  <span style="font-size:18px;">&#9888;&#65039;</span>
+  <span id="runaway-banner-msg" style="flex:1;"></span>
+  <button onclick="document.getElementById('runaway-banner').style.display='none'" style="background:#991b1b;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
 </div>
 
 <!-- Budget Settings Modal -->
@@ -8221,6 +8369,15 @@ function clawmetryLogout(){
     <canvas id="usage-session-cost-bar" height="180" style="width:100%;display:block;margin-bottom:12px;"></canvas>
     <div id="usage-session-cost-table" style="font-size:12px;color:var(--text-secondary);">Loading...</div>
   </div>
+  <!-- Skills Leaderboard (GH #303) -->
+  <div class="section-title">🎯 Skills Leaderboard
+    <span style="float:right;font-size:12px;font-weight:400;color:var(--text-muted);">
+      <span id="skill-total-cost-summary"></span>
+    </span>
+  </div>
+  <div class="card" id="skill-leaderboard-card">
+    <div id="skill-leaderboard-content" style="font-size:12px;color:var(--text-secondary);">Loading...</div>
+  </div>
   <!-- 30-day activity heatmap (GH #69) -->
   <div class="section-title">🗓️ Activity Heatmap — 30 days (hourly)</div>
   <div class="card">
@@ -8246,6 +8403,37 @@ function clawmetryLogout(){
     <div class="section-title">🤖 Model Breakdown</div>
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
+  </div>
+  <!-- Model Attribution Section (GH #300, #305) -->
+  <div class="section-title">🤖 Model Attribution
+    <span id="model-attr-fallback-badge" style="display:none;margin-left:10px;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600;vertical-align:middle;"></span>
+  </div>
+  <div id="model-attribution-panel">
+    <div class="card" style="margin-bottom:12px;">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+        <span style="font-size:13px;font-weight:600;color:var(--text-primary);">Per-Model Breakdown</span>
+        <span style="font-size:11px;color:var(--text-muted);margin-left:4px;" id="model-attr-period-label"></span>
+        <span id="model-attr-switch-badge" style="display:none;margin-left:auto;padding:2px 8px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);border-radius:12px;font-size:11px;color:#f59e0b;"></span>
+      </div>
+      <div id="model-attr-cost-table" style="margin-bottom:14px;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <tbody><tr><td colspan="5" style="color:var(--text-muted);padding:8px;">Loading...</td></tr></tbody>
+        </table>
+      </div>
+      <div id="model-attr-bars" style="display:flex;flex-direction:column;gap:6px;">
+        <div style="color:var(--text-muted);font-size:12px;">Loading...</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+      <div class="card">
+        <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">Per-Session Models (recent)</div>
+        <div id="model-attr-sessions" style="font-size:12px;color:var(--text-secondary);max-height:200px;overflow-y:auto;">Loading...</div>
+      </div>
+      <div class="card">
+        <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">Model Switch Events</div>
+        <div id="model-attr-switches" style="font-size:12px;color:var(--text-secondary);max-height:200px;overflow-y:auto;">Loading...</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -8753,6 +8941,49 @@ function clawmetryLogout(){
     </div>
   </div>
 </div><!-- end page-security -->
+<!-- MODELS (GH #300) -->
+<div class="page" id="page-models">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadModels()">&#x21bb; Refresh</button>
+    <select id="models-period-select" onchange="loadModels()" style="margin-left:8px;padding:5px 10px;background:var(--bg-tertiary);border:1px solid var(--border-secondary);border-radius:6px;color:var(--text-primary);font-size:12px;">
+      <option value="7">Last 7 days</option>
+      <option value="14">Last 14 days</option>
+      <option value="30">Last 30 days</option>
+      <option value="0">All time</option>
+    </select>
+    <span id="models-fallback-alert-banner" style="display:none;margin-left:12px;padding:4px 10px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);border-radius:6px;font-size:12px;color:#f59e0b;font-weight:600;">&#9888; High fallback rate</span>
+  </div>
+  <div id="models-stat-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;"></div>
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+      <span style="font-size:13px;font-weight:700;color:var(--text-primary);">Turn Distribution by Model</span>
+      <span id="models-switch-badge" style="display:none;margin-left:auto;padding:2px 8px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);border-radius:12px;font-size:11px;color:#f59e0b;"></span>
+    </div>
+    <div id="models-bars" style="display:flex;flex-direction:column;gap:8px;"><div style="color:var(--text-muted);font-size:12px;">Loading...</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+    <div class="card">
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">Per-Session Models (recent 15)</div>
+      <div id="models-sessions" style="font-size:12px;color:var(--text-secondary);max-height:260px;overflow-y:auto;">Loading...</div>
+    </div>
+    <div class="card">
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">Model Switch Events</div>
+      <div id="models-switches" style="font-size:12px;color:var(--text-secondary);max-height:260px;overflow-y:auto;">Loading...</div>
+    </div>
+  </div>
+  <div class="card">
+    <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">&#9888; Fallback Rate Alert</div>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <span style="font-size:13px;color:var(--text-secondary);">Alert when fallback rate exceeds</span>
+      <input type="number" id="models-fallback-threshold" value="20" min="0" max="100" step="5"
+        style="width:70px;padding:5px 8px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:6px;color:var(--text-primary);font-size:13px;text-align:center;">
+      <span style="font-size:13px;color:var(--text-secondary);">%</span>
+      <button onclick="loadModels()" style="padding:5px 14px;background:#6366f1;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Apply</button>
+      <span id="models-fallback-status" style="font-size:12px;color:var(--text-muted);"></span>
+    </div>
+  </div>
+</div><!-- end page-models -->
+
 
 
 
@@ -9058,6 +9289,33 @@ async function refreshPausedBanner() {
 setInterval(refreshPausedBanner, 15000);
 setTimeout(refreshPausedBanner, 1500);
 
+// === Token Velocity / Runaway Loop Detection ===
+async function checkTokenVelocity() {
+  try {
+    var data = await fetch('/api/token-velocity').then(function(r){return r.json();});
+    var banner = document.getElementById('runaway-banner');
+    var msg = document.getElementById('runaway-banner-msg');
+    var velCard = document.getElementById('velocity-card-val');
+    if (velCard) {
+      var tokK = (data.tokens_in_window / 1000).toFixed(1);
+      var costStr = data.cost_in_window > 0 ? ' | $' + data.cost_in_window.toFixed(3) : '';
+      velCard.textContent = tokK + 'K tok' + costStr;
+      velCard.style.color = data.is_runaway ? '#ef4444' : 'var(--text-success)';
+    }
+    if (!banner || !msg) return;
+    if (data.is_runaway) {
+      var tokK2 = (data.tokens_in_window / 1000).toFixed(1);
+      var sess = data.session_id || 'unknown';
+      msg.textContent = '\u26a0\ufe0f Runaway loop detected \u2014 ' + tokK2 + 'K tokens in ' + data.window_minutes + ' min ($' + data.cost_in_window.toFixed(3) + '). Session: ' + sess;
+      banner.style.display = 'flex';
+    } else {
+      banner.style.display = 'none';
+    }
+  } catch(e) {}
+}
+setInterval(checkTokenVelocity, 30000);
+setTimeout(checkTokenVelocity, 8000);
+
 // === Telegram Config Functions ===
 async function loadTelegramConfig() {
   try {
@@ -9120,6 +9378,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+  if (name === 'models') loadModels();
 }
 
 function exportUsageData() {
@@ -11441,6 +11700,140 @@ async function loadUsage() {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
 }
+
+// ===== Model Attribution Tab (GH #300) =====
+async function loadModels() {
+  var barsEl = document.getElementById('models-bars');
+  var sessionsEl = document.getElementById('models-sessions');
+  var switchesEl = document.getElementById('models-switches');
+  var statCardsEl = document.getElementById('models-stat-cards');
+  var badgeEl = document.getElementById('models-switch-badge');
+  var fbBadge = document.getElementById('models-fallback-badge');
+  var fbBanner = document.getElementById('models-fallback-alert-banner');
+  var fbStatus = document.getElementById('models-fallback-status');
+  var periodSel = document.getElementById('models-period-select');
+  var thresholdEl = document.getElementById('models-fallback-threshold');
+  if (!barsEl) return;
+
+  var period = periodSel ? parseInt(periodSel.value || '7') : 7;
+  var threshold = thresholdEl ? parseFloat(thresholdEl.value || '20') : 20;
+
+  try {
+    var data = await fetch('/api/usage/model-attribution?days=' + period + '&threshold=' + threshold).then(function(r) { return r.json(); });
+    var models = data.models || [];
+    var palette = ['#6366f1','#22c55e','#f59e0b','#ef4444','#14b8a6','#a855f7','#f97316','#0ea5e9'];
+
+    // Stat cards
+    if (statCardsEl) {
+      var fbRate = data.fallbackRate || 0;
+      var fbColor = fbRate > threshold ? '#f59e0b' : (fbRate > threshold * 0.5 ? '#a78bfa' : '#22c55e');
+      statCardsEl.innerHTML =
+        '<div class="card" style="padding:12px 16px;text-align:center;">' +
+          '<div style="font-size:22px;font-weight:700;color:var(--text-primary);">' + (data.primaryModel || '—').split('/').pop() + '</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px;">Primary Model</div></div>' +
+        '<div class="card" style="padding:12px 16px;text-align:center;">' +
+          '<div style="font-size:22px;font-weight:700;color:var(--text-primary);">' + data.totalTurns + '</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px;">Total Turns</div></div>' +
+        '<div class="card" style="padding:12px 16px;text-align:center;">' +
+          '<div style="font-size:22px;font-weight:700;color:' + fbColor + ';">' + fbRate + '%</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px;">Fallback Rate</div></div>' +
+        '<div class="card" style="padding:12px 16px;text-align:center;">' +
+          '<div style="font-size:22px;font-weight:700;color:var(--text-primary);">' + data.switchCount + '</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px;">Model Switches</div></div>' +
+        '<div class="card" style="padding:12px 16px;text-align:center;">' +
+          '<div style="font-size:22px;font-weight:700;color:var(--text-primary);">$' + (data.totalCost || 0).toFixed(4) + '</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-top:2px;">Est. Cost</div></div>';
+    }
+
+    // Fallback alert
+    if (data.fallbackAlert) {
+      if (fbBanner) fbBanner.style.display = '';
+      if (fbBadge) { fbBadge.style.display = ''; fbBadge.textContent = data.fallbackRate + '%'; }
+      if (fbStatus) fbStatus.innerHTML = '<span style="color:#f59e0b;font-weight:600;">&#9888; Fallback rate ' + data.fallbackRate + '% exceeds threshold ' + threshold + '%</span>';
+    } else {
+      if (fbBanner) fbBanner.style.display = 'none';
+      if (fbBadge) fbBadge.style.display = 'none';
+      if (fbStatus) fbStatus.innerHTML = '<span style="color:#22c55e;">&#10003; Fallback rate ' + data.fallbackRate + '% is within threshold</span>';
+    }
+
+    // Switch badge
+    if (data.switchCount > 0 && badgeEl) {
+      badgeEl.style.display = '';
+      badgeEl.textContent = data.switchCount + ' switch' + (data.switchCount !== 1 ? 'es' : '');
+    }
+
+    // Turn distribution bars
+    if (!models.length) {
+      barsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No model data found in transcripts yet.</div>';
+    } else {
+      var maxTurns = Math.max.apply(null, models.map(function(m) { return m.turns || 0; })) || 1;
+      var barsHtml = '';
+      models.forEach(function(m, i) {
+        var pct = Math.max(2, Math.round((m.turns / maxTurns) * 100));
+        var color = palette[i % palette.length];
+        var shortModel = (m.model || '').split('/').pop() || m.model;
+        var isPrimary = i === 0;
+        barsHtml += '<div style="display:flex;align-items:center;gap:10px;">';
+        barsHtml += '<div style="width:180px;font-size:12px;color:var(--text-secondary);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(m.model) + '">';
+        if (isPrimary) barsHtml += '<span style="color:#22c55e;font-size:10px;margin-right:4px;">&#11088; primary</span>';
+        else barsHtml += '<span style="color:#f59e0b;font-size:10px;margin-right:4px;">fallback</span>';
+        barsHtml += escHtml(shortModel) + '</div>';
+        barsHtml += '<div style="flex:1;background:var(--bg-secondary);border-radius:4px;height:20px;position:relative;">';
+        barsHtml += '<div style="width:' + pct + '%;background:' + color + ';border-radius:4px;height:100%;opacity:0.85;transition:width 0.4s;"></div>';
+        barsHtml += '</div>';
+        barsHtml += '<div style="width:140px;font-size:11px;color:var(--text-muted);">' + m.turns + ' turns · ' + m.pct_turns + '% · $' + (m.cost || 0).toFixed(4) + '</div>';
+        barsHtml += '</div>';
+      });
+      barsEl.innerHTML = barsHtml;
+    }
+
+    // Per-session table
+    var sessionRows = data.sessionModels || [];
+    if (!sessionRows.length) {
+      if (sessionsEl) sessionsEl.innerHTML = '<div style="color:var(--text-muted);">No session data yet.</div>';
+    } else {
+      var sHtml = '<table style="width:100%;border-collapse:collapse;">';
+      sHtml += '<thead><tr style="color:var(--text-muted);font-size:10px;text-transform:uppercase;"><th style="text-align:left;padding:3px 6px;">Session</th><th style="text-align:left;padding:3px 6px;">Model</th><th style="text-align:center;padding:3px 6px;">Mixed?</th><th style="text-align:left;padding:3px 6px;">Date</th></tr></thead><tbody>';
+      sessionRows.slice().reverse().slice(0, 15).forEach(function(s) {
+        var multi = s.multi_model ? '<span style="color:#f59e0b;font-size:10px;">&#9889; yes</span>' : '<span style="color:var(--text-muted);font-size:10px;">no</span>';
+        var shortModel = (s.primary_model || '').split('/').pop() || s.primary_model;
+        sHtml += '<tr style="border-top:1px solid var(--border-secondary);">';
+        sHtml += '<td style="padding:3px 6px;font-family:monospace;font-size:10px;color:var(--text-muted);">' + escHtml(s.session_short) + '</td>';
+        sHtml += '<td style="padding:3px 6px;font-size:11px;" title="' + escHtml(s.primary_model) + '">' + escHtml(shortModel) + '</td>';
+        sHtml += '<td style="padding:3px 6px;text-align:center;">' + multi + '</td>';
+        sHtml += '<td style="padding:3px 6px;font-size:10px;color:var(--text-muted);">' + escHtml(s.day || '') + '</td>';
+        sHtml += '</tr>';
+      });
+      sHtml += '</tbody></table>';
+      if (sessionsEl) sessionsEl.innerHTML = sHtml;
+    }
+
+    // Switch events list
+    var switches = data.switchEvents || [];
+    if (!switches.length) {
+      if (switchesEl) switchesEl.innerHTML = '<div style="color:var(--text-muted);">No model switches detected in this period.</div>';
+    } else {
+      var swHtml = '<div style="display:flex;flex-direction:column;gap:6px;">';
+      switches.slice(0, 15).forEach(function(sw) {
+        var fromShort = (sw.from_model || '').split('/').pop() || sw.from_model;
+        var toShort = (sw.to_model || '').split('/').pop() || sw.to_model;
+        swHtml += '<div style="padding:5px 8px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid #f59e0b;">';
+        swHtml += '<div style="font-size:11px;color:var(--text-primary);">';
+        swHtml += '<span style="color:#ef4444;">' + escHtml(fromShort) + '</span>';
+        swHtml += ' <span style="color:var(--text-muted);">&#8594;</span> ';
+        swHtml += '<span style="color:#22c55e;">' + escHtml(toShort) + '</span>';
+        swHtml += '</div>';
+        swHtml += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + escHtml(sw.ts_str || '') + ' &middot; &#8230;' + escHtml(sw.session_short || '') + '</div>';
+        swHtml += '</div>';
+      });
+      swHtml += '</div>';
+      if (switchesEl) switchesEl.innerHTML = swHtml;
+    }
+  } catch(e) {
+    if (barsEl) barsEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Model attribution unavailable: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
 
 function renderSessionCostChart() {
   var rows = window._sessionCostData || [];
@@ -16428,6 +16821,43 @@ def _infer_provider_from_model(model_name):
         return 'local/other'
     return 'unknown'
 
+@bp_overview.route('/api/token-velocity')
+def api_token_velocity():
+    """Return current token velocity in a 2-minute sliding window.
+
+    Query params:
+        window_minutes (int, default 2)   - sliding window size
+        threshold_tokens (int, default 10000)
+        threshold_cost (float, default 0.10)
+
+    Response JSON:
+        {
+            "window_minutes": 2,
+            "tokens_in_window": 15420,
+            "cost_in_window": 0.12,
+            "hourly_rate_extrapolated": 3.60,
+            "threshold_tokens": 10000,
+            "threshold_cost": 0.10,
+            "is_runaway": true,
+            "session_id": "abc123",
+            "checked_at": "2026-03-26T17:00:00Z"
+        }
+    """
+    try:
+        window_minutes = int(request.args.get('window_minutes', 2))
+        threshold_tokens = int(request.args.get('threshold_tokens', 10000))
+        threshold_cost = float(request.args.get('threshold_cost', 0.10))
+    except (ValueError, TypeError):
+        window_minutes, threshold_tokens, threshold_cost = 2, 10000, 0.10
+
+    result = _check_token_velocity(
+        window_minutes=window_minutes,
+        threshold_tokens=threshold_tokens,
+        threshold_cost=threshold_cost,
+    )
+    return jsonify(result)
+
+
 @bp_overview.route('/api/timeline')
 def api_timeline():
     """Return available dates with activity counts for time travel."""
@@ -18751,7 +19181,7 @@ def _score_cron_match(session, job):
 
 
 def _compute_transcript_analytics():
-    """Parse transcript files once for usage, anomalies, cron attribution, and plugin breakdown."""
+    """Parse transcript files once for usage, anomalies, cron attribution, plugin breakdown, and model attribution."""
     now = time.time()
     if _transcript_analytics_cache['data'] is not None and (now - _transcript_analytics_cache['ts']) < _TRANSCRIPT_ANALYTICS_TTL:
         return _transcript_analytics_cache['data']
@@ -18762,6 +19192,9 @@ def _compute_transcript_analytics():
     daily_tokens = {}
     daily_cost = {}
     model_usage = {}
+    # Model attribution: per-turn counts and switching events
+    model_turns = {}     # model -> turn count
+    model_switches = []  # [{session_id, from_model, to_model, ts_ms}]
 
     if os.path.isdir(sessions_dir):
         for fname in os.listdir(sessions_dir):
@@ -18778,6 +19211,7 @@ def _compute_transcript_analytics():
             s_end = None
             search_parts = []
             explicit_cron_refs = set()
+            s_model_turns = {}  # model -> turn count within this session
 
             try:
                 with open(fpath, 'r') as f:
@@ -18805,7 +19239,18 @@ def _compute_transcript_analytics():
                         message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
                         model = message.get('model') or obj.get('model')
                         if model:
+                            # Track model turns and switching events
+                            if model != s_model and s_model != 'unknown':
+                                ts_ms = int(ts.timestamp() * 1000) if ts else 0
+                                model_switches.append({
+                                    'session_id': sid,
+                                    'from_model': s_model,
+                                    'to_model': model,
+                                    'ts_ms': ts_ms,
+                                })
                             s_model = model
+                            s_model_turns[model] = s_model_turns.get(model, 0) + 1
+                            model_turns[model] = model_turns.get(model, 0) + 1
 
                         usage_metrics = _extract_usage_metrics(obj)
                         tokens = usage_metrics['tokens']
@@ -18857,6 +19302,7 @@ def _compute_transcript_analytics():
                     'tokens': s_tokens,
                     'cost_usd': s_cost,
                     'model': s_model,
+                    'model_turns': s_model_turns,
                     'start_ts': s_start.timestamp() if s_start else 0,
                     'end_ts': s_end.timestamp() if s_end else 0,
                     'day': day,
@@ -18868,18 +19314,20 @@ def _compute_transcript_analytics():
                 continue
 
     summaries.sort(key=lambda s: s.get('start_ts', 0))
+    # Sort model_switches by timestamp descending (most recent first)
+    model_switches.sort(key=lambda x: x.get('ts_ms', 0), reverse=True)
     result = {
         'sessions': summaries,
         'plugin_stats': plugin_stats,
         'daily_tokens': daily_tokens,
         'daily_cost': daily_cost,
         'model_usage': model_usage,
+        'model_turns': model_turns,
+        'model_switches': model_switches[:50],
     }
     _transcript_analytics_cache['data'] = result
     _transcript_analytics_cache['ts'] = now
     return result
-
-
 def _compute_session_cost_anomalies(session_summaries):
     """Flag sessions with cost >2x their rolling 7-day session-cost average."""
     now_ts = time.time()
@@ -19054,6 +19502,230 @@ def api_usage_by_plugin():
     return jsonify({'plugins': rows})
 
 
+# ── Skill attribution (ClawHub integration) ──────────────────────────────────
+_skill_attribution_cache = {'data': None, 'ts': 0}
+_SKILL_ATTRIBUTION_TTL = 120  # seconds
+
+_SKILL_WINDOW_TURNS = 5  # turns after SKILL.md read to attribute to that skill
+
+
+def _extract_skill_name_from_path(path):
+    """Extract skill name from a SKILL.md file path.
+
+    Examples:
+      /home/vivek/clawd/skills/weather/SKILL.md  -> weather
+      .../openclaw/skills/coding-agent/SKILL.md  -> coding-agent
+    """
+    if not path:
+        return None
+    # Normalise separators
+    norm = path.replace('\\', '/')
+    # Must reference SKILL.md
+    if 'skill' not in norm.lower():
+        return None
+    parts = [p for p in norm.split('/') if p]
+    for i, part in enumerate(parts):
+        if part.upper() == 'SKILL.MD' and i >= 1:
+            return parts[i - 1].lower()
+    # Fallback: look for skills/ directory
+    if 'skills/' in norm.lower():
+        idx = norm.lower().rfind('skills/')
+        rest = norm[idx + 7:]
+        skill = rest.split('/')[0].lower()
+        if skill and skill != 'skill.md':
+            return skill
+    return None
+
+
+def _compute_skill_attribution(days=30):
+    """Scan session logs and attribute token cost per skill invocation.
+
+    Skill invocations are detected by finding assistant `toolCall` entries
+    with name 'read' whose path contains 'SKILL.md' or 'skills/'.
+
+    Tokens/cost for the next _SKILL_WINDOW_TURNS turns in that session are
+    attributed to that skill (sliding-window heuristic).
+
+    Returns:
+        {
+          "skills": [...],
+          "period_days": 30,
+          "total_skill_cost": 1.43,
+          "generated_at": "..."
+        }
+    """
+    import time as _time
+    now = _time.time()
+    cache = _skill_attribution_cache
+    if cache['data'] is not None and (now - cache['ts']) < _SKILL_ATTRIBUTION_TTL:
+        return cache['data']
+
+    sessions_dir = _get_sessions_dir()
+    cutoff_ts = now - days * 86400
+
+    # Per-skill accumulators
+    skill_invocations = {}  # skill_name -> list of {ts, tokens, cost, session_id}
+
+    if os.path.isdir(sessions_dir):
+        for fname in sorted(os.listdir(sessions_dir)):
+            if not fname.endswith('.jsonl'):
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            # Quick mtime check: skip files older than cutoff
+            try:
+                if os.path.getmtime(fpath) < cutoff_ts:
+                    continue
+            except OSError:
+                continue
+
+            sid = fname.replace('.jsonl', '')
+            fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
+
+            try:
+                # First pass: collect all events with timestamps and token usage
+                events = []
+                with open(fpath, 'r') as f:
+                    for raw in f:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            obj = json.loads(raw)
+                        except Exception:
+                            continue
+                        ts = _parse_event_timestamp(
+                            obj.get('timestamp') or obj.get('time') or obj.get('created_at'),
+                            fallback_dt
+                        )
+                        metrics = _extract_usage_metrics(obj)
+                        events.append({
+                            'obj': obj,
+                            'ts': ts,
+                            'tokens': metrics['tokens'],
+                            'cost': metrics['cost'],
+                        })
+
+                # Second pass: find skill invocations and attribute token windows
+                for idx, ev in enumerate(events):
+                    obj = ev['obj']
+                    ts = ev['ts']
+                    if ts and ts.timestamp() < cutoff_ts:
+                        continue
+
+                    msg = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+                    content = msg.get('content', [])
+                    if not isinstance(content, list):
+                        continue
+
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        if part.get('type') != 'toolCall':
+                            continue
+                        tool_name = (part.get('name') or '').lower()
+                        if tool_name not in ('read',):
+                            continue
+
+                        args = part.get('arguments') or part.get('input') or {}
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except Exception:
+                                args = {}
+                        path_val = str(args.get('file_path') or args.get('path') or '')
+                        skill = _extract_skill_name_from_path(path_val)
+                        if not skill:
+                            continue
+
+                        # Attribute tokens from next _SKILL_WINDOW_TURNS events
+                        window_tokens = 0
+                        window_cost = 0.0
+                        for j in range(idx, min(idx + _SKILL_WINDOW_TURNS + 1, len(events))):
+                            window_tokens += events[j]['tokens']
+                            window_cost += events[j]['cost']
+
+                        inv_ts = ts.timestamp() if ts else fallback_dt.timestamp()
+                        if skill not in skill_invocations:
+                            skill_invocations[skill] = []
+                        skill_invocations[skill].append({
+                            'ts': inv_ts,
+                            'tokens': window_tokens,
+                            'cost': window_cost,
+                            'session_id': sid,
+                        })
+
+            except Exception:
+                continue
+
+    # Compute trend: last 7 days vs prior 7 days
+    now_ts = now
+    last7_start = now_ts - 7 * 86400
+    prev7_start = now_ts - 14 * 86400
+
+    skills_out = []
+    for skill_name, invs in skill_invocations.items():
+        if not invs:
+            continue
+        total_tokens = sum(i['tokens'] for i in invs)
+        total_cost = sum(i['cost'] for i in invs)
+        last_used_ts = max(i['ts'] for i in invs)
+        last_used = datetime.fromtimestamp(last_used_ts).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        last7_invs = [i for i in invs if i['ts'] >= last7_start]
+        prev7_invs = [i for i in invs if prev7_start <= i['ts'] < last7_start]
+        last7_count = len(last7_invs)
+        prev7_count = len(prev7_invs)
+        if last7_count > prev7_count * 1.2:
+            trend = 'up'
+        elif last7_count < prev7_count * 0.8:
+            trend = 'down'
+        else:
+            trend = 'stable'
+
+        n = len(invs)
+        avg_cost = total_cost / n if n else 0.0
+        avg_tokens = total_tokens / n if n else 0
+
+        skills_out.append({
+            'name': skill_name,
+            'clawhub_url': f'https://clawhub.com/skills/{skill_name}',
+            'invocations': n,
+            'total_tokens': int(round(total_tokens)),
+            'total_cost': round(total_cost, 6),
+            'avg_cost_per_run': round(avg_cost, 6),
+            'avg_tokens_per_run': int(round(avg_tokens)),
+            'last_used': last_used,
+            'last_used_ts': last_used_ts,
+            'trend': trend,
+            'last7_invocations': last7_count,
+        })
+
+    skills_out.sort(key=lambda s: s['total_cost'], reverse=True)
+    total_skill_cost = sum(s['total_cost'] for s in skills_out)
+
+    result = {
+        'skills': skills_out,
+        'period_days': days,
+        'total_skill_cost': round(total_skill_cost, 6),
+        'generated_at': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+    }
+    cache['data'] = result
+    cache['ts'] = now
+    return result
+
+
+@bp_usage.route('/api/skill-attribution')
+def api_skill_attribution():
+    """Return per-skill cost attribution leaderboard (ClawHub integration)."""
+    try:
+        days = int(request.args.get('days', 30))
+    except (ValueError, TypeError):
+        days = 30
+    days = max(1, min(days, 90))
+    data = _compute_skill_attribution(days=days)
+    return jsonify(data)
+
+
 @bp_usage.route('/api/usage/export')
 def api_usage_export():
     """Export usage data as CSV."""
@@ -19141,6 +19813,150 @@ def api_usage_export():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@bp_usage.route('/api/usage/model-attribution')
+def api_usage_model_attribution():
+    """Return per-model attribution: turn counts, cost delta, fallback rate, switch events. GH #300 #305."""
+    try:
+        period_days = request.args.get('days', 7, type=int)
+        fallback_threshold = request.args.get('threshold', 20.0, type=float)
+
+        analytics = _compute_transcript_analytics()
+        model_turns = analytics.get('model_turns', {})
+        model_switches = analytics.get('model_switches', [])
+        sessions = analytics.get('sessions', [])
+
+        # Filter to period_days
+        now_ts = time.time()
+        cutoff_ts = now_ts - (period_days * 86400) if period_days > 0 else 0
+        period_sessions = [s for s in sessions if s.get('start_ts', 0) >= cutoff_ts]
+
+        # Recompute model_turns and tokens from filtered sessions
+        period_model_turns = {}
+        period_model_tokens = {}
+        for s in period_sessions:
+            s_mt = s.get('model_turns', {})
+            for mdl, cnt in s_mt.items():
+                period_model_turns[mdl] = period_model_turns.get(mdl, 0) + cnt
+            s_model = s.get('model', 'unknown')
+            s_tokens = s.get('tokens', 0)
+            if s_model and s_model != 'unknown':
+                period_model_tokens[s_model] = period_model_tokens.get(s_model, 0) + s_tokens
+
+        # Fall back to global if period yields nothing
+        if not period_model_turns:
+            period_model_turns = model_turns
+        if not period_model_tokens:
+            period_model_tokens = analytics.get('model_usage', {})
+
+        total_turns = sum(period_model_turns.values()) or 1
+        total_tokens = sum(period_model_tokens.values()) or 1
+
+        # Cost estimation using _get_model_pricing()
+        pricing = _get_model_pricing()
+        input_ratio, output_ratio = 0.6, 0.4
+
+        def _model_cost(model_name, tokens):
+            m = model_name.lower()
+            key = 'default'
+            if 'opus' in m:
+                key = 'claude-opus'
+            elif 'sonnet' in m:
+                key = 'claude-sonnet'
+            elif 'haiku' in m:
+                key = 'claude-haiku'
+            elif 'gpt-4' in m or 'gpt4' in m:
+                key = 'gpt-4'
+            elif 'gpt-3' in m or 'gpt3' in m:
+                key = 'gpt-3.5'
+            in_price, out_price = pricing.get(key, pricing['default'])
+            return round(
+                (tokens * input_ratio) * (in_price / 1_000_000) +
+                (tokens * output_ratio) * (out_price / 1_000_000),
+                4
+            )
+
+        models = []
+        all_models = set(list(period_model_turns.keys()) + list(period_model_tokens.keys()))
+        for m in all_models:
+            if not m or m == 'unknown':
+                continue
+            turns = period_model_turns.get(m, 0)
+            tokens = period_model_tokens.get(m, 0)
+            cost = _model_cost(m, tokens)
+            models.append({
+                'model': m,
+                'turns': turns,
+                'tokens': int(tokens),
+                'cost': cost,
+                'pct_turns': round((turns / total_turns) * 100, 1),
+                'pct_tokens': round((tokens / total_tokens) * 100, 1),
+            })
+        models.sort(key=lambda x: x['turns'], reverse=True)
+
+        # Fallback rate: primary = most-used model; others = fallback
+        primary_model = models[0]['model'] if models else 'unknown'
+        primary_turns = models[0]['turns'] if models else 0
+        fallback_turns = total_turns - primary_turns
+        fallback_rate = round((fallback_turns / total_turns) * 100, 1) if total_turns > 0 else 0.0
+        fallback_alert = fallback_rate > fallback_threshold
+        total_cost = round(sum(m['cost'] for m in models), 4)
+
+        # Per-session model info (most recent 30 sessions in period)
+        session_models = []
+        for s in reversed(period_sessions[-50:]):
+            sid = s.get('session_id', '')
+            m = s.get('model', 'unknown')
+            mt = s.get('model_turns', {})
+            if not m or m == 'unknown':
+                continue
+            session_models.append({
+                'session_id': sid,
+                'session_short': sid[-12:],
+                'primary_model': m,
+                'model_turns': mt,
+                'multi_model': len(mt) > 1,
+                'day': s.get('day', ''),
+                'tokens': s.get('tokens', 0),
+            })
+        session_models = session_models[-30:]
+
+        # Switch events in period
+        period_switches = [sw for sw in model_switches if sw.get('ts_ms', 0) >= cutoff_ts * 1000]
+        switches_out = []
+        for sw in period_switches[:20]:
+            ts_ms = sw.get('ts_ms', 0)
+            try:
+                ts_str = datetime.fromtimestamp(ts_ms / 1000).strftime('%Y-%m-%d %H:%M') if ts_ms else ''
+            except Exception:
+                ts_str = ''
+            switches_out.append({
+                'session_id': sw.get('session_id', ''),
+                'session_short': sw.get('session_id', '')[-12:],
+                'from_model': sw.get('from_model', ''),
+                'to_model': sw.get('to_model', ''),
+                'ts_ms': ts_ms,
+                'ts_str': ts_str,
+            })
+
+        return jsonify({
+            'models': models,
+            'totalTurns': total_turns,
+            'totalTokens': int(total_tokens),
+            'totalCost': total_cost,
+            'switchEvents': switches_out,
+            'switchCount': len(period_switches),
+            'sessionModels': session_models,
+            'primaryModel': primary_model,
+            'fallbackRate': fallback_rate,
+            'fallbackThreshold': fallback_threshold,
+            'fallbackAlert': fallback_alert,
+            'periodDays': period_days,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e), 'models': [], 'switchEvents': [], 'sessionModels': []}), 500
+
 
 @bp_sessions.route('/api/transcripts')
 def api_transcripts():

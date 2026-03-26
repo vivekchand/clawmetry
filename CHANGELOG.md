@@ -1,3 +1,8 @@
+## [0.12.79] — 2026-03-26
+
+### Added
+- feat: Model Attribution tab (GH #300/#305) — dedicated `Models` nav tab with turn distribution bars, primary vs fallback labelling, cost-per-model, per-session model table, model switch event timeline, and configurable fallback rate alert threshold; backend `/api/usage/model-attribution` already served fallbackRate/fallbackAlert; this PR wires it to a full standalone UI page
+
 ## v0.12.63 (2026-03-22)
 - fix: robust Ollama detection -- PATH fallback + HTTP ping to localhost:11434
 - feat: sync daemon heartbeat includes ollama status (installed, running, models)

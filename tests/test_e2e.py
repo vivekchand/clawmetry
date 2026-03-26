@@ -153,6 +153,13 @@ class TestTabsLoad:
         memory_page = page.locator("#page-memory")
         assert memory_page.count() > 0, "#page-memory element not found"
 
+    def test_models_tab_loads(self, page: Page):
+        """Clicking Models tab shows model attribution page (GH #300)."""
+        load_dashboard(page)
+        click_tab(page, "Models")
+        models_page = page.locator("#page-models")
+        assert models_page.count() > 0, "#page-models element not found"
+
     def test_no_critical_js_errors_on_load(self, page: Page):
         """Page should load without uncaught TypeError/ReferenceError."""
         errors = []
