@@ -1745,6 +1745,7 @@ DASHBOARD_HTML = r"""
   .brain-event:hover { background:rgba(255,255,255,0.02); }
   .brain-event.expanded { flex-wrap:wrap; }
   .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; }
+  .brain-meta { display:contents; } /* Desktop: render children directly in brain-event flex row */
   .brain-time { color:var(--text-muted); min-width:70px; }
   .brain-source { min-width:120px; max-width:200px; font-weight:600; word-break:break-all; flex-shrink:0; }
   .brain-type { padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; min-width:60px; text-align:center; display:inline-block; }
@@ -2591,11 +2592,20 @@ DASHBOARD_HTML = r"""
     .nav-tabs::-webkit-scrollbar { display: none; }
     .nav-tab { padding: 5px 10px; font-size: 11px; white-space: nowrap; }
 
-    /* Brain event stream: compact columns so content gets space */
-    .brain-event { gap: 4px; padding: 4px 0; }
-    .brain-time { min-width: 52px; font-size: 10px; }
-    .brain-source { min-width: 60px; max-width: 80px; font-size: 10px; }
-    .brain-type { min-width: 42px; font-size: 9px; padding: 1px 3px; }
+    /* Brain event stream: stack rows on mobile */
+    .brain-event { flex-direction: column; gap: 2px; padding: 6px 0; align-items: flex-start; }
+    .brain-meta { display: flex !important; align-items: center; gap: 5px; flex-shrink: 0; width: 100%; }
+    .brain-time { min-width: unset; font-size: 10px; flex-shrink: 0; }
+    .brain-source { min-width: unset; max-width: 140px; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .brain-type { min-width: 42px; font-size: 9px; padding: 1px 3px; flex-shrink: 0; }
+    .brain-detail { font-size: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; width: 100%; white-space: normal; }
+    .brain-event.expanded .brain-detail { -webkit-line-clamp: unset; overflow: visible; }
+
+    /* Filter chips: single scrollable row, no wrap */
+    #brain-filter-chips { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+    #brain-filter-chips::-webkit-scrollbar { display: none; }
+    #brain-type-chips { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+    #brain-type-chips::-webkit-scrollbar { display: none; }
 
     /* Cards */
     .card { padding: 12px 14px; }
@@ -6862,6 +6872,7 @@ DASHBOARD_HTML = r"""
   .brain-event:hover { background:rgba(255,255,255,0.02); }
   .brain-event.expanded { flex-wrap:wrap; }
   .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; }
+  .brain-meta { display:contents; } /* Desktop: render children directly in brain-event flex row */
   .brain-time { color:var(--text-muted); min-width:70px; }
   .brain-source { min-width:120px; max-width:200px; font-weight:600; word-break:break-all; flex-shrink:0; }
   .brain-type { padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; min-width:60px; text-align:center; display:inline-block; }
@@ -7708,11 +7719,20 @@ DASHBOARD_HTML = r"""
     .nav-tabs::-webkit-scrollbar { display: none; }
     .nav-tab { padding: 5px 10px; font-size: 11px; white-space: nowrap; }
 
-    /* Brain event stream: compact columns so content gets space */
-    .brain-event { gap: 4px; padding: 4px 0; }
-    .brain-time { min-width: 52px; font-size: 10px; }
-    .brain-source { min-width: 60px; max-width: 80px; font-size: 10px; }
-    .brain-type { min-width: 42px; font-size: 9px; padding: 1px 3px; }
+    /* Brain event stream: stack rows on mobile */
+    .brain-event { flex-direction: column; gap: 2px; padding: 6px 0; align-items: flex-start; }
+    .brain-meta { display: flex !important; align-items: center; gap: 5px; flex-shrink: 0; width: 100%; }
+    .brain-time { min-width: unset; font-size: 10px; flex-shrink: 0; }
+    .brain-source { min-width: unset; max-width: 140px; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .brain-type { min-width: 42px; font-size: 9px; padding: 1px 3px; flex-shrink: 0; }
+    .brain-detail { font-size: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; width: 100%; white-space: normal; }
+    .brain-event.expanded .brain-detail { -webkit-line-clamp: unset; overflow: visible; }
+
+    /* Filter chips: single scrollable row, no wrap */
+    #brain-filter-chips { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+    #brain-filter-chips::-webkit-scrollbar { display: none; }
+    #brain-type-chips { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+    #brain-type-chips::-webkit-scrollbar { display: none; }
 
     /* Cards */
     .card { padding: 12px 14px; }
@@ -9851,10 +9871,18 @@ function renderBrainStream(events) {
     var color = ev.color || brainSourceColor(ev.source || 'main');
     var evType = ev.type || 'TOOL';
     var icon = _brainTypeIcons[evType] || '🔧';
+    var fullSrc = ev.sourceLabel || ev.source || 'main';
+    /* Short agent ID: show role/last segment only; full ID in title attribute */
+    var srcParts = fullSrc.split(':');
+    var shortSrc = srcParts[srcParts.length - 1] || fullSrc;
+    if (shortSrc.length > 12) shortSrc = shortSrc.slice(0, 8) + '\u2026';
+    var roleIcon = fullSrc.indexOf('subagent') >= 0 ? '\uD83E\uDD16' : '\uD83E\uDDE0';
     html += '<div class="brain-event" onclick="this.classList.toggle(\'expanded\')">';
+    html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
-    html += '<span class="brain-source" style="color:' + color + ';flex-shrink:0;">' + escHtml(ev.sourceLabel || ev.source || 'main') + '</span>';
     html += '<span class="brain-type" style="background:rgba(100,100,100,0.15);color:' + color + ';padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;min-width:70px;text-align:center;display:inline-block;white-space:nowrap;">' + icon + ' ' + escHtml(evType) + '</span>';
+    html += '<span class="brain-source" style="color:' + color + ';flex-shrink:0;" title="' + escHtml(fullSrc) + '">' + roleIcon + ' ' + escHtml(shortSrc) + '</span>';
+    html += '</div>';
     html += '<span class="brain-detail">' + renderBrainDetail(ev.detail || '') + '</span>';
     html += '</div>';
   });
