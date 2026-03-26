@@ -135,13 +135,6 @@ This project is tested with BrowserStack.
 
 MIT
 
----
-
-<p align="center">
-  <strong>🦞 See your agent think</strong><br>
-  <sub>Built by <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · Part of the <a href="https://github.com/openclaw/openclaw">OpenClaw</a> ecosystem</sub>
-</p>
-
 ## Star History
 
 <a href="https://www.star-history.com/?repos=vivekchand%2Fclawmetry&type=date&legend=top-left">
@@ -151,3 +144,10 @@ MIT
  <img alt="Star History Chart" src="https://api.star-history.com/image?repos=vivekchand/clawmetry&type=date&legend=top-left" />
  </picture>
 </a>
+
+---
+
+<p align="center">
+  <strong>🦞 See your agent think</strong><br>
+  <sub>Built by <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · Part of the <a href="https://github.com/openclaw/openclaw">OpenClaw</a> ecosystem</sub>
+</p>
