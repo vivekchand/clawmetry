@@ -860,6 +860,193 @@ def _get_active_alerts():
         return []
 
 
+def _get_anomaly_status():
+    """Compute rolling-baseline anomaly status for cost, tokens, error-rate, and latency.
+
+    Returns a dict with a list of signal objects and an overall any_anomaly flag.
+    Each signal includes: name, label, current, baseline, ratio, threshold, is_anomaly, unit, severity.
+    Severity: 'ok' | 'warning' | 'high'.
+    """
+    now = time.time()
+    hour_ago = now - 3600
+    seven_days_ago = now - 7 * 86400
+
+    # Configurable thresholds per signal (multiplier over 7-day hourly baseline)
+    THRESHOLDS = {
+        'cost_per_hour':   2.0,
+        'token_velocity':  3.0,
+        'error_rate':      2.5,
+        'latency_p95':     2.5,
+    }
+
+    signals = []
+
+    with _metrics_lock:
+        cost_entries   = list(metrics_store.get('cost', []))
+        token_entries  = list(metrics_store.get('tokens', []))
+        webhook_entries = list(metrics_store.get('webhooks', []))
+        run_entries    = list(metrics_store.get('runs', []))
+
+    # ── Helper: compute hourly buckets over last 7 days ──────────────────
+    def _hourly_buckets(entries, value_fn, start_ts, end_ts):
+        """Return list of per-hour totals between start_ts and end_ts."""
+        buckets = {}
+        for e in entries:
+            ts = e.get('timestamp', 0)
+            if ts < start_ts or ts > end_ts:
+                continue
+            hour_key = int(ts // 3600)
+            buckets[hour_key] = buckets.get(hour_key, 0) + value_fn(e)
+        return list(buckets.values())
+
+    def _baseline_from_buckets(buckets):
+        """Return mean of non-current hour buckets (exclude the current hour)."""
+        if not buckets:
+            return 0.0
+        return sum(buckets) / len(buckets)
+
+    def _severity(ratio, threshold):
+        if ratio < threshold:
+            return 'ok'
+        if ratio < threshold * 2:
+            return 'warning'
+        return 'high'
+
+    # ── Signal 1: cost_per_hour ──────────────────────────────────────────
+    current_cost = sum(e.get('usd', 0) for e in cost_entries if e.get('timestamp', 0) >= hour_ago)
+    baseline_cost_buckets = _hourly_buckets(cost_entries, lambda e: e.get('usd', 0),
+                                             seven_days_ago, hour_ago)
+    baseline_cost = _baseline_from_buckets(baseline_cost_buckets)
+    cost_ratio = (current_cost / baseline_cost) if baseline_cost > 0 else 0.0
+    cost_threshold = THRESHOLDS['cost_per_hour']
+    signals.append({
+        'name':        'cost_per_hour',
+        'label':       'Hourly Cost',
+        'current':     round(current_cost, 4),
+        'baseline':    round(baseline_cost, 4),
+        'ratio':       round(cost_ratio, 2),
+        'threshold':   cost_threshold,
+        'is_anomaly':  baseline_cost > 0 and cost_ratio >= cost_threshold,
+        'unit':        '$',
+        'severity':    _severity(cost_ratio, cost_threshold) if baseline_cost > 0 else 'ok',
+        'has_baseline': baseline_cost > 0,
+    })
+
+    # ── Signal 2: token_velocity ─────────────────────────────────────────
+    current_tokens = sum(e.get('total', e.get('input', 0) + e.get('output', 0))
+                         for e in token_entries if e.get('timestamp', 0) >= hour_ago)
+    baseline_tok_buckets = _hourly_buckets(
+        token_entries,
+        lambda e: e.get('total', e.get('input', 0) + e.get('output', 0)),
+        seven_days_ago, hour_ago,
+    )
+    baseline_tokens = _baseline_from_buckets(baseline_tok_buckets)
+    tok_ratio = (current_tokens / baseline_tokens) if baseline_tokens > 0 else 0.0
+    tok_threshold = THRESHOLDS['token_velocity']
+    signals.append({
+        'name':        'token_velocity',
+        'label':       'Token Velocity',
+        'current':     int(current_tokens),
+        'baseline':    round(baseline_tokens, 0),
+        'ratio':       round(tok_ratio, 2),
+        'threshold':   tok_threshold,
+        'is_anomaly':  baseline_tokens > 0 and tok_ratio >= tok_threshold,
+        'unit':        'tok/hr',
+        'severity':    _severity(tok_ratio, tok_threshold) if baseline_tokens > 0 else 'ok',
+        'has_baseline': baseline_tokens > 0,
+    })
+
+    # ── Signal 3: error_rate (webhook error events) ──────────────────────
+    def _wh_counts(entries, start_ts, end_ts):
+        total, errors = 0, 0
+        for e in entries:
+            ts = e.get('timestamp', 0)
+            if ts < start_ts or ts > end_ts:
+                continue
+            total += 1
+            et = str(e.get('type', '')).lower()
+            if et.endswith('.error') or 'error' in et:
+                errors += 1
+        return total, errors
+
+    cur_wh_total, cur_wh_errors = _wh_counts(webhook_entries, hour_ago, now)
+    cur_error_rate = (cur_wh_errors / cur_wh_total * 100) if cur_wh_total >= 5 else 0.0
+
+    # Build 7-day error-rate baseline (hourly buckets of error pct)
+    err_buckets = []
+    for h in range(1, 7 * 24):  # Skip current hour (h=0)
+        h_start = hour_ago - h * 3600
+        h_end   = h_start + 3600
+        if h_end < seven_days_ago:
+            break
+        t, e_cnt = _wh_counts(webhook_entries, h_start, h_end)
+        if t >= 5:
+            err_buckets.append(e_cnt / t * 100)
+    baseline_error_rate = _baseline_from_buckets(err_buckets)
+    err_ratio = (cur_error_rate / baseline_error_rate) if baseline_error_rate > 0 else 0.0
+    err_threshold = THRESHOLDS['error_rate']
+    signals.append({
+        'name':        'error_rate',
+        'label':       'Error Rate',
+        'current':     round(cur_error_rate, 1),
+        'baseline':    round(baseline_error_rate, 1),
+        'ratio':       round(err_ratio, 2),
+        'threshold':   err_threshold,
+        'is_anomaly':  baseline_error_rate > 0 and err_ratio >= err_threshold,
+        'unit':        '%',
+        'severity':    _severity(err_ratio, err_threshold) if baseline_error_rate > 0 else 'ok',
+        'has_baseline': baseline_error_rate > 0,
+    })
+
+    # ── Signal 4: latency_p95 (run duration) ────────────────────────────
+    cur_run_durations = sorted(
+        e.get('duration_ms', 0) for e in run_entries if e.get('timestamp', 0) >= hour_ago
+    )
+    if len(cur_run_durations) >= 5:
+        p95_idx = max(0, int(len(cur_run_durations) * 0.95) - 1)
+        cur_p95 = cur_run_durations[p95_idx]
+    else:
+        cur_p95 = None
+
+    baseline_lat_buckets = []
+    for h in range(1, 7 * 24):
+        h_start = hour_ago - h * 3600
+        h_end   = h_start + 3600
+        if h_end < seven_days_ago:
+            break
+        h_durs = sorted(
+            e.get('duration_ms', 0) for e in run_entries
+            if h_start <= e.get('timestamp', 0) < h_end
+        )
+        if len(h_durs) >= 5:
+            idx = max(0, int(len(h_durs) * 0.95) - 1)
+            baseline_lat_buckets.append(h_durs[idx])
+    baseline_p95 = _baseline_from_buckets(baseline_lat_buckets)
+    lat_threshold = THRESHOLDS['latency_p95']
+
+    if cur_p95 is not None and baseline_p95 > 0:
+        lat_ratio = cur_p95 / baseline_p95
+        signals.append({
+            'name':        'latency_p95',
+            'label':       'Latency P95',
+            'current':     round(cur_p95),
+            'baseline':    round(baseline_p95),
+            'ratio':       round(lat_ratio, 2),
+            'threshold':   lat_threshold,
+            'is_anomaly':  lat_ratio >= lat_threshold,
+            'unit':        'ms',
+            'severity':    _severity(lat_ratio, lat_threshold),
+            'has_baseline': True,
+        })
+
+    any_anomaly = any(s['is_anomaly'] for s in signals)
+    return {
+        'signals': signals,
+        'any_anomaly': any_anomaly,
+        'checked_at': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+    }
+
+
 def _budget_monitor_loop():
     """Background thread: check for anomalies, agent-down, and custom alert rules."""
     global _budget_alert_cooldowns, _security_posture_hash
@@ -877,7 +1064,34 @@ def _budget_monitor_loop():
                     channels=['banner', 'telegram'],
                 )
 
-            # Anomaly check: today's cost > 2x 7-day average
+            # Rolling-baseline anomaly detection (cost, tokens, error-rate, latency)
+            try:
+                anomaly_status = _get_anomaly_status()
+                for sig in anomaly_status.get('signals', []):
+                    if not sig.get('is_anomaly'):
+                        continue
+                    rule_id = f'anomaly_{sig["name"]}'
+                    sev = sig.get('severity', 'warning')
+                    msg = (
+                        f'{sig["label"]} anomaly: {sig["current"]}{sig["unit"]} '
+                        f'is {sig["ratio"]:.1f}x the 7-day hourly baseline '
+                        f'({sig["baseline"]}{sig["unit"]})'
+                    )
+                    _fire_alert(rule_id=rule_id, alert_type='anomaly', message=msg,
+                                channels=['banner', 'telegram'])
+                    if sig['name'] == 'cost_per_hour':
+                        _dispatch_configured_webhooks('cost_spike', {
+                            'type': 'cost_spike',
+                            'agent': 'main',
+                            'cost_usd': sig['current'],
+                            'threshold': round(sig['baseline'] * sig['threshold'], 4),
+                            'timestamp': now,
+                            'message': msg,
+                        })
+            except Exception:
+                pass
+
+            # Legacy daily cost anomaly check (kept for backward compat)
             status = _get_budget_status()
             daily_spent = status['daily_spent']
             if daily_spent > 0:
@@ -2980,6 +3194,9 @@ function clawmetryLogout(){
         <div id="sh-inference" style="margin-bottom:14px;"></div></div>
         <div id="sh-security-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🛡️ Security Posture</div>
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
+        <!-- Anomaly Status Panel -->
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">⚡ Anomaly Status</div>
+        <div id="sh-anomaly" style="margin-bottom:4px;"></div>
       </div>
     </div>
 
@@ -8129,6 +8346,9 @@ function clawmetryLogout(){
         <div id="sh-inference" style="margin-bottom:14px;"></div></div>
         <div id="sh-security-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🛡️ Security Posture</div>
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
+        <!-- Anomaly Status Panel -->
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">⚡ Anomaly Status</div>
+        <div id="sh-anomaly" style="margin-bottom:4px;"></div>
       </div>
     </div>
 
@@ -8256,13 +8476,22 @@ function clawmetryLogout(){
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
   </div>
-  <!-- Model Attribution Section (GH #305) -->
-  <div class="section-title">🤖 Model Attribution</div>
+  <!-- Model Attribution Section (GH #300, #305) -->
+  <div class="section-title">🤖 Model Attribution
+    <span id="model-attr-fallback-badge" style="display:none;margin-left:10px;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600;vertical-align:middle;"></span>
+  </div>
   <div id="model-attribution-panel">
+    <!-- Per-model cost breakdown table -->
     <div class="card" style="margin-bottom:12px;">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
-        <span style="font-size:13px;font-weight:600;color:var(--text-primary);">Turn Distribution by Model</span>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+        <span style="font-size:13px;font-weight:600;color:var(--text-primary);">Per-Model Breakdown</span>
+        <span style="font-size:11px;color:var(--text-muted);margin-left:4px;" id="model-attr-period-label"></span>
         <span id="model-attr-switch-badge" style="display:none;margin-left:auto;padding:2px 8px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);border-radius:12px;font-size:11px;color:#f59e0b;"></span>
+      </div>
+      <div id="model-attr-cost-table" style="margin-bottom:14px;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <tbody><tr><td colspan="5" style="color:var(--text-muted);padding:8px;">Loading...</td></tr></tbody>
+        </table>
       </div>
       <div id="model-attr-bars" style="display:flex;flex-direction:column;gap:6px;">
         <div style="color:var(--text-muted);font-size:12px;">Loading...</div>
@@ -11552,6 +11781,52 @@ function startSystemHealthRefresh() {
   loadSystemHealth();
   if (window._sysHealthTimer) clearInterval(window._sysHealthTimer);
   window._sysHealthTimer = setInterval(loadSystemHealth, 30000);
+}
+
+// ===== Anomaly Status Panel =====
+async function loadAnomalyStatus() {
+  var el = document.getElementById('sh-anomaly');
+  if (!el) return;
+  try {
+    var d = await fetch('/api/alerts/anomaly-status').then(function(r) { return r.json(); });
+    var signals = Array.isArray(d.signals) ? d.signals : [];
+    if (!signals.length) {
+      el.innerHTML = '<div style="padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:12px;color:var(--text-muted);">No data yet</div>';
+      return;
+    }
+    var allClear = !d.any_anomaly;
+    var html = '';
+    if (allClear) {
+      html = '<div style="padding:8px 12px;background:#052e16;border:1px solid #166534;border-radius:8px;font-size:12px;color:#4ade80;font-weight:600;">✅ All Clear — no anomalies detected</div>';
+    }
+    signals.forEach(function(s) {
+      var bg = s.severity === 'high' ? '#3f0000' : (s.severity === 'warning' ? '#3f2a06' : 'var(--bg-secondary)');
+      var borderColor = s.severity === 'high' ? '#dc2626' : (s.severity === 'warning' ? '#d97706' : 'var(--border-secondary)');
+      var textColor = s.severity === 'high' ? '#f87171' : (s.severity === 'warning' ? '#fbbf24' : 'var(--text-primary)');
+      var icon = s.severity === 'high' ? '🔴' : (s.severity === 'warning' ? '🟡' : '🟢');
+      var currentFmt = s.unit === '$' ? ('$' + (typeof s.current === 'number' ? s.current.toFixed(4) : s.current)) : (s.current + ' ' + s.unit);
+      var baselineFmt = s.unit === '$' ? ('$' + (typeof s.baseline === 'number' ? s.baseline.toFixed(4) : s.baseline)) : (s.baseline + ' ' + s.unit);
+      var ratioBadge = s.has_baseline
+        ? ('<span style="margin-left:auto;font-size:11px;background:' + (s.is_anomaly ? borderColor : 'var(--bg-secondary)') + ';color:' + (s.is_anomaly ? '#fff' : 'var(--text-muted)') + ';border-radius:4px;padding:2px 6px;font-weight:700;">' + s.ratio + 'x</span>')
+        : '<span style="margin-left:auto;font-size:11px;color:var(--text-faint);">no baseline</span>';
+      html += '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:' + bg + ';border:1px solid ' + borderColor + ';border-radius:8px;margin-bottom:5px;font-size:12px;">'
+        + icon + ' <span style="font-weight:600;color:' + textColor + ';min-width:100px;">' + s.label + '</span>'
+        + '<span style="color:var(--text-secondary);">' + currentFmt + '</span>'
+        + (s.has_baseline ? '<span style="color:var(--text-faint);font-size:11px;">/ baseline ' + baselineFmt + '</span>' : '')
+        + ratioBadge
+        + '</div>';
+    });
+    el.innerHTML = html;
+  } catch(e) {
+    if (document.getElementById('sh-anomaly')) {
+      document.getElementById('sh-anomaly').innerHTML = '<div style="padding:6px 10px;font-size:12px;color:var(--text-muted);">Anomaly data unavailable</div>';
+    }
+  }
+}
+function startAnomalyStatusRefresh() {
+  loadAnomalyStatus();
+  if (window._anomalyTimer) clearInterval(window._anomalyTimer);
+  window._anomalyTimer = setInterval(loadAnomalyStatus, 60000);
 }
 
 // ===== Activity Heatmap =====
@@ -15102,6 +15377,7 @@ async function bootDashboard() {
   try { await loadMemory(); } catch (e) { console.warn('Memory prefetch failed:', e); }
 
   startSystemHealthRefresh();
+  startAnomalyStatusRefresh();
   startOverviewRefresh();
   startOverviewTasksRefresh();
   startActiveTasksRefresh();
@@ -16717,6 +16993,137 @@ def api_cron_runs(job_id):
     if result is None:
         return jsonify({'error': 'Gateway unavailable'}), 502
     return jsonify(result)
+
+
+@bp_crons.route('/api/cron/<job_id>/health')
+def api_cron_job_health(job_id):
+    """Return detailed health metrics for a single cron job: success rate, cost per run, monthly projection, anomaly."""
+    if not job_id:
+        return jsonify({'error': 'Missing job_id'}), 400
+
+    # Fetch job metadata
+    gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': True})
+    job_meta = {}
+    if gw_data and 'jobs' in gw_data:
+        for j in gw_data['jobs']:
+            if isinstance(j, dict) and j.get('id') == job_id:
+                job_meta = j
+                break
+    if not job_meta:
+        for j in _get_crons():
+            if isinstance(j, dict) and j.get('id') == job_id:
+                job_meta = j
+                break
+
+    # Load local run records
+    runs = _read_local_cron_runs(job_id, limit=200)
+
+    # Also pull from gateway runs endpoint
+    gw_runs_data = _gw_invoke('cron', {'action': 'runs', 'jobId': job_id, 'limit': 50}) or {}
+    gw_runs = gw_runs_data.get('runs', [])
+    # Merge: prefer local (has more fields), supplement with gateway runs by run_id
+    local_run_ids = {r.get('runId', r.get('id', '')) for r in runs}
+    for gr in gw_runs:
+        rid = gr.get('runId', gr.get('id', ''))
+        if rid and rid not in local_run_ids:
+            runs.append({
+                'ts': _json_ts_to_epoch(gr.get('startedAt', gr.get('ts'))) * 1000 if _json_ts_to_epoch(gr.get('startedAt', gr.get('ts'))) else 0,
+                'status': gr.get('status', 'unknown'),
+                'durationMs': gr.get('durationMs'),
+                'error': gr.get('error'),
+                'tokens': gr.get('tokens', 0),
+                'costUsd': gr.get('costUsd', gr.get('cost', 0)),
+                'sessionFile': gr.get('sessionFile'),
+                'runId': rid,
+            })
+    # Sort most-recent first
+    runs.sort(key=lambda r: r.get('ts', r.get('runAtMs', 0)), reverse=True)
+
+    total_runs = len(runs)
+    ok_runs = sum(1 for r in runs if r.get('status') in ('ok', 'success'))
+    success_rate = round(ok_runs / total_runs, 4) if total_runs > 0 else None
+
+    # Cost per run: use costUsd from run records if available, else estimate from tokens
+    usd_per_token = _estimate_usd_per_token()
+    costs = []
+    for r in runs:
+        c = float(r.get('costUsd') or r.get('cost_usd') or 0.0)
+        if c == 0.0 and r.get('tokens'):
+            c = float(r['tokens']) * usd_per_token
+        if c > 0:
+            costs.append(c)
+
+    avg_cost_per_run = round(sum(costs) / len(costs), 6) if costs else 0.0
+
+    # Monthly projection: estimate runs per day, project for 30 days
+    runs_per_day = 0.0
+    if total_runs > 0 and runs:
+        oldest_ts = runs[-1].get('ts', runs[-1].get('runAtMs', 0))
+        newest_ts = runs[0].get('ts', runs[0].get('runAtMs', 0))
+        span_days = max((newest_ts - oldest_ts) / 86400000.0, 1.0)
+        runs_per_day = total_runs / span_days
+    monthly_projection = round(runs_per_day * 30 * avg_cost_per_run, 4) if avg_cost_per_run > 0 else 0.0
+
+    # Anomaly detection
+    anomaly = False
+    anomaly_reason = None
+    recent3 = [r for r in runs[:3] if r.get('status') in ('ok', 'success', 'error', 'fail')]
+    if len(recent3) >= 3 and all(r.get('status') not in ('ok', 'success') for r in recent3):
+        anomaly = True
+        anomaly_reason = 'Last 3 runs all failed'
+    elif costs and avg_cost_per_run > 0 and len(costs) >= 2:
+        last_cost = costs[0] if costs else 0
+        avg_excl_last = sum(costs[1:]) / len(costs[1:]) if len(costs) > 1 else avg_cost_per_run
+        if avg_excl_last > 0 and last_cost > avg_excl_last * 3:
+            anomaly = True
+            anomaly_reason = f'Last run cost ${last_cost:.4f} is {last_cost/avg_excl_last:.1f}x above average'
+
+    # Fire alert if anomaly detected
+    if anomaly:
+        job_name = job_meta.get('name', job_id)
+        try:
+            _fire_alert(
+                rule_id=f'cron_anomaly_{job_id}',
+                alert_type='anomaly',
+                message=f'Cron job "{job_name}" anomaly: {anomaly_reason}',
+                channels=['banner', 'telegram'],
+            )
+        except Exception:
+            pass
+
+    # Build recent_runs list (last 20)
+    recent_runs = []
+    for r in runs[:20]:
+        c = float(r.get('costUsd') or r.get('cost_usd') or 0.0)
+        if c == 0.0 and r.get('tokens'):
+            c = float(r['tokens']) * usd_per_token
+        recent_runs.append({
+            'run_id': r.get('runId', r.get('id', '')),
+            'started_at': datetime.fromtimestamp(r['ts'] / 1000, tz=timezone.utc).isoformat() if r.get('ts') else None,
+            'status': r.get('status', 'unknown'),
+            'cost': round(c, 6),
+            'tokens': r.get('tokens', 0),
+            'duration_s': round(r['durationMs'] / 1000.0, 1) if r.get('durationMs') else None,
+            'error': (r.get('error') or '')[:200],
+            'summary': (r.get('summary') or '')[:120],
+        })
+
+    state = job_meta.get('state') or {}
+    return jsonify({
+        'job_id': job_id,
+        'name': job_meta.get('name', job_id),
+        'enabled': job_meta.get('enabled', True),
+        'total_runs': total_runs,
+        'ok_runs': ok_runs,
+        'success_rate': success_rate,
+        'avg_cost_per_run': avg_cost_per_run,
+        'monthly_projection': monthly_projection,
+        'last_run_status': state.get('lastStatus'),
+        'last_run_at': datetime.fromtimestamp(state['lastRunAtMs'] / 1000, tz=timezone.utc).isoformat() if state.get('lastRunAtMs') else None,
+        'anomaly': anomaly,
+        'anomaly_reason': anomaly_reason,
+        'recent_runs': recent_runs,
+    })
 
 
 # ── Cron Health Monitor ────────────────────────────────────────────────────────
@@ -18488,6 +18895,12 @@ def api_alerts_webhook_test():
     return jsonify({'ok': True, 'sent': sent})
 
 
+@bp_alerts.route('/api/alerts/anomaly-status')
+def api_alerts_anomaly_status():
+    """Rolling-baseline anomaly status for cost, tokens, error-rate, and latency."""
+    return jsonify(_get_anomaly_status())
+
+
 # ── History / Time-Series API ────────────────────────────────────────────
 
 @bp_history.route('/api/history/metrics')
@@ -19670,39 +20083,104 @@ def api_usage_export():
 
 @bp_usage.route('/api/usage/model-attribution')
 def api_usage_model_attribution():
-    """Return per-turn model attribution data: turn counts, switching events, and per-session breakdown."""
+    """Return per-turn model attribution data: turn counts, cost delta, fallback rate, switching events."""
     try:
+        period_days = request.args.get('days', 7, type=int)
+        fallback_threshold = request.args.get('threshold', 20.0, type=float)
+
         analytics = _compute_transcript_analytics()
         model_turns = analytics.get('model_turns', {})
         model_switches = analytics.get('model_switches', [])
         sessions = analytics.get('sessions', [])
         model_usage = analytics.get('model_usage', {})
 
-        # Total turns across all models
-        total_turns = sum(model_turns.values()) or 1
+        # Filter to period_days if requested
+        now_ts = time.time()
+        cutoff_ts = now_ts - (period_days * 86400)
+        if period_days > 0:
+            period_sessions = [s for s in sessions if s.get('start_ts', 0) >= cutoff_ts]
+        else:
+            period_sessions = sessions
 
-        # Build model distribution (turns + token share)
-        total_tokens = sum(model_usage.values()) or 1
+        # Recompute model_turns and model_usage from filtered sessions
+        period_model_turns = {}
+        period_model_tokens = {}
+        for s in period_sessions:
+            s_mt = s.get('model_turns', {})
+            for mdl, cnt in s_mt.items():
+                period_model_turns[mdl] = period_model_turns.get(mdl, 0) + cnt
+            s_model = s.get('model', 'unknown')
+            s_tokens = s.get('tokens', 0)
+            if s_model and s_model != 'unknown':
+                period_model_tokens[s_model] = period_model_tokens.get(s_model, 0) + s_tokens
+
+        # Fall back to global if period yields nothing
+        if not period_model_turns:
+            period_model_turns = model_turns
+        if not period_model_tokens:
+            period_model_tokens = model_usage
+
+        # Total turns across all models
+        total_turns = sum(period_model_turns.values()) or 1
+        total_tokens = sum(period_model_tokens.values()) or 1
+
+        # Cost estimation using _get_model_pricing() heuristic
+        pricing = _get_model_pricing()
+        input_ratio, output_ratio = 0.6, 0.4
+
+        def _model_cost(model_name, tokens):
+            """Estimate cost for a model given token count."""
+            m = model_name.lower()
+            key = 'default'
+            if 'opus' in m:
+                key = 'claude-opus'
+            elif 'sonnet' in m:
+                key = 'claude-sonnet'
+            elif 'haiku' in m:
+                key = 'claude-haiku'
+            elif 'gpt-4' in m or 'gpt4' in m:
+                key = 'gpt-4'
+            elif 'gpt-3' in m or 'gpt3' in m:
+                key = 'gpt-3.5'
+            in_price, out_price = pricing.get(key, pricing['default'])
+            return round(
+                (tokens * input_ratio) * (in_price / 1_000_000) +
+                (tokens * output_ratio) * (out_price / 1_000_000),
+                4
+            )
+
+        # Build model distribution
         models = []
-        all_models = set(list(model_turns.keys()) + list(model_usage.keys()))
+        all_models = set(list(period_model_turns.keys()) + list(period_model_tokens.keys()))
         for m in all_models:
             if not m or m == 'unknown':
                 continue
-            turns = model_turns.get(m, 0)
-            tokens = model_usage.get(m, 0)
-            # Heuristic: first model in sessions = primary, others = fallback/switched
+            turns = period_model_turns.get(m, 0)
+            tokens = period_model_tokens.get(m, 0)
+            cost = _model_cost(m, tokens)
             models.append({
                 'model': m,
                 'turns': turns,
                 'tokens': int(tokens),
+                'cost': cost,
                 'pct_turns': round((turns / total_turns) * 100, 1),
                 'pct_tokens': round((tokens / total_tokens) * 100, 1),
             })
         models.sort(key=lambda x: x['turns'], reverse=True)
 
+        # Fallback rate: primary model = most-used; all others = "fallback"
+        primary_model = models[0]['model'] if models else 'unknown'
+        primary_turns = models[0]['turns'] if models else 0
+        fallback_turns = total_turns - primary_turns
+        fallback_rate = round((fallback_turns / total_turns) * 100, 1) if total_turns > 0 else 0.0
+        fallback_alert = fallback_rate > fallback_threshold
+
+        # Total cost across all models
+        total_cost = round(sum(m['cost'] for m in models), 4)
+
         # Per-session model info (most recent 30 sessions)
         session_models = []
-        for s in reversed(sessions[-50:]):
+        for s in reversed(period_sessions[-50:]):
             sid = s.get('session_id', '')
             m = s.get('model', 'unknown')
             mt = s.get('model_turns', {})
@@ -19720,8 +20198,9 @@ def api_usage_model_attribution():
         session_models = session_models[-30:]
 
         # Switch events — include human-readable timestamp
+        period_switches = [sw for sw in model_switches if sw.get('ts_ms', 0) >= cutoff_ts * 1000]
         switches_out = []
-        for sw in model_switches[:20]:
+        for sw in period_switches[:20]:
             ts_ms = sw.get('ts_ms', 0)
             try:
                 ts_str = datetime.fromtimestamp(ts_ms / 1000).strftime('%Y-%m-%d %H:%M') if ts_ms else ''
@@ -19740,10 +20219,15 @@ def api_usage_model_attribution():
             'models': models,
             'totalTurns': total_turns,
             'totalTokens': int(total_tokens),
+            'totalCost': total_cost,
             'switchEvents': switches_out,
-            'switchCount': len(model_switches),
+            'switchCount': len(period_switches),
             'sessionModels': session_models,
-            'primaryModel': models[0]['model'] if models else 'unknown',
+            'primaryModel': primary_model,
+            'fallbackRate': fallback_rate,
+            'fallbackThreshold': fallback_threshold,
+            'fallbackAlert': fallback_alert,
+            'periodDays': period_days,
         })
     except Exception as e:
         return jsonify({'error': str(e), 'models': [], 'switchEvents': [], 'sessionModels': []}), 500
