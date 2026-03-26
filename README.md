@@ -114,11 +114,48 @@ Click any channel node in the Flow to see a live chat bubble view with incoming/
 
 > **Auto-detection:** ClawMetry reads your `~/.openclaw/openclaw.json` and only renders the channels you've actually configured. No manual setup required.
 
+## Docker Deployment
+
+Want to run ClawMetry in a container? No problem! 🐳
+
+**Quick start with Docker:**
+
+```bash
+# Build the image
+docker build -t clawmetry .
+
+# Run with default settings
+docker run -p 8900:8900 clawmetry
+
+# Or with your OpenClaw workspace mounted
+docker run -p 8900:8900 \
+  -v ~/.openclaw:/root/.openclaw \
+  -v /tmp/moltbot:/tmp/moltbot \
+  clawmetry
+```
+
+**Docker Compose example:**
+
+```yaml
+version: '3.8'
+services:
+  clawmetry:
+    build: .
+    ports:
+      - "8900:8900"
+    volumes:
+      - ~/.openclaw:/root/.openclaw:ro
+      - /tmp/moltbot:/tmp/moltbot:ro
+    restart: unless-stopped
+```
+
+> **Note:** When running in Docker, make sure to mount your OpenClaw workspace and log directories so ClawMetry can auto-detect your setup.
+
 ## Requirements
 
 - Python 3.8+
 - Flask (installed automatically via pip)
-- OpenClaw running on the same machine
+- OpenClaw running on the same machine (or mounted volumes for Docker)
 - Linux or macOS
 
 ## Cloud Deployment
