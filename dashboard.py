@@ -2967,6 +2967,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="anomalies-nav-tab" onclick="switchTab('anomalies')" style="position:relative;">&#9888;&#65039; Anomalies<span id="anomaly-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center;line-height:16px;"></span></div>
+    <div class="nav-tab" id="models-nav-tab" onclick="switchTab('models')" style="position:relative;">&#129302; Models<span id="models-fallback-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#f59e0b;color:#fff;border-radius:10px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center;line-height:16px;"></span></div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -10858,12 +10859,112 @@ function toggleCronExpand(jobId) {
 
 async function loadCronRuns(jobId) {
   try {
-    var data = await fetch('/api/cron/' + encodeURIComponent(jobId) + '/runs').then(r => r.json());
     var el = document.getElementById('cron-runs-' + jobId);
     if (!el) return;
-    var runs = data.runs || [];
+
+    // Fetch runs and health in parallel
+    var [runsData, healthData] = await Promise.all([
+      fetch('/api/cron/' + encodeURIComponent(jobId) + '/runs').then(r => r.json()).catch(function(){return {};}),
+      fetch('/api/cron/' + encodeURIComponent(jobId) + '/health').then(r => r.json()).catch(function(){return {};})
+    ]);
+
+    var runs = runsData.runs || [];
+    var h = '';
+
+    // ── Health metrics panel ──────────────────────────────────────────────
+    if (healthData && !healthData.error) {
+      var sr = healthData.success_rate;
+      var srPct = sr !== null && sr !== undefined ? Math.round(sr * 100) : null;
+      var srColor = srPct === null ? '#6b7280' : (srPct >= 90 ? '#22c55e' : (srPct >= 70 ? '#f59e0b' : '#ef4444'));
+      var avgCost = healthData.avg_cost_per_run || 0;
+      var monthly = healthData.monthly_projection || 0;
+      var anomaly = healthData.anomaly;
+      var anomalyReason = healthData.anomaly_reason || '';
+      var recentRuns = healthData.recent_runs || [];
+
+      h += '<div style="background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;padding:12px 14px;margin-bottom:12px;">';
+
+      // Anomaly badge
+      if (anomaly) {
+        h += '<div style="display:inline-flex;align-items:center;gap:6px;background:#ef444420;border:1px solid #ef444440;border-radius:6px;padding:4px 10px;font-size:12px;font-weight:600;color:#ef4444;margin-bottom:10px;">&#x26A0;&#xFE0F; Anomaly: ' + escHtml(anomalyReason) + '</div>';
+      }
+
+      h += '<div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;">';
+
+      // Success rate bar
+      h += '<div style="min-width:140px;">';
+      h += '<div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:4px;">SUCCESS RATE</div>';
+      h += '<div style="font-size:20px;font-weight:700;color:' + srColor + ';">' + (srPct !== null ? srPct + '%' : 'N/A') + '</div>';
+      if (srPct !== null) {
+        h += '<div style="height:4px;background:var(--border-secondary);border-radius:2px;margin-top:4px;width:100px;">';
+        h += '<div style="height:4px;background:' + srColor + ';border-radius:2px;width:' + srPct + '%;"></div></div>';
+      }
+      h += '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + (healthData.ok_runs || 0) + '/' + (healthData.total_runs || 0) + ' runs</div>';
+      h += '</div>';
+
+      // Avg cost per run
+      h += '<div style="min-width:110px;">';
+      h += '<div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:4px;">AVG COST/RUN</div>';
+      h += '<div style="font-size:20px;font-weight:700;color:var(--text-primary);">' + (avgCost > 0 ? '$' + avgCost.toFixed(4) : '-') + '</div>';
+      h += '</div>';
+
+      // Monthly projection
+      h += '<div style="min-width:120px;">';
+      h += '<div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:4px;">MONTHLY EST.</div>';
+      h += '<div style="font-size:20px;font-weight:700;color:var(--text-primary);">' + (monthly > 0 ? '$' + monthly.toFixed(2) : '-') + '</div>';
+      h += '</div>';
+
+      // Last 5 run status dots
+      if (recentRuns.length > 0) {
+        h += '<div>';
+        h += '<div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">RECENT RUNS</div>';
+        h += '<div style="display:flex;gap:5px;">';
+        recentRuns.slice(0, 5).forEach(function(r) {
+          var ok = r.status === 'ok' || r.status === 'success';
+          var dotColor = ok ? '#22c55e' : '#ef4444';
+          var tip = (r.started_at ? new Date(r.started_at).toLocaleString() : '') + ' — ' + r.status + (r.cost > 0 ? ' — $' + r.cost.toFixed(4) : '') + (r.duration_s ? ' — ' + r.duration_s + 's' : '');
+          h += '<div title="' + escHtml(tip) + '" style="width:14px;height:14px;border-radius:50%;background:' + dotColor + ';cursor:default;"></div>';
+        });
+        h += '</div></div>';
+      }
+
+      // Kill switch (Disable) button
+      h += '<div style="margin-left:auto;">';
+      if (healthData.enabled !== false) {
+        h += '<button onclick="event.stopPropagation();cronToggle(\'' + escHtml(jobId) + '\',false)" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:6px;border:1px solid #ef444444;background:#ef444415;color:#ef4444;cursor:pointer;" title="Disable this cron job">&#x23F8; Disable</button>';
+      } else {
+        h += '<button onclick="event.stopPropagation();cronToggle(\'' + escHtml(jobId) + '\',true)" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:6px;border:1px solid #22c55e44;background:#22c55e15;color:#22c55e;cursor:pointer;" title="Enable this cron job">&#x25B6; Enable</button>';
+      }
+      h += '</div>';
+
+      h += '</div></div>'; // close flex + panel
+
+      // Use recent_runs from health if gateway runs is empty
+      if (runs.length === 0 && recentRuns.length > 0) {
+        h += '<div style="font-weight:600;margin-bottom:8px;font-size:13px;">Run History (last ' + recentRuns.length + ')</div>';
+        recentRuns.forEach(function(r) {
+          var ok = r.status === 'ok' || r.status === 'success';
+          var statusCls = ok ? 'run-status-ok' : 'run-status-error';
+          var dur = r.duration_s ? ' — ' + r.duration_s + 's' : '';
+          var cost = r.cost > 0 ? ' — $' + r.cost.toFixed(4) : '';
+          var tok = r.tokens ? ' — ' + r.tokens.toLocaleString() + ' tok' : '';
+          h += '<div class="run-entry">';
+          h += '<span>' + (r.started_at ? new Date(r.started_at).toLocaleString() : '-') + dur + tok + cost + '</span>';
+          h += '<span class="' + statusCls + '">' + escHtml(r.status || 'unknown') + '</span>';
+          h += '</div>';
+          if (!ok && r.error) {
+            h += '<div style="color:var(--text-error);font-size:11px;padding:2px 0 4px 8px;border-left:2px solid var(--text-error);margin-left:4px;">' + escHtml(r.error.substring(0,200)) + '</div>';
+          }
+        });
+        el.innerHTML = h;
+        return;
+      }
+    }
+    // ── End health metrics ─────────────────────────────────────────────────
+
     if (runs.length === 0) {
-      el.innerHTML = '<div style="color:var(--text-muted);">No run history available</div>';
+      h += '<div style="color:var(--text-muted);">No run history available</div>';
+      el.innerHTML = h;
       return;
     }
     // Build calendar heatmap (last 30 days)
@@ -10886,7 +10987,7 @@ async function loadCronRuns(jobId) {
       cal+='<div title="'+tip+'" style="width:14px;height:14px;border-radius:2px;background:'+col+';cursor:default;"></div>';
     }
     cal+='</div>';
-    var h = cal + '<div style="font-weight:600;margin-bottom:8px;">Run History (last ' + runs.length + ')</div>';
+    h += cal + '<div style="font-weight:600;margin-bottom:8px;">Run History (last ' + runs.length + ')</div>';
     runs.forEach(function(r) {
       var statusCls = r.status === 'ok' ? 'run-status-ok' : 'run-status-error';
       var dur = r.durationMs ? ' - ' + (r.durationMs/1000).toFixed(1) + 's' : '';
