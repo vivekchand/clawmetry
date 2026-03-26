@@ -11542,6 +11542,10 @@ async function loadUsage() {
       var el = document.getElementById('usage-session-cost-table');
       if (el) el.innerHTML = '<span style="color:var(--text-muted)">No session cost data available</span>';
     });
+    // Load skill leaderboard (GH #303)
+    loadSkillLeaderboard();
+    // Load 30-day activity heatmap (GH #69)
+    loadHeatmap().catch(function(e) { console.warn('heatmap load failed', e); });
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
