@@ -260,3 +260,12 @@ def patch() -> None:
         _patch_urllib()
     except Exception:
         pass
+
+
+def patch_http(ledger: Any = None) -> None:
+    """
+    Alias for patch(). The *ledger* argument is accepted for API compatibility
+    with sitecustomize_hook but is not required — the interceptor always uses
+    the global singleton ledger from :func:`clawmetry.ledger.get_ledger`.
+    """
+    patch()

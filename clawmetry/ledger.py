@@ -217,6 +217,45 @@ class _Ledger:
 
     # ── cloud sync ────────────────────────────────────────────────────────────
 
+    # ── public query API ──────────────────────────────────────────────────────
+
+    def session_total(self) -> dict:
+        """Return session-level aggregate stats."""
+        with self._lock:
+            elapsed = time.monotonic() - self._session_start
+            return {
+                "total_usd": self._session_cost,
+                "calls": self._session_calls,
+                "by_provider": dict(self._session_by_provider),
+                "duration_seconds": elapsed,
+            }
+
+    def today_total(self) -> dict:
+        """Return today's aggregate stats."""
+        with self._lock:
+            return {
+                "total_usd": self._today_cost,
+                "calls": self._today_calls,
+                "by_provider": dict(self._today_by_provider),
+            }
+
+    def monthly_estimate(self) -> float:
+        """Rough monthly cost estimate extrapolated from today's spend."""
+        try:
+            import datetime
+            now = datetime.datetime.now()
+            seconds_today = (
+                now - now.replace(hour=0, minute=0, second=0, microsecond=0)
+            ).total_seconds()
+            with self._lock:
+                today_cost = self._today_cost
+            daily_rate = today_cost / max(seconds_today, 1) * 86_400
+            return daily_rate * 30
+        except Exception:
+            return 0.0
+
+    # ── cloud sync ────────────────────────────────────────────────────────────
+
     def _maybe_cloud_sync(self) -> None:
         """Fire-and-forget background sync to cloud dashboard."""
         try:

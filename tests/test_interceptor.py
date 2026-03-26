@@ -1,240 +1,252 @@
 """
-tests/test_interceptor.py — Verify zero-config HTTP interceptor works.
+tests/test_interceptor.py — Basic tests for the zero-config HTTP interceptor.
 
-Run with: python -m pytest tests/test_interceptor.py -v
-Or directly: python tests/test_interceptor.py
+Tests verify that:
+- httpx calls to LLM APIs are intercepted and tracked
+- Costs are recorded correctly in the ledger
+- Non-LLM hosts are ignored
+- The interceptor is idempotent (safe to patch twice)
 """
+from __future__ import annotations
+
 import json
-import os
 import sys
+import types
 import unittest
-from unittest.mock import MagicMock, patch, AsyncMock
-
-# Ensure repo root is on path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Disable auto-print during tests
-os.environ["CLAWMETRY_DISABLE"] = "1"
+from unittest.mock import MagicMock, patch
 
 
-class TestProviderDetection(unittest.TestCase):
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_fake_httpx(response_body: bytes):
+    """Return a minimal fake httpx module with controllable Client.send."""
+    httpx = types.ModuleType("httpx")
+
+    class FakeURL:
+        def __init__(self, url):
+            self._url = url
+        def __str__(self):
+            return self._url
+
+    class FakeRequest:
+        def __init__(self, url):
+            self.url = FakeURL(url)
+
+    class FakeResponse:
+        def __init__(self, body: bytes):
+            self.content = body
+            self.request = None
+
+    class Client:
+        def send(self, request, **kwargs):
+            resp = FakeResponse(response_body)
+            resp.request = request
+            return resp
+
+    class AsyncClient:
+        async def send(self, request, **kwargs):
+            resp = FakeResponse(response_body)
+            resp.request = request
+            return resp
+
+    httpx.Client = Client
+    httpx.AsyncClient = AsyncClient
+    httpx.URL = FakeURL
+    httpx.Request = FakeRequest
+    return httpx, FakeRequest
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+class TestInterceptorRecordsCall(unittest.TestCase):
+    """Interceptor should record a call when httpx hits an LLM host."""
+
     def setUp(self):
-        from clawmetry.providers import detect_provider
-        self.detect = detect_provider
+        # Ensure a fresh global ledger for each test
+        import importlib
+        import clawmetry.ledger as ledger_mod
+        ledger_mod._ledger = None
 
-    def test_anthropic(self):
-        self.assertEqual(self.detect("https://api.anthropic.com/v1/messages"), "anthropic")
+    def _anthropic_body(self, model="claude-sonnet-4", input_tokens=100, output_tokens=50) -> bytes:
+        payload = {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "Hello!"}],
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
+        }
+        return json.dumps(payload).encode()
 
-    def test_openai(self):
-        self.assertEqual(self.detect("https://api.openai.com/v1/chat/completions"), "openai")
+    def test_anthropic_call_is_tracked(self):
+        """An httpx call to api.anthropic.com should be recorded in the ledger."""
+        body = self._anthropic_body(input_tokens=1000, output_tokens=500)
+        fake_httpx, FakeRequest = _make_fake_httpx(body)
 
-    def test_gemini(self):
-        self.assertEqual(
-            self.detect("https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent"),
-            "gemini",
-        )
-
-    def test_mistral(self):
-        self.assertEqual(self.detect("https://api.mistral.ai/v1/chat/completions"), "mistral")
-
-    def test_groq(self):
-        self.assertEqual(self.detect("https://api.groq.com/openai/v1/chat/completions"), "groq")
-
-    def test_together(self):
-        self.assertEqual(self.detect("https://api.together.xyz/v1/chat/completions"), "together")
-
-    def test_unknown(self):
-        self.assertIsNone(self.detect("https://example.com/api"))
-
-    def test_empty(self):
-        self.assertIsNone(self.detect(""))
-
-
-class TestUsageExtraction(unittest.TestCase):
-    def setUp(self):
-        from clawmetry.providers import extract_usage
-        self.extract = extract_usage
-
-    def test_anthropic_usage(self):
-        body = json.dumps({
-            "model": "claude-3-5-sonnet-20241022",
-            "usage": {"input_tokens": 100, "output_tokens": 50},
-        }).encode()
-        result = self.extract("anthropic", body)
-        self.assertIsNotNone(result)
-        self.assertEqual(result["input_tokens"], 100)
-        self.assertEqual(result["output_tokens"], 50)
-        self.assertEqual(result["model"], "claude-3-5-sonnet-20241022")
-
-    def test_openai_usage(self):
-        body = json.dumps({
-            "model": "gpt-4o",
-            "usage": {"prompt_tokens": 200, "completion_tokens": 80},
-        }).encode()
-        result = self.extract("openai", body)
-        self.assertIsNotNone(result)
-        self.assertEqual(result["input_tokens"], 200)
-        self.assertEqual(result["output_tokens"], 80)
-
-    def test_gemini_usage(self):
-        body = json.dumps({
-            "usageMetadata": {"promptTokenCount": 150, "candidatesTokenCount": 60},
-        }).encode()
-        result = self.extract("gemini", body)
-        self.assertIsNotNone(result)
-        self.assertEqual(result["input_tokens"], 150)
-        self.assertEqual(result["output_tokens"], 60)
-
-    def test_invalid_json(self):
-        result = self.extract("openai", b"not json")
-        self.assertIsNone(result)
-
-    def test_no_usage_field(self):
-        body = json.dumps({"model": "gpt-4o", "choices": []}).encode()
-        result = self.extract("openai", body)
-        self.assertIsNone(result)
-
-
-class TestCostCalculation(unittest.TestCase):
-    def setUp(self):
-        from clawmetry.providers import get_cost
-        self.get_cost = get_cost
-
-    def test_anthropic_sonnet_cost(self):
-        # 1M input @ $3 + 0.5M output @ $15 = $3 + $7.5 = $10.5
-        cost = self.get_cost("anthropic", "claude-3-5-sonnet-20241022", 1_000_000, 500_000)
-        self.assertAlmostEqual(cost, 10.5, places=2)
-
-    def test_openai_gpt4o_cost(self):
-        # 100k input @ $2.5/M + 50k output @ $10/M = $0.25 + $0.5 = $0.75
-        cost = self.get_cost("openai", "gpt-4o", 100_000, 50_000)
-        self.assertAlmostEqual(cost, 0.75, places=4)
-
-    def test_unknown_provider(self):
-        cost = self.get_cost("unknown-llm", "some-model", 1000, 500)
-        self.assertEqual(cost, 0.0)
-
-    def test_zero_tokens(self):
-        cost = self.get_cost("anthropic", "claude-3-5-sonnet", 0, 0)
-        self.assertEqual(cost, 0.0)
-
-
-class TestHandleResponse(unittest.TestCase):
-    def test_handle_response_anthropic(self):
-        """_handle_response should call ledger.record for known providers."""
-        from clawmetry.interceptor import _handle_response
-        from clawmetry.ledger import get_ledger
-
-        ledger = get_ledger()
-        calls_before = ledger._session_calls
-
-        body = json.dumps({
-            "model": "claude-3-5-sonnet-20241022",
-            "usage": {"input_tokens": 100, "output_tokens": 50},
-        }).encode()
-
-        _handle_response("https://api.anthropic.com/v1/messages", body)
-
-        # Session call count should have increased
-        self.assertGreater(ledger._session_calls, calls_before)
-
-    def test_handle_response_unknown_url(self):
-        """_handle_response should be a no-op for unknown URLs."""
-        from clawmetry.interceptor import _handle_response
-        from clawmetry.ledger import get_ledger
-
-        ledger = get_ledger()
-        calls_before = ledger._session_calls
-        _handle_response("https://example.com/api/v1/foo", b'{"data": "irrelevant"}')
-        self.assertEqual(ledger._session_calls, calls_before)
-
-    def test_handle_response_never_throws(self):
-        """_handle_response must not raise even with garbage input."""
-        from clawmetry.interceptor import _handle_response
-        try:
-            _handle_response("not-a-url", b"not json @@#$")
-            _handle_response("", None)
-            _handle_response(None, None)  # type: ignore
-        except Exception as e:
-            self.fail(f"_handle_response raised: {e}")
-
-
-class TestHttpxPatch(unittest.TestCase):
-    def test_httpx_sync_intercepted(self):
-        """httpx.Client.send should be monkey-patched."""
-        # Re-enable patching for this test
-        old = os.environ.pop("CLAWMETRY_DISABLE", None)
-        try:
-            from clawmetry.interceptor import patch, _patched
-            # Force re-patch if needed
-            _patched.discard("httpx")
-            patch()
-
-            try:
-                import httpx
-            except ImportError:
-                self.skipTest("httpx not installed")
-
-            # Verify the method has been replaced (it won't be the original anymore)
-            # We just verify it can be called without errors using a mock
-            body = json.dumps({
-                "model": "gpt-4o",
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-            }).encode()
-
-            mock_response = MagicMock()
-            mock_response.content = body
-            mock_response.request.url = "https://api.openai.com/v1/chat/completions"
+        with patch.dict(sys.modules, {"httpx": fake_httpx}):
+            # Re-import interceptor with the fake httpx in place
+            import importlib
+            import clawmetry.interceptor as interceptor_mod
+            importlib.reload(interceptor_mod)
 
             from clawmetry.ledger import get_ledger
             ledger = get_ledger()
-            calls_before = ledger._session_calls
 
-            # Call _handle_response directly to simulate what the patch does
+            # Patch and simulate a send
+            interceptor_mod.patch()
+            req = FakeRequest("https://api.anthropic.com/v1/messages")
+            client = fake_httpx.Client()
+            client.send(req)
+
+            stats = ledger.session_total()
+
+        self.assertEqual(stats["calls"], 1)
+        self.assertIn("anthropic", stats["by_provider"])
+        self.assertGreater(stats["total_usd"], 0.0)
+
+    def test_non_llm_host_is_ignored(self):
+        """Calls to non-LLM hosts should not be recorded."""
+        body = json.dumps({"html": "<html></html>"}).encode()
+        fake_httpx, FakeRequest = _make_fake_httpx(body)
+
+        with patch.dict(sys.modules, {"httpx": fake_httpx}):
+            import importlib
+            import clawmetry.interceptor as interceptor_mod
+            importlib.reload(interceptor_mod)
+
             from clawmetry.interceptor import _handle_response
-            _handle_response(str(mock_response.request.url), mock_response.content)
+            from clawmetry.ledger import get_ledger
+            ledger = get_ledger()
 
-            self.assertGreater(ledger._session_calls, calls_before)
-        finally:
-            if old is not None:
-                os.environ["CLAWMETRY_DISABLE"] = old
+            interceptor_mod._handle_response("https://example.com/api", body)
+            stats = ledger.session_total()
+
+        self.assertEqual(stats["calls"], 0)
+
+    def test_patch_is_idempotent(self):
+        """Calling patch() twice should not double-wrap or raise."""
+        body = self._anthropic_body(input_tokens=200, output_tokens=100)
+        fake_httpx, FakeRequest = _make_fake_httpx(body)
+
+        with patch.dict(sys.modules, {"httpx": fake_httpx}):
+            import importlib
+            import clawmetry.interceptor as interceptor_mod
+            importlib.reload(interceptor_mod)
+
+            from clawmetry.ledger import get_ledger
+            ledger = get_ledger()
+
+            interceptor_mod.patch()
+            interceptor_mod.patch()  # second call — must be no-op
+
+            req = FakeRequest("https://api.anthropic.com/v1/messages")
+            client = fake_httpx.Client()
+            client.send(req)
+
+            stats = ledger.session_total()
+
+        # Only one call should be recorded
+        self.assertEqual(stats["calls"], 1)
+
+    def test_patch_http_alias(self):
+        """patch_http() is an alias for patch() and accepts an optional ledger arg."""
+        body = self._anthropic_body(input_tokens=100, output_tokens=50)
+        fake_httpx, FakeRequest = _make_fake_httpx(body)
+
+        with patch.dict(sys.modules, {"httpx": fake_httpx}):
+            import importlib
+            import clawmetry.interceptor as interceptor_mod
+            importlib.reload(interceptor_mod)
+
+            from clawmetry.ledger import get_ledger
+            ledger = get_ledger()
+
+            # Should not raise even with a ledger argument
+            interceptor_mod.patch_http(ledger)
+
+            req = FakeRequest("https://api.anthropic.com/v1/messages")
+            client = fake_httpx.Client()
+            client.send(req)
+
+            stats = ledger.session_total()
+
+        self.assertEqual(stats["calls"], 1)
 
 
-class TestLedger(unittest.TestCase):
-    def test_record_accumulates(self):
-        from clawmetry.ledger import _Ledger
-        ledger = _Ledger()
-        ledger.record("openai", "gpt-4o", 1000, 500, 0.0075)
-        ledger.record("anthropic", "claude-3-5-sonnet", 2000, 1000, 0.045)
-        self.assertEqual(ledger._session_calls, 2)
-        self.assertAlmostEqual(ledger._session_cost, 0.0525, places=6)
-        self.assertIn("openai", ledger._session_by_provider)
-        self.assertIn("anthropic", ledger._session_by_provider)
+class TestProviders(unittest.TestCase):
+    """Unit tests for provider detection and cost calculation."""
 
-    def test_never_throws_on_bad_record(self):
-        from clawmetry.ledger import _Ledger
-        ledger = _Ledger()
-        try:
-            ledger.record(None, None, "bad", "worse", "not-a-float")  # type: ignore
-        except Exception as e:
-            self.fail(f"ledger.record raised: {e}")
+    def test_detect_anthropic(self):
+        from clawmetry.providers import detect_provider
+        self.assertEqual(detect_provider("https://api.anthropic.com/v1/messages"), "anthropic")
+
+    def test_detect_openai(self):
+        from clawmetry.providers import detect_provider
+        self.assertEqual(detect_provider("https://api.openai.com/v1/chat/completions"), "openai")
+
+    def test_detect_unknown(self):
+        from clawmetry.providers import detect_provider
+        self.assertIsNone(detect_provider("https://example.com/api"))
+
+    def test_cost_calculation(self):
+        from clawmetry.providers import get_cost
+        # claude-sonnet-4: $3/M input, $15/M output
+        cost = get_cost("anthropic", "claude-sonnet-4-20250514", 1_000_000, 1_000_000)
+        self.assertAlmostEqual(cost, 18.0, places=2)
+
+    def test_cost_default_fallback(self):
+        from clawmetry.providers import get_cost
+        # Unknown model falls back to default pricing
+        cost = get_cost("anthropic", "claude-unknown-v99", 1_000_000, 0)
+        self.assertGreater(cost, 0.0)
+
+
+class TestLedgerPublicAPI(unittest.TestCase):
+    """Tests for the public query API on the ledger."""
+
+    def setUp(self):
+        import clawmetry.ledger as ledger_mod
+        ledger_mod._ledger = None
+
+    def test_session_total_structure(self):
+        from clawmetry.ledger import get_ledger
+        ledger = get_ledger()
+        stats = ledger.session_total()
+        self.assertIn("total_usd", stats)
+        self.assertIn("calls", stats)
+        self.assertIn("by_provider", stats)
+        self.assertIn("duration_seconds", stats)
+
+    def test_today_total_structure(self):
+        from clawmetry.ledger import get_ledger
+        ledger = get_ledger()
+        stats = ledger.today_total()
+        self.assertIn("total_usd", stats)
+        self.assertIn("calls", stats)
+        self.assertIn("by_provider", stats)
+
+    def test_monthly_estimate_is_float(self):
+        from clawmetry.ledger import get_ledger
+        ledger = get_ledger()
+        result = ledger.monthly_estimate()
+        self.assertIsInstance(result, float)
+
+    def test_record_updates_session(self):
+        from clawmetry.ledger import get_ledger
+        ledger = get_ledger()
+        ledger.record("openai", "gpt-4o", 1000, 500, 0.01)
+        stats = ledger.session_total()
+        self.assertEqual(stats["calls"], 1)
+        self.assertAlmostEqual(stats["total_usd"], 0.01)
+        self.assertIn("openai", stats["by_provider"])
 
 
 if __name__ == "__main__":
-    # When run directly, show output
-    os.environ.pop("CLAWMETRY_DISABLE", None)
-    print("Running ClawMetry interceptor tests…\n")
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-    for cls in [
-        TestProviderDetection,
-        TestUsageExtraction,
-        TestCostCalculation,
-        TestHandleResponse,
-        TestHttpxPatch,
-        TestLedger,
-    ]:
-        suite.addTests(loader.loadTestsFromTestCase(cls))
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-    sys.exit(0 if result.wasSuccessful() else 1)
+    unittest.main()

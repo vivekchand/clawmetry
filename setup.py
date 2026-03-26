@@ -1,5 +1,5 @@
 import re
-from setuptools import setup
+from setuptools import setup, find_packages
 
 with open("README.md", "r", encoding="utf-8") as f:
     long_description = f.read()
@@ -18,6 +18,10 @@ setup(
     author_email="vivek@openclaw.dev",
     url="https://github.com/vivekchand/clawmetry",
     py_modules=["dashboard"],
+    packages=find_packages(include=["clawmetry", "clawmetry.*"]),
+    # Install clawmetry-auto.pth into site-packages root so Python auto-executes
+    # the zero-config interceptor on every Python startup.
+    data_files=[("", ["clawmetry-auto.pth"])],
     python_requires=">=3.8",
     install_requires=[
         "flask>=2.0",
