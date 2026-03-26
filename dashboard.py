@@ -5970,6 +5970,10 @@ def _budget_monitor_loop():
                         channels=['banner', 'telegram'],
                     )
 
+            # Token velocity check: detect runaway agent loops (GH#313)
+            velocity = _compute_token_velocity()
+            _check_velocity_alerts(velocity)
+
             # Anomaly check: today's cost > 2x 7-day average
             status = _get_budget_status()
             daily_spent = status['daily_spent']
@@ -6144,6 +6148,7 @@ def _budget_monitor_loop():
 
         except Exception as e:
             print(f"Warning: Budget monitor error: {e}")
+
 
 
 def _start_budget_monitor_thread():
@@ -7982,6 +7987,15 @@ function clawmetryLogout(){
   <button onclick="document.getElementById('budget-cap-banner').style.display='none'" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
 </div>
 
+<!-- Token Velocity / Runaway Loop Banner -->
+<div id="velocity-banner" style="display:none;padding:10px 16px;border-bottom:2px solid #ef4444;font-size:13px;font-weight:600;align-items:center;gap:10px;background:#3b0000;color:#fca5a5;">
+  <span style="font-size:18px;">&#128308;</span>
+  <span id="velocity-banner-msg" style="flex:1;"></span>
+  <a href="#" onclick="pauseGatewayVelocity();return false;" id="velocity-kill-btn" style="background:#ef4444;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:700;text-decoration:none;display:inline-block;">Kill Loop</a>
+  <button onclick="dismissVelocityBanner()" style="background:#7f1d1d;color:#fecaca;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+</div>
+
+
 <!-- Budget Settings Modal -->
 <div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
   <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
@@ -9051,6 +9065,54 @@ async function ackAllAlerts() {
 // Check alerts every 30s
 setInterval(checkActiveAlerts, 30000);
 setTimeout(checkActiveAlerts, 3000);
+
+// === Token Velocity / Runaway Loop Detection ===
+var _velocityDismissed = false;
+
+function dismissVelocityBanner() {
+  document.getElementById('velocity-banner').style.display = 'none';
+  _velocityDismissed = true;
+  setTimeout(function() { _velocityDismissed = false; }, 300000); // re-enable after 5 min
+}
+
+async function pauseGatewayVelocity() {
+  try {
+    await fetch('/api/budget/pause', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reason:'Token velocity: runaway loop detected'})});
+    document.getElementById('velocity-banner-msg').textContent = '⏸ Gateway paused — runaway loop stopped.';
+    document.getElementById('velocity-kill-btn').style.display = 'none';
+  } catch(e) { alert('Could not pause gateway: ' + e); }
+}
+
+async function checkVelocityAlert() {
+  if (_velocityDismissed) return;
+  try {
+    var data = await fetch('/api/alerts/velocity').then(function(r){return r.json();});
+    var banner = document.getElementById('velocity-banner');
+    if (!banner) return;
+    if (data.alert_active) {
+      var msg = '';
+      if (data.breaches && data.breaches.token_velocity) {
+        msg = '🔴 Runaway loop: ' + (data.tokens_in_window||0).toLocaleString() + ' tokens in ' + (data.window_sec||120) + 's';
+      } else if (data.breaches && data.breaches.tool_chain) {
+        msg = '🔴 Agent loop: ' + (data.max_consecutive_tool_calls||0) + ' consecutive tool calls without a human turn';
+      } else if (data.breaches && data.breaches.cost_velocity) {
+        msg = '🔴 Cost spike: $' + ((data.cost_per_min||0)*60).toFixed(4) + '/hr velocity detected';
+      } else {
+        msg = '🔴 Token velocity alert: possible runaway agent loop';
+      }
+      document.getElementById('velocity-banner-msg').textContent = msg;
+      banner.style.display = 'flex';
+    } else {
+      banner.style.display = 'none';
+    }
+  } catch(e) {}
+}
+
+setInterval(checkVelocityAlert, 30000);
+setTimeout(checkVelocityAlert, 5000);
+
+
 
 // === Heartbeat Gap Alerting ===
 async function checkHeartbeatStatus() {
