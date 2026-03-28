@@ -99,7 +99,9 @@ echo ""
 
 # ── NemoClaw detection ───────────────────────────────────────────────────────
 
+NEMOCLAW_DETECTED=0
 if command -v nemoclaw &>/dev/null; then
+  NEMOCLAW_DETECTED=1
   echo -e "  ${BOLD}🟢 NemoClaw detected${NC}"
   echo ""
 
@@ -156,10 +158,10 @@ except Exception:
 fi
 
 # ── Onboarding ───────────────────────────────────────────────────────────────
-# Runs: clawmetry onboard
+# Runs: clawmetry onboard (skipped when NemoClaw is detected — setup happens inside sandbox)
 
-if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ]; then
-  echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
+if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ] || [ "$NEMOCLAW_DETECTED" = "1" ]; then
+  [ "$NEMOCLAW_DETECTED" = "1" ] || echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
 elif (exec </dev/tty) 2>/dev/null; then
   "$CLAWMETRY_BIN" onboard </dev/tty || true
 else
