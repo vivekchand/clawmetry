@@ -97,6 +97,46 @@ echo ""
 echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
 
+# ── NemoClaw detection ───────────────────────────────────────────────────────
+
+if command -v nemoclaw &>/dev/null; then
+  echo -e "  ${BOLD}🟢 NemoClaw detected${NC}"
+  echo -e "  ${DIM}ClawMetry works best with the NemoClaw preset applied.${NC}"
+  echo -e "  ${DIM}This allows your NemoClaw sandboxes to reach ClawMetry Cloud.${NC}"
+  echo ""
+
+  PRESET_SCRIPT=""
+  # Look for the bundled preset script in the installed clawmetry package
+  PRESET_SCRIPT=$("$INSTALL_DIR/bin/python3" -c "
+import importlib.resources, pathlib
+try:
+    pkg = importlib.resources.files('clawmetry') / 'resources' / 'add-nemoclaw-clawmetry-preset.sh'
+    print(str(pkg))
+except Exception:
+    pass
+" 2>/dev/null || true)
+
+  if [ -n "$PRESET_SCRIPT" ] && [ -f "$PRESET_SCRIPT" ]; then
+    if (exec </dev/tty) 2>/dev/null; then
+      printf "  Apply NemoClaw preset now? [Y/n]: " > /dev/tty
+      read -r NEMO_CHOICE </dev/tty || NEMO_CHOICE="y"
+    else
+      NEMO_CHOICE="y"
+    fi
+
+    NEMO_CHOICE="${NEMO_CHOICE:-y}"
+    if [[ "$NEMO_CHOICE" =~ ^[Yy]$ ]] || [ -z "$NEMO_CHOICE" ]; then
+      echo ""
+      echo -e "  → Applying NemoClaw preset..."
+      bash "$PRESET_SCRIPT" && echo -e "  ${GREEN}${BOLD}✓ NemoClaw preset applied${NC}" || \
+        echo -e "  ${DIM}⚠  Preset setup incomplete. Run manually: bash $PRESET_SCRIPT${NC}"
+    else
+      echo -e "  ${DIM}Skipped. Run later: bash $PRESET_SCRIPT${NC}"
+    fi
+    echo ""
+  fi
+fi
+
 # ── Onboarding ───────────────────────────────────────────────────────────────
 # Runs: clawmetry onboard
 
