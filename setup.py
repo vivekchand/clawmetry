@@ -19,6 +19,7 @@ setup(
     url="https://github.com/vivekchand/clawmetry",
     py_modules=["dashboard"],
     packages=["clawmetry"],
+    package_data={"clawmetry": ["resources/*.sh"]},
     python_requires=">=3.8",
     install_requires=[
         "flask>=2.0",

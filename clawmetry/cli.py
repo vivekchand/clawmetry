@@ -2,12 +2,38 @@
 from __future__ import annotations
 import sys
 import os
+from pathlib import Path
 
 
 def _get_openclaw_dir():
     """Return the OpenClaw config directory, respecting CLAWMETRY_OPENCLAW_DIR env var."""
     import os
     return os.environ.get('CLAWMETRY_OPENCLAW_DIR', os.path.expanduser('~/.openclaw'))
+
+
+def _get_nemoclaw_preset_script() -> str | None:
+    """Return the local NemoClaw preset helper when nemoclaw is installed."""
+    import shutil
+
+    if not shutil.which("nemoclaw"):
+        return None
+
+    script_path = Path(__file__).resolve().parent / "resources" / "add-nemoclaw-clawmetry-preset.sh"
+    if script_path.exists():
+        return str(script_path)
+    return None
+
+
+def _print_nemoclaw_preset_hint(BOLD, CYAN, DIM) -> None:
+    """Suggest installing the NemoClaw preset when the local helper is available."""
+    script_path = _get_nemoclaw_preset_script()
+    if not script_path:
+        return
+
+    print(f"  {BOLD('NemoClaw detected')}")
+    print(f"  {DIM('To allow your NemoClaw sandboxes to reach ClawMetry Cloud, run:')}")
+    print(f"    {CYAN(f'bash {script_path}')}")
+    print()
 
 
 
@@ -599,6 +625,9 @@ def _cmd_onboard(args) -> None:
         _fake_args = _ap.Namespace(key=None, foreground=False, custom_node_id=None)
         _cmd_connect(_fake_args)
 
+        print()
+        _print_nemoclaw_preset_hint(BOLD, CYAN, DIM)
+
         print(f"\n  {BOLD('All done!')}\n")
 
         try:
@@ -617,6 +646,7 @@ def _cmd_onboard(args) -> None:
         print(f"    {CYAN('clawmetry --host 0.0.0.0 --port 8900')}          {DIM('# foreground (LAN)')}")
         print(f"    {CYAN('clawmetry start --host 0.0.0.0 --port 8900')}    {DIM('# background service')}\n")
         print(f"  {DIM('Connect to cloud later: clawmetry connect')}\n")
+        _print_nemoclaw_preset_hint(BOLD, CYAN, DIM)
 
 
 def _cmd_proxy(args) -> None:
