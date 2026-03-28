@@ -618,26 +618,34 @@
 <!-- SCREENSHOTS -->
 <section class="section" style="padding-top:72px;padding-bottom:80px;">
   <h2 class="section-title">See your agents think</h2>
-  <p class="section-sub">Real-time observability for every tool call, token cost, and memory operation.</p>
-  <div class="screenshots-grid">
+  <p class="section-sub">Real-time observability for every tool call, token cost, and memory operation across your NemoClaw fleet.</p>
 
-    <div class="screenshot-card">
-      <img src="/dashboard-full.png" alt="ClawMetry dashboard — full agent activity view" loading="lazy">
-      <div class="screenshot-caption">
-        <strong style="color:var(--text);">Agent Activity Dashboard</strong><br>
-        Live feed of every tool call, session, and sub-agent spawn from your NeMo agents.
-      </div>
+  <div style="max-width:900px;margin:0 auto;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:16px;">
+      <button onclick="showNemoSS('flow')" id="nss-flow" class="nss-tab active-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#76b900;color:#000;transition:all 0.15s;">Flow</button>
+      <button onclick="showNemoSS('brain')" id="nss-brain" class="nss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);transition:all 0.15s;">Brain</button>
+      <button onclick="showNemoSS('overview')" id="nss-overview" class="nss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);transition:all 0.15s;">Overview</button>
+      <button onclick="showNemoSS('crons')" id="nss-crons" class="nss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);transition:all 0.15s;">Crons</button>
+      <button onclick="showNemoSS('memory')" id="nss-memory" class="nss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);transition:all 0.15s;">Memory</button>
+      <button onclick="showNemoSS('security')" id="nss-security" class="nss-tab" style="padding:6px 16px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);transition:all 0.15s;">Security</button>
     </div>
-
-    <div class="screenshot-card">
-      <img src="/dashboard-overview-og.png" alt="ClawMetry overview — token costs and memory" loading="lazy">
-      <div class="screenshot-caption">
-        <strong style="color:var(--text);">Token Cost Overview</strong><br>
-        Per-model token spend, cost breakdown, and memory usage. No surprises on your bill.
-      </div>
+    <div style="border-radius:12px;overflow:hidden;border:1px solid rgba(118,185,0,0.2);box-shadow:0 0 40px rgba(118,185,0,0.06);">
+      <img id="nss-img" src="screenshots/flow.png" alt="ClawMetry dashboard" loading="eager" style="width:100%;display:block;">
     </div>
-
   </div>
+
+  <script>
+  function showNemoSS(name) {
+    document.getElementById('nss-img').src = 'screenshots/' + name + '.png';
+    document.querySelectorAll('.nss-tab').forEach(function(b) {
+      b.style.background = 'rgba(255,255,255,0.06)';
+      b.style.color = 'rgba(255,255,255,0.5)';
+      b.style.fontWeight = '500';
+    });
+    var active = document.getElementById('nss-' + name);
+    if (active) { active.style.background = '#76b900'; active.style.color = '#000'; active.style.fontWeight = '600'; }
+  }
+  </script>
 </section>
 
 <!-- CTA -->
