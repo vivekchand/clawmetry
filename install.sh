@@ -101,14 +101,11 @@ echo ""
 
 if command -v nemoclaw &>/dev/null; then
   echo -e "  ${BOLD}🟢 NemoClaw detected${NC}"
-  echo -e "  ${DIM}ClawMetry works best with the NemoClaw preset applied.${NC}"
-  echo -e "  ${DIM}This allows your NemoClaw sandboxes to reach ClawMetry Cloud.${NC}"
   echo ""
 
-  PRESET_SCRIPT=""
-  # Look for the bundled preset script in the installed clawmetry package
+  # Step 1: Find and auto-apply the bundled preset script
   PRESET_SCRIPT=$("$INSTALL_DIR/bin/python3" -c "
-import importlib.resources, pathlib
+import importlib.resources
 try:
     pkg = importlib.resources.files('clawmetry') / 'resources' / 'add-nemoclaw-clawmetry-preset.sh'
     print(str(pkg))
@@ -117,24 +114,54 @@ except Exception:
 " 2>/dev/null || true)
 
   if [ -n "$PRESET_SCRIPT" ] && [ -f "$PRESET_SCRIPT" ]; then
-    if (exec </dev/tty) 2>/dev/null; then
-      printf "  Apply NemoClaw preset now? [Y/n]: " > /dev/tty
-      read -r NEMO_CHOICE </dev/tty || NEMO_CHOICE="y"
-    else
-      NEMO_CHOICE="y"
-    fi
-
-    NEMO_CHOICE="${NEMO_CHOICE:-y}"
-    if [[ "$NEMO_CHOICE" =~ ^[Yy]$ ]] || [ -z "$NEMO_CHOICE" ]; then
-      echo ""
-      echo -e "  → Applying NemoClaw preset..."
-      bash "$PRESET_SCRIPT" && echo -e "  ${GREEN}${BOLD}✓ NemoClaw preset applied${NC}" || \
-        echo -e "  ${DIM}⚠  Preset setup incomplete. Run manually: bash $PRESET_SCRIPT${NC}"
-    else
-      echo -e "  ${DIM}Skipped. Run later: bash $PRESET_SCRIPT${NC}"
-    fi
+    echo -e "  → Applying ClawMetry preset to NemoClaw sandboxes..."
+    bash "$PRESET_SCRIPT" \
+      && echo -e "  ${GREEN}${BOLD}✓ NemoClaw preset applied${NC}" \
+      || echo -e "  ${DIM}⚠  Preset incomplete. Run manually: bash $PRESET_SCRIPT${NC}"
     echo ""
   fi
+
+  # Step 2: Prompt to install ClawMetry inside a NemoClaw OpenClaw sandbox
+  echo -e "  ${BOLD}Install ClawMetry inside your NemoClaw OpenClaw sandbox?${NC}"
+  echo -e "  ${DIM}This will open the NemoClaw TUI and run:${NC}"
+  echo -e "    ${GREEN}python3 -m venv .venv${NC}"
+  echo -e "    ${GREEN}.venv/bin/pip install clawmetry${NC}"
+  echo -e "    ${GREEN}.venv/bin/clawmetry onboard${NC}"
+  echo -e "    ${GREEN}.venv/bin/clawmetry --host 0.0.0.0 --port 8900 &${NC}"
+  echo ""
+
+  if (exec </dev/tty) 2>/dev/null; then
+    printf "  Open NemoClaw + run ClawMetry setup? [Y/n]: " > /dev/tty
+    read -r NEMO_SANDBOX_CHOICE </dev/tty || NEMO_SANDBOX_CHOICE="y"
+  else
+    NEMO_SANDBOX_CHOICE="y"
+  fi
+
+  NEMO_SANDBOX_CHOICE="${NEMO_SANDBOX_CHOICE:-y}"
+  if [[ "$NEMO_SANDBOX_CHOICE" =~ ^[Yy]$ ]] || [ -z "$NEMO_SANDBOX_CHOICE" ]; then
+    echo ""
+    echo -e "  → Opening NemoClaw OpenClaw TUI..."
+    # Run the setup commands inside a nemoclaw shell session
+    nemoclaw exec -- bash -c '
+      set -e
+      echo "  → Creating venv..."
+      python3 -m venv .venv
+      echo "  → Installing ClawMetry..."
+      .venv/bin/pip install clawmetry --quiet
+      echo "  → Running onboard (local mode)..."
+      CLAWMETRY_SKIP_ONBOARD=0 .venv/bin/clawmetry onboard
+      echo "  → Starting ClawMetry dashboard..."
+      .venv/bin/clawmetry --host 0.0.0.0 --port 8900 &
+      echo "  ✓ ClawMetry running at http://localhost:8900"
+    ' || echo -e "  ${DIM}⚠  Setup incomplete. Open NemoClaw manually and run the commands above.${NC}"
+  else
+    echo -e "  ${DIM}Skipped. To set up later, open a NemoClaw sandbox and run:${NC}"
+    echo -e "    python3 -m venv .venv"
+    echo -e "    .venv/bin/pip install clawmetry"
+    echo -e "    .venv/bin/clawmetry onboard"
+    echo -e "    .venv/bin/clawmetry --host 0.0.0.0 --port 8900 &"
+  fi
+  echo ""
 fi
 
 # ── Onboarding ───────────────────────────────────────────────────────────────
