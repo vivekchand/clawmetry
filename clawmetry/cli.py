@@ -40,7 +40,10 @@ def _stop_existing_daemon() -> None:
         plist = __import__("pathlib").Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
         subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
     elif system == "Linux":
-        subprocess.run(["systemctl", "--user", "stop", "clawmetry-sync"], check=False, capture_output=True)
+        if __import__("shutil").which("systemctl"):
+            subprocess.run(["systemctl", "--user", "stop", "clawmetry-sync"], check=False, capture_output=True)
+        else:
+            subprocess.run(["pkill", "-f", "clawmetry.sync"], check=False, capture_output=True)
     
     # Send offline heartbeat for old node to deregister it from cloud
     if old_node_id and old_api_key:
@@ -452,11 +455,15 @@ def _cmd_disconnect(args) -> None:
             plist.unlink()
         print(f"✅  Stopped launchd daemon ({label})")
     elif system == "Linux":
-        subprocess.run(["systemctl", "--user", "disable", "--now", "clawmetry-sync"], check=False, capture_output=True)
-        svc = __import__("pathlib").Path.home() / ".config" / "systemd" / "user" / "clawmetry-sync.service"
-        if svc.exists():
-            svc.unlink()
-        print("✅  Stopped systemd daemon (clawmetry-sync)")
+        if __import__("shutil").which("systemctl"):
+            subprocess.run(["systemctl", "--user", "disable", "--now", "clawmetry-sync"], check=False, capture_output=True)
+            svc = __import__("pathlib").Path.home() / ".config" / "systemd" / "user" / "clawmetry-sync.service"
+            if svc.exists():
+                svc.unlink()
+            print("✅  Stopped systemd daemon (clawmetry-sync)")
+        else:
+            subprocess.run(["pkill", "-f", "clawmetry.sync"], check=False, capture_output=True)
+            print("✅  Stopped sync daemon")
 
     if CONFIG_FILE.exists():
         CONFIG_FILE.unlink()
@@ -521,10 +528,15 @@ def _cmd_status(args) -> None:
         else:
             print("  Daemon:      ○  Not running")
     elif system == "Linux":
-        import subprocess
-        r = subprocess.run(["systemctl", "--user", "is-active", "clawmetry-sync"], capture_output=True, text=True)
-        running = r.stdout.strip() == "active"
-        print(f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}")
+        import subprocess, shutil
+        if shutil.which("systemctl"):
+            r = subprocess.run(["systemctl", "--user", "is-active", "clawmetry-sync"], capture_output=True, text=True)
+            running = r.stdout.strip() == "active"
+            print(f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}")
+        else:
+            r = subprocess.run(["pgrep", "-f", "clawmetry.sync"], capture_output=True, text=True)
+            running = r.returncode == 0
+            print(f"  Daemon:      {'✅  Running (subprocess)' if running else '○  Not running'}")
 
     if LOG_FILE.exists():
         print(f"  Log:         {LOG_FILE}")
