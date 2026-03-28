@@ -778,7 +778,7 @@
           <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Install it</div>
           <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">pip install clawmetry</span></div>
           <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Run it</div>
-          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">clawmetry</span></div>
+          <div><span style="color:rgba(255,255,255,0.4);">$ </span><span style="color:#28c840;">clawmetry onboard</span></div>
         </div>
         <div id="panel-powershell" style="display:none;">
           <div style="color:rgba(255,255,255,0.35);font-style:italic;"># Same thing, Windows style &#x1F99E;</div>
@@ -822,7 +822,7 @@
 <script>
 var cmds = {
   oneliner: 'curl -fsSL https://clawmetry.com/install.sh | bash',
-  pip: 'pip install clawmetry && clawmetry',
+  pip: 'pip install clawmetry && clawmetry onboard',
   powershell: 'iwr -useb https://clawmetry.com/install.ps1 | iex',
   cmd: 'curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd',
   agent: 'Run pip install clawmetry && clawmetry onboard',
