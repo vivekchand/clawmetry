@@ -798,7 +798,7 @@
         <div id="panel-agent" style="display:none;text-align:center;padding:12px 0 8px;">
           <div style="font-size:13px;color:rgba(255,255,255,0.4);margin-bottom:20px;font-style:italic;">Already running an OpenClaw agent? Just ask it:</div>
           <div style="display:inline-block;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:16px 28px;font-size:15px;color:#fff;letter-spacing:0.01em;">
-            &ldquo;Run <code style="color:#28c840;background:rgba(40,200,64,0.15);padding:2px 8px;border-radius:4px;font-size:14px;">pip install clawmetry &amp;&amp; clawmetry onboard</code>&rdquo;
+            &ldquo;Help me install <code style="color:#28c840;background:rgba(40,200,64,0.15);padding:2px 8px;border-radius:4px;font-size:14px;">pip install clawmetry &amp;&amp; clawmetry onboard</code>&rdquo;
           </div>
           <div style="font-size:12px;color:rgba(255,255,255,0.3);margin-top:20px;line-height:1.7;">
             Your agent will install the package and start your local dashboard automatically.
@@ -825,7 +825,7 @@ var cmds = {
   pip: 'pip install clawmetry && clawmetry onboard',
   powershell: 'iwr -useb https://clawmetry.com/install.ps1 | iex',
   cmd: 'curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd',
-  agent: 'Run pip install clawmetry && clawmetry onboard',
+  agent: 'Help me install pip install clawmetry && clawmetry onboard',
   macos: 'https://github.com/vivekchand/clawmetry-mac/releases/download/v1.0.1/ClawMetry-2026-03-11.dmg'
 };
 var activeTab = 'oneliner';
