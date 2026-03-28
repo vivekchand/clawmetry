@@ -9257,6 +9257,10 @@ function clawmetryLogout(){
   </div>
   <div class="section-title">💰 Cost Breakdown <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
   <div class="card"><table class="usage-table" id="usage-cost-table"><tbody><tr><td colspan="3" style="color:#666;">Loading...</td></tr></tbody></table></div>
+  <div id="usage-anomaly-section" style="display:none;">
+    <div class="section-title">⚠️ Anomaly Alerts <span id="usage-anomaly-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:#7f1d1d;color:#fca5a5;margin-left:8px;"></span></div>
+    <div class="card" id="usage-anomaly-list" style="font-size:13px;"></div>
+  </div>
   <div class="section-title">🧩 Cost By Plugin / Skill</div>
   <div class="card">
     <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
