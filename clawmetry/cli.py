@@ -36,6 +36,40 @@ def _print_nemoclaw_preset_hint(BOLD, CYAN, DIM) -> None:
     print()
 
 
+def _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM) -> None:
+    """Offer to apply the NemoClaw preset immediately after onboarding."""
+    import subprocess
+
+    script_path = _get_nemoclaw_preset_script()
+    if not script_path:
+        return
+
+    print(f"  {BOLD('NemoClaw detected')}")
+    print(f"  {DIM('Apply the ClawMetry preset to your NemoClaw sandboxes now?')}")
+
+    try:
+        choice = _input("  → [Y/n]: ").strip().lower() or "y"
+    except (EOFError, KeyboardInterrupt):
+        choice = "n"
+        print()
+
+    if choice not in ("y", "yes"):
+        print(f"  {DIM('Run this later if you want cloud access inside NemoClaw sandboxes:')}")
+        print(f"    {CYAN(f'bash {script_path}')}")
+        print()
+        return
+
+    print()
+    result = subprocess.run(["bash", script_path], check=False)
+    if result.returncode == 0:
+        print()
+        return
+
+    print(f"  {DIM('Preset setup did not complete. Run this manually:')}")
+    print(f"    {CYAN(f'bash {script_path}')}")
+    print()
+
+
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
@@ -660,6 +694,7 @@ def _cmd_onboard(args) -> None:
     already_connected = bool(_os.environ.get("CLAWMETRY_API_KEY") or _os.environ.get("CLAWMETRY_NODE_ID"))
     if already_connected:
         print(f"\n  {GREEN(BOLD('✓ Already connected to ClawMetry Cloud'))}")
+        _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
         print(f"  {DIM('Run  clawmetry status  to check sync health.')}\n")
         return
 
@@ -685,7 +720,7 @@ def _cmd_onboard(args) -> None:
         _cmd_connect(_fake_args)
 
         print()
-        _print_nemoclaw_preset_hint(BOLD, CYAN, DIM)
+        _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
 
         print(f"\n  {BOLD('All done!')}\n")
 
