@@ -2916,6 +2916,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('models')">Models</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('version-impact')" title="Before/after metrics for each OpenClaw upgrade">Upgrades</div>
     <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
@@ -3823,6 +3824,63 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-security -->
 
+<!-- MODEL ATTRIBUTION -->
+<div class="page" id="page-models">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadModelAttribution()">&#x21bb; Refresh</button>
+  </div>
+  <div class="grid" id="model-stats-grid">
+    <div class="card">
+      <div class="card-title"><span class="icon">🤖</span> Primary Model</div>
+      <div class="card-value" id="model-primary">--</div>
+      <div class="card-sub" id="model-primary-pct"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">🔄</span> Model Diversity</div>
+      <div class="card-value" id="model-count">--</div>
+      <div class="card-sub">distinct models used</div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">⚡</span> Fallback Rate</div>
+      <div class="card-value" id="model-fallback-rate">--</div>
+      <div class="card-sub" id="model-fallback-detail"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">💬</span> Total Turns</div>
+      <div class="card-value" id="model-total-turns">--</div>
+      <div class="card-sub">assistant responses tracked</div>
+    </div>
+  </div>
+  <div class="section-title">🤖 Model Mix</div>
+  <div class="card" id="model-mix-card">
+    <div id="model-mix-chart" style="padding:8px 0;">Loading...</div>
+  </div>
+  <div class="section-title">📊 Per-Session Breakdown</div>
+  <div class="card">
+    <table class="usage-table" id="model-sessions-table" style="width:100%;">
+      <thead><tr>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Model</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Sessions</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Turns</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Share</th>
+      </tr></thead>
+      <tbody><tr><td colspan="4" style="color:#666;padding:8px;">Loading...</td></tr></tbody>
+    </table>
+  </div>
+  <div id="model-switches-section" style="display:none;">
+    <div class="section-title">🔀 Model Switches <span id="model-switches-count" style="font-size:13px;color:var(--text-muted);font-weight:400;"></span></div>
+    <div class="card">
+      <table class="usage-table" id="model-switches-table" style="width:100%;">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Session</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">From</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">To</th>
+        </tr></thead>
+        <tbody><tr><td colspan="3" style="color:#666;padding:8px;">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div><!-- end page-models -->
 
 
 <script>
@@ -4137,6 +4195,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+  if (name === 'models') loadModelAttribution();
 }
 
 function exportUsageData() {
@@ -8145,6 +8204,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('models')">Models</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('version-impact')" title="Before/after metrics for each OpenClaw upgrade">Upgrades</div>
     <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
@@ -9114,6 +9174,64 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-security -->
 
+<!-- MODEL ATTRIBUTION (theme 2) -->
+<div class="page" id="page-models">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadModelAttribution()">&#x21bb; Refresh</button>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-title"><span class="icon">&#x1F916;</span> Primary Model</div>
+      <div class="card-value" id="model-primary">--</div>
+      <div class="card-sub" id="model-primary-pct"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#x1F504;</span> Model Diversity</div>
+      <div class="card-value" id="model-count">--</div>
+      <div class="card-sub">distinct models used</div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#x26A1;</span> Fallback Rate</div>
+      <div class="card-value" id="model-fallback-rate">--</div>
+      <div class="card-sub" id="model-fallback-detail"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#x1F4AC;</span> Total Turns</div>
+      <div class="card-value" id="model-total-turns">--</div>
+      <div class="card-sub">assistant responses tracked</div>
+    </div>
+  </div>
+  <div class="section-title">&#x1F916; Model Mix</div>
+  <div class="card">
+    <div id="model-mix-chart" style="padding:8px 0;">Loading...</div>
+  </div>
+  <div class="section-title">&#x1F4CA; Per-Session Breakdown</div>
+  <div class="card">
+    <table class="usage-table" id="model-sessions-table" style="width:100%;">
+      <thead><tr>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Model</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Sessions</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Turns</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Share</th>
+      </tr></thead>
+      <tbody><tr><td colspan="4" style="color:#666;padding:8px;">Loading...</td></tr></tbody>
+    </table>
+  </div>
+  <div id="model-switches-section" style="display:none;">
+    <div class="section-title">&#x1F500; Model Switches <span id="model-switches-count" style="font-size:13px;color:var(--text-muted);font-weight:400;"></span></div>
+    <div class="card">
+      <table class="usage-table" id="model-switches-table" style="width:100%;">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Session</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">From</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">To</th>
+        </tr></thead>
+        <tbody><tr><td colspan="3" style="color:#666;padding:8px;">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div><!-- end page-models (theme 2) -->
+
 
 
 
@@ -9643,6 +9761,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+  if (name === 'models') loadModelAttribution();
 }
 
 function exportUsageData() {
@@ -12507,6 +12626,77 @@ function displayTrendAnalysis(trend, usageData) {
 function exportUsageData() {
   // Trigger CSV download
   window.open('/api/usage/export', '_blank');
+}
+
+// ===== Model Attribution =====
+async function loadModelAttribution() {
+  try {
+    var data = await fetch('/api/model-attribution').then(function(r) { return r.json(); });
+    var models = data.models || [];
+    var switches = data.switches || [];
+    var totalTurns = data.total_turns || 0;
+    var primaryModel = data.primary_model || '--';
+
+    // Stat cards
+    document.getElementById('model-primary').textContent = primaryModel.replace('anthropic/', '').replace('openai/', '');
+    var primaryPct = totalTurns > 0 && models.length > 0 ? ((models[0].turns / totalTurns) * 100).toFixed(1) : '0';
+    document.getElementById('model-primary-pct').textContent = primaryPct + '% of turns';
+    document.getElementById('model-count').textContent = models.length;
+    document.getElementById('model-total-turns').textContent = totalTurns.toLocaleString();
+    var fallbackCount = models.filter(function(m) { return m.model !== primaryModel; }).reduce(function(s, m) { return s + m.turns; }, 0);
+    var fallbackRate = totalTurns > 0 ? ((fallbackCount / totalTurns) * 100).toFixed(1) : '0';
+    document.getElementById('model-fallback-rate').textContent = fallbackRate + '%';
+    document.getElementById('model-fallback-detail').textContent = fallbackCount + ' turns on non-primary models';
+
+    // Model mix bar chart
+    var chartHtml = '';
+    var colors = ['#4caf50', '#2196f3', '#ff9800', '#e91e63', '#9c27b0', '#00bcd4', '#ff5722', '#607d8b'];
+    models.forEach(function(m, i) {
+      var pct = totalTurns > 0 ? (m.turns / totalTurns * 100).toFixed(1) : '0';
+      var barW = totalTurns > 0 ? Math.max(2, Math.round(m.turns / totalTurns * 100)) : 0;
+      var color = colors[i % colors.length];
+      chartHtml += '<div style="display:flex;align-items:center;gap:10px;margin:6px 0;">';
+      chartHtml += '<div style="min-width:160px;font-size:12px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(m.model) + '">' + escHtml(m.model.replace('anthropic/', '').replace('openai/', '')) + '</div>';
+      chartHtml += '<div style="flex:1;background:var(--bg-secondary);border-radius:4px;height:16px;overflow:hidden;">';
+      chartHtml += '<div style="height:100%;width:' + barW + '%;background:' + color + ';border-radius:4px;transition:width 0.4s;"></div></div>';
+      chartHtml += '<div style="min-width:60px;text-align:right;font-size:12px;color:var(--text-muted);">' + pct + '%</div>';
+      chartHtml += '<div style="min-width:55px;text-align:right;font-size:12px;color:var(--text-secondary);">' + m.turns.toLocaleString() + ' turns</div>';
+      chartHtml += '</div>';
+    });
+    document.getElementById('model-mix-chart').innerHTML = chartHtml || '<div style="color:#666;">No model data found in sessions.</div>';
+
+    // Per-model session table
+    var tbodyHtml = '';
+    models.forEach(function(m) {
+      var pct = totalTurns > 0 ? (m.turns / totalTurns * 100).toFixed(1) : '0';
+      tbodyHtml += '<tr>';
+      tbodyHtml += '<td style="padding:6px 8px;font-size:13px;" title="' + escHtml(m.model) + '">' + escHtml(m.model.replace('anthropic/', '').replace('openai/', '')) + '</td>';
+      tbodyHtml += '<td style="padding:6px 8px;font-size:13px;text-align:right;">' + (m.sessions || 0).toLocaleString() + '</td>';
+      tbodyHtml += '<td style="padding:6px 8px;font-size:13px;text-align:right;">' + m.turns.toLocaleString() + '</td>';
+      tbodyHtml += '<td style="padding:6px 8px;font-size:13px;text-align:right;">' + pct + '%</td>';
+      tbodyHtml += '</tr>';
+    });
+    var tbl = document.getElementById('model-sessions-table');
+    if (tbl) tbl.querySelector('tbody').innerHTML = tbodyHtml || '<tr><td colspan="4" style="color:#666;padding:8px;">No data</td></tr>';
+
+    // Switches section
+    if (switches.length > 0) {
+      document.getElementById('model-switches-section').style.display = '';
+      document.getElementById('model-switches-count').textContent = '(' + switches.length + ' switches)';
+      var swHtml = '';
+      switches.slice(0, 20).forEach(function(sw) {
+        swHtml += '<tr>';
+        swHtml += '<td style="padding:6px 8px;font-size:12px;color:var(--text-muted);">' + escHtml(sw.session.substring(0, 8)) + '...</td>';
+        swHtml += '<td style="padding:6px 8px;font-size:12px;">' + escHtml(sw.from_model.replace('anthropic/', '').replace('openai/', '')) + '</td>';
+        swHtml += '<td style="padding:6px 8px;font-size:12px;color:var(--text-success);">→ ' + escHtml(sw.to_model.replace('anthropic/', '').replace('openai/', '')) + '</td>';
+        swHtml += '</tr>';
+      });
+      var swTbl = document.getElementById('model-switches-table');
+      if (swTbl) swTbl.querySelector('tbody').innerHTML = swHtml;
+    }
+  } catch(e) {
+    console.error('loadModelAttribution', e);
+  }
 }
 
 // ===== Transcripts =====
@@ -21267,6 +21457,92 @@ def api_usage_export():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@bp_usage.route('/api/model-attribution')
+def api_model_attribution():
+    """Per-model turn/session breakdown and switch history (GH #300)."""
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    model_turns = {}    # model -> assistant turn count
+    model_sessions = {} # model -> session count
+    switches = []       # list of {session, from_model, to_model}
+
+    if os.path.isdir(sessions_dir):
+        for fname in os.listdir(sessions_dir):
+            if not fname.endswith('.jsonl') or 'deleted' in fname:
+                continue
+            sid = fname.replace('.jsonl', '')
+            fpath = os.path.join(sessions_dir, fname)
+            try:
+                current_model = None
+                session_start_model = None
+                with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        t = obj.get('type', '')
+                        # Detect model changes
+                        if t == 'model_change':
+                            new_model = obj.get('modelId') or obj.get('model') or ''
+                            if new_model:
+                                if current_model and current_model != new_model:
+                                    switches.append({
+                                        'session': sid,
+                                        'from_model': current_model,
+                                        'to_model': new_model,
+                                    })
+                                current_model = new_model
+                                if session_start_model is None:
+                                    session_start_model = new_model
+                        elif t == 'custom':
+                            ct = obj.get('customType', '')
+                            if ct == 'model-snapshot':
+                                d = obj.get('data', {})
+                                m = d.get('modelId') or d.get('model') or ''
+                                if m and current_model is None:
+                                    current_model = m
+                                    session_start_model = m
+                        # Count assistant turns per model
+                        msg = obj.get('message', {})
+                        if isinstance(msg, dict) and msg.get('role') == 'assistant':
+                            m = msg.get('model') or obj.get('model') or current_model or 'unknown'
+                            if m:
+                                model_turns[m] = model_turns.get(m, 0) + 1
+                # Track which model a session primarily used (first detected)
+                primary = session_start_model or current_model
+                if primary:
+                    model_sessions[primary] = model_sessions.get(primary, 0) + 1
+            except Exception:
+                pass
+
+    total_turns = sum(model_turns.values())
+    # Build sorted model list
+    sorted_models = sorted(model_turns.items(), key=lambda x: -x[1])
+    primary_model = sorted_models[0][0] if sorted_models else ''
+
+    models_out = []
+    for m, turns in sorted_models:
+        models_out.append({
+            'model': m,
+            'turns': turns,
+            'sessions': model_sessions.get(m, 0),
+            'provider': _provider_from_model(m),
+            'share_pct': round(turns / total_turns * 100, 2) if total_turns else 0,
+        })
+
+    return jsonify({
+        'models': models_out,
+        'primary_model': primary_model,
+        'total_turns': total_turns,
+        'model_count': len(model_turns),
+        'switches': switches[:50],  # cap at 50 for response size
+        'switch_count': len(switches),
+    })
+
 
 @bp_sessions.route('/api/transcripts')
 def api_transcripts():
