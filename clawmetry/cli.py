@@ -17,6 +17,66 @@ if _root not in sys.path:
 
 
 
+
+def _is_sync_running() -> bool:
+    """Check if clawmetry.sync is running — no pgrep needed."""
+    import os
+    try:
+        import psutil
+        for p in psutil.process_iter(['cmdline']):
+            try:
+                cmd = ' '.join(p.info.get('cmdline') or [])
+                if 'clawmetry.sync' in cmd or 'clawmetry/sync.py' in cmd:
+                    return True
+            except Exception:
+                pass
+        return False
+    except ImportError:
+        pass
+    try:
+        for pid_str in os.listdir('/proc'):
+            if not pid_str.isdigit():
+                continue
+            try:
+                cmdline = open(f'/proc/{pid_str}/cmdline').read().replace('\x00', ' ')
+                if 'clawmetry.sync' in cmdline or 'clawmetry/sync.py' in cmdline:
+                    return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
+
+def _kill_sync_daemon() -> None:
+    """Kill clawmetry.sync processes — no pkill needed."""
+    import os, signal
+    try:
+        import psutil
+        for p in psutil.process_iter(['pid', 'cmdline']):
+            try:
+                cmd = ' '.join(p.info.get('cmdline') or [])
+                if 'clawmetry.sync' in cmd or 'clawmetry/sync.py' in cmd:
+                    os.kill(p.pid, signal.SIGTERM)
+            except Exception:
+                pass
+        return
+    except ImportError:
+        pass
+    try:
+        for pid_str in os.listdir('/proc'):
+            if not pid_str.isdigit():
+                continue
+            try:
+                cmdline = open(f'/proc/{pid_str}/cmdline').read().replace('\x00', ' ')
+                if 'clawmetry.sync' in cmdline or 'clawmetry/sync.py' in cmdline:
+                    os.kill(int(pid_str), signal.SIGTERM)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _stop_existing_daemon() -> None:
     """Stop any running sync daemon, deregister old node, clear stale state."""
     import subprocess, platform, json
@@ -43,7 +103,7 @@ def _stop_existing_daemon() -> None:
         if __import__("shutil").which("systemctl"):
             subprocess.run(["systemctl", "--user", "stop", "clawmetry-sync"], check=False, capture_output=True)
         else:
-            subprocess.run(["pkill", "-f", "clawmetry.sync"], check=False, capture_output=True)
+            _kill_sync_daemon()
     
     # Send offline heartbeat for old node to deregister it from cloud
     if old_node_id and old_api_key:
@@ -462,7 +522,7 @@ def _cmd_disconnect(args) -> None:
                 svc.unlink()
             print("✅  Stopped systemd daemon (clawmetry-sync)")
         else:
-            subprocess.run(["pkill", "-f", "clawmetry.sync"], check=False, capture_output=True)
+            _kill_sync_daemon()
             print("✅  Stopped sync daemon")
 
     if CONFIG_FILE.exists():
@@ -534,8 +594,7 @@ def _cmd_status(args) -> None:
             running = r.stdout.strip() == "active"
             print(f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}")
         else:
-            r = subprocess.run(["pgrep", "-f", "clawmetry.sync"], capture_output=True, text=True)
-            running = r.returncode == 0
+            running = _is_sync_running()
             print(f"  Daemon:      {'✅  Running (subprocess)' if running else '○  Not running'}")
 
     if LOG_FILE.exists():
