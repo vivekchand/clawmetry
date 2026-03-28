@@ -443,3 +443,34 @@ class TestMemoryAnalytics:
             assert f["status"] in ("ok", "warning", "critical")
 
 
+
+
+class TestModelAttribution:
+    def test_model_attribution_endpoint(self, api, base_url):
+        """GET /api/model-attribution returns 200."""
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        assert "models" in d
+
+    def test_model_attribution_structure(self, api, base_url):
+        """Response has required top-level keys."""
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        for key in ("models", "total_sessions", "timeline", "date_range"):
+            assert key in d, f"Missing key '{key}'"
+
+    def test_model_attribution_models_fields(self, api, base_url):
+        """Each model entry has required fields."""
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        for m in d["models"]:
+            for field in ("model", "provider", "tokens", "sessions", "cost_usd"):
+                assert field in m, f"Model entry missing '{field}'"
+
+    def test_model_attribution_timeline_length(self, api, base_url):
+        """Timeline should have 14 days."""
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        assert len(d["timeline"]) == 14, f"Expected 14-day timeline, got {len(d['timeline'])}"
+
+    def test_model_attribution_no_negative_tokens(self, api, base_url):
+        """Token counts must be non-negative."""
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        for m in d["models"]:
+            assert m["tokens"] >= 0, f"Negative tokens for {m['model']}"

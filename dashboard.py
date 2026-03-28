@@ -2766,6 +2766,7 @@ function clawmetryLogout(){
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
+    <div class="nav-tab" onclick="switchTab('models')">Models</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <!-- History tab hidden until mature -->
@@ -3106,6 +3107,51 @@ function clawmetryLogout(){
     <div class="section-title">🤖 Model Breakdown</div>
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
+  </div>
+</div>
+
+
+<!-- MODELS -->
+<div class="page" id="page-models">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadModelAttribution()">&#x21bb; Refresh</button>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-title"><span class="icon">🤖</span> Primary Model</div>
+      <div class="card-value" id="ma-primary-model">--</div>
+      <div class="card-sub" id="ma-primary-pct"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">🔄</span> Models in Use</div>
+      <div class="card-value" id="ma-model-count">--</div>
+      <div class="card-sub">distinct models seen</div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">💰</span> Costliest Model</div>
+      <div class="card-value" id="ma-costliest-model">--</div>
+      <div class="card-sub" id="ma-costliest-cost"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">📊</span> Sessions Tracked</div>
+      <div class="card-value" id="ma-sessions-count">--</div>
+      <div class="card-sub" id="ma-date-range"></div>
+    </div>
+  </div>
+  <div class="section-title">🤖 Model Attribution Breakdown</div>
+  <div class="card">
+    <div id="ma-breakdown-chart" style="padding:8px 0;"></div>
+    <table class="usage-table" id="ma-breakdown-table" style="margin-top:12px;">
+      <thead><tr><th>Model</th><th>Provider</th><th>Sessions</th><th>Tokens</th><th>Est. Cost</th><th>Share</th></tr></thead>
+      <tbody><tr><td colspan="6" style="color:#666;">Loading...</td></tr></tbody>
+    </table>
+  </div>
+  <div class="section-title">📅 Model Usage Over Time (14 days)</div>
+  <div class="card">
+    <div id="ma-timeline" style="min-height:120px;padding:8px 0;">Loading...</div>
+  </div>
+  <div id="ma-no-data" style="display:none;padding:32px;text-align:center;color:#666;">
+    No model attribution data available yet. Run some sessions first.
   </div>
 </div>
 
@@ -3921,6 +3967,7 @@ function switchTab(name) {
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
+  if (name === 'models') loadModelAttribution();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
@@ -7893,6 +7940,7 @@ function clawmetryLogout(){
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
+    <div class="nav-tab" onclick="switchTab('models')">Models</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <!-- History tab hidden until mature -->
@@ -8277,6 +8325,51 @@ function clawmetryLogout(){
     <div class="section-title">🤖 Model Breakdown</div>
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
+  </div>
+</div>
+
+
+<!-- MODELS -->
+<div class="page" id="page-models">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadModelAttribution()">&#x21bb; Refresh</button>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-title"><span class="icon">🤖</span> Primary Model</div>
+      <div class="card-value" id="ma-primary-model">--</div>
+      <div class="card-sub" id="ma-primary-pct"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">🔄</span> Models in Use</div>
+      <div class="card-value" id="ma-model-count">--</div>
+      <div class="card-sub">distinct models seen</div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">💰</span> Costliest Model</div>
+      <div class="card-value" id="ma-costliest-model">--</div>
+      <div class="card-sub" id="ma-costliest-cost"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">📊</span> Sessions Tracked</div>
+      <div class="card-value" id="ma-sessions-count">--</div>
+      <div class="card-sub" id="ma-date-range"></div>
+    </div>
+  </div>
+  <div class="section-title">🤖 Model Attribution Breakdown</div>
+  <div class="card">
+    <div id="ma-breakdown-chart" style="padding:8px 0;"></div>
+    <table class="usage-table" id="ma-breakdown-table" style="margin-top:12px;">
+      <thead><tr><th>Model</th><th>Provider</th><th>Sessions</th><th>Tokens</th><th>Est. Cost</th><th>Share</th></tr></thead>
+      <tbody><tr><td colspan="6" style="color:#666;">Loading...</td></tr></tbody>
+    </table>
+  </div>
+  <div class="section-title">📅 Model Usage Over Time (14 days)</div>
+  <div class="card">
+    <div id="ma-timeline" style="min-height:120px;padding:8px 0;">Loading...</div>
+  </div>
+  <div id="ma-no-data" style="display:none;padding:32px;text-align:center;color:#666;">
+    No model attribution data available yet. Run some sessions first.
   </div>
 </div>
 
@@ -9149,6 +9242,7 @@ function switchTab(name) {
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
   if (name === 'usage') loadUsage();
+  if (name === 'models') loadModelAttribution();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
@@ -11897,6 +11991,108 @@ function exportUsageData() {
   // Trigger CSV download
   window.open('/api/usage/export', '_blank');
 }
+
+// ===== Model Attribution =====
+async function loadModelAttribution() {
+  try {
+    var data = await fetch('/api/model-attribution').then(function(r){ return r.json(); });
+    var models = data.models || [];
+    var total_tokens = models.reduce(function(s, m){ return s + (m.tokens || 0); }, 0) || 1;
+    var total_sessions = models.reduce(function(s, m){ return s + (m.sessions || 0); }, 0) || 1;
+
+    if (models.length === 0) {
+      var nd = document.getElementById('ma-no-data');
+      if (nd) nd.style.display = 'block';
+      return;
+    }
+
+    // Stat cards
+    var primary = models[0] || {};
+    var setEl = function(id, val){ var el = document.getElementById(id); if(el) el.textContent = val; };
+    var shortModel = function(m){ return (m||'unknown').replace('claude-','').replace('-latest',''); };
+    setEl('ma-primary-model', shortModel(primary.model));
+    setEl('ma-primary-pct', Math.round((primary.tokens||0)/total_tokens*100) + '% of all tokens');
+    setEl('ma-model-count', models.length);
+    setEl('ma-sessions-count', data.total_sessions || total_sessions);
+    setEl('ma-date-range', (data.date_range || ''));
+
+    // Costliest model
+    var byC = models.slice().sort(function(a,b){ return (b.cost_usd||0)-(a.cost_usd||0); });
+    if (byC.length > 0) {
+      setEl('ma-costliest-model', shortModel(byC[0].model));
+      setEl('ma-costliest-cost', byC[0].cost_usd > 0 ? '$' + byC[0].cost_usd.toFixed(4) + ' est.' : 'cost unknown');
+    }
+
+    // Breakdown bar chart (inline SVG bars)
+    var chartHtml = '';
+    var maxT = (models[0] && models[0].tokens) ? models[0].tokens : 1;
+    models.forEach(function(m) {
+      var pct = Math.max(2, Math.round((m.tokens||0)/maxT*100));
+      var tokStr = m.tokens >= 1000000 ? (m.tokens/1000000).toFixed(1)+'M' : m.tokens >= 1000 ? (m.tokens/1000).toFixed(0)+'K' : String(m.tokens||0);
+      var color = m.provider === 'anthropic' ? '#f59e0b' : m.provider === 'openai' ? '#10b981' : m.provider === 'google' ? '#3b82f6' : '#8b5cf6';
+      chartHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
+      chartHtml += '<div style="flex:0 0 120px;font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(shortModel(m.model)) + '</div>';
+      chartHtml += '<div style="flex:1;background:var(--bg-secondary);border-radius:3px;height:14px;position:relative;">';
+      chartHtml += '<div style="background:'+color+';width:'+pct+'%;height:100%;border-radius:3px;"></div></div>';
+      chartHtml += '<div style="flex:0 0 60px;font-size:11px;color:var(--text-secondary);text-align:right;">' + tokStr + '</div>';
+      chartHtml += '</div>';
+    });
+    var chartEl = document.getElementById('ma-breakdown-chart');
+    if (chartEl) chartEl.innerHTML = chartHtml;
+
+    // Table rows
+    var tbody = document.querySelector('#ma-breakdown-table tbody');
+    if (tbody) {
+      var rows = '';
+      models.forEach(function(m) {
+        var sharePct = Math.round((m.tokens||0)/total_tokens*100);
+        var tokStr = m.tokens >= 1000000 ? (m.tokens/1000000).toFixed(1)+'M' : m.tokens >= 1000 ? (m.tokens/1000).toFixed(0)+'K' : String(m.tokens||0);
+        var costStr = m.cost_usd > 0 ? '$'+m.cost_usd.toFixed(4) : '—';
+        rows += '<tr>';
+        rows += '<td style="font-weight:600;">' + escHtml(m.model||'unknown') + '</td>';
+        rows += '<td style="color:#888;font-size:12px;">' + escHtml(m.provider||'?') + '</td>';
+        rows += '<td>' + (m.sessions||0) + '</td>';
+        rows += '<td>' + tokStr + '</td>';
+        rows += '<td>' + costStr + '</td>';
+        rows += '<td><span style="background:var(--bg-secondary);border-radius:8px;padding:2px 8px;font-size:11px;">' + sharePct + '%</span></td>';
+        rows += '</tr>';
+      });
+      tbody.innerHTML = rows;
+    }
+
+    // Timeline (14-day model distribution sparkline)
+    var timeline = data.timeline || [];
+    var tlEl = document.getElementById('ma-timeline');
+    if (tlEl && timeline.length > 0) {
+      var uniqModels = [];
+      timeline.forEach(function(day){ Object.keys(day.models||{}).forEach(function(m){ if(uniqModels.indexOf(m)===-1) uniqModels.push(m); }); });
+      var colors = ['#f59e0b','#10b981','#3b82f6','#8b5cf6','#ef4444','#06b6d4'];
+      var tlHtml = '<div style="overflow-x:auto;">';
+      tlHtml += '<div style="display:flex;gap:2px;align-items:flex-end;height:80px;padding-bottom:20px;min-width:400px;">';
+      var maxDayTok = 1;
+      timeline.forEach(function(day){ var t=Object.values(day.models||{}).reduce(function(s,v){return s+v;},0); if(t>maxDayTok)maxDayTok=t; });
+      timeline.forEach(function(day) {
+        var dayTotal = Object.values(day.models||{}).reduce(function(s,v){return s+v;},0);
+        var barH = dayTotal > 0 ? Math.max(4, Math.round(dayTotal/maxDayTok*60)) : 4;
+        var label = (day.date||'').substring(5);
+        tlHtml += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;">';
+        tlHtml += '<div style="width:100%;height:'+barH+'px;background:'+colors[0]+';border-radius:2px 2px 0 0;" title="'+label+': '+(dayTotal>=1000?(dayTotal/1000).toFixed(0)+'K':dayTotal)+' tokens"></div>';
+        tlHtml += '<div style="font-size:9px;color:#666;margin-top:3px;transform:rotate(-45deg);white-space:nowrap;">'+label+'</div>';
+        tlHtml += '</div>';
+      });
+      tlHtml += '</div></div>';
+      tlEl.innerHTML = tlHtml;
+    } else if (tlEl) {
+      tlEl.innerHTML = '<div style="color:#666;text-align:center;padding:24px;">No timeline data yet.</div>';
+    }
+
+  } catch(e) {
+    console.error('loadModelAttribution error:', e);
+    var nd = document.getElementById('ma-no-data');
+    if (nd) nd.style.display = 'block';
+  }
+}
+
 
 // ===== Transcripts =====
 async function loadTranscripts() {
@@ -19461,6 +19657,106 @@ def api_usage_by_plugin():
     rows.sort(key=lambda r: r['total_tokens'], reverse=True)
     return jsonify({'plugins': rows})
 
+
+
+
+@bp_usage.route('/api/model-attribution')
+def api_model_attribution():
+    """Return per-model token usage, session counts, cost estimates, and 14-day timeline.
+    
+    Closes vivekchand/clawmetry#300 and #305 — Model Attribution Dashboard.
+    Shows which model (primary vs fallback) responded per turn and aggregates by model.
+    """
+    try:
+        analytics = _compute_transcript_analytics()
+        model_usage = analytics.get('model_usage', {})
+        sessions = analytics.get('sessions', [])
+
+        # Per-model aggregation: tokens, cost, sessions
+        model_data = {}
+        for s in sessions:
+            m = s.get('model') or 'unknown'
+            tokens = int(s.get('tokens', 0) or 0)
+            cost = float(s.get('cost_usd', 0.0) or 0.0)
+            if m not in model_data:
+                model_data[m] = {'model': m, 'tokens': 0, 'cost_usd': 0.0, 'sessions': 0}
+            model_data[m]['tokens'] += tokens
+            model_data[m]['cost_usd'] += cost
+            model_data[m]['sessions'] += 1
+
+        # Merge in model_usage data for tokens not captured per-session
+        for model, tokens in model_usage.items():
+            if model not in model_data:
+                model_data[model] = {'model': model, 'tokens': tokens, 'cost_usd': 0.0, 'sessions': 0}
+            elif model_data[model]['tokens'] == 0:
+                model_data[model]['tokens'] = tokens
+
+        # Add provider inference
+        for m_info in model_data.values():
+            m_info['provider'] = _provider_from_model(m_info['model'])
+            m_info['cost_usd'] = round(m_info['cost_usd'], 6)
+
+        # Sort by tokens desc
+        models_list = sorted(model_data.values(), key=lambda x: x['tokens'], reverse=True)
+
+        # 14-day timeline: per-day per-model token usage
+        today = datetime.now()
+        days = [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(13, -1, -1)]
+        
+        # Build daily model breakdown from sessions
+        daily_model = {d: {} for d in days}
+        for s in sessions:
+            m = s.get('model') or 'unknown'
+            tokens = int(s.get('tokens', 0) or 0)
+            if not tokens:
+                continue
+            # Use session start time for date assignment
+            s_start = s.get('start') or s.get('updated_at')
+            if s_start:
+                try:
+                    if isinstance(s_start, (int, float)):
+                        d = datetime.fromtimestamp(s_start / 1000 if s_start > 1e12 else s_start).strftime('%Y-%m-%d')
+                    else:
+                        d = str(s_start)[:10]
+                    if d in daily_model:
+                        daily_model[d][m] = daily_model[d].get(m, 0) + tokens
+                except Exception:
+                    pass
+
+        timeline = [{'date': d, 'models': daily_model[d]} for d in days]
+
+        # Date range
+        all_dates = [s.get('start') or s.get('updated_at') for s in sessions if s.get('start') or s.get('updated_at')]
+        if all_dates:
+            try:
+                parsed = []
+                for d in all_dates:
+                    try:
+                        if isinstance(d, (int, float)):
+                            parsed.append(datetime.fromtimestamp(d / 1000 if d > 1e12 else d))
+                        else:
+                            parsed.append(datetime.fromisoformat(str(d)[:19]))
+                    except Exception:
+                        pass
+                if parsed:
+                    oldest = min(parsed).strftime('%b %d')
+                    newest = max(parsed).strftime('%b %d')
+                    date_range = oldest + ' – ' + newest
+                else:
+                    date_range = ''
+            except Exception:
+                date_range = ''
+        else:
+            date_range = ''
+
+        return jsonify({
+            'models': models_list,
+            'total_sessions': len(sessions),
+            'timeline': timeline,
+            'date_range': date_range,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e), 'models': [], 'timeline': []}), 200
 
 @bp_usage.route('/api/usage/export')
 def api_usage_export():
