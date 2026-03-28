@@ -2921,6 +2921,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('version-impact')" title="Before/after metrics for each OpenClaw upgrade">Upgrades</div>
     <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
     <div class="nav-tab" onclick="switchTab('limits')" title="API rate limit consumption — rolling windows per provider">Limits</div>
+    <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3882,6 +3883,69 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-models -->
 
+<!-- NEMOCLAW GOVERNANCE -->
+<div class="page" id="page-nemoclaw">
+  <div style="padding:12px 0 8px 0;">
+    <!-- Header row -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span id="nc-status-dot" style="font-size:18px;">🟢</span>
+        <span style="font-size:14px;font-weight:700;color:#76b900;">NemoClaw</span>
+        <span id="nc-sandbox-name" style="font-size:12px;background:rgba(118,185,0,0.15);color:#76b900;border:1px solid rgba(118,185,0,0.3);border-radius:12px;padding:2px 10px;font-weight:600;"></span>
+        <span id="nc-blueprint-ver" style="font-size:12px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:12px;padding:2px 10px;"></span>
+      </div>
+      <button class="refresh-btn" onclick="loadNemoClaw()">&#8635; Refresh</button>
+    </div>
+    <!-- Two-column info grid -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+      <!-- Sandbox panel -->
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+        <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">SANDBOX</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <tr><td style="color:var(--text-muted);padding:3px 0;width:45%;">Status</td><td id="nc-sandbox-status" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Blueprint</td><td id="nc-blueprint-ver2" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Last action</td><td id="nc-last-action" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Run ID</td><td id="nc-run-id" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
+        </table>
+      </div>
+      <!-- Inference panel -->
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+        <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">INFERENCE</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <tr><td style="color:var(--text-muted);padding:3px 0;width:45%;">Provider</td><td id="nc-provider" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Model</td><td id="nc-model" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Endpoint</td><td id="nc-endpoint" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Onboarded</td><td id="nc-onboarded" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
+        </table>
+      </div>
+    </div>
+    <!-- Active Policy -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">ACTIVE POLICY</span>
+        <span id="nc-policy-hash" style="font-size:11px;color:var(--text-muted);font-family:\'JetBrains Mono\',monospace;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:4px;padding:1px 6px;"></span>
+        <span id="nc-drift-badge" style="font-size:11px;font-weight:600;"></span>
+      </div>
+      <!-- Drift alert -->
+      <div id="nc-drift-alert" style="display:none;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:10px;margin-bottom:10px;">
+        <div style="font-size:12px;font-weight:700;color:#ef4444;">&#9888;&#65039; Policy drift detected</div>
+        <div id="nc-drift-detail" style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:\'JetBrains Mono\',monospace;"></div>
+      </div>
+      <!-- Network policies table -->
+      <div id="nc-policy-table" style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;line-height:1.8;">
+        <div style="color:var(--text-muted);padding:8px 0;">Loading policy...</div>
+      </div>
+    </div>
+    <!-- Applied Presets -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+      <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">APPLIED PRESETS</div>
+      <div id="nc-presets" style="display:flex;flex-wrap:wrap;gap:6px;">
+        <span style="color:var(--text-muted);font-size:12px;">None detected</span>
+      </div>
+    </div>
+  </div>
+</div><!-- end page-nemoclaw -->
+
 
 <script>
 // === Budget & Alert Functions ===
@@ -4196,6 +4260,7 @@ function switchTab(name) {
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
   if (name === 'models') loadModelAttribution();
+  if (name === 'nemoclaw') loadNemoClaw();
 }
 
 function exportUsageData() {
@@ -6923,6 +6988,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_version)
     app.register_blueprint(bp_version_impact)
     app.register_blueprint(bp_clusters)
+    app.register_blueprint(bp_nemoclaw)
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -10762,6 +10828,128 @@ async function loadSecCatalog() {
     el.innerHTML = html;
   } catch(e) {
     el.innerHTML = '<div style="color:var(--text-error);font-size:11px;">Failed to load: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+// ── NemoClaw Governance Tab ───────────────────────────────────────────────────
+async function loadNemoClaw() {
+  var page = document.getElementById('page-nemoclaw');
+  if (!page) return;
+  try {
+    var data = await fetchJsonWithTimeout('/api/nemoclaw/governance', 8000);
+    var tab = document.getElementById('nemoclaw-tab');
+
+    if (!data.installed) {
+      if (tab) tab.style.display = 'none';
+      page.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:14px;">NemoClaw not installed on this host.<br><span style="font-size:12px;">Install via <code style="background:var(--bg-secondary);padding:2px 6px;border-radius:3px;">pip install nemoclaw</code></span></div>';
+      return;
+    }
+
+    // Show tab
+    if (tab) tab.style.display = '';
+
+    // Status dot
+    var sandboxes = data.sandboxes || [];
+    var anyRunning = sandboxes.some(function(s) { return s.status === 'running' || s.status === 'active'; });
+    var dot = document.getElementById('nc-status-dot');
+    if (dot) dot.textContent = anyRunning ? '🟢' : '⚪';
+
+    // Sandbox name / count badge
+    var nameBadge = document.getElementById('nc-sandbox-name');
+    if (nameBadge) nameBadge.textContent = sandboxes.length ? sandboxes.length + ' sandbox' + (sandboxes.length !== 1 ? 'es' : '') : 'no sandboxes';
+
+    // Policy hash badge
+    var policyEl = document.getElementById('nc-policy-hash');
+    var policy = data.policy || {};
+    if (policyEl) policyEl.textContent = policy.hash ? 'sha:' + policy.hash : '';
+
+    // Blueprint version badge
+    var bpVer = document.getElementById('nc-blueprint-ver');
+    var bpVer2 = document.getElementById('nc-blueprint-ver2');
+    var cfg = data.config || {};
+    var ver = cfg.version || cfg.blueprintVersion || (policy.lines ? policy.lines + ' lines' : '');
+    if (bpVer) bpVer.textContent = ver ? 'v' + ver : '';
+    if (bpVer2) bpVer2.textContent = ver || '—';
+
+    // Sandbox status
+    var sbStatus = document.getElementById('nc-sandbox-status');
+    if (sbStatus) {
+      if (sandboxes.length === 0) {
+        sbStatus.textContent = 'no sandboxes';
+        sbStatus.style.color = 'var(--text-muted)';
+      } else {
+        var running = sandboxes.filter(function(s) { return s.status === 'running' || s.status === 'active'; }).length;
+        sbStatus.textContent = running + '/' + sandboxes.length + ' running';
+        sbStatus.style.color = running > 0 ? '#76b900' : 'var(--text-muted)';
+      }
+    }
+
+    // Inference info from config
+    var provEl = document.getElementById('nc-provider');
+    var mdlEl = document.getElementById('nc-model');
+    var epEl = document.getElementById('nc-endpoint');
+    var obEl = document.getElementById('nc-onboarded');
+    if (provEl) provEl.textContent = cfg.inferenceProvider || cfg.provider || '—';
+    if (mdlEl) mdlEl.textContent = cfg.model || cfg.inferenceModel || '—';
+    if (epEl) epEl.textContent = cfg.endpoint || cfg.inferenceEndpoint || '—';
+    if (obEl) obEl.textContent = cfg.onboardedAt || cfg.createdAt || '—';
+
+    // Last action / run id
+    var laEl = document.getElementById('nc-last-action');
+    var riEl = document.getElementById('nc-run-id');
+    var state = cfg.state || {};
+    if (laEl) laEl.textContent = state.lastAction || cfg.lastAction || '—';
+    if (riEl) riEl.textContent = state.runId || cfg.runId || '—';
+
+    // Drift alert
+    var driftAlert = document.getElementById('nc-drift-alert');
+    var driftDetail = document.getElementById('nc-drift-detail');
+    var driftBadge = document.getElementById('nc-drift-badge');
+    if (data.drift) {
+      if (driftAlert) driftAlert.style.display = '';
+      if (driftDetail) driftDetail.textContent = 'Previous: ' + (data.drift.previous_hash || data.drift.old_hash || '?') + ' → Current: ' + (data.drift.current_hash || data.drift.new_hash || '?') + (data.drift.detected_at ? '  (detected ' + data.drift.detected_at.substring(0,19).replace('T',' ') + ' UTC)' : '');
+      if (driftBadge) { driftBadge.textContent = '⚠ Policy drift detected'; driftBadge.style.cssText = 'font-size:11px;font-weight:700;color:#ef4444;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:4px;padding:2px 8px;'; }
+    } else {
+      if (driftAlert) driftAlert.style.display = 'none';
+      if (driftBadge) { driftBadge.textContent = '✓ No drift'; driftBadge.style.cssText = 'font-size:11px;font-weight:600;color:#76b900;'; }
+    }
+
+    // Network policies table
+    var netPol = data.network_policies || [];
+    var tbl = document.getElementById('nc-policy-table');
+    if (tbl) {
+      if (netPol.length === 0 && !policy.hash) {
+        tbl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No policy file found at ~/.nemoclaw/source/nemoclaw-blueprint/policies/openclaw-sandbox.yaml</div>';
+      } else if (netPol.length === 0) {
+        tbl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Policy loaded (' + (policy.lines || '?') + ' lines) — no network_policies section found.</div>';
+      } else {
+        var html = '<div style="display:grid;grid-template-columns:1fr 2fr;gap:6px;">';
+        netPol.forEach(function(p) {
+          html += '<div style="font-weight:600;color:#76b900;padding:4px 0;border-bottom:1px solid var(--border);">' + escHtml(p.name) + '</div>';
+          html += '<div style="color:var(--text-secondary);padding:4px 0;border-bottom:1px solid var(--border);word-break:break-all;">' + (p.hosts || []).map(function(h) { return '<span style="background:var(--bg-primary);border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin:1px;display:inline-block;">' + escHtml(h) + '</span>'; }).join(' ') + '</div>';
+        });
+        html += '</div>';
+        tbl.innerHTML = html;
+      }
+    }
+
+    // Presets
+    var presetsEl = document.getElementById('nc-presets');
+    if (presetsEl) {
+      var presets = data.presets || [];
+      if (presets.length === 0) {
+        presetsEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">None detected</span>';
+      } else {
+        presetsEl.innerHTML = presets.map(function(p) {
+          return '<span style="background:rgba(118,185,0,0.1);border:1px solid rgba(118,185,0,0.25);color:#76b900;border-radius:12px;padding:3px 10px;font-size:12px;font-weight:600;">' + escHtml(p) + '</span>';
+        }).join('');
+      }
+    }
+
+  } catch(e) {
+    var tab = document.getElementById('nemoclaw-tab');
+    if (tab) tab.style.display = 'none';
+    console.warn('NemoClaw governance load failed:', e);
   }
 }
 
@@ -16280,6 +16468,119 @@ async function showSnapshot(ts) {
     console.error('Snapshot error:', e);
   }
 }
+
+// ── NemoClaw Governance ──────────────────────────────────────────────────────
+async function loadNemoClaw() {
+  try {
+    var data = await fetch('/api/nemoclaw/status').then(function(r) { return r.json(); });
+    if (!data.installed) {
+      document.getElementById('nemoclaw-tab').style.display = 'none';
+      return;
+    }
+    document.getElementById('nemoclaw-tab').style.display = '';
+
+    // Header chips
+    var state = data.state || {};
+    var cfg = data.config || {};
+    var sandboxEl = document.getElementById('nc-sandbox-name');
+    if (sandboxEl) sandboxEl.textContent = state.sandboxName || cfg.profile || '';
+    var bpVerEl = document.getElementById('nc-blueprint-ver');
+    if (bpVerEl) bpVerEl.textContent = state.blueprintVersion || '';
+
+    // Sandbox panel
+    var statusEl = document.getElementById('nc-sandbox-status');
+    if (statusEl) {
+      var statusText = state.lastAction ? state.lastAction : 'unknown';
+      statusEl.textContent = statusText;
+      statusEl.style.color = (statusText.indexOf('run') !== -1 || statusText.indexOf('start') !== -1) ? '#22c55e' : 'var(--text-primary)';
+    }
+    var bpVer2 = document.getElementById('nc-blueprint-ver2');
+    if (bpVer2) bpVer2.textContent = state.blueprintVersion || '—';
+    var lastAction = document.getElementById('nc-last-action');
+    if (lastAction) lastAction.textContent = state.lastAction || '—';
+    var runId = document.getElementById('nc-run-id');
+    if (runId) runId.textContent = state.lastRunId || '—';
+
+    // Inference panel
+    var provEl = document.getElementById('nc-provider');
+    if (provEl) provEl.textContent = cfg.provider || '—';
+    var modelEl = document.getElementById('nc-model');
+    if (modelEl) modelEl.textContent = cfg.model || '—';
+    var epEl = document.getElementById('nc-endpoint');
+    if (epEl) epEl.textContent = cfg.endpoint || '—';
+    var onbEl = document.getElementById('nc-onboarded');
+    if (onbEl) {
+      var ob = cfg.onboardedAt || '';
+      if (ob) { try { ob = new Date(ob).toLocaleDateString(); } catch(e) {} }
+      onbEl.textContent = ob || '—';
+    }
+
+    // Policy
+    var hashEl = document.getElementById('nc-policy-hash');
+    if (hashEl) hashEl.textContent = data.policy_hash ? 'hash: ' + data.policy_hash : '';
+
+    var driftBadge = document.getElementById('nc-drift-badge');
+    var driftAlert = document.getElementById('nc-drift-alert');
+    var driftDetail = document.getElementById('nc-drift-detail');
+    if (data.policy_drifted) {
+      if (driftBadge) { driftBadge.textContent = '⚠️ Policy drift detected'; driftBadge.style.color = '#ef4444'; }
+      if (driftAlert) driftAlert.style.display = 'block';
+      if (driftDetail && data.drift_info) {
+        driftDetail.textContent = 'Old: ' + (data.drift_info.old_hash || '?') + '  →  New: ' + (data.drift_info.new_hash || '?') + '\nDetected: ' + (data.drift_info.detected_at || '');
+      }
+    } else {
+      if (driftBadge) { driftBadge.textContent = '✅ No drift'; driftBadge.style.color = '#22c55e'; }
+      if (driftAlert) driftAlert.style.display = 'none';
+    }
+
+    // Network policies table
+    var policyEl = document.getElementById('nc-policy-table');
+    if (policyEl) {
+      var policies = data.network_policies || [];
+      if (policies.length === 0) {
+        policyEl.innerHTML = '<div style="color:var(--text-muted);">No network policies found</div>';
+      } else {
+        var rows = policies.map(function(p) {
+          var hosts = Array.isArray(p.hosts) ? p.hosts.join(', ') : (p.hosts || '');
+          return '<tr><td style="color:#76b900;padding:2px 12px 2px 0;white-space:nowrap;">' + _ncEsc(p.name) + '</td>'
+               + '<td style="color:var(--text-secondary);">' + _ncEsc(hosts) + '</td></tr>';
+        }).join('');
+        policyEl.innerHTML = '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>';
+      }
+    }
+
+    // Presets
+    var presetsEl = document.getElementById('nc-presets');
+    if (presetsEl) {
+      var presets = data.presets || [];
+      if (presets.length === 0) {
+        presetsEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">None detected</span>';
+      } else {
+        presetsEl.innerHTML = presets.map(function(p) {
+          return '<span style="background:rgba(118,185,0,0.12);color:#76b900;border:1px solid rgba(118,185,0,0.25);border-radius:12px;padding:3px 12px;font-size:12px;font-weight:600;">' + _ncEsc(p) + '</span>';
+        }).join('');
+      }
+    }
+  } catch(e) {
+    console.error('NemoClaw load error:', e);
+  }
+}
+
+function _ncEsc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// On page load: check NemoClaw and show tab if installed
+(function() {
+  try {
+    fetch('/api/nemoclaw/status').then(function(r) { return r.json(); }).then(function(d) {
+      if (d && d.installed) {
+        var t = document.getElementById('nemoclaw-tab');
+        if (t) t.style.display = '';
+      }
+    }).catch(function(){});
+  } catch(e) {}
+})();
 </script>
 </div> <!-- end zoom-wrapper -->
 
@@ -16811,7 +17112,208 @@ bp_usage = _Blueprint('usage', __name__)
 bp_version = _Blueprint('version', __name__)
 bp_version_impact = _Blueprint('version_impact', __name__)
 bp_clusters = _Blueprint('clusters', __name__)
+bp_nemoclaw = _Blueprint('nemoclaw', __name__)
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ── NemoClaw Governance ───────────────────────────────────────────────────────
+_nemoclaw_policy_hash = None  # Module-level: tracks last-seen policy hash for drift detection
+_nemoclaw_drift_info = {}     # Stores drift metadata (old hash, new hash, timestamp)
+
+
+def _detect_nemoclaw():
+    """Returns dict with nemoclaw info, or None if not installed."""
+    import shutil as _shutil
+    from pathlib import Path as _Path
+    if not _shutil.which("nemoclaw"):
+        return None
+    home = _Path.home()
+    result = {"installed": True}
+    # Load config
+    cfg_path = home / ".nemoclaw" / "config.json"
+    if cfg_path.exists():
+        try:
+            result["config"] = json.loads(cfg_path.read_text())
+        except Exception:
+            pass
+    # Load state
+    state_path = home / ".nemoclaw" / "state" / "nemoclaw.json"
+    if state_path.exists():
+        try:
+            result["state"] = json.loads(state_path.read_text())
+        except Exception:
+            pass
+    # Load policy
+    policy_path = home / ".nemoclaw" / "source" / "nemoclaw-blueprint" / "policies" / "openclaw-sandbox.yaml"
+    if policy_path.exists():
+        try:
+            result["policy_yaml"] = policy_path.read_text()
+            result["policy_hash"] = __import__("hashlib").sha256(policy_path.read_bytes()).hexdigest()[:12]
+        except Exception:
+            pass
+    # Load presets
+    presets_dir = home / ".nemoclaw" / "source" / "nemoclaw-blueprint" / "policies" / "presets"
+    if presets_dir.exists():
+        try:
+            result["presets"] = [p.stem for p in presets_dir.glob("*.yaml")]
+        except Exception:
+            pass
+    # Get sandbox list
+    try:
+        import subprocess as _sp
+        r = _sp.run(["nemoclaw", "list"], capture_output=True, text=True, timeout=5)
+        result["sandbox_list_raw"] = r.stdout
+    except Exception:
+        pass
+    return result
+
+
+def _parse_network_policies(yaml_text):
+    """Parse network_policies section from openclaw-sandbox.yaml.
+    Returns list of {name, hosts} dicts without requiring PyYAML."""
+    policies = []
+    try:
+        import yaml as _yaml
+        data = _yaml.safe_load(yaml_text)
+        if isinstance(data, dict):
+            net = data.get("network_policies") or data.get("networkPolicies") or {}
+            if isinstance(net, dict):
+                for name, hosts in net.items():
+                    if isinstance(hosts, list):
+                        policies.append({"name": name, "hosts": hosts})
+                    elif isinstance(hosts, str):
+                        policies.append({"name": name, "hosts": [hosts]})
+        return policies
+    except ImportError:
+        pass
+    # Fallback: simple line-based parser for network_policies block
+    in_block = False
+    current_name = None
+    current_hosts = []
+    for line in yaml_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("network_policies:"):
+            in_block = True
+            continue
+        if in_block:
+            if not line.startswith(" ") and not line.startswith("\t") and stripped and not stripped.startswith("#"):
+                if current_name:
+                    policies.append({"name": current_name, "hosts": current_hosts})
+                in_block = False
+                break
+            if stripped.endswith(":") and not stripped.startswith("-"):
+                if current_name:
+                    policies.append({"name": current_name, "hosts": current_hosts})
+                current_name = stripped[:-1]
+                current_hosts = []
+            elif stripped.startswith("- ") and current_name:
+                current_hosts.append(stripped[2:].strip())
+            elif current_name and ":" in stripped and not stripped.startswith("-"):
+                # key: value host format
+                parts = stripped.split(":", 1)
+                if len(parts) == 2:
+                    current_hosts.append(stripped.strip())
+    if current_name:
+        policies.append({"name": current_name, "hosts": current_hosts})
+    return policies
+
+# ── NemoClaw Governance API ───────────────────────────────────────────────────
+
+@bp_nemoclaw.route('/api/nemoclaw/governance')
+def api_nemoclaw_governance():
+    """Return NemoClaw governance status: policy, sandbox state, drift detection."""
+    global _nemoclaw_policy_hash, _nemoclaw_drift_info
+    info = _detect_nemoclaw()
+    if info is None:
+        return jsonify({'installed': False})
+
+    result = {
+        'installed': True,
+        'sandboxes': [],
+        'policy': None,
+        'network_policies': [],
+        'presets': info.get('presets', []),
+        'drift': None,
+        'config': {},
+    }
+
+    # Config summary (sanitise - remove tokens/keys)
+    cfg = info.get('config', {})
+    if cfg:
+        safe_cfg = {k: v for k, v in cfg.items() if 'token' not in k.lower() and 'key' not in k.lower() and 'secret' not in k.lower()}
+        result['config'] = safe_cfg
+
+    # Sandbox state
+    state = info.get('state', {})
+    if isinstance(state, dict):
+        sandboxes_raw = state.get('sandboxes') or state.get('shells') or {}
+        if isinstance(sandboxes_raw, dict):
+            for name, sb in sandboxes_raw.items():
+                if isinstance(sb, dict):
+                    result['sandboxes'].append({
+                        'name': name,
+                        'status': sb.get('status', 'unknown'),
+                        'pid': sb.get('pid'),
+                        'created': sb.get('created') or sb.get('createdAt'),
+                        'preset': sb.get('preset') or sb.get('policy_preset'),
+                    })
+        elif isinstance(sandboxes_raw, list):
+            for sb in sandboxes_raw:
+                if isinstance(sb, dict):
+                    result['sandboxes'].append({
+                        'name': sb.get('name', 'unknown'),
+                        'status': sb.get('status', 'unknown'),
+                        'pid': sb.get('pid'),
+                        'created': sb.get('created') or sb.get('createdAt'),
+                        'preset': sb.get('preset') or sb.get('policy_preset'),
+                    })
+
+    # Parse sandbox list from CLI output if state didn't give sandboxes
+    if not result['sandboxes'] and info.get('sandbox_list_raw'):
+        for line in info['sandbox_list_raw'].splitlines():
+            line = line.strip()
+            if not line or line.startswith('#') or line.lower().startswith('name'):
+                continue
+            parts = line.split()
+            if parts:
+                status = parts[1] if len(parts) > 1 else 'unknown'
+                result['sandboxes'].append({'name': parts[0], 'status': status, 'pid': None, 'created': None, 'preset': None})
+
+    # Policy summary
+    policy_yaml = info.get('policy_yaml')
+    policy_hash = info.get('policy_hash')
+    if policy_yaml:
+        result['network_policies'] = _parse_network_policies(policy_yaml)
+        result['policy'] = {
+            'hash': policy_hash,
+            'lines': len(policy_yaml.splitlines()),
+            'size_bytes': len(policy_yaml.encode()),
+        }
+
+    # Drift detection: compare policy hash vs last seen
+    if policy_hash:
+        if _nemoclaw_policy_hash is None:
+            _nemoclaw_policy_hash = policy_hash
+        elif _nemoclaw_policy_hash != policy_hash:
+            _nemoclaw_drift_info = {
+                'detected_at': datetime.utcnow().isoformat() + 'Z',
+                'previous_hash': _nemoclaw_policy_hash,
+                'current_hash': policy_hash,
+            }
+            _nemoclaw_policy_hash = policy_hash
+
+        if _nemoclaw_drift_info:
+            result['drift'] = _nemoclaw_drift_info
+
+    return jsonify(result)
+
+
+@bp_nemoclaw.route('/api/nemoclaw/governance/acknowledge-drift', methods=['POST'])
+def api_nemoclaw_acknowledge_drift():
+    """Clear the drift alert (user acknowledged the policy change)."""
+    global _nemoclaw_drift_info
+    _nemoclaw_drift_info = {}
+    return jsonify({'ok': True})
+
 
 # ── Version check & self-update routes ────────────────────────────────────────
 _pypi_cache = {"ts": 0, "version": None}
@@ -25377,9 +25879,63 @@ def api_automation_analysis():
         })
 
 
+# ── NemoClaw Governance Routes ───────────────────────────────────────────────
+
+@bp_nemoclaw.route('/api/nemoclaw/status')
+def api_nemoclaw_status():
+    """Detect NemoClaw installation and return full status."""
+    global _nemoclaw_policy_hash, _nemoclaw_drift_info
+    data = _detect_nemoclaw()
+    if not data:
+        return jsonify({"installed": False})
+    # Policy drift detection
+    current_hash = data.get("policy_hash")
+    if current_hash:
+        if _nemoclaw_policy_hash is None:
+            _nemoclaw_policy_hash = current_hash
+        elif _nemoclaw_policy_hash != current_hash:
+            _nemoclaw_drift_info = {
+                "old_hash": _nemoclaw_policy_hash,
+                "new_hash": current_hash,
+                "detected_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _nemoclaw_policy_hash = current_hash
+            data["policy_drifted"] = True
+            data["drift_info"] = _nemoclaw_drift_info
+        else:
+            data["policy_drifted"] = False
+    # Parse network policies for structured display
+    if data.get("policy_yaml"):
+        data["network_policies"] = _parse_network_policies(data["policy_yaml"])
+    return jsonify(data)
+
+
+@bp_nemoclaw.route('/api/nemoclaw/policy')
+def api_nemoclaw_policy():
+    """Return full policy YAML + hash + drift status."""
+    global _nemoclaw_policy_hash, _nemoclaw_drift_info
+    data = _detect_nemoclaw()
+    if not data:
+        return jsonify({"installed": False, "policy_yaml": None})
+    result = {
+        "installed": True,
+        "policy_yaml": data.get("policy_yaml"),
+        "policy_hash": data.get("policy_hash"),
+        "policy_drifted": False,
+        "drift_info": None,
+    }
+    current_hash = data.get("policy_hash")
+    if current_hash:
+        if _nemoclaw_policy_hash and _nemoclaw_policy_hash != current_hash:
+            result["policy_drifted"] = True
+            result["drift_info"] = _nemoclaw_drift_info
+        elif _nemoclaw_policy_hash is None:
+            _nemoclaw_policy_hash = current_hash
+    if data.get("policy_yaml"):
+        result["network_policies"] = _parse_network_policies(data["policy_yaml"])
+    return jsonify(result)
+
 # ── Context Inspector (GH #9) ─────────────────────────────────────────
-    except Exception as e:
-        return jsonify({'error': str(e), 'agents': [], 'lintWarnings': [], 'summary': {}}), 500
 
 
 # ── Upgrade Impact Dashboard (GH #408) ────────────────────────────────────────
