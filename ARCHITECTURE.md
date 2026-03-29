@@ -28,6 +28,33 @@
 
 ClawMetry is a **read-only observer** that sits alongside your OpenClaw gateway. It never modifies your agents or their data. It reads what OpenClaw already writes to disk and connects to the gateway's WebSocket API for real-time updates.
 
+## Claude Code as a Second Data Source
+
+ClawMetry also supports **Claude Code** (`~/.claude/projects/`) as a data source via a dedicated dashboard (`dashboard_claudecode.py`). Claude Code stores session transcripts as JSONL files with a similar schema to OpenClaw sessions.
+
+```
+~/.claude/
+├── projects/
+│   ├── -Users-you-Developer-myproject/   # Per-project directories
+│   │   ├── <session-uuid>.jsonl          # Session transcripts
+│   │   └── memory/MEMORY.md              # Project memory
+│   └── ...more projects
+└── settings.json
+```
+
+The Claude Code dashboard is a standalone Flask app that can be:
+- Run independently: `python dashboard_claudecode.py --port 8901`
+- Mounted as a Blueprint: `app.register_blueprint(bp_claudecode, url_prefix='/claudecode')`
+- Deployed at `clawmetry.com/claudecode`
+
+Key differences from the OpenClaw data source:
+| Aspect | OpenClaw | Claude Code |
+|--------|----------|-------------|
+| Session dir | `~/.openclaw/agents/main/sessions/` | `~/.claude/projects/<slug>/` |
+| Real-time | WebSocket JSON-RPC | Filesystem polling (10s) |
+| Tool names | OpenClaw tools | `Bash`, `Read`, `Write`, `Glob`, etc. |
+| Pricing | Gateway-managed | Estimated from model pricing table |
+
 ## How ClawMetry Gets Its Data
 
 ClawMetry has **three data sources**, all local to your machine:
