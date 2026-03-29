@@ -687,6 +687,83 @@
   </div>
   <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 1</h4>Welcome everyone. Thank you for joining. This session is for YOU — whether you're in IT, recruiting, running a business, or just curious about where AI is going. We're going to look at something that goes beyond chatting with AI — an AI that actually works for you. No code needed. Let's begin.</div>
 
+  <!-- SLIDE: ABOUT ME -->
+  <div class="slide" id="slide-about">
+    <div class="slide-tag">About Me</div>
+    <h2>Hi, I'm <span class="gradient-text">Vivek Chand</span></h2>
+
+    <div style="max-width:750px;margin:0 auto;display:flex;flex-direction:column;gap:20px;">
+
+      <div style="display:flex;gap:24px;align-items:flex-start;">
+        <!-- Current role -->
+        <div style="flex:1;background:rgba(229,68,58,0.08);border:1px solid rgba(229,68,58,0.2);border-radius:14px;padding:20px;">
+          <div style="font-size:1.3rem;margin-bottom:8px;">🏨</div>
+          <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:8px;">Tech Lead, AI Engineering @ Booking.com</div>
+          <div style="font-size:0.85rem;color:rgba(255,255,255,0.55);line-height:1.7;">
+            Leading the Customer Support AI initiative. Built the AI summarisation pipeline processing <strong style="color:#fff;">111K+ daily interactions</strong> across chat, email, and voice.<br><br>
+            Took quality from <strong style="color:#E5443A;">60% to 95%+</strong> using agentic evaluation loops. Single-pass prompt, under 10 seconds, production-scale.
+          </div>
+        </div>
+
+        <!-- Journey -->
+        <div style="flex:1;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:20px;">
+          <div style="font-size:1.3rem;margin-bottom:8px;">🚀</div>
+          <div style="font-size:1rem;font-weight:700;color:#fff;margin-bottom:8px;">Builder at heart</div>
+          <div style="font-size:0.85rem;color:rgba(255,255,255,0.55);line-height:1.7;">
+            <span style="color:rgba(255,255,255,0.35);">2011-2015</span> Early startups (RecruiterBox, DwellBird)<br>
+            <span style="color:rgba(255,255,255,0.35);">2015-2019</span> Ed-tech (Class, personalized education across India)<br>
+            <span style="color:rgba(255,255,255,0.35);">2019-now</span> Booking.com (CS AI, summarisation, voice)<br>
+            <span style="color:rgba(255,255,255,0.35);">2026</span> <strong style="color:#E5443A;">Building ClawMetry</strong> + VedicVoice
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align:center;font-size:0.85rem;color:rgba(255,255,255,0.4);">
+        🇮🇳 Born in Bangalore &nbsp;·&nbsp; 🇳🇱 Based in Netherlands &nbsp;·&nbsp; Sourashtra community member
+      </div>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — About Me</h4>Quick intro: I'm Vivek, Tech Lead at Booking.com working on AI for customer support. Built the summarisation system that processes over 100K conversations daily. Before that, startups in HR tech, real estate, ed-tech. Born in Bangalore, now in Netherlands. Proud Sourashtra community member. I'm going to tell you about something that changed how I work.</div>
+
+  <!-- SLIDE: MY OPENCLAW STORY -->
+  <div class="slide" id="slide-story">
+    <div class="slide-tag">My Story</div>
+    <h2>How I got started with <span class="gradient-text">OpenClaw</span></h2>
+
+    <div style="max-width:750px;margin:0 auto;display:flex;flex-direction:column;gap:16px;">
+
+      <div style="display:flex;gap:16px;align-items:flex-start;">
+        <div style="width:48px;height:48px;border-radius:50%;background:rgba(229,68,58,0.2);display:flex;align-items:center;justify-content:center;font-size:1.3rem;flex-shrink:0;">1</div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:14px 18px;flex:1;">
+          <div style="font-weight:700;color:#fff;font-size:0.9rem;">End of January 2026: discovered OpenClaw</div>
+          <div style="font-size:0.82rem;color:rgba(255,255,255,0.5);margin-top:4px;">Got hooked. Started running agents for side projects. Within weeks I had multiple agents doing real work.</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:16px;align-items:flex-start;">
+        <div style="width:48px;height:48px;border-radius:50%;background:rgba(229,68,58,0.2);display:flex;align-items:center;justify-content:center;font-size:1.3rem;flex-shrink:0;">2</div>
+        <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:14px 18px;flex:1;">
+          <div style="font-weight:700;color:#fff;font-size:0.9rem;">The roadblock: zero visibility</div>
+          <div style="font-size:0.82rem;color:rgba(255,255,255,0.5);margin-top:4px;">Agents running in parallel. No idea what they were doing. Token costs piling up. Memory files changing unexpectedly. Coming from building production systems at scale, having no observability felt wrong.</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:16px;align-items:flex-start;">
+        <div style="width:48px;height:48px;border-radius:50%;background:rgba(229,68,58,0.2);display:flex;align-items:center;justify-content:center;font-size:1.3rem;flex-shrink:0;">3</div>
+        <div style="background:rgba(229,68,58,0.08);border:1px solid rgba(229,68,58,0.2);border-radius:10px;padding:14px 18px;flex:1;">
+          <div style="font-weight:700;color:#fff;font-size:0.9rem;">Built ClawMetry — using OpenClaw itself</div>
+          <div style="font-size:0.82rem;color:rgba(255,255,255,0.5);margin-top:4px;">What would have taken 2-3 weeks took a fraction of that. Open source observability dashboard for OpenClaw. <strong style="color:#E5443A;">90,000+ downloads. 200+ GitHub stars. NVIDIA NemoClaw support.</strong></div>
+        </div>
+      </div>
+
+      <div style="text-align:center;margin-top:12px;padding:14px 20px;background:rgba(229,68,58,0.06);border:1px solid rgba(229,68,58,0.15);border-radius:10px;">
+        <div style="font-size:0.95rem;color:#fff;font-weight:600;">"I built an observability tool using the very thing I needed to observe."</div>
+        <div style="font-size:0.8rem;color:rgba(255,255,255,0.4);margin-top:4px;">That's the power of OpenClaw. Today I'll show you what it can do for you.</div>
+      </div>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — My Story</h4>So here's my story. End of January this year, I discovered OpenClaw and got hooked. Started running agents for my projects. But quickly hit a wall: I had no idea what my agents were actually doing. Costs piling up, memory changing, no visibility. Coming from Booking.com where we have Grafana dashboards for everything, this felt wrong. So I built ClawMetry — and here's the meta part — I built it using OpenClaw itself. What would have taken weeks took days. It now has 90K+ downloads and we just added NVIDIA NemoClaw support. That's the power of this tool. Let me show you what it can do for YOUR work.</div>
+
   <!-- SLIDE 2: THE GAP -->
   <div class="slide" id="slide-2">
     <div class="slide-tag">The Gap</div>
