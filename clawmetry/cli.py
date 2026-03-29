@@ -594,6 +594,152 @@ def _cmd_disconnect(args) -> None:
     print("Disconnected from ClawMetry Cloud.")
 
 
+def _cmd_uninstall() -> None:
+    """clawmetry uninstall — fully remove clawmetry, stop daemons, delete all files."""
+    import shutil, platform, subprocess
+    from pathlib import Path
+    from clawmetry.sync import CONFIG_FILE, STATE_FILE, LOG_FILE
+
+    home = Path.home()
+    system = platform.system()
+
+    # Collect what will be removed
+    items = []
+
+    # 1. Daemons
+    if system == "Darwin":
+        plist = home / "Library" / "LaunchAgents" / "com.clawmetry.sync.plist"
+        if plist.exists():
+            items.append(("Daemon", f"launchd service: {plist}"))
+    elif system == "Linux":
+        svc = home / ".config" / "systemd" / "user" / "clawmetry-sync.service"
+        if svc.exists():
+            items.append(("Daemon", f"systemd service: {svc}"))
+        if _is_sync_running():
+            items.append(("Daemon", "Running sync process"))
+
+    # 2. Config files
+    clawmetry_dir = home / ".clawmetry"
+    if clawmetry_dir.exists():
+        items.append(("Config", f"Config directory: {clawmetry_dir}"))
+    if CONFIG_FILE.exists():
+        items.append(("Config", f"Cloud config: {CONFIG_FILE}"))
+    if STATE_FILE.exists():
+        items.append(("State", f"Sync state: {STATE_FILE}"))
+    if LOG_FILE.exists():
+        items.append(("Logs", f"Sync log: {LOG_FILE}"))
+
+    # 3. Venv install paths
+    venv_paths = [
+        Path("/opt/clawmetry"),
+        home / ".clawmetry",
+    ]
+    for vp in venv_paths:
+        if vp.exists() and (vp / "bin" / "clawmetry").exists():
+            items.append(("Install", f"Venv install: {vp}"))
+
+    # 4. Symlinks
+    symlinks = [
+        Path("/usr/local/bin/clawmetry"),
+        home / ".local" / "bin" / "clawmetry",
+    ]
+    for sl in symlinks:
+        if sl.exists() or sl.is_symlink():
+            items.append(("Symlink", f"Binary: {sl}"))
+
+    # 5. pip package
+    items.append(("Package", "pip package: clawmetry"))
+
+    if not items:
+        print("  Nothing to uninstall. ClawMetry does not appear to be installed.")
+        return
+
+    # Show confirmation
+    print()
+    print("  \033[1m\033[91m⚠️  ClawMetry Uninstall\033[0m")
+    print("  \033[2m" + "─" * 50 + "\033[0m")
+    print()
+    print("  The following will be removed:")
+    print()
+    for category, detail in items:
+        print(f"    \033[91m✗\033[0m  [{category}] {detail}")
+    print()
+    print("  \033[2mThis action is irreversible. Your encryption key and cloud")
+    print("  config will be permanently deleted.\033[0m")
+    print()
+
+    try:
+        confirm = input("  Type 'uninstall' to confirm: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n  Cancelled.")
+        return
+
+    if confirm != "uninstall":
+        print("  Cancelled.")
+        return
+
+    print()
+
+    # Execute uninstall
+    # 1. Stop daemons
+    if system == "Darwin":
+        plist = home / "Library" / "LaunchAgents" / "com.clawmetry.sync.plist"
+        if plist.exists():
+            subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
+            plist.unlink()
+            print("  ✅  Stopped and removed launchd daemon")
+    elif system == "Linux":
+        svc = home / ".config" / "systemd" / "user" / "clawmetry-sync.service"
+        if shutil.which("systemctl"):
+            subprocess.run(["systemctl", "--user", "disable", "--now", "clawmetry-sync"], check=False, capture_output=True)
+        _kill_sync_daemon()
+        if svc.exists():
+            svc.unlink()
+        print("  ✅  Stopped and removed sync daemon")
+
+    # 2. Remove config directory
+    if clawmetry_dir.exists():
+        shutil.rmtree(clawmetry_dir, ignore_errors=True)
+        print(f"  ✅  Removed {clawmetry_dir}")
+
+    # 3. Remove config/state/log files
+    for f in [CONFIG_FILE, STATE_FILE, LOG_FILE]:
+        if f.exists():
+            f.unlink(missing_ok=True)
+            print(f"  ✅  Removed {f}")
+
+    # 4. Remove venv installs
+    for vp in venv_paths:
+        if vp.exists() and (vp / "bin" / "clawmetry").exists():
+            try:
+                shutil.rmtree(vp)
+                print(f"  ✅  Removed {vp}")
+            except PermissionError:
+                subprocess.run(["sudo", "rm", "-rf", str(vp)], check=False)
+                print(f"  ✅  Removed {vp} (sudo)")
+
+    # 5. Remove symlinks
+    for sl in symlinks:
+        if sl.exists() or sl.is_symlink():
+            try:
+                sl.unlink()
+                print(f"  ✅  Removed {sl}")
+            except PermissionError:
+                subprocess.run(["sudo", "rm", "-f", str(sl)], check=False)
+                print(f"  ✅  Removed {sl} (sudo)")
+
+    # 6. Pip uninstall
+    print("  ⏳  Uninstalling pip package...")
+    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "clawmetry"],
+                   check=False, capture_output=True)
+    print("  ✅  Uninstalled clawmetry pip package")
+
+    print()
+    print("  \033[1m\033[92m✓ ClawMetry fully uninstalled.\033[0m")
+    print("  \033[2mTo reinstall: curl -fsSL https://clawmetry.com/install.sh | bash\033[0m")
+    print()
+
+
 def _cmd_status(args) -> None:
     """clawmetry status — show local + cloud sync status."""
     import platform
@@ -1050,8 +1196,11 @@ def main() -> None:
     # update — self-update to latest PyPI version
     sub.add_parser("update", help="Update clawmetry to the latest version")
 
+    # uninstall — fully remove clawmetry
+    sub.add_parser("uninstall", help="Fully uninstall clawmetry (stop daemons, remove all files)")
+
     # Parse just the first token to decide if it's a sub-command or dashboard flag
-    _subcmds = ("onboard", "connect", "disconnect", "status", "proxy", "update")
+    _subcmds = ("onboard", "connect", "disconnect", "status", "proxy", "update", "uninstall")
     if len(sys.argv) > 1 and sys.argv[1] in _subcmds:
         args = parser.parse_args()
         # Issue #322: Set OpenClaw config directory from CLI flag
@@ -1070,6 +1219,8 @@ def main() -> None:
             _cmd_proxy(args)
         elif args.cmd == "update":
             _cmd_update()
+        elif args.cmd == "uninstall":
+            _cmd_uninstall()
     else:
         # Fall through to dashboard (handles --host, --port, --version, start, stop, etc.)
         dashboard_main()
