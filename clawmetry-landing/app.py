@@ -2747,6 +2747,10 @@ def cloud():
 def nemoclaw():
     return send_from_directory(".", "nemoclaw.html")
 
+@app.route("/slides/openclaw-intro")
+def slides_openclaw_intro():
+    return send_from_directory("slides", "openclaw-intro.html")
+
 
 
 

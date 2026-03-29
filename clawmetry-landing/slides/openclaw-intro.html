@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meet OpenClaw — Sourashtra Community Session</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --bg2: #161b22;
+    --bg3: #21262d;
+    --accent: #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #f78166;
+    --accent4: #d2a8ff;
+    --accent5: #ffa657;
+    --text: #e6edf3;
+    --text2: #8b949e;
+    --border: #30363d;
+    --glow: rgba(88,166,255,0.15);
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overflow: hidden;
+  }
+
+  /* ── Slide Container ── */
+  #deck {
+    width: 100vw; height: 100vh;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 60px 80px;
+    opacity: 0;
+    transform: translateX(60px);
+    transition: opacity 0.45s cubic-bezier(.4,0,.2,1), transform 0.45s cubic-bezier(.4,0,.2,1);
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  .slide.active {
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: all;
+  }
+
+  .slide.exit-left {
+    opacity: 0;
+    transform: translateX(-60px);
+    pointer-events: none;
+  }
+
+  /* ── Progress bar ── */
+  #progress-bar {
+    position: fixed;
+    bottom: 0; left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--accent4));
+    transition: width 0.4s ease;
+    z-index: 100;
+    border-radius: 0 2px 2px 0;
+  }
+
+  /* ── Slide counter ── */
+  #counter {
+    position: fixed;
+    bottom: 18px; right: 24px;
+    font-size: 13px;
+    color: var(--text2);
+    z-index: 100;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.05em;
+  }
+
+  /* ── Nav arrows ── */
+  .nav-btn {
+    position: fixed;
+    top: 50%; transform: translateY(-50%);
+    background: rgba(33,38,45,0.7);
+    border: 1px solid var(--border);
+    color: var(--text2);
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 20px;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+    transition: all 0.2s;
+    backdrop-filter: blur(6px);
+  }
+  .nav-btn:hover { background: var(--bg3); color: var(--text); border-color: var(--accent); }
+  #btn-prev { left: 16px; }
+  #btn-next { right: 16px; }
+
+  /* ── Hint bar ── */
+  #hint {
+    position: fixed;
+    bottom: 14px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: var(--text2);
+    z-index: 100;
+    letter-spacing: 0.03em;
+  }
+
+  /* ────────────────────────────────
+     OVERVIEW MODE
+  ──────────────────────────────── */
+  #overview {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(13,17,23,0.97);
+    z-index: 200;
+    padding: 40px;
+    overflow-y: auto;
+  }
+  #overview.open { display: block; }
+  #overview h2 { text-align: center; margin-bottom: 28px; color: var(--text2); font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase; }
+  #overview-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .ov-thumb {
+    background: var(--bg2);
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    cursor: pointer;
+    transition: border-color 0.2s, transform 0.2s;
+    aspect-ratio: 16/9;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    text-align: center;
+    gap: 8px;
+    position: relative;
+  }
+  .ov-thumb:hover { border-color: var(--accent); transform: scale(1.02); }
+  .ov-thumb.current { border-color: var(--accent2); }
+  .ov-num {
+    position: absolute; top: 8px; left: 10px;
+    font-size: 11px; color: var(--text2);
+  }
+  .ov-emoji { font-size: 28px; }
+  .ov-title { font-size: 13px; color: var(--text); font-weight: 600; }
+
+  /* ────────────────────────────────
+     COMMON COMPONENTS
+  ──────────────────────────────── */
+  .slide-tag {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .slide-tag::before { content: ''; width: 24px; height: 2px; background: var(--accent); border-radius: 2px; display: inline-block; }
+
+  h1 { font-size: clamp(36px, 5vw, 62px); font-weight: 800; line-height: 1.1; letter-spacing: -0.02em; }
+  h2 { font-size: clamp(26px, 3.5vw, 44px); font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
+  h3 { font-size: clamp(18px, 2vw, 26px); font-weight: 600; }
+
+  .gradient-text {
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent4) 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .pill {
+    display: inline-block;
+    padding: 4px 12px; border-radius: 20px;
+    font-size: 12px; font-weight: 600;
+    background: var(--bg3); border: 1px solid var(--border);
+  }
+
+  .glow-circle {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    pointer-events: none;
+  }
+
+  /* ── Code block ── */
+  .code-block {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 20px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 14px;
+    color: var(--accent2);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    overflow: auto;
+    max-width: 100%;
+  }
+
+  /* ────────────────────────────────
+     SLIDE 1 — TITLE
+  ──────────────────────────────── */
+  #slide-1 {
+    background: radial-gradient(ellipse at 50% 30%, rgba(88,166,255,0.12) 0%, transparent 65%),
+                radial-gradient(ellipse at 80% 80%, rgba(210,168,255,0.08) 0%, transparent 50%),
+                var(--bg);
+    text-align: center;
+  }
+  #slide-1 h1 { margin-bottom: 20px; }
+  #slide-1 .subtitle {
+    font-size: clamp(16px, 2vw, 22px);
+    color: var(--text2);
+    max-width: 540px;
+    line-height: 1.6;
+    margin-bottom: 36px;
+  }
+  #slide-1 .badge-row {
+    display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
+  }
+  .badge {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px; color: var(--text2);
+    display: flex; align-items: center; gap: 6px;
+  }
+  #slide-1 .claw-logo {
+    font-size: 72px;
+    margin-bottom: 24px;
+    display: block;
+    filter: drop-shadow(0 0 30px rgba(88,166,255,0.4));
+  }
+
+  /* ────────────────────────────────
+     SLIDE 2 — GAP
+  ──────────────────────────────── */
+  #slide-2 { background: var(--bg); }
+  #slide-2 .vs-grid {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 0 32px;
+    width: 100%;
+    max-width: 900px;
+    align-items: center;
+    margin-top: 32px;
+  }
+  .vs-card {
+    background: var(--bg2);
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    padding: 28px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .vs-card.openclaw { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 40px rgba(88,166,255,0.1); }
+  .vs-card-header { display: flex; align-items: center; gap: 12px; }
+  .vs-icon { font-size: 32px; }
+  .vs-name { font-size: 18px; font-weight: 700; }
+  .vs-tagline { font-size: 13px; color: var(--text2); }
+  .vs-examples { display: flex; flex-direction: column; gap: 10px; }
+  .vs-example {
+    background: var(--bg3);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text2);
+    border-left: 3px solid var(--border);
+  }
+  .vs-example.win { border-left-color: var(--accent2); color: var(--text); }
+  .vs-example span { color: var(--text2); }
+  .vs-divider { font-size: 28px; font-weight: 900; color: var(--text2); text-align: center; }
+  #slide-2 .analogy {
+    margin-top: 28px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 24px;
+    font-size: 16px;
+    color: var(--text2);
+    max-width: 700px;
+    text-align: center;
+  }
+  #slide-2 .analogy strong { color: var(--text); }
+
+  /* ────────────────────────────────
+     SLIDE 3 — WHAT IS OPENCLAW
+  ──────────────────────────────── */
+  #slide-3 {
+    background: radial-gradient(ellipse at 20% 70%, rgba(63,185,80,0.08) 0%, transparent 50%), var(--bg);
+  }
+  .steps-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    width: 100%;
+    max-width: 860px;
+    margin-top: 36px;
+  }
+  .step {
+    flex: 1;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px 20px;
+    display: flex; flex-direction: column; gap: 10px;
+    position: relative;
+  }
+  .step-num {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 800; font-size: 15px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .step-emoji { font-size: 36px; }
+  .step h3 { font-size: 16px; }
+  .step p { font-size: 13px; color: var(--text2); line-height: 1.5; }
+  .step-arrow {
+    font-size: 24px; color: var(--text2);
+    display: flex; align-items: center; padding: 0 8px;
+    flex-shrink: 0; margin-top: 40px;
+  }
+  #slide-3 .fact-row {
+    display: flex; gap: 16px; margin-top: 28px; flex-wrap: wrap;
+    justify-content: center;
+  }
+  .fact-chip {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 18px;
+    font-size: 14px; display: flex; align-items: center; gap: 8px;
+  }
+  .fact-chip .fc-num { color: var(--accent); font-weight: 700; font-size: 16px; }
+
+  /* ────────────────────────────────
+     SLIDE 4 — USE CASES
+  ──────────────────────────────── */
+  #slide-4 {
+    background: var(--bg);
+  }
+  .uc-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    width: 100%;
+    max-width: 840px;
+    margin-top: 28px;
+  }
+  .uc-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 24px;
+    display: flex; flex-direction: column; gap: 10px;
+    transition: border-color 0.2s, transform 0.2s;
+    cursor: default;
+  }
+  .uc-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .uc-card-head { display: flex; align-items: center; gap: 12px; }
+  .uc-emoji { font-size: 28px; }
+  .uc-role { font-size: 15px; font-weight: 700; }
+  .uc-tasks { font-size: 13px; color: var(--text2); line-height: 1.6; }
+  .uc-tasks span { color: var(--accent2); font-weight: 600; }
+
+  /* ────────────────────────────────
+     SLIDE 5 — PRIYA STORY
+  ──────────────────────────────── */
+  #slide-5 {
+    background: radial-gradient(ellipse at 70% 20%, rgba(255,166,87,0.08) 0%, transparent 50%), var(--bg);
+  }
+  .story-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    width: 100%;
+    max-width: 860px;
+    margin-top: 28px;
+  }
+  .story-before, .story-after {
+    border-radius: 14px;
+    padding: 24px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .story-before {
+    background: rgba(248,81,73,0.06);
+    border: 1px solid rgba(248,81,73,0.3);
+  }
+  .story-after {
+    background: rgba(63,185,80,0.06);
+    border: 1px solid rgba(63,185,80,0.3);
+  }
+  .story-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  }
+  .story-before .story-label { color: var(--accent3); }
+  .story-after .story-label { color: var(--accent2); }
+  .story-headline { font-size: 18px; font-weight: 700; }
+  .story-detail { font-size: 14px; color: var(--text2); line-height: 1.6; }
+  .story-quote {
+    background: var(--bg3); border-radius: 8px; padding: 10px 14px;
+    font-size: 13px; font-style: italic; color: var(--text);
+    border-left: 3px solid var(--accent2);
+  }
+  #slide-5 .punchline {
+    margin-top: 24px;
+    font-size: 17px;
+    color: var(--text2);
+    max-width: 660px;
+    text-align: center;
+    line-height: 1.6;
+  }
+  #slide-5 .punchline strong { color: var(--text); }
+
+  /* ────────────────────────────────
+     SLIDE 6 — GET STARTED
+  ──────────────────────────────── */
+  #slide-6 {
+    background: radial-gradient(ellipse at 50% 50%, rgba(210,168,255,0.06) 0%, transparent 60%), var(--bg);
+  }
+  .paths-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    width: 100%;
+    max-width: 860px;
+    margin-top: 28px;
+  }
+  .path-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 22px;
+    display: flex; flex-direction: column; gap: 14px;
+    align-items: center; text-align: center;
+    position: relative;
+  }
+  .path-card:nth-child(2) { border-color: var(--accent2); box-shadow: 0 0 30px rgba(63,185,80,0.1); }
+  .path-icon { font-size: 40px; }
+  .path-name { font-size: 17px; font-weight: 700; }
+  .path-diff {
+    display: inline-block;
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+  }
+  .path-diff.easiest { background: rgba(63,185,80,0.15); border-color: rgba(63,185,80,0.4); color: var(--accent2); }
+  .path-desc { font-size: 13px; color: var(--text2); line-height: 1.5; }
+  .path-badge {
+    position: absolute; top: -12px; left: 50%; transform: translateX(-50%);
+    background: var(--accent2); color: var(--bg);
+    padding: 3px 12px; border-radius: 20px; font-size: 11px; font-weight: 700;
+  }
+  #slide-6 .free-note {
+    margin-top: 20px; font-size: 14px; color: var(--text2);
+    display: flex; align-items: center; gap: 8px;
+  }
+  #slide-6 .free-note span { color: var(--accent2); font-weight: 700; }
+
+  /* ────────────────────────────────
+     SLIDE 7 — LIVE DEMO
+  ──────────────────────────────── */
+  #slide-7 {
+    background: radial-gradient(ellipse at 50% 40%, rgba(88,166,255,0.12) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 80%, rgba(63,185,80,0.06) 0%, transparent 50%), var(--bg);
+    text-align: center;
+  }
+  #slide-7 .demo-headline { font-size: clamp(42px, 6vw, 76px); font-weight: 900; margin-bottom: 12px; }
+  #slide-7 .demo-sub { font-size: 18px; color: var(--text2); margin-bottom: 36px; }
+  .demo-items {
+    display: flex; flex-direction: column; gap: 14px;
+    align-items: flex-start;
+    max-width: 500px;
+    text-align: left;
+  }
+  .demo-item {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 20px;
+    font-size: 15px;
+    width: 100%;
+  }
+  .demo-item-num {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent); color: var(--bg);
+    font-weight: 800; font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  #slide-7 .qr-placeholder {
+    margin-top: 32px;
+    width: 100px; height: 100px;
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: var(--text2); text-align: center;
+    line-height: 1.4;
+  }
+
+  /* ────────────────────────────────
+     SLIDE 8 — CLAWMETRY
+  ──────────────────────────────── */
+  #slide-8 {
+    background: radial-gradient(ellipse at 30% 60%, rgba(210,168,255,0.08) 0%, transparent 50%), var(--bg);
+  }
+  #slide-8 .cm-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 36px;
+    width: 100%;
+    max-width: 860px;
+    margin-top: 28px;
+    align-items: center;
+  }
+  .cm-dashboard-mock {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .cm-mock-bar {
+    background: var(--bg3);
+    padding: 10px 14px;
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cm-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .cm-mock-title { font-size: 12px; color: var(--text2); margin-left: 8px; }
+  .cm-mock-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .cm-mock-row {
+    background: var(--bg3); border-radius: 8px; padding: 10px 12px;
+    font-size: 12px; display: flex; align-items: center; gap: 10px;
+  }
+  .cm-activity-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent2); flex-shrink: 0; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+  .cm-row-text { color: var(--text2); }
+  .cm-row-text em { color: var(--text); font-style: normal; }
+  .cm-features { display: flex; flex-direction: column; gap: 14px; }
+  .cm-feat {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .cm-feat-icon { font-size: 24px; flex-shrink: 0; }
+  .cm-feat-text h4 { font-size: 14px; font-weight: 600; }
+  .cm-feat-text p { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  #slide-8 .cm-install {
+    margin-top: 20px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+
+  /* ────────────────────────────────
+     SLIDE 9 — START TODAY
+  ──────────────────────────────── */
+  #slide-9 {
+    background: radial-gradient(ellipse at 50% 30%, rgba(88,166,255,0.15) 0%, transparent 60%),
+                radial-gradient(ellipse at 20% 80%, rgba(63,185,80,0.08) 0%, transparent 50%), var(--bg);
+    text-align: center;
+  }
+  #slide-9 h1 { font-size: clamp(40px, 6vw, 78px); margin-bottom: 10px; }
+  #slide-9 .sub { font-size: 18px; color: var(--text2); margin-bottom: 40px; }
+  .qr-row {
+    display: flex; gap: 40px; justify-content: center; margin-bottom: 36px; flex-wrap: wrap;
+  }
+  .qr-item {
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+  }
+  .qr-box {
+    width: 120px; height: 120px;
+    border: 2px dashed var(--border);
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: var(--text2); text-align: center; line-height: 1.4;
+    position: relative;
+    background: var(--bg2);
+  }
+  .qr-label { font-size: 13px; font-weight: 600; color: var(--text2); }
+  .resource-row {
+    display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 32px;
+  }
+  .resource-chip {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-size: 14px;
+    display: flex; align-items: center; gap: 8px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  #slide-9 .footer-text {
+    font-size: 20px; color: var(--text2);
+  }
+  #slide-9 .footer-text span { color: var(--text); font-weight: 700; }
+
+  /* ────────────────────────────────
+     PRESENTER NOTES (print only)
+  ──────────────────────────────── */
+  .presenter-notes {
+    display: none;
+  }
+
+  @media print {
+    html, body { overflow: visible; height: auto; }
+    #deck { overflow: visible; height: auto; }
+    #progress-bar, #counter, .nav-btn, #hint, #overview { display: none !important; }
+
+    .slide {
+      position: relative !important;
+      display: flex !important;
+      opacity: 1 !important;
+      transform: none !important;
+      pointer-events: all !important;
+      width: 100% !important;
+      height: 100vh !important;
+      page-break-after: always;
+      break-after: page;
+    }
+
+    .presenter-notes {
+      display: block;
+      background: #f0f0f0;
+      color: #333;
+      padding: 20px 40px;
+      font-size: 13px;
+      line-height: 1.7;
+      page-break-before: avoid;
+    }
+    .presenter-notes h4 {
+      color: #666;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 8px;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Overview grid ── -->
+<div id="overview">
+  <h2>Slide Overview — press Esc or click to close</h2>
+  <div id="overview-grid">
+    <div class="ov-thumb" data-idx="0"><span class="ov-num">1</span><span class="ov-emoji">🦅</span><span class="ov-title">Meet OpenClaw</span></div>
+    <div class="ov-thumb" data-idx="1"><span class="ov-num">2</span><span class="ov-emoji">⚡</span><span class="ov-title">ChatGPT vs OpenClaw</span></div>
+    <div class="ov-thumb" data-idx="2"><span class="ov-num">3</span><span class="ov-emoji">🧠</span><span class="ov-title">What is OpenClaw?</span></div>
+    <div class="ov-thumb" data-idx="3"><span class="ov-num">4</span><span class="ov-emoji">💼</span><span class="ov-title">Use Cases</span></div>
+    <div class="ov-thumb" data-idx="4"><span class="ov-num">5</span><span class="ov-emoji">✨</span><span class="ov-title">The 10x Moment</span></div>
+    <div class="ov-thumb" data-idx="5"><span class="ov-num">6</span><span class="ov-emoji">🚀</span><span class="ov-title">Get Started</span></div>
+    <div class="ov-thumb" data-idx="6"><span class="ov-num">7</span><span class="ov-emoji">🎬</span><span class="ov-title">Live Demo</span></div>
+    <div class="ov-thumb" data-idx="7"><span class="ov-num">8</span><span class="ov-emoji">📊</span><span class="ov-title">ClawMetry</span></div>
+    <div class="ov-thumb" data-idx="8"><span class="ov-num">9</span><span class="ov-emoji">🌟</span><span class="ov-title">Start Today</span></div>
+  </div>
+</div>
+
+<!-- ── Deck ── -->
+<div id="deck">
+
+  <!-- SLIDE 1: TITLE -->
+  <div class="slide active" id="slide-1">
+    <div class="glow-circle" style="width:500px;height:500px;top:-100px;left:50%;transform:translateX(-50%);background:rgba(88,166,255,0.06);"></div>
+    <span class="claw-logo">🦅</span>
+    <div class="slide-tag">Sourashtra Community · AI Session 2026</div>
+    <h1 class="gradient-text">Meet OpenClaw:<br>Your AI That Actually<br><em style="font-style:normal;">Does Things</em></h1>
+    <p class="subtitle">A beginner's guide to the future of personal AI</p>
+    <div class="badge-row">
+      <div class="badge">🌐 openclaw.ai</div>
+      <div class="badge">💻 No coding required</div>
+      <div class="badge">☁️ Cloud or laptop</div>
+      <div class="badge">🆓 Free to start</div>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 1</h4>Welcome everyone. Thank you for joining. This session is for YOU — whether you're in IT, recruiting, running a business, or just curious about where AI is going. We're going to look at something that goes beyond chatting with AI — an AI that actually works for you. No code needed. Let's begin.</div>
+
+  <!-- SLIDE 2: THE GAP -->
+  <div class="slide" id="slide-2">
+    <div class="slide-tag">The Gap</div>
+    <h2>ChatGPT <span style="color:var(--text2)">vs</span> <span class="gradient-text">OpenClaw</span></h2>
+    <div class="vs-grid">
+      <div class="vs-card">
+        <div class="vs-card-header">
+          <span class="vs-icon">💬</span>
+          <div>
+            <div class="vs-name">ChatGPT</div>
+            <div class="vs-tagline">Answers your questions</div>
+          </div>
+        </div>
+        <div class="vs-examples">
+          <div class="vs-example">
+            💬 "Write me an email to John"<br>
+            <span>→ You get a draft. <strong>You still have to send it.</strong></span>
+          </div>
+          <div class="vs-example">
+            💬 "Research competitors for me"<br>
+            <span>→ Some text. <strong>You still have to dig deeper.</strong></span>
+          </div>
+          <div class="vs-example">
+            💬 "Summarise this meeting"<br>
+            <span>→ Paste content in. <strong>Manual work every time.</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="vs-divider">→</div>
+
+      <div class="vs-card openclaw">
+        <div class="vs-card-header">
+          <span class="vs-icon">🦅</span>
+          <div>
+            <div class="vs-name" style="color:var(--accent)">OpenClaw</div>
+            <div class="vs-tagline">Does things for you</div>
+          </div>
+        </div>
+        <div class="vs-examples">
+          <div class="vs-example win">
+            🤖 "Send this email to John"<br>
+            → ✅ <strong>Done. Email sent.</strong>
+          </div>
+          <div class="vs-example win">
+            🤖 "Research our top 5 competitors"<br>
+            → ✅ <strong>Full report in your inbox.</strong>
+          </div>
+          <div class="vs-example win">
+            🤖 "Summarise today's meeting notes"<br>
+            → ✅ <strong>Summary ready, shared with team.</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="analogy">
+      💡 <strong>ChatGPT is a consultant.</strong> OpenClaw is your assistant who <strong>actually executes.</strong>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 2</h4>Most people here have used ChatGPT or Claude. Those are brilliant for getting advice and drafts. But you still have to do the final step yourself. OpenClaw closes that gap — it has access to your tools (browser, email, files, calendar) and it actually takes the actions. It goes from "here's a draft" to "done, I sent it."</div>
+
+  <!-- SLIDE 3: WHAT IS OPENCLAW -->
+  <div class="slide" id="slide-3">
+    <div class="slide-tag">What is OpenClaw?</div>
+    <h2>Three simple steps. <span class="gradient-text">Infinite possibilities.</span></h2>
+    <div class="steps-row">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-emoji">🗣️</div>
+        <h3>You describe the task</h3>
+        <p>In plain English. "Screen these 30 CVs and shortlist the best 5." No prompts to learn, no code to write.</p>
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-emoji">⚙️</div>
+        <h3>OpenClaw thinks & acts</h3>
+        <p>It plans the work, then uses real tools — browser, files, email, calendar, APIs — to get it done step by step.</p>
+      </div>
+      <div class="step-arrow">→</div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-emoji">✅</div>
+        <h3>It reports back</h3>
+        <p>Task complete. Results delivered. You stayed focused on what only you can do.</p>
+      </div>
+    </div>
+    <div class="fact-row">
+      <div class="fact-chip"><span class="fc-num">220,000+</span> developers worldwide</div>
+      <div class="fact-chip">🖥️ Runs on Mac, Windows, Linux, or cloud</div>
+      <div class="fact-chip">🚫 Zero coding required to use</div>
+      <div class="fact-chip">🔌 Connects to 100s of tools & APIs</div>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 3</h4>Think of OpenClaw as an employee who works overnight and never complains. You tell it what you need, it figures out how to do it, and it comes back with results. It uses tools — so it can actually browse the web, open files, send emails. 220,000+ developers already use it. And you don't need to write a single line of code to benefit from it.</div>
+
+  <!-- SLIDE 4: USE CASES -->
+  <div class="slide" id="slide-4">
+    <div class="slide-tag">Use Cases</div>
+    <h2>Made for <span class="gradient-text">YOUR</span> world</h2>
+    <div class="uc-grid">
+      <div class="uc-card">
+        <div class="uc-card-head">
+          <span class="uc-emoji">👔</span>
+          <span class="uc-role">IT Professionals</span>
+        </div>
+        <p class="uc-tasks">
+          <span>→</span> Monitor servers overnight &amp; alert on issues<br>
+          <span>→</span> Auto-generate incident reports<br>
+          <span>→</span> Respond to tickets with smart templates<br>
+          <span>→</span> Run scheduled maintenance checks
+        </p>
+      </div>
+      <div class="uc-card">
+        <div class="uc-card-head">
+          <span class="uc-emoji">🔍</span>
+          <span class="uc-role">Recruiters</span>
+        </div>
+        <p class="uc-tasks">
+          <span>→</span> Screen 50 CVs, shortlist top 5 with scores<br>
+          <span>→</span> Draft personalised outreach emails<br>
+          <span>→</span> Schedule interview slots automatically<br>
+          <span>→</span> Track candidate pipelines end-to-end
+        </p>
+      </div>
+      <div class="uc-card">
+        <div class="uc-card-head">
+          <span class="uc-emoji">🏪</span>
+          <span class="uc-role">Small Business Owners</span>
+        </div>
+        <p class="uc-tasks">
+          <span>→</span> Reply to customer enquiries 24/7<br>
+          <span>→</span> Schedule &amp; post social media content<br>
+          <span>→</span> Summarise meetings &amp; action items<br>
+          <span>→</span> Monitor reviews &amp; respond instantly
+        </p>
+      </div>
+      <div class="uc-card">
+        <div class="uc-card-head">
+          <span class="uc-emoji">📚</span>
+          <span class="uc-role">Students &amp; Learners</span>
+        </div>
+        <p class="uc-tasks">
+          <span>→</span> Research topics &amp; compile summaries<br>
+          <span>→</span> Digest long papers into key points<br>
+          <span>→</span> Prepare interview questions &amp; mock answers<br>
+          <span>→</span> Track job applications &amp; deadlines
+        </p>
+      </div>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 4</h4>Let me show you how this applies to exactly what you do. IT folks — imagine your agent watching your servers while you sleep. Recruiters — let it screen CVs while you focus on relationships. Small business owners — customer messages handled, social posts scheduled. Students — research done, summaries ready. This isn't theory — these are things people are doing right now.</div>
+
+  <!-- SLIDE 5: PRIYA STORY -->
+  <div class="slide" id="slide-5">
+    <div class="slide-tag">The 10× Moment</div>
+    <h2>Meet <span class="gradient-text">Priya</span> 👩‍💼</h2>
+    <div class="story-layout">
+      <div class="story-before">
+        <div class="story-label">😩 Before OpenClaw</div>
+        <div class="story-headline">Every Monday morning...</div>
+        <p class="story-detail">Priya is a recruiter. She spends <strong>3 hours every Monday</strong> manually reading through 30 CVs for a senior Java developer role.</p>
+        <p class="story-detail">She reads each one, copies highlights into a spreadsheet, writes notes, then drafts individual emails to shortlisted candidates.</p>
+        <p class="story-detail" style="color:var(--accent3)">⏱️ 3 hours. Same routine. Every single week.</p>
+      </div>
+      <div class="story-after">
+        <div class="story-label">🚀 After OpenClaw</div>
+        <div class="story-headline">Monday looks different now.</div>
+        <p class="story-detail">Priya tells OpenClaw:</p>
+        <div class="story-quote">"Screen these 30 CVs for a senior Java developer role. Shortlist the top 5 with a summary and a ranking. Then draft personalised emails for each."</div>
+        <p class="story-detail" style="color:var(--accent2)">✅ Done in <strong>12 minutes.</strong> While she has her morning chai. ☕</p>
+        <p class="story-detail">She reviews the shortlist, tweaks one email, hits send. Back to meaningful work by 9:20am.</p>
+      </div>
+    </div>
+    <p class="punchline">💡 <strong>It doesn't replace Priya.</strong> It removes the boring parts so she can focus on what actually matters — <strong>people.</strong></p>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 5</h4>This is a story that resonates with recruiters but applies to everyone. The 10x moment isn't about replacing people — it's about reclaiming time. 3 hours → 12 minutes. That's not science fiction. That's OpenClaw today. What would YOU do with those 3 hours back every week? Pause here. Let that land.</div>
+
+  <!-- SLIDE 6: GET STARTED -->
+  <div class="slide" id="slide-6">
+    <div class="slide-tag">Get Started</div>
+    <h2>Three paths. <span class="gradient-text">All free to start.</span> 🆓</h2>
+    <div class="paths-row">
+      <div class="path-card">
+        <div class="path-icon">🖥️</div>
+        <div class="path-name">MacBook / Linux / Windows</div>
+        <div class="pill path-diff">Easy</div>
+        <p class="path-desc">Install on your own machine. One command and you're running.</p>
+        <div class="code-block" style="font-size:11px;text-align:left;width:100%;">curl -fsSL https://openclaw.ai/<br>install.sh | bash</div>
+        <p class="path-desc" style="font-size:12px;">🕐 ~5 minutes to set up</p>
+      </div>
+      <div class="path-card" style="position:relative;">
+        <div class="path-badge">⭐ Easiest</div>
+        <div class="path-icon">☁️</div>
+        <div class="path-name">KiloClaw</div>
+        <div class="pill path-diff easiest">Easiest</div>
+        <p class="path-desc">Fully hosted. No install. Sign up and start chatting with your agent in 60 seconds.</p>
+        <div class="code-block" style="font-size:13px;text-align:center;">kilo.ai/kiloclaw</div>
+        <p class="path-desc" style="font-size:12px;">🕐 60 seconds to start</p>
+      </div>
+      <div class="path-card">
+        <div class="path-icon">🔧</div>
+        <div class="path-name">Hostinger</div>
+        <div class="pill path-diff">Easy</div>
+        <p class="path-desc">1-click deploy from the Hostinger marketplace. Great if you already have hosting.</p>
+        <div class="code-block" style="font-size:11px;text-align:center;">Hostinger Marketplace<br>→ Search "OpenClaw"</div>
+        <p class="path-desc" style="font-size:12px;">🕐 ~2 minutes to deploy</p>
+      </div>
+    </div>
+    <div class="free-note">
+      <span>✅ All free to start</span> · No credit card needed · Upgrade only when you love it
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 6</h4>Don't let "getting started" be a barrier. For most people in this room, KiloClaw is the best option — no installation, nothing to configure, just sign up and start. If you're technically inclined or want full control, install it locally. Either way, free to start, no credit card needed. I'll share the links at the end.</div>
+
+  <!-- SLIDE 7: LIVE DEMO -->
+  <div class="slide" id="slide-7">
+    <div class="glow-circle" style="width:400px;height:400px;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(88,166,255,0.07);"></div>
+    <div class="demo-headline">Let's see it in action 🎬</div>
+    <div class="demo-sub">Live demo — Vivek's MacBook</div>
+    <div class="demo-items">
+      <div class="demo-item">
+        <div class="demo-item-num">1</div>
+        Ask OpenClaw to research a topic and deliver a summary 🔍
+      </div>
+      <div class="demo-item">
+        <div class="demo-item-num">2</div>
+        Ask it to draft and send a real message 📨
+      </div>
+      <div class="demo-item">
+        <div class="demo-item-num">3</div>
+        Watch it run multiple tasks in parallel ⚡
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:32px;">
+      <div class="qr-placeholder">📱 QR Code<br>openclaw.ai</div>
+      <div style="font-size:11px;color:var(--text2);">Scan to follow along</div>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 7</h4>LIVE DEMO TIME. Switch to your MacBook terminal / OpenClaw interface. Demo 1: Ask it to research "top AI tools for recruiters in 2026" and summarise. Demo 2: Ask it to send yourself a Telegram message saying "OpenClaw works!". Demo 3: Kick off two tasks simultaneously. Key point to reinforce: "Notice how it's doing things — not just telling you about things."</div>
+
+  <!-- SLIDE 8: CLAWMETRY -->
+  <div class="slide" id="slide-8">
+    <div class="slide-tag">ClawMetry</div>
+    <h2>Watch your agent <span class="gradient-text">work in real-time</span> 📊</h2>
+    <div class="cm-layout">
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <p style="font-size:16px;color:var(--text2);line-height:1.6;">Once your agent is running — how do you know what it's doing?<br><strong style="color:var(--text)">ClawMetry shows you everything.</strong></p>
+        <div class="cm-dashboard-mock">
+          <div class="cm-mock-bar">
+            <div class="cm-dot" style="background:#f78166;"></div>
+            <div class="cm-dot" style="background:#ffa657;"></div>
+            <div class="cm-dot" style="background:#3fb950;"></div>
+            <div class="cm-mock-title">ClawMetry Dashboard — clawmetry.com</div>
+          </div>
+          <div class="cm-mock-body">
+            <div class="cm-mock-row">
+              <div class="cm-activity-dot"></div>
+              <div class="cm-row-text"><em>Agent screening CVs...</em> reading file #12 of 30</div>
+            </div>
+            <div class="cm-mock-row">
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0;"></div>
+              <div class="cm-row-text">Tokens used: <em>4,280</em> · Cost: <em>$0.003</em></div>
+            </div>
+            <div class="cm-mock-row">
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--accent4);flex-shrink:0;"></div>
+              <div class="cm-row-text">Memory: <em>Added 3 candidate summaries</em></div>
+            </div>
+            <div class="cm-mock-row">
+              <div style="width:8px;height:8px;border-radius:50%;background:var(--accent5);flex-shrink:0;"></div>
+              <div class="cm-row-text">Tool used: <em>read_file</em> · Duration: 0.3s</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        <div class="cm-features">
+          <div class="cm-feat">
+            <div class="cm-feat-icon">📡</div>
+            <div class="cm-feat-text">
+              <h4>Live Activity Feed</h4>
+              <p>See every tool call, file read, and web search your agent makes — as it happens.</p>
+            </div>
+          </div>
+          <div class="cm-feat">
+            <div class="cm-feat-icon">💰</div>
+            <div class="cm-feat-text">
+              <h4>Token &amp; Cost Tracking</h4>
+              <p>Know exactly how much each task costs. Stay in control of your AI spend.</p>
+            </div>
+          </div>
+          <div class="cm-feat">
+            <div class="cm-feat-icon">🧠</div>
+            <div class="cm-feat-text">
+              <h4>Memory Changes</h4>
+              <p>Watch what your agent learns and remembers across sessions.</p>
+            </div>
+          </div>
+        </div>
+        <div class="cm-install">
+          <div class="code-block" style="font-size:13px;">pip install clawmetry</div>
+          <div style="font-size:13px;color:var(--text2);">Open source · Free · <a href="https://clawmetry.com" style="color:var(--accent);text-decoration:none;">clawmetry.com</a></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 8</h4>ClawMetry is like a cockpit dashboard for your AI agent. It's something we built to make running agents transparent — you can see every action, every cost, every memory update. It's open source, free, and installs in seconds. This is especially useful for IT professionals or anyone who wants accountability from their agent.</div>
+
+  <!-- SLIDE 9: START TODAY -->
+  <div class="slide" id="slide-9">
+    <div class="glow-circle" style="width:600px;height:600px;top:-150px;left:50%;transform:translateX(-50%);background:rgba(88,166,255,0.08);"></div>
+    <div class="slide-tag">Your Turn</div>
+    <h1 class="gradient-text">Your first agent,<br>today. 🌟</h1>
+    <p class="sub">Everything you need to get started, right here.</p>
+    <div class="qr-row">
+      <div class="qr-item">
+        <div class="qr-box">
+          <div>📱<br>QR Code<br><strong>openclaw.ai</strong></div>
+        </div>
+        <div class="qr-label">OpenClaw</div>
+        <div style="font-size:11px;color:var(--text2);">Install on your machine</div>
+      </div>
+      <div class="qr-item">
+        <div class="qr-box">
+          <div>📱<br>QR Code<br><strong>kilo.ai/kiloclaw</strong></div>
+        </div>
+        <div class="qr-label">KiloClaw</div>
+        <div style="font-size:11px;color:var(--text2);">Hosted · No install · 60 sec</div>
+      </div>
+      <div class="qr-item">
+        <div class="qr-box">
+          <div>📱<br>QR Code<br><strong>clawmetry.com</strong></div>
+        </div>
+        <div class="qr-label">ClawMetry</div>
+        <div style="font-size:11px;color:var(--text2);">Monitor your agent</div>
+      </div>
+    </div>
+    <div class="resource-row">
+      <div class="resource-chip">🌐 openclaw.ai</div>
+      <div class="resource-chip">☁️ kilo.ai/kiloclaw</div>
+      <div class="resource-chip">📊 clawmetry.com</div>
+    </div>
+    <div class="footer-text">💬 <span>Questions? Let's talk!</span> — I'm here for the next 30 minutes.</div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 9</h4>That's our session. Three URLs to remember: openclaw.ai for the main project, kilo.ai/kiloclaw for the quickest way to start, clawmetry.com to monitor your agent. My recommendation: go home, sign up on KiloClaw tonight, and give it one real task from your work tomorrow morning. See how it does. Then come back to me with questions. Thank you all!</div>
+
+</div><!-- /deck -->
+
+<!-- ── UI chrome ── -->
+<div id="progress-bar"></div>
+<div id="counter">1 / 9</div>
+<button class="nav-btn" id="btn-prev" aria-label="Previous slide">‹</button>
+<button class="nav-btn" id="btn-next" aria-label="Next slide">›</button>
+<div id="hint">← → Space · F fullscreen · Esc overview</div>
+
+<script>
+(function() {
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let current = 0;
+  let overviewOpen = false;
+  let isAnimating = false;
+
+  const bar = document.getElementById('progress-bar');
+  const counter = document.getElementById('counter');
+  const overview = document.getElementById('overview');
+  const ovThumbs = document.querySelectorAll('.ov-thumb');
+
+  function updateUI() {
+    bar.style.width = ((current + 1) / total * 100) + '%';
+    counter.textContent = (current + 1) + ' / ' + total;
+    ovThumbs.forEach((t, i) => {
+      t.classList.toggle('current', i === current);
+    });
+  }
+
+  function goTo(idx, dir) {
+    if (isAnimating || idx === current) return;
+    if (idx < 0 || idx >= total) return;
+    isAnimating = true;
+
+    const from = slides[current];
+    const to = slides[idx];
+
+    from.classList.add('exit-left');
+    from.classList.remove('active');
+
+    to.style.transform = dir > 0 ? 'translateX(60px)' : 'translateX(-60px)';
+    to.style.opacity = '0';
+    to.classList.add('active');
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        to.style.transform = '';
+        to.style.opacity = '';
+        setTimeout(() => {
+          from.classList.remove('exit-left');
+          to.style.transform = null;
+          to.style.opacity = null;
+          isAnimating = false;
+        }, 480);
+      });
+    });
+
+    current = idx;
+    updateUI();
+  }
+
+  function next() { goTo(current + 1, 1); }
+  function prev() { goTo(current - 1, -1); }
+
+  // Reset CSS transitions on slide elements
+  slides.forEach(s => {
+    s.style.transition = 'opacity 0.45s cubic-bezier(.4,0,.2,1), transform 0.45s cubic-bezier(.4,0,.2,1)';
+  });
+
+  // Keyboard
+  document.addEventListener('keydown', e => {
+    if (overviewOpen) {
+      if (e.key === 'Escape') closeOverview();
+      return;
+    }
+    switch(e.key) {
+      case 'ArrowRight': case 'ArrowDown': case ' ': e.preventDefault(); next(); break;
+      case 'ArrowLeft': case 'ArrowUp': e.preventDefault(); prev(); break;
+      case 'Escape': openOverview(); break;
+      case 'f': case 'F': toggleFullscreen(); break;
+    }
+  });
+
+  // Click to advance (not on buttons)
+  document.getElementById('deck').addEventListener('click', e => {
+    if (e.target.closest('.nav-btn') || overviewOpen) return;
+    next();
+  });
+
+  // Nav buttons
+  document.getElementById('btn-next').addEventListener('click', e => { e.stopPropagation(); next(); });
+  document.getElementById('btn-prev').addEventListener('click', e => { e.stopPropagation(); prev(); });
+
+  // Overview
+  function openOverview() {
+    overview.classList.add('open');
+    overviewOpen = true;
+  }
+  function closeOverview() {
+    overview.classList.remove('open');
+    overviewOpen = false;
+  }
+
+  overview.addEventListener('click', e => {
+    const thumb = e.target.closest('.ov-thumb');
+    if (thumb) {
+      const idx = parseInt(thumb.dataset.idx, 10);
+      closeOverview();
+      setTimeout(() => goTo(idx, idx > current ? 1 : -1), 100);
+    } else if (e.target === overview) {
+      closeOverview();
+    }
+  });
+
+  // Fullscreen
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  }
+
+  // Touch swipe
+  let touchStartX = 0;
+  document.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; }, { passive: true });
+  document.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    if (Math.abs(dx) > 50) { dx < 0 ? next() : prev(); }
+  }, { passive: true });
+
+  updateUI();
+})();
+</script>
+</body>
+</html>
