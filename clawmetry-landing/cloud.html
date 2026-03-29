@@ -463,7 +463,7 @@
         <div id="cpanel-agent" style="display:none;text-align:center;padding:12px 0 8px;">
           <div style="font-size:13px;color:rgba(255,255,255,0.4);margin-bottom:20px;font-style:italic;">Already running an OpenClaw agent? Just ask it:</div>
           <div style="display:inline-block;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:16px 28px;font-size:15px;color:#fff;letter-spacing:0.01em;">
-            &ldquo;Help me install<br><code style="color:#28c840;background:rgba(40,200,64,0.15);padding:2px 8px;border-radius:4px;font-size:14px;">pip install clawmetry &amp;&amp; clawmetry connect</code>&rdquo;
+            &ldquo;Help me install<br><code style="color:#28c840;background:rgba(40,200,64,0.15);padding:2px 8px;border-radius:4px;font-size:14px;">pip install clawmetry &amp;&amp; clawmetry connect &amp;&amp; setup clawmetry sync via supervisord</code>&rdquo;
           </div>
           <div style="font-size:12px;color:rgba(255,255,255,0.3);margin-top:20px;line-height:1.7;">
             Your agent will install the package, connect your node to the cloud,<br>and open app.clawmetry.com automatically.
@@ -475,7 +475,7 @@
     <script>
     var cloudCmds = {
       curl: 'curl -fsSL https://clawmetry.com/install.sh | bash',
-      agent: 'Help me install pip install clawmetry && clawmetry connect',
+      agent: 'Help me install pip install clawmetry && clawmetry connect && setup clawmetry sync via supervisord in a PTY',
       pip: 'pip install clawmetry && clawmetry connect',
       powershell: 'iwr -useb https://clawmetry.com/install.ps1 | iex; clawmetry connect',
       cmd: 'curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd && clawmetry connect',
