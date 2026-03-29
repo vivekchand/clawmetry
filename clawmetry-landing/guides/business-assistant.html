@@ -123,14 +123,9 @@
     <pre><code>curl -fsSL https://openclaw.ai/install.sh | bash</code><button class="copy-btn" onclick="copyCode(this)">Copy</button></pre>
     <p>Follow the prompts. We recommend <strong>Claude Sonnet</strong> for business operations. It's fast, handles multi-step tasks well, and keeps costs reasonable for daily use.</p>
 
-    <h2>Step 2: Configure Telegram</h2>
-    <p>Open <code>~/.config/openclaw/config.yaml</code> and add your Telegram bot token:</p>
-    <pre><code>channels:
-  telegram:
-    bot_token: "YOUR_BOT_TOKEN_HERE"
-    allowed_users:
-      - YOUR_TELEGRAM_USER_ID</code><button class="copy-btn" onclick="copyCode(this)">Copy</button></pre>
-    <p>Start a chat with your bot on Telegram. Your business command center, always in your pocket.</p>
+    <h2>Step 2: Connect Your Channel</h2>
+    <p>The installer already ran <code>openclaw onboard</code> which walks you through connecting Telegram, WhatsApp, Discord, or any channel. That's it.</p>
+    <p style="color:rgba(255,255,255,0.45);font-size:0.9rem;">If you skipped it during install, just run <code>openclaw onboard</code> anytime.</p>
 
     <h2>Step 3: Set up ClawMetry</h2>
     <p style="font-weight:600;color:var(--accent);font-size:15px;margin-bottom:8px">You wouldn't run a server without monitoring. Don't run an AI agent without observability.</p>
