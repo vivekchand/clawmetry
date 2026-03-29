@@ -123,11 +123,7 @@ except Exception:
     echo ""
   fi
 
-  # Step 2: Show sandbox names and connect command
-  echo -e "  ${BOLD}Next: set up ClawMetry inside your NemoClaw OpenClaw sandbox${NC}"
-  echo ""
-
-  # Get sandbox names from nemoclaw list
+  # Step 2: Auto-install ClawMetry inside sandbox + interactive connect
   SANDBOX_NAMES=$(nemoclaw list 2>/dev/null | awk '
     /^  Sandboxes:/ { in_list=1; next }
     /^  \* = default sandbox/ { in_list=0; next }
@@ -136,25 +132,43 @@ except Exception:
 
   if [ -n "$SANDBOX_NAMES" ]; then
     FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)
-    echo -e "  ${DIM}Your sandboxes:${NC}"
-    while IFS= read -r sb; do
-      echo -e "    ${DIM}•${NC} $sb"
-    done <<< "$SANDBOX_NAMES"
-    echo ""
-    echo -e "  ${DIM}1. Connect to your sandbox:${NC}"
-    echo -e "    ${GREEN}nemoclaw ${FIRST_SANDBOX} connect${NC}"
-  else
-    echo -e "  ${DIM}1. Connect to your sandbox:${NC}"
-    echo -e "    ${GREEN}nemoclaw <sandbox-name> connect${NC}"
-  fi
 
-  echo ""
-  echo -e "  ${DIM}2. Inside the sandbox, run:${NC}"
-  echo -e "    ${GREEN}python3 -m venv .venv${NC}"
-  echo -e "    ${GREEN}.venv/bin/pip install clawmetry${NC}"
-  echo -e "    ${GREEN}.venv/bin/clawmetry onboard${NC}"
-  echo -e "    ${GREEN}.venv/bin/clawmetry --host 0.0.0.0 --port 8900 &${NC}"
-  echo ""
+    echo -e "  → Installing ClawMetry inside sandbox ${BOLD}${FIRST_SANDBOX}${NC}..."
+    if nemoclaw "$FIRST_SANDBOX" exec -- bash -c '
+      python3 -m venv .venv 2>/dev/null
+      .venv/bin/pip install --quiet clawmetry 2>/dev/null
+    ' 2>/dev/null; then
+      echo -e "  ${GREEN}${BOLD}✓ ClawMetry installed inside sandbox${NC}"
+    else
+      echo -e "  ${DIM}⚠  Could not auto-install. Run manually inside the sandbox:${NC}"
+      echo -e "    ${GREEN}python3 -m venv .venv && .venv/bin/pip install clawmetry${NC}"
+    fi
+
+    echo ""
+    echo -e "  → Connecting to ClawMetry Cloud..."
+    echo -e "  ${DIM}Enter your email and OTP to connect:${NC}"
+    echo ""
+
+    if (exec </dev/tty) 2>/dev/null; then
+      nemoclaw "$FIRST_SANDBOX" exec -it -- .venv/bin/clawmetry connect </dev/tty || true
+    else
+      echo -e "  ${DIM}No TTY available. Connect manually:${NC}"
+      echo -e "    ${GREEN}nemoclaw ${FIRST_SANDBOX} connect${NC}"
+      echo -e "    ${GREEN}.venv/bin/clawmetry connect${NC}"
+    fi
+
+    echo ""
+    echo -e "  → Starting ClawMetry dashboard..."
+    nemoclaw "$FIRST_SANDBOX" exec -- bash -c '.venv/bin/clawmetry --host 0.0.0.0 --port 8900 &' 2>/dev/null || true
+    echo -e "  ${GREEN}${BOLD}✓ ClawMetry running inside ${FIRST_SANDBOX}${NC}"
+    echo ""
+  else
+    echo -e "  ${DIM}No NemoClaw sandboxes found yet.${NC}"
+    echo -e "  ${DIM}Once you create a sandbox, install ClawMetry inside:${NC}"
+    echo -e "    ${GREEN}nemoclaw <sandbox-name> connect${NC}"
+    echo -e "    ${GREEN}pip install clawmetry && clawmetry connect${NC}"
+    echo ""
+  fi
 fi
 
 # ── Onboarding ───────────────────────────────────────────────────────────────
