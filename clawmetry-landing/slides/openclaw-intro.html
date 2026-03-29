@@ -614,6 +614,327 @@
     display: none;
   }
 
+  /* ────────────────────────────────
+     MOBILE RESPONSIVE
+  ──────────────────────────────── */
+  @media (max-width: 768px) {
+    /* ── Global slide fixes ── */
+    .slide {
+      padding: 20px 16px !important;
+      overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch;
+      justify-content: flex-start !important;
+      padding-top: 32px !important;
+    }
+    .slide h1 { font-size: 1.6rem !important; }
+    .slide h2 { font-size: 1.3rem !important; }
+    .slide h3 { font-size: 1rem !important; }
+    .slide-tag {
+      font-size: 0.65rem !important;
+      margin-bottom: 12px !important;
+    }
+
+    /* Nav arrows smaller + tighter */
+    .nav-btn { width: 36px; height: 36px; font-size: 16px; }
+    #btn-prev { left: 8px; }
+    #btn-next { right: 8px; }
+    #hint { font-size: 10px; }
+    #counter { font-size: 11px; right: 16px; bottom: 14px; }
+
+    /* ── Overview grid ── */
+    #overview { padding: 20px; }
+    #overview-grid {
+      grid-template-columns: 1fr 1fr !important;
+      gap: 10px;
+    }
+    .ov-thumb { padding: 10px; }
+    .ov-emoji { font-size: 22px; }
+    .ov-title { font-size: 11px; }
+
+    /* ── Slide 1: Title ── */
+    #slide-1 .claw-logo img { width: 72px !important; height: 72px !important; }
+    #slide-1 .subtitle { font-size: 0.85rem !important; margin-bottom: 20px; }
+    #slide-1 .badge-row { gap: 8px; }
+    .badge { padding: 6px 10px; font-size: 12px; }
+    /* Agenda box */
+    #slide-1 > div:last-of-type {
+      padding: 12px 14px !important;
+      margin-top: 12px !important;
+    }
+    #slide-1 > div:last-of-type div[style*="font-size:0.85rem"] {
+      font-size: 0.75rem !important;
+    }
+
+    /* ── About Me slide ── */
+    #slide-about > div:nth-child(3) > div:first-child {
+      flex-direction: column !important;
+      gap: 14px !important;
+    }
+    #slide-about > div:nth-child(3) > div:first-child > div {
+      flex: unset !important;
+      width: 100% !important;
+      padding: 14px !important;
+    }
+    #slide-about > div:nth-child(3) > div:first-child > div div[style*="font-size:0.85rem"] {
+      font-size: 0.78rem !important;
+    }
+    #slide-about > div:nth-child(3) > div:first-child > div div[style*="font-size:1rem"] {
+      font-size: 0.88rem !important;
+    }
+    #slide-about img { width: 56px !important; height: 56px !important; }
+
+    /* ── My Story slide ── */
+    #slide-story > div[style*="max-width:750px"] {
+      gap: 12px !important;
+    }
+    #slide-story div[style*="width:48px"] {
+      width: 34px !important;
+      height: 34px !important;
+      font-size: 1rem !important;
+    }
+    #slide-story div[style*="font-weight:700"][style*="font-size:0.9rem"] {
+      font-size: 0.82rem !important;
+    }
+    #slide-story div[style*="font-size:0.82rem"] {
+      font-size: 0.75rem !important;
+    }
+
+    /* ── Slide 2: The Gap (ChatGPT vs OpenClaw) ── */
+    #slide-2 .vs-grid {
+      grid-template-columns: 1fr !important;
+      gap: 12px !important;
+    }
+    .vs-divider {
+      display: none !important;
+    }
+    .vs-card { padding: 18px; }
+    .vs-icon { font-size: 24px; }
+    .vs-name { font-size: 15px; }
+    .vs-example { padding: 8px 10px; font-size: 12px; }
+    #slide-2 .analogy {
+      padding: 12px 16px;
+      font-size: 13px;
+      margin-top: 16px;
+    }
+
+    /* ── Slide 3: What is OpenClaw ── */
+    .steps-row {
+      flex-direction: column !important;
+      gap: 12px !important;
+      margin-top: 20px !important;
+    }
+    .step-arrow {
+      display: none !important;
+    }
+    .step {
+      padding: 16px 14px;
+    }
+    .step-num { width: 26px; height: 26px; font-size: 13px; }
+    .step-emoji { font-size: 28px; }
+    .step p { font-size: 12px; }
+    #slide-3 .fact-row {
+      gap: 8px; margin-top: 16px;
+    }
+    .fact-chip { padding: 8px 12px; font-size: 12px; }
+    .fact-chip .fc-num { font-size: 13px; }
+    /* Star history + creator row */
+    #slide-3 > div:last-of-type {
+      flex-direction: column !important;
+      gap: 10px !important;
+      margin-top: 10px !important;
+    }
+
+    /* ── Slide 3b: Under the Hood ── */
+    #slide-3b > div[style*="max-width:900px"] > div:first-child {
+      flex-wrap: wrap !important;
+      gap: 10px !important;
+      justify-content: center !important;
+    }
+    #slide-3b div[style*="grid-template-columns:1fr 1fr"][style*="gap:6px"] {
+      grid-template-columns: 1fr 1fr !important;
+      gap: 4px !important;
+    }
+    #slide-3b div[style*="grid-template-columns:1fr 1fr"][style*="gap:6px"] > div {
+      padding: 4px 8px !important;
+      font-size: 0.65rem !important;
+    }
+    /* Labels row */
+    #slide-3b > div[style*="max-width:900px"] > div:last-child {
+      flex-direction: column !important;
+      gap: 4px !important;
+      font-size: 0.68rem !important;
+      text-align: center;
+      margin-top: 14px !important;
+    }
+    /* Architecture boxes */
+    #slide-3b div[style*="border-radius:8px"][style*="padding:14px 20px"] {
+      padding: 10px 12px !important;
+      font-size: 0.75rem !important;
+    }
+    #slide-3b div[style*="border-radius:10px"][style*="padding:16px 22px"] {
+      padding: 10px 14px !important;
+    }
+
+    /* ── Arch 1: Channels + Gateway ── */
+    #slide-arch1 div[style*="display:flex"][style*="gap:16px"][style*="justify-content:center"] {
+      gap: 8px !important;
+    }
+    #slide-arch1 div[style*="padding:12px 18px"] {
+      padding: 8px 10px !important;
+    }
+    #slide-arch1 div[style*="font-size:1.8rem"] {
+      font-size: 1.3rem !important;
+    }
+    #slide-arch1 div[style*="font-size:0.8rem"][style*="font-weight:600"] {
+      font-size: 0.7rem !important;
+    }
+    #slide-arch1 div[style*="padding:24px"] {
+      padding: 16px !important;
+    }
+    #slide-arch1 div[style*="font-size:1.2rem"][style*="font-weight:800"] {
+      font-size: 1rem !important;
+    }
+    #slide-arch1 div[style*="font-size:0.9rem"] {
+      font-size: 0.78rem !important;
+    }
+
+    /* ── Arch 2: Memory + Cron ── */
+    #slide-arch2 > div[style*="grid-template-columns:1fr 1fr"] {
+      grid-template-columns: 1fr !important;
+      gap: 14px !important;
+    }
+    #slide-arch2 div[style*="padding:20px"] {
+      padding: 14px !important;
+    }
+    #slide-arch2 div[style*="font-size:1.1rem"] {
+      font-size: 0.95rem !important;
+    }
+    #slide-arch2 div[style*="font-size:0.85rem"] {
+      font-size: 0.78rem !important;
+    }
+
+    /* ── Arch 3: Sessions + Sub-Agents ── */
+    #slide-arch3 div[style*="display:grid"][style*="grid-template-columns:1fr 1fr"] {
+      grid-template-columns: 1fr !important;
+      gap: 12px !important;
+    }
+    #slide-arch3 div[style*="padding:20px"] {
+      padding: 14px !important;
+    }
+    #slide-arch3 div[style*="font-size:1.1rem"] {
+      font-size: 0.95rem !important;
+    }
+    #slide-arch3 div[style*="font-size:0.85rem"] {
+      font-size: 0.78rem !important;
+    }
+    /* Sub-agent spawn diagram */
+    #slide-arch3 div[style*="display:flex"][style*="align-items:center"][style*="justify-content:center"][style*="gap:12px"] {
+      flex-wrap: wrap !important;
+      gap: 8px !important;
+    }
+    #slide-arch3 div[style*="display:flex"][style*="gap:8px"] {
+      flex-wrap: wrap !important;
+      gap: 6px !important;
+    }
+
+    /* ── Slide 4: Use Cases ── */
+    .uc-grid {
+      grid-template-columns: 1fr !important;
+      gap: 12px !important;
+      margin-top: 16px !important;
+    }
+    .uc-card { padding: 16px 18px; }
+    .uc-emoji { font-size: 22px; }
+    .uc-role { font-size: 14px; }
+    .uc-tasks { font-size: 12px; }
+
+    /* ── Slide 5: Priya/Meera Story ── */
+    .story-layout {
+      grid-template-columns: 1fr !important;
+      gap: 14px !important;
+      margin-top: 16px !important;
+    }
+    .story-before, .story-after { padding: 16px; gap: 10px; }
+    .story-headline { font-size: 15px; }
+    .story-detail { font-size: 12px; }
+    .story-quote { font-size: 12px; padding: 8px 12px; }
+    #slide-5 .punchline { font-size: 14px; margin-top: 16px; }
+
+    /* ── Security slide ── */
+    #slide-security div[style*="max-width:800px"] {
+      gap: 12px !important;
+    }
+    #slide-security div[style*="padding:18px 22px"] {
+      padding: 14px 16px !important;
+    }
+    #slide-security div[style*="font-size:1rem"] {
+      font-size: 0.88rem !important;
+    }
+    #slide-security div[style*="font-size:0.88rem"] {
+      font-size: 0.78rem !important;
+    }
+
+    /* ── NVIDIA slide ── */
+    #slide-nvidia div[style*="grid-template-columns:1fr 1fr"] {
+      grid-template-columns: 1fr !important;
+      gap: 10px !important;
+    }
+    #slide-nvidia img { max-width: 100%; height: auto; }
+
+    /* ── Slide 6: Get Started ── */
+    .paths-row {
+      grid-template-columns: 1fr !important;
+      gap: 14px !important;
+      margin-top: 16px !important;
+    }
+    .path-card { padding: 18px 16px; }
+    .path-icon { font-size: 32px; }
+    .path-name { font-size: 14px; }
+    .path-desc { font-size: 12px; }
+    .code-block { font-size: 11px !important; padding: 10px 14px; white-space: pre-wrap; word-break: break-all; }
+    #slide-6 .free-note { font-size: 12px; }
+
+    /* ── Slide 7: Live Demo ── */
+    #slide-7 .demo-headline { font-size: 1.8rem !important; }
+    #slide-7 .demo-sub { font-size: 14px; margin-bottom: 20px; }
+    .demo-items { gap: 10px; }
+    .demo-item { padding: 10px 14px; font-size: 13px; }
+    .demo-item-num { width: 24px; height: 24px; font-size: 12px; }
+
+    /* ── Slide 8: ClawMetry ── */
+    #slide-8 .cm-layout {
+      grid-template-columns: 1fr !important;
+      gap: 16px !important;
+    }
+    .cm-feat { padding: 10px 12px; }
+    .cm-feat-icon { font-size: 20px; }
+    .cm-feat-text h4 { font-size: 13px; }
+    .cm-feat-text p { font-size: 11px; }
+    .cm-mock-row { font-size: 11px; padding: 8px 10px; }
+    #slide-8 .cm-install { flex-direction: column; align-items: flex-start; gap: 8px; }
+
+    /* ── Slide 9: Start Today ── */
+    .qr-row { gap: 20px; margin-bottom: 20px; }
+    .qr-box { width: 90px; height: 90px; }
+    .qr-box img { width: 100px !important; height: 100px !important; }
+    .qr-label { font-size: 11px; }
+    .resource-row { gap: 8px; margin-bottom: 20px; }
+    .resource-chip { padding: 8px 14px; font-size: 12px; }
+    #slide-9 .sub { font-size: 14px; margin-bottom: 24px; }
+    #slide-9 .footer-text { font-size: 16px; }
+
+    /* ── General: all inline grid/flex overrides ── */
+    div[style*="display:grid"][style*="grid-template-columns: 1fr 1fr"] {
+      grid-template-columns: 1fr !important;
+    }
+    div[style*="display:flex"][style*="gap:24px"] {
+      flex-wrap: wrap !important;
+    }
+    div[style*="display:flex"][style*="gap:36px"] {
+      flex-wrap: wrap !important;
+    }
+  }
+
   @media print {
     html, body { overflow: visible; height: auto; }
     #deck { overflow: visible; height: auto; }
