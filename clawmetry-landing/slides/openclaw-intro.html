@@ -789,20 +789,51 @@
     <h2>How OpenClaw <span class="gradient-text">actually works</span></h2>
 
     <div style="max-width:850px;margin:0 auto;">
-      <!-- ClawMetry Flow screenshot -->
-      <div style="border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,0.1);box-shadow:0 8px 40px rgba(0,0,0,0.4);margin-bottom:24px;">
-        <img src="/screenshots/flow.png" alt="OpenClaw Architecture — Flow View from ClawMetry" style="width:100%;display:block;">
+      <!-- Architecture flow diagram -->
+      <div style="display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap;">
+
+        <!-- You -->
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+          <div style="width:48px;height:48px;border-radius:50%;background:rgba(99,102,241,0.3);display:flex;align-items:center;justify-content:center;font-size:1.5rem;">👤</div>
+          <div style="font-weight:700;color:#fff;font-size:0.85rem;">You</div>
+        </div>
+
+        <div style="color:rgba(255,255,255,0.2);font-size:0.75rem;text-align:center;">messages in<br>→</div>
+
+        <!-- Channel -->
+        <div style="background:#3b82f6;border-radius:8px;padding:10px 18px;font-weight:700;color:#fff;font-size:0.85rem;">💬 TG / WhatsApp / Discord</div>
+
+        <div style="color:rgba(255,255,255,0.2);font-size:0.75rem;text-align:center;">routes to<br>→</div>
+
+        <!-- Gateway -->
+        <div style="background:rgba(100,116,139,0.5);border-radius:8px;padding:10px 18px;font-weight:700;color:#fff;font-size:0.85rem;">🏠 Gateway</div>
+
+        <div style="color:rgba(255,255,255,0.2);font-size:0.75rem;text-align:center;">routes to AI<br>→</div>
+
+        <!-- AI Model -->
+        <div style="background:rgba(229,68,58,0.8);border-radius:10px;padding:14px 22px;text-align:center;">
+          <div style="font-size:1.2rem;">🧠</div>
+          <div style="font-weight:800;color:#fff;font-size:0.9rem;">AI Model</div>
+          <div style="font-size:0.7rem;color:rgba(255,255,255,0.6);">Claude / GPT / Gemini</div>
+        </div>
+
+        <div style="color:rgba(255,255,255,0.2);font-size:0.75rem;text-align:center;">uses tools<br>→</div>
+
+        <!-- Tools -->
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="background:#3b82f6;border-radius:6px;padding:6px 14px;font-size:0.75rem;font-weight:600;color:#fff;">📋 Sessions</div>
+          <div style="background:#f59e0b;border-radius:6px;padding:6px 14px;font-size:0.75rem;font-weight:600;color:#000;">⚡ Exec</div>
+          <div style="background:#8b5cf6;border-radius:6px;padding:6px 14px;font-size:0.75rem;font-weight:600;color:#fff;">🌐 Web</div>
+          <div style="background:#0d9488;border-radius:6px;padding:6px 14px;font-size:0.75rem;font-weight:600;color:#fff;">🔍 Search</div>
+          <div style="background:#6b7280;border-radius:6px;padding:6px 14px;font-size:0.75rem;font-weight:600;color:#fff;">📅 Cron</div>
+          <div style="background:#6366f1;border-radius:6px;padding:6px 14px;font-size:0.75rem;font-weight:600;color:#fff;">🔊 TTS</div>
+          <div style="background:#2563eb;border-radius:6px;padding:6px 14px;font-size:0.75rem;font-weight:600;color:#fff;">🧠 Memory</div>
+        </div>
       </div>
-      <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;font-size:0.82rem;color:rgba(255,255,255,0.5);">
-        <span>💬 <strong style="color:#fff;">You</strong> send a message via Telegram/Web/CLI</span>
-        <span>→</span>
-        <span>🏠 <strong style="color:#fff;">Gateway</strong> routes to AI model</span>
-        <span>→</span>
-        <span>🧠 <strong style="color:#fff;">AI</strong> thinks and uses tools</span>
-        <span>→</span>
-        <span>🔧 <strong style="color:#fff;">Tools:</strong> Exec, Web, Search, Cron, Memory, TTS</span>
+
+      <div style="text-align:center;margin-top:20px;font-size:0.85rem;color:rgba(255,255,255,0.4);">
+        You send a message from any channel. The Gateway routes it to the AI. The AI uses tools to get work done.
       </div>
-      <div style="text-align:center;margin-top:12px;font-size:0.75rem;color:rgba(255,255,255,0.3);">Live architecture view from ClawMetry (clawmetry.com)</div>
     </div>
   </div>
   <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 3b</h4>This is the actual live architecture view from ClawMetry. You can see how everything flows: your message comes in, the Gateway routes it to the AI, the AI uses tools to get work done, and reports back.</div>
