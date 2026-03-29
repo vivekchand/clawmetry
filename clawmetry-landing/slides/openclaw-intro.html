@@ -805,7 +805,146 @@
       <div style="text-align:center;margin-top:12px;font-size:0.75rem;color:rgba(255,255,255,0.3);">Live architecture view from ClawMetry (clawmetry.com)</div>
     </div>
   </div>
-  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 3b</h4>For those who want to know how it works: OpenClaw has a Gateway that's always running on your machine. When you send a message, the Gateway routes it to an AI model, which thinks and decides what tools to use. Tools include browsing the web, reading files, sending emails. Each conversation is a session with memory. The agent has a personality file (SOUL.md) and a memory file (MEMORY.md) — it actually learns over time. It can spawn sub-agents for parallel work, and you can schedule recurring tasks with cron jobs. All of this runs locally on your machine.</div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Slide 3b</h4>This is the actual live architecture view from ClawMetry. You can see how everything flows: your message comes in, the Gateway routes it to the AI, the AI uses tools to get work done, and reports back.</div>
+
+  <!-- SLIDE: ARCH 1 — Channels + Gateway -->
+  <div class="slide" id="slide-arch1">
+    <div class="slide-tag">Architecture Deep Dive (1/3)</div>
+    <h2>Channels + <span class="gradient-text">Gateway</span></h2>
+    <div style="max-width:800px;margin:0 auto;display:flex;flex-direction:column;gap:20px;">
+
+      <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-bottom:8px;">
+        <div style="background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:12px 18px;text-align:center;">
+          <div style="font-size:1.8rem;">💬</div>
+          <div style="font-weight:600;color:#fff;font-size:0.8rem;margin-top:4px;">Telegram</div>
+        </div>
+        <div style="background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:12px 18px;text-align:center;">
+          <div style="font-size:1.8rem;">💜</div>
+          <div style="font-weight:600;color:#fff;font-size:0.8rem;margin-top:4px;">Discord</div>
+        </div>
+        <div style="background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:12px 18px;text-align:center;">
+          <div style="font-size:1.8rem;">📱</div>
+          <div style="font-weight:600;color:#fff;font-size:0.8rem;margin-top:4px;">WhatsApp</div>
+        </div>
+        <div style="background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:12px 18px;text-align:center;">
+          <div style="font-size:1.8rem;">💼</div>
+          <div style="font-weight:600;color:#fff;font-size:0.8rem;margin-top:4px;">Slack</div>
+        </div>
+        <div style="background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:12px 18px;text-align:center;">
+          <div style="font-size:1.8rem;">📧</div>
+          <div style="font-weight:600;color:#fff;font-size:0.8rem;margin-top:4px;">Signal</div>
+        </div>
+        <div style="background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:12px 18px;text-align:center;">
+          <div style="font-size:1.8rem;">🌐</div>
+          <div style="font-weight:600;color:#fff;font-size:0.8rem;margin-top:4px;">Web / CLI</div>
+        </div>
+        <div style="background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:12px 18px;text-align:center;">
+          <div style="font-size:1.8rem;">📲</div>
+          <div style="font-weight:600;color:#fff;font-size:0.8rem;margin-top:4px;">iMessage</div>
+        </div>
+      </div>
+
+      <div style="text-align:center;font-size:1.5rem;color:rgba(255,255,255,0.2);">↓ all messages flow to ↓</div>
+
+      <div style="background:rgba(229,68,58,0.1);border:1px solid rgba(229,68,58,0.25);border-radius:14px;padding:24px;text-align:center;">
+        <div style="font-size:2rem;margin-bottom:8px;">🏠</div>
+        <div style="font-size:1.2rem;font-weight:800;color:#fff;">The Gateway</div>
+        <div style="font-size:0.9rem;color:rgba(255,255,255,0.5);margin-top:8px;line-height:1.6;">
+          Always running on your machine (or cloud). Routes every message to the right AI model.<br>
+          Manages sessions, authentication, config. Connects to any channel you want.<br>
+          <strong style="color:rgba(255,255,255,0.7);">You talk to your agent wherever you already are. It meets you there.</strong>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Arch 1</h4>OpenClaw supports all major messaging channels out of the box. The key insight: you don't need a new app. Your agent lives in Telegram, WhatsApp, Discord, Slack, whatever you already use. The Gateway is the core process that runs on your machine and routes everything.</div>
+
+  <!-- SLIDE: ARCH 2 — Memory + Cron -->
+  <div class="slide" id="slide-arch2">
+    <div class="slide-tag">Architecture Deep Dive (2/3)</div>
+    <h2>Memory + <span class="gradient-text">Scheduled Tasks</span></h2>
+    <div style="max-width:800px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+
+      <div style="background:rgba(118,185,0,0.08);border:1px solid rgba(118,185,0,0.2);border-radius:14px;padding:20px;">
+        <div style="font-size:1.5rem;margin-bottom:10px;">🧠</div>
+        <div style="font-size:1.1rem;font-weight:700;color:#fff;margin-bottom:12px;">Long-Term Memory</div>
+        <div style="font-size:0.85rem;color:rgba(255,255,255,0.55);line-height:1.7;">
+          <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:10px 14px;font-family:monospace;font-size:0.8rem;margin-bottom:10px;color:rgba(255,255,255,0.6);">
+            📄 SOUL.md — who the agent is<br>
+            📄 MEMORY.md — what it has learned<br>
+            📁 memory/ — daily notes and logs<br>
+            📄 USER.md — what it knows about you
+          </div>
+          Your agent <strong style="color:#fff;">remembers everything</strong> across sessions.<br><br>
+          It knows your preferences, your projects, your context. It writes daily journals and updates its own memory.<br><br>
+          <strong style="color:#76b900;">It literally grows smarter the longer you use it.</strong>
+        </div>
+      </div>
+
+      <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:14px;padding:20px;">
+        <div style="font-size:1.5rem;margin-bottom:10px;">⏰</div>
+        <div style="font-size:1.1rem;font-weight:700;color:#fff;margin-bottom:12px;">Cron Jobs (Scheduled Tasks)</div>
+        <div style="font-size:0.85rem;color:rgba(255,255,255,0.55);line-height:1.7;">
+          <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:10px 14px;font-family:monospace;font-size:0.8rem;margin-bottom:10px;color:rgba(255,255,255,0.6);">
+            "Every morning at 8am, check my email<br>
+            &nbsp;and summarise what's urgent"<br><br>
+            "Every Friday, generate a weekly report<br>
+            &nbsp;from my project tasks"
+          </div>
+          Set it once, it runs <strong style="color:#fff;">automatically</strong> on schedule.<br><br>
+          Weather checks, email summaries, social media posts, data backups, reminders.<br><br>
+          <strong style="color:#f59e0b;">Your agent works even while you sleep.</strong>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Arch 2</h4>Two killer features that set OpenClaw apart from ChatGPT: persistent memory and scheduled tasks. Your agent doesn't forget. It writes daily journals, remembers your preferences, learns your projects. And cron jobs mean you set something up once and it happens on autopilot. Check email every morning, send reports every Friday, post content on schedule.</div>
+
+  <!-- SLIDE: ARCH 3 — Sessions + Sub-Agents -->
+  <div class="slide" id="slide-arch3">
+    <div class="slide-tag">Architecture Deep Dive (3/3)</div>
+    <h2>Sessions + <span class="gradient-text">Sub-Agents</span></h2>
+    <div style="max-width:800px;margin:0 auto;display:flex;flex-direction:column;gap:20px;">
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+        <div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:14px;padding:20px;">
+          <div style="font-size:1.5rem;margin-bottom:10px;">📋</div>
+          <div style="font-size:1.1rem;font-weight:700;color:#fff;margin-bottom:12px;">Sessions</div>
+          <div style="font-size:0.85rem;color:rgba(255,255,255,0.55);line-height:1.7;">
+            Every conversation is a <strong style="color:#fff;">session</strong>.<br><br>
+            Your main chat is the "main session." But your agent can also have isolated sessions for background work.<br><br>
+            Each session has its own context, history, and tools.
+          </div>
+        </div>
+
+        <div style="background:rgba(229,68,58,0.08);border:1px solid rgba(229,68,58,0.2);border-radius:14px;padding:20px;">
+          <div style="font-size:1.5rem;margin-bottom:10px;">🔄</div>
+          <div style="font-size:1.1rem;font-weight:700;color:#fff;margin-bottom:12px;">Sub-Agents</div>
+          <div style="font-size:0.85rem;color:rgba(255,255,255,0.55);line-height:1.7;">
+            Your agent can <strong style="color:#fff;">spawn child agents</strong> for parallel work.<br><br>
+            Like a manager delegating tasks to a team. "Research this topic" goes to one sub-agent while "Draft this email" goes to another.<br><br>
+            All running simultaneously.
+          </div>
+        </div>
+      </div>
+
+      <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:20px;text-align:center;">
+        <div style="font-size:0.9rem;color:rgba(255,255,255,0.5);margin-bottom:12px;">Think of it like this:</div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;">
+          <div style="background:rgba(229,68,58,0.15);border-radius:10px;padding:10px 16px;font-weight:700;color:#fff;font-size:0.85rem;">🧠 Main Agent</div>
+          <div style="color:rgba(255,255,255,0.3);">spawns</div>
+          <div style="display:flex;gap:8px;">
+            <div style="background:rgba(118,185,0,0.12);border-radius:8px;padding:8px 12px;font-size:0.75rem;color:rgba(255,255,255,0.6);">🔍 Research</div>
+            <div style="background:rgba(118,185,0,0.12);border-radius:8px;padding:8px 12px;font-size:0.75rem;color:rgba(255,255,255,0.6);">✍️ Write</div>
+            <div style="background:rgba(118,185,0,0.12);border-radius:8px;padding:8px 12px;font-size:0.75rem;color:rgba(255,255,255,0.6);">📊 Analyse</div>
+            <div style="background:rgba(118,185,0,0.12);border-radius:8px;padding:8px 12px;font-size:0.75rem;color:rgba(255,255,255,0.6);">📧 Email</div>
+          </div>
+        </div>
+        <div style="font-size:0.8rem;color:rgba(255,255,255,0.4);margin-top:10px;">All running in parallel. Results merge back to the main agent.</div>
+      </div>
+    </div>
+  </div>
+  <div class="presenter-notes"><h4>📝 Presenter Notes — Arch 3</h4>Sessions and sub-agents are what make OpenClaw truly powerful. Sessions give you separate conversation contexts. Sub-agents are the magic: your main agent can delegate work to child agents that run in parallel. Imagine asking your agent to research 5 different companies at the same time. It spawns 5 sub-agents, they all work simultaneously, and results come back to you in minutes instead of hours. This is the 10x multiplier.</div>
 
   <!-- SLIDE 4: USE CASES -->
   <div class="slide" id="slide-4">
