@@ -802,7 +802,7 @@
             &ldquo;Help me install<br><code style="color:#28c840;background:rgba(40,200,64,0.15);padding:2px 8px;border-radius:4px;font-size:14px;">pip install clawmetry &amp;&amp; clawmetry onboard</code>&rdquo;
           </div>
           <div style="font-size:12px;color:rgba(255,255,255,0.3);margin-top:20px;line-height:1.7;">
-            Your agent will install the package and connect your node to the cloud, and open app.clawmetry.com automatically. Run in a PTY since it needs OTP verification.
+            Your agent will install the package and set up your local observability dashboard automatically. Run in a PTY since it needs interactive input.
           </div>
         </div>
       </div>
@@ -826,7 +826,7 @@ var cmds = {
   pip: 'pip install clawmetry && clawmetry onboard',
   powershell: 'iwr -useb https://clawmetry.com/install.ps1 | iex',
   cmd: 'curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd && del install.cmd',
-  agent: 'Help me install pip install clawmetry && clawmetry onboard',
+  agent: 'Help me install pip install clawmetry && clawmetry onboard in a PTY',
   macos: 'https://github.com/vivekchand/clawmetry-mac/releases/download/v1.0.1/ClawMetry-2026-03-11.dmg'
 };
 var activeTab = 'oneliner';
