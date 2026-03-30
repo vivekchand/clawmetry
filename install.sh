@@ -298,7 +298,7 @@ startsecs=3
 stdout_logfile=/sandbox/.clawmetry/sync.log
 stderr_logfile=/sandbox/.clawmetry/sync.log
 stdout_logfile_maxbytes=10MB
-environment=HOME="/sandbox",CLAWMETRY_CONFIG="/sandbox/.clawmetry/config.json",CLAWMETRY_OPENCLAW_DIR="/sandbox/.openclaw"
+environment=HOME="/sandbox",CLAWMETRY_CONFIG="/sandbox/.clawmetry/config.json",CLAWMETRY_OPENCLAW_DIR="/sandbox/.openclaw",CLAWMETRY_OPENCLAW_DIR="/sandbox/.openclaw"
 PROGEOF
 
             # Kill ALL stray sync.py daemons before supervisord takes over
