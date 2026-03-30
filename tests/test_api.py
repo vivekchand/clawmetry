@@ -154,6 +154,43 @@ class TestUsage:
         assert isinstance(d, dict)
 
 
+# ---------------------------------------------------------------------------
+# Model Attribution
+# ---------------------------------------------------------------------------
+
+class TestModelAttribution:
+    def test_status(self, api, base_url):
+        r = get(api, base_url, "/api/model-attribution")
+        assert_ok(r)
+
+    def test_required_keys(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        assert_keys(d, "models", "primary_model", "fallback_rate_overall",
+                    "sessions_total", "fallback_sessions", "cost_delta_usd", "timeline")
+
+    def test_models_is_list(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        assert isinstance(d["models"], list)
+
+    def test_timeline_is_list(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        assert isinstance(d["timeline"], list)
+
+    def test_fallback_rate_is_float(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        rate = d["fallback_rate_overall"]
+        assert isinstance(rate, (int, float))
+        assert 0.0 <= rate <= 1.0
+
+    def test_model_row_schema(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        for row in d["models"]:
+            assert_keys(row, "model", "tokens", "cost", "sessions", "is_primary", "share")
+            assert isinstance(row["tokens"], int)
+            assert isinstance(row["cost"], float)
+            assert isinstance(row["sessions"], int)
+            assert isinstance(row["is_primary"], bool)
+
 
 # ---------------------------------------------------------------------------
 # Channel endpoints

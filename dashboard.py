@@ -2768,6 +2768,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('models')">Models</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3618,6 +3619,45 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-security -->
 
+<!-- MODELS -->
+<div class="page" id="page-models">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadModelAttribution()">&#x21BB; Refresh</button>
+  </div>
+  <div id="model-attr-alerts" style="margin-bottom:12px;"></div>
+  <div class="grid" id="model-attr-stats">
+    <div class="card">
+      <div class="card-title"><span class="icon">&#129504;</span> Primary Model</div>
+      <div class="card-value" id="ma-primary-model" style="font-size:14px;word-break:break-all;">--</div>
+      <div class="card-sub" id="ma-primary-sub"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#9888;&#65039;</span> Fallback Rate</div>
+      <div class="card-value" id="ma-fallback-rate">--</div>
+      <div class="card-sub" id="ma-fallback-sessions"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#128176;</span> Cost Delta (fallback vs primary)</div>
+      <div class="card-value" id="ma-cost-delta">--</div>
+      <div class="card-sub">Extra cost from fallback usage</div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#128203;</span> Total Sessions</div>
+      <div class="card-value" id="ma-total-sessions">--</div>
+      <div class="card-sub">Analysed from JSONL transcripts</div>
+    </div>
+  </div>
+  <!-- Model breakdown table -->
+  <div class="card" style="margin-top:16px;">
+    <div class="card-title"><span class="icon">&#128200;</span> Per-Model Breakdown</div>
+    <div id="model-attr-table" style="margin-top:10px;"></div>
+  </div>
+  <!-- Fallback timeline -->
+  <div class="card" style="margin-top:16px;">
+    <div class="card-title"><span class="icon">&#128202;</span> Primary vs Fallback Token Usage (last 30 days)</div>
+    <div id="model-attr-timeline" style="margin-top:10px;"></div>
+  </div>
+</div><!-- end page-models -->
 
 
 <script>
@@ -3929,6 +3969,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+  if (name === 'models') loadModelAttribution();
 }
 
 function exportUsageData() {
@@ -7895,6 +7936,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('models')">Models</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -8789,6 +8831,44 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-security -->
 
+<!-- MODELS (theme2) -->
+<div class="page" id="page-models">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadModelAttribution()">&#x21BB; Refresh</button>
+  </div>
+  <div id="model-attr-alerts" style="margin-bottom:12px;"></div>
+  <div class="grid" id="model-attr-stats">
+    <div class="card">
+      <div class="card-title"><span class="icon">&#129504;</span> Primary Model</div>
+      <div class="card-value" id="ma-primary-model" style="font-size:14px;word-break:break-all;">--</div>
+      <div class="card-sub" id="ma-primary-sub"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#9888;&#65039;</span> Fallback Rate</div>
+      <div class="card-value" id="ma-fallback-rate">--</div>
+      <div class="card-sub" id="ma-fallback-sessions"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#128176;</span> Cost Delta (fallback vs primary)</div>
+      <div class="card-value" id="ma-cost-delta">--</div>
+      <div class="card-sub">Extra cost from fallback usage</div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#128203;</span> Total Sessions</div>
+      <div class="card-value" id="ma-total-sessions">--</div>
+      <div class="card-sub">Analysed from JSONL transcripts</div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px;">
+    <div class="card-title"><span class="icon">&#128200;</span> Per-Model Breakdown</div>
+    <div id="model-attr-table" style="margin-top:10px;"></div>
+  </div>
+  <div class="card" style="margin-top:16px;">
+    <div class="card-title"><span class="icon">&#128202;</span> Primary vs Fallback Token Usage (last 30 days)</div>
+    <div id="model-attr-timeline" style="margin-top:10px;"></div>
+  </div>
+</div><!-- end page-models theme2 -->
+
 
 
 
@@ -9157,6 +9237,7 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+  if (name === 'models') loadModelAttribution();
 }
 
 function exportUsageData() {
@@ -10155,6 +10236,112 @@ async function loadSecCatalog() {
     el.innerHTML = html;
   } catch(e) {
     el.innerHTML = '<div style="color:var(--text-error);font-size:11px;">Failed to load: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+// ─── Model Attribution ────────────────────────────────────────────────────────
+async function loadModelAttribution() {
+  try {
+    var data = await fetchJsonWithTimeout('/api/model-attribution', 30000);
+    if (data.error) { console.warn('model-attribution error:', data.error); return; }
+
+    // Stat cards
+    var primaryEl = document.getElementById('ma-primary-model');
+    var primarySub = document.getElementById('ma-primary-sub');
+    var fallbackEl = document.getElementById('ma-fallback-rate');
+    var fallbackSub = document.getElementById('ma-fallback-sessions');
+    var deltaEl = document.getElementById('ma-cost-delta');
+    var sessEl = document.getElementById('ma-total-sessions');
+
+    if (primaryEl) primaryEl.textContent = data.primary_model || '(unknown)';
+    if (primarySub) {
+      var prow = (data.models || []).find(function(m) { return m.is_primary; });
+      primarySub.textContent = prow ? fmtTokens(prow.tokens) + ' tokens' : '';
+    }
+    var frPct = Math.round((data.fallback_rate_overall || 0) * 100);
+    if (fallbackEl) {
+      fallbackEl.textContent = frPct + '%';
+      fallbackEl.style.color = frPct > 10 ? '#ef4444' : frPct > 5 ? '#f59e0b' : '#22c55e';
+    }
+    if (fallbackSub) fallbackSub.textContent = (data.fallback_sessions || 0) + ' fallback / ' + (data.sessions_total || 0) + ' total';
+    if (deltaEl) {
+      var delta = data.cost_delta_usd || 0;
+      deltaEl.textContent = (delta >= 0 ? '+' : '') + '$' + Math.abs(delta).toFixed(4);
+      deltaEl.style.color = delta > 0 ? '#ef4444' : '#22c55e';
+    }
+    if (sessEl) sessEl.textContent = data.sessions_total || 0;
+
+    // High fallback rate alert
+    var alertsEl = document.getElementById('model-attr-alerts');
+    if (alertsEl) {
+      if (frPct > 10) {
+        alertsEl.innerHTML = '<div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:12px 16px;color:#ef4444;font-size:13px;">&#9888; Fallback rate is <strong>' + frPct + '%</strong> — your primary model (' + (data.primary_model || '?') + ') may be experiencing rate limits or errors.</div>';
+      } else {
+        alertsEl.innerHTML = '';
+      }
+    }
+
+    // Model table
+    var tableEl = document.getElementById('model-attr-table');
+    if (tableEl && data.models && data.models.length > 0) {
+      var html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+      html += '<thead><tr style="border-bottom:1px solid var(--border-primary);">';
+      html += '<th style="text-align:left;padding:6px 8px;color:var(--text-tertiary);font-weight:600;">Model</th>';
+      html += '<th style="text-align:right;padding:6px 8px;color:var(--text-tertiary);font-weight:600;">Tokens</th>';
+      html += '<th style="text-align:right;padding:6px 8px;color:var(--text-tertiary);font-weight:600;">Cost</th>';
+      html += '<th style="text-align:right;padding:6px 8px;color:var(--text-tertiary);font-weight:600;">Sessions</th>';
+      html += '<th style="text-align:right;padding:6px 8px;color:var(--text-tertiary);font-weight:600;">Share</th>';
+      html += '<th style="text-align:center;padding:6px 8px;color:var(--text-tertiary);font-weight:600;">Role</th>';
+      html += '</tr></thead><tbody>';
+      data.models.forEach(function(m) {
+        var badge = m.is_primary
+          ? '<span style="background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.3);padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">Primary</span>'
+          : '<span style="background:rgba(239,68,68,0.1);color:#ef4444;border:1px solid rgba(239,68,68,0.3);padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">Fallback</span>';
+        if (m.model === 'unknown') badge = '<span style="background:rgba(148,163,184,0.1);color:#94a3b8;padding:2px 8px;border-radius:12px;font-size:11px;">Unknown</span>';
+        html += '<tr style="border-bottom:1px solid var(--border-secondary);">';
+        html += '<td style="padding:8px;color:var(--text-primary);font-family:monospace;">' + (m.model || '?') + '</td>';
+        html += '<td style="padding:8px;text-align:right;">' + fmtTokens(m.tokens) + '</td>';
+        html += '<td style="padding:8px;text-align:right;">$' + (m.cost || 0).toFixed(4) + '</td>';
+        html += '<td style="padding:8px;text-align:right;">' + (m.sessions || 0) + '</td>';
+        html += '<td style="padding:8px;text-align:right;">' + Math.round((m.share || 0) * 100) + '%</td>';
+        html += '<td style="padding:8px;text-align:center;">' + badge + '</td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      tableEl.innerHTML = html;
+    } else if (tableEl) {
+      tableEl.innerHTML = '<div style="color:var(--text-tertiary);font-size:13px;padding:12px 0;">No model data available yet.</div>';
+    }
+
+    // Timeline SVG bar chart
+    var tlEl = document.getElementById('model-attr-timeline');
+    if (tlEl && data.timeline && data.timeline.length > 0) {
+      var tl = data.timeline.slice(-30);
+      var maxTok = Math.max.apply(null, tl.map(function(d) { return (d.primary_tokens || 0) + (d.fallback_tokens || 0); })) || 1;
+      var barW = Math.max(4, Math.floor(560 / tl.length) - 2);
+      var svgH = 80;
+      var svg = '<svg width="100%" viewBox="0 0 ' + (tl.length * (barW + 2)) + ' ' + (svgH + 20) + '" style="overflow:visible;">';
+      tl.forEach(function(d, i) {
+        var x = i * (barW + 2);
+        var tot = (d.primary_tokens || 0) + (d.fallback_tokens || 0);
+        var ph = Math.round(((d.primary_tokens || 0) / maxTok) * svgH);
+        var fh = Math.round(((d.fallback_tokens || 0) / maxTok) * svgH);
+        // Primary bar (bottom)
+        svg += '<rect x="' + x + '" y="' + (svgH - ph) + '" width="' + barW + '" height="' + ph + '" fill="rgba(34,197,94,0.6)" rx="1"><title>' + d.date + ' primary: ' + fmtTokens(d.primary_tokens || 0) + '</title></rect>';
+        // Fallback bar (on top)
+        if (fh > 0) svg += '<rect x="' + x + '" y="' + (svgH - ph - fh) + '" width="' + barW + '" height="' + fh + '" fill="rgba(239,68,68,0.7)" rx="1"><title>' + d.date + ' fallback: ' + fmtTokens(d.fallback_tokens || 0) + '</title></rect>';
+      });
+      svg += '</svg>';
+      var legend = '<div style="margin-top:6px;font-size:11px;color:var(--text-tertiary);display:flex;gap:16px;">';
+      legend += '<span><span style="display:inline-block;width:10px;height:10px;background:rgba(34,197,94,0.6);border-radius:2px;margin-right:4px;"></span>Primary</span>';
+      legend += '<span><span style="display:inline-block;width:10px;height:10px;background:rgba(239,68,68,0.7);border-radius:2px;margin-right:4px;"></span>Fallback</span>';
+      legend += '</div>';
+      tlEl.innerHTML = svg + legend;
+    } else if (tlEl) {
+      tlEl.innerHTML = '<div style="color:var(--text-tertiary);font-size:13px;padding:12px 0;">No timeline data available.</div>';
+    }
+  } catch(e) {
+    console.warn('loadModelAttribution error:', e);
   }
 }
 
@@ -19547,6 +19734,122 @@ def api_usage_export():
         response.headers['Content-Disposition'] = f'attachment; filename=openclaw-usage-{datetime.now().strftime("%Y%m%d")}.csv'
         return response
         
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp_usage.route('/api/model-attribution')
+def api_model_attribution():
+    """Return per-model token and cost attribution with fallback detection.
+
+    For each session, the model recorded in the JSONL is compared against
+    the configured primary model (from openclaw.json / env).  Sessions using
+    a different model are counted as fallbacks.
+
+    Response schema::
+
+        {
+          "models": [{"model": str, "tokens": int, "cost": float, "sessions": int,
+                       "is_primary": bool, "fallback_rate": float}],
+          "primary_model": str | null,
+          "fallback_rate_overall": float,   // 0-1
+          "sessions_total": int,
+          "fallback_sessions": int,
+          "cost_delta_usd": float,          // fallback_cost - primary_cost (signed)
+          "timeline": [{"date": str, "primary_tokens": int, "fallback_tokens": int}]
+        }
+    """
+    try:
+        analytics = _compute_transcript_analytics()
+        sessions = analytics.get('sessions', [])
+        model_usage = analytics.get('model_usage', {})
+
+        # Detect primary model from config
+        primary_model = None
+        try:
+            cfg_path = os.path.expanduser('~/.openclaw/openclaw.json')
+            if os.path.exists(cfg_path):
+                with open(cfg_path) as _f:
+                    _cfg = json.load(_f)
+                    primary_model = (_cfg.get('model') or _cfg.get('defaultModel')
+                                     or _cfg.get('providers', {}).get('default'))
+        except Exception:
+            pass
+        if not primary_model:
+            primary_model = os.environ.get('OPENCLAW_MODEL') or os.environ.get('DEFAULT_MODEL')
+
+        # Infer primary as most-used model if not configured
+        if not primary_model and model_usage:
+            primary_model = max(model_usage, key=lambda m: model_usage[m])
+
+        # Per-session stats
+        model_stats: dict = {}  # model -> {tokens, cost, sessions}
+        fallback_sessions = 0
+        primary_sessions = 0
+        total_sessions = 0
+
+        # Daily timeline
+        daily: dict = {}  # date -> {primary_tokens, fallback_tokens}
+
+        for sess in sessions:
+            model = sess.get('model') or 'unknown'
+            tokens = int(sess.get('tokens', 0) or 0)
+            cost = float(sess.get('cost_usd', 0.0) or 0.0)
+            day = sess.get('day') or ''
+
+            if model not in model_stats:
+                model_stats[model] = {'tokens': 0, 'cost': 0.0, 'sessions': 0}
+            model_stats[model]['tokens'] += tokens
+            model_stats[model]['cost'] += cost
+            model_stats[model]['sessions'] += 1
+            total_sessions += 1
+
+            is_fb = bool(primary_model and model != primary_model and model != 'unknown')
+            if is_fb:
+                fallback_sessions += 1
+            else:
+                primary_sessions += 1
+
+            if day:
+                if day not in daily:
+                    daily[day] = {'date': day, 'primary_tokens': 0, 'fallback_tokens': 0}
+                if is_fb:
+                    daily[day]['fallback_tokens'] += tokens
+                else:
+                    daily[day]['primary_tokens'] += tokens
+
+        # Build model rows
+        total_tokens = sum(v['tokens'] for v in model_stats.values()) or 1
+        rows = []
+        for model, stats in sorted(model_stats.items(), key=lambda x: -x[1]['tokens']):
+            is_primary = bool(primary_model and model == primary_model)
+            rows.append({
+                'model': model,
+                'tokens': stats['tokens'],
+                'cost': round(stats['cost'], 6),
+                'sessions': stats['sessions'],
+                'is_primary': is_primary,
+                'share': round(stats['tokens'] / total_tokens, 4),
+            })
+
+        # Cost delta: fallback total - primary total
+        primary_cost = sum(r['cost'] for r in rows if r.get('is_primary'))
+        fallback_cost = sum(r['cost'] for r in rows if not r.get('is_primary')
+                            and r['model'] != 'unknown')
+        cost_delta = round(fallback_cost - primary_cost, 6)
+
+        fallback_rate = round(fallback_sessions / total_sessions, 4) if total_sessions > 0 else 0.0
+
+        timeline = sorted(daily.values(), key=lambda d: d['date'])
+
+        return jsonify({
+            'models': rows,
+            'primary_model': primary_model,
+            'fallback_rate_overall': fallback_rate,
+            'sessions_total': total_sessions,
+            'fallback_sessions': fallback_sessions,
+            'cost_delta_usd': cost_delta,
+            'timeline': timeline,
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
