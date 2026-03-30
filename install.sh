@@ -145,13 +145,22 @@ except Exception:
         echo -e "  → Installing ClawMetry inside sandbox ${BOLD}${sb}${NC}..."
 
         INSTALLED_VER=$(docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-          clawmetry --version 2>/dev/null || true)
+          clawmetry --version 2>/dev/null | grep -o '[0-9]*\.[0-9]*\.[0-9]*' || true)
+        REQUIRED_VER="0.12.87"
 
+        needs_install=1
         if [ -n "$INSTALLED_VER" ]; then
-          echo -e "  ${GREEN}${BOLD}✓ ClawMetry already installed ($INSTALLED_VER)${NC}"
-        else
+          if [ "$(printf '%s\n%s' "$INSTALLED_VER" "$REQUIRED_VER" | sort -V | head -1)" = "$REQUIRED_VER" ]; then
+            echo -e "  ${GREEN}${BOLD}✓ ClawMetry $INSTALLED_VER already installed${NC}"
+            needs_install=0
+          else
+            echo -e "  ${DIM}↑ Upgrading ClawMetry $INSTALLED_VER → $REQUIRED_VER...${NC}"
+          fi
+        fi
+
+        if [ "$needs_install" = "1" ]; then
           if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-            pip install --break-system-packages --quiet clawmetry 2>/dev/null; then
+            pip install --break-system-packages --quiet "clawmetry>=$REQUIRED_VER" 2>/dev/null; then
             echo -e "  ${GREEN}${BOLD}✓ ClawMetry installed${NC}"
           else
             echo -e "  ${DIM}⚠  Auto-install failed. Install manually:${NC}"
@@ -214,8 +223,14 @@ except Exception:
                 rm -f /root/.clawmetry/config.json 2>/dev/null || true
               echo -e "  ${DIM}↺ Cleared stale config (different account)${NC}"
             fi
-            # Run clawmetry connect non-interactively inside sandbox
-            # --key + --enc-key + --node-id skips OTP and enc key prompts, starts daemon
+            # Pre-write config so --key matches _saved_api_key (skips OTP verification)
+            CONNECT_TS=$(date -u +%Y-%m-%dT%H:%M:%S 2>/dev/null || date +%Y-%m-%dT%H:%M:%S)
+            docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+              bash -c "mkdir -p /root/.clawmetry && python3 -c \"
+import json; json.dump({'api_key':'$HOST_API_KEY','node_id':'$sb','platform':'Linux','connected_at':'$CONNECT_TS','encryption_key':'$HOST_ENC_KEY'},open('/root/.clawmetry/config.json','w'))
+\"" 2>/dev/null || true
+
+            # Connect non-interactively (OTP skipped — key matches saved config)
             if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
               clawmetry connect --key "$HOST_API_KEY" --enc-key "$HOST_ENC_KEY" --node-id "$sb" 2>/dev/null; then
               echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb connected (node: $sb)${NC}"
