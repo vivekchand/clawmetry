@@ -275,14 +275,23 @@ stdout_logfile_maxbytes=10MB
 environment=HOME="/root"
 PROGEOF
 
-            # Kill stale PID-file daemon if any
+            # Kill any stray daemon (started by old clawmetry connect without --no-daemon)
             kill $(cat /root/.clawmetry/sync.pid 2>/dev/null) 2>/dev/null || true
             rm -f /root/.clawmetry/sync.pid
+            # Also kill any stray sync.py process
+            for _pid in /proc/[0-9]*/cmdline; do
+              _p="${_pid%/cmdline}"; _p="${_p#/proc/}"
+              if grep -qa "sync.py" "$_pid" 2>/dev/null && grep -qa "clawmetry" "$_pid" 2>/dev/null; then
+                kill "$_p" 2>/dev/null || true
+              fi
+            done
+            sleep 1
 
             # Start or reload supervisord
             if supervisorctl -c /etc/supervisor/supervisord.conf status >/dev/null 2>&1; then
               supervisorctl -c /etc/supervisor/supervisord.conf update >/dev/null 2>&1
-              supervisorctl -c /etc/supervisor/supervisord.conf restart clawmetry-sync >/dev/null 2>&1
+              supervisorctl -c /etc/supervisor/supervisord.conf stop clawmetry-sync >/dev/null 2>&1 || true
+              supervisorctl -c /etc/supervisor/supervisord.conf start clawmetry-sync >/dev/null 2>&1
             else
               supervisord -c /etc/supervisor/supervisord.conf
             fi
