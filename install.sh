@@ -97,14 +97,78 @@ echo ""
 echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
 
-# ── Onboarding ───────────────────────────────────────────────────────────────
-# Runs: clawmetry onboard
+# ── NemoClaw detection ───────────────────────────────────────────────────────
 
-if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ]; then
-  echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
-# shellcheck disable=SC2217
-elif [ -r /dev/tty ] 2>/dev/null; then
-  "$CLAWMETRY_BIN" onboard < /dev/tty || true
+NEMOCLAW_DETECTED=0
+if command -v nemoclaw &>/dev/null; then
+  NEMOCLAW_DETECTED=1
+  echo -e "  ${BOLD}🟢 NemoClaw detected${NC}"
+  echo ""
+
+  # Step 1: Find and auto-apply the bundled preset script
+  PRESET_SCRIPT=$("$INSTALL_DIR/bin/python3" -c "
+import importlib.resources
+try:
+    pkg = importlib.resources.files('clawmetry') / 'resources' / 'add-nemoclaw-clawmetry-preset.sh'
+    print(str(pkg))
+except Exception:
+    pass
+" 2>/dev/null || true)
+
+  if [ -n "$PRESET_SCRIPT" ] && [ -f "$PRESET_SCRIPT" ]; then
+    echo -e "  → Applying ClawMetry preset to NemoClaw sandboxes..."
+    bash "$PRESET_SCRIPT" \
+      && echo -e "  ${GREEN}${BOLD}✓ NemoClaw preset applied${NC}" \
+      || echo -e "  ${DIM}⚠  Preset incomplete. Run manually: bash $PRESET_SCRIPT${NC}"
+    echo ""
+  fi
+
+  # Step 2: Auto-install ClawMetry inside sandbox + interactive connect
+  SANDBOX_NAMES=$(nemoclaw list 2>/dev/null | awk '
+    /^  Sandboxes:/ { in_list=1; next }
+    /^  \* = default sandbox/ { in_list=0; next }
+    in_list && /^    [^ ]/ { name=$1; gsub(/\*/, "", name); if (name != "") print name }
+  ' | head -5)
+
+  if [ -n "$SANDBOX_NAMES" ]; then
+    FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)
+
+    echo -e "  → Opening sandbox ${BOLD}${FIRST_SANDBOX}${NC} to install ClawMetry..."
+    echo ""
+    echo -e "  ${DIM}Inside the sandbox, run these commands:${NC}"
+    echo ""
+    echo -e "    ${GREEN}pip install clawmetry${NC}"
+    echo -e "    ${GREEN}clawmetry connect${NC}"
+    echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
+    echo ""
+    echo -e "  ${DIM}clawmetry connect will ask for your email and OTP.${NC}"
+    echo ""
+
+    if (exec </dev/tty) 2>/dev/null; then
+      printf "  Press Enter to connect to sandbox ${FIRST_SANDBOX}... " > /dev/tty
+      read -r </dev/tty
+      nemoclaw "$FIRST_SANDBOX" connect </dev/tty || true
+    else
+      echo -e "  ${DIM}Connect manually:${NC}"
+      echo -e "    ${GREEN}nemoclaw ${FIRST_SANDBOX} connect${NC}"
+    fi
+    echo ""
+  else
+    echo -e "  ${DIM}No NemoClaw sandboxes found yet.${NC}"
+    echo -e "  ${DIM}Once you create a sandbox, install ClawMetry inside:${NC}"
+    echo -e "    ${GREEN}nemoclaw <sandbox-name> connect${NC}"
+    echo -e "    ${GREEN}pip install clawmetry && clawmetry connect${NC}"
+    echo ""
+  fi
+fi
+
+# ── Onboarding ───────────────────────────────────────────────────────────────
+# Runs: clawmetry onboard (skipped when NemoClaw is detected — setup happens inside sandbox)
+
+if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ] || [ "$NEMOCLAW_DETECTED" = "1" ]; then
+  [ "$NEMOCLAW_DETECTED" = "1" ] || echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
+elif (exec </dev/tty) 2>/dev/null; then
+  "$CLAWMETRY_BIN" onboard </dev/tty || true
 else
   "$CLAWMETRY_BIN" onboard || true
 fi
