@@ -137,7 +137,8 @@ except Exception:
     echo ""
     echo -e "  ${DIM}Once connected, run these commands:${NC}"
     echo ""
-    echo -e "    ${GREEN}pip install --break-system-packages uv && uv pip install clawmetry${NC}"
+    echo -e "    ${GREEN}pip install --break-system-packages uv && export PATH=\$HOME/.local/bin:\$PATH${NC}"
+    echo -e "    ${GREEN}uv pip install --system clawmetry${NC}"
     echo -e "    ${GREEN}clawmetry connect${NC}"
     echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
     echo ""
@@ -157,7 +158,7 @@ except Exception:
     echo -e "  ${DIM}No NemoClaw sandboxes found yet.${NC}"
     echo -e "  ${DIM}Once you create a sandbox, install ClawMetry inside:${NC}"
     echo -e "    ${GREEN}nemoclaw <sandbox-name> connect${NC}"
-    echo -e "    ${GREEN}pip install --break-system-packages uv && uv pip install clawmetry && clawmetry connect${NC}"
+    echo -e "    ${GREEN}pip install --break-system-packages uv && export PATH=\$HOME/.local/bin:\$PATH && uv pip install --system clawmetry && clawmetry connect${NC}"
     echo ""
   fi
 fi
