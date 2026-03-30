@@ -82,7 +82,7 @@ if [ -n "$_CM_CFG_BAK" ] && [ -f "$_CM_CFG_BAK" ]; then
 fi
 
 echo -e "  → Installing clawmetry from PyPI..."
-$USE_SUDO "$INSTALL_DIR/bin/pip" install --no-cache-dir clawmetry >/dev/null 2>&1
+$USE_SUDO "$INSTALL_DIR/bin/pip" install --no-cache-dir --upgrade clawmetry >/dev/null 2>&1
 
 # Create symlink
 mkdir -p "$BIN_DIR" 2>/dev/null || $USE_SUDO mkdir -p "$BIN_DIR"
@@ -144,29 +144,17 @@ except Exception:
         [ -z "$sb" ] && continue
         echo -e "  → Installing ClawMetry inside sandbox ${BOLD}${sb}${NC}..."
 
-        INSTALLED_VER=$(docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-          clawmetry --version 2>/dev/null | grep -o '[0-9]*\.[0-9]*\.[0-9]*' || true)
-        REQUIRED_VER="0.12.87"
-
-        needs_install=1
-        if [ -n "$INSTALLED_VER" ]; then
-          if [ "$(printf '%s\n%s' "$INSTALLED_VER" "$REQUIRED_VER" | sort -V | head -1)" = "$REQUIRED_VER" ]; then
-            echo -e "  ${GREEN}${BOLD}✓ ClawMetry $INSTALLED_VER already installed${NC}"
-            needs_install=0
-          else
-            echo -e "  ${DIM}↑ Upgrading ClawMetry $INSTALLED_VER → $REQUIRED_VER...${NC}"
-          fi
-        fi
-
-        if [ "$needs_install" = "1" ]; then
-          if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-            pip install --break-system-packages --quiet "clawmetry>=$REQUIRED_VER" 2>/dev/null; then
-            echo -e "  ${GREEN}${BOLD}✓ ClawMetry installed${NC}"
-          else
-            echo -e "  ${DIM}⚠  Auto-install failed. Install manually:${NC}"
-            echo -e "    ${GREEN}nemoclaw $sb connect${NC}"
-            echo -e "    ${GREEN}pip install --break-system-packages clawmetry${NC}"
-          fi
+        # Always upgrade to latest
+        echo -e "  ${DIM}→ Upgrading to latest...${NC}"
+        if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+          pip install --break-system-packages --quiet --upgrade clawmetry 2>/dev/null; then
+          NEW_VER=$(docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+            clawmetry --version 2>/dev/null | grep -o '[0-9]*\.[0-9]*\.[0-9]*' || true)
+          echo -e "  ${GREEN}${BOLD}✓ ClawMetry ${NEW_VER} installed${NC}"
+        else
+          echo -e "  ${DIM}⚠  Auto-install failed. Install manually:${NC}"
+          echo -e "    ${GREEN}nemoclaw $sb connect${NC}"
+          echo -e "    ${GREEN}pip install --break-system-packages --upgrade clawmetry${NC}"
         fi
       done
 
