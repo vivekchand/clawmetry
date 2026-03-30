@@ -167,16 +167,19 @@ except Exception:
 
       _read_host_config() {
         if [ -f "$HOST_CONFIG" ]; then
-          HOST_API_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null \
-            || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null || true)
-          HOST_ENC_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null \
-            || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null || true)
+          # Use the venv python directly (most reliable on macOS)
+          _PY="$INSTALL_DIR/bin/python3"
+          [ -x "$_PY" ] || _PY="python3"
+          HOST_API_KEY=$("$_PY" -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null || true)
+          HOST_ENC_KEY=$("$_PY" -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null || true)
         fi
       }
 
       _read_host_config
 
-      if [ -z "$HOST_API_KEY" ]; then
+      if [ -n "$HOST_API_KEY" ]; then
+        echo -e "  ${GREEN}${BOLD}✓ ClawMetry Cloud already authenticated${NC}"
+      elif [ -z "$HOST_API_KEY" ]; then
         echo -e "  ${BOLD}Authenticate with ClawMetry Cloud${NC}"
         echo -e "  ${DIM}Enter your email to get a one-time code.${NC}"
         echo ""
@@ -238,15 +241,13 @@ import json; json.dump({'api_key':'$HOST_API_KEY','node_id':'$sb','platform':'Li
         [ -z "$sb" ] && continue
         echo -e "  → Starting supervisor in sandbox ${BOLD}${sb}${NC}..."
         docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-          bash -c '
-            set -e
+          bash << 'SANDBOX_SCRIPT'
             # Install supervisord if missing
-            command -v supervisord >/dev/null 2>&1 || pip install --break-system-packages --quiet supervisor
+            command -v supervisord >/dev/null 2>&1 || pip install --break-system-packages --quiet supervisor 2>/dev/null
 
-            # Write configs
+            # Write supervisord config
             mkdir -p /etc/supervisor/conf.d /var/log/supervisor /var/run
-
-            cat > /etc/supervisor/supervisord.conf << SUPEOF
+            cat > /etc/supervisor/supervisord.conf << 'SUPEOF'
 [unix_http_server]
 file=/var/run/supervisor.sock
 [supervisord]
@@ -275,29 +276,33 @@ stdout_logfile_maxbytes=10MB
 environment=HOME="/root"
 PROGEOF
 
-            # Kill any stray daemon (started by old clawmetry connect without --no-daemon)
-            kill $(cat /root/.clawmetry/sync.pid 2>/dev/null) 2>/dev/null || true
+            # Kill ALL stray sync.py daemons before supervisord takes over
+            kill "$(cat /root/.clawmetry/sync.pid 2>/dev/null)" 2>/dev/null || true
             rm -f /root/.clawmetry/sync.pid
-            # Also kill any stray sync.py process
-            for _pid in /proc/[0-9]*/cmdline; do
-              _p="${_pid%/cmdline}"; _p="${_p#/proc/}"
-              if grep -qa "sync.py" "$_pid" 2>/dev/null && grep -qa "clawmetry" "$_pid" 2>/dev/null; then
+            for _f in /proc/[0-9]*/cmdline; do
+              _p="${_f%/cmdline}"; _p="${_p#/proc/}"
+              if grep -qa "sync.py" "$_f" 2>/dev/null && grep -qa "clawmetry" "$_f" 2>/dev/null; then
                 kill "$_p" 2>/dev/null || true
               fi
             done
             sleep 1
 
-            # Start or reload supervisord
-            if supervisorctl -c /etc/supervisor/supervisord.conf status >/dev/null 2>&1; then
-              supervisorctl -c /etc/supervisor/supervisord.conf update >/dev/null 2>&1
-              supervisorctl -c /etc/supervisor/supervisord.conf stop clawmetry-sync >/dev/null 2>&1 || true
-              supervisorctl -c /etc/supervisor/supervisord.conf start clawmetry-sync >/dev/null 2>&1
-            else
-              supervisord -c /etc/supervisor/supervisord.conf
+            # Shut down existing supervisord cleanly, then start fresh
+            if supervisorctl -c /etc/supervisor/supervisord.conf pid >/dev/null 2>&1; then
+              supervisorctl -c /etc/supervisor/supervisord.conf shutdown >/dev/null 2>&1 || true
+              sleep 2
             fi
-          ' 2>/dev/null \
-          && echo -e "  ${GREEN}${BOLD}✓ Supervisor running in $sb${NC}" \
-          || echo -e "  ${DIM}⚠  Could not start supervisor in $sb${NC}"
+            kill "$(cat /var/run/supervisord.pid 2>/dev/null)" 2>/dev/null || true
+            rm -f /var/run/supervisord.pid /var/run/supervisor.sock
+            sleep 1
+            supervisord -c /etc/supervisor/supervisord.conf
+SANDBOX_SCRIPT
+        _rc=$?
+        if [ "$_rc" -eq 0 ]; then
+          echo -e "  ${GREEN}${BOLD}✓ Supervisor running in $sb${NC}"
+        else
+          echo -e "  ${DIM}⚠  Could not start supervisor in $sb${NC}"
+        fi
       done
 
       echo ""
