@@ -121,7 +121,7 @@ except Exception:
 
   if [ -n "$PRESET_SCRIPT" ] && [ -f "$PRESET_SCRIPT" ]; then
     echo -e "  → Applying ClawMetry preset to NemoClaw sandboxes..."
-    bash "$PRESET_SCRIPT" \
+    bash "$PRESET_SCRIPT" >/dev/null 2>&1 \
       && echo -e "  ${GREEN}${BOLD}✓ NemoClaw preset applied${NC}" \
       || echo -e "  ${DIM}⚠  Preset incomplete. Run manually: bash $PRESET_SCRIPT${NC}"
     echo ""
