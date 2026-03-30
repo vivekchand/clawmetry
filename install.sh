@@ -201,13 +201,19 @@ except Exception:
           [ -z "$sb" ] && continue
           echo -e "  → Connecting sandbox ${BOLD}${sb}${NC} to ClawMetry Cloud..."
 
-          # Check if already connected
+          # Check if already connected with the CURRENT API key
           SB_KEY=$(docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
             bash -c 'test -f /root/.clawmetry/config.json && python3 -c "import json; print(json.load(open(\"/root/.clawmetry/config.json\")).get(\"api_key\",\"\"))" 2>/dev/null || echo ""' 2>/dev/null || true)
 
-          if [ -n "$SB_KEY" ]; then
+          if [ -n "$SB_KEY" ] && [ "$SB_KEY" = "$HOST_API_KEY" ]; then
             echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb already connected${NC}"
           else
+            # Clear stale config if key doesn't match
+            if [ -n "$SB_KEY" ] && [ "$SB_KEY" != "$HOST_API_KEY" ]; then
+              docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+                rm -f /root/.clawmetry/config.json 2>/dev/null || true
+              echo -e "  ${DIM}↺ Cleared stale config (different account)${NC}"
+            fi
             # Run clawmetry connect non-interactively inside sandbox
             # --key + --enc-key + --node-id skips OTP and enc key prompts, starts daemon
             if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
