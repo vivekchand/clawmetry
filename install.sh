@@ -131,34 +131,71 @@ except Exception:
   ' | head -5)
 
   if [ -n "$SANDBOX_NAMES" ]; then
-    FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)
+    # Find the OpenShell cluster container for kubectl access
+    CLUSTER_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'openshell-cluster' | head -1)
 
-    echo -e "  ${BOLD}Next: install ClawMetry inside sandbox ${FIRST_SANDBOX}${NC}"
-    echo ""
-    echo -e "  ${DIM}Once connected, run these commands:${NC}"
-    echo ""
-    echo -e "    ${GREEN}pip install --break-system-packages uv && export PATH=\$HOME/.local/bin:\$PATH${NC}"
-    echo -e "    ${GREEN}uv pip install --system clawmetry${NC}"
-    echo -e "    ${GREEN}clawmetry connect${NC}"
-    echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
-    echo ""
-    echo -e "  ${DIM}clawmetry connect will ask for your email and send an OTP.${NC}"
-    echo ""
+    if [ -n "$CLUSTER_CONTAINER" ]; then
+      # Automated install via kubectl exec (no interactive shell needed)
+      echo "$SANDBOX_NAMES" | while IFS= read -r sb; do
+        [ -z "$sb" ] && continue
+        echo -e "  → Installing ClawMetry inside sandbox ${BOLD}${sb}${NC}..."
 
-    if (exec </dev/tty) 2>/dev/null; then
-      printf "  Press Enter to connect to sandbox %s... " "$FIRST_SANDBOX" > /dev/tty
-      read -r </dev/tty
-      nemoclaw "$FIRST_SANDBOX" connect </dev/tty || true
+        # Check if already installed
+        INSTALLED_VER=$(docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+          clawmetry --version 2>/dev/null || true)
+
+        if [ -n "$INSTALLED_VER" ]; then
+          echo -e "  ${GREEN}${BOLD}✓ ClawMetry already installed ($INSTALLED_VER)${NC}"
+        else
+          # Install via pip (sandbox runs as root, --break-system-packages needed for Debian)
+          if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+            pip install --break-system-packages --quiet clawmetry 2>/dev/null; then
+            echo -e "  ${GREEN}${BOLD}✓ ClawMetry installed${NC}"
+          else
+            echo -e "  ${DIM}⚠  Auto-install failed. Install manually:${NC}"
+            echo -e "    ${GREEN}nemoclaw $sb connect${NC}"
+            echo -e "    ${GREEN}pip install --break-system-packages clawmetry${NC}"
+          fi
+        fi
+      done
+
+      echo ""
+      FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)
+
+      # Interactive connect for clawmetry connect (needs OTP input)
+      echo -e "  ${BOLD}Next: connect ClawMetry to your cloud dashboard${NC}"
+      echo -e "  ${DIM}This requires your email and a one-time code.${NC}"
+      echo ""
+
+      if (exec </dev/tty) 2>/dev/null; then
+        printf "  Press Enter to connect to sandbox %s... " "$FIRST_SANDBOX" > /dev/tty
+        read -r </dev/tty
+        nemoclaw "$FIRST_SANDBOX" connect </dev/tty || true
+      else
+        echo -e "  ${DIM}Connect manually and run:${NC}"
+        echo -e "    ${GREEN}nemoclaw $FIRST_SANDBOX connect${NC}"
+        echo -e "    ${GREEN}clawmetry connect${NC}"
+        echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
+      fi
     else
-      echo -e "  ${DIM}Connect manually:${NC}"
+      # No cluster container found, fall back to manual instructions
+      FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)
+      echo -e "  ${BOLD}Next: install ClawMetry inside sandbox ${FIRST_SANDBOX}${NC}"
+      echo ""
+      echo -e "  ${DIM}Connect to the sandbox and run:${NC}"
+      echo ""
       echo -e "    ${GREEN}nemoclaw $FIRST_SANDBOX connect${NC}"
+      echo -e "    ${GREEN}pip install --break-system-packages clawmetry${NC}"
+      echo -e "    ${GREEN}clawmetry connect${NC}"
+      echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
+      echo ""
     fi
     echo ""
   else
     echo -e "  ${DIM}No NemoClaw sandboxes found yet.${NC}"
     echo -e "  ${DIM}Once you create a sandbox, install ClawMetry inside:${NC}"
     echo -e "    ${GREEN}nemoclaw <sandbox-name> connect${NC}"
-    echo -e "    ${GREEN}pip install --break-system-packages uv && export PATH=\$HOME/.local/bin:\$PATH && uv pip install --system clawmetry && clawmetry connect${NC}"
+    echo -e "    ${GREEN}pip install --break-system-packages clawmetry${NC}"
     echo ""
   fi
 fi
