@@ -208,10 +208,18 @@ except Exception:
           if [ -n "$SB_KEY" ] && [ "$SB_KEY" = "$HOST_API_KEY" ]; then
             echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb already connected${NC}"
           else
-            # Clear stale config if key doesn't match
+            # Clear stale config + sync state if key doesn't match (new account)
             if [ -n "$SB_KEY" ] && [ "$SB_KEY" != "$HOST_API_KEY" ]; then
               docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-                rm -f /root/.clawmetry/config.json 2>/dev/null || true
+                bash -s >/dev/null 2>&1 << 'CLEAR_SCRIPT'
+rm -f /root/.clawmetry/config.json /sandbox/.clawmetry/config.json
+# Reset sync state so events re-upload under new account
+for state_file in /root/.clawmetry/sync-state.json /sandbox/.clawmetry/sync-state.json; do
+  if [ -f "$state_file" ]; then
+    python3 -c "import json; p='$state_file'; s=json.load(open(p)); s['last_event_ids']={} ; json.dump(s,open(p,'w'))"
+  fi
+done
+CLEAR_SCRIPT
               echo -e "  ${DIM}↺ Cleared stale config (different account)${NC}"
             fi
             # Pre-write config so --key matches _saved_api_key (skips OTP verification)
