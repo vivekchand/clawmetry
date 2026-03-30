@@ -163,73 +163,66 @@ except Exception:
 
       echo ""
 
-      # Step 2b: Connect on the HOST (interactive OTP) to get API key
+      # Step 2b: OTP on HOST (--key-only: saves key+enc_key, no daemon — host has no OpenClaw)
       HOST_CONFIG="$HOME/.clawmetry/config.json"
       HOST_API_KEY=""
       HOST_ENC_KEY=""
 
-      if [ -f "$HOST_CONFIG" ]; then
-        HOST_API_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null \
-          || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null || true)
-        HOST_ENC_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null \
-          || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null || true)
-      fi
+      _read_host_config() {
+        if [ -f "$HOST_CONFIG" ]; then
+          HOST_API_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null \
+            || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null || true)
+          HOST_ENC_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null \
+            || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null || true)
+        fi
+      }
+
+      _read_host_config
 
       if [ -z "$HOST_API_KEY" ]; then
-        echo -e "  ${BOLD}Connect ClawMetry to your cloud dashboard${NC}"
-        echo -e "  ${DIM}This requires your email and a one-time code.${NC}"
+        echo -e "  ${BOLD}Authenticate with ClawMetry Cloud${NC}"
+        echo -e "  ${DIM}Enter your email to get a one-time code.${NC}"
         echo ""
 
         if (exec </dev/tty) 2>/dev/null; then
-          "$CLAWMETRY_BIN" connect </dev/tty || true
-
-          # Re-read config after connect
-          if [ -f "$HOST_CONFIG" ]; then
-            HOST_API_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null \
-              || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null || true)
-            HOST_ENC_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null \
-              || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null || true)
-          fi
+          # --key-only: OTP flow without starting daemon on host (no OpenClaw on host)
+          "$CLAWMETRY_BIN" connect --key-only </dev/tty || true
+          _read_host_config
         else
-          echo -e "  ${DIM}Run this to connect:${NC}"
-          echo -e "    ${GREEN}clawmetry connect${NC}"
+          echo -e "  ${DIM}Run to authenticate:${NC}"
+          echo -e "    ${GREEN}clawmetry connect --key-only${NC}"
         fi
-      else
-        echo -e "  ${GREEN}${BOLD}✓ ClawMetry Cloud already connected on host${NC}"
       fi
 
-      # Step 2c: Propagate API key + encryption key into all sandboxes
+      # Step 2c: Connect each sandbox using the key (non-interactive, starts daemon inside sandbox)
       if [ -n "$HOST_API_KEY" ] && [ -n "$HOST_ENC_KEY" ]; then
         echo ""
         echo "$SANDBOX_NAMES" | while IFS= read -r sb; do
           [ -z "$sb" ] && continue
+          echo -e "  → Connecting sandbox ${BOLD}${sb}${NC} to ClawMetry Cloud..."
 
-          # Check if sandbox already connected
+          # Check if already connected
           SB_KEY=$(docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
             bash -c 'test -f /root/.clawmetry/config.json && python3 -c "import json; print(json.load(open(\"/root/.clawmetry/config.json\")).get(\"api_key\",\"\"))" 2>/dev/null || echo ""' 2>/dev/null || true)
 
           if [ -n "$SB_KEY" ]; then
-            echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb already connected to cloud${NC}"
+            echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb already connected${NC}"
           else
-            CONNECT_TS=$(date -u +%Y-%m-%dT%H:%M:%S 2>/dev/null || date +%Y-%m-%dT%H:%M:%S)
-            docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-              bash -c "mkdir -p /root/.clawmetry && cat > /root/.clawmetry/config.json << CLAWCFG
-{
-  \"api_key\": \"$HOST_API_KEY\",
-  \"node_id\": \"$sb\",
-  \"platform\": \"Linux\",
-  \"connected_at\": \"$CONNECT_TS\",
-  \"encryption_key\": \"$HOST_ENC_KEY\"
-}
-CLAWCFG" 2>/dev/null \
-              && echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb connected to cloud (node: $sb)${NC}" \
-              || echo -e "  ${DIM}⚠  Could not connect sandbox $sb. Run 'clawmetry connect' inside.${NC}"
+            # Run clawmetry connect non-interactively inside sandbox
+            # --key + --enc-key + --node-id skips OTP and enc key prompts, starts daemon
+            if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+              clawmetry connect --key "$HOST_API_KEY" --enc-key "$HOST_ENC_KEY" --node-id "$sb" 2>/dev/null; then
+              echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb connected (node: $sb)${NC}"
+            else
+              echo -e "  ${DIM}⚠  Could not connect sandbox $sb automatically.${NC}"
+              echo -e "  ${DIM}Connect manually: nemoclaw $sb connect → clawmetry connect${NC}"
+            fi
           fi
         done
       fi
 
       echo ""
-      echo -e "  ${GREEN}${BOLD}✓ All done! Open app.clawmetry.com to see your dashboard${NC}"
+      echo -e "  ${GREEN}${BOLD}✓ All done! Open app.clawmetry.com to see your sandboxes${NC}"
     else
       # No cluster container found, fall back to manual instructions
       FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)

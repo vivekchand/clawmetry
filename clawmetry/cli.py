@@ -415,9 +415,15 @@ def _cmd_connect(args) -> None:
 
     # Always prompt for encryption key — be transparent
     # Store the raw passphrase as-is; normalization happens at encrypt/decrypt time
+    # Use --enc-key if provided (non-interactive sandbox/automated use)
+    _enc_key_arg = getattr(args, 'enc_key', None) or ''
+
     print()
     print("🔐 Encryption key protects your data end-to-end.")
-    if _saved_enc_key:
+    if _enc_key_arg:
+        enc_key = _enc_key_arg
+        print(f"  Using provided encryption key.")
+    elif _saved_enc_key:
         masked = _saved_enc_key[:6] + '…' + _saved_enc_key[-4:]
         print(f"  Existing key: {masked}")
         custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
@@ -438,6 +444,14 @@ def _cmd_connect(args) -> None:
     print()
     print(f"  Connected as: {node_id}")
     print()
+
+    # --key-only: just save config, don't start daemon (for host-side NemoClaw OTP flow)
+    if getattr(args, 'key_only', False):
+        print(f"  API key:      {api_key}")
+        print(f"  Enc key:      {enc_key}")
+        print()
+        return
+
     print("  Keep this secret key safe (like a password):")
     print(f"  {enc_key}")
     print()
@@ -810,6 +824,94 @@ def _cmd_status(args) -> None:
         for ln in lines:
             print(f"    {ln}")
 
+    # NemoClaw sandbox nodes (if docker + kubectl available)
+    _print_nemoclaw_nodes(args)
+
+
+def _print_nemoclaw_nodes(args) -> None:
+    """Show status of ClawMetry on all NemoClaw sandboxes."""
+    import subprocess, shutil, json as _json
+
+    if not shutil.which("docker"):
+        return
+
+    # Find cluster container
+    try:
+        r = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
+                           capture_output=True, text=True, timeout=5)
+        cluster = next((n for n in r.stdout.splitlines() if "openshell-cluster" in n), None)
+    except Exception:
+        return
+
+    if not cluster:
+        return
+
+    # Get sandbox pod names
+    try:
+        r = subprocess.run(
+            ["docker", "exec", cluster, "kubectl", "get", "pods",
+             "-n", "openshell", "--no-headers", "-o",
+             "custom-columns=NAME:.metadata.name"],
+            capture_output=True, text=True, timeout=10
+        )
+        pods = [p for p in r.stdout.splitlines() if p and not p.startswith("openshell-")]
+    except Exception:
+        return
+
+    if not pods:
+        return
+
+    print()
+    print("NemoClaw Sandboxes\n" + "─" * 40)
+    for pod in pods:
+        try:
+            r = subprocess.run(
+                ["docker", "exec", cluster, "kubectl", "exec",
+                 "-n", "openshell", pod, "--",
+                 "bash", "-c",
+                 "test -f /root/.clawmetry/config.json && "
+                 "python3 -c \"import json; c=json.load(open('/root/.clawmetry/config.json')); "
+                 "print(c.get('api_key','') + '|' + c.get('node_id','') + '|' + c.get('encryption_key',''))\" "
+                 "2>/dev/null || echo 'NOT_CONNECTED'"],
+                capture_output=True, text=True, timeout=10
+            )
+            out = r.stdout.strip()
+        except Exception:
+            out = ""
+
+        print(f"\n  Sandbox:     {pod}")
+        if out and out != "NOT_CONNECTED" and "|" in out:
+            parts = out.split("|", 2)
+            api_key = parts[0] if len(parts) > 0 else ""
+            node_id = parts[1] if len(parts) > 1 else pod
+            enc_key = parts[2] if len(parts) > 2 else ""
+            masked_api = api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
+            print(f"  Cloud sync:  ✅  Connected")
+            print(f"  API key:     {masked_api}")
+            print(f"  Node ID:     {node_id}")
+            if enc_key:
+                if getattr(args, 'show_key', False):
+                    print(f"  Secret key:  {enc_key}")
+                else:
+                    masked_enc = enc_key[:6] + "…" + enc_key[-4:]
+                    print(f"  Secret key:  {masked_enc}  (--show-key to reveal)")
+                print(f"  E2E:         🔒 enabled")
+            # Check daemon
+            try:
+                rd = subprocess.run(
+                    ["docker", "exec", cluster, "kubectl", "exec",
+                     "-n", "openshell", pod, "--",
+                     "bash", "-c",
+                     "pgrep -f 'clawmetry.*sync\\|clawmetry-sync' > /dev/null 2>&1 && echo running || echo stopped"],
+                    capture_output=True, text=True, timeout=5
+                )
+                daemon_status = rd.stdout.strip()
+                print(f"  Daemon:      {'✅  Running' if daemon_status == 'running' else '○  Not running'}")
+            except Exception:
+                pass
+        else:
+            print(f"  Cloud sync:  ○  Not connected  (run: clawmetry connect inside sandbox)")
+
 
 def _cmd_onboard(args) -> None:
     """clawmetry onboard — interactive first-time setup wizard."""
@@ -1159,6 +1261,8 @@ def main() -> None:
     # connect
     p_connect = sub.add_parser("connect", help="Activate cloud sync")
     p_connect.add_argument("--key", metavar="cm_xxx", help="API key (skip prompt)")
+    p_connect.add_argument("--enc-key", metavar="KEY", dest="enc_key", help="Encryption key (skip prompt, for automated/sandbox use)")
+    p_connect.add_argument("--key-only", action="store_true", help="Save key + config only, do not start daemon (for NemoClaw host use)")
     p_connect.add_argument("--foreground", action="store_true", help="Run daemon in foreground")
     p_connect.add_argument("--node-id", metavar="NAME", dest="custom_node_id", help="Custom node name (default: hostname)")
 
