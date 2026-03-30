@@ -234,6 +234,9 @@ import json; json.dump({'api_key':'$HOST_API_KEY','node_id':'$sb','platform':'Li
             if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
               clawmetry connect --key "$HOST_API_KEY" --enc-key "$HOST_ENC_KEY" --node-id "$sb" 2>/dev/null; then
               echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb connected (node: $sb)${NC}"
+              # Ensure daemon survives kubectl exec session end via supervisord if available
+              docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+                bash -c 'command -v supervisorctl >/dev/null 2>&1 && supervisorctl start clawmetry-sync 2>/dev/null || true' 2>/dev/null || true
             else
               echo -e "  ${DIM}⚠  Could not connect sandbox $sb automatically.${NC}"
               echo -e "  ${DIM}Connect manually: nemoclaw $sb connect → clawmetry connect${NC}"

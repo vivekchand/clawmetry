@@ -452,9 +452,11 @@ def _cmd_connect(args) -> None:
         print()
         return
 
-    print("  Keep this secret key safe (like a password):")
-    print(f"  {enc_key}")
-    print()
+    # Skip enc key reminder when --enc-key was passed (automated/sandbox use)
+    if not _enc_key_arg:
+        print("  Keep this secret key safe (like a password):")
+        print(f"  {enc_key}")
+        print()
 
     # Start daemon
     _start_daemon(config, args)
@@ -557,19 +559,26 @@ WantedBy=default.target
         print("  Running in the background. Your data is syncing to the cloud.")
         print('  To stop: clawmetry disconnect')
     else:
-        print("  ⚠️  systemctl not available (container/Docker?).")
-        print("  Falling back to background subprocess…")
+        if sys.stdout.isatty():
+            print("  ⚠️  systemctl not available (container/Docker?).")
+            print("  Falling back to background subprocess…")
         _start_subprocess()
 
 
 def _start_subprocess() -> None:
-    import subprocess
+    import subprocess, shutil
     sync_script = str(__import__("pathlib").Path(__file__).parent / "sync.py")
+    log_file = str(__import__("pathlib").Path.home() / ".clawmetry" / "sync.log")
+
+    # Use setsid if available — ensures daemon survives kubectl exec session end
+    cmd = ["setsid", sys.executable, sync_script] if shutil.which("setsid") else [sys.executable, sync_script]
     proc = subprocess.Popen(
-        [sys.executable, sync_script],
-        stdout=open(str(__import__("pathlib").Path.home() / ".clawmetry" / "sync.log"), "a"),
+        cmd,
+        stdout=open(log_file, "a"),
         stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
         start_new_session=True,
+        close_fds=True,
     )
     print(f"✅  Sync daemon started (pid {proc.pid})")
 
@@ -902,7 +911,9 @@ def _print_nemoclaw_nodes(args) -> None:
                     ["docker", "exec", cluster, "kubectl", "exec",
                      "-n", "openshell", pod, "--",
                      "bash", "-c",
-                     "pgrep -f 'clawmetry.*sync\\|clawmetry-sync' > /dev/null 2>&1 && echo running || echo stopped"],
+                     "pid=$(cat /root/.clawmetry/sync.pid 2>/dev/null); "
+                     "[ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null && echo running || "
+                     "grep -r sync.py /proc/*/cmdline 2>/dev/null | grep -q clawmetry && echo running || echo stopped"],
                     capture_output=True, text=True, timeout=5
                 )
                 daemon_status = rd.stdout.strip()
