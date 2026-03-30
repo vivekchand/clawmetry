@@ -288,3 +288,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Architecture overview on startup matching clawmetry.com/how-it-works
 - `clawmetry --help` and `clawmetry help` 
 # v0.12.77
+
+## v0.12.87 (2026-03-30)
+- `clawmetry status` now shows all NemoClaw sandbox nodes with connection status
+- `clawmetry status --show-key` reveals enc key per sandbox
+- New `--key-only` flag: OTP on host without starting daemon (host has no OpenClaw)
+- New `--enc-key` flag: non-interactive connect for sandboxes
+- Only sandboxes appear in app.clawmetry.com, not the host
+- Clean end message after NemoClaw install
