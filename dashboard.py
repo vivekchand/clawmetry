@@ -4515,6 +4515,44 @@ async function ackAllAlerts() {
 // Check alerts every 30s
 setInterval(checkActiveAlerts, 30000);
 setTimeout(checkActiveAlerts, 3000);
+var _velocityDismissed = false;
+
+async function checkVelocityAlert() {
+  if (_velocityDismissed) return;
+  try {
+    var data = await fetch('/api/alerts/velocity').then(function(r){return r.json();});
+    var banner = document.getElementById('velocity-banner');
+    if (!banner) return;
+    if (!data.active) {
+      _velocityDismissed = false;
+      banner.style.display = 'none';
+      return;
+    }
+    var reasons = data.reasons || [];
+    var mainMsg = '\u26a1 Runaway loop detected';
+    var detail = reasons.join(' | ');
+    if (data.triggeringSession) {
+      detail += ' — session: ' + data.triggeringSession.substring(0, 16) + '...';
+    }
+    document.getElementById('velocity-banner-msg').textContent = mainMsg;
+    document.getElementById('velocity-banner-detail').textContent = detail;
+    banner.style.display = 'flex';
+  } catch(e) {}
+}
+
+function dismissVelocityAlert() {
+  _velocityDismissed = true;
+  var banner = document.getElementById('velocity-banner');
+  if (banner) banner.style.display = 'none';
+  // Re-enable after 10 minutes
+  setTimeout(function() { _velocityDismissed = false; }, 600000);
+}
+
+// Check velocity every 30s
+setInterval(checkVelocityAlert, 30000);
+setTimeout(checkVelocityAlert, 5000);
+
+
 
 // === Telegram Config Functions ===
 async function loadTelegramConfig() {
@@ -8948,6 +8986,15 @@ function clawmetryLogout(){
   <button onclick="document.getElementById('budget-cap-banner').style.display='none'" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
 </div>
 
+
+<!-- Token Velocity Alert Banner (GH#313) -->
+<div id="velocity-banner" style="display:none;padding:10px 16px;background:#7c2d12;border-bottom:2px solid #f97316;color:#fed7aa;font-size:13px;font-weight:600;align-items:center;gap:10px;">
+  <span style="font-size:18px;">&#9889;</span>
+  <span id="velocity-banner-msg" style="flex:1;"></span>
+  <span id="velocity-banner-detail" style="font-size:11px;font-weight:400;opacity:0.8;margin-left:8px;"></span>
+  <button onclick="dismissVelocityAlert()" style="background:#f97316;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+</div>
+
 <!-- Budget Settings Modal -->
 <div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
   <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
@@ -10223,6 +10270,44 @@ async function ackAllAlerts() {
 // Check alerts every 30s
 setInterval(checkActiveAlerts, 30000);
 setTimeout(checkActiveAlerts, 3000);
+var _velocityDismissed = false;
+
+async function checkVelocityAlert() {
+  if (_velocityDismissed) return;
+  try {
+    var data = await fetch('/api/alerts/velocity').then(function(r){return r.json();});
+    var banner = document.getElementById('velocity-banner');
+    if (!banner) return;
+    if (!data.active) {
+      _velocityDismissed = false;
+      banner.style.display = 'none';
+      return;
+    }
+    var reasons = data.reasons || [];
+    var mainMsg = '\u26a1 Runaway loop detected';
+    var detail = reasons.join(' | ');
+    if (data.triggeringSession) {
+      detail += ' — session: ' + data.triggeringSession.substring(0, 16) + '...';
+    }
+    document.getElementById('velocity-banner-msg').textContent = mainMsg;
+    document.getElementById('velocity-banner-detail').textContent = detail;
+    banner.style.display = 'flex';
+  } catch(e) {}
+}
+
+function dismissVelocityAlert() {
+  _velocityDismissed = true;
+  var banner = document.getElementById('velocity-banner');
+  if (banner) banner.style.display = 'none';
+  // Re-enable after 10 minutes
+  setTimeout(function() { _velocityDismissed = false; }, 600000);
+}
+
+// Check velocity every 30s
+setInterval(checkVelocityAlert, 30000);
+setTimeout(checkVelocityAlert, 5000);
+
+
 
 // === Anomaly Detection Banner ===
 var _anomalyBannerEl = null;
