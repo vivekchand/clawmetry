@@ -137,6 +137,7 @@ except Exception:
     echo ""
     echo -e "  ${DIM}Once connected, run these commands:${NC}"
     echo ""
+    echo -e "    ${GREEN}python3 -m venv .venv && source .venv/bin/activate${NC}"
     echo -e "    ${GREEN}pip install clawmetry${NC}"
     echo -e "    ${GREEN}clawmetry connect${NC}"
     echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
@@ -157,7 +158,7 @@ except Exception:
     echo -e "  ${DIM}No NemoClaw sandboxes found yet.${NC}"
     echo -e "  ${DIM}Once you create a sandbox, install ClawMetry inside:${NC}"
     echo -e "    ${GREEN}nemoclaw <sandbox-name> connect${NC}"
-    echo -e "    ${GREEN}pip install clawmetry && clawmetry connect${NC}"
+    echo -e "    ${GREEN}python3 -m venv .venv && source .venv/bin/activate && pip install clawmetry && clawmetry connect${NC}"
     echo ""
   fi
 fi
