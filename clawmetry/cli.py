@@ -697,18 +697,24 @@ def _cmd_uninstall() -> None:
             svc.unlink()
         print("  ✅  Stopped and removed sync daemon")
 
-    # 2. Remove config directory
+    # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
+    print("  ⏳  Uninstalling pip package...")
+    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "clawmetry"],
+                   check=False, capture_output=True)
+    print("  ✅  Uninstalled clawmetry pip package")
+
+    # 3. Remove config directory (includes venv)
     if clawmetry_dir.exists():
         shutil.rmtree(clawmetry_dir, ignore_errors=True)
         print(f"  ✅  Removed {clawmetry_dir}")
 
-    # 3. Remove config/state/log files
+    # 4. Remove config/state/log files
     for f in [CONFIG_FILE, STATE_FILE, LOG_FILE]:
         if f.exists():
             f.unlink(missing_ok=True)
             print(f"  ✅  Removed {f}")
 
-    # 4. Remove venv installs
+    # 5. Remove venv installs
     for vp in venv_paths:
         if vp.exists() and (vp / "bin" / "clawmetry").exists():
             try:
@@ -718,7 +724,7 @@ def _cmd_uninstall() -> None:
                 subprocess.run(["sudo", "rm", "-rf", str(vp)], check=False)
                 print(f"  ✅  Removed {vp} (sudo)")
 
-    # 5. Remove symlinks
+    # 6. Remove symlinks
     for sl in symlinks:
         if sl.exists() or sl.is_symlink():
             try:
@@ -727,12 +733,6 @@ def _cmd_uninstall() -> None:
             except PermissionError:
                 subprocess.run(["sudo", "rm", "-f", str(sl)], check=False)
                 print(f"  ✅  Removed {sl} (sudo)")
-
-    # 6. Pip uninstall
-    print("  ⏳  Uninstalling pip package...")
-    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "clawmetry"],
-                   check=False, capture_output=True)
-    print("  ✅  Uninstalled clawmetry pip package")
 
     print()
     print("  \033[1m\033[92m✓ ClawMetry fully uninstalled.\033[0m")
