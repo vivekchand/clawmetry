@@ -548,40 +548,37 @@ class TestActivityHeatmap:
         d = assert_ok(get(api, base_url, "/api/heatmap"))
         assert d["max"] >= 0
 
-# ---------------------------------------------------------------------------
-# Model Attribution (GH #300)
-# ---------------------------------------------------------------------------
 class TestModelAttribution:
-    """Tests for model attribution dashboard (GH #300)."""
-
     def test_model_attribution_returns_200(self, api, base_url):
-        """Model attribution endpoint returns 200."""
+        """Model attribution endpoint returns 200 with expected keys."""
         d = assert_ok(get(api, base_url, "/api/model-attribution"))
-        assert isinstance(d, dict)
+        assert_keys(d, "model_distribution", "primary_model", "fallback_rate",
+                     "total_sessions", "fallback_sessions", "switch_events", "per_session")
 
-    def test_model_attribution_keys(self, api, base_url):
-        """Response has required top-level keys."""
+    def test_model_distribution_structure(self, api, base_url):
+        """Each model distribution entry has required fields."""
         d = assert_ok(get(api, base_url, "/api/model-attribution"))
-        assert_keys(d, "models", "primary_model", "total_turns", "model_count", "switches", "switch_count")
+        for m in d["model_distribution"]:
+            assert_keys(m, "model", "tokens", "pct", "sessions")
+            assert isinstance(m["pct"], (int, float))
+            assert m["tokens"] >= 0
 
-    def test_models_list_structure(self, api, base_url):
-        """Each entry in models list has required fields."""
+    def test_fallback_rate_valid(self, api, base_url):
+        """Fallback rate is between 0 and 1."""
         d = assert_ok(get(api, base_url, "/api/model-attribution"))
-        for m in d["models"]:
-            assert_keys(m, "model", "turns", "sessions", "provider", "share_pct")
-            assert isinstance(m["turns"], int)
-            assert isinstance(m["sessions"], int)
-            assert 0 <= m["share_pct"] <= 100
+        assert 0.0 <= d["fallback_rate"] <= 1.0
 
-    def test_total_turns_consistency(self, api, base_url):
-        """Sum of per-model turns equals total_turns."""
+    def test_per_session_structure(self, api, base_url):
+        """Per-session entries have expected structure."""
         d = assert_ok(get(api, base_url, "/api/model-attribution"))
-        total = sum(m["turns"] for m in d["models"])
-        assert total == d["total_turns"]
+        for s in d["per_session"]:
+            assert_keys(s, "session_id", "models", "primary", "switch_count", "switches", "total_tokens")
+            assert isinstance(s["models"], dict)
+            assert isinstance(s["switches"], list)
 
-    def test_switches_is_list(self, api, base_url):
-        """Switches field is a list."""
+    def test_switch_events_structure(self, api, base_url):
+        """Switch events have from/to/session_id."""
         d = assert_ok(get(api, base_url, "/api/model-attribution"))
-        assert isinstance(d["switches"], list)
-        assert isinstance(d["switch_count"], int)
-        assert len(d["switches"]) <= 50  # capped at 50>>>>>>> a33aec4 (feat: model attribution dashboard — track which model responded per turn (closes vivekchand/clawmetry#300))
+        for ev in d["switch_events"]:
+            assert_keys(ev, "session_id", "from", "to", "at_turn")
+
