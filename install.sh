@@ -223,7 +223,7 @@ import json; json.dump({'api_key':'$HOST_API_KEY','node_id':'$sb','platform':'Li
 
             # Connect non-interactively (OTP skipped — key matches saved config)
             if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-              clawmetry connect --key "$HOST_API_KEY" --enc-key "$HOST_ENC_KEY" --node-id "$sb" --no-daemon 2>/dev/null; then
+              clawmetry connect --key "$HOST_API_KEY" --enc-key "$HOST_ENC_KEY" --node-id "$sb" --no-daemon >/dev/null 2>&1; then
               echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb connected (node: $sb)${NC}"
               # Ensure daemon survives kubectl exec session end via supervisord if available
               docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
@@ -241,7 +241,7 @@ import json; json.dump({'api_key':'$HOST_API_KEY','node_id':'$sb','platform':'Li
         [ -z "$sb" ] && continue
         echo -e "  → Starting supervisor in sandbox ${BOLD}${sb}${NC}..."
         docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-          bash << 'SANDBOX_SCRIPT'
+          bash << 'SANDBOX_SCRIPT' >/dev/null 2>&1
             # Install supervisord if missing
             command -v supervisord >/dev/null 2>&1 || pip install --break-system-packages --quiet supervisor 2>/dev/null
 
