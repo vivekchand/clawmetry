@@ -100,6 +100,10 @@ echo ""
 # ── NemoClaw detection ───────────────────────────────────────────────────────
 
 NEMOCLAW_DETECTED=0
+# Ensure common install paths are checked (non-interactive shells may have minimal PATH)
+for _p in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
+  [[ ":$PATH:" != *":$_p:"* ]] && [ -d "$_p" ] && export PATH="$_p:$PATH"
+done
 if command -v nemoclaw &>/dev/null; then
   NEMOCLAW_DETECTED=1
   echo -e "  ${BOLD}🟢 NemoClaw detected${NC}"
