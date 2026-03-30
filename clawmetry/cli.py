@@ -458,6 +458,11 @@ def _cmd_connect(args) -> None:
         print(f"  {enc_key}")
         print()
 
+    # --no-daemon: skip daemon start (managed by supervisord externally)
+    if getattr(args, 'no_daemon', False):
+        print()
+        return
+
     # Start daemon
     _start_daemon(config, args)
     print()
@@ -1353,6 +1358,7 @@ def main() -> None:
     p_connect.add_argument("--key", metavar="cm_xxx", help="API key (skip prompt)")
     p_connect.add_argument("--enc-key", metavar="KEY", dest="enc_key", help="Encryption key (skip prompt, for automated/sandbox use)")
     p_connect.add_argument("--key-only", action="store_true", help="Save key + config only, do not start daemon (for NemoClaw host use)")
+    p_connect.add_argument("--no-daemon", action="store_true", help="Connect but do not start daemon (daemon managed externally, e.g. supervisord)")
     p_connect.add_argument("--foreground", action="store_true", help="Run daemon in foreground")
     p_connect.add_argument("--node-id", metavar="NAME", dest="custom_node_id", help="Custom node name (default: hostname)")
 
