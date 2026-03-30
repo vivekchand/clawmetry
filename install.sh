@@ -216,10 +216,19 @@ except Exception:
             fi
             # Pre-write config so --key matches _saved_api_key (skips OTP verification)
             CONNECT_TS=$(date -u +%Y-%m-%dT%H:%M:%S 2>/dev/null || date +%Y-%m-%dT%H:%M:%S)
+            # Write config to both root and sandbox user homes
             docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-              bash -c "mkdir -p /root/.clawmetry && python3 -c \"
-import json; json.dump({'api_key':'$HOST_API_KEY','node_id':'$sb','platform':'Linux','connected_at':'$CONNECT_TS','encryption_key':'$HOST_ENC_KEY'},open('/root/.clawmetry/config.json','w'))
-\"" 2>/dev/null || true
+              bash -c "
+python3 - << PYEOF
+import json, os, shutil
+cfg = {'api_key':'$HOST_API_KEY','node_id':'$sb','platform':'Linux','connected_at':'$CONNECT_TS','encryption_key':'$HOST_ENC_KEY'}
+for d in ['/root/.clawmetry', '/sandbox/.clawmetry']:
+    os.makedirs(d, exist_ok=True)
+    json.dump(cfg, open(d + '/config.json', 'w'))
+# chown sandbox home to sandbox user
+os.system('chown -R sandbox:sandbox /sandbox/.clawmetry 2>/dev/null')
+PYEOF
+" 2>/dev/null || true
 
             # Connect non-interactively (OTP skipped — key matches saved config)
             if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
@@ -241,7 +250,7 @@ import json; json.dump({'api_key':'$HOST_API_KEY','node_id':'$sb','platform':'Li
         [ -z "$sb" ] && continue
         echo -e "  → Starting supervisor in sandbox ${BOLD}${sb}${NC}..."
         docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-          bash << 'SANDBOX_SCRIPT' >/dev/null 2>&1
+          bash -s >/dev/null 2>&1 << 'SANDBOX_SCRIPT'
             # Install supervisord if missing
             command -v supervisord >/dev/null 2>&1 || pip install --break-system-packages --quiet supervisor 2>/dev/null
 
@@ -273,7 +282,7 @@ startsecs=3
 stdout_logfile=/root/.clawmetry/sync.log
 stderr_logfile=/root/.clawmetry/sync.log
 stdout_logfile_maxbytes=10MB
-environment=HOME="/root"
+environment=HOME="/sandbox",CLAWMETRY_CONFIG="/sandbox/.clawmetry/config.json"
 PROGEOF
 
             # Kill ALL stray sync.py daemons before supervisord takes over
