@@ -61,7 +61,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.94"
+__version__ = "0.12.95"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -150,6 +150,10 @@ _ALERTS_CONFIG_FILE = os.path.expanduser('~/.openclaw/clawmetry-alerts.json')
 _security_posture_hash = ''
 _ALERTS_CONFIG_FILE = os.path.expanduser('~/.openclaw/clawmetry-alerts.json')
 _security_posture_hash = ''
+# Token velocity alert thresholds (GH#313)
+_VELOCITY_TOKENS_PER_2MIN = 10000  # tokens in any 2-minute window
+_VELOCITY_CONSECUTIVE_TOOLS = 20   # consecutive tool calls without human turn
+_VELOCITY_COST_PER_MIN = 0.10      # USD/min cost rate
 
 # ── OTLP Metrics Store ─────────────────────────────────────────────────
 METRICS_FILE = None  # Set via CLI/env, defaults to {WORKSPACE}/.clawmetry-metrics.json
@@ -860,6 +864,133 @@ def _get_active_alerts():
         return []
 
 
+def _compute_velocity_status():
+    """Compute real-time token velocity across all active sessions.
+
+    Returns a dict with:
+      - active: bool (True if any threshold exceeded)
+      - tokensIn2Min: total tokens in last 2 minutes across all sessions
+      - costPerMin: estimated USD/min cost rate
+      - maxConsecutiveTools: highest consecutive-tool-call chain found
+      - triggeringSession: session ID with highest burn rate (if any)
+      - reasons: list of human-readable trigger reasons
+    """
+    now = time.time()
+    window_2min = now - 120
+
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    total_tokens_2min = 0.0
+    max_consecutive_tools = 0
+    triggering_session = None
+    highest_tpm = 0.0
+
+    try:
+        if os.path.isdir(sessions_dir):
+            candidates = sorted(
+                [f for f in os.listdir(sessions_dir) if f.endswith('.jsonl') and 'deleted' not in f],
+                key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+                reverse=True
+            )[:20]  # check 20 most recent sessions
+            for fname in candidates:
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if now - mtime > 300:  # skip sessions inactive > 5 min
+                        continue
+                    tokens_2min = 0.0
+                    consecutive_tools = 0
+                    max_consecutive_in_session = 0
+                    with open(fpath, 'r', errors='replace') as f:
+                        lines = list(deque(f, maxlen=2000))
+                    for line in lines:
+                        try:
+                            obj = json.loads(line.strip())
+                        except Exception:
+                            continue
+                        ts = _json_ts_to_epoch(
+                            obj.get('timestamp') or obj.get('time') or obj.get('created_at')
+                        )
+                        if not ts:
+                            continue
+                        # Count consecutive tool calls (any tool_use role)
+                        msg = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+                        role = msg.get('role', '') or obj.get('role', '')
+                        content = msg.get('content', [])
+                        is_tool_call = False
+                        if isinstance(content, list):
+                            for blk in content:
+                                if isinstance(blk, dict) and blk.get('type') == 'tool_use':
+                                    is_tool_call = True
+                                    break
+                        if role == 'user' and not is_tool_call:
+                            consecutive_tools = 0  # human turn resets counter
+                        elif is_tool_call or role == 'assistant':
+                            consecutive_tools += 1
+                            max_consecutive_in_session = max(max_consecutive_in_session, consecutive_tools)
+                        # Sum tokens in last 2 minutes
+                        if ts >= window_2min:
+                            usage = msg.get('usage', {}) if isinstance(msg.get('usage'), dict) else {}
+                            tok = float(
+                                usage.get('total_tokens')
+                                or usage.get('totalTokens')
+                                or (usage.get('input_tokens', 0) + usage.get('output_tokens', 0))
+                                or 0
+                            )
+                            tokens_2min += tok
+                    total_tokens_2min += tokens_2min
+                    if max_consecutive_in_session > max_consecutive_tools:
+                        max_consecutive_tools = max_consecutive_in_session
+                    # Track highest burn session
+                    burn = _session_burn_stats(fname.replace('.jsonl', ''))
+                    tpm = burn.get('tokensPerMin', 0)
+                    if tpm > highest_tpm:
+                        highest_tpm = tpm
+                        triggering_session = fname.replace('.jsonl', '')
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    usd_per_token = _estimate_usd_per_token()
+    cost_per_min = highest_tpm * usd_per_token
+
+    reasons = []
+    active = False
+
+    if total_tokens_2min >= _VELOCITY_TOKENS_PER_2MIN:
+        active = True
+        reasons.append(
+            f'Token velocity: {int(total_tokens_2min):,} tokens in 2 min '
+            f'(threshold: {_VELOCITY_TOKENS_PER_2MIN:,})'
+        )
+    if cost_per_min >= _VELOCITY_COST_PER_MIN:
+        active = True
+        reasons.append(
+            f'Cost rate: ${cost_per_min:.3f}/min '
+            f'(threshold: ${_VELOCITY_COST_PER_MIN:.2f}/min)'
+        )
+    if max_consecutive_tools >= _VELOCITY_CONSECUTIVE_TOOLS:
+        active = True
+        reasons.append(
+            f'Consecutive tool calls: {max_consecutive_tools} '
+            f'(threshold: {_VELOCITY_CONSECUTIVE_TOOLS})'
+        )
+
+    return {
+        'active': active,
+        'tokensIn2Min': round(total_tokens_2min, 1),
+        'costPerMin': round(cost_per_min, 5),
+        'maxConsecutiveTools': max_consecutive_tools,
+        'triggeringSession': triggering_session,
+        'reasons': reasons,
+        'thresholds': {
+            'tokensIn2Min': _VELOCITY_TOKENS_PER_2MIN,
+            'costPerMin': _VELOCITY_COST_PER_MIN,
+            'consecutiveTools': _VELOCITY_CONSECUTIVE_TOOLS,
+        },
+    }
+
+
 def _budget_monitor_loop():
     """Background thread: check for anomalies, agent-down, and custom alert rules."""
     global _budget_alert_cooldowns, _security_posture_hash
@@ -898,6 +1029,23 @@ def _budget_monitor_loop():
                         'timestamp': now,
                         'message': f'Cost spike detected: {ratio:.1f}x daily average',
                     })
+
+
+            # Token velocity alert (GH#313): detect runaway agent loops
+            try:
+                vel = _compute_velocity_status()
+                if vel['active']:
+                    reasons_str = '; '.join(vel['reasons'])
+                    sid_hint = f' (session: {vel["triggeringSession"][:12]}...)' if vel.get('triggeringSession') else ''
+                    msg = f'\u26a1 Runaway loop detected{sid_hint}: {reasons_str}'
+                    _fire_alert(
+                        rule_id='token_velocity',
+                        alert_type='token_velocity',
+                        message=msg,
+                        channels=['banner', 'telegram'],
+                    )
+            except Exception as _vel_err:
+                print(f'Warning: velocity check failed: {_vel_err}')
 
             # Agent error-rate check from webhook channel metrics (last 60 minutes)
             window_start = now - 3600
@@ -5967,6 +6115,23 @@ def _budget_monitor_loop():
                         'timestamp': now,
                         'message': f'Cost spike detected: {ratio:.1f}x daily average',
                     })
+
+
+            # Token velocity alert (GH#313): detect runaway agent loops
+            try:
+                vel = _compute_velocity_status()
+                if vel['active']:
+                    reasons_str = '; '.join(vel['reasons'])
+                    sid_hint = f' (session: {vel["triggeringSession"][:12]}...)' if vel.get('triggeringSession') else ''
+                    msg = f'\u26a1 Runaway loop detected{sid_hint}: {reasons_str}'
+                    _fire_alert(
+                        rule_id='token_velocity',
+                        alert_type='token_velocity',
+                        message=msg,
+                        channels=['banner', 'telegram'],
+                    )
+            except Exception as _vel_err:
+                print(f'Warning: velocity check failed: {_vel_err}')
 
             # Agent error-rate check from webhook channel metrics (last 60 minutes)
             window_start = now - 3600
@@ -18409,6 +18574,20 @@ def api_alerts_webhook_test():
     if not sent:
         return jsonify({'ok': False, 'error': 'No configured webhook URL for selected target'}), 400
     return jsonify({'ok': True, 'sent': sent})
+
+
+@bp_alerts.route('/api/alerts/velocity')
+def api_alerts_velocity():
+    """Real-time token velocity status — detects runaway agent loops.
+
+    Returns whether any velocity threshold is currently exceeded:
+      - tokensIn2Min: tokens consumed in last 2-min sliding window
+      - costPerMin: estimated USD/min burn rate
+      - maxConsecutiveTools: longest consecutive tool-call chain
+      - active: True if any threshold is breached
+      - reasons: human-readable list of triggered thresholds
+    """
+    return jsonify(_compute_velocity_status())
 
 
 # ── History / Time-Series API ────────────────────────────────────────────
