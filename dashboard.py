@@ -6611,6 +6611,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_overview)
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
+    app.register_blueprint(bp_upgrade)
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
     # ────────────────────────────────────────────────────────────────────────
@@ -7895,6 +7896,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('upgrades')">Upgrades</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -8789,7 +8791,83 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-security -->
 
-
+<div class="page" id="page-upgrades">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x1F4E6; Upgrade Impact</span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span id="upgrade-scan-time" style="font-size:11px;color:var(--text-muted);"></span>
+        <button class="refresh-btn" onclick="loadUpgradeImpact();">&#8635; Refresh</button>
+      </div>
+    </div>
+    <div id="upgrade-banner" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:14px;display:none;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div id="upgrade-banner-icon" style="font-size:28px;">&#x1F4E6;</div>
+        <div style="flex:1;">
+          <div id="upgrade-banner-title" style="font-size:13px;font-weight:700;color:var(--text-primary);"></div>
+          <div id="upgrade-banner-sub" style="font-size:11px;color:var(--text-muted);margin-top:2px;"></div>
+        </div>
+      </div>
+    </div>
+    <div id="upgrade-comparison" style="display:none;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:14px;">
+        <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:8px;">&#x1F4B0; Avg Cost / Session</div>
+          <div style="display:flex;align-items:baseline;gap:12px;">
+            <div id="uc-cost-before" style="font-size:20px;font-weight:700;color:var(--text-secondary);">-</div>
+            <div style="font-size:14px;color:var(--text-muted);">&#x2192;</div>
+            <div id="uc-cost-after" style="font-size:20px;font-weight:700;color:var(--text-primary);">-</div>
+            <div id="uc-cost-delta" style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:12px;"></div>
+          </div>
+        </div>
+        <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:8px;">&#x1F4CA; Avg Tokens / Session</div>
+          <div style="display:flex;align-items:baseline;gap:12px;">
+            <div id="uc-tokens-before" style="font-size:20px;font-weight:700;color:var(--text-secondary);">-</div>
+            <div style="font-size:14px;color:var(--text-muted);">&#x2192;</div>
+            <div id="uc-tokens-after" style="font-size:20px;font-weight:700;color:var(--text-primary);">-</div>
+            <div id="uc-tokens-delta" style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:12px;"></div>
+          </div>
+        </div>
+        <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:8px;">&#x26A0;&#xFE0F; Error Rate</div>
+          <div style="display:flex;align-items:baseline;gap:12px;">
+            <div id="uc-errors-before" style="font-size:20px;font-weight:700;color:var(--text-secondary);">-</div>
+            <div style="font-size:14px;color:var(--text-muted);">&#x2192;</div>
+            <div id="uc-errors-after" style="font-size:20px;font-weight:700;color:var(--text-primary);">-</div>
+            <div id="uc-errors-delta" style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:12px;"></div>
+          </div>
+        </div>
+        <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:8px;">&#x1F4C1; Sessions / Day</div>
+          <div style="display:flex;align-items:baseline;gap:12px;">
+            <div id="uc-sessions-before" style="font-size:20px;font-weight:700;color:var(--text-secondary);">-</div>
+            <div style="font-size:14px;color:var(--text-muted);">&#x2192;</div>
+            <div id="uc-sessions-after" style="font-size:20px;font-weight:700;color:var(--text-primary);">-</div>
+            <div id="uc-sessions-delta" style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:12px;"></div>
+          </div>
+        </div>
+        <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:8px;">&#x1F527; Tool Success Rate</div>
+          <div style="display:flex;align-items:baseline;gap:12px;">
+            <div id="uc-tools-before" style="font-size:20px;font-weight:700;color:var(--text-secondary);">-</div>
+            <div style="font-size:14px;color:var(--text-muted);">&#x2192;</div>
+            <div id="uc-tools-after" style="font-size:20px;font-weight:700;color:var(--text-primary);">-</div>
+            <div id="uc-tools-delta" style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:12px;"></div>
+          </div>
+        </div>
+        <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:8px;">&#x1F916; Model Mix</div>
+          <div id="uc-models-content" style="font-size:12px;color:var(--text-secondary);">-</div>
+        </div>
+      </div>
+    </div>
+    <div id="upgrade-history" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+      <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Version History</div>
+      <div id="upgrade-timeline" style="font-size:12px;color:var(--text-muted);">Loading...</div>
+    </div>
+  </div>
+</div><!-- end page-upgrades -->
 
 
 <script>
@@ -9156,7 +9234,103 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
+  if (name === 'upgrades') loadUpgradeImpact();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+}
+
+
+function _fmtDelta(before, after, unit, invert) {
+  if (!before || before === 0) return {text: 'N/A', cls: ''};
+  var pct = ((after - before) / before) * 100;
+  var sign = pct >= 0 ? '+' : '';
+  var improved = invert ? pct < 0 : pct > 0;
+  return {
+    text: sign + pct.toFixed(1) + '%',
+    cls: Math.abs(pct) < 2 ? 'background:rgba(148,163,184,0.2);color:#94a3b8;' :
+         improved ? 'background:rgba(34,197,94,0.15);color:#22c55e;' :
+         'background:rgba(239,68,68,0.15);color:#ef4444;'
+  };
+}
+
+function loadUpgradeImpact() {
+  fetch('/api/upgrade-impact').then(function(r){return r.json();}).then(function(d) {
+    document.getElementById('upgrade-scan-time').textContent = 'Scanned ' + new Date().toLocaleTimeString();
+    var banner = document.getElementById('upgrade-banner');
+    var comp = document.getElementById('upgrade-comparison');
+    if (d.current_version) {
+      banner.style.display = 'block';
+      document.getElementById('upgrade-banner-icon').innerHTML = d.latest_change ? '&#x1F504;' : '&#x1F4E6;';
+      var title = 'Running OpenClaw ' + d.current_version;
+      if (d.latest_change) {
+        title = 'Upgraded from ' + d.latest_change.from_version + ' to ' + d.latest_change.to_version;
+        var dt = new Date(d.latest_change.detected_at);
+        document.getElementById('upgrade-banner-sub').textContent = 'Detected ' + dt.toLocaleDateString() + ' ' + dt.toLocaleTimeString() + '. Comparing ' + d.latest_change.window_days + '-day windows before and after.';
+      } else {
+        document.getElementById('upgrade-banner-sub').textContent = 'No version changes detected yet. Metrics will appear after your next upgrade.';
+      }
+      document.getElementById('upgrade-banner-title').textContent = title;
+    }
+    if (d.comparison) {
+      comp.style.display = 'block';
+      var c = d.comparison;
+      document.getElementById('uc-cost-before').textContent = '$' + (c.before.avg_cost_per_session || 0).toFixed(3);
+      document.getElementById('uc-cost-after').textContent = '$' + (c.after.avg_cost_per_session || 0).toFixed(3);
+      var costD = _fmtDelta(c.before.avg_cost_per_session, c.after.avg_cost_per_session, '$', true);
+      document.getElementById('uc-cost-delta').textContent = costD.text;
+      document.getElementById('uc-cost-delta').setAttribute('style', costD.cls);
+
+      document.getElementById('uc-tokens-before').textContent = Math.round(c.before.avg_tokens_per_session || 0).toLocaleString();
+      document.getElementById('uc-tokens-after').textContent = Math.round(c.after.avg_tokens_per_session || 0).toLocaleString();
+      var tokD = _fmtDelta(c.before.avg_tokens_per_session, c.after.avg_tokens_per_session, '', true);
+      document.getElementById('uc-tokens-delta').textContent = tokD.text;
+      document.getElementById('uc-tokens-delta').setAttribute('style', tokD.cls);
+
+      document.getElementById('uc-errors-before').textContent = ((c.before.error_rate || 0) * 100).toFixed(1) + '%';
+      document.getElementById('uc-errors-after').textContent = ((c.after.error_rate || 0) * 100).toFixed(1) + '%';
+      var errD = _fmtDelta(c.before.error_rate || 0.001, c.after.error_rate, '%', true);
+      document.getElementById('uc-errors-delta').textContent = errD.text;
+      document.getElementById('uc-errors-delta').setAttribute('style', errD.cls);
+
+      document.getElementById('uc-sessions-before').textContent = (c.before.sessions_per_day || 0).toFixed(1);
+      document.getElementById('uc-sessions-after').textContent = (c.after.sessions_per_day || 0).toFixed(1);
+      var sesD = _fmtDelta(c.before.sessions_per_day, c.after.sessions_per_day, '', false);
+      document.getElementById('uc-sessions-delta').textContent = sesD.text;
+      document.getElementById('uc-sessions-delta').setAttribute('style', sesD.cls);
+
+      document.getElementById('uc-tools-before').textContent = ((c.before.tool_success_rate || 0) * 100).toFixed(1) + '%';
+      document.getElementById('uc-tools-after').textContent = ((c.after.tool_success_rate || 0) * 100).toFixed(1) + '%';
+      var toolD = _fmtDelta(c.before.tool_success_rate || 0.001, c.after.tool_success_rate, '%', false);
+      document.getElementById('uc-tools-delta').textContent = toolD.text;
+      document.getElementById('uc-tools-delta').setAttribute('style', toolD.cls);
+
+      var modelsHtml = '<div style="margin-bottom:6px;font-weight:600;">Before:</div>';
+      (c.before.model_mix || []).forEach(function(m) { modelsHtml += '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span>' + m.model + '</span><span style="color:var(--text-muted);">' + m.pct.toFixed(0) + '%</span></div>'; });
+      modelsHtml += '<div style="margin:6px 0 4px 0;border-top:1px solid var(--border);padding-top:6px;font-weight:600;">After:</div>';
+      (c.after.model_mix || []).forEach(function(m) { modelsHtml += '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span>' + m.model + '</span><span style="color:var(--text-muted);">' + m.pct.toFixed(0) + '%</span></div>'; });
+      document.getElementById('uc-models-content').innerHTML = modelsHtml;
+    }
+    var tl = document.getElementById('upgrade-timeline');
+    if (d.version_history && d.version_history.length > 0) {
+      var html = '<div style="border-left:2px solid var(--border);padding-left:16px;margin-left:8px;">';
+      d.version_history.forEach(function(v, i) {
+        var dt = new Date(v.detected_at);
+        var isCurrent = i === 0;
+        var dotColor = isCurrent ? '#22c55e' : 'var(--text-muted)';
+        html += '<div style="position:relative;padding-bottom:' + (i < d.version_history.length - 1 ? '16' : '4') + 'px;">';
+        html += '<div style="position:absolute;left:-22px;top:2px;width:10px;height:10px;border-radius:50%;background:' + dotColor + ';border:2px solid var(--bg-secondary);"></div>';
+        html += '<div style="font-weight:600;color:' + (isCurrent ? '#22c55e' : 'var(--text-primary)') + ';">v' + v.version + (isCurrent ? ' (current)' : '') + '</div>';
+        html += '<div style="color:var(--text-muted);font-size:11px;">' + dt.toLocaleDateString() + ' ' + dt.toLocaleTimeString() + '</div>';
+        if (v.sessions_count) html += '<div style="color:var(--text-muted);font-size:11px;">' + v.sessions_count + ' sessions, $' + (v.total_cost || 0).toFixed(2) + ' total cost</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+      tl.innerHTML = html;
+    } else {
+      tl.innerHTML = '<div style="color:var(--text-muted);padding:8px 0;">No version history recorded yet. Version tracking starts after the first dashboard scan.</div>';
+    }
+  }).catch(function(e) {
+    document.getElementById('upgrade-timeline').innerHTML = '<div style="color:#ef4444;">Failed to load upgrade data: ' + e.message + '</div>';
+  });
 }
 
 function exportUsageData() {
@@ -15752,6 +15926,7 @@ bp_otel = _Blueprint('otel', __name__)
 bp_overview = _Blueprint('overview', __name__)
 bp_sessions = _Blueprint('sessions', __name__)
 bp_security = _Blueprint('security', __name__)
+bp_upgrade = _Blueprint('upgrade', __name__)
 bp_usage = _Blueprint('usage', __name__)
 bp_version = _Blueprint('version', __name__)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -19326,6 +19501,273 @@ def _compute_session_cost_anomalies(session_summaries):
 
     anomalies.sort(key=lambda a: a.get('ratio', 0), reverse=True)
     return anomalies
+
+# ── Upgrade Impact Dashboard ──────────────────────────────────────────────────
+
+_upgrade_db_path = None
+_upgrade_db_lock = threading.Lock()
+
+
+def _get_upgrade_db_path():
+    global _upgrade_db_path
+    if _upgrade_db_path:
+        return _upgrade_db_path
+    data_dir = os.path.expanduser('~/.clawmetry')
+    os.makedirs(data_dir, exist_ok=True)
+    _upgrade_db_path = os.path.join(data_dir, 'upgrade_history.db')
+    return _upgrade_db_path
+
+
+def _upgrade_init_db():
+    import sqlite3
+    db_path = _get_upgrade_db_path()
+    conn = sqlite3.connect(db_path)
+    conn.execute('''CREATE TABLE IF NOT EXISTS version_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version TEXT NOT NULL,
+        detected_at TEXT NOT NULL,
+        UNIQUE(version)
+    )''')
+    conn.commit()
+    conn.close()
+
+
+def _detect_openclaw_version():
+    """Detect current OpenClaw version from CLI or package info."""
+    # Try openclaw --version
+    try:
+        out = subprocess.check_output(['openclaw', '--version'], timeout=5, stderr=subprocess.STDOUT).decode().strip()
+        # Format: "OpenClaw 2026.3.13 (61d171a)" or similar
+        parts = out.split()
+        for p in parts:
+            if p[0].isdigit():
+                return p.rstrip(')')
+    except Exception:
+        pass
+    # Try node package
+    try:
+        out = subprocess.check_output(['npm', 'list', '-g', 'openclaw', '--depth=0', '--json'], timeout=10, stderr=subprocess.STDOUT).decode()
+        d = json.loads(out)
+        deps = d.get('dependencies', {})
+        if 'openclaw' in deps:
+            return deps['openclaw'].get('version', '')
+    except Exception:
+        pass
+    return None
+
+
+def _record_version(version):
+    """Record a version in the history DB if not already present."""
+    import sqlite3
+    _upgrade_init_db()
+    db_path = _get_upgrade_db_path()
+    with _upgrade_db_lock:
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute('INSERT OR IGNORE INTO version_history (version, detected_at) VALUES (?, ?)',
+                         (version, datetime.now(timezone.utc).isoformat()))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _get_version_history():
+    """Get all recorded versions, newest first."""
+    import sqlite3
+    _upgrade_init_db()
+    db_path = _get_upgrade_db_path()
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute('SELECT version, detected_at FROM version_history ORDER BY id DESC').fetchall()
+        return [{'version': r[0], 'detected_at': r[1]} for r in rows]
+    finally:
+        conn.close()
+
+
+def _compute_session_metrics(sessions_dir, start_dt, end_dt):
+    """Compute aggregate metrics for sessions in a time window."""
+    if not os.path.isdir(sessions_dir):
+        return None
+    total_cost = 0.0
+    total_tokens = 0
+    total_sessions = 0
+    error_count = 0
+    total_events = 0
+    tool_calls = 0
+    tool_errors = 0
+    model_counts = defaultdict(int)
+
+    for fname in os.listdir(sessions_dir):
+        if not fname.endswith('.jsonl'):
+            continue
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            mtime = datetime.fromtimestamp(os.path.getmtime(fpath), tz=timezone.utc)
+            # Skip files clearly outside our window (rough filter by mtime)
+            if mtime < start_dt - timedelta(days=7):
+                continue
+        except Exception:
+            continue
+
+        session_in_window = False
+        session_cost = 0.0
+        session_tokens = 0
+        session_errors = 0
+        session_events = 0
+        session_tool_calls = 0
+        session_tool_errors = 0
+        session_models = defaultdict(int)
+
+        try:
+            with open(fpath, 'r', errors='replace') as fh:
+                for line in fh:
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    ts_val = obj.get('timestamp')
+                    if not ts_val:
+                        msg = obj.get('message', {})
+                        if isinstance(msg, dict):
+                            ts_val = msg.get('timestamp')
+                    evt_dt = _parse_event_timestamp(ts_val)
+                    if not evt_dt:
+                        continue
+                    if evt_dt.tzinfo is None:
+                        evt_dt = evt_dt.replace(tzinfo=timezone.utc)
+                    if evt_dt < start_dt or evt_dt >= end_dt:
+                        continue
+
+                    session_in_window = True
+                    session_events += 1
+
+                    # Extract usage
+                    usage = _extract_usage_metrics(obj)
+                    session_cost += usage.get('cost', 0)
+                    session_tokens += usage.get('tokens', 0)
+
+                    # Model tracking
+                    msg = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+                    model = msg.get('model')
+                    if model:
+                        session_models[model] += 1
+
+                    # Error detection
+                    role = msg.get('role', obj.get('role', ''))
+                    content = msg.get('content', '')
+                    if isinstance(content, str) and ('error' in content.lower()[:100] or 'traceback' in content.lower()[:100]):
+                        session_errors += 1
+
+                    # Tool call tracking
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict):
+                                if item.get('type') == 'toolCall':
+                                    session_tool_calls += 1
+                                elif item.get('type') == 'toolResult':
+                                    if item.get('isError') or item.get('error'):
+                                        session_tool_errors += 1
+        except Exception:
+            continue
+
+        if session_in_window:
+            total_sessions += 1
+            total_cost += session_cost
+            total_tokens += session_tokens
+            error_count += session_errors
+            total_events += session_events
+            tool_calls += session_tool_calls
+            tool_errors += session_tool_errors
+            for m, c in session_models.items():
+                model_counts[m] += c
+
+    if total_sessions == 0:
+        return None
+
+    days = max((end_dt - start_dt).days, 1)
+    total_model_events = sum(model_counts.values()) or 1
+    model_mix = sorted(
+        [{'model': m, 'pct': (c / total_model_events) * 100} for m, c in model_counts.items()],
+        key=lambda x: -x['pct']
+    )[:5]
+
+    return {
+        'sessions': total_sessions,
+        'total_cost': round(total_cost, 4),
+        'total_tokens': total_tokens,
+        'avg_cost_per_session': round(total_cost / total_sessions, 4) if total_sessions else 0,
+        'avg_tokens_per_session': round(total_tokens / total_sessions) if total_sessions else 0,
+        'error_rate': round(error_count / max(total_events, 1), 4),
+        'sessions_per_day': round(total_sessions / days, 1),
+        'tool_success_rate': round(1.0 - (tool_errors / max(tool_calls, 1)), 4),
+        'model_mix': model_mix,
+    }
+
+
+@bp_upgrade.route('/api/upgrade-impact')
+def api_upgrade_impact():
+    """Upgrade impact dashboard: detect version, compare before/after metrics."""
+    # Detect and record current version
+    current = _detect_openclaw_version()
+    if current:
+        _record_version(current)
+
+    history = _get_version_history()
+
+    # Enrich history with session counts
+    sessions_dir = _get_sessions_dir()
+    for entry in history:
+        try:
+            det = datetime.fromisoformat(entry['detected_at'].replace('Z', '+00:00'))
+            if det.tzinfo is None:
+                det = det.replace(tzinfo=timezone.utc)
+            # Count sessions in a window around this version
+            metrics = _compute_session_metrics(sessions_dir, det, det + timedelta(days=7))
+            if metrics:
+                entry['sessions_count'] = metrics['sessions']
+                entry['total_cost'] = metrics['total_cost']
+        except Exception:
+            pass
+
+    result = {
+        'current_version': current,
+        'version_history': history,
+        'latest_change': None,
+        'comparison': None,
+    }
+
+    # If we have at least 2 versions, compute before/after
+    if len(history) >= 2:
+        new_ver = history[0]
+        old_ver = history[1]
+        try:
+            change_dt = datetime.fromisoformat(new_ver['detected_at'].replace('Z', '+00:00'))
+            if change_dt.tzinfo is None:
+                change_dt = change_dt.replace(tzinfo=timezone.utc)
+
+            window_days = 7
+            before_start = change_dt - timedelta(days=window_days)
+            after_end = min(change_dt + timedelta(days=window_days), datetime.now(timezone.utc))
+
+            before_metrics = _compute_session_metrics(sessions_dir, before_start, change_dt)
+            after_metrics = _compute_session_metrics(sessions_dir, change_dt, after_end)
+
+            if before_metrics and after_metrics:
+                result['latest_change'] = {
+                    'from_version': old_ver['version'],
+                    'to_version': new_ver['version'],
+                    'detected_at': new_ver['detected_at'],
+                    'window_days': window_days,
+                }
+                result['comparison'] = {
+                    'before': before_metrics,
+                    'after': after_metrics,
+                }
+        except Exception:
+            pass
+
+    return jsonify(result)
+
 
 # ── New Feature APIs ────────────────────────────────────────────────────
 

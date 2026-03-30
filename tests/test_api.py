@@ -443,3 +443,35 @@ class TestMemoryAnalytics:
             assert f["status"] in ("ok", "warning", "critical")
 
 
+
+
+class TestUpgradeImpact:
+    """Upgrade impact dashboard endpoint tests."""
+
+    def test_upgrade_impact_returns_200(self, api, base_url):
+        """Upgrade impact endpoint returns 200 with required keys."""
+        d = assert_ok(get(api, base_url, "/api/upgrade-impact"))
+        assert_keys(d, "current_version", "version_history", "latest_change", "comparison")
+
+    def test_upgrade_impact_version_history_is_list(self, api, base_url):
+        """Version history is a list."""
+        d = assert_ok(get(api, base_url, "/api/upgrade-impact"))
+        assert isinstance(d["version_history"], list)
+
+    def test_upgrade_impact_current_version_detected(self, api, base_url):
+        """Current OpenClaw version should be detected (or null if not installed)."""
+        d = assert_ok(get(api, base_url, "/api/upgrade-impact"))
+        # current_version is either a string or null
+        v = d["current_version"]
+        assert v is None or isinstance(v, str)
+
+    def test_upgrade_impact_comparison_structure(self, api, base_url):
+        """If comparison exists, it has before/after with expected keys."""
+        d = assert_ok(get(api, base_url, "/api/upgrade-impact"))
+        if d["comparison"]:
+            assert_keys(d["comparison"], "before", "after")
+            for period in ("before", "after"):
+                metrics = d["comparison"][period]
+                assert_keys(metrics, "sessions", "avg_cost_per_session",
+                           "avg_tokens_per_session", "error_rate",
+                           "sessions_per_day", "tool_success_rate", "model_mix")
