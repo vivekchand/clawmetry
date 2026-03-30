@@ -133,34 +133,25 @@ except Exception:
   if [ -n "$SANDBOX_NAMES" ]; then
     FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)
 
-    echo -e "  → Installing ClawMetry inside sandbox ${BOLD}${FIRST_SANDBOX}${NC}..."
-    if nemoclaw "$FIRST_SANDBOX" exec -- bash -c '
-      python3 -m venv .venv 2>/dev/null
-      .venv/bin/pip install --quiet clawmetry 2>/dev/null
-    ' 2>/dev/null; then
-      echo -e "  ${GREEN}${BOLD}✓ ClawMetry installed inside sandbox${NC}"
-    else
-      echo -e "  ${DIM}⚠  Could not auto-install. Run manually inside the sandbox:${NC}"
-      echo -e "    ${GREEN}python3 -m venv .venv && .venv/bin/pip install clawmetry${NC}"
-    fi
-
+    echo -e "  ${BOLD}Next: install ClawMetry inside sandbox ${FIRST_SANDBOX}${NC}"
     echo ""
-    echo -e "  → Connecting to ClawMetry Cloud..."
-    echo -e "  ${DIM}Enter your email and OTP to connect:${NC}"
+    echo -e "  ${DIM}Once connected, run these commands:${NC}"
+    echo ""
+    echo -e "    ${GREEN}pip install clawmetry${NC}"
+    echo -e "    ${GREEN}clawmetry connect${NC}"
+    echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
+    echo ""
+    echo -e "  ${DIM}clawmetry connect will ask for your email and send an OTP.${NC}"
     echo ""
 
     if (exec </dev/tty) 2>/dev/null; then
-      nemoclaw "$FIRST_SANDBOX" exec -it -- .venv/bin/clawmetry connect </dev/tty || true
+      printf "  Press Enter to connect to sandbox %s... " "$FIRST_SANDBOX" > /dev/tty
+      read -r </dev/tty
+      nemoclaw "$FIRST_SANDBOX" connect </dev/tty || true
     else
-      echo -e "  ${DIM}No TTY available. Connect manually:${NC}"
-      echo -e "    ${GREEN}nemoclaw ${FIRST_SANDBOX} connect${NC}"
-      echo -e "    ${GREEN}.venv/bin/clawmetry connect${NC}"
+      echo -e "  ${DIM}Connect manually:${NC}"
+      echo -e "    ${GREEN}nemoclaw $FIRST_SANDBOX connect${NC}"
     fi
-
-    echo ""
-    echo -e "  → Starting ClawMetry dashboard..."
-    nemoclaw "$FIRST_SANDBOX" exec -- bash -c '.venv/bin/clawmetry --host 0.0.0.0 --port 8900 &' 2>/dev/null || true
-    echo -e "  ${GREEN}${BOLD}✓ ClawMetry running inside ${FIRST_SANDBOX}${NC}"
     echo ""
   else
     echo -e "  ${DIM}No NemoClaw sandboxes found yet.${NC}"
