@@ -2941,7 +2941,7 @@ if __name__ == "__main__":
 import time as _time
 
 _traction_cache = {"data": None, "ts": 0}
-_last_known = {"pypi_day": "1,809", "pypi_week": "10,054", "pypi_month": "17,550", "gh_stars": "78", "gh_forks": "15", "gh_issues": "0"}  # seeded fallbacks; updated on each successful API call
+_last_known = {"pypi_day": "517", "pypi_week": "3,942", "pypi_month": "32,373", "gh_stars": "211", "gh_forks": "39", "gh_issues": "0"}  # seeded fallbacks; updated on each successful API call
 
 def _fetch_traction_data():
     now = _time.time()
