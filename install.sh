@@ -139,19 +139,17 @@ except Exception:
     CLUSTER_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'openshell-cluster' | head -1)
 
     if [ -n "$CLUSTER_CONTAINER" ]; then
-      # Automated install via kubectl exec
+      # Step 2a: Install ClawMetry inside all sandboxes via kubectl exec
       echo "$SANDBOX_NAMES" | while IFS= read -r sb; do
         [ -z "$sb" ] && continue
         echo -e "  → Installing ClawMetry inside sandbox ${BOLD}${sb}${NC}..."
 
-        # Check if already installed
         INSTALLED_VER=$(docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
           clawmetry --version 2>/dev/null || true)
 
         if [ -n "$INSTALLED_VER" ]; then
           echo -e "  ${GREEN}${BOLD}✓ ClawMetry already installed ($INSTALLED_VER)${NC}"
         else
-          # Install via pip (sandbox runs as root, --break-system-packages needed for Debian)
           if docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
             pip install --break-system-packages --quiet clawmetry 2>/dev/null; then
             echo -e "  ${GREEN}${BOLD}✓ ClawMetry installed${NC}"
@@ -159,30 +157,81 @@ except Exception:
             echo -e "  ${DIM}⚠  Auto-install failed. Install manually:${NC}"
             echo -e "    ${GREEN}nemoclaw $sb connect${NC}"
             echo -e "    ${GREEN}pip install --break-system-packages clawmetry${NC}"
-            continue
           fi
         fi
-
       done
 
       echo ""
-      FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)
 
-      # Interactive connect: drop user into sandbox to run clawmetry connect (OTP required)
-      echo -e "  ${BOLD}Next: connect ClawMetry to your cloud dashboard${NC}"
-      echo -e "  ${DIM}Inside the sandbox, run:${NC}"
-      echo -e "    ${GREEN}clawmetry connect${NC}"
-      echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
-      echo ""
+      # Step 2b: Connect on the HOST (interactive OTP) to get API key
+      HOST_CONFIG="$HOME/.clawmetry/config.json"
+      HOST_API_KEY=""
+      HOST_ENC_KEY=""
 
-      if (exec </dev/tty) 2>/dev/null; then
-        printf "  Press Enter to connect to sandbox %s... " "$FIRST_SANDBOX" > /dev/tty
-        read -r </dev/tty
-        nemoclaw "$FIRST_SANDBOX" connect </dev/tty || true
-      else
-        echo -e "  ${DIM}Connect manually:${NC}"
-        echo -e "    ${GREEN}nemoclaw $FIRST_SANDBOX connect${NC}"
+      if [ -f "$HOST_CONFIG" ]; then
+        HOST_API_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null \
+          || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null || true)
+        HOST_ENC_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null \
+          || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null || true)
       fi
+
+      if [ -z "$HOST_API_KEY" ]; then
+        echo -e "  ${BOLD}Connect ClawMetry to your cloud dashboard${NC}"
+        echo -e "  ${DIM}This requires your email and a one-time code.${NC}"
+        echo ""
+
+        if (exec </dev/tty) 2>/dev/null; then
+          "$CLAWMETRY_BIN" connect </dev/tty || true
+
+          # Re-read config after connect
+          if [ -f "$HOST_CONFIG" ]; then
+            HOST_API_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null \
+              || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('api_key',''))" 2>/dev/null || true)
+            HOST_ENC_KEY=$(/usr/bin/python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null \
+              || python3 -c "import json; print(json.load(open('$HOST_CONFIG')).get('encryption_key',''))" 2>/dev/null || true)
+          fi
+        else
+          echo -e "  ${DIM}Run this to connect:${NC}"
+          echo -e "    ${GREEN}clawmetry connect${NC}"
+        fi
+      else
+        echo -e "  ${GREEN}${BOLD}✓ ClawMetry Cloud already connected on host${NC}"
+      fi
+
+      # Step 2c: Propagate API key + encryption key into all sandboxes
+      if [ -n "$HOST_API_KEY" ] && [ -n "$HOST_ENC_KEY" ]; then
+        echo ""
+        echo "$SANDBOX_NAMES" | while IFS= read -r sb; do
+          [ -z "$sb" ] && continue
+
+          # Check if sandbox already connected
+          SB_KEY=$(docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+            bash -c 'test -f /root/.clawmetry/config.json && python3 -c "import json; print(json.load(open(\"/root/.clawmetry/config.json\")).get(\"api_key\",\"\"))" 2>/dev/null || echo ""' 2>/dev/null || true)
+
+          if [ -n "$SB_KEY" ]; then
+            echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb already connected to cloud${NC}"
+          else
+            CONNECT_TS=$(date -u +%Y-%m-%dT%H:%M:%S 2>/dev/null || date +%Y-%m-%dT%H:%M:%S)
+            docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+              bash -c "mkdir -p /root/.clawmetry && cat > /root/.clawmetry/config.json << CLAWCFG
+{
+  \"api_key\": \"$HOST_API_KEY\",
+  \"node_id\": \"$sb\",
+  \"platform\": \"Linux\",
+  \"connected_at\": \"$CONNECT_TS\",
+  \"encryption_key\": \"$HOST_ENC_KEY\"
+}
+CLAWCFG" 2>/dev/null \
+              && echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb connected to cloud (node: $sb)${NC}" \
+              || echo -e "  ${DIM}⚠  Could not connect sandbox $sb. Run 'clawmetry connect' inside.${NC}"
+          fi
+        done
+      fi
+
+      echo ""
+      echo -e "  ${DIM}Start the dashboard inside any sandbox:${NC}"
+      echo -e "    ${GREEN}nemoclaw <sandbox> connect${NC}"
+      echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
     else
       # No cluster container found, fall back to manual instructions
       FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)
