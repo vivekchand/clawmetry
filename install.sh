@@ -279,8 +279,8 @@ autostart=true
 autorestart=true
 startretries=10
 startsecs=3
-stdout_logfile=/root/.clawmetry/sync.log
-stderr_logfile=/root/.clawmetry/sync.log
+stdout_logfile=/sandbox/.clawmetry/sync.log
+stderr_logfile=/sandbox/.clawmetry/sync.log
 stdout_logfile_maxbytes=10MB
 environment=HOME="/sandbox",CLAWMETRY_CONFIG="/sandbox/.clawmetry/config.json"
 PROGEOF
