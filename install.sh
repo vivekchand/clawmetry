@@ -139,7 +139,7 @@ except Exception:
     CLUSTER_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep 'openshell-cluster' | head -1)
 
     if [ -n "$CLUSTER_CONTAINER" ]; then
-      # Automated install via kubectl exec (no interactive shell needed)
+      # Automated install via kubectl exec
       echo "$SANDBOX_NAMES" | while IFS= read -r sb; do
         [ -z "$sb" ] && continue
         echo -e "  → Installing ClawMetry inside sandbox ${BOLD}${sb}${NC}..."
@@ -159,16 +159,20 @@ except Exception:
             echo -e "  ${DIM}⚠  Auto-install failed. Install manually:${NC}"
             echo -e "    ${GREEN}nemoclaw $sb connect${NC}"
             echo -e "    ${GREEN}pip install --break-system-packages clawmetry${NC}"
+            continue
           fi
         fi
+
       done
 
       echo ""
       FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)
 
-      # Interactive connect for clawmetry connect (needs OTP input)
+      # Interactive connect: drop user into sandbox to run clawmetry connect (OTP required)
       echo -e "  ${BOLD}Next: connect ClawMetry to your cloud dashboard${NC}"
-      echo -e "  ${DIM}This requires your email and a one-time code.${NC}"
+      echo -e "  ${DIM}Inside the sandbox, run:${NC}"
+      echo -e "    ${GREEN}clawmetry connect${NC}"
+      echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
       echo ""
 
       if (exec </dev/tty) 2>/dev/null; then
@@ -176,10 +180,8 @@ except Exception:
         read -r </dev/tty
         nemoclaw "$FIRST_SANDBOX" connect </dev/tty || true
       else
-        echo -e "  ${DIM}Connect manually and run:${NC}"
+        echo -e "  ${DIM}Connect manually:${NC}"
         echo -e "    ${GREEN}nemoclaw $FIRST_SANDBOX connect${NC}"
-        echo -e "    ${GREEN}clawmetry connect${NC}"
-        echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
       fi
     else
       # No cluster container found, fall back to manual instructions
