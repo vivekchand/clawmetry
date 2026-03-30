@@ -229,9 +229,7 @@ CLAWCFG" 2>/dev/null \
       fi
 
       echo ""
-      echo -e "  ${DIM}Start the dashboard inside any sandbox:${NC}"
-      echo -e "    ${GREEN}nemoclaw <sandbox> connect${NC}"
-      echo -e "    ${GREEN}clawmetry --host 0.0.0.0 --port 8900 &${NC}"
+      echo -e "  ${GREEN}${BOLD}✓ All done! Open app.clawmetry.com to see your dashboard${NC}"
     else
       # No cluster container found, fall back to manual instructions
       FIRST_SANDBOX=$(echo "$SANDBOX_NAMES" | head -1)
