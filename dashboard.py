@@ -3262,10 +3262,12 @@ function clawmetryLogout(){
   <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
     <button class="refresh-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;">+ New Job</button>
+    <button class="refresh-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
     <label class="modal-auto-refresh" style="margin-left:auto;">
       <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
     </label>
   </div>
+  <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
   <div class="card" id="crons-list">Loading...</div>
 </div>
@@ -8450,10 +8452,12 @@ function clawmetryLogout(){
   <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
     <button class="refresh-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;">+ New Job</button>
+    <button class="refresh-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
     <label class="modal-auto-refresh" style="margin-left:auto;">
       <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
     </label>
   </div>
+  <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
   <div class="card" id="crons-list">Loading...</div>
 </div>
@@ -10765,12 +10769,112 @@ async function loadCrons() {
   var data = await fetch('/api/crons').then(r => r.json());
   _cronJobs = data.jobs || [];
   renderCrons();
+  // Load cron health summary panel
+  loadCronHealthPanel();
   // Load multi-node cron status from fleet nodes
   loadCronsMultiNode();
   // Start auto-refresh if checkbox is checked and timer not running
   var cb = document.getElementById('cron-auto-refresh');
   if (cb && cb.checked && !_cronAutoRefreshTimer) {
     _cronAutoRefreshTimer = setInterval(loadCrons, 30000);
+  }
+}
+
+async function loadCronHealthPanel() {
+  var panel = document.getElementById('cron-health-panel');
+  if (!panel) return;
+  try {
+    var d = await fetch('/api/cron/health-summary').then(function(r){return r.json();});
+    var jobs = d.jobs || [];
+    var totals = d.totals || {};
+    if (!jobs.length) { panel.innerHTML = ''; return; }
+
+    // Show emergency stop button if there are errors/warnings
+    var killBtn = document.getElementById('cron-kill-all-btn');
+    if (killBtn) killBtn.style.display = (totals.error > 0 || totals.silent > 0) ? '' : 'none';
+
+    // Stat cards row
+    var statBg = function(color) { return 'background:' + color + ';border-radius:8px;padding:10px 16px;text-align:center;min-width:70px;'; };
+    var html = '<div class="card" style="padding:14px;">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">';
+    html += '<span style="font-size:13px;font-weight:700;color:var(--text-primary);">&#x2764;&#xFE0F; Cron Health</span>';
+    html += '</div>';
+
+    // Stat row
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">';
+    html += '<div style="' + statBg('rgba(34,197,94,0.12)') + 'border:1px solid rgba(34,197,94,0.3);">';
+    html += '<div style="font-size:18px;font-weight:700;color:#22c55e;">' + (totals.ok||0) + '</div>';
+    html += '<div style="font-size:10px;color:var(--text-muted);">Healthy</div></div>';
+
+    if (totals.error > 0) {
+      html += '<div style="' + statBg('rgba(239,68,68,0.12)') + 'border:1px solid rgba(239,68,68,0.3);">';
+      html += '<div style="font-size:18px;font-weight:700;color:#ef4444;">' + totals.error + '</div>';
+      html += '<div style="font-size:10px;color:var(--text-muted);">Errored</div></div>';
+    }
+    if (totals.silent > 0) {
+      html += '<div style="' + statBg('rgba(245,158,11,0.12)') + 'border:1px solid rgba(245,158,11,0.3);">';
+      html += '<div style="font-size:18px;font-weight:700;color:#f59e0b;">' + totals.silent + '</div>';
+      html += '<div style="font-size:10px;color:var(--text-muted);">Silent</div></div>';
+    }
+    if (totals.warning > 0) {
+      html += '<div style="' + statBg('rgba(234,179,8,0.12)') + 'border:1px solid rgba(234,179,8,0.3);">';
+      html += '<div style="font-size:18px;font-weight:700;color:#eab308;">' + totals.warning + '</div>';
+      html += '<div style="font-size:10px;color:var(--text-muted);">Anomaly</div></div>';
+    }
+    if (totals.disabled > 0) {
+      html += '<div style="' + statBg('rgba(148,163,184,0.1)') + 'border:1px solid rgba(148,163,184,0.2);">';
+      html += '<div style="font-size:18px;font-weight:700;color:var(--text-muted);">' + totals.disabled + '</div>';
+      html += '<div style="font-size:10px;color:var(--text-muted);">Disabled</div></div>';
+    }
+
+    // Total monthly cost projection
+    var totalMonthly = jobs.reduce(function(s,j){return s + (j.monthlyProjectedCost||0);},0);
+    if (totalMonthly > 0) {
+      html += '<div style="' + statBg('rgba(99,102,241,0.1)') + 'border:1px solid rgba(99,102,241,0.25);margin-left:auto;">';
+      html += '<div style="font-size:14px;font-weight:700;color:#818cf8;">$' + totalMonthly.toFixed(2) + '</div>';
+      html += '<div style="font-size:10px;color:var(--text-muted);">/mo projected</div></div>';
+    }
+    html += '</div>';
+
+    // Alert rows for problem jobs
+    var problemJobs = jobs.filter(function(j){return j.health === 'error' || j.health === 'silent' || j.costSpike || j.durationSpike;});
+    if (problemJobs.length) {
+      html += '<div style="display:flex;flex-direction:column;gap:6px;">';
+      problemJobs.forEach(function(j) {
+        var color = j.health === 'error' ? '#ef4444' : j.health === 'silent' ? '#f59e0b' : '#eab308';
+        var icon = j.health === 'error' ? '&#x1F534;' : j.health === 'silent' ? '&#x1F7E1;' : '&#x26A0;&#xFE0F;';
+        var msg = '';
+        if (j.health === 'error') msg = j.lastError ? escHtml(j.lastError.substring(0,80)) : 'Failed';
+        else if (j.health === 'silent') msg = 'No run in >' + (j.expectedIntervalMs ? Math.round(j.expectedIntervalMs/60000*2.5) + ' min' : 'expected window');
+        else if (j.costSpike) msg = 'Cost spike: last run $' + (j.costUsd||0).toFixed(4) + ' vs avg $' + (j.avgCost||0).toFixed(4);
+        else if (j.durationSpike) msg = 'Duration spike: last ' + ((j.lastDurationMs||0)/1000).toFixed(1) + 's (3x above avg)';
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg-secondary);border-left:3px solid ' + color + ';border-radius:4px;">';
+        html += '<span>' + icon + '</span>';
+        html += '<span style="font-size:12px;font-weight:600;color:var(--text-primary);">' + escHtml(j.name) + '</span>';
+        html += '<span style="font-size:12px;color:var(--text-secondary);">&mdash; ' + msg + '</span>';
+        if (j.consecutiveFailures >= 2) html += '<span style="font-size:11px;color:#ef4444;margin-left:auto;">' + j.consecutiveFailures + ' consecutive failures</span>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+
+    html += '</div>';
+    panel.innerHTML = html;
+  } catch(e) {
+    // Silently fail — health panel is non-critical
+    var panel = document.getElementById('cron-health-panel');
+    if (panel) panel.innerHTML = '';
+  }
+}
+
+async function cronKillAll() {
+  if (!confirm('Emergency stop: disable ALL active cron jobs now? This cannot be undone automatically — you must re-enable them manually.')) return;
+  try {
+    var r = await fetch('/api/cron/kill-all', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}).then(function(x){return x.json();});
+    alert(r.message || 'Done');
+    loadCrons();
+  } catch(e) {
+    alert('Error: ' + e.message);
   }
 }
 
@@ -16968,6 +17072,174 @@ def api_cron_runs(job_id):
     if result is None:
         return jsonify({'error': 'Gateway unavailable'}), 502
     return jsonify(result)
+
+
+@bp_crons.route('/api/cron/health-summary')
+def api_cron_health_summary():
+    """Aggregate cron health: per-job success rate, cost, anomaly flags, silent detection."""
+    gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': True}) or {}
+    jobs = gw_data.get('jobs', []) or _get_crons()
+    if not isinstance(jobs, list):
+        jobs = []
+
+    now_ms = int(datetime.now().timestamp() * 1000)
+    summary = []
+    total_ok = total_err = total_silent = 0
+
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        job_id = job.get('id', '')
+        job_name = job.get('name', job_id)
+        state = job.get('state') or {}
+        enabled = job.get('enabled', True)
+
+        last_run_ms = state.get('lastRunAtMs') or state.get('lastRunAt') or 0
+        if isinstance(last_run_ms, str):
+            try:
+                from dateutil import parser as _dtp
+                last_run_ms = int(_dtp.parse(last_run_ms).timestamp() * 1000)
+            except Exception:
+                last_run_ms = 0
+
+        last_status = state.get('lastStatus', 'pending')
+        last_duration_ms = state.get('lastDurationMs') or 0
+        consecutive_failures = state.get('consecutiveFailures') or 0
+        last_error = state.get('lastError', '')
+        next_run_ms = state.get('nextRunAtMs') or 0
+
+        # Detect silent jobs: enabled, has run before, but hasn't run in >2x expected interval
+        is_silent = False
+        expected_interval_ms = None
+        sched = job.get('schedule') or {}
+        if isinstance(sched, dict):
+            every_ms = sched.get('everyMs')
+            if every_ms:
+                expected_interval_ms = int(every_ms)
+                if enabled and last_run_ms and (now_ms - last_run_ms) > every_ms * 2.5:
+                    is_silent = True
+
+        # Cost attribution from existing api_crons enrichment
+        cost_usd = job.get('cost_usd') or 0.0
+        cost_session_count = job.get('cost_session_count') or 0
+
+        # Anomaly: cost spike (last run vs average)
+        run_history = job.get('runHistory') or []
+        cost_spike = False
+        avg_cost = None
+        if run_history and len(run_history) > 2:
+            historical_costs = [r.get('costUsd', 0) for r in run_history[1:] if r.get('costUsd')]
+            if historical_costs:
+                avg_cost = sum(historical_costs) / len(historical_costs)
+                last_cost = run_history[0].get('costUsd', 0) if run_history else 0
+                if avg_cost > 0 and last_cost > avg_cost * 2.5:
+                    cost_spike = True
+
+        # Duration anomaly: last run >3x average
+        duration_spike = False
+        if run_history and len(run_history) > 2:
+            historical_durations = [r.get('durationMs', 0) for r in run_history[1:] if r.get('durationMs')]
+            if historical_durations and last_duration_ms:
+                avg_dur = sum(historical_durations) / len(historical_durations)
+                if avg_dur > 0 and last_duration_ms > avg_dur * 3:
+                    duration_spike = True
+
+        # Health status
+        if not enabled:
+            health = 'disabled'
+        elif is_silent:
+            health = 'silent'
+            total_silent += 1
+        elif consecutive_failures >= 3 or last_status == 'error':
+            health = 'error'
+            total_err += 1
+        elif cost_spike or duration_spike:
+            health = 'warning'
+        else:
+            health = 'ok'
+            total_ok += 1
+
+        # Monthly cost projection
+        monthly_cost = 0.0
+        if cost_usd and cost_session_count and cost_session_count > 0:
+            avg_run_cost = cost_usd / cost_session_count
+            # Estimate runs/month from schedule
+            if expected_interval_ms:
+                runs_per_month = (30 * 24 * 3600 * 1000) / expected_interval_ms
+                monthly_cost = avg_run_cost * runs_per_month
+
+        summary.append({
+            'id': job_id,
+            'name': job_name,
+            'enabled': enabled,
+            'health': health,
+            'lastStatus': last_status,
+            'lastRunAtMs': last_run_ms,
+            'lastDurationMs': last_duration_ms,
+            'nextRunAtMs': next_run_ms,
+            'consecutiveFailures': consecutive_failures,
+            'lastError': last_error,
+            'costUsd': round(float(cost_usd), 6),
+            'costSessionCount': cost_session_count,
+            'monthlyProjectedCost': round(monthly_cost, 4),
+            'avgCost': round(avg_cost, 6) if avg_cost else None,
+            'isSilent': is_silent,
+            'costSpike': cost_spike,
+            'durationSpike': duration_spike,
+            'expectedIntervalMs': expected_interval_ms,
+        })
+
+    total_jobs = len(summary)
+    has_anomalies = any(j['costSpike'] or j['durationSpike'] for j in summary)
+    has_errors = total_err > 0
+    has_silent = total_silent > 0
+
+    return jsonify({
+        'jobs': summary,
+        'totals': {
+            'total': total_jobs,
+            'ok': total_ok,
+            'error': total_err,
+            'silent': total_silent,
+            'disabled': sum(1 for j in summary if j['health'] == 'disabled'),
+            'warning': sum(1 for j in summary if j['health'] == 'warning'),
+        },
+        'hasAnomalies': has_anomalies,
+        'hasErrors': has_errors,
+        'hasSilent': has_silent,
+    })
+
+
+@bp_crons.route('/api/cron/kill-all', methods=['POST'])
+def api_cron_kill_all():
+    """Emergency: disable all enabled cron jobs. Returns count disabled."""
+    gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': False}) or {}
+    jobs = gw_data.get('jobs', []) or _get_crons()
+    if not isinstance(jobs, list):
+        jobs = []
+
+    disabled_count = 0
+    errors = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        if not job.get('enabled', True):
+            continue
+        job_id = job.get('id', '')
+        if not job_id:
+            continue
+        result = _gw_invoke('cron', {'action': 'update', 'jobId': job_id, 'patch': {'enabled': False}})
+        if result is not None:
+            disabled_count += 1
+        else:
+            errors.append(job_id)
+
+    return jsonify({
+        'ok': True,
+        'disabled': disabled_count,
+        'errors': errors,
+        'message': f'Emergency stop: {disabled_count} cron job(s) disabled.',
+    })
 
 
 def _find_log_file(ds):

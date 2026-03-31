@@ -134,6 +134,46 @@ class TestCrons:
         assert isinstance(d, (list, dict))
 
 
+class TestCronHealth:
+    def test_health_summary_returns_200(self, api, base_url):
+        """Cron health summary endpoint returns 200."""
+        d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
+        assert "jobs" in d
+        assert "totals" in d
+
+    def test_health_summary_totals_structure(self, api, base_url):
+        """Totals contain all expected keys."""
+        d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
+        totals = d["totals"]
+        for key in ("total", "ok", "error", "silent", "disabled", "warning"):
+            assert key in totals, f"Missing totals key '{key}'"
+
+    def test_health_summary_jobs_have_health_field(self, api, base_url):
+        """Each job entry has a health field with valid value."""
+        d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
+        valid_health = {"ok", "error", "warning", "silent", "disabled"}
+        for job in d.get("jobs", []):
+            assert "health" in job, "Job missing health field"
+            assert job["health"] in valid_health, f"Invalid health value: {job['health']}"
+
+    def test_health_summary_jobs_have_required_fields(self, api, base_url):
+        """Each job entry has required observability fields."""
+        d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
+        for job in d.get("jobs", []):
+            assert_keys(job, "id", "name", "enabled", "health", "lastStatus",
+                        "costUsd", "monthlyProjectedCost", "isSilent", "costSpike")
+
+    def test_kill_all_returns_ok(self, api, base_url):
+        """Emergency kill-all endpoint returns ok:true with no jobs to disable."""
+        r = api.post(f"{base_url}/api/cron/kill-all",
+                     json={}, timeout=10)
+        assert r.status_code == 200
+        d = r.json()
+        assert d.get("ok") is True
+        assert "disabled" in d
+        assert "message" in d
+
+
 class TestTranscripts:
     def test_status(self, api, base_url):
         r = get(api, base_url, "/api/transcripts")
