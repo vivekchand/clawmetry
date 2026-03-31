@@ -1039,9 +1039,11 @@ def _print_nemoclaw_nodes(args) -> None:
                 ["docker", "exec", cluster, "kubectl", "exec",
                  "-n", "openshell", pod, "--",
                  "bash", "-c",
-                 "test -f /root/.clawmetry/config.json && "
-                 "python3 -c \"import json; c=json.load(open('/root/.clawmetry/config.json')); "
-                 "print(c.get('api_key','') + '|' + c.get('node_id','') + '|' + c.get('encryption_key',''))\" "
+                 "cfg=/root/.clawmetry/config.json; "
+                 "[ -f /sandbox/.clawmetry/config.json ] && cfg=/sandbox/.clawmetry/config.json; "
+                 "test -f $cfg && "
+                 "python3 -c \"import json,sys; c=json.load(open(sys.argv[1])); "
+                 "print(c.get('api_key','') + '|' + c.get('node_id','') + '|' + c.get('encryption_key',''))\" $cfg "
                  "2>/dev/null || echo 'NOT_CONNECTED'"],
                 capture_output=True, text=True, timeout=10
             )
@@ -1072,12 +1074,10 @@ def _print_nemoclaw_nodes(args) -> None:
                     ["docker", "exec", cluster, "kubectl", "exec",
                      "-n", "openshell", pod, "--",
                      "bash", "-c",
-                     "python3 -c \""
-                     "import os,pathlib; "
-                     "p=pathlib.Path('/root/.clawmetry/sync.pid'); "
-                     "pid=int(p.read_text()) if p.exists() else 0; "
-                     "exit(0 if pid and not os.system(f'kill -0 {pid} 2>/dev/null') else 1)"
-                     "\" && echo running || echo stopped"],
+                     "supervisorctl status clawmetry-sync 2>/dev/null | grep -q RUNNING && echo running || { "
+                     "for pf in /sandbox/.clawmetry/sync.pid /root/.clawmetry/sync.pid; do "
+                     "[ -f $pf ] && kill -0 $(cat $pf) 2>/dev/null && echo running && exit 0; "
+                     "done; echo stopped; }"],
                     capture_output=True, text=True, timeout=5
                 )
                 daemon_status = rd.stdout.strip()
