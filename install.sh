@@ -265,7 +265,7 @@ PYEOF
         # Wait for network policy to propagate inside sandbox
         sleep 5
 
-        _sb_out=$(docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
+        _sb_out=$(docker exec -i "$CLUSTER_CONTAINER" kubectl exec -i -n openshell "$sb" -- \
           bash -s 2>&1 << 'SANDBOX_SCRIPT'
             set -e
 
@@ -370,6 +370,8 @@ PROGEOF
             rm -f /var/run/supervisord.pid /var/run/supervisor.sock
             sleep 1
             supervisord -c /etc/supervisor/supervisord.conf
+            sleep 3
+            supervisorctl -c /etc/supervisor/supervisord.conf status
 SANDBOX_SCRIPT
         )
         _rc=$?
