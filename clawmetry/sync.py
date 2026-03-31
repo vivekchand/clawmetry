@@ -1364,7 +1364,24 @@ def _build_tool_stats():
         # Read last 20 active sessions
         files = sorted(glob.glob(os.path.join(session_dir, "*.jsonl")), key=os.path.getmtime, reverse=True)[:20]
         
+        # Pre-load session-level channel info from sessions.json
+        _session_channels = {}
+        _sessions_json = os.path.join(session_dir, "sessions.json")
+        try:
+            with open(_sessions_json) as _sjf:
+                _sj = json.load(_sjf)
+            for _sk, _sv in _sj.items():
+                _sf = os.path.basename(_sv.get("sessionFile", ""))
+                _dc = _sv.get("deliveryContext", {}) or {}
+                _ori = _sv.get("origin", {}) or {}
+                _ch = _dc.get("channel", "") or _ori.get("provider", "") or _ori.get("surface", "")
+                if _sf and _ch:
+                    _session_channels[_sf] = _ch
+        except Exception:
+            pass
+
         for fp in files:
+            _file_channel = _session_channels.get(os.path.basename(fp), "")
             try:
                 for line in open(fp, errors="ignore"):
                     try:
@@ -1408,8 +1425,8 @@ def _build_tool_stats():
                                         target = args.get("target", "") or args.get("channel", "")
                                         tool_recent.setdefault(name, []).append({"target": target, "ts": ts})
                         
-                        # Track channel messages from inbound context
-                        if role == "user":
+                        # Track channel messages (inbound + outbound)
+                        if role in ("user", "assistant"):
                             text = ""
                             if isinstance(msg.get("content"), str):
                                 text = msg["content"][:300]
@@ -1419,14 +1436,15 @@ def _build_tool_stats():
                                         text = c.get("text", "")[:300]
                                         break
                             
-                            # Try to detect channel from metadata
+                            # Try to detect channel from metadata, fall back to session-level channel
                             meta = ev.get("metadata", {}) or {}
-                            channel = meta.get("channel", "") or meta.get("surface", "")
+                            channel = meta.get("channel", "") or meta.get("surface", "") or _file_channel
                             if channel and text:
-                                channel_msgs[channel]["in"] += 1
+                                direction = "in" if role == "user" else "out"
+                                channel_msgs[channel][direction] += 1
                                 channel_msgs[channel]["messages"].append({
-                                    "direction": "in", "content": text[:200],
-                                    "timestamp": ts, "sender": meta.get("sender", "User")
+                                    "direction": direction, "content": text[:200],
+                                    "timestamp": ts, "sender": meta.get("sender", "User") if role == "user" else "Agent"
                                 })
                     except Exception:
                         continue
