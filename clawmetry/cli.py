@@ -707,8 +707,14 @@ def _cmd_disconnect(args) -> None:
 
 def _get_nemoclaw_sandboxes() -> list:
     """Return list of NemoClaw sandbox pod names if docker + nemoclaw available."""
-    import subprocess, shutil
-    if not shutil.which("docker") or not shutil.which("nemoclaw"):
+    import subprocess, shutil, os
+    # Augment PATH with common macOS install locations
+    extra = ["/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin")]
+    env = os.environ.copy()
+    env["PATH"] = ":".join(extra) + ":" + env.get("PATH", "")
+    def _which(cmd):
+        return shutil.which(cmd, path=env["PATH"])
+    if not _which("docker") or not _which("nemoclaw"):
         return []
     try:
         r = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
