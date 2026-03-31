@@ -244,7 +244,7 @@ PYEOF
               echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb connected (node: $sb)${NC}"
               # Ensure daemon survives kubectl exec session end via supervisord if available
               docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-                bash -c 'command -v supervisorctl >/dev/null 2>&1 && supervisorctl start clawmetry-sync 2>/dev/null || true' 2>/dev/null || true
+                bash -c 'command -v supervisorctl >/dev/null 2>&1 && supervisorctl start clawmetry-sync >/dev/null 2>&1 || true' 2>/dev/null || true
             else
               echo -e "  ${DIM}⚠  Could not connect sandbox $sb automatically.${NC}"
               echo -e "  ${DIM}Connect manually: nemoclaw $sb connect → clawmetry connect${NC}"
@@ -260,7 +260,7 @@ PYEOF
 
         # Ensure PyPI + ClawMetry policies applied before pip install
         for _pol in clawmetry pypi; do
-          printf '%s\ny\n' "$_pol" | nemoclaw "$sb" policy-add 2>/dev/null || true
+          printf '%s\ny\n' "$_pol" | nemoclaw "$sb" policy-add >/dev/null 2>&1 || true
         done
         # Wait for network policy to propagate inside sandbox
         sleep 5
