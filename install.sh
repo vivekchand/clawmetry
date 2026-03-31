@@ -257,6 +257,14 @@ PYEOF
       echo "$SANDBOX_NAMES" | while IFS= read -r sb; do
         [ -z "$sb" ] && continue
         echo -e "  → Starting supervisor in sandbox ${BOLD}${sb}${NC}..."
+
+        # Ensure PyPI + ClawMetry policies applied before pip install
+        for _pol in clawmetry pypi; do
+          printf '%s\ny\n' "$_pol" | nemoclaw "$sb" policy-add 2>/dev/null || true
+        done
+        # Wait for network policy to propagate inside sandbox
+        sleep 5
+
         docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
           bash -s >/dev/null 2>&1 << 'SANDBOX_SCRIPT'
             # Install supervisord if missing
