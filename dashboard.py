@@ -3130,6 +3130,8 @@ function clawmetryLogout(){
         <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
         <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
+        <div id="sh-channels-wrap"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Channels</div>
+        <div id="sh-channels" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
         <div id="sh-disks" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Cron Jobs</div>
@@ -8377,6 +8379,8 @@ function clawmetryLogout(){
         <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
         <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
+        <div id="sh-channels-wrap"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Channels</div>
+        <div id="sh-channels" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
         <div id="sh-disks" style="margin-bottom:14px;"></div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Cron Jobs</div>
@@ -11805,6 +11809,7 @@ async function loadSystemHealth() {
       return r.json();
     });
     var services = Array.isArray(d.services) ? d.services : [];
+    var channels = Array.isArray(d.channels) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];
     var crons = (d.crons && typeof d.crons === 'object') ? d.crons : {enabled: 0, ok24h: 0, failed: []};
     var subagents = (d.subagents && typeof d.subagents === 'object') ? d.subagents : {runs: 0, successPct: 0};
@@ -11821,6 +11826,28 @@ async function loadSystemHealth() {
       shtml = '<div style="padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;font-size:12px;color:var(--text-muted);">No service data available</div>';
     }
     document.getElementById('sh-services').innerHTML = shtml;
+
+    // Channels
+    var chWrap = document.getElementById('sh-channels-wrap');
+    var chEl = document.getElementById('sh-channels');
+    if (chEl) {
+      if (channels.length === 0) {
+        if (chWrap) chWrap.style.display = 'none';
+      } else {
+        if (chWrap) chWrap.style.display = '';
+        var chhtml = '';
+        channels.forEach(function(ch) {
+          var dotColor = ch.status === 'connected' ? '#16a34a' : (ch.status === 'configured' ? '#d97706' : '#6b7280');
+          var dotGlow = ch.status === 'connected' ? 'rgba(22,163,74,0.5)' : (ch.status === 'configured' ? 'rgba(217,119,6,0.35)' : 'transparent');
+          var borderColor = ch.status === 'connected' ? 'rgba(22,163,74,0.3)' : 'var(--border-secondary)';
+          chhtml += '<div style="display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg-secondary);border-radius:8px;border:1px solid ' + borderColor + ';font-size:12px;" title="' + ch.detail + '">'
+            + '<span style="width:9px;height:9px;border-radius:50%;background:' + dotColor + ';box-shadow:0 0 6px ' + dotGlow + ';flex-shrink:0;display:inline-block;"></span>'
+            + ch.icon + ' <span style="font-weight:600;color:var(--text-primary);">' + ch.name + '</span>'
+            + '<span style="color:var(--text-muted);font-size:10px;margin-left:4px;">' + ch.detail + '</span></div>';
+        });
+        chEl.innerHTML = chhtml;
+      }
+    }
 
     // Disks
     var dhtml = '';
@@ -23981,6 +24008,170 @@ def api_heatmap():
     return jsonify({'days': days, 'max': max_val})
 
 
+def _detect_channel_status():
+    """Return list of configured channels with live connectivity status.
+
+    Each entry: {'name': str, 'icon': str, 'status': 'connected'|'configured'|'unknown', 'detail': str}
+    """
+    CHANNEL_ICONS = {
+        'telegram': '✈️', 'discord': '🎮', 'slack': '💬', 'whatsapp': '📱',
+        'signal': '🔒', 'imessage': '🍎', 'webchat': '🌐', 'matrix': '🔢',
+        'msteams': '🏢', 'irc': '📡', 'googlechat': '🔵', 'mattermost': '⚡',
+        'line': '💚', 'nostr': '🟣', 'twitch': '💜', 'bluebubbles': '💙',
+    }
+    KNOWN_CHANNELS = (
+        'telegram', 'signal', 'whatsapp', 'discord', 'webchat', 'imessage', 'irc', 'slack',
+        'googlechat', 'bluebubbles', 'matrix', 'mattermost', 'msteams', 'line', 'nostr',
+        'twitch', 'feishu', 'synology-chat', 'nextcloud-talk', 'tlon', 'zalo', 'zalouser',
+    )
+
+    configured = []
+
+    def _add(name):
+        n = name.lower()
+        if n in KNOWN_CHANNELS and n not in configured:
+            configured.append(n)
+
+    # Detect from gateway YAML config
+    oc_dir = _get_openclaw_dir()
+    yaml_candidates = [
+        os.path.join(oc_dir, 'gateway.yaml'),
+        os.path.join(oc_dir, 'gateway.yml'),
+        os.path.expanduser('~/.clawdbot/gateway.yaml'),
+        os.path.expanduser('~/.clawdbot/gateway.yml'),
+    ]
+    for yf in yaml_candidates:
+        try:
+            import yaml as _yaml
+            with open(yf) as f:
+                ydata = _yaml.safe_load(f)
+            if not isinstance(ydata, dict):
+                continue
+            for section_key in ('channels', 'plugins'):
+                section = ydata.get(section_key, {})
+                if isinstance(section, dict):
+                    for name, conf in section.items():
+                        if isinstance(conf, dict) and conf.get('enabled', True):
+                            _add(name)
+                        elif isinstance(conf, bool) and conf:
+                            _add(name)
+                elif isinstance(section, list):
+                    for name in section:
+                        _add(str(name))
+            if configured:
+                break
+        except Exception:
+            continue
+
+    # Detect from JSON config files
+    if not configured:
+        for cf in [
+            os.path.join(oc_dir, 'openclaw.json'),
+            os.path.expanduser('~/.clawdbot/openclaw.json'),
+            os.path.expanduser('~/.clawdbot/moltbot.json'),
+        ]:
+            try:
+                with open(cf) as f:
+                    data = json.load(f)
+                plugins = data.get('plugins', {}).get('entries', {})
+                for name, pconf in plugins.items():
+                    if isinstance(pconf, dict) and pconf.get('enabled'):
+                        _add(name)
+                channels = data.get('channels', {})
+                if isinstance(channels, dict):
+                    for name in channels:
+                        _add(name)
+                elif isinstance(channels, list):
+                    for name in channels:
+                        _add(str(name))
+                if configured:
+                    break
+            except Exception:
+                continue
+
+    # Also check session data to infer active channels from recent activity
+    if not configured:
+        try:
+            sessions = _get_sessions()
+            for s in sessions:
+                ch = s.get('channel') or s.get('channelName') or ''
+                if ch:
+                    _add(ch)
+        except Exception:
+            pass
+
+    if not configured:
+        return []
+
+    # Filter to channels with data directories (evidence of real setup)
+    DIR_EXEMPT = {
+        'imessage', 'irc', 'googlechat', 'slack', 'webchat', 'bluebubbles',
+        'matrix', 'mattermost', 'msteams', 'line', 'nostr', 'twitch', 'feishu',
+        'synology-chat', 'nextcloud-talk', 'tlon', 'zalo', 'zalouser',
+    }
+    cb_dir = os.path.expanduser('~/.clawdbot')
+    active = []
+    for ch in configured:
+        if ch in DIR_EXEMPT:
+            active.append(ch)
+        elif any(os.path.isdir(os.path.join(d, ch)) for d in [oc_dir, cb_dir]):
+            active.append(ch)
+    if active:
+        configured = active
+
+    # Try to probe live connectivity for known channels
+    results = []
+    for ch in configured:
+        icon = CHANNEL_ICONS.get(ch, '📡')
+        status = 'configured'
+        detail = 'Configured'
+
+        if ch == 'telegram':
+            # Check if Telegram bot is reachable via getMe
+            try:
+                budget_cfg = _get_budget_config()
+                tg_token = str(budget_cfg.get('telegram_bot_token', '')).strip()
+                if not tg_token:
+                    # Try reading directly from openclaw.json
+                    for cf in [os.path.join(oc_dir, 'openclaw.json'), os.path.expanduser('~/.clawdbot/openclaw.json')]:
+                        try:
+                            with open(cf) as f:
+                                d = json.load(f)
+                            tg_token = str(d.get('telegram', {}).get('token', '') or d.get('plugins', {}).get('entries', {}).get('telegram', {}).get('token', '')).strip()
+                            if tg_token:
+                                break
+                        except Exception:
+                            pass
+                if tg_token:
+                    import urllib.request as _ur
+                    req = _ur.Request(f'https://api.telegram.org/bot{tg_token}/getMe', method='GET')
+                    req.add_header('User-Agent', 'ClawMetry/1.0')
+                    with _ur.urlopen(req, timeout=4) as resp:
+                        data = json.loads(resp.read())
+                    if data.get('ok'):
+                        bot_name = data.get('result', {}).get('username', '')
+                        status = 'connected'
+                        detail = f'@{bot_name}' if bot_name else 'Connected'
+                    else:
+                        status = 'configured'
+                        detail = 'Token invalid'
+                else:
+                    status = 'configured'
+                    detail = 'No token configured'
+            except Exception as e:
+                err = str(e)
+                if 'timed out' in err or 'timeout' in err:
+                    status = 'configured'
+                    detail = 'Timeout checking'
+                else:
+                    status = 'configured'
+                    detail = 'Check failed'
+
+        results.append({'name': ch.capitalize(), 'id': ch, 'icon': icon, 'status': status, 'detail': detail})
+
+    return results
+
+
 @bp_health.route('/api/system-health')
 def api_system_health():
     """Comprehensive system health for the Overview tab."""
@@ -24081,6 +24272,7 @@ def api_system_health():
 
     return jsonify({
         'services': services,
+        'channels': _detect_channel_status(),
         'disks': disks,
         'crons': {'enabled': cron_enabled, 'ok24h': cron_ok_24h, 'failed': cron_failed},
         'subagents': {'runs': sa_runs, 'successPct': sa_pct},
