@@ -1,0 +1,41 @@
+{
+  "id": "clawmetry",
+  "name": "ClawMetry",
+  "description": "Real-time observability dashboard for OpenClaw AI agents. Tracks token usage, costs, memory, and tool calls. Zero config — auto-detects your OpenClaw setup.",
+  "version": "0.12.96",
+  "kind": "observability",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "port": {
+        "type": "integer",
+        "default": 8900,
+        "description": "Port for the ClawMetry dashboard (default: 8900)"
+      },
+      "host": {
+        "type": "string",
+        "default": "127.0.0.1",
+        "description": "Host/bind address for the dashboard (use 0.0.0.0 for LAN access)"
+      },
+      "autoStart": {
+        "type": "boolean",
+        "default": true,
+        "description": "Automatically start the dashboard when OpenClaw starts"
+      }
+    }
+  },
+  "uiHints": {
+    "port": {
+      "label": "Dashboard Port",
+      "placeholder": "8900"
+    },
+    "host": {
+      "label": "Bind Address",
+      "placeholder": "127.0.0.1"
+    },
+    "autoStart": {
+      "label": "Auto-start with OpenClaw"
+    }
+  }
+}

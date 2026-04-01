@@ -205,6 +205,15 @@ Simplifies OSS dashboard to 7 core tabs: **Flow, Brain, Overview, Crons, Tokens,
 
 # Changelog
 
+## [0.12.99] — 2026-03-31
+
+### Fixed
+- **NemoClaw install**: `docker exec -i` flag so heredoc stdin reaches sandbox — supervisord now installs correctly via `curl|bash` (#459)
+- **NemoClaw install**: Detect real OpenClaw data dir inside sandbox at install time (#458)
+- **Channel messages**: Populate channel message counts when per-message metadata is empty — reads channel from sessions.json deliveryContext (#461)
+- **Channel messages**: Track both inbound (user) and outbound (assistant) messages
+
+
 ## [0.11.0] - 2026-03-01
 
 ### Added

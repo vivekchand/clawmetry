@@ -41,12 +41,13 @@ from flask import Flask, render_template_string, request, jsonify, Response, mak
 
 # History / time-series module
 try:
-    from history import HistoryDB, HistoryCollector
+    from history import HistoryDB, HistoryCollector, AgentReliabilityScorer
     _HAS_HISTORY = True
 except ImportError:
     _HAS_HISTORY = False
     HistoryDB = None
     HistoryCollector = None
+    AgentReliabilityScorer = None
 
 _history_db = None
 _history_collector = None
@@ -61,7 +62,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.96"
+__version__ = "0.12.99"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -2916,6 +2917,8 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('version-impact')" title="Before/after metrics for each OpenClaw upgrade">Upgrades</div>
+    <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -2927,6 +2930,14 @@ function clawmetryLogout(){
   <span id="alert-banner-msg" style="flex:1;"></span>
   <button onclick="ackAllAlerts()" style="background:var(--text-error);color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
   <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
+</div>
+
+<!-- Upgrade Impact Banner -->
+<div id="upgrade-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg,#1e3a5f 0%,#1a1a2e 100%);border-bottom:2px solid #3b82f6;color:#93c5fd;font-size:13px;font-weight:500;align-items:center;gap:10px;">
+  <span style="font-size:16px;">&#128640;</span>
+  <span id="upgrade-banner-msg" style="flex:1;"></span>
+  <button onclick="switchTab('version-impact')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">View Details</button>
+  <button onclick="dismissUpgradeBanner()" style="background:transparent;color:#93c5fd;border:1px solid #3b82f680;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
 </div>
 
 <!-- Budget Settings Modal -->
@@ -3109,6 +3120,14 @@ function clawmetryLogout(){
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
     </div>
+    <div class="stats-footer-item" id="reliability-card">
+      <span class="stats-footer-icon" id="reliability-icon">🔄</span>
+      <div>
+        <div class="stats-footer-label">Reliability</div>
+        <div class="stats-footer-value" id="reliability-direction">--</div>
+      </div>
+      <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail"></span>
+    </div>
   </div>
 
   <!-- Split Screen: Flow Left | Tasks Right -->
@@ -3144,6 +3163,8 @@ function clawmetryLogout(){
         <div id="sh-inference" style="margin-bottom:14px;"></div></div>
         <div id="sh-security-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🛡️ Security Posture</div>
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
+        <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
+        <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
       </div>
     </div>
 
@@ -3341,6 +3362,29 @@ function clawmetryLogout(){
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>
     <div class="chat-messages" id="transcript-messages"></div>
+  </div>
+</div>
+
+
+<!-- UPGRADE IMPACT -->
+<div class="page" id="page-version-impact">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#128200; Upgrade Impact</h2>
+    <button class="refresh-btn" onclick="loadVersionImpact()">&#8635; Refresh</button>
+  </div>
+  <div id="version-impact-content" style="padding:8px 0;">
+    <div style="color:var(--text-muted);font-size:13px;">Loading...</div>
+  </div>
+</div>
+
+<!-- SESSION CLUSTERS -->
+<div class="page" id="page-clusters">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#129492; Session Clusters</h2>
+    <button class="refresh-btn" onclick="loadClusters()">&#8635; Refresh</button>
+  </div>
+  <div id="clusters-content" style="padding:8px 0;">
+    <div style="color:var(--text-muted);font-size:13px;">Loading...</div>
   </div>
 </div>
 
@@ -4076,6 +4120,8 @@ function switchTab(name) {
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
+  if (name === 'version-impact') loadVersionImpact();
+  if (name === 'clusters') loadClusters();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
@@ -4270,6 +4316,7 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -4306,6 +4353,27 @@ async function loadAll() {
     document.getElementById('refresh-time').textContent = 'Load failed - retrying...';
     return false;
   }
+}
+
+async function loadReliabilityCard() {
+  try {
+    var r = await fetchJsonWithTimeout('/api/history/reliability', 5000);
+    var icons = {improving:'📈',degrading:'⚠️',stable:'✅',insufficient_data:'🔄'};
+    var icon = icons[r.direction] || '🔄';
+    var label = r.direction === 'insufficient_data' ? 'No data' : r.direction.charAt(0).toUpperCase() + r.direction.slice(1);
+    var el = document.getElementById('reliability-icon');
+    if (el) el.textContent = icon;
+    el = document.getElementById('reliability-direction');
+    if (el) el.textContent = label;
+    el = document.getElementById('reliability-detail');
+    if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
+    el = document.getElementById('reliability-icon-lt');
+    if (el) el.textContent = icon;
+    el = document.getElementById('reliability-direction-lt');
+    if (el) el.textContent = label;
+    el = document.getElementById('reliability-detail-lt');
+    if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
+  } catch(e) { console.warn('reliability card load failed', e); }
 }
 
 async function loadMiniWidgets(overview, usage) {
@@ -5110,12 +5178,13 @@ from flask import Flask, render_template_string, request, jsonify, Response, mak
 
 # History / time-series module
 try:
-    from history import HistoryDB, HistoryCollector
+    from history import HistoryDB, HistoryCollector, AgentReliabilityScorer
     _HAS_HISTORY = True
 except ImportError:
     _HAS_HISTORY = False
     HistoryDB = None
     HistoryCollector = None
+    AgentReliabilityScorer = None
 
 _history_db = None
 _history_collector = None
@@ -6782,6 +6851,8 @@ def detect_config(args=None):
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
+    app.register_blueprint(bp_version_impact)
+    app.register_blueprint(bp_clusters)
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -8064,6 +8135,8 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('version-impact')" title="Before/after metrics for each OpenClaw upgrade">Upgrades</div>
+    <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -8121,6 +8194,14 @@ function clawmetryLogout(){
   <span style="font-size:18px;">⏸</span>
   <span id="paused-banner-msg" style="flex:1;"></span>
   <button onclick="dismissPausedBanner()" style="background:#991b1b;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+</div>
+
+<!-- Upgrade Impact Banner -->
+<div id="upgrade-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg,#1e3a5f 0%,#1a1a2e 100%);border-bottom:2px solid #3b82f6;color:#93c5fd;font-size:13px;font-weight:500;align-items:center;gap:10px;">
+  <span style="font-size:16px;">&#128640;</span>
+  <span id="upgrade-banner-msg" style="flex:1;"></span>
+  <button onclick="switchTab('version-impact')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">View Details</button>
+  <button onclick="dismissUpgradeBanner()" style="background:transparent;color:#93c5fd;border:1px solid #3b82f680;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
 </div>
 
 <!-- Heartbeat Gap Banner -->
@@ -8285,6 +8366,14 @@ function clawmetryLogout(){
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
     </div>
+    <div class="stats-footer-item" id="reliability-card-lt">
+      <span class="stats-footer-icon" id="reliability-icon-lt">🔄</span>
+      <div>
+        <div class="stats-footer-label">Reliability</div>
+        <div class="stats-footer-value" id="reliability-direction-lt">--</div>
+      </div>
+      <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail-lt"></span>
+    </div>
   </div>
 
   <!-- Split Screen: Flow Left | Tasks Right -->
@@ -8320,6 +8409,8 @@ function clawmetryLogout(){
         <div id="sh-inference" style="margin-bottom:14px;"></div></div>
         <div id="sh-security-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🛡️ Security Posture</div>
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
+        <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
+        <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
       </div>
     </div>
 
@@ -8533,6 +8624,29 @@ function clawmetryLogout(){
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>
     <div class="chat-messages" id="transcript-messages"></div>
+  </div>
+</div>
+
+
+<!-- UPGRADE IMPACT -->
+<div class="page" id="page-version-impact">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#128200; Upgrade Impact</h2>
+    <button class="refresh-btn" onclick="loadVersionImpact()">&#8635; Refresh</button>
+  </div>
+  <div id="version-impact-content" style="padding:8px 0;">
+    <div style="color:var(--text-muted);font-size:13px;">Loading...</div>
+  </div>
+</div>
+
+<!-- SESSION CLUSTERS -->
+<div class="page" id="page-clusters">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#129492; Session Clusters</h2>
+    <button class="refresh-btn" onclick="loadClusters()">&#8635; Refresh</button>
+  </div>
+  <div id="clusters-content" style="padding:8px 0;">
+    <div style="color:var(--text-muted);font-size:13px;">Loading...</div>
   </div>
 </div>
 
@@ -9211,6 +9325,61 @@ async function ackAllAlerts() {
 setInterval(checkActiveAlerts, 30000);
 setTimeout(checkActiveAlerts, 3000);
 
+// === Anomaly Detection Banner ===
+var _anomalyBannerEl = null;
+function _getOrCreateAnomalyBanner() {
+  if (_anomalyBannerEl) return _anomalyBannerEl;
+  var existing = document.getElementById('anomaly-engine-banner');
+  if (existing) { _anomalyBannerEl = existing; return existing; }
+  var el = document.createElement('div');
+  el.id = 'anomaly-engine-banner';
+  el.style.cssText = 'display:none;padding:10px 16px;background:#451a03;border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:600;align-items:center;gap:10px;';
+  el.innerHTML = '<span style="font-size:18px;">&#128680;</span><span id="anomaly-banner-msg" style="flex:1;"></span><a href="#" onclick="showView(\'usage\');checkAnomalies();return false;" style="color:#fbbf24;text-decoration:underline;font-size:12px;margin-right:8px;">View Details</a><button onclick="document.getElementById(\'anomaly-engine-banner\').style.display=\'none\';" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">Dismiss</button>';
+  // Insert after alert-banner
+  var alertBanner = document.getElementById('alert-banner');
+  if (alertBanner && alertBanner.parentNode) {
+    alertBanner.parentNode.insertBefore(el, alertBanner.nextSibling);
+  } else {
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  _anomalyBannerEl = el;
+  return el;
+}
+
+async function checkAnomalies() {
+  try {
+    var data = await fetch('/api/anomalies').then(function(r){return r.json();});
+    var banner = _getOrCreateAnomalyBanner();
+    if (!data.has_active || data.active_count === 0) {
+      banner.style.display = 'none';
+      return;
+    }
+    var anomalies = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
+    if (anomalies.length === 0) { banner.style.display = 'none'; return; }
+    // Summarize: show most severe
+    var bySeverity = {critical: [], high: [], medium: []};
+    anomalies.forEach(function(a) {
+      var sev = a.severity || 'medium';
+      if (bySeverity[sev]) bySeverity[sev].push(a);
+    });
+    var topAnomaly = bySeverity.critical[0] || bySeverity.high[0] || bySeverity.medium[0];
+    var metricLabels = {cost_spike: 'cost spike', token_spike: 'token spike', error_rate_spike: 'error rate spike'};
+    var label = metricLabels[topAnomaly.metric] || topAnomaly.metric;
+    var msg = 'Anomaly detected: ' + label + ' (' + Number(topAnomaly.ratio || 0).toFixed(1) + 'x baseline)';
+    if (anomalies.length > 1) msg += ' + ' + (anomalies.length - 1) + ' more';
+    document.getElementById('anomaly-banner-msg').textContent = msg;
+    var isCritical = bySeverity.critical.length > 0;
+    banner.style.background = isCritical ? '#7f1d1d' : '#451a03';
+    banner.style.color = isCritical ? '#fca5a5' : '#fbbf24';
+    banner.style.borderColor = isCritical ? '#ef4444' : '#f59e0b';
+    banner.style.display = 'flex';
+  } catch(e) {}
+}
+
+// Check anomalies every 5 minutes
+setInterval(checkAnomalies, 300000);
+setTimeout(checkAnomalies, 8000);
+
 // === Heartbeat Gap Alerting ===
 async function checkHeartbeatStatus() {
   try {
@@ -9325,6 +9494,8 @@ function switchTab(name) {
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
+  if (name === 'version-impact') loadVersionImpact();
+  if (name === 'clusters') loadClusters();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
@@ -9519,6 +9690,7 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -11723,6 +11895,9 @@ async function loadSystemHealth() {
       if (secWrap) secWrap.style.display = '';
     } else if (secWrap) { secWrap.style.display = 'none'; }
 
+    // Agent Reliability (async, non-blocking)
+    _loadReliabilityWidget();
+
     return true;
   } catch(e) {
     console.error('System health load failed', e);
@@ -11732,6 +11907,51 @@ async function loadSystemHealth() {
     document.getElementById('sh-crons').innerHTML = msg;
     document.getElementById('sh-subagents').innerHTML = msg;
     return false;
+  }
+}
+async function _loadReliabilityWidget() {
+  var wrap = document.getElementById('sh-reliability-wrap');
+  var el = document.getElementById('sh-reliability');
+  if (!wrap || !el) return;
+  try {
+    var r = await fetch('/api/reliability').then(function(r) { return r.json(); });
+    if (r.direction === 'insufficient_data' || r.error) {
+      wrap.style.display = 'none';
+      return;
+    }
+    wrap.style.display = '';
+    var icon = r.direction === 'improving' ? '📈' : r.direction === 'degrading' ? '⚠️' : '✅';
+    var color = r.direction === 'improving' ? '#22c55e' : r.direction === 'degrading' ? '#dc2626' : '#3b82f6';
+    var label = r.direction.charAt(0).toUpperCase() + r.direction.slice(1);
+    var slope = r.slope_per_session > 0 ? '+' + (r.slope_per_session * 100).toFixed(2) + '%' : (r.slope_per_session * 100).toFixed(2) + '%';
+    var html = '<div style="padding:10px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;">';
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">';
+    html += '<span style="font-size:16px;">' + icon + '</span>';
+    html += '<span style="font-weight:700;font-size:13px;color:' + color + ';">' + label + '</span>';
+    html += '<span style="font-size:11px;color:var(--text-muted);">(' + slope + '/session, ' + r.session_count + ' sessions, ' + r.window_days + 'd)</span>';
+    html += '</div>';
+    // Sparkline from points
+    if (r.points && r.points.length > 2) {
+      var pts = r.points;
+      var w = 200, h = 30;
+      var minD = 0, maxD = 1;
+      var stepX = w / Math.max(pts.length - 1, 1);
+      var pathD = '';
+      for (var i = 0; i < pts.length; i++) {
+        var x = Math.round(i * stepX);
+        var y = Math.round(h - (pts[i].delivery * h));
+        pathD += (i === 0 ? 'M' : 'L') + x + ',' + y;
+      }
+      var sparkColor = r.direction === 'degrading' ? '#dc2626' : r.direction === 'improving' ? '#22c55e' : '#3b82f6';
+      html += '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" style="display:block;"><path d="' + pathD + '" fill="none" stroke="' + sparkColor + '" stroke-width="1.5"/></svg>';
+    }
+    if (r.degrading_dimensions && r.degrading_dimensions.length > 0) {
+      html += '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">Degrading: ' + r.degrading_dimensions.join(', ') + '</div>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) {
+    wrap.style.display = 'none';
   }
 }
 function startSystemHealthRefresh() {
@@ -12194,6 +12414,172 @@ function toggleMsg(idx) {
     short.style.display = 'none';
     full.style.display = '';
     event.target.textContent = 'Show less';
+  }
+}
+
+
+// ── Upgrade Banner (on overview page) ──────────────────────────────────────
+function dismissUpgradeBanner() {
+  document.getElementById('upgrade-banner').style.display = 'none';
+  try { localStorage.setItem('cm_upgrade_banner_dismissed', Date.now().toString()); } catch(e){}
+}
+async function checkUpgradeBanner() {
+  try {
+    var data = await fetch('/api/version-impact').then(r => r.json());
+    if (!data.transitions || data.transitions.length === 0) return;
+    var latest = data.transitions[data.transitions.length - 1];
+    var upgradedTs = new Date(latest.upgraded_at).getTime();
+    // Only show banner for upgrades in the last 7 days
+    if (Date.now() - upgradedTs > 7 * 86400000) return;
+    // Check if dismissed
+    try {
+      var dismissed = parseInt(localStorage.getItem('cm_upgrade_banner_dismissed') || '0');
+      if (dismissed > upgradedTs) return;
+    } catch(e){}
+    var costDiff = latest.diff.avg_cost;
+    var errorDiff = latest.diff.error_rate;
+    var arrows = [];
+    if (costDiff && costDiff.pct_change !== null) {
+      var c = costDiff.pct_change;
+      arrows.push('cost ' + (c > 0 ? '+' : '') + c + '%');
+    }
+    if (errorDiff && errorDiff.pct_change !== null) {
+      var e = errorDiff.pct_change;
+      arrows.push('errors ' + (e > 0 ? '+' : '') + e + '%');
+    }
+    var msg = 'You upgraded from <b>' + escHtml(latest.from_version) + '</b> to <b>' + escHtml(latest.to_version) + '</b>';
+    if (arrows.length > 0) msg += ' &mdash; ' + arrows.join(', ');
+    var banner = document.getElementById('upgrade-banner');
+    document.getElementById('upgrade-banner-msg').innerHTML = msg;
+    banner.style.display = 'flex';
+  } catch(e){}
+}
+setTimeout(checkUpgradeBanner, 3000);
+
+// ── Upgrade Impact Panel ───────────────────────────────────────────────────
+async function loadVersionImpact() {
+  var el = document.getElementById('version-impact-content');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading version impact data...</div>';
+  try {
+    var data = await fetch('/api/version-impact').then(r => r.json());
+    if (!data.version_detected) {
+      el.innerHTML = '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:15px;font-weight:600;color:var(--text-primary);">Version not detected</div><div style="font-size:13px;color:var(--text-muted);margin-top:8px;">Could not detect OpenClaw version from config.</div></div>';
+      return;
+    }
+    var html = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">';
+    html += '<div class="card" style="padding:12px 20px;display:inline-flex;align-items:center;gap:10px;">';
+    html += '<span style="font-size:12px;color:var(--text-muted);">Current Version</span>';
+    html += '<span style="font-size:16px;font-weight:700;color:var(--text-accent);">' + escHtml(data.current_version) + '</span>';
+    html += '</div>';
+    if (data.version_history && data.version_history.length > 0) {
+      html += '<div style="font-size:12px;color:var(--text-muted);">' + data.version_history.length + ' version(s) tracked</div>';
+    }
+    html += '</div>';
+    if (data.version_history && data.version_history.length > 1) {
+      html += '<div class="card" style="padding:16px;margin-bottom:16px;">';
+      html += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px;">Version Timeline</div>';
+      html += '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">';
+      data.version_history.forEach(function(v, i) {
+        html += '<div style="display:flex;align-items:center;gap:4px;">';
+        html += '<div style="background:var(--text-accent);color:#fff;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;">' + escHtml(v.version) + '</div>';
+        html += '<div style="font-size:10px;color:var(--text-muted);">' + new Date(v.detected_at).toLocaleDateString() + '</div>';
+        if (i < data.version_history.length - 1) html += '<div style="color:var(--text-muted);">&#8594;</div>';
+        html += '</div>';
+      });
+      html += '</div></div>';
+    }
+    if (!data.transitions || data.transitions.length === 0) {
+      html += '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:13px;color:var(--text-muted);">No version transitions yet. Comparison metrics will appear after the next OpenClaw upgrade.</div></div>';
+    } else {
+      data.transitions.forEach(function(t) {
+        html += '<div class="card" style="padding:16px;margin-bottom:12px;">';
+        html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">';
+        html += '<span style="font-size:13px;font-weight:600;color:var(--text-muted);">' + escHtml(t.from_version) + '</span>';
+        html += '<span style="color:var(--text-accent);font-size:18px;">&#8594;</span>';
+        html += '<span style="font-size:15px;font-weight:700;color:var(--text-accent);">' + escHtml(t.to_version) + '</span>';
+        html += '<span style="font-size:11px;color:var(--text-muted);">upgraded ' + timeAgo(new Date(t.upgraded_at).getTime() / 1000) + '</span>';
+        html += '</div>';
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">';
+        var metrics = [
+          {key:'avg_cost', label:'Avg Cost/Session', fmtFn: function(v){return '$'+v.toFixed(5);}},
+          {key:'avg_tokens', label:'Avg Tokens', fmtFn: function(v){return Math.round(v).toLocaleString();}},
+          {key:'avg_tool_calls', label:'Avg Tool Calls', fmtFn: function(v){return v.toFixed(1);}},
+          {key:'error_rate', label:'Error Rate', fmtFn: function(v){return (v*100).toFixed(1)+'%';}},
+          {key:'avg_duration_ms', label:'Avg Duration', fmtFn: function(v){return v > 60000 ? (v/60000).toFixed(1)+'m' : (v/1000).toFixed(0)+'s';}}
+        ];
+        metrics.forEach(function(m) {
+          var diff = t.diff[m.key];
+          if (!diff) return;
+          var pct = diff.pct_change;
+          var isGoodDown = (m.key === 'avg_cost' || m.key === 'error_rate' || m.key === 'avg_duration_ms');
+          var color = pct === null ? 'var(--text-muted)' : (pct === 0 ? 'var(--text-muted)' : (isGoodDown ? (pct < 0 ? '#22c55e' : '#ef4444') : (pct > 0 ? '#22c55e' : '#ef4444')));
+          var arrow = pct === null ? '' : (pct > 0 ? '&#8593;' : pct < 0 ? '&#8595;' : '=');
+          html += '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px;">';
+          html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">' + m.label + '</div>';
+          html += '<div style="display:flex;align-items:baseline;gap:6px;">';
+          html += '<span style="font-size:13px;font-weight:600;color:var(--text-primary);">' + m.fmtFn(diff.after) + '</span>';
+          if (pct !== null) html += '<span style="font-size:11px;color:' + color + ';font-weight:600;">' + arrow + ' ' + Math.abs(pct) + '%</span>';
+          html += '</div>';
+          html += '<div style="font-size:10px;color:var(--text-muted);">before: ' + m.fmtFn(diff.before) + '</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+        html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">Sessions before: ' + t.before.session_count + ' &bull; after: ' + t.after.session_count + '</div>';
+        html += '</div>';
+      });
+    }
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="padding:16px;color:var(--text-error);">Failed to load version impact data</div>';
+  }
+}
+
+// ── Session Clusters Panel ─────────────────────────────────────────────────
+async function loadClusters() {
+  var el = document.getElementById('clusters-content');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Analyzing session patterns...</div>';
+  try {
+    var data = await fetch('/api/clusters').then(r => r.json());
+    if (!data.clusters || data.clusters.length === 0) {
+      el.innerHTML = '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:13px;color:var(--text-muted);">No sessions found to cluster.</div></div>';
+      return;
+    }
+    var clusterColors = {'browsing-heavy':'#60a5fa','code-heavy':'#34d399','messaging':'#f472b6','doc-analysis':'#a78bfa','mixed-research':'#fbbf24','cron-light':'#94a3b8','expensive-outlier':'#ef4444','general':'#6b7280'};
+    var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:16px;">';
+    data.clusters.forEach(function(cl) {
+      var color = clusterColors[cl.label] || '#6b7280';
+      var errorPct = (cl.error_rate * 100).toFixed(0);
+      html += '<div class="card" style="padding:16px;border-top:3px solid ' + color + ';">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">';
+      html += '<div><div style="font-size:14px;font-weight:700;color:var(--text-primary);">' + escHtml(cl.label) + '</div>';
+      html += '<div style="font-size:12px;color:var(--text-muted);">' + cl.session_count + ' session' + (cl.session_count !== 1 ? 's' : '') + '</div></div>';
+      html += '<div style="background:' + color + '22;color:' + color + ';padding:4px 8px;border-radius:12px;font-size:11px;font-weight:600;">' + cl.session_count + '</div>';
+      html += '</div>';
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">';
+      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Avg cost:</span> <span style="font-weight:600;color:var(--text-primary);">$' + cl.avg_cost.toFixed(4) + '</span></div>';
+      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Avg tokens:</span> <span style="font-weight:600;color:var(--text-primary);">' + (cl.avg_tokens / 1000).toFixed(1) + 'K</span></div>';
+      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Error rate:</span> <span style="font-weight:600;">' + errorPct + '%</span></div>';
+      if (cl.rep_session) {
+        html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Top session:</span> <span style="font-family:monospace;color:var(--text-accent);" title="' + escHtml(cl.rep_session.id) + '">' + escHtml(cl.rep_session.id.substring(0,8)) + '</span></div>';
+      }
+      html += '</div>';
+      if (cl.rep_session && cl.rep_session.tools && cl.rep_session.tools.length > 0) {
+        html += '<div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">';
+        cl.rep_session.tools.slice(0,5).forEach(function(t) {
+          html += '<span style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:4px;font-size:10px;padding:2px 6px;color:var(--text-muted);">' + escHtml(t) + '</span>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    var total = data.clusters.reduce(function(s, c) { return s + c.session_count; }, 0);
+    html += '<div class="card" style="padding:12px 16px;font-size:12px;color:var(--text-muted);">Total: <strong style="color:var(--text-primary);">' + total + ' sessions</strong> across <strong style="color:var(--text-primary);">' + data.clusters.length + ' clusters</strong></div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="padding:16px;color:var(--text-error);">Failed to load clusters</div>';
   }
 }
 
@@ -15968,6 +16354,8 @@ bp_sessions = _Blueprint('sessions', __name__)
 bp_security = _Blueprint('security', __name__)
 bp_usage = _Blueprint('usage', __name__)
 bp_version = _Blueprint('version', __name__)
+bp_version_impact = _Blueprint('version_impact', __name__)
+bp_clusters = _Blueprint('clusters', __name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Version check & self-update routes ────────────────────────────────────────
@@ -17013,10 +17401,296 @@ def api_cron_create():
 
 @bp_crons.route('/api/cron/<job_id>/runs')
 def api_cron_runs(job_id):
-    result = _gw_invoke('cron', {'action': 'runs', 'jobId': job_id, 'limit': 10})
+    """Return run history for a specific cron job.
+
+    Tries gateway RPC first; falls back to parsing JSONL session transcripts
+    for cron candidate sessions attributed to this job.
+    Returns enriched list with p50/p95 duration stats.
+    """
+    # Try gateway API first
+    result = _gw_invoke('cron', {'action': 'runs', 'jobId': job_id, 'limit': 50})
+    if result is not None:
+        runs = result.get('runs', result) if isinstance(result, dict) else result
+        if isinstance(runs, list) and runs:
+            return jsonify(_enrich_cron_runs(job_id, runs))
+
+    # Fallback: derive runs from transcript analytics
+    runs = _cron_runs_from_transcripts(job_id)
+    return jsonify(_enrich_cron_runs(job_id, runs))
+
+
+def _enrich_cron_runs(job_id, runs):
+    """Add p50/p95 duration and cost stats to a list of cron run records."""
+    if not runs:
+        return {'jobId': job_id, 'runs': [], 'stats': {}}
+
+    durations = sorted([r.get('durationMs', 0) for r in runs if r.get('durationMs')])
+    costs = [r.get('costUsd', 0.0) or r.get('cost_usd', 0.0) for r in runs if (r.get('costUsd') or r.get('cost_usd'))]
+    ok_count = sum(1 for r in runs if r.get('status') in ('ok', 'success', 'completed'))
+    err_count = sum(1 for r in runs if r.get('status') in ('error', 'failed', 'failure'))
+
+    def _pct(lst, p):
+        if not lst:
+            return 0
+        idx = int(len(lst) * p / 100)
+        return lst[min(idx, len(lst) - 1)]
+
+    stats = {
+        'totalRuns': len(runs),
+        'successCount': ok_count,
+        'errorCount': err_count,
+        'successRate': round(ok_count / len(runs) * 100, 1) if runs else 0,
+        'avgDurationMs': int(sum(durations) / len(durations)) if durations else 0,
+        'p50DurationMs': _pct(durations, 50),
+        'p95DurationMs': _pct(durations, 95),
+        'avgCostUsd': round(sum(costs) / len(costs), 6) if costs else 0.0,
+        'totalCostUsd': round(sum(costs), 6),
+    }
+    return {'jobId': job_id, 'runs': runs[:50], 'stats': stats}
+
+
+def _cron_runs_from_transcripts(job_id):
+    """Derive synthetic cron run records from JSONL session analytics."""
+    analytics = _compute_transcript_analytics()
+    sessions = analytics.get('sessions', [])
+    jobs = _get_crons()
+    target_job = next((j for j in jobs if isinstance(j, dict) and j.get('id') == job_id), None)
+
+    runs = []
+    for sess in sessions:
+        if not sess.get('is_cron_candidate'):
+            continue
+        # Check if this session is attributed to the target job
+        score = _score_cron_match(sess, target_job or {'id': job_id}) if target_job else 0
+        explicit = job_id in (sess.get('explicit_cron_refs') or set())
+        if score < 20 and not explicit:
+            continue
+
+        start_ts = sess.get('start_ts', 0)
+        end_ts = sess.get('end_ts', 0)
+        dur_ms = int((end_ts - start_ts) * 1000) if end_ts > start_ts else 0
+        runs.append({
+            'sessionId': sess.get('session_id', ''),
+            'timestamp': int(start_ts * 1000) if start_ts else 0,
+            'status': 'ok',
+            'durationMs': dur_ms,
+            'costUsd': round(float(sess.get('cost_usd', 0.0) or 0.0), 6),
+            'tokens': sess.get('tokens', 0),
+        })
+
+    # Most-recent first
+    runs.sort(key=lambda r: r.get('timestamp', 0), reverse=True)
+    return runs[:50]
+
+
+@bp_crons.route('/api/cron/<job_id>/kill', methods=['POST'])
+def api_cron_kill(job_id):
+    """Kill switch: disable a single cron job by ID.
+
+    Sends update via gateway WebSocket RPC to disable the job immediately.
+    Returns the updated job state or an error.
+    """
+    result = _gw_invoke('cron', {'action': 'update', 'jobId': job_id, 'patch': {'enabled': False}})
     if result is None:
-        return jsonify({'error': 'Gateway unavailable'}), 502
-    return jsonify(result)
+        return jsonify({'ok': False, 'error': 'Gateway unavailable — cannot disable cron remotely. Try restarting the gateway.'}), 502
+    return jsonify({'ok': True, 'jobId': job_id, 'enabled': False, 'result': result})
+
+
+@bp_crons.route('/api/cron-run-log')
+def api_cron_run_log():
+    """Return a parsed session transcript for a cron run (for the run-log modal)."""
+    session_id = request.args.get('session_id', '')
+    if not session_id:
+        return jsonify({'error': 'session_id required'}), 400
+    sessions_dir = _get_sessions_dir()
+    fpath = os.path.join(sessions_dir, f'{session_id}.jsonl')
+    if not os.path.isfile(fpath):
+        return jsonify({'error': 'Session not found'}), 404
+    events = []
+    try:
+        with open(fpath, 'r', errors='replace') as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                    if obj.get('type') == 'message':
+                        msg = obj.get('message', {})
+                        events.append({
+                            'role': msg.get('role', ''),
+                            'timestamp': obj.get('timestamp', ''),
+                            'content': str(msg.get('content', ''))[:500],
+                        })
+                except Exception:
+                    continue
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'sessionId': session_id, 'events': events})
+
+
+@bp_crons.route('/api/cron/health-summary')
+def api_cron_health_summary():
+    """Aggregate cron health: per-job success rate, cost, anomaly flags, silent detection."""
+    gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': True}) or {}
+    jobs = gw_data.get('jobs', []) or _get_crons()
+    if not isinstance(jobs, list):
+        jobs = []
+
+    now_ms = int(datetime.now().timestamp() * 1000)
+    summary = []
+    total_ok = total_err = total_silent = 0
+
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        job_id = job.get('id', '')
+        job_name = job.get('name', job_id)
+        state = job.get('state') or {}
+        enabled = job.get('enabled', True)
+
+        last_run_ms = state.get('lastRunAtMs') or state.get('lastRunAt') or 0
+        if isinstance(last_run_ms, str):
+            try:
+                from dateutil import parser as _dtp
+                last_run_ms = int(_dtp.parse(last_run_ms).timestamp() * 1000)
+            except Exception:
+                last_run_ms = 0
+
+        last_status = state.get('lastStatus', 'pending')
+        last_duration_ms = state.get('lastDurationMs') or 0
+        consecutive_failures = state.get('consecutiveFailures') or 0
+        last_error = state.get('lastError', '')
+        next_run_ms = state.get('nextRunAtMs') or 0
+
+        # Detect silent jobs: enabled, has run before, but hasn't run in >2.5x expected interval
+        is_silent = False
+        expected_interval_ms = None
+        sched = job.get('schedule') or {}
+        if isinstance(sched, dict):
+            every_ms = sched.get('everyMs')
+            if every_ms:
+                expected_interval_ms = int(every_ms)
+                if enabled and last_run_ms and (now_ms - last_run_ms) > every_ms * 2.5:
+                    is_silent = True
+
+        # Cost attribution from existing api_crons enrichment
+        cost_usd = job.get('cost_usd') or 0.0
+        cost_session_count = job.get('cost_session_count') or 0
+
+        # Anomaly: cost spike (last run vs average) — uses run history from gateway
+        run_history = job.get('runHistory') or []
+        cost_spike = False
+        avg_cost = None
+        if run_history and len(run_history) > 2:
+            historical_costs = [r.get('costUsd', 0) for r in run_history[1:] if r.get('costUsd')]
+            if historical_costs:
+                avg_cost = sum(historical_costs) / len(historical_costs)
+                last_cost = run_history[0].get('costUsd', 0) if run_history else 0
+                if avg_cost > 0 and last_cost > avg_cost * 2.5:
+                    cost_spike = True
+
+        # Duration anomaly: last run >3x average
+        duration_spike = False
+        if run_history and len(run_history) > 2:
+            historical_durations = [r.get('durationMs', 0) for r in run_history[1:] if r.get('durationMs')]
+            if historical_durations and last_duration_ms:
+                avg_dur = sum(historical_durations) / len(historical_durations)
+                if avg_dur > 0 and last_duration_ms > avg_dur * 3:
+                    duration_spike = True
+
+        # Health status
+        if not enabled:
+            health = 'disabled'
+        elif is_silent:
+            health = 'silent'
+            total_silent += 1
+        elif consecutive_failures >= 3 or last_status == 'error':
+            health = 'error'
+            total_err += 1
+        elif cost_spike or duration_spike:
+            health = 'warning'
+        else:
+            health = 'ok'
+            total_ok += 1
+
+        # Monthly cost projection
+        monthly_cost = 0.0
+        if cost_usd and cost_session_count and cost_session_count > 0:
+            avg_run_cost = cost_usd / cost_session_count
+            if expected_interval_ms:
+                runs_per_month = (30 * 24 * 3600 * 1000) / expected_interval_ms
+                monthly_cost = avg_run_cost * runs_per_month
+
+        summary.append({
+            'id': job_id,
+            'name': job_name,
+            'enabled': enabled,
+            'health': health,
+            'lastStatus': last_status,
+            'lastRunAtMs': last_run_ms,
+            'lastDurationMs': last_duration_ms,
+            'nextRunAtMs': next_run_ms,
+            'consecutiveFailures': consecutive_failures,
+            'lastError': last_error,
+            'costUsd': round(float(cost_usd), 6),
+            'costSessionCount': cost_session_count,
+            'monthlyProjectedCost': round(monthly_cost, 4),
+            'avgCost': round(avg_cost, 6) if avg_cost else None,
+            'isSilent': is_silent,
+            'costSpike': cost_spike,
+            'durationSpike': duration_spike,
+            'expectedIntervalMs': expected_interval_ms,
+        })
+
+    total_jobs = len(summary)
+    has_anomalies = any(j['costSpike'] or j['durationSpike'] for j in summary)
+    has_errors = total_err > 0
+    has_silent = total_silent > 0
+
+    return jsonify({
+        'jobs': summary,
+        'totals': {
+            'total': total_jobs,
+            'ok': total_ok,
+            'error': total_err,
+            'silent': total_silent,
+            'disabled': sum(1 for j in summary if j['health'] == 'disabled'),
+            'warning': sum(1 for j in summary if j['health'] == 'warning'),
+        },
+        'hasAnomalies': has_anomalies,
+        'hasErrors': has_errors,
+        'hasSilent': has_silent,
+    })
+
+
+@bp_crons.route('/api/cron/kill-all', methods=['POST'])
+def api_cron_kill_all():
+    """Emergency: disable all enabled cron jobs. Returns count disabled."""
+    gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': False}) or {}
+    jobs = gw_data.get('jobs', []) or _get_crons()
+    if not isinstance(jobs, list):
+        jobs = []
+
+    disabled_count = 0
+    errors = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        if not job.get('enabled', True):
+            continue
+        job_id = job.get('id', '')
+        if not job_id:
+            continue
+        result = _gw_invoke('cron', {'action': 'update', 'jobId': job_id, 'patch': {'enabled': False}})
+        if result is not None:
+            disabled_count += 1
+        else:
+            errors.append(job_id)
+
+    return jsonify({
+        'ok': True,
+        'disabled': disabled_count,
+        'errors': errors,
+        'message': f'Emergency stop: {disabled_count} cron job(s) disabled.',
+    })
 
 
 def _find_log_file(ds):
@@ -18707,6 +19381,18 @@ def api_history_stats():
     return jsonify(stats)
 
 
+@bp_history.route('/api/history/reliability')
+def api_history_reliability():
+    """Cross-session behavioral reliability trend."""
+    if not _history_db:
+        return jsonify({'error': 'History DB not available'}), 503
+    from history import AgentReliabilityScorer
+    scorer = AgentReliabilityScorer(_history_db)
+    window = request.args.get('window', 30, type=int)
+    result = scorer.score(window_days=window)
+    return jsonify(result)
+
+
 # ── Billing Mode Heuristics (API key vs OAuth/included) ──────────────────
 
 _openclaw_cfg_cache = None
@@ -19664,6 +20350,245 @@ def api_usage_anomalies():
         'baseline_7d_avg_usd': round(baseline_avg, 6),
         'threshold_multiplier': 2.0,
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Anomaly Detection Engine (GH #301)
+# Rolling-baseline anomaly detector using local SQLite storage.
+# Detects cost spikes (>2x), token spikes (>2x), error rate spikes (>3x)
+# against a 7-day rolling baseline derived from session transcripts.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ANOMALY_DB_PATH = os.path.expanduser('~/.openclaw/clawmetry.db')
+_anomaly_db_conn = None
+_anomaly_db_lock = threading.Lock()
+
+
+def _get_anomaly_db():
+    """Return a thread-safe SQLite connection for anomaly storage.
+
+    Uses ~/.openclaw/clawmetry.db (creates if absent). The schema is
+    append-only so it is safe to call from any thread with the lock held.
+    """
+    global _anomaly_db_conn
+    with _anomaly_db_lock:
+        if _anomaly_db_conn is None:
+            db_dir = os.path.dirname(_ANOMALY_DB_PATH)
+            os.makedirs(db_dir, exist_ok=True)
+            _anomaly_db_conn = sqlite3.connect(_ANOMALY_DB_PATH, check_same_thread=False)
+            _anomaly_db_conn.row_factory = sqlite3.Row
+            _anomaly_db_conn.execute('PRAGMA journal_mode=WAL')
+            _anomaly_db_conn.execute('PRAGMA synchronous=NORMAL')
+            _anomaly_db_conn.executescript('''
+                CREATE TABLE IF NOT EXISTS anomalies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    detected_at REAL NOT NULL,
+                    session_key TEXT NOT NULL,
+                    metric TEXT NOT NULL,
+                    value REAL NOT NULL,
+                    baseline REAL NOT NULL,
+                    ratio REAL NOT NULL,
+                    severity TEXT NOT NULL,
+                    acknowledged INTEGER DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_anomalies_ts ON anomalies(detected_at);
+                CREATE INDEX IF NOT EXISTS idx_anomalies_session ON anomalies(session_key);
+                CREATE INDEX IF NOT EXISTS idx_anomalies_metric ON anomalies(metric);
+            ''')
+            _anomaly_db_conn.commit()
+        return _anomaly_db_conn
+
+
+def _detect_and_store_anomalies():
+    """Compute rolling-baseline anomalies and persist new ones to SQLite.
+
+    Runs on every call to /api/anomalies (with a short in-memory TTL to
+    avoid re-scanning transcripts too frequently).
+
+    Detects:
+    - cost_spike:        session cost > 2x 7-day rolling average
+    - token_spike:       session tokens > 2x 7-day rolling average
+    - error_rate_spike:  rolling 24h error rate > 3x 7-day baseline
+
+    Returns list of anomaly dicts (both freshly detected and stored).
+    """
+    import sqlite3 as _sqlite3
+
+    analytics = _compute_transcript_analytics()
+    sessions = analytics.get('sessions', [])
+    now_ts = time.time()
+    window_7d = 7 * 86400
+    window_24h = 86400
+
+    # ── Build 7-day baseline ──────────────────────────────────────────────────
+    baseline_window_start = now_ts - window_7d
+    baseline_sessions = [s for s in sessions if float(s.get('start_ts', 0) or 0) >= baseline_window_start]
+
+    baseline_costs = [float(s.get('cost_usd', 0.0) or 0.0) for s in baseline_sessions if float(s.get('cost_usd', 0.0) or 0.0) > 0]
+    baseline_tokens = [int(s.get('tokens', 0) or 0) for s in baseline_sessions if int(s.get('tokens', 0) or 0) > 0]
+
+    avg_cost_7d = sum(baseline_costs) / len(baseline_costs) if baseline_costs else 0.0
+    avg_tokens_7d = sum(baseline_tokens) / len(baseline_tokens) if baseline_tokens else 0.0
+
+    # Error-rate baseline: fraction of sessions in last 7d with errors
+    # (We approximate via cost=0 + tokens>0 as proxy for "errored" sessions.)
+    err_baseline_count = sum(
+        1 for s in baseline_sessions
+        if float(s.get('cost_usd', 0.0) or 0.0) == 0 and int(s.get('tokens', 0) or 0) > 100
+    )
+    err_baseline_rate = err_baseline_count / max(len(baseline_sessions), 1)
+
+    # 24h error rate
+    recent_sessions_24h = [s for s in sessions if float(s.get('start_ts', 0) or 0) >= now_ts - window_24h]
+    recent_err_count = sum(
+        1 for s in recent_sessions_24h
+        if float(s.get('cost_usd', 0.0) or 0.0) == 0 and int(s.get('tokens', 0) or 0) > 100
+    )
+    recent_err_rate = recent_err_count / max(len(recent_sessions_24h), 1)
+
+    # ── Detect anomalies in recent (last 24h) sessions ─────────────────────
+    new_anomalies = []
+    day_ago = now_ts - window_24h
+
+    for sess in sessions:
+        ts = float(sess.get('start_ts', 0) or 0)
+        if ts < day_ago:
+            continue
+        sid = sess.get('session_id', '')
+        cost = float(sess.get('cost_usd', 0.0) or 0.0)
+        tokens = int(sess.get('tokens', 0) or 0)
+
+        # Cost spike
+        if avg_cost_7d > 0 and cost > avg_cost_7d * 2.0:
+            ratio = round(cost / avg_cost_7d, 3)
+            severity = 'critical' if ratio > 5 else 'high' if ratio > 3 else 'medium'
+            new_anomalies.append({
+                'session_key': sid,
+                'metric': 'cost_spike',
+                'value': cost,
+                'baseline': avg_cost_7d,
+                'ratio': ratio,
+                'severity': severity,
+                'detected_at': ts,
+            })
+
+        # Token spike
+        if avg_tokens_7d > 0 and tokens > avg_tokens_7d * 2.0:
+            ratio = round(tokens / avg_tokens_7d, 3)
+            severity = 'critical' if ratio > 5 else 'high' if ratio > 3 else 'medium'
+            new_anomalies.append({
+                'session_key': sid,
+                'metric': 'token_spike',
+                'value': tokens,
+                'baseline': avg_tokens_7d,
+                'ratio': ratio,
+                'severity': severity,
+                'detected_at': ts,
+            })
+
+    # Error rate spike (aggregate — tied to a synthetic session_key)
+    if err_baseline_rate > 0 and recent_err_rate > err_baseline_rate * 3.0:
+        ratio = round(recent_err_rate / err_baseline_rate, 3)
+        new_anomalies.append({
+            'session_key': '__error_rate__',
+            'metric': 'error_rate_spike',
+            'value': round(recent_err_rate, 4),
+            'baseline': round(err_baseline_rate, 4),
+            'ratio': ratio,
+            'severity': 'high' if ratio > 5 else 'medium',
+            'detected_at': now_ts,
+        })
+
+    # ── Persist new anomalies (deduplicate by session_key + metric within 24h) ──
+    try:
+        db = _get_anomaly_db()
+        with _anomaly_db_lock:
+            for a in new_anomalies:
+                existing = db.execute(
+                    'SELECT id FROM anomalies WHERE session_key = ? AND metric = ? AND detected_at >= ?',
+                    (a['session_key'], a['metric'], a['detected_at'] - window_24h)
+                ).fetchone()
+                if not existing:
+                    db.execute(
+                        'INSERT INTO anomalies (detected_at, session_key, metric, value, baseline, ratio, severity) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                        (a['detected_at'], a['session_key'], a['metric'], a['value'], a['baseline'], a['ratio'], a['severity'])
+                    )
+            db.commit()
+    except Exception as _e:
+        pass  # Non-critical — continue with in-memory results
+
+    # ── Return stored anomalies from last 48h ──────────────────────────────
+    try:
+        db = _get_anomaly_db()
+        cutoff = now_ts - (2 * window_24h)
+        rows = db.execute(
+            'SELECT * FROM anomalies WHERE detected_at >= ? ORDER BY detected_at DESC LIMIT 200',
+            (cutoff,)
+        ).fetchall()
+        stored = [dict(r) for r in rows]
+    except Exception:
+        stored = []
+
+    return stored, {
+        'baseline_cost_7d': round(avg_cost_7d, 6),
+        'baseline_tokens_7d': round(avg_tokens_7d, 2),
+        'baseline_error_rate_7d': round(err_baseline_rate, 4),
+        'recent_error_rate_24h': round(recent_err_rate, 4),
+        'session_count_7d': len(baseline_sessions),
+    }
+
+
+_anomaly_detection_cache = {'data': None, 'ts': 0}
+_ANOMALY_CACHE_TTL = 60  # seconds
+
+import sqlite3
+
+
+@bp_usage.route('/api/anomalies')
+def api_anomalies():
+    """Rolling-baseline anomaly detection endpoint.
+
+    Returns recent anomalies stored in ~/.openclaw/clawmetry.db with:
+    - severity: critical/high/medium
+    - metric: cost_spike / token_spike / error_rate_spike
+    - value: the observed value that triggered the anomaly
+    - baseline: the 7-day rolling average used as baseline
+    - ratio: value / baseline
+    - session_key: session ID (or '__error_rate__' for aggregate)
+    - detected_at: Unix timestamp of detection
+    """
+    now = time.time()
+    if _anomaly_detection_cache['data'] is not None and (now - _anomaly_detection_cache['ts']) < _ANOMALY_CACHE_TTL:
+        return jsonify(_anomaly_detection_cache['data'])
+
+    anomalies, baselines = _detect_and_store_anomalies()
+    active = [a for a in anomalies if not a.get('acknowledged')]
+    result = {
+        'anomalies': anomalies,
+        'active_count': len(active),
+        'has_active': bool(active),
+        'baselines': baselines,
+        'threshold_cost_multiplier': 2.0,
+        'threshold_token_multiplier': 2.0,
+        'threshold_error_multiplier': 3.0,
+    }
+    _anomaly_detection_cache['data'] = result
+    _anomaly_detection_cache['ts'] = now
+    return jsonify(result)
+
+
+@bp_usage.route('/api/anomalies/<int:anomaly_id>/ack', methods=['POST'])
+def api_anomaly_ack(anomaly_id):
+    """Acknowledge an anomaly so it no longer appears in the active banner."""
+    try:
+        db = _get_anomaly_db()
+        with _anomaly_db_lock:
+            db.execute('UPDATE anomalies SET acknowledged = 1 WHERE id = ?', (anomaly_id,))
+            db.commit()
+        _anomaly_detection_cache['data'] = None  # invalidate cache
+        return jsonify({'ok': True, 'id': anomaly_id})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @bp_usage.route('/api/usage/by-plugin')
@@ -22881,6 +23806,21 @@ def api_security_posture():
         return jsonify({'error': str(e), 'score': 'U', 'checks': []}), 500
 
 
+@bp_health.route('/api/reliability')
+def api_reliability():
+    """Cross-session behavioral reliability trend (AgentReliabilityScorer)."""
+    if not _history_db or not AgentReliabilityScorer:
+        return jsonify({'error': 'History module not available', 'direction': 'insufficient_data'}), 200
+    try:
+        window = int(request.args.get('window', 30))
+        window = max(1, min(window, 90))
+        scorer = AgentReliabilityScorer(_history_db)
+        result = scorer.score(window_days=window)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e), 'direction': 'insufficient_data'}), 500
+
+
 @bp_health.route('/api/heatmap')
 def api_heatmap():
     """Activity heatmap - events per hour for the last 7 days."""
@@ -23403,6 +24343,473 @@ def api_automation_analysis():
 # ── Context Inspector (GH #9) ─────────────────────────────────────────
     except Exception as e:
         return jsonify({'error': str(e), 'agents': [], 'lintWarnings': [], 'summary': {}}), 500
+
+
+# ── Upgrade Impact Dashboard (GH #408) ────────────────────────────────────────
+
+def _get_openclaw_version():
+    """Detect current OpenClaw version from openclaw.json meta field or CLI."""
+    # Try meta.lastTouchedVersion from openclaw.json
+    oc_config = os.path.expanduser('~/.openclaw/openclaw.json')
+    try:
+        with open(oc_config) as f:
+            data = json.load(f)
+        v = (data.get('meta') or {}).get('lastTouchedVersion')
+        if v:
+            return str(v)
+        # Also try wizard.lastRunVersion
+        v = (data.get('wizard') or {}).get('lastRunVersion')
+        if v:
+            return str(v)
+    except Exception:
+        pass
+    # Fallback: run openclaw --version
+    try:
+        import subprocess
+        out = subprocess.check_output(['openclaw', '--version'],
+                                      stderr=subprocess.STDOUT, timeout=5).decode().strip()
+        # Extract semver-like from output e.g. "openclaw/2026.3.13 ..."
+        import re
+        m = re.search(r'(\d{4}\.\d+\.\d+|\d+\.\d+\.\d+)', out)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def _version_impact_db():
+    """Get SQLite connection for version tracking, reusing history.db."""
+    db_path = os.path.expanduser('~/.clawmetry/history.db')
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    db = _sqlite3.connect(db_path, timeout=10)
+    db.row_factory = _sqlite3.Row
+    db.execute('PRAGMA journal_mode=WAL')
+    db.executescript('''
+        CREATE TABLE IF NOT EXISTS version_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            version TEXT NOT NULL,
+            detected_at REAL NOT NULL,
+            source TEXT DEFAULT 'openclaw.json'
+        );
+        CREATE INDEX IF NOT EXISTS idx_ve_ts ON version_events(detected_at);
+    ''')
+    return db
+
+
+def _record_version_if_changed(current_version):
+    """Record a version event if the version has changed since last check."""
+    if not current_version:
+        return
+    db = _version_impact_db()
+    try:
+        row = db.execute(
+            'SELECT version FROM version_events ORDER BY detected_at DESC LIMIT 1'
+        ).fetchone()
+        if row and row['version'] == current_version:
+            db.close()
+            return
+        db.execute(
+            'INSERT INTO version_events (version, detected_at) VALUES (?, ?)',
+            (current_version, time.time())
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _compute_session_stats_in_range(sessions_dir, start_ts, end_ts):
+    """Compute aggregate session stats for sessions whose mtime falls in [start_ts, end_ts)."""
+    stats = {
+        'session_count': 0,
+        'total_cost': 0.0,
+        'total_tokens': 0,
+        'error_count': 0,
+        'tool_calls': 0,
+        'duration_ms_total': 0,
+        'duration_sessions': 0,
+    }
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return stats
+
+    for fname in os.listdir(sessions_dir):
+        if not fname.endswith('.jsonl'):
+            continue
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            mtime = os.path.getmtime(fpath)
+            if not (start_ts <= mtime < end_ts):
+                continue
+        except OSError:
+            continue
+
+        stats['session_count'] += 1
+        session_cost = 0.0
+        session_tokens = 0
+        session_errors = 0
+        session_tools = 0
+        first_ts = None
+        last_ts = None
+
+        try:
+            with open(fpath, 'r', errors='replace') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    ts_str = ev.get('timestamp', '')
+                    if ts_str:
+                        try:
+                            ts_dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                            ts_f = ts_dt.timestamp()
+                            if first_ts is None or ts_f < first_ts:
+                                first_ts = ts_f
+                            if last_ts is None or ts_f > last_ts:
+                                last_ts = ts_f
+                        except Exception:
+                            pass
+                    ev_type = ev.get('type', '')
+                    if ev_type == 'message':
+                        msg = ev.get('message', {})
+                        role = msg.get('role', '')
+                        if role == 'assistant':
+                            usage = msg.get('usage', {})
+                            if isinstance(usage, dict):
+                                cost_obj = usage.get('cost', {})
+                                if isinstance(cost_obj, dict):
+                                    session_cost += float(cost_obj.get('total', 0))
+                                elif isinstance(cost_obj, (int, float)):
+                                    session_cost += float(cost_obj)
+                                tok_in = usage.get('input', 0) or usage.get('inputTokens', 0) or 0
+                                tok_out = usage.get('output', 0) or usage.get('outputTokens', 0) or 0
+                                session_tokens += int(tok_in) + int(tok_out)
+                        if isinstance(msg.get('content'), list):
+                            for part in msg['content']:
+                                if isinstance(part, dict) and part.get('type') == 'toolCall':
+                                    session_tools += 1
+                    elif ev_type == 'error':
+                        session_errors += 1
+        except Exception:
+            pass
+
+        stats['total_cost'] += session_cost
+        stats['total_tokens'] += session_tokens
+        stats['error_count'] += session_errors
+        stats['tool_calls'] += session_tools
+        if first_ts and last_ts and last_ts > first_ts:
+            stats['duration_ms_total'] += int((last_ts - first_ts) * 1000)
+            stats['duration_sessions'] += 1
+
+    return stats
+
+
+def _stats_to_summary(stats):
+    n = max(stats['session_count'], 1)
+    return {
+        'session_count': stats['session_count'],
+        'avg_cost': round(stats['total_cost'] / n, 6),
+        'avg_tokens': int(stats['total_tokens'] / n),
+        'avg_tool_calls': round(stats['tool_calls'] / n, 1),
+        'error_rate': round(stats['error_count'] / n, 3),
+        'avg_duration_ms': int(stats['duration_ms_total'] / max(stats['duration_sessions'], 1)),
+        'total_cost': round(stats['total_cost'], 6),
+    }
+
+
+def _compute_diff(before, after):
+    """Compute percentage change between before and after summaries."""
+    diff = {}
+    for key in ('avg_cost', 'avg_tokens', 'avg_tool_calls', 'error_rate', 'avg_duration_ms'):
+        b = before.get(key, 0)
+        a = after.get(key, 0)
+        if b == 0:
+            pct = None
+        else:
+            pct = round((a - b) / abs(b) * 100, 1)
+        diff[key] = {'before': b, 'after': a, 'pct_change': pct}
+    return diff
+
+
+@bp_version_impact.route('/api/version-impact')
+def api_version_impact():
+    """Return version transition list with before/after metric comparisons."""
+    current_version = _get_openclaw_version()
+    _record_version_if_changed(current_version)
+
+    db = _version_impact_db()
+    try:
+        rows = db.execute(
+            'SELECT version, detected_at FROM version_events ORDER BY detected_at ASC'
+        ).fetchall()
+    finally:
+        db.close()
+
+    if not rows:
+        return jsonify({
+            'current_version': current_version or 'unknown',
+            'transitions': [],
+            'version_detected': bool(current_version),
+            'note': 'No version history yet. Version tracking starts from first load.' if not current_version else
+                    'First version recorded. Comparisons will appear after next version upgrade.',
+        })
+
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    transitions = []
+    now_ts = time.time()
+
+    for i in range(len(rows)):
+        row = rows[i]
+        version = row['version']
+        start_ts = row['detected_at']
+        end_ts = rows[i + 1]['detected_at'] if i + 1 < len(rows) else now_ts
+
+        if i > 0:
+            prev_row = rows[i - 1]
+            prev_version = prev_row['version']
+            prev_start = prev_row['detected_at']
+            prev_end = start_ts
+
+            before_stats = _compute_session_stats_in_range(sessions_dir, prev_start, prev_end)
+            after_stats = _compute_session_stats_in_range(sessions_dir, start_ts, end_ts)
+
+            before_summary = _stats_to_summary(before_stats)
+            after_summary = _stats_to_summary(after_stats)
+            diff = _compute_diff(before_summary, after_summary)
+
+            transitions.append({
+                'from_version': prev_version,
+                'to_version': version,
+                'upgraded_at': datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat(),
+                'before': before_summary,
+                'after': after_summary,
+                'diff': diff,
+            })
+
+    return jsonify({
+        'current_version': current_version or (rows[-1]['version'] if rows else 'unknown'),
+        'version_detected': bool(current_version),
+        'version_history': [
+            {'version': r['version'],
+             'detected_at': datetime.fromtimestamp(r['detected_at'], tz=timezone.utc).isoformat()}
+            for r in rows
+        ],
+        'transitions': transitions,
+    })
+
+
+# ── Trace Clustering (GH #406) ───────────────────────────────────────────────
+
+_CLUSTER_TOOL_GROUPS = {
+    'browsing': {'browser', 'web_fetch', 'web_search'},
+    'coding': {'exec', 'Read', 'Write', 'Edit', 'process'},
+    'messaging': {'message', 'tts'},
+    'pdf': {'pdf', 'image'},
+    'files': {'Read', 'Write', 'Edit'},
+}
+
+_CLUSTER_PATTERNS = [
+    # (cluster_label, dominant_tools_required, min_fraction)
+    ('browsing-heavy', {'browser', 'web_fetch', 'web_search'}, 0.4),
+    ('code-heavy', {'exec', 'Read', 'Write', 'Edit'}, 0.4),
+    ('messaging', {'message', 'tts'}, 0.3),
+    ('doc-analysis', {'pdf', 'image'}, 0.2),
+    ('mixed-research', {'web_search', 'exec', 'Read'}, 0.15),
+    ('cron-light', set(), 0.0),  # fallback for very short sessions
+]
+
+
+def _extract_session_fingerprint(fpath):
+    """Extract tool call sequence, cost, tokens, error presence from a session JSONL file."""
+    tools_seq = []
+    cost = 0.0
+    tokens = 0
+    has_error = False
+    first_ts = None
+    last_ts = None
+
+    try:
+        with open(fpath, 'r', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except Exception:
+                    continue
+
+                ts_str = ev.get('timestamp', '')
+                if ts_str:
+                    try:
+                        ts_f = datetime.fromisoformat(ts_str.replace('Z', '+00:00')).timestamp()
+                        if first_ts is None or ts_f < first_ts:
+                            first_ts = ts_f
+                        if last_ts is None or ts_f > last_ts:
+                            last_ts = ts_f
+                    except Exception:
+                        pass
+
+                ev_type = ev.get('type', '')
+                if ev_type == 'error':
+                    has_error = True
+                elif ev_type == 'message':
+                    msg = ev.get('message', {})
+                    if msg.get('role') == 'assistant':
+                        usage = msg.get('usage', {})
+                        if isinstance(usage, dict):
+                            cost_obj = usage.get('cost', {})
+                            if isinstance(cost_obj, dict):
+                                cost += float(cost_obj.get('total', 0))
+                            tok_in = usage.get('input', 0) or usage.get('inputTokens', 0) or 0
+                            tok_out = usage.get('output', 0) or usage.get('outputTokens', 0) or 0
+                            tokens += int(tok_in) + int(tok_out)
+                        if isinstance(msg.get('content'), list):
+                            for part in msg['content']:
+                                if isinstance(part, dict) and part.get('type') == 'toolCall':
+                                    tn = part.get('name', '')
+                                    if tn:
+                                        tools_seq.append(tn)
+    except Exception:
+        pass
+
+    duration_ms = int((last_ts - first_ts) * 1000) if (first_ts and last_ts and last_ts > first_ts) else 0
+
+    # Cost bucket (calibrated to typical agent session costs)
+    if cost < 0.10:
+        cost_bucket = 'low'
+    elif cost < 1.0:
+        cost_bucket = 'medium'
+    else:
+        cost_bucket = 'high'
+
+    return {
+        'tools_seq': tools_seq,
+        'tool_set': list(set(tools_seq)),
+        'cost': round(cost, 6),
+        'tokens': tokens,
+        'has_error': has_error,
+        'cost_bucket': cost_bucket,
+        'duration_ms': duration_ms,
+        'tool_count': len(tools_seq),
+    }
+
+
+def _assign_cluster_label(fp):
+    """Assign a cluster label to a session based on its fingerprint."""
+    tools = set(fp['tool_set'])
+    n = fp['tool_count']
+    cost = fp['cost']
+    has_error = fp['has_error']
+
+    if n == 0:
+        return 'cron-light'
+
+    # Score each cluster pattern by fraction of required tools present in session tool set
+    best_label = 'general'
+    best_score = 0.0
+
+    for label, required_tools, min_frac in _CLUSTER_PATTERNS:
+        if not required_tools:
+            continue
+        # Fraction of required_tools that appear in the session (0..1)
+        overlap = len(tools & required_tools)
+        frac = overlap / len(required_tools) if required_tools else 0.0
+        if frac >= min_frac and frac > best_score:
+            best_score = frac
+            best_label = label
+
+    # Override only truly extreme outliers (cost > $5 or pure exec-only)
+    if cost > 5.0:
+        best_label = 'expensive-outlier'
+
+    # Suffix for error-heavy sessions
+    if has_error and best_label not in ('expensive-outlier',):
+        best_label += '+errors'
+
+    return best_label
+
+
+def _build_clusters(sessions_dir, limit=200):
+    """Analyze recent sessions and return cluster groups."""
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return {}
+
+    files = sorted(
+        [f for f in os.listdir(sessions_dir) if f.endswith('.jsonl') and 'deleted' not in f],
+        key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+        reverse=True
+    )[:limit]
+
+    clusters = {}  # label -> {sessions, total_cost, total_tokens, error_count, rep_session}
+
+    for fname in files:
+        fpath = os.path.join(sessions_dir, fname)
+        sid = fname.replace('.jsonl', '')
+        fp = _extract_session_fingerprint(fpath)
+        label = _assign_cluster_label(fp)
+
+        if label not in clusters:
+            clusters[label] = {
+                'label': label,
+                'sessions': [],
+                'total_cost': 0.0,
+                'total_tokens': 0,
+                'error_count': 0,
+                'rep_session': None,
+            }
+
+        c = clusters[label]
+        c['sessions'].append({
+            'id': sid,
+            'cost': fp['cost'],
+            'tokens': fp['tokens'],
+            'tools': fp['tool_set'][:8],
+            'has_error': fp['has_error'],
+            'cost_bucket': fp['cost_bucket'],
+            'duration_ms': fp['duration_ms'],
+        })
+        c['total_cost'] += fp['cost']
+        c['total_tokens'] += fp['tokens']
+        if fp['has_error']:
+            c['error_count'] += 1
+        # Representative session: highest cost/complexity
+        if c['rep_session'] is None or fp['cost'] > c['rep_session'].get('cost', 0):
+            c['rep_session'] = {'id': sid, 'cost': fp['cost'], 'tools': fp['tool_set'][:8]}
+
+    # Compute summaries
+    result = []
+    for label, c in sorted(clusters.items(), key=lambda x: len(x[1]['sessions']), reverse=True):
+        n = len(c['sessions'])
+        result.append({
+            'label': label,
+            'session_count': n,
+            'avg_cost': round(c['total_cost'] / n, 6),
+            'avg_tokens': int(c['total_tokens'] / n),
+            'error_rate': round(c['error_count'] / n, 3),
+            'rep_session': c['rep_session'],
+            'sessions': c['sessions'][:20],  # cap for response size
+        })
+
+    return result
+
+
+@bp_clusters.route('/api/clusters')
+def api_clusters():
+    """Return session clusters grouped by tool call pattern, cost, and error types."""
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    try:
+        clusters = _build_clusters(sessions_dir)
+        return jsonify({
+            'clusters': clusters,
+            'total_clusters': len(clusters),
+            'sessions_dir': sessions_dir,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e), 'clusters': []}), 500
 
 
 def _build_context_inspector_data():

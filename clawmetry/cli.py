@@ -4,6 +4,13 @@ import sys
 import os
 from pathlib import Path
 
+# Auto-activate HTTP interceptor when CLAWMETRY_INTERCEPT=1
+if os.environ.get("CLAWMETRY_INTERCEPT") == "1":
+    try:
+        from clawmetry import interceptor as _interceptor  # noqa: F401
+    except Exception:
+        pass
+
 
 def _get_openclaw_dir():
     """Return the OpenClaw config directory, respecting CLAWMETRY_OPENCLAW_DIR env var."""
@@ -698,6 +705,54 @@ def _cmd_disconnect(args) -> None:
     print("Disconnected from ClawMetry Cloud.")
 
 
+def _get_nemoclaw_sandboxes() -> list:
+    """Return list of NemoClaw sandbox pod names if docker + nemoclaw available."""
+    import subprocess, shutil, os
+    # Augment PATH with common macOS install locations
+    extra = ["/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin")]
+    env = os.environ.copy()
+    env["PATH"] = ":".join(extra) + ":" + env.get("PATH", "")
+    def _which(cmd):
+        return shutil.which(cmd, path=env["PATH"])
+    if not _which("docker") or not _which("nemoclaw"):
+        return []
+    try:
+        docker = _which("docker")
+        r = subprocess.run([docker, "ps", "--format", "{{.Names}}"],
+                           capture_output=True, text=True, timeout=5, env=env)
+        cluster = next((n for n in r.stdout.splitlines() if "openshell-cluster" in n), None)
+        if not cluster:
+            return []
+        r2 = subprocess.run(
+            [docker, "exec", cluster, "kubectl", "get", "pods",
+             "-n", "openshell", "--no-headers", "-o",
+             "custom-columns=NAME:.metadata.name"],
+            capture_output=True, text=True, timeout=10, env=env)
+        return [p for p in r2.stdout.splitlines() if p and not p.startswith("openshell-")]
+    except Exception:
+        return []
+
+
+def _uninstall_nemoclaw_sandbox(cluster: str, pod: str, docker_bin: str = "docker") -> None:
+    """Stop supervisord daemon and remove ClawMetry config from a NemoClaw sandbox."""
+    import subprocess
+    cmd = (
+        "supervisorctl -c /etc/supervisor/supervisord.conf stop clawmetry-sync 2>/dev/null || true; "
+        "supervisorctl -c /etc/supervisor/supervisord.conf shutdown 2>/dev/null || true; "
+        "sleep 1; "
+        "rm -rf /sandbox/.clawmetry /root/.clawmetry; "
+        "rm -f /etc/supervisor/conf.d/clawmetry-sync.conf /etc/supervisor/supervisord.conf; "
+        "pip uninstall -y --break-system-packages clawmetry 2>/dev/null || true"
+    )
+    try:
+        subprocess.run(
+            [docker_bin, "exec", cluster, "kubectl", "exec", "-n", "openshell", pod,
+             "--", "bash", "-c", cmd],
+            capture_output=True, timeout=30)
+    except Exception:
+        pass
+
+
 def _cmd_uninstall() -> None:
     """clawmetry uninstall — fully remove clawmetry, stop daemons, delete all files."""
     import shutil, platform, subprocess
@@ -751,7 +806,12 @@ def _cmd_uninstall() -> None:
         if sl.exists() or sl.is_symlink():
             items.append(("Symlink", f"Binary: {sl}"))
 
-    # 5. pip package
+    # 5. NemoClaw sandboxes
+    _nemoclaw_sandboxes = _get_nemoclaw_sandboxes()
+    for _sb in _nemoclaw_sandboxes:
+        items.append(("NemoClaw", f"Sandbox {_sb}: stop daemon, remove config + clawmetry"))
+
+    # 6. pip package
     items.append(("Package", "pip package: clawmetry"))
 
     if not items:
@@ -837,6 +897,26 @@ def _cmd_uninstall() -> None:
             except PermissionError:
                 subprocess.run(["sudo", "rm", "-f", str(sl)], check=False)
                 print(f"  ✅  Removed {sl} (sudo)")
+
+    # 7. NemoClaw sandboxes
+    if _nemoclaw_sandboxes:
+        import subprocess as _sp, os as _os
+        _extra = ["/opt/homebrew/bin", "/usr/local/bin"]
+        _env = _os.environ.copy()
+        _env["PATH"] = ":".join(_extra) + ":" + _env.get("PATH", "")
+        import shutil as _sh
+        _docker = _sh.which("docker", path=_env["PATH"]) or "docker"
+        try:
+            r = _sp.run([_docker, "ps", "--format", "{{.Names}}"],
+                        capture_output=True, text=True, timeout=5, env=_env)
+            cluster = next((n for n in r.stdout.splitlines() if "openshell-cluster" in n), None)
+        except Exception:
+            cluster = None
+        if cluster:
+            for sb in _nemoclaw_sandboxes:
+                print(f"  ⏳  Uninstalling from sandbox {sb}...")
+                _uninstall_nemoclaw_sandbox(cluster, sb, docker_bin=_docker)
+                print(f"  ✅  Sandbox {sb} cleaned")
 
     print()
     print("  \033[1m\033[92m✓ ClawMetry fully uninstalled.\033[0m")
@@ -959,9 +1039,11 @@ def _print_nemoclaw_nodes(args) -> None:
                 ["docker", "exec", cluster, "kubectl", "exec",
                  "-n", "openshell", pod, "--",
                  "bash", "-c",
-                 "test -f /root/.clawmetry/config.json && "
-                 "python3 -c \"import json; c=json.load(open('/root/.clawmetry/config.json')); "
-                 "print(c.get('api_key','') + '|' + c.get('node_id','') + '|' + c.get('encryption_key',''))\" "
+                 "cfg=/root/.clawmetry/config.json; "
+                 "[ -f /sandbox/.clawmetry/config.json ] && cfg=/sandbox/.clawmetry/config.json; "
+                 "test -f $cfg && "
+                 "python3 -c \"import json,sys; c=json.load(open(sys.argv[1])); "
+                 "print(c.get('api_key','') + '|' + c.get('node_id','') + '|' + c.get('encryption_key',''))\" $cfg "
                  "2>/dev/null || echo 'NOT_CONNECTED'"],
                 capture_output=True, text=True, timeout=10
             )
@@ -992,12 +1074,10 @@ def _print_nemoclaw_nodes(args) -> None:
                     ["docker", "exec", cluster, "kubectl", "exec",
                      "-n", "openshell", pod, "--",
                      "bash", "-c",
-                     "python3 -c \""
-                     "import os,pathlib; "
-                     "p=pathlib.Path('/root/.clawmetry/sync.pid'); "
-                     "pid=int(p.read_text()) if p.exists() else 0; "
-                     "exit(0 if pid and not os.system(f'kill -0 {pid} 2>/dev/null') else 1)"
-                     "\" && echo running || echo stopped"],
+                     "supervisorctl status clawmetry-sync 2>/dev/null | grep -q RUNNING && echo running || { "
+                     "for pf in /sandbox/.clawmetry/sync.pid /root/.clawmetry/sync.pid; do "
+                     "[ -f $pf ] && kill -0 $(cat $pf) 2>/dev/null && echo running && exit 0; "
+                     "done; echo stopped; }"],
                     capture_output=True, text=True, timeout=5
                 )
                 daemon_status = rd.stdout.strip()

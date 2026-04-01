@@ -19,10 +19,10 @@ setup(
     url="https://github.com/vivekchand/clawmetry",
     py_modules=["dashboard"],
     packages=["clawmetry"],
-    package_data={"clawmetry": ["resources/*.sh"]},
+    package_data={"clawmetry": ["resources/*.sh", "py.typed"]},
     python_requires=">=3.8",
     install_requires=[
-        "flask>=2.0",
+        "flask>=2.0,<4",
         "waitress>=2.0",
         "cryptography>=3.0",
     ],

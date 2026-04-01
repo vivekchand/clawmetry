@@ -219,6 +219,12 @@ Contributors who help improve OpenClaw Dashboard will be:
 
 ---
 
+## 🧪 Cloud Testing
+
+For testing against real cloud deployments or verifying ClawMetry Cloud integrations, see [docs/CLOUD_TESTING.md](docs/CLOUD_TESTING.md).
+
+---
+
 ## 📄 License
 
 By contributing to OpenClaw Dashboard, you agree that your contributions will be licensed under the same MIT License that covers the project.

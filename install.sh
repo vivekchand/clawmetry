@@ -244,7 +244,7 @@ PYEOF
               echo -e "  ${GREEN}${BOLD}✓ Sandbox $sb connected (node: $sb)${NC}"
               # Ensure daemon survives kubectl exec session end via supervisord if available
               docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-                bash -c 'command -v supervisorctl >/dev/null 2>&1 && supervisorctl start clawmetry-sync 2>/dev/null || true' 2>/dev/null || true
+                bash -c 'command -v supervisorctl >/dev/null 2>&1 && supervisorctl start clawmetry-sync >/dev/null 2>&1 || true' 2>/dev/null || true
             else
               echo -e "  ${DIM}⚠  Could not connect sandbox $sb automatically.${NC}"
               echo -e "  ${DIM}Connect manually: nemoclaw $sb connect → clawmetry connect${NC}"
@@ -257,13 +257,60 @@ PYEOF
       echo "$SANDBOX_NAMES" | while IFS= read -r sb; do
         [ -z "$sb" ] && continue
         echo -e "  → Starting supervisor in sandbox ${BOLD}${sb}${NC}..."
-        docker exec "$CLUSTER_CONTAINER" kubectl exec -n openshell "$sb" -- \
-          bash -s >/dev/null 2>&1 << 'SANDBOX_SCRIPT'
+
+        # Ensure PyPI + ClawMetry policies applied before pip install
+        for _pol in clawmetry pypi; do
+          printf '%s\ny\n' "$_pol" | nemoclaw "$sb" policy-add >/dev/null 2>&1 || true
+        done
+        # Wait for network policy to propagate inside sandbox
+        sleep 5
+
+        _sb_out=$(docker exec -i "$CLUSTER_CONTAINER" kubectl exec -i -n openshell "$sb" -- \
+          bash -s 2>&1 << 'SANDBOX_SCRIPT'
+            set -e
+
             # Install supervisord if missing
             command -v supervisord >/dev/null 2>&1 || pip install --break-system-packages --quiet supervisor 2>/dev/null
 
-            # Write supervisord config
+            # Detect the real OpenClaw data directory (NemoClaw stores it at /sandbox/.openclaw-data)
+            # Walk /sandbox, /root and /home to find agents/main/sessions — do NOT hardcode the path.
+            _oc_dir=""
+            for _search_root in /sandbox /root /home; do
+              _hit=$(find "$_search_root" -maxdepth 6 -name "sessions.json" \
+                       -path "*/agents/main/sessions/*" 2>/dev/null | head -1)
+              if [ -n "$_hit" ]; then
+                # Walk up 4 levels from sessions.json to reach the openclaw root
+                # sessions.json lives at <root>/agents/main/sessions/sessions.json
+                _oc_dir=$(dirname "$_hit")   # .../agents/main/sessions
+                _oc_dir=$(dirname "$_oc_dir") # .../agents/main
+                _oc_dir=$(dirname "$_oc_dir") # .../agents
+                _oc_dir=$(dirname "$_oc_dir") # <openclaw-root>
+                break
+              fi
+            done
+            # Fallback: use the clawmetry config path (guaranteed to exist after connect)
+            if [ -z "$_oc_dir" ]; then
+              _clawmetry_config=$(cat /sandbox/.clawmetry/config.json 2>/dev/null || cat /root/.clawmetry/config.json 2>/dev/null || echo "")
+              _oc_dir="/sandbox/.openclaw-data"
+              echo "WARN: openclaw sessions not found; defaulting to $_oc_dir"
+            fi
+            echo "INFO: CLAWMETRY_OPENCLAW_DIR=$_oc_dir"
+
+            # Resolve the clawmetry config path
+            if [ -f /sandbox/.clawmetry/config.json ]; then
+              _cm_config="/sandbox/.clawmetry/config.json"
+              _cm_log="/sandbox/.clawmetry/sync.log"
+            else
+              _cm_config="/root/.clawmetry/config.json"
+              _cm_log="/root/.clawmetry/sync.log"
+            fi
+
+            # Resolve sync.py path
+            SYNC_PATH=$(python3 -c "import clawmetry.sync, os; print(os.path.abspath(clawmetry.sync.__file__))")
+
+            # Write supervisord configs
             mkdir -p /etc/supervisor/conf.d /var/log/supervisor /var/run
+
             cat > /etc/supervisor/supervisord.conf << 'SUPEOF'
 [unix_http_server]
 file=/var/run/supervisor.sock
@@ -279,7 +326,6 @@ serverurl=unix:///var/run/supervisor.sock
 files = /etc/supervisor/conf.d/*.conf
 SUPEOF
 
-            SYNC_PATH=$(python3 -c "import clawmetry.sync, os; print(os.path.abspath(clawmetry.sync.__file__))")
             cat > /etc/supervisor/conf.d/clawmetry-sync.conf << PROGEOF
 [program:clawmetry-sync]
 command=python3 ${SYNC_PATH}
@@ -287,15 +333,26 @@ autostart=true
 autorestart=true
 startretries=10
 startsecs=3
-stdout_logfile=/sandbox/.clawmetry/sync.log
-stderr_logfile=/sandbox/.clawmetry/sync.log
+stdout_logfile=${_cm_log}
+stderr_logfile=${_cm_log}
 stdout_logfile_maxbytes=10MB
-environment=HOME="/sandbox",CLAWMETRY_CONFIG="/sandbox/.clawmetry/config.json",CLAWMETRY_OPENCLAW_DIR="/sandbox/.openclaw"
+environment=HOME="/sandbox",CLAWMETRY_CONFIG="${_cm_config}",CLAWMETRY_OPENCLAW_DIR="${_oc_dir}"
 PROGEOF
+
+            # Verify conf files were actually written before proceeding
+            if [ ! -f /etc/supervisor/supervisord.conf ]; then
+              echo "ERROR: failed to write /etc/supervisor/supervisord.conf" >&2
+              exit 1
+            fi
+            if [ ! -f /etc/supervisor/conf.d/clawmetry-sync.conf ]; then
+              echo "ERROR: failed to write /etc/supervisor/conf.d/clawmetry-sync.conf" >&2
+              exit 1
+            fi
 
             # Kill ALL stray sync.py daemons before supervisord takes over
             kill "$(cat /root/.clawmetry/sync.pid 2>/dev/null)" 2>/dev/null || true
-            rm -f /root/.clawmetry/sync.pid
+            kill "$(cat /sandbox/.clawmetry/sync.pid 2>/dev/null)" 2>/dev/null || true
+            rm -f /root/.clawmetry/sync.pid /sandbox/.clawmetry/sync.pid
             for _f in /proc/[0-9]*/cmdline; do
               _p="${_f%/cmdline}"; _p="${_p#/proc/}"
               if grep -qa "sync.py" "$_f" 2>/dev/null && grep -qa "clawmetry" "$_f" 2>/dev/null; then
@@ -313,12 +370,19 @@ PROGEOF
             rm -f /var/run/supervisord.pid /var/run/supervisor.sock
             sleep 1
             supervisord -c /etc/supervisor/supervisord.conf
+            sleep 3
+            supervisorctl -c /etc/supervisor/supervisord.conf status
 SANDBOX_SCRIPT
+        )
         _rc=$?
+        # Surface any WARN/ERROR/INFO lines from the sandbox script
+        _info=$(echo "$_sb_out" | grep -E "^(INFO|WARN|ERROR):" || true)
         if [ "$_rc" -eq 0 ]; then
           echo -e "  ${GREEN}${BOLD}✓ Supervisor running in $sb${NC}"
+          [ -n "$_info" ] && echo -e "  ${DIM}$_info${NC}"
         else
           echo -e "  ${DIM}⚠  Could not start supervisor in $sb${NC}"
+          [ -n "$_sb_out" ] && echo -e "  ${DIM}$_sb_out${NC}"
         fi
       done
 

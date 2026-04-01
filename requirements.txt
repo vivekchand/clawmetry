@@ -1,4 +1,4 @@
-flask>=2.0
+flask>=2.0,<4
 
 # Testing dependencies
 pytest>=8.0
