@@ -3264,6 +3264,16 @@ function clawmetryLogout(){
   <div class="card">
     <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
   </div>
+  <div class="section-title" style="display:flex;align-items:center;">📅 Activity Heatmap <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">hourly usage intensity</span>
+    <span style="margin-left:auto;display:flex;gap:6px;">
+      <button id="heatmap-btn-7d" class="time-btn active" onclick="loadHeatmap(7)" style="font-size:11px;padding:2px 8px;">7d</button>
+      <button id="heatmap-btn-30d" class="time-btn" onclick="loadHeatmap(30)" style="font-size:11px;padding:2px 8px;">30d</button>
+    </span>
+  </div>
+  <div class="card">
+    <div class="heatmap-wrap"><div id="heatmap-grid" class="heatmap-grid">Loading...</div></div>
+    <div id="heatmap-legend" class="heatmap-legend"></div>
+  </div>
 </div>
 
 <!-- CRONS -->
@@ -8529,6 +8539,16 @@ function clawmetryLogout(){
   <div class="card">
     <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
   </div>
+  <div class="section-title" style="display:flex;align-items:center;">📅 Activity Heatmap <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">hourly usage intensity</span>
+    <span style="margin-left:auto;display:flex;gap:6px;">
+      <button id="heatmap-btn-7d" class="time-btn active" onclick="loadHeatmap(7)" style="font-size:11px;padding:2px 8px;">7d</button>
+      <button id="heatmap-btn-30d" class="time-btn" onclick="loadHeatmap(30)" style="font-size:11px;padding:2px 8px;">30d</button>
+    </span>
+  </div>
+  <div class="card">
+    <div class="heatmap-wrap"><div id="heatmap-grid" class="heatmap-grid">Loading...</div></div>
+    <div id="heatmap-legend" class="heatmap-legend"></div>
+  </div>
 </div>
 
 <!-- CRONS -->
@@ -12075,10 +12095,18 @@ function startSystemHealthRefresh() {
 }
 
 // ===== Activity Heatmap =====
-async function loadHeatmap() {
+var _heatmapDays = 7;
+async function loadHeatmap(days) {
+  if (days) _heatmapDays = days;
+  // Update toggle buttons
+  var btn7 = document.getElementById('heatmap-btn-7d');
+  var btn30 = document.getElementById('heatmap-btn-30d');
+  if (btn7) btn7.className = _heatmapDays === 7 ? 'time-btn active' : 'time-btn';
+  if (btn30) btn30.className = _heatmapDays === 30 ? 'time-btn active' : 'time-btn';
   try {
-    var data = await fetch('/api/heatmap').then(r => r.json());
+    var data = await fetch('/api/heatmap?days=' + _heatmapDays).then(r => r.json());
     var grid = document.getElementById('heatmap-grid');
+    if (!grid) return;
     var maxVal = Math.max(1, data.max);
     var html = '<div class="heatmap-label"></div>';
     for (var h = 0; h < 24; h++) { html += '<div class="heatmap-hour-label">' + (h < 10 ? '0' : '') + h + '</div>'; }
@@ -12092,14 +12120,15 @@ async function loadHeatmap() {
         else if (intensity < 0.5) color = '#2a6a3a';
         else if (intensity < 0.75) color = '#4a9a2a';
         else color = '#6adb3a';
-        html += '<div class="heatmap-cell" style="background:' + color + ';" title="' + day.label + ' ' + (hi < 10 ? '0' : '') + hi + ':00 - ' + val + ' events"></div>';
+        html += '<div class="heatmap-cell" style="background:' + color + ';" title="' + day.label + ' ' + (hi < 10 ? '0' : '') + hi + ':00 — ' + val + ' events"></div>';
       });
     });
     grid.innerHTML = html;
     var legend = document.getElementById('heatmap-legend');
-    legend.innerHTML = 'Less <div class="heatmap-legend-cell" style="background:#12122a"></div><div class="heatmap-legend-cell" style="background:#1a3a2a"></div><div class="heatmap-legend-cell" style="background:#2a6a3a"></div><div class="heatmap-legend-cell" style="background:#4a9a2a"></div><div class="heatmap-legend-cell" style="background:#6adb3a"></div> More';
+    if (legend) legend.innerHTML = 'Less <div class="heatmap-legend-cell" style="background:#12122a"></div><div class="heatmap-legend-cell" style="background:#1a3a2a"></div><div class="heatmap-legend-cell" style="background:#2a6a3a"></div><div class="heatmap-legend-cell" style="background:#4a9a2a"></div><div class="heatmap-legend-cell" style="background:#6adb3a"></div> More';
   } catch(e) {
-    document.getElementById('heatmap-grid').innerHTML = '<span style="color:#555">No activity data</span>';
+    var grid2 = document.getElementById('heatmap-grid');
+    if (grid2) grid2.innerHTML = '<span style="color:#555">No activity data</span>';
   }
 }
 
@@ -12193,6 +12222,8 @@ async function loadUsage() {
       var el = document.getElementById('trace-clusters-content');
       if (el) el.innerHTML = '<span style="color:var(--text-muted)">No cluster data available</span>';
     });
+    // Load activity heatmap
+    loadHeatmap();
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
@@ -23995,27 +24026,37 @@ def api_reliability():
 
 @bp_health.route('/api/heatmap')
 def api_heatmap():
-    """Activity heatmap - events per hour for the last 7 days."""
+    """Activity heatmap - events per hour for the last N days (default 7, max 90).
+
+    Query params:
+      days: int  number of days to show (1-90, default 7)
+    """
+    try:
+        n_days = max(1, min(90, int(request.args.get('days', 7))))
+    except (ValueError, TypeError):
+        n_days = 7
+
     now = datetime.now()
-    # Initialize 7 days × 24 hours grid
+    # Initialize N days × 24 hours grid
     grid = {}
     day_labels = []
-    for i in range(6, -1, -1):
+    for i in range(n_days - 1, -1, -1):
         d = now - timedelta(days=i)
         ds = d.strftime('%Y-%m-%d')
         grid[ds] = [0] * 24
-        day_labels.append({'date': ds, 'label': d.strftime('%a %d')})
+        lbl = d.strftime('%b %d') if n_days > 7 else d.strftime('%a %d')
+        day_labels.append({'date': ds, 'label': lbl})
 
-    # Parse log files for the last 7 days
-    for i in range(7):
+    # Source 1: log files
+    for i in range(n_days):
         d = now - timedelta(days=i)
         ds = d.strftime('%Y-%m-%d')
         log_file = _find_log_file(ds)
         if not log_file:
             continue
         try:
-            with open(log_file) as f:
-                for line in f:
+            with open(log_file) as lf:
+                for line in lf:
                     try:
                         obj = json.loads(line.strip())
                         ts = obj.get('time') or (obj.get('_meta', {}).get('date') if isinstance(obj.get('_meta'), dict) else None)
@@ -24024,23 +24065,58 @@ def api_heatmap():
                                 dt = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
                             else:
                                 dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00').replace('+00:00', ''))
-                            hour = dt.hour
                             day_key = dt.strftime('%Y-%m-%d')
                             if day_key in grid:
-                                grid[day_key][hour] += 1
+                                grid[day_key][dt.hour] += 1
                     except Exception:
-                        # Count non-JSON lines too
                         if ds in grid:
                             grid[ds][12] += 1  # default to noon
         except Exception:
             pass
 
-    max_val = max(max(hours) for hours in grid.values()) if grid else 0
-    days = []
-    for dl in day_labels:
-        days.append({'label': dl['label'], 'hours': grid.get(dl['date'], [0] * 24)})
+    # Source 2: session JSONL files (fills gaps when log files missing)
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    cutoff = now - timedelta(days=n_days)
+    if sessions_dir and os.path.isdir(sessions_dir):
+        try:
+            for fname in os.listdir(sessions_dir):
+                if not fname.endswith('.jsonl') or 'deleted' in fname:
+                    continue
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if datetime.fromtimestamp(mtime) < cutoff:
+                        continue
+                    with open(fpath, errors='replace') as sf:
+                        for line in sf:
+                            try:
+                                obj = json.loads(line.strip())
+                                ts = obj.get('timestamp') or obj.get('ts') or obj.get('time') or (
+                                    obj.get('_meta', {}).get('date') if isinstance(obj.get('_meta'), dict) else None)
+                                if not ts:
+                                    continue
+                                if isinstance(ts, (int, float)):
+                                    dt = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
+                                else:
+                                    dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00').replace('+00:00', ''))
+                                if dt < cutoff:
+                                    continue
+                                day_key = dt.strftime('%Y-%m-%d')
+                                if day_key in grid:
+                                    grid[day_key][dt.hour] += 1
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
-    return jsonify({'days': days, 'max': max_val})
+    max_val = max(max(hours) for hours in grid.values()) if grid else 0
+    days_out = []
+    for dl in day_labels:
+        days_out.append({'label': dl['label'], 'hours': grid.get(dl['date'], [0] * 24)})
+
+    return jsonify({'days': days_out, 'max': max_val, 'n_days': n_days})
 
 
 def _detect_channel_status():

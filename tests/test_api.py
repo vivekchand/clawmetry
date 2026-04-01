@@ -510,3 +510,40 @@ class TestTraceClusters:
             assert c["total_tokens"] >= 0
             assert c["cost_tier"] in ("cheap", "medium", "expensive")
             assert isinstance(c["has_errors"], bool)
+
+
+class TestActivityHeatmap:
+    """Tests for activity heatmap endpoint (GH #69)."""
+
+    def test_heatmap_default_7_days(self, api, base_url):
+        """Heatmap default returns 7 days."""
+        d = assert_ok(get(api, base_url, "/api/heatmap"))
+        assert_keys(d, "days", "max", "n_days")
+        assert d["n_days"] == 7
+        assert len(d["days"]) == 7
+
+    def test_heatmap_30_days(self, api, base_url):
+        """Heatmap ?days=30 returns 30 days."""
+        d = assert_ok(get(api, base_url, "/api/heatmap?days=30"))
+        assert d["n_days"] == 30
+        assert len(d["days"]) == 30
+
+    def test_heatmap_max_clamped(self, api, base_url):
+        """Heatmap days clamped to 90."""
+        d = assert_ok(get(api, base_url, "/api/heatmap?days=999"))
+        assert d["n_days"] == 90
+        assert len(d["days"]) == 90
+
+    def test_heatmap_day_structure(self, api, base_url):
+        """Each day has label and 24 hourly buckets."""
+        d = assert_ok(get(api, base_url, "/api/heatmap"))
+        for day in d["days"]:
+            assert "label" in day
+            assert "hours" in day
+            assert len(day["hours"]) == 24
+            assert all(isinstance(h, int) and h >= 0 for h in day["hours"])
+
+    def test_heatmap_max_nonneg(self, api, base_url):
+        """max field is non-negative."""
+        d = assert_ok(get(api, base_url, "/api/heatmap"))
+        assert d["max"] >= 0
