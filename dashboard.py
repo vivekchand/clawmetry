@@ -2255,6 +2255,7 @@ DASHBOARD_HTML = r"""
   .heatmap-cell[title]:hover::after { content: attr(title); position: absolute; bottom: 120%; left: 50%; transform: translateX(-50%); background: #222; color: #eee; padding: 3px 8px; border-radius: 4px; font-size: 10px; white-space: nowrap; z-index: 10; pointer-events: none; }
   .heatmap-legend { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 11px; color: #666; }
   .heatmap-legend-cell { width: 14px; height: 14px; border-radius: 3px; }
+  .heatmap-btn-active { background: var(--accent, #6366f1) !important; color: #fff !important; border-color: var(--accent, #6366f1) !important; }
 
   /* === Health Checks === */
   .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
@@ -3264,6 +3265,19 @@ function clawmetryLogout(){
   <div class="card">
     <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
   </div>
+  <div class="section-title" style="display:flex;align-items:center;gap:12px;">
+    <span>🔥 Activity Heatmap</span>
+    <div style="display:flex;gap:4px;margin-left:auto;">
+      <button id="heatmap-btn-7" class="refresh-btn heatmap-btn-active" style="padding:4px 12px;font-size:12px;" onclick="loadHeatmap(7)">7d</button>
+      <button id="heatmap-btn-30" class="refresh-btn" style="padding:4px 12px;font-size:12px;" onclick="loadHeatmap(30)">30d</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="heatmap-wrap">
+      <div class="heatmap-grid" id="heatmap-grid"><span style="color:#555">Loading...</span></div>
+    </div>
+    <div class="heatmap-legend" id="heatmap-legend"></div>
+  </div>
 </div>
 
 <!-- CRONS -->
@@ -4100,7 +4114,7 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
-  if (name === 'usage') loadUsage();
+  if (name === 'usage') { loadUsage(); loadHeatmap(); }
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
@@ -7458,6 +7472,7 @@ DASHBOARD_HTML = r"""
   .heatmap-cell[title]:hover::after { content: attr(title); position: absolute; bottom: 120%; left: 50%; transform: translateX(-50%); background: #222; color: #eee; padding: 3px 8px; border-radius: 4px; font-size: 10px; white-space: nowrap; z-index: 10; pointer-events: none; }
   .heatmap-legend { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 11px; color: #666; }
   .heatmap-legend-cell { width: 14px; height: 14px; border-radius: 3px; }
+  .heatmap-btn-active { background: var(--accent, #6366f1) !important; color: #fff !important; border-color: var(--accent, #6366f1) !important; }
 
   /* === Health Checks === */
   .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
@@ -8529,6 +8544,19 @@ function clawmetryLogout(){
   <div class="card">
     <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
   </div>
+  <div class="section-title" style="display:flex;align-items:center;gap:12px;">
+    <span>🔥 Activity Heatmap</span>
+    <div style="display:flex;gap:4px;margin-left:auto;">
+      <button id="heatmap-btn-7" class="refresh-btn heatmap-btn-active" style="padding:4px 12px;font-size:12px;" onclick="loadHeatmap(7)">7d</button>
+      <button id="heatmap-btn-30" class="refresh-btn" style="padding:4px 12px;font-size:12px;" onclick="loadHeatmap(30)">30d</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="heatmap-wrap">
+      <div class="heatmap-grid" id="heatmap-grid"><span style="color:#555">Loading...</span></div>
+    </div>
+    <div class="heatmap-legend" id="heatmap-legend"></div>
+  </div>
 </div>
 
 <!-- CRONS -->
@@ -9580,7 +9608,7 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
-  if (name === 'usage') loadUsage();
+  if (name === 'usage') { loadUsage(); loadHeatmap(); }
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
@@ -12075,9 +12103,16 @@ function startSystemHealthRefresh() {
 }
 
 // ===== Activity Heatmap =====
-async function loadHeatmap() {
+var _heatmapDays = 7;
+async function loadHeatmap(days) {
+  if (days !== undefined) _heatmapDays = days;
+  // Update toggle button state
+  var btn7 = document.getElementById('heatmap-btn-7');
+  var btn30 = document.getElementById('heatmap-btn-30');
+  if (btn7) btn7.classList.toggle('heatmap-btn-active', _heatmapDays === 7);
+  if (btn30) btn30.classList.toggle('heatmap-btn-active', _heatmapDays === 30);
   try {
-    var data = await fetch('/api/heatmap').then(r => r.json());
+    var data = await fetch('/api/heatmap?days=' + _heatmapDays).then(r => r.json());
     var grid = document.getElementById('heatmap-grid');
     var maxVal = Math.max(1, data.max);
     var html = '<div class="heatmap-label"></div>';
@@ -23995,19 +24030,44 @@ def api_reliability():
 
 @bp_health.route('/api/heatmap')
 def api_heatmap():
-    """Activity heatmap - events per hour for the last 7 days."""
+    """Activity heatmap - events per hour for the last N days (default 7, max 90).
+
+    Query params:
+      ?days=N  - number of days to include (default 7, clamped to 1-90)
+    """
+    try:
+        req_days = int(request.args.get('days', 7))
+    except (ValueError, TypeError):
+        req_days = 7
+    num_days = max(1, min(90, req_days))
+
     now = datetime.now()
-    # Initialize 7 days × 24 hours grid
+    # Initialize N days x 24 hours grid
     grid = {}
     day_labels = []
-    for i in range(6, -1, -1):
+    for i in range(num_days - 1, -1, -1):
         d = now - timedelta(days=i)
         ds = d.strftime('%Y-%m-%d')
         grid[ds] = [0] * 24
         day_labels.append({'date': ds, 'label': d.strftime('%a %d')})
 
-    # Parse log files for the last 7 days
-    for i in range(7):
+    def _record_ts(ts_val, ds_hint):
+        """Parse a timestamp value and increment the appropriate grid cell."""
+        try:
+            if isinstance(ts_val, (int, float)):
+                dt = datetime.fromtimestamp(ts_val / 1000 if ts_val > 1e12 else ts_val)
+            else:
+                dt = datetime.fromisoformat(str(ts_val).replace('Z', '+00:00').replace('+00:00', ''))
+            day_key = dt.strftime('%Y-%m-%d')
+            if day_key in grid:
+                grid[day_key][dt.hour] += 1
+                return True
+        except Exception:
+            pass
+        return False
+
+    # Data source 1: log files
+    for i in range(num_days):
         d = now - timedelta(days=i)
         ds = d.strftime('%Y-%m-%d')
         log_file = _find_log_file(ds)
@@ -24020,14 +24080,9 @@ def api_heatmap():
                         obj = json.loads(line.strip())
                         ts = obj.get('time') or (obj.get('_meta', {}).get('date') if isinstance(obj.get('_meta'), dict) else None)
                         if ts:
-                            if isinstance(ts, (int, float)):
-                                dt = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
-                            else:
-                                dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00').replace('+00:00', ''))
-                            hour = dt.hour
-                            day_key = dt.strftime('%Y-%m-%d')
-                            if day_key in grid:
-                                grid[day_key][hour] += 1
+                            if not _record_ts(ts, ds):
+                                if ds in grid:
+                                    grid[ds][12] += 1  # default to noon
                     except Exception:
                         # Count non-JSON lines too
                         if ds in grid:
@@ -24035,12 +24090,44 @@ def api_heatmap():
         except Exception:
             pass
 
-    max_val = max(max(hours) for hours in grid.values()) if grid else 0
-    days = []
-    for dl in day_labels:
-        days.append({'label': dl['label'], 'hours': grid.get(dl['date'], [0] * 24)})
+    # Data source 2: session JSONL files
+    sessions_dir = _get_sessions_dir()
+    if sessions_dir and os.path.isdir(sessions_dir):
+        cutoff = now - timedelta(days=num_days)
+        try:
+            for fname in os.listdir(sessions_dir):
+                if not fname.endswith('.jsonl'):
+                    continue
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if datetime.fromtimestamp(mtime) < cutoff:
+                        continue
+                    with open(fpath) as sf:
+                        for line in sf:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                obj = json.loads(line)
+                                ts = (obj.get('timestamp') or obj.get('ts') or
+                                      obj.get('time') or
+                                      (obj.get('_meta', {}).get('date') if isinstance(obj.get('_meta'), dict) else None))
+                                if ts:
+                                    _record_ts(ts, None)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
-    return jsonify({'days': days, 'max': max_val})
+    max_val = max(max(hours) for hours in grid.values()) if grid else 0
+    days_out = []
+    for dl in day_labels:
+        days_out.append({'label': dl['label'], 'hours': grid.get(dl['date'], [0] * 24)})
+
+    return jsonify({'days': days_out, 'max': max_val, 'days_requested': num_days})
 
 
 def _detect_channel_status():
