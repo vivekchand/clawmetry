@@ -3024,24 +3024,6 @@ function clawmetryLogout(){
           </div>
         </div>
       </div>
-      <div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Configure Alerts</div>
-        <div style="display:grid;gap:8px;">
-          <input id="alert-webhook-url" type="text" placeholder="Generic webhook URL (JSON payload)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <input id="alert-slack-url" type="text" placeholder="Slack incoming webhook URL" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <input id="alert-discord-url" type="text" placeholder="Discord webhook URL" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-cost-spike"> Cost spike alerts</label>
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-agent-error"> Agent error rate alerts</label>
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-security"> Security posture changes</label>
-          </div>
-          <div style="display:flex;gap:8px;">
-            <button onclick="saveWebhookConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save</button>
-            <button onclick="testWebhookConfig('all')" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Test</button>
-            <span id="alert-webhook-status" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;"></span>
-          </div>
-        </div>
-      </div>
       <div id="alert-rules-list" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
     </div>
     <!-- Telegram Tab -->
