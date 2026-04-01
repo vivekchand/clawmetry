@@ -443,3 +443,41 @@ class TestMemoryAnalytics:
             assert f["status"] in ("ok", "warning", "critical")
 
 
+
+
+class TestTraceClusters:
+    """Tests for trace clustering endpoint (closes GH #406)."""
+
+    def test_clusters_returns_200(self, api, base_url):
+        """Trace clusters endpoint returns 200."""
+        d = assert_ok(get(api, base_url, "/api/sessions/clusters"))
+        assert_keys(d, "clusters", "total_sessions", "days", "generated_at")
+
+    def test_clusters_is_list(self, api, base_url):
+        """clusters field is a list."""
+        d = assert_ok(get(api, base_url, "/api/sessions/clusters"))
+        assert isinstance(d["clusters"], list)
+
+    def test_clusters_total_sessions_is_int(self, api, base_url):
+        """total_sessions is a non-negative integer."""
+        d = assert_ok(get(api, base_url, "/api/sessions/clusters"))
+        assert isinstance(d["total_sessions"], int)
+        assert d["total_sessions"] >= 0
+
+    def test_clusters_days_filter(self, api, base_url):
+        """days query parameter is respected."""
+        d = assert_ok(get(api, base_url, "/api/sessions/clusters?days=7"))
+        assert d["days"] == 7
+
+    def test_cluster_shape(self, api, base_url):
+        """Each cluster has the expected fields."""
+        d = assert_ok(get(api, base_url, "/api/sessions/clusters"))
+        for c in d["clusters"]:
+            assert_keys(c, "cluster_id", "label", "session_count", "total_tokens",
+                         "total_cost_usd", "avg_cost_usd", "error_count",
+                         "tool_category", "cost_tier", "has_errors",
+                         "model_family", "top_tools")
+            assert c["session_count"] >= 1
+            assert c["total_tokens"] >= 0
+            assert c["cost_tier"] in ("cheap", "medium", "expensive")
+            assert isinstance(c["has_errors"], bool)

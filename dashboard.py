@@ -3276,6 +3276,10 @@ function clawmetryLogout(){
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
   </div>
+  <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
+  <div class="card">
+    <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+  </div>
 </div>
 
 <!-- CRONS -->
@@ -8534,6 +8538,10 @@ function clawmetryLogout(){
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
   </div>
+  <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
+  <div class="card">
+    <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+  </div>
 </div>
 
 <!-- CRONS -->
@@ -12064,9 +12072,50 @@ async function loadUsage() {
       var el = document.getElementById('usage-session-cost-table');
       if (el) el.innerHTML = '<span style="color:var(--text-muted)">No session cost data available</span>';
     });
+    // Load trace clusters
+    fetch('/api/sessions/clusters').then(r => r.json()).then(function(cd) {
+      renderTraceClusters(cd.clusters || [], cd.total_sessions || 0);
+    }).catch(function() {
+      var el = document.getElementById('trace-clusters-content');
+      if (el) el.innerHTML = '<span style="color:var(--text-muted)">No cluster data available</span>';
+    });
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
+}
+
+function renderTraceClusters(clusters, totalSessions) {
+  var el = document.getElementById('trace-clusters-content');
+  if (!el) return;
+  if (!clusters || clusters.length === 0) {
+    el.innerHTML = '<span style="color:var(--text-muted)">No sessions to cluster yet</span>';
+    return;
+  }
+  var categoryIcons = {
+    'code-execution': '⚙️', 'file-ops': '📁', 'web': '🌐',
+    'communication': '💬', 'orchestration': '🤖', 'memory': '🧠',
+    'no-tools': '💭', 'other-tools': '🔧'
+  };
+  var costColors = { 'expensive': '#ef4444', 'medium': '#f59e0b', 'cheap': '#22c55e' };
+  var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;">';
+  clusters.forEach(function(c) {
+    var icon = categoryIcons[c.tool_category] || '🔧';
+    var costColor = costColors[c.cost_tier] || '#888';
+    var errBadge = c.has_errors ? '<span style="background:#ef44441a;color:#ef4444;border:1px solid #ef444440;border-radius:4px;padding:1px 6px;font-size:10px;margin-left:6px;">errors</span>' : '';
+    var topTools = (c.top_tools || []).slice(0,3).map(function(t){ return '<code style="background:rgba(255,255,255,0.07);padding:1px 5px;border-radius:3px;font-size:10px;">' + escHtml(t.tool) + ' ×' + t.count + '</code>'; }).join(' ');
+    html += '<div style="background:var(--bg-card,rgba(255,255,255,0.04));border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:14px;">';
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">';
+    html += '<span style="font-size:20px;">' + icon + '</span>';
+    html += '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;color:var(--text-primary,#fff);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(c.label) + errBadge + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted,#888);margin-top:1px;">' + c.session_count + ' session' + (c.session_count !== 1 ? 's' : '') + ' · ' + c.model_family + '</div></div>';
+    html += '<div style="text-align:right;"><div style="font-size:14px;font-weight:700;color:' + costColor + ';">$' + c.total_cost_usd.toFixed(3) + '</div><div style="font-size:10px;color:var(--text-muted,#888);">avg $' + c.avg_cost_usd.toFixed(4) + '</div></div>';
+    html += '</div>';
+    if (topTools) html += '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;">' + topTools + '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted,#888);">' + totalSessions + ' sessions clustered into ' + clusters.length + ' groups by tool pattern, cost, and model</div>';
+  el.innerHTML = html;
 }
 
 function renderSessionCostChart() {
@@ -20564,6 +20613,248 @@ def api_usage_by_plugin():
         })
     rows.sort(key=lambda r: r['total_tokens'], reverse=True)
     return jsonify({'plugins': rows})
+
+
+@bp_usage.route('/api/sessions/clusters')
+def api_sessions_clusters():
+    """Cluster sessions by behavior pattern (tool usage, cost profile, error type, model).
+
+    Implements trace clustering similar to PostHog's Clusters for LLM Analytics,
+    but with OpenClaw-native dimensions (tool names, skill invocations, cron sessions).
+    Closes vivekchand/clawmetry#406.
+    """
+    _CLUSTER_ANALYTICS_TTL = 120  # seconds
+    now_ts = time.time()
+
+    # Optional time window filter (days)
+    try:
+        days = int(request.args.get('days', 30))
+    except (ValueError, TypeError):
+        days = 30
+    cutoff_ts = now_ts - (days * 86400)
+
+    sessions_dir = _get_sessions_dir()
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return jsonify({'clusters': [], 'total_sessions': 0, 'days': days, 'generated_at': int(now_ts * 1000)})
+
+    usd_per_tok = _estimate_usd_per_token()
+    session_profiles = []
+
+    for fname in os.listdir(sessions_dir):
+        if not fname.endswith('.jsonl'):
+            continue
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            fmtime = os.path.getmtime(fpath)
+            if fmtime < cutoff_ts:
+                continue
+
+            sid = fname.replace('.jsonl', '')
+            tool_counts = defaultdict(int)
+            error_count = 0
+            s_tokens = 0
+            s_model = 'unknown'
+            has_cron = False
+            has_subagent = False
+            turn_count = 0
+            s_start = fmtime
+
+            with open(fpath, 'r') as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line.strip())
+                    except Exception:
+                        continue
+
+                    # Detect model
+                    message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+                    model = message.get('model') or obj.get('model')
+                    if model:
+                        s_model = model
+
+                    # Count tool calls
+                    tools = _extract_tool_plugins(obj)
+                    for t in tools:
+                        tool_counts[t] += 1
+
+                    # Count errors
+                    if obj.get('type') in ('error', 'tool_error') or (
+                        isinstance(obj.get('error'), dict) and obj['error']
+                    ):
+                        error_count += 1
+
+                    # Detect cron / subagent hints
+                    content_str = json.dumps(obj, default=str).lower()
+                    if 'cron' in content_str or 'scheduled' in content_str:
+                        has_cron = True
+                    if 'subagent' in content_str or 'spawned' in content_str:
+                        has_subagent = True
+
+                    # Usage metrics
+                    metrics = _extract_usage_metrics(obj)
+                    if metrics['tokens'] > 0:
+                        s_tokens += metrics['tokens']
+                        turn_count += 1
+
+            if s_tokens == 0 and not tool_counts:
+                continue
+
+            total_tools = sum(tool_counts.values())
+            top_tool = max(tool_counts, key=tool_counts.get) if tool_counts else 'none'
+            cost = round(s_tokens * usd_per_tok, 6)
+
+            # Determine cost tier
+            if cost >= 0.10:
+                cost_tier = 'expensive'
+            elif cost >= 0.02:
+                cost_tier = 'medium'
+            else:
+                cost_tier = 'cheap'
+
+            session_profiles.append({
+                'session_id': sid,
+                'model': s_model,
+                'top_tool': top_tool,
+                'tool_counts': dict(tool_counts),
+                'total_tools': total_tools,
+                'error_count': error_count,
+                'tokens': s_tokens,
+                'cost_usd': cost,
+                'cost_tier': cost_tier,
+                'has_cron': has_cron,
+                'has_subagent': has_subagent,
+                'turn_count': turn_count,
+                'fmtime': fmtime,
+            })
+        except Exception:
+            continue
+
+    # ── Clustering logic ────────────────────────────────────────────────────────
+    # Cluster key = (dominant_tool_category, cost_tier, error_presence, model_family)
+
+    def _model_family(model_str):
+        m = (model_str or '').lower()
+        if 'claude' in m:
+            return 'claude'
+        if 'gpt' in m or 'openai' in m:
+            return 'gpt'
+        if 'gemini' in m or 'google' in m:
+            return 'gemini'
+        if 'llama' in m or 'mistral' in m or 'groq' in m:
+            return 'open-source'
+        return 'other'
+
+    def _tool_category(tool_name):
+        t = (tool_name or '').lower()
+        if t in ('none', ''):
+            return 'no-tools'
+        if t in ('exec', 'bash', 'shell', 'run'):
+            return 'code-execution'
+        if t in ('read', 'write', 'edit', 'file_read', 'file_write'):
+            return 'file-ops'
+        if t in ('web_search', 'web_fetch', 'browser'):
+            return 'web'
+        if t in ('message', 'tts', 'send_message'):
+            return 'communication'
+        if t in ('sessions_spawn', 'sessions_send', 'subagents'):
+            return 'orchestration'
+        if t in ('memory_search', 'memory_get'):
+            return 'memory'
+        return 'other-tools'
+
+    clusters_map = defaultdict(lambda: {
+        'sessions': [],
+        'total_tokens': 0,
+        'total_cost_usd': 0.0,
+        'error_count': 0,
+        'tool_freq': defaultdict(int),
+    })
+
+    for sp in session_profiles:
+        mf = _model_family(sp['model'])
+        tc = _tool_category(sp['top_tool'])
+        has_errors = 'errors' if sp['error_count'] > 0 else 'clean'
+        cluster_key = f"{tc}|{sp['cost_tier']}|{has_errors}|{mf}"
+
+        c = clusters_map[cluster_key]
+        c['sessions'].append(sp['session_id'])
+        c['total_tokens'] += sp['tokens']
+        c['total_cost_usd'] += sp['cost_usd']
+        c['error_count'] += sp['error_count']
+        for tool, cnt in sp['tool_counts'].items():
+            c['tool_freq'][tool] += cnt
+
+        # Tag attributes (set once)
+        if 'tool_category' not in c:
+            c['tool_category'] = tc
+            c['cost_tier'] = sp['cost_tier']
+            c['has_errors'] = has_errors == 'errors'
+            c['model_family'] = mf
+
+    # ── Build response ──────────────────────────────────────────────────────────
+    clusters_out = []
+    for key, c in clusters_map.items():
+        n = len(c['sessions'])
+        avg_cost = c['total_cost_usd'] / n if n > 0 else 0.0
+        top_tools_sorted = sorted(c['tool_freq'].items(), key=lambda x: x[1], reverse=True)[:5]
+
+        # Auto-label cluster
+        tc = c.get('tool_category', 'other')
+        cost_tier = c.get('cost_tier', 'cheap')
+        mf = c.get('model_family', 'other')
+        has_err = c.get('has_errors', False)
+        label_parts = []
+        if tc == 'code-execution':
+            label_parts.append('Code execution')
+        elif tc == 'file-ops':
+            label_parts.append('File operations')
+        elif tc == 'web':
+            label_parts.append('Web browsing')
+        elif tc == 'communication':
+            label_parts.append('Messaging')
+        elif tc == 'orchestration':
+            label_parts.append('Agent orchestration')
+        elif tc == 'memory':
+            label_parts.append('Memory access')
+        elif tc == 'no-tools':
+            label_parts.append('Conversational')
+        else:
+            label_parts.append('Mixed tools')
+        if cost_tier == 'expensive':
+            label_parts.append('high-cost')
+        elif cost_tier == 'medium':
+            label_parts.append('medium-cost')
+        if has_err:
+            label_parts.append('with errors')
+        if mf not in ('claude', 'other'):
+            label_parts.append(mf)
+
+        cluster_label = ' '.join(label_parts)
+
+        clusters_out.append({
+            'cluster_id': key,
+            'label': cluster_label,
+            'session_count': n,
+            'session_ids': c['sessions'][:10],  # first 10 for drill-down
+            'total_tokens': c['total_tokens'],
+            'total_cost_usd': round(c['total_cost_usd'], 6),
+            'avg_cost_usd': round(avg_cost, 6),
+            'error_count': c['error_count'],
+            'tool_category': tc,
+            'cost_tier': cost_tier,
+            'has_errors': has_err,
+            'model_family': mf,
+            'top_tools': [{'tool': t, 'count': cnt} for t, cnt in top_tools_sorted],
+        })
+
+    clusters_out.sort(key=lambda x: x['session_count'], reverse=True)
+
+    return jsonify({
+        'clusters': clusters_out,
+        'total_sessions': len(session_profiles),
+        'days': days,
+        'generated_at': int(now_ts * 1000),
+    })
 
 
 @bp_usage.route('/api/usage/export')
