@@ -3119,6 +3119,14 @@ function clawmetryLogout(){
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
     </div>
+    <div class="stats-footer-item" id="reliability-card">
+      <span class="stats-footer-icon" id="reliability-icon">🔄</span>
+      <div>
+        <div class="stats-footer-label">Reliability</div>
+        <div class="stats-footer-value" id="reliability-direction">--</div>
+      </div>
+      <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail"></span>
+    </div>
   </div>
 
   <!-- Split Screen: Flow Left | Tasks Right -->
@@ -4301,6 +4309,7 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -4337,6 +4346,27 @@ async function loadAll() {
     document.getElementById('refresh-time').textContent = 'Load failed - retrying...';
     return false;
   }
+}
+
+async function loadReliabilityCard() {
+  try {
+    var r = await fetchJsonWithTimeout('/api/history/reliability', 5000);
+    var icons = {improving:'📈',degrading:'⚠️',stable:'✅',insufficient_data:'🔄'};
+    var icon = icons[r.direction] || '🔄';
+    var label = r.direction === 'insufficient_data' ? 'No data' : r.direction.charAt(0).toUpperCase() + r.direction.slice(1);
+    var el = document.getElementById('reliability-icon');
+    if (el) el.textContent = icon;
+    el = document.getElementById('reliability-direction');
+    if (el) el.textContent = label;
+    el = document.getElementById('reliability-detail');
+    if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
+    el = document.getElementById('reliability-icon-lt');
+    if (el) el.textContent = icon;
+    el = document.getElementById('reliability-direction-lt');
+    if (el) el.textContent = label;
+    el = document.getElementById('reliability-detail-lt');
+    if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
+  } catch(e) { console.warn('reliability card load failed', e); }
 }
 
 async function loadMiniWidgets(overview, usage) {
@@ -8328,6 +8358,14 @@ function clawmetryLogout(){
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
     </div>
+    <div class="stats-footer-item" id="reliability-card-lt">
+      <span class="stats-footer-icon" id="reliability-icon-lt">🔄</span>
+      <div>
+        <div class="stats-footer-label">Reliability</div>
+        <div class="stats-footer-value" id="reliability-direction-lt">--</div>
+      </div>
+      <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail-lt"></span>
+    </div>
   </div>
 
   <!-- Split Screen: Flow Left | Tasks Right -->
@@ -9638,6 +9676,7 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -19237,6 +19276,18 @@ def api_history_stats():
     stats = _history_db.get_stats()
     stats['enabled'] = True
     return jsonify(stats)
+
+
+@bp_history.route('/api/history/reliability')
+def api_history_reliability():
+    """Cross-session behavioral reliability trend."""
+    if not _history_db:
+        return jsonify({'error': 'History DB not available'}), 503
+    from history import AgentReliabilityScorer
+    scorer = AgentReliabilityScorer(_history_db)
+    window = request.args.get('window', 30, type=int)
+    result = scorer.score(window_days=window)
+    return jsonify(result)
 
 
 # ── Billing Mode Heuristics (API key vs OAuth/included) ──────────────────

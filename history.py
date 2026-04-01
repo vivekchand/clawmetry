@@ -268,6 +268,131 @@ class HistoryDB:
         conn.execute('PRAGMA optimize')
 
 
+class AgentReliabilityScorer:
+    """Cross-session behavioral reliability trend from existing sessions_log.
+
+    Reads sessions_log records and computes whether the agent is becoming
+    more or less reliable over time, independent of cost. Zero schema changes.
+    """
+
+    def __init__(self, db):
+        self.db = db
+
+    def score(self, window_days=30, min_sessions=5):
+        """Compute cross-session reliability trend."""
+        now = time.time()
+        from_ts = now - (window_days * 86400)
+
+        sessions = self.db.query_sessions(from_ts, now)
+        if not sessions:
+            return self._empty_result(0, window_days)
+
+        # Group by session_key: take latest snapshot per session
+        by_key = {}
+        for s in sessions:
+            key = s.get('session_key', '')
+            if not key:
+                continue
+            prev = by_key.get(key)
+            if prev is None or s['timestamp'] > prev['timestamp']:
+                by_key[key] = s
+
+        if len(by_key) < min_sessions:
+            return self._empty_result(len(by_key), window_days)
+
+        # Build per-session reliability points, ordered by timestamp
+        ordered = sorted(by_key.values(), key=lambda s: s['timestamp'])
+        points = []
+        for s in ordered:
+            tokens_in = max(s.get('tokens_in', 0) or 0, 1)
+            tokens_out = s.get('tokens_out', 0) or 0
+            cost = s.get('cost', 0) or 0
+            status = (s.get('status', '') or '').lower()
+            total_tokens = max(tokens_in + tokens_out, 1)
+
+            if status in ('error', 'stalled', 'failed', 'timeout'):
+                delivery = 0.0
+            elif status in ('completed', 'done', 'active', ''):
+                delivery = 1.0
+            else:
+                delivery = 0.5
+
+            points.append({
+                'session_key': s.get('session_key', ''),
+                'timestamp': s['timestamp'],
+                'delivery_score': delivery,
+                'token_efficiency': tokens_out / tokens_in,
+                'cost_per_token': cost / total_tokens,
+            })
+
+        # OLS slope per dimension (stdlib only)
+        def _ols_slope(ys):
+            n = len(ys)
+            if n < 2:
+                return 0.0
+            xs = list(range(n))
+            x_mean = sum(xs) / n
+            y_mean = sum(ys) / n
+            num = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys))
+            den = sum((x - x_mean) ** 2 for x in xs)
+            return num / den if den else 0.0
+
+        delivery_slope = _ols_slope([p['delivery_score'] for p in points])
+        efficiency_slope = _ols_slope([p['token_efficiency'] for p in points])
+        cost_slope = _ols_slope([p['cost_per_token'] for p in points])
+
+        threshold = 0.02
+        overall_slope = delivery_slope
+        if overall_slope < -threshold:
+            direction = 'degrading'
+        elif overall_slope > threshold:
+            direction = 'improving'
+        else:
+            direction = 'stable'
+
+        degrading = []
+        if delivery_slope < -threshold:
+            degrading.append('delivery_score')
+        if efficiency_slope < -0.05:
+            degrading.append('token_efficiency')
+        if cost_slope > 0.00001:
+            degrading.append('cost_per_token')
+
+        return {
+            'direction': direction,
+            'slope_per_session': round(overall_slope, 6),
+            'significant': abs(overall_slope) > threshold,
+            'session_count': len(points),
+            'window_days': window_days,
+            'degrading_dimensions': degrading,
+            'delivery_slope': round(delivery_slope, 6),
+            'efficiency_slope': round(efficiency_slope, 6),
+            'cost_slope': round(cost_slope, 8),
+            'points': [
+                {
+                    'ts': p['timestamp'],
+                    'delivery': round(p['delivery_score'], 2),
+                    'efficiency': round(p['token_efficiency'], 4),
+                }
+                for p in points[-60:]
+            ],
+        }
+
+    def _empty_result(self, count, window_days):
+        return {
+            'direction': 'insufficient_data',
+            'slope_per_session': 0.0,
+            'significant': False,
+            'session_count': count,
+            'window_days': window_days,
+            'degrading_dimensions': [],
+            'delivery_slope': 0.0,
+            'efficiency_slope': 0.0,
+            'cost_slope': 0.0,
+            'points': [],
+        }
+
+
 class HistoryCollector:
     """Background thread that polls the gateway and stores snapshots."""
 
