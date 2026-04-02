@@ -19483,39 +19483,32 @@ def api_channels():
             except Exception:
                 continue
 
-    # Filter to channels that actually have data directories (proof of real usage)
-    # Some channels (like imessage) use system paths, not openclaw dirs -- skip dir check for those
+    # Trust the gateway config as the source of truth for channel presence.
+    # Previously a directory-existence filter was applied, but this incorrectly
+    # filtered out channels like WhatsApp that are configured as plugins and do
+    # not create standalone data directories under ~/.openclaw/<channel>/.
+    # We only fall back to the directory check if nothing was found in config,
+    # and even then we never exclude channels that are explicitly in the config.
+    #
+    # Channels that never create standalone data dirs (always config-only):
     DIR_EXEMPT_CHANNELS = {
-        "imessage",
-        "irc",
-        "googlechat",
-        "slack",
-        "webchat",
-        "bluebubbles",
-        "matrix",
-        "mattermost",
-        "msteams",
-        "line",
-        "nostr",
-        "twitch",
-        "feishu",
-        "synology-chat",
-        "nextcloud-talk",
-        "tlon",
-        "zalo",
-        "zalouser",
+        "telegram", "signal", "whatsapp", "discord",  # plugin-based channels
+        "imessage", "irc", "googlechat", "slack", "webchat", "bluebubbles",
+        "matrix", "mattermost", "msteams", "line", "nostr", "twitch",
+        "feishu", "synology-chat", "nextcloud-talk", "tlon", "zalo", "zalouser",
     }
-    if configured:
-        active_channels = []
+    # If we found channels via config, trust them directly — no dir filter needed.
+    # Only apply the dir filter to channels not already confirmed by config
+    # (this handles the rare case where the config scanner found nothing but
+    # we want to validate directory-based discovery).
+    if not configured:
+        # Directory-based last resort
         oc_dir = os.path.expanduser("~/.openclaw")
         cb_dir = os.path.expanduser("~/.clawdbot")
-        for ch in configured:
-            if ch in DIR_EXEMPT_CHANNELS:
-                active_channels.append(ch)
-            elif any(os.path.isdir(os.path.join(d, ch)) for d in [oc_dir, cb_dir]):
-                active_channels.append(ch)
-        if active_channels:
-            configured = active_channels
+        for ch in list(KNOWN_CHANNELS):
+            if ch not in DIR_EXEMPT_CHANNELS:
+                if any(os.path.isdir(os.path.join(d, ch)) for d in [oc_dir, cb_dir]):
+                    _add(ch)
 
     # Fallback: show all if nothing found
     if not configured:
@@ -20854,12 +20847,49 @@ def api_logs():
     return jsonify({"lines": lines, "date": date_str})
 
 
+def _get_all_agent_session_dirs():
+    """Return {agent_name: sessions_dir} for every agent found in ~/.openclaw/agents/*.
+
+    This allows Brain tab and component/brain to show sessions from all agents
+    (e.g. a WhatsApp-bound agent) with correct attribution, instead of only
+    reading from the primary SESSIONS_DIR.
+    """
+    result = {}
+    primary = SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
+    if os.path.isdir(primary):
+        parts = primary.rstrip("/").split(os.sep)
+        try:
+            sess_idx = parts.index("sessions")
+            primary_agent = parts[sess_idx - 1] if sess_idx > 0 else "main"
+        except ValueError:
+            primary_agent = "main"
+        result[primary_agent] = primary
+
+    for base_dir in [
+        os.path.expanduser("~/.openclaw/agents"),
+        os.path.expanduser("~/.clawdbot/agents"),
+        os.path.expanduser("~/.moltbot/agents"),
+    ]:
+        if not os.path.isdir(base_dir):
+            continue
+        try:
+            for agent_name in sorted(os.listdir(base_dir)):
+                sess_dir = os.path.join(base_dir, agent_name, "sessions")
+                if os.path.isdir(sess_dir) and agent_name not in result:
+                    result[agent_name] = sess_dir
+        except OSError:
+            continue
+
+    return result
+
+
 @bp_brain.route("/api/brain-history")
 def api_brain_history():
     # Return unified event stream - v2 no truncation
     events = []
 
-    # Build sessionId to displayName map
+    # Build sessionId to displayName map across ALL agent directories
+    all_agent_dirs = _get_all_agent_session_dirs()
     session_dir = SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
     index_path = os.path.join(session_dir, "sessions.json")
     sid_to_label = {}
@@ -21019,26 +21049,31 @@ def api_brain_history():
         except Exception:
             pass
 
-    # Source 2: Session JSONL files (sub-agent activity)
-    session_files = sorted(glob.glob(os.path.join(session_dir, "*.jsonl")))
+    # Source 2: Session JSONL files from ALL agent directories
+    # Scan each agent's sessions/ dir so non-main agents (e.g. WhatsApp-bound)
+    # are included with correct attribution instead of being silently omitted.
+    import re as _re
 
-    for sf in session_files:
+    session_files_by_agent = []  # list of (sf_path, agent_name)
+    for agent_name, sdir in all_agent_dirs.items():
+        for sf in sorted(glob.glob(os.path.join(sdir, "*.jsonl"))):
+            session_files_by_agent.append((sf, agent_name))
+
+    for sf, owning_agent in session_files_by_agent:
         try:
             fname = os.path.basename(sf).replace(".jsonl", "")
             label = sid_to_label.get(fname, "")
             source_id = fname
-            import re as _re
 
-            source_label = (
-                label
-                if label
-                else (
-                    "agent:" + fname[:8]
-                    if _re.match(r"[0-9a-f-]{36}", fname)
-                    else fname
-                )
-            )
-            color = get_agent_color(source_id)
+            if label:
+                source_label = label
+            elif _re.match(r"[0-9a-f-]{36}", fname):
+                # UUID session — prefix with owning agent for context
+                source_label = owning_agent + ":" + fname[:8] if owning_agent != "main" else "agent:" + fname[:8]
+            else:
+                source_label = fname
+
+            color = get_agent_color(owning_agent if owning_agent != "main" else source_id)
 
             with open(sf, "r", errors="replace") as fh:
                 all_lines = fh.readlines()
@@ -27751,11 +27786,14 @@ def api_component_brain():
     limit = int(request.args.get("limit", 50))
     offset = int(request.args.get("offset", 0))
 
-    sessions_dir = SESSIONS_DIR or os.path.expanduser(
-        "~/.openclaw/agents/main/sessions"
-    )
-    if not os.path.isdir(sessions_dir):
-        sessions_dir = os.path.expanduser("~/.moltbot/agents/main/sessions")
+    # Scan ALL agent session directories so sessions from non-main agents
+    # (e.g. WhatsApp-bound agents) appear with correct attribution.
+    all_agent_dirs = _get_all_agent_session_dirs()
+    if not all_agent_dirs:
+        fallback = SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
+        if not os.path.isdir(fallback):
+            fallback = os.path.expanduser("~/.moltbot/agents/main/sessions")
+        all_agent_dirs = {"main": fallback}
 
     today = datetime.now().strftime("%Y-%m-%d")
     calls = []
@@ -27766,152 +27804,157 @@ def api_component_brain():
     durations = []
     models_seen = set()
 
-    if os.path.isdir(sessions_dir):
-        for fname in os.listdir(sessions_dir):
-            if not fname.endswith(".jsonl"):
+    # Collect (fpath, agent_name) pairs across all agent dirs
+    all_session_files = []
+    for agent_name, sdir in all_agent_dirs.items():
+        if not os.path.isdir(sdir):
+            continue
+        for fname in os.listdir(sdir):
+            if fname.endswith(".jsonl"):
+                all_session_files.append((os.path.join(sdir, fname), fname, agent_name))
+
+    for fpath, fname_full, owning_agent in all_session_files:
+        session_id = fname_full.replace(".jsonl", "")
+
+        try:
+            # Quick check: only process files modified today
+            mtime = os.path.getmtime(fpath)
+            file_date = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+            if file_date != today:
                 continue
-            fpath = os.path.join(sessions_dir, fname)
-            session_id = fname.replace(".jsonl", "")
 
-            try:
-                # Quick check: only process files modified today
-                mtime = os.path.getmtime(fpath)
-                file_date = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
-                if file_date != today:
-                    continue
+            # Default label: use owning agent directory name for proper attribution
+            session_label = owning_agent
+            prev_ts = None
+            with open(fpath, "r") as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line.strip())
+                    except json.JSONDecodeError:
+                        continue
 
-                # Detect if subagent from session metadata
-                session_label = "main"
-                prev_ts = None
-                with open(fpath, "r") as f:
-                    for line in f:
-                        try:
-                            obj = json.loads(line.strip())
-                        except json.JSONDecodeError:
-                            continue
+                    # Check session header for subagent hints
+                    if obj.get("type") == "session":
+                        continue
+                    if (
+                        obj.get("type") == "custom"
+                        and obj.get("customType") == "openclaw.session-info"
+                    ):
+                        data = obj.get("data", {})
+                        if "subagent" in str(data.get("session", "")):
+                            session_label = "subagent:" + session_id[:8]
 
-                        # Check session header for subagent hints
-                        if obj.get("type") == "session":
-                            continue
-                        if (
-                            obj.get("type") == "custom"
-                            and obj.get("customType") == "openclaw.session-info"
+                    if obj.get("type") != "message":
+                        # Track user message timestamps for duration calc
+                        if obj.get("type") == "message" or (
+                            isinstance(obj.get("message"), dict)
+                            and obj["message"].get("role") == "user"
                         ):
-                            data = obj.get("data", {})
-                            if "subagent" in str(data.get("session", "")):
-                                session_label = "subagent:" + session_id[:8]
+                            pass
+                        continue
 
-                        if obj.get("type") != "message":
-                            # Track user message timestamps for duration calc
-                            if obj.get("type") == "message" or (
-                                isinstance(obj.get("message"), dict)
-                                and obj["message"].get("role") == "user"
-                            ):
-                                pass
-                            continue
+                    msg = obj.get("message", {})
+                    usage = msg.get("usage")
+                    if not usage or not isinstance(usage, dict):
+                        # Track user message time for duration
+                        if msg.get("role") == "user":
+                            prev_ts = obj.get("timestamp")
+                        continue
 
-                        msg = obj.get("message", {})
-                        usage = msg.get("usage")
-                        if not usage or not isinstance(usage, dict):
-                            # Track user message time for duration
-                            if msg.get("role") == "user":
-                                prev_ts = obj.get("timestamp")
-                            continue
+                    if msg.get("role") != "assistant":
+                        continue
 
-                        if msg.get("role") != "assistant":
-                            continue
+                    ts = obj.get("timestamp", "")
+                    if not ts:
+                        continue
 
-                        ts = obj.get("timestamp", "")
-                        if not ts:
-                            continue
+                    # Only include today's entries
+                    if not ts.startswith(today):
+                        prev_ts = None
+                        continue
 
-                        # Only include today's entries
-                        if not ts.startswith(today):
-                            prev_ts = None
-                            continue
+                    model = msg.get("model", "unknown") or "unknown"
+                    models_seen.add(model)
 
-                        model = msg.get("model", "unknown") or "unknown"
-                        models_seen.add(model)
+                    tokens_in = (
+                        usage.get("input", 0)
+                        + usage.get("cacheRead", 0)
+                        + usage.get("cacheWrite", 0)
+                    )
+                    tokens_out = usage.get("output", 0)
+                    cache_read = usage.get("cacheRead", 0)
+                    cost_data = usage.get("cost", {})
+                    call_cost = (
+                        float(cost_data.get("total", 0))
+                        if isinstance(cost_data, dict)
+                        else 0.0
+                    )
 
-                        tokens_in = (
-                            usage.get("input", 0)
-                            + usage.get("cacheRead", 0)
-                            + usage.get("cacheWrite", 0)
-                        )
-                        tokens_out = usage.get("output", 0)
-                        cache_read = usage.get("cacheRead", 0)
-                        cost_data = usage.get("cost", {})
-                        call_cost = (
-                            float(cost_data.get("total", 0))
-                            if isinstance(cost_data, dict)
-                            else 0.0
-                        )
+                    total_input += usage.get("input", 0)
+                    total_output += tokens_out
+                    total_cache_read += cache_read
+                    total_cost += call_cost
 
-                        total_input += usage.get("input", 0)
-                        total_output += tokens_out
-                        total_cache_read += cache_read
-                        total_cost += call_cost
+                    # Detect thinking blocks
+                    has_thinking = False
+                    for c in msg.get("content") or []:
+                        if isinstance(c, dict) and c.get("type") == "thinking":
+                            has_thinking = True
+                            break
 
-                        # Detect thinking blocks
-                        has_thinking = False
+                    # Extract tools used
+                    tools = []
+                    for c in msg.get("content") or []:
+                        if isinstance(c, dict) and c.get("type") == "toolCall":
+                            tool_name = c.get("name", "")
+                            if tool_name and tool_name not in tools:
+                                tools.append(tool_name)
+
+                    # Compute duration from previous user message
+                    duration_ms = 0
+                    if prev_ts:
+                        try:
+                            t1 = datetime.fromisoformat(
+                                prev_ts.replace("Z", "+00:00")
+                            )
+                            t2 = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            duration_ms = int((t2 - t1).total_seconds() * 1000)
+                            if 0 < duration_ms < 300000:  # sanity: < 5 min
+                                durations.append(duration_ms)
+                        except Exception:
+                            pass
+
+                    # Detect subagent from content context
+                    if session_label == "main":
                         for c in msg.get("content") or []:
-                            if isinstance(c, dict) and c.get("type") == "thinking":
-                                has_thinking = True
-                                break
+                            if isinstance(c, dict) and c.get("type") == "text":
+                                text = c.get("text", "")[:200]
+                                if "subagent" in text.lower():
+                                    session_label = "subagent:" + session_id[:8]
+                                    break
 
-                        # Extract tools used
-                        tools = []
-                        for c in msg.get("content") or []:
-                            if isinstance(c, dict) and c.get("type") == "toolCall":
-                                tool_name = c.get("name", "")
-                                if tool_name and tool_name not in tools:
-                                    tools.append(tool_name)
+                    calls.append(
+                        {
+                            "timestamp": ts,
+                            "model": model,
+                            "tokens_in": tokens_in,
+                            "tokens_out": tokens_out,
+                            "cache_read": cache_read,
+                            "cache_write": usage.get("cacheWrite", 0),
+                            "thinking": has_thinking,
+                            "cost": "${:.4f}".format(call_cost),
+                            "cost_raw": call_cost,
+                            "tools_used": tools,
+                            "duration_ms": duration_ms,
+                            "session": session_label,
+                            "stop_reason": msg.get("stopReason", ""),
+                        }
+                    )
 
-                        # Compute duration from previous user message
-                        duration_ms = 0
-                        if prev_ts:
-                            try:
-                                t1 = datetime.fromisoformat(
-                                    prev_ts.replace("Z", "+00:00")
-                                )
-                                t2 = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                                duration_ms = int((t2 - t1).total_seconds() * 1000)
-                                if 0 < duration_ms < 300000:  # sanity: < 5 min
-                                    durations.append(duration_ms)
-                            except Exception:
-                                pass
+                    prev_ts = ts
 
-                        # Detect subagent from content context
-                        if session_label == "main":
-                            for c in msg.get("content") or []:
-                                if isinstance(c, dict) and c.get("type") == "text":
-                                    text = c.get("text", "")[:200]
-                                    if "subagent" in text.lower():
-                                        session_label = "subagent:" + session_id[:8]
-                                        break
-
-                        calls.append(
-                            {
-                                "timestamp": ts,
-                                "model": model,
-                                "tokens_in": tokens_in,
-                                "tokens_out": tokens_out,
-                                "cache_read": cache_read,
-                                "cache_write": usage.get("cacheWrite", 0),
-                                "thinking": has_thinking,
-                                "cost": "${:.4f}".format(call_cost),
-                                "cost_raw": call_cost,
-                                "tools_used": tools,
-                                "duration_ms": duration_ms,
-                                "session": session_label,
-                                "stop_reason": msg.get("stopReason", ""),
-                            }
-                        )
-
-                        prev_ts = ts
-
-            except Exception:
-                continue
+        except Exception:
+            continue
 
     # Sort by timestamp descending
     calls.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
