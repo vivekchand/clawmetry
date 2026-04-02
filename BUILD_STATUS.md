@@ -1,4 +1,4 @@
-# OpenClaw Dashboard - Build Status
+# ClawMetry - Build Status
 
 ## Latest Updates
 
