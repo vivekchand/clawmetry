@@ -3072,6 +3072,15 @@ function clawmetryLogout(){
     <span class="refresh-time" id="refresh-time" style="font-size:11px;">Loading...</span>
   </div>
 
+  <!-- Token Velocity Alert Banner (GH #313) -->
+  <div id="velocity-alert-banner" style="display:none;margin-bottom:8px;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <span id="velocity-alert-msg"></span>
+      <span style="font-size:11px;font-weight:400;color:inherit;opacity:0.8;">auto-refreshes every 30s</span>
+    </div>
+    <div id="velocity-flagged-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;"></div>
+  </div>
+
   <!-- Stats Bar (top) -->
   <div class="stats-footer">
     <div class="stats-footer-item">
@@ -4266,6 +4275,7 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
+  if (name === 'overview') { if (_velocityPollTimer) clearInterval(_velocityPollTimer); _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
@@ -4460,6 +4470,66 @@ function setFlowTextAll(idSuffix, text, maxLen) {
   });
 }
 
+
+var _velocityPollTimer = null;
+
+async function loadTokenVelocity() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/token-velocity', 5000);
+    var banner = document.getElementById('velocity-alert-banner');
+    var msgEl  = document.getElementById('velocity-alert-msg');
+    var listEl = document.getElementById('velocity-flagged-list');
+    if (!banner) return;
+
+    if (!d.alert || d.level === 'ok') {
+      banner.style.display = 'none';
+      return;
+    }
+
+    var vel = d.velocity_2min ? d.velocity_2min.toLocaleString() : '0';
+    var cpm = d.cost_per_min ? '$' + d.cost_per_min.toFixed(3) + '/min' : '';
+    msgEl.textContent = '\u26a0\ufe0f High token velocity \u2014 ' + vel + ' tokens/2min' + (cpm ? '  (' + cpm + ')' : '');
+
+    if (d.level === 'critical') {
+      banner.style.background = 'rgba(220,38,38,0.18)';
+      banner.style.border     = '1px solid rgba(239,68,68,0.5)';
+      banner.style.color      = '#fca5a5';
+    } else {
+      banner.style.background = 'rgba(217,119,6,0.18)';
+      banner.style.border     = '1px solid rgba(245,158,11,0.5)';
+      banner.style.color      = '#fcd34d';
+    }
+
+    // Render flagged sessions with Kill buttons
+    if (listEl && d.flagged_sessions && d.flagged_sessions.length > 0) {
+      listEl.innerHTML = d.flagged_sessions.map(function(s) {
+        var info = s.tokens_2min ? s.tokens_2min.toLocaleString() + ' tok/2min' : '';
+        if (s.tool_chain_len >= 20) info += (info ? ', ' : '') + s.tool_chain_len + ' tool chain';
+        return '<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.3);border-radius:6px;padding:3px 8px;font-size:11px;font-weight:400;">'
+          + '<code style="font-size:10px;color:inherit;opacity:0.8;">' + s.id + '</code>'
+          + '<span style="opacity:0.7;">' + info + '</span>'
+          + '<button onclick="killSession('' + s.id + '')" style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:1px 6px;font-size:10px;cursor:pointer;font-weight:600;">Kill</button>'
+          + '</span>';
+      }).join('');
+    } else if (listEl) {
+      listEl.innerHTML = '';
+    }
+
+    banner.style.display = 'block';
+  } catch(e) {
+    console.warn('token velocity check failed', e);
+  }
+}
+
+async function killSession(sessionId) {
+  if (!confirm('Stop session ' + sessionId + '?')) return;
+  try {
+    var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/stop', {method: 'POST'});
+    if (resp.ok) { alert('Session stopped.'); loadTokenVelocity(); }
+    else alert('Failed to stop session: ' + resp.status);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
 async function loadAll() {
   try {
     // Render overview quickly; do not block on heavy usage aggregation.
@@ -4472,6 +4542,7 @@ async function loadAll() {
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
     loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
+    loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -8483,6 +8554,15 @@ function clawmetryLogout(){
     <span class="refresh-time" id="refresh-time" style="font-size:11px;">Loading...</span>
   </div>
 
+  <!-- Token Velocity Alert Banner (GH #313) -->
+  <div id="velocity-alert-banner" style="display:none;margin-bottom:8px;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <span id="velocity-alert-msg"></span>
+      <span style="font-size:11px;font-weight:400;color:inherit;opacity:0.8;">auto-refreshes every 30s</span>
+    </div>
+    <div id="velocity-flagged-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;"></div>
+  </div>
+
   <!-- Stats Bar (top) -->
   <div class="stats-footer">
     <div class="stats-footer-item">
@@ -9911,6 +9991,7 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
+  if (name === 'overview') { if (_velocityPollTimer) clearInterval(_velocityPollTimer); _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
@@ -10117,6 +10198,7 @@ async function loadAll() {
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
     loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
+    loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -22268,6 +22350,124 @@ def api_model_attribution():
         'model_count': len(model_turns),
         'switches': switches[:50],  # cap at 50 for response size
         'switch_count': len(switches),
+    })
+
+
+@bp_usage.route('/api/token-velocity')
+def api_token_velocity():
+    """Sliding 2-min token velocity endpoint — detects runaway agent loops (GH #313).
+
+    Returns:
+      {
+        alert: bool,
+        level: "ok" | "warning" | "critical",
+        velocity_2min: int,       # total tokens in last 2 minutes
+        cost_per_min: float,      # estimated USD/min burn rate
+        flagged_sessions: [       # sessions exceeding thresholds
+          {id, tokens_2min, tool_chain_len, cost_per_min}
+        ]
+      }
+
+    Thresholds:
+      warning:  velocity_2min >= 8000
+      critical: velocity_2min >= 15000 OR tool_chain_len >= 20
+    """
+    WARN_TOKENS   = 8000
+    CRIT_TOKENS   = 15000
+    CRIT_TOOLS    = 20
+
+    now        = time.time()
+    window_2min = now - 120
+
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    total_tokens_2min = 0
+    flagged = []
+
+    try:
+        if os.path.isdir(sessions_dir):
+            candidates = sorted(
+                [f for f in os.listdir(sessions_dir)
+                 if f.endswith('.jsonl') and 'deleted' not in f],
+                key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+                reverse=True
+            )[:20]
+
+            for fname in candidates:
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if now - mtime > 300:          # skip inactive sessions > 5 min
+                        continue
+                    tokens_2min   = 0
+                    consecutive   = 0
+                    max_chain     = 0
+                    with open(fpath, 'r', errors='replace') as fh:
+                        lines = list(fh)
+                    for line in lines:
+                        try:
+                            obj = json.loads(line.strip())
+                        except Exception:
+                            continue
+                        ts = _json_ts_to_epoch(
+                            obj.get('timestamp') or obj.get('time') or obj.get('created_at')
+                        )
+                        msg     = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+                        role    = msg.get('role', '') or obj.get('role', '')
+                        content = msg.get('content', [])
+                        is_tool = False
+                        if isinstance(content, list):
+                            for blk in content:
+                                if isinstance(blk, dict) and blk.get('type') == 'tool_use':
+                                    is_tool = True
+                                    break
+                        if role == 'user' and not is_tool:
+                            consecutive = 0
+                        elif is_tool or role == 'assistant':
+                            consecutive += 1
+                            max_chain = max(max_chain, consecutive)
+                        if ts and ts >= window_2min:
+                            usage = msg.get('usage', {}) if isinstance(msg.get('usage'), dict) else {}
+                            tok = float(
+                                usage.get('total_tokens')
+                                or usage.get('totalTokens')
+                                or (usage.get('input_tokens', 0) + usage.get('output_tokens', 0))
+                                or 0
+                            )
+                            tokens_2min += int(tok)
+
+                    total_tokens_2min += tokens_2min
+                    usd_per_token = _estimate_usd_per_token()
+                    sess_tpm = _session_burn_stats(fname.replace('.jsonl', '')).get('tokensPerMin', 0)
+                    sess_cpm = round(sess_tpm * usd_per_token, 5)
+
+                    if tokens_2min >= WARN_TOKENS or max_chain >= CRIT_TOOLS:
+                        flagged.append({
+                            'id':           fname.replace('.jsonl', ''),
+                            'tokens_2min':  tokens_2min,
+                            'tool_chain_len': max_chain,
+                            'cost_per_min': sess_cpm,
+                        })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    if total_tokens_2min >= CRIT_TOKENS or any(s['tool_chain_len'] >= CRIT_TOOLS for s in flagged):
+        level = 'critical'
+    elif total_tokens_2min >= WARN_TOKENS:
+        level = 'warning'
+    else:
+        level = 'ok'
+
+    usd_per_token  = _estimate_usd_per_token()
+    cost_per_min   = round(total_tokens_2min / 2 * usd_per_token, 5)   # tokens/2min → per min
+
+    return jsonify({
+        'alert':            level != 'ok',
+        'level':            level,
+        'velocity_2min':    total_tokens_2min,
+        'cost_per_min':     cost_per_min,
+        'flagged_sessions': flagged,
     })
 
 

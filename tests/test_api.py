@@ -576,3 +576,44 @@ class TestModelAttribution:
         assert isinstance(d["switch_count"], int)
         assert len(d["switches"]) <= 50
 
+
+
+class TestTokenVelocity:
+    """Tests for GH #313 — token velocity alert endpoint."""
+
+    def test_token_velocity_returns_200(self, api, base_url):
+        """Token velocity endpoint returns HTTP 200."""
+        r = get(api, base_url, "/api/token-velocity")
+        assert r.status_code == 200, (
+            f"Expected 200 for {r.url}, got {r.status_code}: {r.text[:200]}"
+        )
+
+    def test_token_velocity_structure(self, api, base_url):
+        """Response contains required keys: alert, level, velocity_2min, flagged_sessions."""
+        d = assert_ok(get(api, base_url, "/api/token-velocity"))
+        assert_keys(d, "alert", "level", "velocity_2min", "flagged_sessions")
+        assert isinstance(d["alert"], bool), "alert must be bool"
+        assert isinstance(d["velocity_2min"], (int, float)), "velocity_2min must be a number"
+        assert isinstance(d["flagged_sessions"], list), "flagged_sessions must be a list"
+
+    def test_token_velocity_level_valid(self, api, base_url):
+        """level field must be one of 'ok', 'warning', 'critical'."""
+        d = assert_ok(get(api, base_url, "/api/token-velocity"))
+        assert d["level"] in ("ok", "warning", "critical"), (
+            f"Unexpected level: {d['level']!r}"
+        )
+
+    def test_token_velocity_cost_per_min_present(self, api, base_url):
+        """cost_per_min field is present and non-negative."""
+        d = assert_ok(get(api, base_url, "/api/token-velocity"))
+        assert "cost_per_min" in d, "cost_per_min key missing"
+        assert isinstance(d["cost_per_min"], (int, float)), "cost_per_min must be numeric"
+        assert d["cost_per_min"] >= 0, "cost_per_min must be non-negative"
+
+    def test_token_velocity_alert_matches_level(self, api, base_url):
+        """alert bool must be False when level is 'ok', True otherwise."""
+        d = assert_ok(get(api, base_url, "/api/token-velocity"))
+        if d["level"] == "ok":
+            assert d["alert"] is False, "alert should be False when level='ok'"
+        else:
+            assert d["alert"] is True, "alert should be True for warning/critical"
