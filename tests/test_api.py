@@ -547,3 +547,41 @@ class TestActivityHeatmap:
         """max field is non-negative."""
         d = assert_ok(get(api, base_url, "/api/heatmap"))
         assert d["max"] >= 0
+
+# ---------------------------------------------------------------------------
+# Model Attribution (GH #300)
+# ---------------------------------------------------------------------------
+class TestModelAttribution:
+    """Tests for model attribution dashboard (GH #300)."""
+
+    def test_model_attribution_returns_200(self, api, base_url):
+        """Model attribution endpoint returns 200."""
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        assert isinstance(d, dict)
+
+    def test_model_attribution_keys(self, api, base_url):
+        """Response has required top-level keys."""
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        assert_keys(d, "models", "primary_model", "total_turns", "model_count", "switches", "switch_count")
+
+    def test_models_list_structure(self, api, base_url):
+        """Each entry in models list has required fields."""
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        for m in d["models"]:
+            assert_keys(m, "model", "turns", "sessions", "provider", "share_pct")
+            assert isinstance(m["turns"], int)
+            assert isinstance(m["sessions"], int)
+            assert 0 <= m["share_pct"] <= 100
+
+    def test_total_turns_consistency(self, api, base_url):
+        """Sum of per-model turns equals total_turns."""
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        total = sum(m["turns"] for m in d["models"])
+        assert total == d["total_turns"]
+
+    def test_switches_is_list(self, api, base_url):
+        """Switches field is a list."""
+        d = assert_ok(get(api, base_url, "/api/model-attribution"))
+        assert isinstance(d["switches"], list)
+        assert isinstance(d["switch_count"], int)
+        assert len(d["switches"]) <= 50  # capped at 50>>>>>>> a33aec4 (feat: model attribution dashboard — track which model responded per turn (closes vivekchand/clawmetry#300))
