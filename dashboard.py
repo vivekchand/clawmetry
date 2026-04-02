@@ -3601,6 +3601,17 @@ function clawmetryLogout(){
   <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
   <div class="card" id="crons-list">Loading...</div>
+  <!-- Cron Health Monitor (GH #302) -->
+  <div id="cron-health-anomaly-banner" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;color:#ef4444;font-size:13px;font-weight:600;">&#x26A0;&#xFE0F; Anomalies detected in cron jobs — review health table below</div>
+  <div style="margin-top:16px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x1F4CA; Cron Health Monitor</span>
+      <span style="font-size:11px;color:var(--text-muted);">Click row to expand run history</span>
+    </div>
+    <div id="cron-health-table" style="overflow-x:auto;">
+      <div style="color:var(--text-muted);font-size:13px;">Loading health data...</div>
+    </div>
+  </div>
 </div>
 
 <!-- Cron Edit/Create Modal -->
@@ -9308,6 +9319,17 @@ function clawmetryLogout(){
   <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
   <div class="card" id="crons-list">Loading...</div>
+  <!-- Cron Health Monitor (GH #302) -->
+  <div id="cron-health-anomaly-banner" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;color:#ef4444;font-size:13px;font-weight:600;">&#x26A0;&#xFE0F; Anomalies detected in cron jobs — review health table below</div>
+  <div style="margin-top:16px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x1F4CA; Cron Health Monitor</span>
+      <span style="font-size:11px;color:var(--text-muted);">Click row to expand run history</span>
+    </div>
+    <div id="cron-health-table" style="overflow-x:auto;">
+      <div style="color:var(--text-muted);font-size:13px;">Loading health data...</div>
+    </div>
+  </div>
 </div>
 
 <!-- Cron Edit/Create Modal -->
@@ -12205,6 +12227,8 @@ async function loadCrons() {
   loadCronHealth();
   // Load multi-node cron status from fleet nodes
   loadCronsMultiNode();
+  // Load cron health monitor (GH #302)
+  loadCronHealth();
   // Start auto-refresh if checkbox is checked and timer not running
   var cb = document.getElementById('cron-auto-refresh');
   if (cb && cb.checked && !_cronAutoRefreshTimer) {
