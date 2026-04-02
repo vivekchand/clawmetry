@@ -5,6 +5,7 @@ Reads local OpenClaw sessions/logs, encrypts with AES-256-GCM (E2E),
 and streams to ingest.clawmetry.com. The encryption key never leaves
 the local machine — cloud stores ciphertext only.
 """
+
 from __future__ import annotations
 import json
 import os
@@ -26,11 +27,13 @@ from itertools import islice
 
 def _get_openclaw_dir():
     """Return the OpenClaw config directory, respecting CLAWMETRY_OPENCLAW_DIR env var."""
-    return os.environ.get('CLAWMETRY_OPENCLAW_DIR', os.path.expanduser('~/.openclaw'))
+    return os.environ.get("CLAWMETRY_OPENCLAW_DIR", os.path.expanduser("~/.openclaw"))
+
 
 # ── Single-instance PID lock ──────────────────────────────────────────────────
 def _pid_file() -> Path:
     return Path(os.path.expanduser("~/.clawmetry/sync.pid"))
+
 
 def _acquire_pid_lock() -> bool:
     """Write PID file. Return False if another instance is already running."""
@@ -45,6 +48,7 @@ def _acquire_pid_lock() -> bool:
             pass
     pid_path.write_text(str(os.getpid()))
     return True
+
 
 def _release_pid_lock() -> None:
     try:
@@ -86,17 +90,20 @@ def _validate_log_offsets(state: dict, paths: dict) -> None:
             log.warning(f"Could not validate offset for {fname}: {e}")
 
 
-
 INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
-CONFIG_DIR  = Path.home() / ".clawmetry"
+CONFIG_DIR = Path.home() / ".clawmetry"
 CONFIG_FILE = CONFIG_DIR / "config.json"
-STATE_FILE  = CONFIG_DIR / "sync-state.json"
-LOG_FILE    = CONFIG_DIR / "sync.log"
+STATE_FILE = CONFIG_DIR / "sync-state.json"
+LOG_FILE = CONFIG_DIR / "sync.log"
 
-POLL_INTERVAL = 15    # seconds between sync cycles
-STREAM_INTERVAL = 2   # seconds between real-time stream pushes
-BATCH_SIZE    = 200   # events per encrypted POST (was 10; fewer HTTP requests = faster sync)
-MAX_EVENTS_PER_CYCLE = 5000  # cap per sync cycle so initial sync doesn't block the main loop
+POLL_INTERVAL = 15  # seconds between sync cycles
+STREAM_INTERVAL = 2  # seconds between real-time stream pushes
+BATCH_SIZE = (
+    200  # events per encrypted POST (was 10; fewer HTTP requests = faster sync)
+)
+MAX_EVENTS_PER_CYCLE = (
+    5000  # cap per sync cycle so initial sync doesn't block the main loop
+)
 
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 log = logging.getLogger("clawmetry-sync")
@@ -108,16 +115,26 @@ if not log.handlers:
     _stdout_is_log = False
     try:
         import os as _os
+
         if hasattr(sys.stdout, "fileno"):
-            _stdout_is_log = _os.path.samefile(
-                _os.fstat(sys.stdout.fileno()).st_ino and f"/proc/self/fd/{sys.stdout.fileno()}" or "",
-                str(LOG_FILE),
-            ) if _os.path.exists(str(LOG_FILE)) else False
+            _stdout_is_log = (
+                _os.path.samefile(
+                    _os.fstat(sys.stdout.fileno()).st_ino
+                    and f"/proc/self/fd/{sys.stdout.fileno()}"
+                    or "",
+                    str(LOG_FILE),
+                )
+                if _os.path.exists(str(LOG_FILE))
+                else False
+            )
     except Exception:
         try:
             _stdout_stat = _os.fstat(sys.stdout.fileno())
             _log_stat = _os.stat(str(LOG_FILE))
-            _stdout_is_log = (_stdout_stat.st_dev == _log_stat.st_dev and _stdout_stat.st_ino == _log_stat.st_ino)
+            _stdout_is_log = (
+                _stdout_stat.st_dev == _log_stat.st_dev
+                and _stdout_stat.st_ino == _log_stat.st_ino
+            )
         except Exception:
             pass
     _sh = logging.StreamHandler(sys.stdout)
@@ -135,6 +152,7 @@ if not log.handlers:
 
 # ── Encryption (AES-256-GCM) ─────────────────────────────────────────────────
 
+
 def generate_encryption_key() -> str:
     """Generate a new 256-bit key. Returns base64url string."""
     return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
@@ -143,6 +161,7 @@ def generate_encryption_key() -> str:
 def _normalize_encryption_key(key_str: str) -> str:
     """Ensure key is a valid base64url AES key. If not, derive one via SHA-256."""
     import hashlib as _hl_norm
+
     try:
         raw = base64.urlsafe_b64decode(key_str + "==")
         if len(raw) in (16, 24, 32):
@@ -150,13 +169,14 @@ def _normalize_encryption_key(key_str: str) -> str:
     except Exception:
         pass
     derived = _hl_norm.sha256(key_str.encode()).digest()
-    return base64.urlsafe_b64encode(derived).decode().rstrip('=')
+    return base64.urlsafe_b64encode(derived).decode().rstrip("=")
 
 
 def _get_aesgcm(key_b64: str):
     """Return an AESGCM cipher from a base64url key (auto-derives if passphrase)."""
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
         key_b64 = _normalize_encryption_key(key_b64)
         raw = base64.urlsafe_b64decode(key_b64 + "==")
         return AESGCM(raw)
@@ -174,21 +194,22 @@ def encrypt_payload(data: dict, key_b64: str) -> str:
     Cloud stores this blob and never sees plaintext.
     """
     cipher = _get_aesgcm(key_b64)
-    nonce  = secrets.token_bytes(12)          # 96-bit nonce (GCM standard)
-    plain  = json.dumps(data).encode()
-    ct     = cipher.encrypt(nonce, plain, None)
+    nonce = secrets.token_bytes(12)  # 96-bit nonce (GCM standard)
+    plain = json.dumps(data).encode()
+    ct = cipher.encrypt(nonce, plain, None)
     return base64.urlsafe_b64encode(nonce + ct).decode()
 
 
 def decrypt_payload(blob: str, key_b64: str) -> dict:
     """Decrypt a blob produced by encrypt_payload. Used by clients."""
     cipher = _get_aesgcm(key_b64)
-    raw    = base64.urlsafe_b64decode(blob + "==")
+    raw = base64.urlsafe_b64decode(blob + "==")
     nonce, ct = raw[:12], raw[12:]
     return json.loads(cipher.decrypt(nonce, ct, None))
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
+
 
 def load_config() -> dict:
     if not CONFIG_FILE.exists():
@@ -218,14 +239,16 @@ def save_state(state: dict) -> None:
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
+
 def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
-    url  = INGEST_URL.rstrip("/") + path
+    url = INGEST_URL.rstrip("/") + path
     body = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json", "X-Api-Key": api_key}
     if payload.get("node_id"):
         headers["X-Node-Id"] = payload["node_id"]
-    req  = urllib.request.Request(
-        url, data=body,
+    req = urllib.request.Request(
+        url,
+        data=body,
         headers=headers,
         method="POST",
     )
@@ -249,14 +272,17 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
 def get_machine_id() -> str:
     """Generate a stable hardware fingerprint for this machine."""
     import hashlib, platform
+
     mid = ""
     # macOS: IOPlatformUUID (stable across reboots/reinstalls)
     if platform.system() == "Darwin":
         try:
             import subprocess
+
             out = subprocess.check_output(
                 ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
-                timeout=5, stderr=subprocess.DEVNULL
+                timeout=5,
+                stderr=subprocess.DEVNULL,
             ).decode()
             for line in out.splitlines():
                 if "IOPlatformUUID" in line:
@@ -266,23 +292,38 @@ def get_machine_id() -> str:
             pass
     # Linux: /etc/machine-id
     if not mid:
-        for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"]:
+        # In Docker containers, /etc/machine-id is identical across clones
+        # Use cgroup inode as container-specific fallback
+        if _is_running_in_container():
             try:
-                with open(path) as f:
-                    mid = f.read().strip()
-                    if mid:
-                        break
+                import stat
+
+                st = os.stat("/proc/1")
+                mid = f"container-{st.st_ino}"
             except Exception:
                 pass
+        if not mid:
+            for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"]:
+                try:
+                    with open(path) as f:
+                        mid = f.read().strip()
+                        if mid:
+                            break
+                except Exception:
+                    pass
     # Windows: WMIC
     if not mid and platform.system() == "Windows":
         try:
             import subprocess
+
             out = subprocess.check_output(
                 ["wmic", "csproduct", "get", "uuid"],
-                timeout=5, stderr=subprocess.DEVNULL
+                timeout=5,
+                stderr=subprocess.DEVNULL,
             ).decode()
-            lines = [l.strip() for l in out.splitlines() if l.strip() and l.strip() != "UUID"]
+            lines = [
+                l.strip() for l in out.splitlines() if l.strip() and l.strip() != "UUID"
+            ]
             if lines:
                 mid = lines[0]
         except Exception:
@@ -290,14 +331,19 @@ def get_machine_id() -> str:
     # Fallback: MAC address (less stable but better than nothing)
     if not mid:
         import uuid as _uuid_mod
+
         mid = str(_uuid_mod.getnode())
     return hashlib.sha256(mid.encode()).hexdigest()[:32]
 
 
-def validate_key(api_key: str, hostname: str = "", existing_node_id: str = "", **kwargs) -> dict:
+def validate_key(
+    api_key: str, hostname: str = "", existing_node_id: str = "", **kwargs
+) -> dict:
     payload = {"api_key": api_key}
-    if hostname: payload["hostname"] = hostname
-    if existing_node_id: payload["existing_node_id"] = existing_node_id
+    if hostname:
+        payload["hostname"] = hostname
+    if existing_node_id:
+        payload["existing_node_id"] = existing_node_id
     payload["machine_id"] = get_machine_id()
     return _post("/auth", payload, api_key)
 
@@ -320,11 +366,15 @@ def _find_openclaw_dirs(root, max_depth=4):
             if base in ("node_modules", ".git", "__pycache__", "venv", ".venv"):
                 dirnames.clear()
                 continue
-            if dirpath.endswith(os.sep + "agents" + os.sep + "main" + os.sep + "sessions") or                dirpath.endswith("/agents/main/sessions"):
+            if dirpath.endswith(
+                os.sep + "agents" + os.sep + "main" + os.sep + "sessions"
+            ) or dirpath.endswith("/agents/main/sessions"):
                 if not sessions_dir:
                     sessions_dir = dirpath
                     log.info(f"  Found sessions: {dirpath}")
-            if os.path.basename(dirpath) == "workspace" and os.path.isfile(os.path.join(dirpath, "AGENTS.md")):
+            if os.path.basename(dirpath) == "workspace" and os.path.isfile(
+                os.path.join(dirpath, "AGENTS.md")
+            ):
                 if not workspace_dir:
                     workspace_dir = dirpath
                     log.info(f"  Found workspace: {dirpath}")
@@ -344,7 +394,10 @@ def _is_running_in_container() -> bool:
     try:
         with open("/proc/1/cgroup", "r") as f:
             cgroup = f.read()
-        if any(k in cgroup for k in ("docker", "kubepods", "containerd", "lxc", "opencontainer")):
+        if any(
+            k in cgroup
+            for k in ("docker", "kubepods", "containerd", "lxc", "opencontainer")
+        ):
             return True
     except Exception:
         pass
@@ -361,13 +414,17 @@ def _detect_nemoclaw() -> dict:
       security_sandbox_enabled (bool), security_network_policy (bool)
     """
     import subprocess, shutil
+
     result: dict = {"detected": False}
 
     # 1. Check for the nemoclaw binary
     nemo_bin = shutil.which("nemoclaw")
     if not nemo_bin:
-        for candidate in ["/usr/local/bin/nemoclaw", "/opt/nemoclaw/bin/nemoclaw",
-                          "/usr/bin/nemoclaw"]:
+        for candidate in [
+            "/usr/local/bin/nemoclaw",
+            "/opt/nemoclaw/bin/nemoclaw",
+            "/usr/bin/nemoclaw",
+        ]:
             if os.path.isfile(candidate):
                 nemo_bin = candidate
                 break
@@ -383,8 +440,13 @@ def _detect_nemoclaw() -> dict:
     # 2. Get version
     if nemo_bin:
         try:
-            ver = subprocess.check_output([nemo_bin, "--version"], stderr=subprocess.DEVNULL,
-                                          timeout=5).decode().strip()
+            ver = (
+                subprocess.check_output(
+                    [nemo_bin, "--version"], stderr=subprocess.DEVNULL, timeout=5
+                )
+                .decode()
+                .strip()
+            )
             result["version"] = ver
         except Exception:
             result["version"] = "unknown"
@@ -399,9 +461,13 @@ def _detect_nemoclaw() -> dict:
     if nemo_bin:
         try:
             status_out = subprocess.check_output(
-                [nemo_bin, "status", "--json"] + ([sandbox_name] if sandbox_name else []),
-                stderr=subprocess.DEVNULL, timeout=10).decode()
+                [nemo_bin, "status", "--json"]
+                + ([sandbox_name] if sandbox_name else []),
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).decode()
             import json as _j
+
             status_data = _j.loads(status_out)
             result["sandbox_status"] = status_data.get("status", "unknown")
             result["inference_provider"] = status_data.get("inferenceProvider", "")
@@ -422,13 +488,18 @@ def _detect_nemoclaw() -> dict:
     if openshell_bin and not result.get("sandbox_name"):
         try:
             import json as _j
+
             sb_out = subprocess.check_output(
                 [openshell_bin, "sandbox", "list", "--json"],
-                stderr=subprocess.DEVNULL, timeout=10).decode()
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).decode()
             sandboxes = _j.loads(sb_out)
-            for sb in (sandboxes if isinstance(sandboxes, list) else []):
-                if any(k in (sb.get("image", "") + sb.get("name", "")).lower()
-                       for k in ("openclaw", "clawd", "nemoclaw")):
+            for sb in sandboxes if isinstance(sandboxes, list) else []:
+                if any(
+                    k in (sb.get("image", "") + sb.get("name", "")).lower()
+                    for k in ("openclaw", "clawd", "nemoclaw")
+                ):
                     result["sandbox_name"] = sb.get("name", "")
                     result["sandbox_status"] = sb.get("status", "unknown")
                     break
@@ -441,12 +512,16 @@ def _detect_nemoclaw() -> dict:
 def _find_openshell_bin() -> str | None:
     """Find the openshell CLI binary."""
     import shutil
+
     for name in ("openshell", "openshell-cli"):
         p = shutil.which(name)
         if p:
             return p
-    for candidate in ["/usr/local/bin/openshell", "/opt/openshell/bin/openshell",
-                      "/usr/bin/openshell"]:
+    for candidate in [
+        "/usr/local/bin/openshell",
+        "/opt/openshell/bin/openshell",
+        "/usr/bin/openshell",
+    ]:
         if os.path.isfile(candidate):
             return candidate
     return None
@@ -459,12 +534,21 @@ def _detect_docker_openclaw() -> dict:
     (ghcr.io/nvidia/openshell-community/* images).
     """
     import subprocess, json as _json
+
     result = {}
     try:
         # Find containers with openclaw/clawd/nemoclaw/openshell/nvidia in name or image
         out = subprocess.run(
-            ["docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Mounts}}"],
-            capture_output=True, text=True, timeout=5)
+            [
+                "docker",
+                "ps",
+                "--format",
+                "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Mounts}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         if out.returncode != 0:
             return {}
         for line in out.stdout.strip().splitlines():
@@ -472,13 +556,23 @@ def _detect_docker_openclaw() -> dict:
             if len(parts) < 3:
                 continue
             cid, name, image = parts[0], parts[1], parts[2]
-            if not any(k in (name + image).lower() for k in [
-                    "openclaw", "clawd", "claw", "nemoclaw", "openshell", "nvidia"]):
+            if not any(
+                k in (name + image).lower()
+                for k in [
+                    "openclaw",
+                    "clawd",
+                    "claw",
+                    "nemoclaw",
+                    "openshell",
+                    "nvidia",
+                ]
+            ):
                 continue
 
             # Determine runtime: nemoclaw/openshell vs plain docker
-            is_nemoclaw = any(k in (name + image).lower()
-                              for k in ("nemoclaw", "openshell", "nvidia"))
+            is_nemoclaw = any(
+                k in (name + image).lower() for k in ("nemoclaw", "openshell", "nvidia")
+            )
             runtime_tag = "nemoclaw" if is_nemoclaw else "docker"
             log.info(f"Found {runtime_tag} container: {name} ({image}) id={cid}")
 
@@ -486,26 +580,47 @@ def _detect_docker_openclaw() -> dict:
             # Plain OpenClaw containers use /root/.openclaw or /data
             nemoclaw_paths = ["/sandbox/.openclaw", "/sandbox/agents/main/sessions"]
             standard_paths = ["/root/.openclaw", "/data", "/app"]
-            preferred_paths = (nemoclaw_paths + standard_paths) if is_nemoclaw else standard_paths
+            preferred_paths = (
+                (nemoclaw_paths + standard_paths) if is_nemoclaw else standard_paths
+            )
 
             # Get volume mounts via docker inspect
             try:
                 insp = subprocess.run(
                     ["docker", "inspect", "--format", "{{json .Mounts}}", cid],
-                    capture_output=True, text=True, timeout=5)
-                mounts = _json.loads(insp.stdout.strip()) if insp.returncode == 0 else []
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                mounts = (
+                    _json.loads(insp.stdout.strip()) if insp.returncode == 0 else []
+                )
                 for m in mounts:
                     src = m.get("Source", "")
                     dst = m.get("Destination", "")
                     # Look for data/workspace/sessions mounts
-                    if "agents" in dst or "sessions" in dst or "/data" == dst or "openclaw" in dst.lower() \
-                            or "/sandbox" in dst:
+                    if (
+                        "agents" in dst
+                        or "sessions" in dst
+                        or "/data" == dst
+                        or "openclaw" in dst.lower()
+                        or "/sandbox" in dst
+                    ):
                         log.info(f"  Mount: {src} -> {dst}")
                         if "sessions" in dst:
                             result["sessions_dir"] = src
                         elif "agents" in dst:
-                            result["sessions_dir"] = os.path.join(src, "main", "sessions")
-                        elif dst in ("/data", "/app", "/home", "/root", "/opt", "/sandbox"):
+                            result["sessions_dir"] = os.path.join(
+                                src, "main", "sessions"
+                            )
+                        elif dst in (
+                            "/data",
+                            "/app",
+                            "/home",
+                            "/root",
+                            "/opt",
+                            "/sandbox",
+                        ):
                             # Search mount point for sessions + workspace (up to 3 levels deep)
                             _found_s, _found_w = _find_openclaw_dirs(src)
                             if _found_s:
@@ -522,16 +637,25 @@ def _detect_docker_openclaw() -> dict:
             if not result:
                 try:
                     for check_path in preferred_paths:
-                        sessions_path = (f"{check_path}/agents/main/sessions"
-                                         if not check_path.endswith("sessions")
-                                         else check_path)
+                        sessions_path = (
+                            f"{check_path}/agents/main/sessions"
+                            if not check_path.endswith("sessions")
+                            else check_path
+                        )
                         chk = subprocess.run(
                             ["docker", "exec", cid, "ls", sessions_path],
-                            capture_output=True, text=True, timeout=5)
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
                         if chk.returncode == 0 and chk.stdout.strip():
-                            log.info(f"  Found sessions inside container at {check_path}")
+                            log.info(
+                                f"  Found sessions inside container at {check_path}"
+                            )
                             # Copy files out to host
-                            mirror_subdir = "nemoclaw-mirror" if is_nemoclaw else "docker-mirror"
+                            mirror_subdir = (
+                                "nemoclaw-mirror" if is_nemoclaw else "docker-mirror"
+                            )
                             host_dir = Path.home() / ".clawmetry" / mirror_subdir
                             host_dir.mkdir(parents=True, exist_ok=True)
                             sessions_mirror = host_dir / "sessions"
@@ -539,16 +663,43 @@ def _detect_docker_openclaw() -> dict:
                             sessions_mirror.mkdir(exist_ok=True)
                             workspace_mirror.mkdir(exist_ok=True)
                             # rsync from container
-                            subprocess.run(["docker", "cp", f"{cid}:{sessions_path}/.", str(sessions_mirror)],
-                                           capture_output=True, timeout=30)
-                            workspace_root = check_path if check_path.endswith(".openclaw") \
+                            subprocess.run(
+                                [
+                                    "docker",
+                                    "cp",
+                                    f"{cid}:{sessions_path}/.",
+                                    str(sessions_mirror),
+                                ],
+                                capture_output=True,
+                                timeout=30,
+                            )
+                            workspace_root = (
+                                check_path
+                                if check_path.endswith(".openclaw")
                                 else os.path.dirname(check_path)
-                            subprocess.run(["docker", "cp", f"{cid}:{workspace_root}/workspace/.", str(workspace_mirror)],
-                                           capture_output=True, timeout=30)
+                            )
+                            subprocess.run(
+                                [
+                                    "docker",
+                                    "cp",
+                                    f"{cid}:{workspace_root}/workspace/.",
+                                    str(workspace_mirror),
+                                ],
+                                capture_output=True,
+                                timeout=30,
+                            )
                             # Copy logs
                             for log_path in ["/tmp/openclaw", f"{check_path}/logs"]:
-                                subprocess.run(["docker", "cp", f"{cid}:{log_path}/.", str(host_dir / "logs")],
-                                               capture_output=True, timeout=15)
+                                subprocess.run(
+                                    [
+                                        "docker",
+                                        "cp",
+                                        f"{cid}:{log_path}/.",
+                                        str(host_dir / "logs"),
+                                    ],
+                                    capture_output=True,
+                                    timeout=15,
+                                )
                             result["sessions_dir"] = str(sessions_mirror)
                             result["workspace"] = str(workspace_mirror)
                             result["log_dir"] = str(host_dir / "logs")
@@ -592,9 +743,18 @@ def detect_paths() -> dict:
     # Support explicit NemoClaw sandbox name via env var
     nemoclaw_sandbox = os.environ.get("NEMOCLAW_SANDBOX", "")
     if nemoclaw_sandbox:
-        sessions_candidates.insert(0, Path(f"/sandbox/{nemoclaw_sandbox}/.openclaw/agents/main/sessions"))
-        sessions_candidates.insert(1, Path(f"/var/lib/openshell/sandboxes/{nemoclaw_sandbox}/.openclaw/agents/main/sessions"))
-    found_sessions = docker_paths.get("sessions_dir") or next((str(p) for p in sessions_candidates if p.exists()), None)
+        sessions_candidates.insert(
+            0, Path(f"/sandbox/{nemoclaw_sandbox}/.openclaw/agents/main/sessions")
+        )
+        sessions_candidates.insert(
+            1,
+            Path(
+                f"/var/lib/openshell/sandboxes/{nemoclaw_sandbox}/.openclaw/agents/main/sessions"
+            ),
+        )
+    found_sessions = docker_paths.get("sessions_dir") or next(
+        (str(p) for p in sessions_candidates if p.exists()), None
+    )
     sessions_dir = found_sessions or str(sessions_candidates[0])
 
     if not found_sessions:
@@ -604,25 +764,39 @@ def detect_paths() -> dict:
     else:
         # Warn if NemoClaw is detected and sync daemon appears to be inside the sandbox
         if _is_running_in_container():
-            log.warning("⚠️  NemoClaw/container detected: ClawMetry sync daemon appears to be running INSIDE the sandbox.")
-            log.warning("   Recommended: run the sync daemon on the HOST for unrestricted network access.")
-            log.warning("   If you must run inside the sandbox, add this to your NemoClaw network policy:")
+            log.warning(
+                "⚠️  NemoClaw/container detected: ClawMetry sync daemon appears to be running INSIDE the sandbox."
+            )
+            log.warning(
+                "   Recommended: run the sync daemon on the HOST for unrestricted network access."
+            )
+            log.warning(
+                "   If you must run inside the sandbox, add this to your NemoClaw network policy:"
+            )
             log.warning("     network:")
             log.warning("       egress:")
             log.warning("         - host: ingest.clawmetry.com")
             log.warning("           port: 443")
             log.warning("           protocol: https")
 
-    log_candidates = [Path("/tmp/openclaw"), Path(_get_openclaw_dir()) / "logs", Path("/data/logs")]
-    log_dir = docker_paths.get("log_dir") or next((str(p) for p in log_candidates if p.exists()), "/tmp/openclaw")
+    log_candidates = [
+        Path("/tmp/openclaw"),
+        Path(_get_openclaw_dir()) / "logs",
+        Path("/data/logs"),
+    ]
+    log_dir = docker_paths.get("log_dir") or next(
+        (str(p) for p in log_candidates if p.exists()), "/tmp/openclaw"
+    )
 
     workspace_candidates = [
         Path(_get_openclaw_dir()) / "workspace",
         Path("/data/workspace"),
         Path("/app/workspace"),
     ]
-    workspace = docker_paths.get("workspace") or next((str(p) for p in workspace_candidates if p.exists()),
-                     str(workspace_candidates[0]))
+    workspace = docker_paths.get("workspace") or next(
+        (str(p) for p in workspace_candidates if p.exists()),
+        str(workspace_candidates[0]),
+    )
 
     log.info(f"Paths: sessions={sessions_dir} logs={log_dir} workspace={workspace}")
     return {"sessions_dir": sessions_dir, "log_dir": log_dir, "workspace": workspace}
@@ -630,11 +804,12 @@ def detect_paths() -> dict:
 
 # ── Sync: session events (full content, encrypted) ────────────────────────────
 
+
 def sync_sessions(config: dict, state: dict, paths: dict) -> int:
     sessions_dir = paths["sessions_dir"]
-    api_key      = config["api_key"]
-    enc_key      = config.get("encryption_key")
-    node_id      = config["node_id"]
+    api_key = config["api_key"]
+    enc_key = config.get("encryption_key")
+    node_id = config["node_id"]
     last_ids: dict = state.setdefault("last_event_ids", {})
     total = 0
 
@@ -651,8 +826,10 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
                 if ":subagent:" in _k and isinstance(_meta, dict):
                     _sf = _meta.get("sessionFile", "")
                     if _sf:
-                        _fn = os.path.basename(_sf)          # e.g. "00b5b41b-…jsonl"
-                        file_to_subagent_id[_fn] = _k.split(":")[-1]  # e.g. "317db68b-…"
+                        _fn = os.path.basename(_sf)  # e.g. "00b5b41b-…jsonl"
+                        file_to_subagent_id[_fn] = _k.split(":")[
+                            -1
+                        ]  # e.g. "317db68b-…"
         except Exception:
             pass
 
@@ -664,7 +841,7 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
         if total >= MAX_EVENTS_PER_CYCLE:
             break  # continue next cycle; progress is saved per-file
 
-        fname    = os.path.basename(fpath)
+        fname = os.path.basename(fpath)
         last_line = last_ids.get(fname, 0)
         batch: list[dict] = []
         subagent_id = file_to_subagent_id.get(fname)  # None for main session
@@ -690,7 +867,9 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
                 line_cursor = i + 1
 
                 if len(batch) >= BATCH_SIZE:
-                    _flush_session_batch(batch, fname, api_key, enc_key, node_id, subagent_id)
+                    _flush_session_batch(
+                        batch, fname, api_key, enc_key, node_id, subagent_id
+                    )
                     total += len(batch)
                     batch = []
                     # Save progress after each batch so restarts don't re-upload
@@ -699,10 +878,14 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
                         break
 
             if batch:
-                _flush_session_batch(batch, fname, api_key, enc_key, node_id, subagent_id)
+                _flush_session_batch(
+                    batch, fname, api_key, enc_key, node_id, subagent_id
+                )
                 total += len(batch)
 
-            last_ids[fname] = len(all_lines) if total < MAX_EVENTS_PER_CYCLE else line_cursor
+            last_ids[fname] = (
+                len(all_lines) if total < MAX_EVENTS_PER_CYCLE else line_cursor
+            )
 
         except Exception as e:
             log.warning(f"Session sync error ({fname}): {e}")
@@ -710,26 +893,36 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
     return total
 
 
-def _flush_session_batch(batch: list, fname: str, api_key: str,
-                          enc_key: str | None, node_id: str,
-                          subagent_id: str | None = None) -> None:
+def _flush_session_batch(
+    batch: list,
+    fname: str,
+    api_key: str,
+    enc_key: str | None,
+    node_id: str,
+    subagent_id: str | None = None,
+) -> None:
     payload = {"session_file": fname, "node_id": node_id, "events": batch}
     # Include subagent_id so the cloud can correlate blobs → sub-agent sessions.
     # The session key UUID (subagent_id) differs from the .jsonl filename UUID.
     if subagent_id:
         payload["subagent_id"] = subagent_id
     if enc_key:
-        _post("/ingest/events", {
-            "node_id": node_id,
-            "encrypted": True,
-            "blob": encrypt_payload(payload, enc_key),
-        }, api_key)
+        _post(
+            "/ingest/events",
+            {
+                "node_id": node_id,
+                "encrypted": True,
+                "blob": encrypt_payload(payload, enc_key),
+            },
+            api_key,
+        )
     else:
         _post("/ingest/events", payload, api_key)
 
 
-def sync_sessions_recent(config: dict, state: dict, paths: dict,
-                         minutes: int = 60) -> int:
+def sync_sessions_recent(
+    config: dict, state: dict, paths: dict, minutes: int = 60
+) -> int:
     """Sync only events from the last N minutes, reading files from the tail.
 
     This gives the dashboard immediate visibility into *current* activity.
@@ -746,9 +939,9 @@ def sync_sessions_recent(config: dict, state: dict, paths: dict,
     from datetime import timedelta
 
     sessions_dir = paths["sessions_dir"]
-    api_key  = config["api_key"]
-    enc_key  = config.get("encryption_key")
-    node_id  = config["node_id"]
+    api_key = config["api_key"]
+    enc_key = config.get("encryption_key")
+    node_id = config["node_id"]
     last_ids: dict = state.setdefault("last_event_ids", {})
     total = 0
 
@@ -833,14 +1026,18 @@ def sync_sessions_recent(config: dict, state: dict, paths: dict,
                     continue
                 batch.append(obj)
                 if len(batch) >= BATCH_SIZE:
-                    _flush_session_batch(batch, fname, api_key, enc_key, node_id, subagent_id)
+                    _flush_session_batch(
+                        batch, fname, api_key, enc_key, node_id, subagent_id
+                    )
                     total += len(batch)
                     batch = []
                     if total >= MAX_EVENTS_PER_CYCLE:
                         break
 
             if batch:
-                _flush_session_batch(batch, fname, api_key, enc_key, node_id, subagent_id)
+                _flush_session_batch(
+                    batch, fname, api_key, enc_key, node_id, subagent_id
+                )
                 total += len(batch)
 
             # Advance cursor to EOF so backfill loop doesn't re-send these.
@@ -857,17 +1054,18 @@ def sync_sessions_recent(config: dict, state: dict, paths: dict,
 
 # ── Sync: logs (full lines, encrypted) ────────────────────────────────────────
 
+
 def sync_logs(config: dict, state: dict, paths: dict) -> int:
-    log_dir  = paths["log_dir"]
-    api_key  = config["api_key"]
-    enc_key  = config.get("encryption_key")
-    node_id  = config["node_id"]
+    log_dir = paths["log_dir"]
+    api_key = config["api_key"]
+    enc_key = config.get("encryption_key")
+    node_id = config["node_id"]
     offsets: dict = state.setdefault("last_log_offsets", {})
     total = 0
 
     log_files = sorted(glob.glob(os.path.join(log_dir, "openclaw-*.log")))[-5:]
     for fpath in log_files:
-        fname  = os.path.basename(fpath)
+        fname = os.path.basename(fpath)
         offset = offsets.get(fname, 0)
         entries: list[dict] = []
 
@@ -902,40 +1100,49 @@ def sync_logs(config: dict, state: dict, paths: dict) -> int:
     return total
 
 
-def _flush_log_batch(entries: list, fname: str, api_key: str,
-                      enc_key: str | None, node_id: str) -> None:
+def _flush_log_batch(
+    entries: list, fname: str, api_key: str, enc_key: str | None, node_id: str
+) -> None:
     payload = {"log_file": fname, "node_id": node_id, "lines": entries}
     if enc_key:
-        _post("/ingest/logs", {
-            "node_id": node_id,
-            "encrypted": True,
-            "blob": encrypt_payload(payload, enc_key),
-        }, api_key)
+        _post(
+            "/ingest/logs",
+            {
+                "node_id": node_id,
+                "encrypted": True,
+                "blob": encrypt_payload(payload, enc_key),
+            },
+            api_key,
+        )
     else:
         _post("/ingest/logs", payload, api_key)
 
 
 # ── Heartbeat ─────────────────────────────────────────────────────────────────
 
+
 def _detect_ollama_for_heartbeat():
     """Detect Ollama status for heartbeat reporting."""
     import shutil
+
     result = {"installed": False, "running": False, "models": []}
 
     # Check if binary exists
-    ollama_bin = shutil.which('ollama')
+    ollama_bin = shutil.which("ollama")
     if not ollama_bin:
         common_paths = [
-            '/opt/homebrew/bin/ollama',
-            '/usr/local/bin/ollama',
-            '/usr/bin/ollama',
-            os.path.expanduser('~/.ollama/ollama'),
+            "/opt/homebrew/bin/ollama",
+            "/usr/local/bin/ollama",
+            "/usr/bin/ollama",
+            os.path.expanduser("~/.ollama/ollama"),
         ]
-        if os.name == 'nt':
-            common_paths.extend([
-                os.path.expandvars(r'%LOCALAPPDATA%\Programs\Ollama\ollama.exe'),
-                os.path.expandvars(r'%LOCALAPPDATA%\Ollama\ollama.exe'),
-            ])
+        if os.name == "nt":
+            common_paths.extend(
+                [
+                    os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
+                    os.path.expandvars(r"%LOCALAPPDATA%\Ollama\ollama.exe"),
+                ]
+            )
         for p in common_paths:
             if os.path.isfile(p):
                 ollama_bin = p
@@ -947,12 +1154,15 @@ def _detect_ollama_for_heartbeat():
     # Check if running + get models
     try:
         import json as _json
-        req = urllib.request.Request('http://localhost:11434/api/tags', method='GET')
+
+        req = urllib.request.Request("http://localhost:11434/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
             if resp.status == 200:
                 result["running"] = True
                 data = _json.loads(resp.read())
-                result["models"] = [m.get("name", "") for m in data.get("models", [])[:10]]
+                result["models"] = [
+                    m.get("name", "") for m in data.get("models", [])[:10]
+                ]
                 result["installed"] = True  # If running, definitely installed
     except Exception:
         pass
@@ -980,7 +1190,7 @@ def send_heartbeat(config: dict) -> bool:
         except Exception as e:
             last_err = e
             if attempt < 2:
-                time.sleep(2 ** attempt)  # 1s, 2s backoff
+                time.sleep(2**attempt)  # 1s, 2s backoff
     log.warning(f"Heartbeat failed after 3 attempts: {last_err}")
     return False
 
@@ -988,7 +1198,10 @@ def send_heartbeat(config: dict) -> bool:
 def _get_version() -> str:
     try:
         import re
-        src = (Path(__file__).parent.parent / "dashboard.py").read_text(errors="replace")
+
+        src = (Path(__file__).parent.parent / "dashboard.py").read_text(
+            errors="replace"
+        )
         m = re.search(r'^__version__\s*=\s*["\'](.+?)["\']', src, re.M)
         return m.group(1) if m else "unknown"
     except Exception:
@@ -996,6 +1209,7 @@ def _get_version() -> str:
 
 
 # ── Daemon loop ────────────────────────────────────────────────────────────────
+
 
 def sync_crons(config: dict, state: dict, paths: dict) -> int:
     """Sync cron job definitions to cloud."""
@@ -1015,6 +1229,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
 
     try:
         import hashlib
+
         raw = open(cron_file, "rb").read()
         h = hashlib.md5(raw).hexdigest()
         if h == last_hash:
@@ -1026,25 +1241,40 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
         for j in jobs:
             sched = j.get("schedule", {})
             kind = sched.get("kind", "")
-            expr = sched.get("interval", "") if kind == "interval" else (
-                   f"at {sched.get('at', '')}" if kind == "at" else
-                   sched.get("cron", "") if kind == "cron" else "")
+            expr = (
+                sched.get("interval", "")
+                if kind == "interval"
+                else (
+                    f"at {sched.get('at', '')}"
+                    if kind == "at"
+                    else sched.get("cron", "")
+                    if kind == "cron"
+                    else ""
+                )
+            )
             state = j.get("state", {})
-            events.append({
-                "type": "cron_state", "session_id": "",
-                "data": {"job_id": j.get("id",""), "name": j.get("name",""),
-                         "enabled": j.get("enabled", True), "expr": expr,
-                         "schedule": sched,
-                         "task": (j.get("task") or "")[:200],
-                         "state": {
-                             "lastStatus": state.get("lastStatus"),
-                             "lastRunAtMs": state.get("lastRunAtMs"),
-                             "nextRunAtMs": state.get("nextRunAtMs"),
-                             "lastDurationMs": state.get("lastDurationMs"),
-                             "lastError": state.get("lastError"),
-                             "consecutiveFailures": state.get("consecutiveFailures"),
-                         }}
-            })
+            events.append(
+                {
+                    "type": "cron_state",
+                    "session_id": "",
+                    "data": {
+                        "job_id": j.get("id", ""),
+                        "name": j.get("name", ""),
+                        "enabled": j.get("enabled", True),
+                        "expr": expr,
+                        "schedule": sched,
+                        "task": (j.get("task") or "")[:200],
+                        "state": {
+                            "lastStatus": state.get("lastStatus"),
+                            "lastRunAtMs": state.get("lastRunAtMs"),
+                            "nextRunAtMs": state.get("nextRunAtMs"),
+                            "lastDurationMs": state.get("lastDurationMs"),
+                            "lastError": state.get("lastError"),
+                            "consecutiveFailures": state.get("consecutiveFailures"),
+                        },
+                    },
+                }
+            )
 
         if events:
             _post("/api/ingest", {"events": events, "node_id": node_id}, api_key)
@@ -1057,7 +1287,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
 
 def sync_session_metadata(config: dict, state: dict = None) -> int:
     """Sync OpenClaw session metadata rows to cloud sessions table.
-    
+
     Uses mtime tracking to only re-parse files that changed since last sync.
     Reads JSONL session files directly (HTTP API returns HTML, not JSON).
     Extracts session_id, model, timestamps from the event stream.
@@ -1131,16 +1361,18 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                             if msg_model:
                                 model = msg_model
 
-                session_rows.append({
-                    "session_id": sid,
-                    "display_name": label or sid[:8],
-                    "status": "completed",
-                    "model": model,
-                    "total_tokens": total_tokens,
-                    "total_cost": total_cost,
-                    "started_at": started_at,
-                    "updated_at": updated_at,
-                })
+                session_rows.append(
+                    {
+                        "session_id": sid,
+                        "display_name": label or sid[:8],
+                        "status": "completed",
+                        "model": model,
+                        "total_tokens": total_tokens,
+                        "total_cost": total_cost,
+                        "started_at": started_at,
+                        "updated_at": updated_at,
+                    }
+                )
                 last_mtimes[fpath.name] = current_mtime
             except Exception as e:
                 log.debug(f"Session parse error ({fpath.name}): {e}")
@@ -1178,7 +1410,7 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
 
         # Batch in groups of 50
         for i in range(0, len(session_rows), 50):
-            batch = session_rows[i:i+50]
+            batch = session_rows[i : i + 50]
             _post("/ingest/sessions", {"node_id": node_id, "sessions": batch}, api_key)
         return len(session_rows)
     except Exception as e:
@@ -1189,15 +1421,23 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
 def sync_memory(config: dict, state: dict, paths: dict) -> int:
     """Sync memory files (MEMORY.md + memory/*.md) to cloud."""
     workspace = paths.get("workspace", "")
-    api_key   = config["api_key"]
-    enc_key   = config.get("encryption_key")
-    node_id   = config["node_id"]
+    api_key = config["api_key"]
+    enc_key = config.get("encryption_key")
+    node_id = config["node_id"]
     last_hashes: dict = state.setdefault("memory_hashes", {})
     synced = 0
 
     # Collect all workspace memory files (same list as OSS dashboard)
     memory_files = []
-    for name in ['MEMORY.md', 'SOUL.md', 'IDENTITY.md', 'USER.md', 'AGENTS.md', 'TOOLS.md', 'HEARTBEAT.md']:
+    for name in [
+        "MEMORY.md",
+        "SOUL.md",
+        "IDENTITY.md",
+        "USER.md",
+        "AGENTS.md",
+        "TOOLS.md",
+        "HEARTBEAT.md",
+    ]:
         fpath = os.path.join(workspace, name)
         if os.path.isfile(fpath):
             memory_files.append((name, fpath))
@@ -1213,6 +1453,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     # Check for changes via content hash; always send all file contents so the
     # Memory tab can display any file, not just files changed in the last cycle.
     import hashlib
+
     changed_files = []
     all_file_contents = []
     file_list = []
@@ -1221,7 +1462,13 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
             content_bytes = open(path, "rb").read()
             h = hashlib.md5(content_bytes).hexdigest()
             text = content_bytes.decode("utf-8", errors="replace")
-            file_list.append({"name": name, "size": len(content_bytes), "modified": os.path.getmtime(path)})
+            file_list.append(
+                {
+                    "name": name,
+                    "size": len(content_bytes),
+                    "modified": os.path.getmtime(path),
+                }
+            )
             all_file_contents.append((name, text))
             if h != last_hashes.get(name):
                 changed_files.append(name)
@@ -1237,16 +1484,24 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     payload = {
         "node_id": node_id,
         "memory_state": {"files": file_list},
-        "memory_content": [{"path": name, "content": content[:100000]} for name, content in all_file_contents],
+        "memory_content": [
+            {"path": name, "content": content[:100000]}
+            for name, content in all_file_contents
+        ],
     }
     try:
         if enc_key:
             from clawmetry.sync import encrypt_payload
-            _post("/ingest/memory", {
-                "node_id": node_id,
-                "encrypted": True,
-                "blob": encrypt_payload(payload, enc_key),
-            }, api_key)
+
+            _post(
+                "/ingest/memory",
+                {
+                    "node_id": node_id,
+                    "encrypted": True,
+                    "blob": encrypt_payload(payload, enc_key),
+                },
+                api_key,
+            )
         else:
             _post("/ingest/memory", payload, api_key)
         synced = len(changed_files)
@@ -1255,22 +1510,20 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
 
     return synced
 
-
-
-# ── Real-time log streaming ────────────────────────────────────────────────────
-
-
+    # ── Real-time log streaming ────────────────────────────────────────────────────
 
     """Build memory file list for the Memory popup."""
-
 
 
 def _build_machine_info():
     """Build machine hardware info for the Machine popup."""
     try:
         import platform, subprocess, socket
+
         items = []
-        items.append({"label": "Hostname", "value": socket.gethostname(), "status": "ok"})
+        items.append(
+            {"label": "Hostname", "value": socket.gethostname(), "status": "ok"}
+        )
         # IP
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1285,21 +1538,43 @@ def _build_machine_info():
         # CPU Cores
         try:
             import multiprocessing
-            items.append({"label": "CPU Cores", "value": str(multiprocessing.cpu_count()), "status": "ok"})
+
+            items.append(
+                {
+                    "label": "CPU Cores",
+                    "value": str(multiprocessing.cpu_count()),
+                    "status": "ok",
+                }
+            )
         except Exception:
             pass
         # Load average
         try:
             load = os.getloadavg()
-            items.append({"label": "Load (1/5/15m)", "value": f"{load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}", "status": "ok"})
+            items.append(
+                {
+                    "label": "Load (1/5/15m)",
+                    "value": f"{load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}",
+                    "status": "ok",
+                }
+            )
         except Exception:
             pass
         # GPU
         try:
-            gpu = subprocess.check_output(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], timeout=5).decode().strip()
+            gpu = (
+                subprocess.check_output(
+                    ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                    timeout=5,
+                )
+                .decode()
+                .strip()
+            )
             items.append({"label": "GPU", "value": gpu, "status": "ok"})
         except Exception:
-            items.append({"label": "GPU", "value": "N/A (no nvidia-smi)", "status": "ok"})
+            items.append(
+                {"label": "GPU", "value": "N/A (no nvidia-smi)", "status": "ok"}
+            )
         # Kernel
         items.append({"label": "Kernel", "value": platform.release(), "status": "ok"})
         return {"items": items}
@@ -1307,33 +1582,66 @@ def _build_machine_info():
         log.warning(f"Machine info error: {e}")
         return {"items": []}
 
+
 def _build_runtime_info():
     """Build runtime environment info for the Runtime popup."""
     try:
         import platform, subprocess
+
         items = []
-        items.append({"label": "Python", "value": platform.python_version(), "status": "ok"})
-        items.append({"label": "OS", "value": f"{platform.system()} {platform.release()}", "status": "ok"})
-        items.append({"label": "Architecture", "value": platform.machine(), "status": "ok"})
+        items.append(
+            {"label": "Python", "value": platform.python_version(), "status": "ok"}
+        )
+        items.append(
+            {
+                "label": "OS",
+                "value": f"{platform.system()} {platform.release()}",
+                "status": "ok",
+            }
+        )
+        items.append(
+            {"label": "Architecture", "value": platform.machine(), "status": "ok"}
+        )
         # OpenClaw version
         try:
-            oc_ver = subprocess.check_output(["openclaw", "--version"], stderr=subprocess.STDOUT, timeout=5).decode().strip()
+            oc_ver = (
+                subprocess.check_output(
+                    ["openclaw", "--version"], stderr=subprocess.STDOUT, timeout=5
+                )
+                .decode()
+                .strip()
+            )
             items.append({"label": "OpenClaw", "value": oc_ver, "status": "ok"})
         except Exception:
             items.append({"label": "OpenClaw", "value": "unknown", "status": "warning"})
         # Disk /
         try:
-            df = subprocess.check_output(["df", "-h", "/"], timeout=5).decode().strip().split("\n")
+            df = (
+                subprocess.check_output(["df", "-h", "/"], timeout=5)
+                .decode()
+                .strip()
+                .split("\n")
+            )
             if len(df) >= 2:
                 parts = df[1].split()
                 pct = int(parts[4].replace("%", ""))
                 st = "critical" if pct > 90 else "warning" if pct > 80 else "ok"
-                items.append({"label": "Disk /", "value": f"{parts[2]} / {parts[1]} ({parts[4]} used)", "status": st})
+                items.append(
+                    {
+                        "label": "Disk /",
+                        "value": f"{parts[2]} / {parts[1]} ({parts[4]} used)",
+                        "status": st,
+                    }
+                )
         except Exception:
             pass
         # Node.js
         try:
-            nv = subprocess.check_output(["node", "--version"], timeout=5).decode().strip()
+            nv = (
+                subprocess.check_output(["node", "--version"], timeout=5)
+                .decode()
+                .strip()
+            )
             items.append({"label": "Node.js", "value": nv, "status": "ok"})
         except Exception:
             pass
@@ -1342,17 +1650,28 @@ def _build_runtime_info():
         log.warning(f"Runtime info error: {e}")
         return {"items": []}
 
+
 def _build_memory_files(workspace):
     """Build memory file list for the Memory popup."""
     if not workspace or not os.path.isdir(workspace):
         return []
     files = []
-    for name in ["MEMORY.md", "SOUL.md", "IDENTITY.md", "USER.md", "AGENTS.md", "TOOLS.md", "HEARTBEAT.md"]:
+    for name in [
+        "MEMORY.md",
+        "SOUL.md",
+        "IDENTITY.md",
+        "USER.md",
+        "AGENTS.md",
+        "TOOLS.md",
+        "HEARTBEAT.md",
+    ]:
         fpath = os.path.join(workspace, name)
         if os.path.isfile(fpath):
             try:
                 st = os.stat(fpath)
-                files.append({"name": name, "size": st.st_size, "modified": st.st_mtime})
+                files.append(
+                    {"name": name, "size": st.st_size, "modified": st.st_mtime}
+                )
             except Exception:
                 pass
     mem_dir = os.path.join(workspace, "memory")
@@ -1362,15 +1681,23 @@ def _build_memory_files(workspace):
                 fpath = os.path.join(mem_dir, f)
                 try:
                     st = os.stat(fpath)
-                    files.append({"name": f"memory/{f}", "size": st.st_size, "modified": st.st_mtime})
+                    files.append(
+                        {
+                            "name": f"memory/{f}",
+                            "size": st.st_size,
+                            "modified": st.st_mtime,
+                        }
+                    )
                 except Exception:
                     pass
     return files
+
 
 def _build_brain_data():
     """Build LLM call data for the Brain/AI Model popup."""
     try:
         import collections
+
         home = str(Path.home())
         session_dir = os.path.join(_get_openclaw_dir(), "agents", "main", "sessions")
         if not os.path.isdir(session_dir):
@@ -1389,7 +1716,11 @@ def _build_brain_data():
 
         today = datetime.now().strftime("%Y-%m-%d")
 
-        files = sorted(glob.glob(os.path.join(session_dir, "*.jsonl")), key=os.path.getmtime, reverse=True)[:20]
+        files = sorted(
+            glob.glob(os.path.join(session_dir, "*.jsonl")),
+            key=os.path.getmtime,
+            reverse=True,
+        )[:20]
 
         for fp in files:
             try:
@@ -1421,24 +1752,51 @@ def _build_brain_data():
                             continue
 
                         # OpenClaw JSONL format uses: input/output/cacheRead/cacheWrite/cost.total
-                        tok_in = (usage.get("input") or usage.get("inputTokens") or usage.get("input_tokens") or 0)
-                        tok_out = (usage.get("output") or usage.get("outputTokens") or usage.get("output_tokens") or 0)
-                        cr = (usage.get("cacheRead") or usage.get("cacheReadInputTokens") or usage.get("cache_read_input_tokens") or 0)
-                        cw = (usage.get("cacheWrite") or usage.get("cacheCreationInputTokens") or usage.get("cache_creation_input_tokens") or 0)
+                        tok_in = (
+                            usage.get("input")
+                            or usage.get("inputTokens")
+                            or usage.get("input_tokens")
+                            or 0
+                        )
+                        tok_out = (
+                            usage.get("output")
+                            or usage.get("outputTokens")
+                            or usage.get("output_tokens")
+                            or 0
+                        )
+                        cr = (
+                            usage.get("cacheRead")
+                            or usage.get("cacheReadInputTokens")
+                            or usage.get("cache_read_input_tokens")
+                            or 0
+                        )
+                        cw = (
+                            usage.get("cacheWrite")
+                            or usage.get("cacheCreationInputTokens")
+                            or usage.get("cache_creation_input_tokens")
+                            or 0
+                        )
 
                         # Use actual cost from usage.cost.total if available, else estimate
                         cost_obj = usage.get("cost", {})
                         if isinstance(cost_obj, dict) and cost_obj.get("total"):
                             cost = float(cost_obj["total"])
                         else:
-                            cost = (tok_in * 3 + tok_out * 15 + cr * 0.3 + cw * 3.75) / 1_000_000
+                            cost = (
+                                tok_in * 3 + tok_out * 15 + cr * 0.3 + cw * 3.75
+                            ) / 1_000_000
 
                         # Duration: compute from prev user msg timestamp (durationMs rarely stored)
-                        dur_ms = int(ev.get("durationMs", 0) or ev.get("duration_ms", 0) or 0)
+                        dur_ms = int(
+                            ev.get("durationMs", 0) or ev.get("duration_ms", 0) or 0
+                        )
                         if not dur_ms and prev_user_ts and ts:
                             try:
                                 from datetime import timezone
-                                t1 = datetime.fromisoformat(prev_user_ts.replace("Z", "+00:00"))
+
+                                t1 = datetime.fromisoformat(
+                                    prev_user_ts.replace("Z", "+00:00")
+                                )
                                 t2 = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                                 d = int((t2 - t1).total_seconds() * 1000)
                                 if 0 < d < 300000:
@@ -1472,17 +1830,19 @@ def _build_brain_data():
                         if cr > 0:
                             cache_hit_calls += 1
 
-                        calls.append({
-                            "timestamp": ts,
-                            "session": session_name,
-                            "tokens_in": tok_in,
-                            "tokens_out": tok_out,
-                            "cost": "$" + format(cost, ".4f"),
-                            "duration_ms": dur_ms,
-                            "thinking": has_thinking,
-                            "cache_read": cr,
-                            "tools_used": tools_used[:5],
-                        })
+                        calls.append(
+                            {
+                                "timestamp": ts,
+                                "session": session_name,
+                                "tokens_in": tok_in,
+                                "tokens_out": tok_out,
+                                "cost": "$" + format(cost, ".4f"),
+                                "duration_ms": dur_ms,
+                                "thinking": has_thinking,
+                                "cache_read": cr,
+                                "tools_used": tools_used[:5],
+                            }
+                        )
                     except Exception:
                         continue
             except Exception:
@@ -1514,24 +1874,32 @@ def _build_brain_data():
         log.warning(f"Brain data error: {e}")
         return {"stats": {}, "calls": [], "total": 0}
 
+
 def _build_tool_stats():
     """Build tool usage stats from recent session logs."""
     try:
         import collections, glob
+
         home = str(Path.home())
         session_dir = os.path.join(_get_openclaw_dir(), "agents", "main", "sessions")
         if not os.path.isdir(session_dir):
             return {}
-        
+
         tool_counts = collections.Counter()
         tool_recent = {}  # tool_name -> last few entries
-        channel_msgs = collections.defaultdict(lambda: {"in": 0, "out": 0, "messages": []})
-        
+        channel_msgs = collections.defaultdict(
+            lambda: {"in": 0, "out": 0, "messages": []}
+        )
+
         today = datetime.now().strftime("%Y-%m-%d")
-        
+
         # Read last 20 active sessions
-        files = sorted(glob.glob(os.path.join(session_dir, "*.jsonl")), key=os.path.getmtime, reverse=True)[:20]
-        
+        files = sorted(
+            glob.glob(os.path.join(session_dir, "*.jsonl")),
+            key=os.path.getmtime,
+            reverse=True,
+        )[:20]
+
         # Pre-load session-level channel info from sessions.json
         _session_channels = {}
         _sessions_json = os.path.join(session_dir, "sessions.json")
@@ -1542,7 +1910,11 @@ def _build_tool_stats():
                 _sf = os.path.basename(_sv.get("sessionFile", ""))
                 _dc = _sv.get("deliveryContext", {}) or {}
                 _ori = _sv.get("origin", {}) or {}
-                _ch = _dc.get("channel", "") or _ori.get("provider", "") or _ori.get("surface", "")
+                _ch = (
+                    _dc.get("channel", "")
+                    or _ori.get("provider", "")
+                    or _ori.get("surface", "")
+                )
                 if _sf and _ch:
                     _session_channels[_sf] = _ch
         except Exception:
@@ -1559,40 +1931,63 @@ def _build_tool_stats():
                         msg = ev.get("message", {})
                         ts = ev.get("timestamp", "")
                         role = msg.get("role", "")
-                        
+
                         if isinstance(msg.get("content"), list):
                             for c in msg["content"]:
                                 if c.get("type") == "toolCall":
                                     name = c.get("name", "?")
                                     tool_counts[name] += 1
-                                    args = c.get("arguments", {}) or c.get("input", {}) or c.get("args", {}) or {}
+                                    args = (
+                                        c.get("arguments", {})
+                                        or c.get("input", {})
+                                        or c.get("args", {})
+                                        or {}
+                                    )
                                     if isinstance(args, str):
-                                        try: args = json.loads(args)
-                                        except: args = {}
-                                    
+                                        try:
+                                            args = json.loads(args)
+                                        except:
+                                            args = {}
+
                                     # Track recent entries for specific tools
                                     if name == "web_search":
                                         q = args.get("query", "")
                                         if q and name not in tool_recent:
                                             tool_recent[name] = []
                                         if q:
-                                            tool_recent.setdefault(name, []).append({"query": q[:200], "ts": ts})
+                                            tool_recent.setdefault(name, []).append(
+                                                {"query": q[:200], "ts": ts}
+                                            )
                                     elif name == "web_fetch":
                                         url = args.get("url", "")
                                         if url:
-                                            tool_recent.setdefault(name, []).append({"url": url[:200], "ts": ts})
+                                            tool_recent.setdefault(name, []).append(
+                                                {"url": url[:200], "ts": ts}
+                                            )
                                     elif name == "browser":
                                         action = args.get("action", "")
                                         url = args.get("url", "")
-                                        tool_recent.setdefault(name, []).append({"action": action, "url": url[:200] if url else "", "ts": ts})
+                                        tool_recent.setdefault(name, []).append(
+                                            {
+                                                "action": action,
+                                                "url": url[:200] if url else "",
+                                                "ts": ts,
+                                            }
+                                        )
                                     elif name == "exec":
                                         cmd = args.get("command", "")
                                         if cmd:
-                                            tool_recent.setdefault(name, []).append({"command": cmd[:300], "ts": ts})
+                                            tool_recent.setdefault(name, []).append(
+                                                {"command": cmd[:300], "ts": ts}
+                                            )
                                     elif name == "message":
-                                        target = args.get("target", "") or args.get("channel", "")
-                                        tool_recent.setdefault(name, []).append({"target": target, "ts": ts})
-                        
+                                        target = args.get("target", "") or args.get(
+                                            "channel", ""
+                                        )
+                                        tool_recent.setdefault(name, []).append(
+                                            {"target": target, "ts": ts}
+                                        )
+
                         # Track channel messages (inbound + outbound)
                         if role in ("user", "assistant"):
                             text = ""
@@ -1603,31 +1998,41 @@ def _build_tool_stats():
                                     if c.get("type") == "text":
                                         text = c.get("text", "")[:300]
                                         break
-                            
+
                             # Try to detect channel from metadata, fall back to session-level channel
                             meta = ev.get("metadata", {}) or {}
-                            channel = meta.get("channel", "") or meta.get("surface", "") or _file_channel
+                            channel = (
+                                meta.get("channel", "")
+                                or meta.get("surface", "")
+                                or _file_channel
+                            )
                             if channel and text:
                                 direction = "in" if role == "user" else "out"
                                 channel_msgs[channel][direction] += 1
-                                channel_msgs[channel]["messages"].append({
-                                    "direction": direction, "content": text[:200],
-                                    "timestamp": ts, "sender": meta.get("sender", "User") if role == "user" else "Agent"
-                                })
+                                channel_msgs[channel]["messages"].append(
+                                    {
+                                        "direction": direction,
+                                        "content": text[:200],
+                                        "timestamp": ts,
+                                        "sender": meta.get("sender", "User")
+                                        if role == "user"
+                                        else "Agent",
+                                    }
+                                )
                     except Exception:
                         continue
             except Exception:
                 continue
-        
+
         # Cap recent entries
         for name in tool_recent:
             tool_recent[name] = tool_recent[name][-30:]
             tool_recent[name].reverse()
-        
+
         for ch in channel_msgs:
             channel_msgs[ch]["messages"] = channel_msgs[ch]["messages"][-30:]
             channel_msgs[ch]["messages"].reverse()
-        
+
         return {
             "counts": dict(tool_counts.most_common(30)),
             "recent": {k: v for k, v in tool_recent.items()},
@@ -1636,6 +2041,7 @@ def _build_tool_stats():
     except Exception as e:
         log.warning(f"Tool stats error: {e}")
         return {}
+
 
 def _build_channel_list(config):
     """Build list of configured channels."""
@@ -1651,7 +2057,16 @@ def _build_channel_list(config):
             for key in ch_section:
                 channels.append({"name": key, "enabled": True})
         # Also check top-level channel keys
-        for key in ("telegram", "discord", "slack", "whatsapp", "signal", "irc", "webchat", "imessage"):
+        for key in (
+            "telegram",
+            "discord",
+            "slack",
+            "whatsapp",
+            "signal",
+            "irc",
+            "webchat",
+            "imessage",
+        ):
             if key in data and key not in [c["name"] for c in channels]:
                 cfg = data[key]
                 if isinstance(cfg, dict):
@@ -1661,10 +2076,10 @@ def _build_channel_list(config):
         return []
 
 
-
 def _build_channel_data(config):
     """Build channel message data from gateway.log (outgoing) + session files (incoming)."""
     import re as _re
+
     try:
         home = str(Path.home())
         today = datetime.now().strftime("%Y-%m-%d")
@@ -1672,8 +2087,18 @@ def _build_channel_data(config):
         session_dir = os.path.join(_get_openclaw_dir(), "agents", "main", "sessions")
         channels = {}
 
-        known_channels = {"telegram", "imessage", "whatsapp", "signal", "discord",
-                          "slack", "webchat", "irc", "googlechat", "msteams"}
+        known_channels = {
+            "telegram",
+            "imessage",
+            "whatsapp",
+            "signal",
+            "discord",
+            "slack",
+            "webchat",
+            "irc",
+            "googlechat",
+            "msteams",
+        }
 
         # ── Outgoing: parse gateway.log ──────────────────────────────────────
         if os.path.exists(gw_log):
@@ -1682,26 +2107,45 @@ def _build_channel_data(config):
                     raw = raw.strip()
                     if not raw:
                         continue
-                    ts_match = _re.match(r'(\d{4}-\d{2}-\d{2}T[\d:.]+Z)', raw)
+                    ts_match = _re.match(r"(\d{4}-\d{2}-\d{2}T[\d:.]+Z)", raw)
                     if not ts_match or today not in ts_match.group(1):
                         continue
                     ts = ts_match.group(1)
-                    ch_match = _re.search(r'\[(\w+)\]', raw)
+                    ch_match = _re.search(r"\[(\w+)\]", raw)
                     if not ch_match:
                         continue
                     ch_name = ch_match.group(1).lower()
                     if ch_name not in known_channels:
                         continue
                     if ch_name not in channels:
-                        channels[ch_name] = {"messages": [], "todayIn": 0, "todayOut": 0, "total": 0}
-                    rest = raw[ts_match.end():].strip()
-                    if any(x in rest for x in ("sendMessage ok", "send ok", "delivered",
-                                               "sendPhoto ok", "sendAudio ok", "sendDocument ok")):
+                        channels[ch_name] = {
+                            "messages": [],
+                            "todayIn": 0,
+                            "todayOut": 0,
+                            "total": 0,
+                        }
+                    rest = raw[ts_match.end() :].strip()
+                    if any(
+                        x in rest
+                        for x in (
+                            "sendMessage ok",
+                            "send ok",
+                            "delivered",
+                            "sendPhoto ok",
+                            "sendAudio ok",
+                            "sendDocument ok",
+                        )
+                    ):
                         channels[ch_name]["todayOut"] += 1
                         channels[ch_name]["total"] += 1
-                        channels[ch_name]["messages"].append({
-                            "direction": "out", "content": "", "timestamp": ts, "sender": "Diya"
-                        })
+                        channels[ch_name]["messages"].append(
+                            {
+                                "direction": "out",
+                                "content": "",
+                                "timestamp": ts,
+                                "sender": "Diya",
+                            }
+                        )
 
         # ── Incoming: parse session JSONL files ──────────────────────────────
         # Telegram sessions contain "message_id" in first user message
@@ -1712,7 +2156,9 @@ def _build_channel_data(config):
                     continue
                 fpath = os.path.join(session_dir, fname)
                 try:
-                    mtime = datetime.fromtimestamp(os.path.getmtime(fpath)).strftime("%Y-%m-%d")
+                    mtime = datetime.fromtimestamp(os.path.getmtime(fpath)).strftime(
+                        "%Y-%m-%d"
+                    )
                     if mtime != today:
                         continue
                     detected_ch = None
@@ -1722,12 +2168,22 @@ def _build_channel_data(config):
                         for line in f2:
                             try:
                                 obj = json.loads(line)
-                                if obj.get("type") == "message" and obj.get("message", {}).get("role") == "user":
+                                if (
+                                    obj.get("type") == "message"
+                                    and obj.get("message", {}).get("role") == "user"
+                                ):
                                     content = obj["message"].get("content", "")
-                                    text = content if isinstance(content, str) else " ".join(
-                                        c.get("text", "") for c in content if isinstance(c, dict))
-                                    if 'message_id' in text and 'sender_id' in text:
-                                        if 'imessage' in text.lower() or '+' in text:
+                                    text = (
+                                        content
+                                        if isinstance(content, str)
+                                        else " ".join(
+                                            c.get("text", "")
+                                            for c in content
+                                            if isinstance(c, dict)
+                                        )
+                                    )
+                                    if "message_id" in text and "sender_id" in text:
+                                        if "imessage" in text.lower() or "+" in text:
                                             detected_ch = "imessage"
                                         else:
                                             detected_ch = "telegram"
@@ -1738,13 +2194,22 @@ def _build_channel_data(config):
                                 continue
                     if detected_ch and first_user_ts:
                         if detected_ch not in channels:
-                            channels[detected_ch] = {"messages": [], "todayIn": 0, "todayOut": 0, "total": 0}
+                            channels[detected_ch] = {
+                                "messages": [],
+                                "todayIn": 0,
+                                "todayOut": 0,
+                                "total": 0,
+                            }
                         channels[detected_ch]["todayIn"] += 1
                         channels[detected_ch]["total"] += 1
-                        channels[detected_ch]["messages"].append({
-                            "direction": "in", "content": first_user_text, 
-                            "timestamp": first_user_ts, "sender": "User"
-                        })
+                        channels[detected_ch]["messages"].append(
+                            {
+                                "direction": "in",
+                                "content": first_user_text,
+                                "timestamp": first_user_ts,
+                                "sender": "User",
+                            }
+                        )
                 except Exception:
                     continue
 
@@ -1759,10 +2224,10 @@ def _build_channel_data(config):
         return {}
 
 
-
 def _build_cron_jobs(paths):
     """Build cron jobs list for snapshot."""
     import json as _j2
+
     home = str(Path.home())
     cron_candidates = [
         os.path.join(_get_openclaw_dir(), "cron", "jobs.json"),
@@ -1778,27 +2243,39 @@ def _build_cron_jobs(paths):
         for j in jobs:
             sched = j.get("schedule", {})
             kind = sched.get("kind", "")
-            expr = sched.get("interval", "") if kind == "interval" else (
-                   f"at {sched.get('at', '')}" if kind == "at" else
-                   sched.get("cron", "") if kind == "cron" else "")
+            expr = (
+                sched.get("interval", "")
+                if kind == "interval"
+                else (
+                    f"at {sched.get('at', '')}"
+                    if kind == "at"
+                    else sched.get("cron", "")
+                    if kind == "cron"
+                    else ""
+                )
+            )
             sched_obj = j.get("schedule", {})
-            result.append({
-                "id": j.get("id", ""),
-                "name": j.get("name", ""),
-                "enabled": j.get("enabled", True),
-                "schedule": sched_obj,
-                "task": j.get("task", "")[:200],
-                "state": j.get("state", {}),
-                "lastRun": None,
-                "lastStatus": None,
-            })
+            result.append(
+                {
+                    "id": j.get("id", ""),
+                    "name": j.get("name", ""),
+                    "enabled": j.get("enabled", True),
+                    "schedule": sched_obj,
+                    "task": j.get("task", "")[:200],
+                    "state": j.get("state", {}),
+                    "lastRun": None,
+                    "lastStatus": None,
+                }
+            )
         return result
     except Exception:
         return []
 
+
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     """Push system info + subagent data as encrypted snapshot."""
     import subprocess, platform, json as _json
+
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
     node_id = config["node_id"]
@@ -1808,16 +2285,30 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # System info
     system = []
     try:
-        disk = subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=5).stdout.strip().split("\n")[-1].split()
+        disk = (
+            subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=5)
+            .stdout.strip()
+            .split("\n")[-1]
+            .split()
+        )
         disk_pct = int(disk[4].replace("%", "")) if len(disk) > 4 else 0
-        disk_color = "green" if disk_pct < 80 else ("yellow" if disk_pct < 90 else "red")
+        disk_color = (
+            "green" if disk_pct < 80 else ("yellow" if disk_pct < 90 else "red")
+        )
         system.append(["Disk /", f"{disk[2]} / {disk[1]} ({disk[4]})", disk_color])
     except Exception:
         system.append(["Disk /", "--", ""])
     # Check for additional data drives
     for extra_mount in ["/mnt/data-drive", "/data", "/mnt/data", "/home"]:
         try:
-            ed = subprocess.run(["df", "-h", extra_mount], capture_output=True, text=True, timeout=3).stdout.strip().split("\n")[-1].split()
+            ed = (
+                subprocess.run(
+                    ["df", "-h", extra_mount], capture_output=True, text=True, timeout=3
+                )
+                .stdout.strip()
+                .split("\n")[-1]
+                .split()
+            )
             if len(ed) > 4 and ed[5] != "/":
                 ep = int(ed[4].replace("%", ""))
                 ec = "green" if ep < 80 else ("yellow" if ep < 90 else "red")
@@ -1828,34 +2319,66 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     try:
         if sys.platform == "darwin":
             import re as _re
-            vm = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=5).stdout
-            pages = {m.group(1): int(m.group(2)) for m in _re.finditer(r'"(.+?)"\s*:\s*(\d+)', vm)}
+
+            vm = subprocess.run(
+                ["vm_stat"], capture_output=True, text=True, timeout=5
+            ).stdout
+            pages = {
+                m.group(1): int(m.group(2))
+                for m in _re.finditer(r'"(.+?)"\s*:\s*(\d+)', vm)
+            }
             page_size = 16384
-            used = (pages.get("Pages active", 0) + pages.get("Pages wired down", 0)) * page_size
-            total_raw = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5).stdout.strip()
+            used = (
+                pages.get("Pages active", 0) + pages.get("Pages wired down", 0)
+            ) * page_size
+            total_raw = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout.strip()
             total = int(total_raw) if total_raw else 0
             system.append(["RAM", f"{used // (1024**3)}G / {total // (1024**3)}G", ""])
         else:
-            mem = subprocess.run(["free", "-h"], capture_output=True, text=True, timeout=5).stdout.strip().split("\n")[1].split()
+            mem = (
+                subprocess.run(
+                    ["free", "-h"], capture_output=True, text=True, timeout=5
+                )
+                .stdout.strip()
+                .split("\n")[1]
+                .split()
+            )
             system.append(["RAM", f"{mem[2]} / {mem[1]}", ""])
     except Exception:
         system.append(["RAM", "--", ""])
 
     try:
         if sys.platform == "darwin":
-            up = subprocess.run(["uptime"], capture_output=True, text=True, timeout=5).stdout.strip()
+            up = subprocess.run(
+                ["uptime"], capture_output=True, text=True, timeout=5
+            ).stdout.strip()
             system.append(["Uptime", up.split(",")[0].split("up")[-1].strip(), ""])
         else:
-            up = subprocess.run(["uptime", "-p"], capture_output=True, text=True, timeout=5).stdout.strip()
+            up = subprocess.run(
+                ["uptime", "-p"], capture_output=True, text=True, timeout=5
+            ).stdout.strip()
             system.append(["Uptime", up.replace("up ", ""), ""])
     except Exception:
         system.append(["Uptime", "--", ""])
 
     # Gateway status
     try:
-        gw = subprocess.run(["pgrep", "-f", "openclaw"], capture_output=True, text=True, timeout=5)
+        gw = subprocess.run(
+            ["pgrep", "-f", "openclaw"], capture_output=True, text=True, timeout=5
+        )
         gw_running = gw.returncode == 0
-        system.append(["Gateway", "Running" if gw_running else "Stopped", "green" if gw_running else "red"])
+        system.append(
+            [
+                "Gateway",
+                "Running" if gw_running else "Stopped",
+                "green" if gw_running else "red",
+            ]
+        )
     except Exception:
         system.append(["Gateway", "--", ""])
 
@@ -1887,24 +2410,37 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 session_count += 1
                 if ":subagent:" in key:
                     age_ms = now_ms - meta.get("updatedAt", 0)
-                    status = "active" if age_ms < 120000 else ("idle" if age_ms < 3600000 else "stale")
+                    status = (
+                        "active"
+                        if age_ms < 120000
+                        else ("idle" if age_ms < 3600000 else "stale")
+                    )
                     if status == "active":
                         active_count += 1
-                    subagents_list.append({
-                        "label": meta.get("label", key.split(":")[-1][:12]),
-                        "status": status,
-                        "model": meta.get("model", ""),
-                        "task": meta.get("task", "")[:100],
-                        "tokens": meta.get("totalTokens", 0),
-                        "sessionId": key.split(":")[-1],
-                        "key": key,
-                        # sessionFile basename lets the cloud map file-UUID → subagent-UUID
-                        # for brain blobs that were synced before subagent_id was added.
-                        "sessionFile": os.path.basename(meta.get("sessionFile", "")),
-                        "displayName": meta.get("label", meta.get("task", key.split(":")[-1][:12]))[:80],
-                        "updatedAt": meta.get("updatedAt", 0),
-                        "runtimeMs": int(now_ms - meta.get("createdAt", meta.get("updatedAt", now_ms))),
-                    })
+                    subagents_list.append(
+                        {
+                            "label": meta.get("label", key.split(":")[-1][:12]),
+                            "status": status,
+                            "model": meta.get("model", ""),
+                            "task": meta.get("task", "")[:100],
+                            "tokens": meta.get("totalTokens", 0),
+                            "sessionId": key.split(":")[-1],
+                            "key": key,
+                            # sessionFile basename lets the cloud map file-UUID → subagent-UUID
+                            # for brain blobs that were synced before subagent_id was added.
+                            "sessionFile": os.path.basename(
+                                meta.get("sessionFile", "")
+                            ),
+                            "displayName": meta.get(
+                                "label", meta.get("task", key.split(":")[-1][:12])
+                            )[:80],
+                            "updatedAt": meta.get("updatedAt", 0),
+                            "runtimeMs": int(
+                                now_ms
+                                - meta.get("createdAt", meta.get("updatedAt", now_ms))
+                            ),
+                        }
+                    )
                 elif "subagent" not in key:
                     if not model_name:
                         model_name = meta.get("model", "")
@@ -1925,7 +2461,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         cron_path = next((p for p in cron_candidates if os.path.isfile(p)), None)
         if cron_path:
             cron_data = _json.load(open(cron_path))
-            crons = cron_data.get("jobs", cron_data) if isinstance(cron_data, dict) else cron_data
+            crons = (
+                cron_data.get("jobs", cron_data)
+                if isinstance(cron_data, dict)
+                else cron_data
+            )
             if isinstance(crons, list):
                 for c in crons:
                     if c.get("enabled", True):
@@ -1956,8 +2496,12 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "memorySize": sum(f.get("size", 0) for f in _mem_files),
         "memoryFiles": _mem_files,
         "subagents": subagents_list,
-        "subagentCounts": {"active": active_count, "idle": len([s for s in subagents_list if s["status"] == "idle"]),
-                           "stale": len([s for s in subagents_list if s["status"] == "stale"]), "total": len(subagents_list)},
+        "subagentCounts": {
+            "active": active_count,
+            "idle": len([s for s in subagents_list if s["status"] == "idle"]),
+            "stale": len([s for s in subagents_list if s["status"] == "stale"]),
+            "total": len(subagents_list),
+        },
         "totalActive": active_count,
         "spending": spending,
         "cronJobs": _build_cron_jobs(paths),
@@ -1987,7 +2531,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
             "security.network_policy": nemo.get("security_network_policy", True),
         }
         payload["sandbox"] = sandbox_meta
-        log.info(f"NemoClaw detected: sandbox={nemo.get('sandbox_name')} status={nemo.get('sandbox_status')}")
+        log.info(
+            f"NemoClaw detected: sandbox={nemo.get('sandbox_name')} status={nemo.get('sandbox_status')}"
+        )
     elif _is_running_in_container():
         # Generic container (Docker without NemoClaw) — still tag it
         payload["sandbox"] = {
@@ -2010,14 +2556,20 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         payload.setdefault("sandbox", {})
         payload["sandbox"]["runtime"] = "nemoclaw"
 
-    log.info(f"System snapshot: {len(subagents_list)} subagents ({active_count} active)")
+    log.info(
+        f"System snapshot: {len(subagents_list)} subagents ({active_count} active)"
+    )
 
     try:
-        _post("/ingest/system-snapshot", {
-            "node_id": node_id,
-            "encrypted": True,
-            "blob": encrypt_payload(payload, enc_key),
-        }, api_key)
+        _post(
+            "/ingest/system-snapshot",
+            {
+                "node_id": node_id,
+                "encrypted": True,
+                "blob": encrypt_payload(payload, enc_key),
+            },
+            api_key,
+        )
         return 1
     except Exception as e:
         log.warning(f"System snapshot sync error: {e}")
@@ -2025,6 +2577,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
 
 
 # ── Real-time log streaming ────────────────────────────────────────────────────
+
 
 def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
     """Start a background thread that tails the local log file and POSTs lines to cloud in real-time."""
@@ -2040,11 +2593,17 @@ def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
         if not log_dir or not os.path.isdir(log_dir):
             return None
         today = datetime.now().strftime("%Y-%m-%d")
-        candidates = sorted(glob.glob(os.path.join(log_dir, f"*{today}*")), reverse=True)
+        candidates = sorted(
+            glob.glob(os.path.join(log_dir, f"*{today}*")), reverse=True
+        )
         if candidates:
             return candidates[0]
         # Fallback: most recent log file
-        all_logs = sorted(glob.glob(os.path.join(log_dir, "*.log")), key=os.path.getmtime, reverse=True)
+        all_logs = sorted(
+            glob.glob(os.path.join(log_dir, "*.log")),
+            key=os.path.getmtime,
+            reverse=True,
+        )
         return all_logs[0] if all_logs else None
 
     def _stream_worker():
@@ -2070,7 +2629,9 @@ def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
                         continue
                     proc = subprocess.Popen(
                         ["tail", "-f", "-n", "0", current_file],
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
                     )
                     log.info(f"Tailing {current_file}")
 
@@ -2080,6 +2641,7 @@ def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
 
                 # Non-blocking read with select
                 import select
+
                 ready, _, _ = select.select([proc.stdout], [], [], STREAM_INTERVAL)
                 if ready:
                     line = proc.stdout.readline()
@@ -2090,7 +2652,11 @@ def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
                 now = time.time()
                 if batch and (now - last_push >= STREAM_INTERVAL or len(batch) >= 50):
                     try:
-                        _post("/ingest/stream", {"node_id": node_id, "lines": batch}, api_key)
+                        _post(
+                            "/ingest/stream",
+                            {"node_id": node_id, "lines": batch},
+                            api_key,
+                        )
                     except Exception as e:
                         log.debug(f"Stream push error: {e}")
                     batch = []
@@ -2114,20 +2680,24 @@ def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
 
 def run_daemon() -> None:
     if not _acquire_pid_lock():
-        print("[clawmetry-sync] Another instance is already running. Exiting.", flush=True)
+        print(
+            "[clawmetry-sync] Another instance is already running. Exiting.", flush=True
+        )
         sys.exit(0)
     import atexit
+
     atexit.register(_release_pid_lock)
     config = load_config()
     # If node_id looks like email prefix (contains + or @), use hostname instead
     nid = config.get("node_id", "")
     if not nid:
         import socket
+
         config["node_id"] = socket.gethostname() or platform.node() or "unknown"
         save_config(config)
         log.info(f"Auto-set node_id:  → {config['node_id']!r}")
-    paths  = detect_paths()
-    enc    = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
+    paths = detect_paths()
+    enc = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
     log.info(f"Starting sync daemon — node={config['node_id']} → {INGEST_URL} ({enc})")
 
     # ── Startup sync: recent-first so Brain feed shows current activity ──
@@ -2192,6 +2762,7 @@ def run_daemon() -> None:
     first_run = not state.get("initial_backfill_done")
     _backfill_done = threading.Event()
     if first_run:
+
         def _backfill_worker():
             # Give the main loop one full cycle (≈15s) to post recent events
             time.sleep(20)
@@ -2219,11 +2790,13 @@ def run_daemon() -> None:
         t.start()
 
     heartbeat_interval = 60
-    snapshot_interval = 60   # system snapshot (subagents, flow metrics) every 60s
-    log_sync_interval  = 60  # log lines are low-priority; streamer covers real-time
-    last_heartbeat  = time.time()
-    last_snapshot   = 0  # force first snapshot immediately
-    last_log_sync   = time.time()  # already synced at startup; next run after log_sync_interval
+    snapshot_interval = 60  # system snapshot (subagents, flow metrics) every 60s
+    log_sync_interval = 60  # log lines are low-priority; streamer covers real-time
+    last_heartbeat = time.time()
+    last_snapshot = 0  # force first snapshot immediately
+    last_log_sync = (
+        time.time()
+    )  # already synced at startup; next run after log_sync_interval
     consecutive_hb_failures = 0
 
     while True:
@@ -2231,7 +2804,7 @@ def run_daemon() -> None:
             state = load_state()
 
             # ── High-priority: memory, flow metrics, subagents, recent sessions ──
-            mem  = sync_memory(config, state, paths)
+            mem = sync_memory(config, state, paths)
             snap = 0
             now_snap = time.time()
             if now_snap - last_snapshot > snapshot_interval:
@@ -2251,10 +2824,14 @@ def run_daemon() -> None:
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
             save_state(state)
             if ev or lg or mem or crons or sm or snap:
-                log.info(f"Synced {ev} events, {lg} log lines, {mem} memory files, {crons} crons, {sm} session rows ({enc})")
+                log.info(
+                    f"Synced {ev} events, {lg} log lines, {mem} memory files, {crons} crons, {sm} session rows ({enc})"
+                )
 
             # Re-mirror Docker data if running in Docker mode
-            if hasattr(detect_paths, "_docker_cid") or any("docker-mirror" in str(v) for v in paths.values()):
+            if hasattr(detect_paths, "_docker_cid") or any(
+                "docker-mirror" in str(v) for v in paths.values()
+            ):
                 try:
                     fresh = _detect_docker_openclaw()
                     if fresh.get("sessions_dir"):
@@ -2266,13 +2843,17 @@ def run_daemon() -> None:
             if now - last_heartbeat > heartbeat_interval:
                 if send_heartbeat(config):
                     if consecutive_hb_failures > 0:
-                        log.info(f"Heartbeat recovered after {consecutive_hb_failures} consecutive failures")
+                        log.info(
+                            f"Heartbeat recovered after {consecutive_hb_failures} consecutive failures"
+                        )
                     consecutive_hb_failures = 0
                     last_heartbeat = now
                 else:
                     consecutive_hb_failures += 1
                     if consecutive_hb_failures >= 5:
-                        log.error(f"CRITICAL: {consecutive_hb_failures} consecutive heartbeat failures — node appears offline in cloud")
+                        log.error(
+                            f"CRITICAL: {consecutive_hb_failures} consecutive heartbeat failures — node appears offline in cloud"
+                        )
 
         except Exception as e:
             log.error(f"Sync cycle error: {e}")
@@ -2280,21 +2861,37 @@ def run_daemon() -> None:
         time.sleep(POLL_INTERVAL)
 
 
-
 def _build_gateway_data(paths: dict = None) -> dict:
     """Parse gateway.log (plain text) for routing events."""
     import re
+
     try:
         from datetime import datetime as _dt
+
         today = _dt.now().strftime("%Y-%m-%d")
         gw_log = os.path.join(_get_openclaw_dir(), "logs", "gateway.log")
 
         routes = []
-        stats = {"today_messages": 0, "today_heartbeats": 0, "today_crons": 0,
-                 "today_errors": 0, "active_sessions": 0}
+        stats = {
+            "today_messages": 0,
+            "today_heartbeats": 0,
+            "today_crons": 0,
+            "today_errors": 0,
+            "active_sessions": 0,
+        }
 
-        _KNOWN_CHANNELS = {"telegram", "imessage", "whatsapp", "signal", "discord",
-                           "slack", "irc", "webchat", "googlechat", "msteams"}
+        _KNOWN_CHANNELS = {
+            "telegram",
+            "imessage",
+            "whatsapp",
+            "signal",
+            "discord",
+            "slack",
+            "irc",
+            "webchat",
+            "googlechat",
+            "msteams",
+        }
 
         if os.path.exists(gw_log):
             with open(gw_log, errors="ignore") as f:
@@ -2307,8 +2904,14 @@ def _build_gateway_data(paths: dict = None) -> dict:
                     if not m:
                         continue
                     ts, tag, rest = m.group(1), m.group(2), m.group(3)
-                    route = {"timestamp": ts, "from": tag, "to": "brain",
-                             "session": "", "type": "message", "status": "ok"}
+                    route = {
+                        "timestamp": ts,
+                        "from": tag,
+                        "to": "brain",
+                        "session": "",
+                        "type": "message",
+                        "status": "ok",
+                    }
                     if tag == "heartbeat":
                         route["type"] = "heartbeat"
                         stats["today_heartbeats"] += 1
@@ -2318,7 +2921,11 @@ def _build_gateway_data(paths: dict = None) -> dict:
                         stats["today_crons"] += 1
                         routes.append(route)
                     elif tag in _KNOWN_CHANNELS:
-                        if "sendMessage ok" in rest or "send ok" in rest or "delivered" in rest.lower():
+                        if (
+                            "sendMessage ok" in rest
+                            or "send ok" in rest
+                            or "delivered" in rest.lower()
+                        ):
                             # Extract message_id for display
                             m_id = re.search(r"message=(\d+)", rest)
                             if m_id:
@@ -2338,9 +2945,19 @@ def _build_gateway_data(paths: dict = None) -> dict:
             "port": 18789,
         }
     except Exception as e:
-        return {"stats": {"today_messages": 0, "today_heartbeats": 0, "today_crons": 0,
-                          "today_errors": 0, "active_sessions": 0},
-                "routes": [], "total": 0, "status": "running", "port": 18789}
+        return {
+            "stats": {
+                "today_messages": 0,
+                "today_heartbeats": 0,
+                "today_crons": 0,
+                "today_errors": 0,
+                "active_sessions": 0,
+            },
+            "routes": [],
+            "total": 0,
+            "status": "running",
+            "port": 18789,
+        }
 
 
 if __name__ == "__main__":
@@ -2352,10 +2969,12 @@ if __name__ == "__main__":
             break
         except Exception as e:
             import traceback
+
             log.error(f"Daemon crashed: {e}")
             log.error(traceback.format_exc())
             log.info("Restarting in 15 seconds...")
             time.sleep(15)
+
 
 
 
