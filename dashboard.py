@@ -2922,7 +2922,6 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
     <div class="nav-tab" onclick="switchTab('limits')" title="API rate limit consumption — rolling windows per provider">Limits</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <div class="nav-tab" onclick="switchTab('models')">Models</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3884,7 +3883,6 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-models -->
 
-
 <!-- NEMOCLAW GOVERNANCE -->
 <div class="page" id="page-nemoclaw">
   <div style="padding:12px 0 8px 0;">
@@ -3939,66 +3937,27 @@ function clawmetryLogout(){
       </div>
     </div>
     <!-- Applied Presets -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
       <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">APPLIED PRESETS</div>
       <div id="nc-presets" style="display:flex;flex-wrap:wrap;gap:6px;">
         <span style="color:var(--text-muted);font-size:12px;">None detected</span>
       </div>
     </div>
+    <!-- Egress Approvals Panel -->
+    <div style="background:var(--bg-secondary);border:1px solid rgba(118,185,0,0.35);border-radius:8px;padding:14px;" id="nc-approvals-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">PENDING EGRESS APPROVALS</span>
+          <span id="nc-approvals-count" style="display:none;font-size:11px;font-weight:700;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:10px;padding:1px 8px;"></span>
+        </div>
+        <button class="refresh-btn" onclick="loadNemoClawApprovals()" style="font-size:11px;">&#8635; Refresh</button>
+      </div>
+      <div id="nc-approvals-list">
+        <div style="color:var(--text-muted);font-size:12px;padding:8px 0;">Loading...</div>
+      </div>
+    </div>
   </div>
 </div><!-- end page-nemoclaw -->
-<div class="page" id="page-models">
-  <div style="padding:12px 0 8px 0;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#129302; Model Attribution</span>
-      <button class="refresh-btn" onclick="loadModelAttribution()">&#8635; Refresh</button>
-    </div>
-    <!-- Stats row -->
-    <div id="models-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#a855f7;" id="models-primary-name">-</div>
-        <div style="font-size:11px;color:var(--text-muted);">Primary Model</div>
-      </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#3b82f6;" id="models-total-sessions">0</div>
-        <div style="font-size:11px;color:var(--text-muted);">Total Sessions</div>
-      </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#f59e0b;" id="models-fallback-rate">0%</div>
-        <div style="font-size:11px;color:var(--text-muted);">Fallback Rate</div>
-      </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#22c55e;" id="models-switch-count">0</div>
-        <div style="font-size:11px;color:var(--text-muted);">Switch Events</div>
-      </div>
-    </div>
-    <!-- Distribution chart + table -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">Token Distribution</div>
-        <div id="models-donut" style="display:flex;align-items:center;justify-content:center;min-height:180px;"></div>
-      </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">Model Breakdown</div>
-        <div id="models-breakdown" style="max-height:220px;overflow-y:auto;"></div>
-      </div>
-    </div>
-    <!-- Per-session table -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:14px;">
-      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px;">Sessions with Model Switches</div>
-      <div id="models-session-table" style="max-height:400px;overflow-y:auto;">
-        <div style="color:var(--text-muted);padding:20px;">Loading...</div>
-      </div>
-    </div>
-    <!-- Switch events -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
-      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px;">Recent Switch Events</div>
-      <div id="models-switch-list" style="max-height:300px;overflow-y:auto;">
-        <div style="color:var(--text-muted);padding:20px;">Loading...</div>
-      </div>
-    </div>
-  </div>
-</div><!-- end page-models -->
 
 
 <script>
@@ -4312,10 +4271,10 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
-  if (name === 'models') loadModelAttribution();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
   if (name === 'models') loadModelAttribution();
-  if (name === 'nemoclaw') loadNemoClaw();
+  if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
+  if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
 }
 
 function exportUsageData() {
@@ -8330,7 +8289,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('version-impact')" title="Before/after metrics for each OpenClaw upgrade">Upgrades</div>
     <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
     <div class="nav-tab" onclick="switchTab('limits')" title="API rate limit consumption — rolling windows per provider">Limits</div>
-    <div class="nav-tab" onclick="switchTab('models')">Models</div>
+    <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -9354,55 +9313,81 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-models (theme 2) -->
 
-
-<div class="page" id="page-models">
+<!-- NEMOCLAW GOVERNANCE -->
+<div class="page" id="page-nemoclaw">
   <div style="padding:12px 0 8px 0;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#129302; Model Attribution</span>
-      <button class="refresh-btn" onclick="loadModelAttribution()">&#8635; Refresh</button>
+    <!-- Header row -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span id="nc-status-dot" style="font-size:18px;">🟢</span>
+        <span style="font-size:14px;font-weight:700;color:#76b900;">NemoClaw</span>
+        <span id="nc-sandbox-name" style="font-size:12px;background:rgba(118,185,0,0.15);color:#76b900;border:1px solid rgba(118,185,0,0.3);border-radius:12px;padding:2px 10px;font-weight:600;"></span>
+        <span id="nc-blueprint-ver" style="font-size:12px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:12px;padding:2px 10px;"></span>
+      </div>
+      <button class="refresh-btn" onclick="loadNemoClaw()">&#8635; Refresh</button>
     </div>
-    <div id="models-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#a855f7;" id="models-primary-name">-</div>
-        <div style="font-size:11px;color:var(--text-muted);">Primary Model</div>
+    <!-- Two-column info grid -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+      <!-- Sandbox panel -->
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+        <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">SANDBOX</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <tr><td style="color:var(--text-muted);padding:3px 0;width:45%;">Status</td><td id="nc-sandbox-status" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Blueprint</td><td id="nc-blueprint-ver2" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Last action</td><td id="nc-last-action" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Run ID</td><td id="nc-run-id" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
+        </table>
       </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#3b82f6;" id="models-total-sessions">0</div>
-        <div style="font-size:11px;color:var(--text-muted);">Total Sessions</div>
-      </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#f59e0b;" id="models-fallback-rate">0%</div>
-        <div style="font-size:11px;color:var(--text-muted);">Fallback Rate</div>
-      </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#22c55e;" id="models-switch-count">0</div>
-        <div style="font-size:11px;color:var(--text-muted);">Switch Events</div>
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">Token Distribution</div>
-        <div id="models-donut" style="display:flex;align-items:center;justify-content:center;min-height:180px;"></div>
-      </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">Model Breakdown</div>
-        <div id="models-breakdown" style="max-height:220px;overflow-y:auto;"></div>
-      </div>
-    </div>
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:14px;">
-      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px;">Sessions with Model Switches</div>
-      <div id="models-session-table" style="max-height:400px;overflow-y:auto;">
-        <div style="color:var(--text-muted);padding:20px;">Loading...</div>
+      <!-- Inference panel -->
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+        <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">INFERENCE</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <tr><td style="color:var(--text-muted);padding:3px 0;width:45%;">Provider</td><td id="nc-provider" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Model</td><td id="nc-model" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Endpoint</td><td id="nc-endpoint" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
+          <tr><td style="color:var(--text-muted);padding:3px 0;">Onboarded</td><td id="nc-onboarded" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
+        </table>
       </div>
     </div>
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
-      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px;">Recent Switch Events</div>
-      <div id="models-switch-list" style="max-height:300px;overflow-y:auto;">
-        <div style="color:var(--text-muted);padding:20px;">Loading...</div>
+    <!-- Active Policy -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">ACTIVE POLICY</span>
+        <span id="nc-policy-hash" style="font-size:11px;color:var(--text-muted);font-family:\'JetBrains Mono\',monospace;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:4px;padding:1px 6px;"></span>
+        <span id="nc-drift-badge" style="font-size:11px;font-weight:600;"></span>
+      </div>
+      <!-- Drift alert -->
+      <div id="nc-drift-alert" style="display:none;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:10px;margin-bottom:10px;">
+        <div style="font-size:12px;font-weight:700;color:#ef4444;">&#9888;&#65039; Policy drift detected</div>
+        <div id="nc-drift-detail" style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:\'JetBrains Mono\',monospace;"></div>
+      </div>
+      <!-- Network policies table -->
+      <div id="nc-policy-table" style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;line-height:1.8;">
+        <div style="color:var(--text-muted);padding:8px 0;">Loading policy...</div>
+      </div>
+    </div>
+    <!-- Applied Presets -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
+      <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">APPLIED PRESETS</div>
+      <div id="nc-presets" style="display:flex;flex-wrap:wrap;gap:6px;">
+        <span style="color:var(--text-muted);font-size:12px;">None detected</span>
+      </div>
+    </div>
+    <!-- Egress Approvals Panel -->
+    <div style="background:var(--bg-secondary);border:1px solid rgba(118,185,0,0.35);border-radius:8px;padding:14px;" id="nc-approvals-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">PENDING EGRESS APPROVALS</span>
+          <span id="nc-approvals-count" style="display:none;font-size:11px;font-weight:700;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:10px;padding:1px 8px;"></span>
+        </div>
+        <button class="refresh-btn" onclick="loadNemoClawApprovals()" style="font-size:11px;">&#8635; Refresh</button>
+      </div>
+      <div id="nc-approvals-list">
+        <div style="color:var(--text-muted);font-size:12px;padding:8px 0;">Loading...</div>
       </div>
     </div>
   </div>
-</div><!-- end page-models -->
+</div><!-- end page-nemoclaw (theme 2) -->
 
 
 <script>
@@ -9930,9 +9915,10 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
-  if (name === 'models') loadModelAttribution();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
   if (name === 'models') loadModelAttribution();
+  if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
+  if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
 }
 
 function exportUsageData() {
@@ -11055,128 +11041,131 @@ async function loadNemoClaw() {
     var tab = document.getElementById('nemoclaw-tab');
     if (tab) tab.style.display = 'none';
     console.warn('NemoClaw governance load failed:', e);
-// === Model Attribution ===
-var _modelColors = ['#a855f7','#3b82f6','#22c55e','#f59e0b','#ef4444','#06b6d4','#ec4899','#84cc16','#f97316','#64748b'];
+  }
+  // Also load approvals
+  loadNemoClawApprovals();
+}
 
-async function loadModelAttribution() {
+// Auto-refresh approvals every 15 seconds when NemoClaw tab is active
+var _ncApprovalsTimer = null;
+function _startNcApprovalsAutoRefresh() {
+  if (_ncApprovalsTimer) return;
+  loadNemoClawApprovals();
+  _ncApprovalsTimer = setInterval(loadNemoClawApprovals, 15000);
+}
+function _stopNcApprovalsAutoRefresh() {
+  if (_ncApprovalsTimer) { clearInterval(_ncApprovalsTimer); _ncApprovalsTimer = null; }
+}
+
+async function loadNemoClawApprovals() {
+  var listEl = document.getElementById('nc-approvals-list');
+  var countEl = document.getElementById('nc-approvals-count');
+  if (!listEl) return;
   try {
-    var h = {};
-    if (window._authToken) h['Authorization'] = 'Bearer ' + window._authToken;
-    var r = await fetch('/api/model-attribution', {headers: h});
-    var d = await r.json();
-
-    // Short model name helper
-    function shortModel(m) {
-      if (!m) return 'unknown';
-      var parts = m.split('/');
-      return parts[parts.length - 1];
+    var data = await fetchJsonWithTimeout('/api/nemoclaw/pending-approvals', 8000);
+    if (!data.installed) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:6px 0;">openshell not available on this host</div>';
+      if (countEl) countEl.style.display = 'none';
+      return;
     }
-
-    // Stats
-    var pn = document.getElementById('models-primary-name');
-    if (pn) pn.textContent = shortModel(d.primary_model);
-    var ts = document.getElementById('models-total-sessions');
-    if (ts) ts.textContent = d.total_sessions || 0;
-    var fr = document.getElementById('models-fallback-rate');
-    if (fr) fr.textContent = Math.round((d.fallback_rate || 0) * 100) + '%';
-    var sc = document.getElementById('models-switch-count');
-    if (sc) sc.textContent = (d.switch_events || []).length;
-
-    // Donut chart (SVG)
-    var donutEl = document.getElementById('models-donut');
-    if (donutEl && d.model_distribution && d.model_distribution.length > 0) {
-      var total = d.model_distribution.reduce(function(a, b) { return a + b.tokens; }, 0) || 1;
-      var cx = 90, cy = 90, r2 = 70, ir = 45;
-      var svg = '<svg width="180" height="180" viewBox="0 0 180 180">';
-      var startAngle = -90;
-      d.model_distribution.forEach(function(m, i) {
-        var pct = m.tokens / total;
-        var angle = pct * 360;
-        if (angle < 0.5) return;
-        var endAngle = startAngle + angle;
-        var largeArc = angle > 180 ? 1 : 0;
-        var sr = startAngle * Math.PI / 180;
-        var er = endAngle * Math.PI / 180;
-        var x1 = cx + r2 * Math.cos(sr), y1 = cy + r2 * Math.sin(sr);
-        var x2 = cx + r2 * Math.cos(er), y2 = cy + r2 * Math.sin(er);
-        var ix1 = cx + ir * Math.cos(er), iy1 = cy + ir * Math.sin(er);
-        var ix2 = cx + ir * Math.cos(sr), iy2 = cy + ir * Math.sin(sr);
-        var color = _modelColors[i % _modelColors.length];
-        svg += '<path d="M' + x1 + ',' + y1 + ' A' + r2 + ',' + r2 + ' 0 ' + largeArc + ',1 ' + x2 + ',' + y2;
-        svg += ' L' + ix1 + ',' + iy1 + ' A' + ir + ',' + ir + ' 0 ' + largeArc + ',0 ' + ix2 + ',' + iy2 + ' Z"';
-        svg += ' fill="' + color + '" opacity="0.85"><title>' + shortModel(m.model) + ': ' + m.pct + '%</title></path>';
-        startAngle = endAngle;
-      });
-      svg += '<text x="' + cx + '" y="' + (cy - 5) + '" text-anchor="middle" fill="var(--text-primary)" font-size="18" font-weight="700">' + d.model_distribution.length + '</text>';
-      svg += '<text x="' + cx + '" y="' + (cy + 12) + '" text-anchor="middle" fill="var(--text-muted)" font-size="10">models</text>';
-      svg += '</svg>';
-      donutEl.innerHTML = svg;
-    } else if (donutEl) {
-      donutEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No model data</div>';
-    }
-
-    // Breakdown table
-    var bdEl = document.getElementById('models-breakdown');
-    if (bdEl && d.model_distribution) {
-      var html = '';
-      d.model_distribution.forEach(function(m, i) {
-        var color = _modelColors[i % _modelColors.length];
-        html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">';
-        html += '<div style="width:10px;height:10px;border-radius:50%;background:' + color + ';flex-shrink:0;"></div>';
-        html += '<div style="flex:1;font-size:12px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + m.model + '">' + shortModel(m.model) + '</div>';
-        html += '<div style="font-size:11px;color:var(--text-muted);white-space:nowrap;">' + m.pct + '% &middot; ' + m.sessions + ' sessions</div>';
-        html += '</div>';
-      });
-      bdEl.innerHTML = html || '<div style="color:var(--text-muted);font-size:12px;">No data</div>';
-    }
-
-    // Sessions table
-    var stEl = document.getElementById('models-session-table');
-    if (stEl && d.per_session) {
-      var sessions = d.per_session.filter(function(s) { return s.switch_count > 0; }).slice(0, 20);
-      if (sessions.length === 0) {
-        stEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:12px;">No model switches detected in any session.</div>';
+    var approvals = data.approvals || [];
+    if (countEl) {
+      if (approvals.length > 0) {
+        countEl.textContent = approvals.length;
+        countEl.style.display = '';
       } else {
-        var html = '<div style="display:grid;grid-template-columns:1fr auto auto;gap:4px 12px;font-size:11px;">';
-        html += '<div style="color:var(--text-muted);font-weight:600;padding:4px 0;">Session</div>';
-        html += '<div style="color:var(--text-muted);font-weight:600;padding:4px 0;">Models</div>';
-        html += '<div style="color:var(--text-muted);font-weight:600;padding:4px 0;">Switches</div>';
-        sessions.forEach(function(s) {
-          html += '<div style="color:var(--text-primary);padding:4px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + s.session_id + '">' + s.session_id.substring(0, 12) + '...</div>';
-          var badges = Object.keys(s.models).map(function(m, i) {
-            return '<span style="background:' + _modelColors[i % _modelColors.length] + '22;color:' + _modelColors[i % _modelColors.length] + ';padding:1px 6px;border-radius:4px;font-size:10px;">' + shortModel(m) + '</span>';
-          }).join(' ');
-          html += '<div style="padding:4px 0;">' + badges + '</div>';
-          html += '<div style="color:#f59e0b;font-weight:700;padding:4px 0;text-align:center;">' + s.switch_count + '</div>';
-        });
-        html += '</div>';
-        stEl.innerHTML = html;
+        countEl.style.display = 'none';
       }
     }
-
-    // Switch events
-    var slEl = document.getElementById('models-switch-list');
-    if (slEl && d.switch_events) {
-      if (d.switch_events.length === 0) {
-        slEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:12px;">No switch events recorded.</div>';
-      } else {
-        var html = '';
-        d.switch_events.slice(0, 50).forEach(function(ev) {
-          html += '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px;">';
-          html += '<span style="color:var(--text-muted);width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + ev.session_id + '">' + ev.session_id.substring(0, 10) + '</span>';
-          html += '<span style="color:#ef4444;">' + shortModel(ev.from) + '</span>';
-          html += '<span style="color:var(--text-muted);">&#8594;</span>';
-          html += '<span style="color:#22c55e;">' + shortModel(ev.to) + '</span>';
-          html += '<span style="color:var(--text-muted);margin-left:auto;">turn ' + ev.at_turn + '</span>';
-          html += '</div>';
-        });
-        slEl.innerHTML = html;
+    if (approvals.length === 0) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;text-align:center;">✓ No pending requests</div>';
+      return;
+    }
+    var html = '';
+    approvals.forEach(function(a) {
+      var ruleDisplay = '';
+      if (a.host) {
+        ruleDisplay = escHtml(a.host);
+        if (a.port) ruleDisplay += ':' + escHtml(String(a.port));
+        if (a.protocol) ruleDisplay += ' (' + escHtml(a.protocol.toUpperCase()) + ')';
+      } else if (a.rule_name) {
+        ruleDisplay = escHtml(a.rule_name);
       }
+      var timeAgo = '';
+      if (a.ts) {
+        try {
+          var diff = Math.floor((Date.now() - new Date(a.ts).getTime()) / 1000);
+          if (diff < 60) timeAgo = diff + 's ago';
+          else if (diff < 3600) timeAgo = Math.floor(diff/60) + 'm ago';
+          else timeAgo = Math.floor(diff/3600) + 'h ago';
+        } catch(e) {}
+      }
+      html += '<div style="border:1px solid rgba(118,185,0,0.25);border-radius:6px;padding:12px;margin-bottom:8px;background:var(--bg-primary);">';
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
+      html += '<div style="font-size:12px;">';
+      html += '<span style="color:var(--text-muted);">sandbox: </span><span style="color:#76b900;font-weight:600;font-family:\'JetBrains Mono\',monospace;">' + escHtml(a.sandbox || '') + '</span>';
+      if (a.rule_name) html += '<span style="color:var(--text-muted);margin-left:10px;">rule: </span><span style="color:var(--text-secondary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">' + escHtml(a.rule_name) + '</span>';
+      html += '</div>';
+      if (timeAgo) html += '<span style="font-size:11px;color:var(--text-muted);">' + escHtml(timeAgo) + '</span>';
+      html += '</div>';
+      if (ruleDisplay) {
+        html += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;margin-bottom:10px;">' + ruleDisplay + '</div>';
+      }
+      var chunkId = escHtml(a.chunk_id || '');
+      var sandbox = escHtml(a.sandbox || '');
+      html += '<div style="display:flex;gap:8px;">';
+      html += '<button onclick="ncApprove(\'' + sandbox + '\',\'' + chunkId + '\',this)" style="flex:1;padding:6px 12px;background:rgba(118,185,0,0.15);color:#76b900;border:1px solid rgba(118,185,0,0.4);border-radius:5px;cursor:pointer;font-size:12px;font-weight:600;">&#10003; Approve</button>';
+      html += '<button onclick="ncReject(\'' + sandbox + '\',\'' + chunkId + '\',this)" style="flex:1;padding:6px 12px;background:rgba(239,68,68,0.1);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:5px;cursor:pointer;font-size:12px;font-weight:600;">&#10007; Reject</button>';
+      html += '</div>';
+      html += '</div>';
+    });
+    listEl.innerHTML = html;
+  } catch(e) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Failed to load approvals</div>';
+  }
+}
+
+async function ncApprove(sandbox, chunkId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Approving...'; }
+  try {
+    var resp = await fetch('/api/nemoclaw/approve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sandbox: sandbox, chunk_id: chunkId})
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      setTimeout(loadNemoClawApprovals, 500);
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = '✓ Approve'; }
+      alert('Approve failed: ' + (data.output || 'unknown error'));
     }
   } catch(e) {
-    console.error('Model attribution error:', e);
-    var el = document.getElementById('models-session-table');
-    if (el) el.innerHTML = '<div style="color:var(--text-error);font-size:11px;">Failed to load: ' + String(e) + '</div>';
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Approve'; }
+    console.error('ncApprove error:', e);
+  }
+}
+
+async function ncReject(sandbox, chunkId, btn) {
+  var reason = window.prompt('Reject reason (optional):') || '';
+  if (reason === null) return; // cancelled
+  if (btn) { btn.disabled = true; btn.textContent = 'Rejecting...'; }
+  try {
+    var resp = await fetch('/api/nemoclaw/reject', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sandbox: sandbox, chunk_id: chunkId, reason: reason})
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      setTimeout(loadNemoClawApprovals, 500);
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = '✗ Reject'; }
+      alert('Reject failed: ' + (data.output || 'unknown error'));
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '✗ Reject'; }
+    console.error('ncReject error:', e);
   }
 }
 
@@ -16696,8 +16685,9 @@ async function showSnapshot(ts) {
   }
 }
 
-// ── NemoClaw Governance ──────────────────────────────────────────────────────
-async function loadNemoClaw() {
+// ── NemoClaw: duplicate stub removed; see loadNemoClaw() above ────────────────
+// (The live implementation lives earlier in this file at the // NemoClaw Governance Tab comment)
+if (false) { async function loadNemoClaw() {
   try {
     var data = await fetch('/api/nemoclaw/status').then(function(r) { return r.json(); });
     if (!data.installed) {
@@ -16808,6 +16798,7 @@ function _ncEsc(s) {
     }).catch(function(){});
   } catch(e) {}
 })();
+}} // end if(false) stub
 </script>
 </div> <!-- end zoom-wrapper -->
 
@@ -25536,139 +25527,6 @@ def api_system_health():
     })
 
 
-_model_attribution_cache = {'data': None, 'ts': 0}
-_MODEL_ATTRIBUTION_TTL = 60  # seconds
-
-
-@bp_health.route('/api/model-attribution')
-def api_model_attribution():
-    """Model attribution — which model responded per turn in each session."""
-    now = time.time()
-    if _model_attribution_cache['data'] is not None and (now - _model_attribution_cache['ts']) < _MODEL_ATTRIBUTION_TTL:
-        return jsonify(_model_attribution_cache['data'])
-
-    sessions_dir = _get_sessions_dir()
-    model_total_tokens = defaultdict(int)  # model -> total tokens
-    model_session_count = defaultdict(int)  # model -> number of sessions it appeared in
-    per_session = []
-    all_switch_events = []
-
-    if os.path.isdir(sessions_dir):
-        for fname in os.listdir(sessions_dir):
-            if not fname.endswith('.jsonl'):
-                continue
-            sid = fname.replace('.jsonl', '')
-            fpath = os.path.join(sessions_dir, fname)
-
-            models_in_session = defaultdict(int)  # model -> tokens in this session
-            assistant_models = []  # ordered list of (model, timestamp) for switch detection
-            seen_models = set()
-
-            try:
-                with open(fpath, 'r') as f:
-                    for line in f:
-                        try:
-                            obj = json.loads(line.strip())
-                        except Exception:
-                            continue
-
-                        message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
-                        model = message.get('model') or obj.get('model')
-                        if not model:
-                            continue
-
-                        usage_metrics = _extract_usage_metrics(obj)
-                        tokens = usage_metrics['tokens']
-
-                        models_in_session[model] += tokens
-                        seen_models.add(model)
-
-                        # Track assistant responses for switch detection
-                        role = message.get('role') or obj.get('role', '')
-                        if role == 'assistant' or tokens > 0:
-                            ts_raw = obj.get('timestamp') or obj.get('time') or obj.get('created_at')
-                            assistant_models.append((model, str(ts_raw) if ts_raw else ''))
-
-            except Exception:
-                continue
-
-            if not seen_models:
-                continue
-
-            # Aggregate into global totals
-            for m, t in models_in_session.items():
-                model_total_tokens[m] += t
-                model_session_count[m] += 1
-
-            # Detect switches
-            switches = []
-            for i in range(1, len(assistant_models)):
-                prev_model = assistant_models[i - 1][0]
-                curr_model = assistant_models[i][0]
-                if prev_model != curr_model:
-                    switches.append({
-                        'from': prev_model,
-                        'to': curr_model,
-                        'at_turn': i,
-                    })
-
-            # Determine primary model (most tokens)
-            primary = max(models_in_session, key=models_in_session.get) if models_in_session else 'unknown'
-
-            per_session.append({
-                'session_id': sid,
-                'models': dict(models_in_session),
-                'primary': primary,
-                'switch_count': len(switches),
-                'switches': switches[:10],  # cap per session
-                'total_tokens': sum(models_in_session.values()),
-            })
-
-            for sw in switches:
-                all_switch_events.append({
-                    'session_id': sid,
-                    'from': sw['from'],
-                    'to': sw['to'],
-                    'at_turn': sw['at_turn'],
-                })
-
-    # Sort per_session by switch count descending
-    per_session.sort(key=lambda s: (-s['switch_count'], -s['total_tokens']))
-
-    # Determine global primary model
-    global_primary = max(model_total_tokens, key=model_total_tokens.get) if model_total_tokens else 'unknown'
-
-    # Fallback rate: sessions where a non-primary model appeared
-    total_sessions = len(per_session)
-    fallback_sessions = sum(1 for s in per_session if len(s['models']) > 1)
-    fallback_rate = round(fallback_sessions / total_sessions, 4) if total_sessions > 0 else 0.0
-
-    # Model distribution
-    total_tokens_all = sum(model_total_tokens.values()) or 1
-    model_distribution = []
-    for m, t in sorted(model_total_tokens.items(), key=lambda x: -x[1]):
-        model_distribution.append({
-            'model': m,
-            'tokens': t,
-            'pct': round(t / total_tokens_all * 100, 1),
-            'sessions': model_session_count[m],
-        })
-
-    result = {
-        'model_distribution': model_distribution,
-        'primary_model': global_primary,
-        'fallback_rate': fallback_rate,
-        'total_sessions': total_sessions,
-        'fallback_sessions': fallback_sessions,
-        'switch_events': all_switch_events[:100],  # cap at 100
-        'per_session': per_session[:50],  # top 50
-    }
-
-    _model_attribution_cache['data'] = result
-    _model_attribution_cache['ts'] = now
-    return jsonify(result)
-
-
 @bp_health.route('/api/health')
 def api_health():
     """System health checks."""
@@ -26294,6 +26152,114 @@ def api_nemoclaw_policy():
     if data.get("policy_yaml"):
         result["network_policies"] = _parse_network_policies(data["policy_yaml"])
     return jsonify(result)
+
+
+@bp_nemoclaw.route('/api/nemoclaw/approve', methods=['POST'])
+def api_nemoclaw_approve():
+    """Approve a pending NemoClaw egress chunk."""
+    data = request.get_json() or {}
+    sandbox = data.get('sandbox')
+    chunk_id = data.get('chunk_id')
+    if not sandbox or not chunk_id:
+        return jsonify({'error': 'missing sandbox or chunk_id'}), 400
+    import subprocess as _sp
+    r = _sp.run(
+        ['openshell', 'draft', 'approve', sandbox, chunk_id],
+        capture_output=True, text=True, timeout=10
+    )
+    return jsonify({'ok': r.returncode == 0, 'output': r.stdout or r.stderr})
+
+
+@bp_nemoclaw.route('/api/nemoclaw/reject', methods=['POST'])
+def api_nemoclaw_reject():
+    """Reject a pending NemoClaw egress chunk."""
+    data = request.get_json() or {}
+    sandbox = data.get('sandbox')
+    chunk_id = data.get('chunk_id')
+    reason = data.get('reason', '')
+    if not sandbox or not chunk_id:
+        return jsonify({'error': 'missing sandbox or chunk_id'}), 400
+    import subprocess as _sp
+    cmd = ['openshell', 'draft', 'reject', sandbox, chunk_id]
+    if reason:
+        cmd += ['--reason', reason]
+    r = _sp.run(cmd, capture_output=True, text=True, timeout=10)
+    return jsonify({'ok': r.returncode == 0, 'output': r.stdout or r.stderr})
+
+
+@bp_nemoclaw.route('/api/nemoclaw/pending-approvals')
+def api_nemoclaw_pending_approvals():
+    """Return pending egress approval requests from openshell."""
+    import shutil as _shutil
+    if not _shutil.which('openshell'):
+        return jsonify({'installed': False, 'approvals': []})
+    try:
+        # Get sandbox names
+        import subprocess as _sp
+        r = _sp.run(['nemoclaw', 'list'], capture_output=True, text=True, timeout=5)
+        approvals = []
+        sandboxes = []
+        for line in r.stdout.splitlines():
+            line = line.strip()
+            if not line or line.startswith('#') or line.lower().startswith('name') or line.startswith('-'):
+                continue
+            parts = line.split()
+            if parts:
+                sandboxes.append(parts[0])
+        for sandbox in sandboxes:
+            # Try JSON output first
+            r2 = _sp.run(
+                ['openshell', 'draft', 'get', sandbox, '--status', 'pending', '--json'],
+                capture_output=True, text=True, timeout=5
+            )
+            if r2.returncode == 0 and r2.stdout.strip():
+                try:
+                    import json as _j
+                    chunks = _j.loads(r2.stdout)
+                    if not isinstance(chunks, list):
+                        chunks = [chunks] if isinstance(chunks, dict) else []
+                    for chunk in chunks:
+                        endpoints = chunk.get('proposed_rule', {}).get('endpoints', [{}])
+                        first_ep = endpoints[0] if endpoints else {}
+                        approvals.append({
+                            'sandbox': sandbox,
+                            'chunk_id': chunk.get('id'),
+                            'rule_name': chunk.get('rule_name'),
+                            'host': first_ep.get('host'),
+                            'port': first_ep.get('port'),
+                            'protocol': first_ep.get('protocol'),
+                            'status': 'pending',
+                            'ts': chunk.get('created_at'),
+                        })
+                    continue
+                except (ValueError, KeyError):
+                    pass
+            # Fallback: plain text
+            r3 = _sp.run(
+                ['openshell', 'draft', 'get', sandbox, '--status', 'pending'],
+                capture_output=True, text=True, timeout=5
+            )
+            if r3.returncode == 0:
+                for line in r3.stdout.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith('#') or line.lower().startswith('id'):
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        approvals.append({
+                            'sandbox': sandbox,
+                            'chunk_id': parts[0],
+                            'rule_name': parts[1] if len(parts) > 1 else None,
+                            'host': parts[2] if len(parts) > 2 else None,
+                            'port': parts[3] if len(parts) > 3 else None,
+                            'protocol': None,
+                            'status': 'pending',
+                            'ts': None,
+                        })
+        return jsonify({'installed': True, 'approvals': approvals})
+    except Exception as e:
+        return jsonify({'installed': True, 'approvals': [], 'error': str(e)})
+
 
 # ── Context Inspector (GH #9) ─────────────────────────────────────────
 

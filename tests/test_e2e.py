@@ -172,7 +172,11 @@ class TestTabsLoad:
         assert count > 0, "No nav tabs found"
         
         for i in range(count):
-            tabs.nth(i).click()
+            tab = tabs.nth(i)
+            # Skip tabs hidden via display:none (e.g. NemoClaw tab before NemoClaw connects)
+            if not tab.is_visible():
+                continue
+            tab.click()
             page.wait_for_timeout(300)
         
         critical = [e for e in errors if "TypeError" in e or "ReferenceError" in e]
