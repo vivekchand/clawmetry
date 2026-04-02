@@ -692,7 +692,8 @@ def _pause_gateway():
         return
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
-    # Fallback: SIGSTOP to gateway process (Unix only)
+    # Fallback: SIGTERM to gateway process (Unix only)
+    # Note: SIGSTOP (19) freezes process indefinitely with TCP held open.
     if sys.platform != 'win32':
         try:
             result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
@@ -700,7 +701,7 @@ def _pause_gateway():
             for pid in result.stdout.strip().split('\n'):
                 pid = pid.strip()
                 if pid:
-                    os.kill(int(pid), 19)  # SIGSTOP
+                    os.kill(int(pid), 15)  # SIGTERM
                     return
         except Exception:
             pass
@@ -5957,7 +5958,8 @@ def _pause_gateway():
         return
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
-    # Fallback: SIGSTOP to gateway process (Unix only)
+    # Fallback: SIGTERM to gateway process (Unix only)
+    # Note: SIGSTOP (19) freezes process indefinitely with TCP held open.
     if sys.platform != 'win32':
         try:
             result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
@@ -5965,7 +5967,7 @@ def _pause_gateway():
             for pid in result.stdout.strip().split('\n'):
                 pid = pid.strip()
                 if pid:
-                    os.kill(int(pid), 19)  # SIGSTOP
+                    os.kill(int(pid), 15)  # SIGSTOP
                     return
         except Exception:
             pass
