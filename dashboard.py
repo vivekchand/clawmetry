@@ -702,8 +702,8 @@ def _pause_gateway():
                 if pid:
                     os.kill(int(pid), 19)  # SIGSTOP
                     return
-        except Exception:
-            pass
+        except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError):
+            pass  # process gone or can't access
 
 
 def _resume_gateway():
@@ -5967,8 +5967,8 @@ def _pause_gateway():
                 if pid:
                     os.kill(int(pid), 19)  # SIGSTOP
                     return
-        except Exception:
-            pass
+        except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError):
+            pass  # process gone or can't access
 
 
 def _resume_gateway():
