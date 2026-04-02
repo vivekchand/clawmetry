@@ -20607,6 +20607,71 @@ def api_cron_kill_all():
     )
 
 
+@bp_crons.route("/api/cron-health")
+def api_cron_health():
+    """Cron health monitor — run history, success rate, cost per run (GH #306).
+
+    Alias for /api/cron/health-summary with a normalised response shape:
+
+        {
+          "crons": [
+            {
+              "id": str,
+              "name": str,
+              "enabled": bool,
+              "health": "ok" | "warning" | "error" | "silent" | "disabled",
+              "stats": {
+                "success_rate": float,     # 0-100 (derived from consecutive failures)
+                "total_runs": int,
+                "avg_duration_ms": float,
+                "total_cost_usd": float,
+              },
+              "recent_runs": [],           # reserved for future run-log expansion
+              "last_error": str | null,
+            }
+          ],
+          "totals": { "total", "ok", "error", "silent", "disabled", "warning" },
+          "has_anomalies": bool,
+        }
+    """
+    with app.test_request_context():
+        inner = api_cron_health_summary()
+    raw = inner.get_json(force=True) or {}
+
+    crons_out = []
+    for j in raw.get("jobs", []):
+        cf = j.get("consecutiveFailures", 0) or 0
+        total_runs = j.get("costSessionCount", 0) or 0
+        # Estimate success rate: each consecutive failure counts against a window of 10
+        window = max(total_runs, cf, 10)
+        success_rate = round(max(0.0, (window - cf) / window * 100.0), 1)
+
+        crons_out.append(
+            {
+                "id": j.get("id", ""),
+                "name": j.get("name", ""),
+                "enabled": bool(j.get("enabled", True)),
+                "health": j.get("health", "ok"),
+                "stats": {
+                    "success_rate": success_rate,
+                    "total_runs": total_runs,
+                    "avg_duration_ms": float(j.get("lastDurationMs") or 0),
+                    "total_cost_usd": float(j.get("costUsd") or 0),
+                },
+                "recent_runs": [],  # run history available via /api/cron/<id>/runs
+                "last_error": j.get("lastError") or None,
+            }
+        )
+
+    return jsonify(
+        {
+            "crons": crons_out,
+            "totals": raw.get("totals", {}),
+            "has_anomalies": bool(raw.get("hasAnomalies", False)),
+        }
+    )
+
+
 def _find_log_file(ds):
     """Find log file for a given date string, trying multiple prefixes and dirs."""
     dirs = [LOG_DIR] + _get_log_dirs()
