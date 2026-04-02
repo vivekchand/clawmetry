@@ -3290,10 +3290,12 @@ function clawmetryLogout(){
   <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
     <button class="refresh-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;">+ New Job</button>
+    <button class="refresh-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
     <label class="modal-auto-refresh" style="margin-left:auto;">
       <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
     </label>
   </div>
+  <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
   <div class="card" id="crons-list">Loading...</div>
 </div>
@@ -8721,10 +8723,12 @@ function clawmetryLogout(){
   <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
     <button class="refresh-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;">+ New Job</button>
+    <button class="refresh-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
     <label class="modal-auto-refresh" style="margin-left:auto;">
       <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
     </label>
   </div>
+  <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
   <div class="card" id="crons-list">Loading...</div>
 </div>
@@ -11618,12 +11622,98 @@ async function loadCrons() {
   var data = await fetch('/api/crons').then(r => r.json());
   _cronJobs = data.jobs || [];
   renderCrons();
+  // Load cron health summary panel
+  loadCronHealth();
   // Load multi-node cron status from fleet nodes
   loadCronsMultiNode();
   // Start auto-refresh if checkbox is checked and timer not running
   var cb = document.getElementById('cron-auto-refresh');
   if (cb && cb.checked && !_cronAutoRefreshTimer) {
     _cronAutoRefreshTimer = setInterval(loadCrons, 30000);
+  }
+}
+
+async function loadCronHealth() {
+  var panel = document.getElementById('cron-health-panel');
+  if (!panel) return;
+  try {
+    var data = await fetch('/api/cron/health-summary').then(r => r.json());
+    var jobs = data.jobs || [];
+    var totals = data.totals || {};
+    var hasIssues = data.hasErrors || data.hasSilent || data.hasAnomalies;
+
+    // Show/hide emergency stop button
+    var killBtn = document.getElementById('cron-kill-all-btn');
+    if (killBtn) killBtn.style.display = hasIssues ? 'inline-flex' : 'none';
+
+    if (jobs.length === 0) { panel.innerHTML = ''; return; }
+
+    var healthColor = {'ok':'#22c55e','warning':'#f59e0b','error':'#ef4444','silent':'#ef4444','disabled':'#6b7280'};
+    var healthIcon = {'ok':'&#x2705;','warning':'&#x26A0;&#xFE0F;','error':'&#x274C;','silent':'&#x1F4F5;','disabled':'&#x23F8;'};
+
+    var html = '<div class="card" style="padding:14px;">';
+    // Summary row
+    html += '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:12px;">';
+    html += '<div style="font-size:13px;font-weight:700;color:var(--text-primary);">&#x1F4CA; Cron Health</div>';
+    html += '<span style="font-size:12px;background:#16a34a22;color:#22c55e;border-radius:6px;padding:2px 8px;">'+totals.ok+' healthy</span>';
+    if (totals.error) html += '<span style="font-size:12px;background:#ef444422;color:#ef4444;border-radius:6px;padding:2px 8px;">'+totals.error+' errors</span>';
+    if (totals.silent) html += '<span style="font-size:12px;background:#ef444422;color:#ef4444;border-radius:6px;padding:2px 8px;">'+totals.silent+' silent</span>';
+    if (totals.warning) html += '<span style="font-size:12px;background:#f59e0b22;color:#f59e0b;border-radius:6px;padding:2px 8px;">'+totals.warning+' warnings</span>';
+    if (totals.disabled) html += '<span style="font-size:12px;background:#6b728022;color:#6b7280;border-radius:6px;padding:2px 8px;">'+totals.disabled+' disabled</span>';
+    html += '</div>';
+
+    // Per-job health rows (only non-ok or all if <=8 jobs)
+    var showJobs = jobs.length <= 8 ? jobs : jobs.filter(function(j){return j.health !== 'ok';});
+    if (showJobs.length > 0) {
+      html += '<div style="display:grid;gap:6px;">';
+      showJobs.forEach(function(j) {
+        var color = healthColor[j.health] || '#6b7280';
+        var icon = healthIcon[j.health] || '';
+        var projStr = j.monthlyProjectedCost > 0 ? ' &middot; ~$'+j.monthlyProjectedCost.toFixed(2)+'/mo' : '';
+        var anomalyBadges = '';
+        if (j.costSpike) anomalyBadges += ' <span title="Cost spike detected" style="font-size:11px;background:#f59e0b22;color:#f59e0b;border-radius:4px;padding:1px 5px;">cost spike</span>';
+        if (j.durationSpike) anomalyBadges += ' <span title="Duration spike detected" style="font-size:11px;background:#f59e0b22;color:#f59e0b;border-radius:4px;padding:1px 5px;">slow run</span>';
+        if (j.isSilent) anomalyBadges += ' <span title="Job has not run in over 2.5x expected interval" style="font-size:11px;background:#ef444422;color:#ef4444;border-radius:4px;padding:1px 5px;">silent</span>';
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);">';
+        html += '<span style="width:8px;height:8px;border-radius:50%;background:'+color+';flex-shrink:0;"></span>';
+        html += '<span style="font-size:12px;font-weight:600;color:var(--text-primary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+escHtml(j.name||j.id)+'</span>';
+        html += anomalyBadges;
+        if (j.consecutiveFailures > 1) html += '<span style="font-size:11px;background:#ef444422;color:#ef4444;border-radius:4px;padding:1px 5px;">'+j.consecutiveFailures+' fails</span>';
+        html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">'+projStr+'</span>';
+        html += '<button onclick="event.stopPropagation();cronPauseJob(\''+escHtml(j.id)+'\')" title="Pause this job" style="font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;">&#x23F8; Pause</button>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+    panel.innerHTML = html;
+  } catch(e) {
+    // Non-fatal: health panel is supplementary
+    console.debug('cron health load failed', e);
+  }
+}
+
+async function cronKillAll() {
+  if (!confirm('Emergency stop: disable ALL active cron jobs? This cannot be undone automatically.')) return;
+  try {
+    var r = await fetch('/api/cron/kill-all', {method:'POST'}).then(res => res.json());
+    alert('Disabled ' + (r.disabled||0) + ' cron job(s).' + (r.errors && r.errors.length ? ' Failed: '+r.errors.join(', ') : ''));
+    loadCrons();
+  } catch(e) {
+    alert('Emergency stop failed: ' + e.message);
+  }
+}
+
+async function cronPauseJob(jobId) {
+  try {
+    var r = await fetch('/api/cron/toggle', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({jobId: jobId, enabled: false})
+    }).then(res => res.json());
+    if (r.ok !== false) { loadCrons(); } else { alert('Failed to pause job: ' + (r.error||'unknown error')); }
+  } catch(e) {
+    alert('Pause failed: ' + e.message);
   }
 }
 
