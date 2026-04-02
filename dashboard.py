@@ -13999,11 +13999,123 @@ function showTranscriptList() {
   document.getElementById('transcript-back-btn').style.display = 'none';
 }
 
+// ── Session Replay State ────────────────────────────────────────────────────
+window._replayEvents = [];
+window._replayIndex = 0;
+window._replayFilter = 'all';
+
+function _buildReplayEvent(m, idx) {
+  var role = m.role || 'unknown';
+  // Determine event type for filtering
+  var type = role;
+  if (role === 'assistant' && m.content && m.content.indexOf('[tool_use]') !== -1) type = 'tool_use';
+  if (role === 'assistant' && m.content && m.content.indexOf('<antml_thinking>') !== -1) type = 'thinking';
+  return { role: role, type: type, content: m.content || '', timestamp: m.timestamp, tokens: m.tokens || null, originalIndex: idx };
+}
+
+function _renderReplayEvent(ev, highlighted) {
+  var role = ev.role;
+  var cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
+  var content = ev.content;
+  var needsTruncate = content.length > 800;
+  var displayContent = needsTruncate ? content.substring(0, 800) : content;
+  var highlightStyle = highlighted ? 'box-shadow:0 0 0 2px #6366f1;' : '';
+  var html = '<div class="chat-msg ' + cls + '" id="replay-msg-' + ev.originalIndex + '" style="' + highlightStyle + '">';
+  html += '<div class="chat-role">' + escHtml(role) + '</div>';
+  if (needsTruncate) {
+    html += '<div class="chat-content-truncated" id="msg-' + ev.originalIndex + '-short">' + escHtml(displayContent) + '</div>';
+    html += '<div id="msg-' + ev.originalIndex + '-full" style="display:none;white-space:pre-wrap;">' + escHtml(content) + '</div>';
+    html += '<div class="chat-expand" onclick="toggleMsg(' + ev.originalIndex + ')">Show more (' + content.length + ' chars)</div>';
+  } else {
+    html += '<div style="white-space:pre-wrap;">' + escHtml(content) + '</div>';
+  }
+  if (ev.tokens) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">&#128200; ' + ev.tokens + ' tokens</div>';
+  if (ev.timestamp) html += '<div class="chat-ts">' + new Date(ev.timestamp).toLocaleString() + '</div>';
+  html += '</div>';
+  return html;
+}
+
+function _replayFilteredEvents() {
+  var f = window._replayFilter;
+  if (!f || f === 'all') return window._replayEvents;
+  return window._replayEvents.filter(function(ev) { return ev.type === f || ev.role === f; });
+}
+
+function _replayRenderCurrent() {
+  var filtered = _replayFilteredEvents();
+  if (!filtered.length) {
+    document.getElementById('transcript-messages').innerHTML = '<div style="color:var(--text-muted);padding:16px;">No events match this filter.</div>';
+    document.getElementById('replay-pos').textContent = '0/0';
+    return;
+  }
+  var idx = window._replayIndex;
+  if (idx < 0) idx = 0;
+  if (idx >= filtered.length) idx = filtered.length - 1;
+  window._replayIndex = idx;
+
+  // Render all filtered events up to current index (show history)
+  var html = '';
+  for (var i = 0; i <= idx; i++) {
+    html += _renderReplayEvent(filtered[i], i === idx);
+  }
+  document.getElementById('transcript-messages').innerHTML = html;
+  document.getElementById('replay-pos').textContent = (idx + 1) + '/' + filtered.length;
+  var scrubber = document.getElementById('replay-scrubber');
+  scrubber.max = filtered.length - 1;
+  scrubber.value = idx;
+
+  // Scroll highlighted message into view
+  var el = document.getElementById('replay-msg-' + filtered[idx].originalIndex);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function replayNext() {
+  var filtered = _replayFilteredEvents();
+  if (window._replayIndex < filtered.length - 1) {
+    window._replayIndex++;
+    _replayRenderCurrent();
+  }
+}
+
+function replayPrev() {
+  if (window._replayIndex > 0) {
+    window._replayIndex--;
+    _replayRenderCurrent();
+  }
+}
+
+function replayJumpTo(index) {
+  window._replayIndex = index;
+  _replayRenderCurrent();
+}
+
+function replayFilter(type) {
+  window._replayFilter = type;
+  window._replayIndex = 0;
+  // Update pill styles
+  document.querySelectorAll('.replay-filter').forEach(function(btn) {
+    var isActive = btn.getAttribute('data-type') === type;
+    btn.style.background = isActive ? '#6366f1' : 'var(--button-bg)';
+    btn.style.color = isActive ? '#fff' : 'var(--text-secondary)';
+    btn.style.borderColor = isActive ? '#6366f1' : 'var(--border-secondary)';
+  });
+  var filtered = _replayFilteredEvents();
+  var scrubber = document.getElementById('replay-scrubber');
+  scrubber.max = Math.max(0, filtered.length - 1);
+  scrubber.value = 0;
+  _replayRenderCurrent();
+}
+
 async function viewTranscript(sessionId) {
   document.getElementById('transcript-list').style.display = 'none';
   document.getElementById('transcript-viewer').style.display = '';
   document.getElementById('transcript-back-btn').style.display = '';
   document.getElementById('transcript-messages').innerHTML = '<div style="padding:20px;color:#666;">Loading transcript...</div>';
+  document.getElementById('replay-controls').style.display = 'none';
+  // Reset replay state
+  window._replayEvents = [];
+  window._replayIndex = 0;
+  window._replayFilter = 'all';
   try {
     var data = await fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json());
     // Metadata
@@ -14013,27 +14125,23 @@ async function viewTranscript(sessionId) {
     if (data.totalTokens) metaHtml += '<div class="stat-row"><span class="stat-label">Tokens</span><span class="stat-val"><span class="badge tokens">' + (data.totalTokens/1000).toFixed(0) + 'K</span></span></div>';
     if (data.duration) metaHtml += '<div class="stat-row"><span class="stat-label">Duration</span><span class="stat-val">' + data.duration + '</span></div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
-    // Messages
-    var msgsHtml = '';
-    data.messages.forEach(function(m, idx) {
-      var role = m.role || 'unknown';
-      var cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
-      var content = m.content || '';
-      var needsTruncate = content.length > 800;
-      var displayContent = needsTruncate ? content.substring(0, 800) : content;
-      msgsHtml += '<div class="chat-msg ' + cls + '">';
-      msgsHtml += '<div class="chat-role">' + escHtml(role) + '</div>';
-      if (needsTruncate) {
-        msgsHtml += '<div class="chat-content-truncated" id="msg-' + idx + '-short">' + escHtml(displayContent) + '</div>';
-        msgsHtml += '<div id="msg-' + idx + '-full" style="display:none;white-space:pre-wrap;">' + escHtml(content) + '</div>';
-        msgsHtml += '<div class="chat-expand" onclick="toggleMsg(' + idx + ')">Show more (' + content.length + ' chars)</div>';
-      } else {
-        msgsHtml += '<div style="white-space:pre-wrap;">' + escHtml(content) + '</div>';
-      }
-      if (m.timestamp) msgsHtml += '<div class="chat-ts">' + new Date(m.timestamp).toLocaleString() + '</div>';
-      msgsHtml += '</div>';
+    // Build replay events array (store parsed events for replay)
+    window._replayEvents = (data.messages || []).map(function(m, idx) {
+      return _buildReplayEvent(m, idx);
     });
-    document.getElementById('transcript-messages').innerHTML = msgsHtml || '<div style="color:#555;padding:16px;">No messages in this transcript</div>';
+    if (window._replayEvents.length > 0) {
+      // Show replay controls and start at last event (show full conversation by default)
+      window._replayIndex = window._replayEvents.length - 1;
+      var scrubber = document.getElementById('replay-scrubber');
+      scrubber.min = 0;
+      scrubber.max = window._replayEvents.length - 1;
+      scrubber.value = window._replayIndex;
+      document.getElementById('replay-controls').style.display = '';
+      // Reset filter pills to "all"
+      replayFilter('all');
+    } else {
+      document.getElementById('transcript-messages').innerHTML = '<div style="color:#555;padding:16px;">No messages in this transcript</div>';
+    }
   } catch(e) {
     document.getElementById('transcript-messages').innerHTML = '<div style="color:#e74c3c;padding:16px;">Failed to load transcript</div>';
   }
