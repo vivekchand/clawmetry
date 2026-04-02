@@ -3226,6 +3226,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
     <div class="nav-tab" onclick="switchTab('limits')" title="API rate limit consumption — rolling windows per provider">Limits</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
+    <div class="nav-tab" onclick="switchTab('subagents')" title="Sub-agent tree — collapsible parent nodes">Agents</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -4322,6 +4323,15 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-nemoclaw -->
 
+<!-- SUB-AGENT TREE -->
+<div class="page" id="page-subagents">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#129313; Sub-Agent Tree</h2>
+    <button class="refresh-btn" onclick="loadSubagents()">&#8635; Refresh</button>
+  </div>
+  <div id="subagents-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
+</div><!-- end page-subagents -->
+
 
 <script>
 
@@ -4736,6 +4746,8 @@ function switchTab(name) {
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
+  if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
+  if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
 }
 
 function exportUsageData() {
@@ -8985,6 +8997,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
     <div class="nav-tab" onclick="switchTab('limits')" title="API rate limit consumption — rolling windows per provider">Limits</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
+    <div class="nav-tab" onclick="switchTab('subagents')" title="Sub-agent tree — collapsible parent nodes">Agents</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -10150,6 +10163,15 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-nemoclaw (theme 2) -->
 
+<!-- SUB-AGENT TREE (theme 2) -->
+<div class="page" id="page-subagents">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#129313; Sub-Agent Tree</h2>
+    <button class="refresh-btn" onclick="loadSubagents()">&#8635; Refresh</button>
+  </div>
+  <div id="subagents-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
+</div><!-- end page-subagents (theme 2) -->
+
 
 <div class="page" id="page-logs">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -10741,6 +10763,8 @@ function switchTab(name) {
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
+  if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
+  if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
 }
 
 function exportUsageData() {
@@ -14380,6 +14404,83 @@ async function checkUpgradeBanner() {
   } catch(e){}
 }
 setTimeout(checkUpgradeBanner, 3000);
+
+// ── Sub-Agent Tree ────────────────────────────────────────────────────────
+var _subagentsTimer = null;
+var _subagentsExpanded = {};
+
+async function loadSubagents() {
+  var el = document.getElementById('subagents-list');
+  if (!el) return;
+  try {
+    var data = await fetch('/api/subagents').then(function(r) { return r.json(); });
+    var agents = data.subagents || [];
+    var counts = data.counts || {};
+    if (agents.length === 0) {
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">No sub-agents found. Sub-agents appear here when spawned by the main session.</div>';
+      return;
+    }
+    var byId = {};
+    agents.forEach(function(a) { byId[a.sessionId] = a; });
+    var roots = [];
+    var childrenOf = {};
+    agents.forEach(function(a) {
+      var p = a.parent;
+      if (p && byId[p]) {
+        if (!childrenOf[p]) childrenOf[p] = [];
+        childrenOf[p].push(a);
+      } else {
+        roots.push(a);
+      }
+    });
+    function statusDot(status) {
+      var colors = { active: '#16a34a', idle: '#d97706', stale: '#6b7280' };
+      var glow = status === 'active' ? 'box-shadow:0 0 6px rgba(22,163,74,0.6);' : '';
+      return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (colors[status] || '#6b7280') + ';' + glow + 'flex-shrink:0;margin-right:4px;"></span>';
+    }
+    function renderAgent(a, depth) {
+      var sid = a.sessionId;
+      var hasChildren = !!(childrenOf[sid] && childrenOf[sid].length > 0);
+      var isExpanded = _subagentsExpanded[sid] !== false;
+      var indent = depth > 0 ? 'padding-left:' + (depth * 22 + 12) + 'px;' : 'padding-left:12px;';
+      var toggleBtn = hasChildren
+        ? '<button onclick="event.stopPropagation();_saToggle(' + JSON.stringify(sid) + ')" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--text-muted);padding:0 4px 0 0;line-height:1;min-width:16px;">' + (isExpanded ? '▼' : '▶') + '</button>'
+        : '<span style="display:inline-block;min-width:16px;"></span>';
+      var tokens = a.totalTokens >= 1000 ? (a.totalTokens / 1000).toFixed(1) + 'K' : a.totalTokens;
+      var depthBadge = a.depth > 0 ? '<span style="font-size:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:4px;padding:1px 5px;color:var(--text-muted);margin-left:6px;">d' + a.depth + '</span>' : '';
+      var html = '<div style="display:flex;align-items:center;gap:6px;' + indent + 'padding-top:8px;padding-bottom:8px;padding-right:12px;border-bottom:1px solid var(--border-secondary);">';
+      html += toggleBtn;
+      html += statusDot(a.status);
+      html += '<span style="font-weight:600;font-size:13px;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(a.displayName) + '">' + escHtml(a.displayName) + '</span>';
+      html += depthBadge;
+      html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + escHtml(a.model || '') + '</span>';
+      html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + tokens + ' tok</span>';
+      html += '<span style="font-size:11px;color:var(--text-faint);white-space:nowrap;margin-left:8px;">' + escHtml(a.runtime || '') + '</span>';
+      html += '</div>';
+      if (hasChildren && isExpanded) {
+        childrenOf[sid].forEach(function(child) { html += renderAgent(child, depth + 1); });
+      }
+      return html;
+    }
+    var summaryHtml = '<div style="display:flex;gap:16px;padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:12px;flex-wrap:wrap;">';
+    summaryHtml += '<span style="color:var(--text-muted);"><strong style="color:var(--text-primary);">' + (counts.total || 0) + '</strong> total</span>';
+    if (counts.active) summaryHtml += '<span style="color:#16a34a;"><strong>' + counts.active + '</strong> active</span>';
+    if (counts.idle) summaryHtml += '<span style="color:#d97706;"><strong>' + counts.idle + '</strong> idle</span>';
+    if (counts.stale) summaryHtml += '<span style="color:var(--text-muted);"><strong>' + counts.stale + '</strong> stale</span>';
+    summaryHtml += '</div>';
+    var treeHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">' + summaryHtml;
+    roots.forEach(function(a) { treeHtml += renderAgent(a, 0); });
+    treeHtml += '</div>';
+    el.innerHTML = treeHtml;
+  } catch(e) {
+    el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load sub-agents: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+function _saToggle(sid) {
+  _subagentsExpanded[sid] = (_subagentsExpanded[sid] === false) ? true : false;
+  loadSubagents();
+}
 
 // ── Upgrade Impact Panel ───────────────────────────────────────────────────
 async function loadVersionImpact() {
@@ -19690,6 +19791,63 @@ def api_sessions():
     if gw_data and "sessions" in gw_data:
         return jsonify({"sessions": _augment_sessions_with_burn(gw_data["sessions"])})
     return jsonify({"sessions": _augment_sessions_with_burn(_get_sessions())})
+
+
+@bp_sessions.route("/api/subagents")
+def api_subagents():
+    """Return sub-agent list with depth/parent fields for the tree view."""
+    now_ms = time.time() * 1000
+    gw_data = _gw_invoke("sessions_list", {"limit": 100, "messageLimit": 0})
+    if gw_data and "sessions" in gw_data:
+        all_sessions = gw_data["sessions"]
+    else:
+        all_sessions = _get_sessions()
+
+    subagents = []
+    counts = {"total": 0, "active": 0, "idle": 0, "stale": 0}
+    for s in all_sessions:
+        sid = s.get("sessionId") or s.get("key", "")
+        if not sid:
+            continue
+        age_ms = now_ms - (s.get("updatedAt") or s.get("lastActiveMs", 0) or 0)
+        if age_ms < 120000:
+            status = "active"
+        elif age_ms < 600000:
+            status = "idle"
+        else:
+            status = "stale"
+        depth = int(s.get("depth", 0) or 0)
+        parent = s.get("spawnedBy") or s.get("parentKey") or None
+        is_subagent = depth > 0 or "subagent" in sid.lower() or bool(parent)
+        if not is_subagent:
+            continue
+        tokens = int(s.get("totalTokens") or 0)
+        model = s.get("model") or s.get("modelRef") or "unknown"
+        display = s.get("displayName") or s.get("label") or sid[:20]
+        started = s.get("startedAt") or s.get("updatedAt") or now_ms
+        elapsed_s = max(0, int((now_ms - started) / 1000))
+        if elapsed_s < 60:
+            runtime = f"{elapsed_s}s"
+        elif elapsed_s < 3600:
+            runtime = f"{elapsed_s // 60}m"
+        else:
+            runtime = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+        counts["total"] += 1
+        counts[status] += 1
+        subagents.append({
+            "sessionId": sid,
+            "displayName": display,
+            "model": model,
+            "status": status,
+            "depth": depth,
+            "parent": parent,
+            "totalTokens": tokens,
+            "runtime": runtime,
+            "updatedAt": s.get("updatedAt") or s.get("lastActiveMs", 0),
+        })
+
+    subagents.sort(key=lambda x: (0 if x["status"] == "active" else 1 if x["status"] == "idle" else 2, x["depth"]))
+    return jsonify({"subagents": subagents, "counts": counts})
 
 
 @bp_sessions.route("/api/delegation-tree")
