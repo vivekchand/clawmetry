@@ -21,6 +21,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from datetime import datetime, timezone
+from itertools import islice
 
 
 def _get_openclaw_dir():
@@ -670,9 +671,8 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
 
         try:
             with open(fpath, "r", errors="replace") as f:
-                all_lines = f.readlines()
+                new_lines = list(islice(f, last_line, None))
 
-            new_lines = all_lines[last_line:]
             line_cursor = last_line
             for i, raw in enumerate(new_lines, start=last_line):
                 raw = raw.strip()
@@ -782,7 +782,7 @@ def sync_sessions_recent(config: dict, state: dict, paths: dict,
 
         try:
             with open(fpath, "r", errors="replace") as f:
-                all_lines = f.readlines()
+                all_lines = list(islice(f, None))  # read all for backwards scan
 
             n = len(all_lines)
             if n == 0:
