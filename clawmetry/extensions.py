@@ -16,6 +16,7 @@ Registration:
     from clawmetry.extensions import register
     register("session.snapshot", my_handler)
 """
+
 from __future__ import annotations
 
 import importlib.metadata

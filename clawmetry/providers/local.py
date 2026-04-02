@@ -1,19 +1,22 @@
 """Local filesystem data provider — reads directly from ~/.openclaw files."""
+
 from __future__ import annotations
-import glob
 import json
 import os
-import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
-from clawmetry.providers.base import (
-    ClawMetryDataProvider, Event, LogEntry, MemoryFile, MetricPoint, Session
-)
+from clawmetry.providers.base import ClawMetryDataProvider, Event, MemoryFile, Session
 
 _MEMORY_FILE_NAMES = [
-    "MEMORY.md", "SOUL.md", "IDENTITY.md", "USER.md",
-    "AGENTS.md", "TOOLS.md", "HEARTBEAT.md", "BOOTSTRAP.md",
+    "MEMORY.md",
+    "SOUL.md",
+    "IDENTITY.md",
+    "USER.md",
+    "AGENTS.md",
+    "TOOLS.md",
+    "HEARTBEAT.md",
+    "BOOTSTRAP.md",
 ]
 
 
@@ -31,7 +34,11 @@ class LocalDataProvider(ClawMetryDataProvider):
     # ── Sessions ──────────────────────────────────────────────────────────────
 
     def _sessions_index_path(self) -> str:
-        return os.path.join(self.sessions_dir, "sessions.json") if self.sessions_dir else ""
+        return (
+            os.path.join(self.sessions_dir, "sessions.json")
+            if self.sessions_dir
+            else ""
+        )
 
     def get_session_index(self) -> Dict[str, Dict]:
         idx_path = self._sessions_index_path()
@@ -47,8 +54,12 @@ class LocalDataProvider(ClawMetryDataProvider):
             self._sessions_index_cache = {}
         return self._sessions_index_cache or {}
 
-    def list_sessions(self, limit: int = 30, include_subagents: bool = True,
-                      since_ms: Optional[int] = None) -> List[Session]:
+    def list_sessions(
+        self,
+        limit: int = 30,
+        include_subagents: bool = True,
+        since_ms: Optional[int] = None,
+    ) -> List[Session]:
         index = self.get_session_index()
         sessions = []
         for key, meta in index.items():
@@ -61,18 +72,24 @@ class LocalDataProvider(ClawMetryDataProvider):
             is_subagent = ":subagent:" in key
             if not include_subagents and is_subagent:
                 continue
-            kind = "subagent" if is_subagent else "cron" if ":cron:" in key else "direct"
-            sessions.append(Session(
-                session_id=sid,
-                display_name=meta.get("label") or meta.get("displayName") or key[:40],
-                model=meta.get("model", "unknown"),
-                channel=meta.get("lastChannel") or meta.get("channel", "unknown"),
-                updated_at=updated,
-                total_tokens=meta.get("totalTokens", 0) or 0,
-                kind=kind,
-                label=meta.get("label", ""),
-                extra=meta,
-            ))
+            kind = (
+                "subagent" if is_subagent else "cron" if ":cron:" in key else "direct"
+            )
+            sessions.append(
+                Session(
+                    session_id=sid,
+                    display_name=meta.get("label")
+                    or meta.get("displayName")
+                    or key[:40],
+                    model=meta.get("model", "unknown"),
+                    channel=meta.get("lastChannel") or meta.get("channel", "unknown"),
+                    updated_at=updated,
+                    total_tokens=meta.get("totalTokens", 0) or 0,
+                    kind=kind,
+                    label=meta.get("label", ""),
+                    extra=meta,
+                )
+            )
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
         return sessions[:limit]
 
@@ -83,10 +100,18 @@ class LocalDataProvider(ClawMetryDataProvider):
                 continue
             if meta.get("sessionId", key) == session_id:
                 is_subagent = ":subagent:" in key
-                kind = "subagent" if is_subagent else "cron" if ":cron:" in key else "direct"
+                kind = (
+                    "subagent"
+                    if is_subagent
+                    else "cron"
+                    if ":cron:" in key
+                    else "direct"
+                )
                 return Session(
                     session_id=session_id,
-                    display_name=meta.get("label") or meta.get("displayName") or key[:40],
+                    display_name=meta.get("label")
+                    or meta.get("displayName")
+                    or key[:40],
                     model=meta.get("model", "unknown"),
                     channel=meta.get("lastChannel") or meta.get("channel", "unknown"),
                     updated_at=meta.get("updatedAt", 0),
@@ -99,8 +124,9 @@ class LocalDataProvider(ClawMetryDataProvider):
 
     # ── Events ────────────────────────────────────────────────────────────────
 
-    def get_events(self, session_id: str, limit: int = 500,
-                   tail_bytes: Optional[int] = None) -> List[Event]:
+    def get_events(
+        self, session_id: str, limit: int = 500, tail_bytes: Optional[int] = None
+    ) -> List[Event]:
         if not self.sessions_dir:
             return []
         jsonl_path = os.path.join(self.sessions_dir, f"{session_id}.jsonl")
@@ -124,13 +150,15 @@ class LocalDataProvider(ClawMetryDataProvider):
                     continue
                 ev_type = obj.get("type", "unknown")
                 ts = obj.get("timestamp") or obj.get("ts") or ""
-                events.append(Event(
-                    event_id=f"{session_id}:{i}",
-                    session_id=session_id,
-                    event_type=ev_type,
-                    ts=ts,
-                    data=obj,
-                ))
+                events.append(
+                    Event(
+                        event_id=f"{session_id}:{i}",
+                        session_id=session_id,
+                        event_type=ev_type,
+                        ts=ts,
+                        data=obj,
+                    )
+                )
         except Exception:
             pass
         return events[-limit:]
@@ -146,7 +174,9 @@ class LocalDataProvider(ClawMetryDataProvider):
                 return p
         return None
 
-    def get_log_lines(self, date_str: Optional[str] = None, limit: int = 1000) -> List[str]:
+    def get_log_lines(
+        self, date_str: Optional[str] = None, limit: int = 1000
+    ) -> List[str]:
         if date_str is None:
             date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         path = self._log_file_path(date_str)
@@ -155,7 +185,7 @@ class LocalDataProvider(ClawMetryDataProvider):
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
-            return [l.rstrip("\n") for l in lines[-limit:]]
+            return [line.rstrip("\n") for line in lines[-limit:]]
         except Exception:
             return []
 
@@ -179,11 +209,15 @@ class LocalDataProvider(ClawMetryDataProvider):
             p = os.path.join(self.workspace, name)
             if os.path.exists(p):
                 stat = os.stat(p)
-                files.append(MemoryFile(
-                    path=name,
-                    size=stat.st_size,
-                    modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                ))
+                files.append(
+                    MemoryFile(
+                        path=name,
+                        size=stat.st_size,
+                        modified=datetime.fromtimestamp(
+                            stat.st_mtime, tz=timezone.utc
+                        ).isoformat(),
+                    )
+                )
         # Daily notes in memory/ subdir
         mem_dir = os.path.join(self.workspace, "memory")
         if os.path.isdir(mem_dir):
@@ -191,11 +225,15 @@ class LocalDataProvider(ClawMetryDataProvider):
                 if fname.endswith(".md"):
                     p = os.path.join(mem_dir, fname)
                     stat = os.stat(p)
-                    files.append(MemoryFile(
-                        path=f"memory/{fname}",
-                        size=stat.st_size,
-                        modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                    ))
+                    files.append(
+                        MemoryFile(
+                            path=f"memory/{fname}",
+                            size=stat.st_size,
+                            modified=datetime.fromtimestamp(
+                                stat.st_mtime, tz=timezone.utc
+                            ).isoformat(),
+                        )
+                    )
         return files
 
     def read_workspace_file(self, relative_path: str) -> str:
@@ -243,9 +281,13 @@ class LocalDataProvider(ClawMetryDataProvider):
             "provider": "LocalDataProvider",
             "ok": True,
             "sessions_dir": self.sessions_dir,
-            "sessions_dir_exists": os.path.isdir(self.sessions_dir) if self.sessions_dir else False,
+            "sessions_dir_exists": os.path.isdir(self.sessions_dir)
+            if self.sessions_dir
+            else False,
             "log_dir": self.log_dir,
             "log_dir_exists": os.path.isdir(self.log_dir) if self.log_dir else False,
             "workspace": self.workspace,
-            "workspace_exists": os.path.isdir(self.workspace) if self.workspace else False,
+            "workspace_exists": os.path.isdir(self.workspace)
+            if self.workspace
+            else False,
         }
