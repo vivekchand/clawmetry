@@ -114,6 +114,54 @@ class TestSystemHealth:
         assert isinstance(d, dict)
 
 
+class TestSandboxStatus:
+    """Tests for /api/sandbox-status — generic sandbox, inference & security cards."""
+
+    def test_status(self, api, base_url):
+        r = get(api, base_url, "/api/sandbox-status")
+        assert_ok(r)
+
+    def test_top_level_keys_always_present(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/sandbox-status"))
+        assert_keys(d, "sandbox", "inference", "security")
+
+    def test_sandbox_null_or_valid_shape(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/sandbox-status"))
+        sb = d.get("sandbox")
+        if sb is not None:
+            assert isinstance(sb, dict), "sandbox must be a dict when not null"
+            assert_keys(sb, "name", "status", "type")
+
+    def test_inference_null_or_valid_shape(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/sandbox-status"))
+        inf = d.get("inference")
+        if inf is not None:
+            assert isinstance(inf, dict), "inference must be a dict when not null"
+            assert_keys(inf, "provider", "model")
+
+    def test_security_null_or_valid_shape(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/sandbox-status"))
+        sec = d.get("security")
+        if sec is not None:
+            assert isinstance(sec, dict), "security must be a dict when not null"
+            # Must contain at least one of the two canonical fields
+            has_field = "sandbox_enabled" in sec or "network_policy" in sec
+            assert has_field, "security must contain sandbox_enabled or network_policy"
+
+    def test_sandbox_status_is_string_when_present(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/sandbox-status"))
+        sb = d.get("sandbox")
+        if sb is not None:
+            assert isinstance(sb.get("status"), str), "sandbox.status must be a string"
+
+    def test_security_sandbox_enabled_is_bool_when_present(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/sandbox-status"))
+        sec = d.get("security")
+        if sec is not None and "sandbox_enabled" in sec:
+            assert isinstance(sec["sandbox_enabled"], bool), \
+                "security.sandbox_enabled must be a boolean"
+
+
 class TestSessions:
     def test_status(self, api, base_url):
         r = get(api, base_url, "/api/sessions")

@@ -13455,6 +13455,81 @@ function startSystemHealthRefresh() {
   window._sysHealthTimer = setInterval(loadSystemHealth, 30000);
 }
 
+// ===== Sandbox Status (dedicated endpoint) =====
+// Fetches /api/sandbox-status and renders the three cards:
+//   • Sandbox card  — hides when sandbox is null
+//   • Inference card — hides when inference is null
+//   • Security badge — shows "Sandboxed" tag when security.sandbox_enabled is true
+// Called on Overview tab load (see bootDashboard).
+async function loadSandboxStatus() {
+  try {
+    var d = await fetch('/api/sandbox-status').then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
+
+    // --- Sandbox card ---
+    var sbWrap = document.getElementById('sh-sandbox-wrap');
+    var sbEl   = document.getElementById('sh-sandbox');
+    if (d.sandbox && sbEl) {
+      var sb = d.sandbox;
+      var sbDot   = sb.status === 'running' ? '🟢' : (sb.status === 'error' ? '🔴' : '🟡');
+      var sbColor = sb.status === 'running'
+        ? 'var(--text-success,#22c55e)'
+        : (sb.status === 'error' ? 'var(--text-error,#dc2626)' : '#d97706');
+      sbEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;'
+        + 'background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:13px;">'
+        + sbDot + ' <span style="font-weight:600;color:' + sbColor + ';">' + (sb.name || 'Sandbox') + '</span>'
+        + '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">' + (sb.type || '') + '</span></div>';
+      if (sbWrap) sbWrap.style.display = '';
+    } else if (sbWrap) {
+      sbWrap.style.display = 'none';
+    }
+
+    // --- Inference card ---
+    var infWrap = document.getElementById('sh-inference-wrap');
+    var infEl   = document.getElementById('sh-inference');
+    if (d.inference && infEl) {
+      var inf = d.inference;
+      infEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;'
+        + 'background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:13px;">'
+        + '🤖 <span style="font-weight:600;color:var(--text-primary);">' + (inf.provider || 'Unknown') + '</span>'
+        + (inf.model ? '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;font-family:monospace;">'
+            + inf.model + '</span>' : '')
+        + '</div>';
+      if (infWrap) infWrap.style.display = '';
+    } else if (infWrap) {
+      infWrap.style.display = 'none';
+    }
+
+    // --- Security badge (Sandboxed) ---
+    var secWrap = document.getElementById('sh-security-wrap');
+    var secEl   = document.getElementById('sh-security');
+    if (d.security && secEl) {
+      var sec = d.security;
+      var badges = '';
+      if (sec.sandbox_enabled) {
+        badges += '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;'
+          + 'font-weight:600;background:rgba(34,197,94,0.15);color:#22c55e;margin-right:4px;">🔒 Sandboxed</span>';
+      }
+      if (sec.network_policy) {
+        badges += '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;'
+          + 'font-weight:600;background:rgba(59,130,246,0.15);color:#3b82f6;margin-right:4px;">'
+          + 'Net: ' + sec.network_policy + '</span>';
+      }
+      if (!badges) badges = '<span style="color:var(--text-muted);font-size:12px;">No security metadata detected</span>';
+      secEl.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:4px;padding:8px 10px;'
+        + 'background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);">'
+        + badges + '</div>';
+      if (secWrap) secWrap.style.display = '';
+    } else if (secWrap) {
+      secWrap.style.display = 'none';
+    }
+  } catch(e) {
+    console.warn('loadSandboxStatus failed', e);
+  }
+}
+
 // ===== Activity Heatmap =====
 var _heatmapDays = 7;
 async function loadHeatmap(days) {
@@ -17377,6 +17452,7 @@ async function bootDashboard() {
 
   setBootStep('health', 'loading', 'Loading system health');
   var okHealth = await loadSystemHealth();
+  loadSandboxStatus();
   setBootStep('health', okHealth ? 'done' : 'fail', okHealth ? 'System health ready' : 'System health delayed');
 
   setBootStep('streams', 'loading', 'Connecting live streams');
@@ -21553,8 +21629,12 @@ function renderNodes(nodes) {
     const model = m.model || 'unknown';
     const disk = (m.health && m.health.disk_pct) ? m.health.disk_pct.toFixed(0)+'%' : '-';
     const svcBar = renderServiceBar(m);
+    const secMeta = m.security || {};
+    const sandboxedBadge = secMeta.sandbox_enabled
+      ? '<span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.3);">🔒 Sandboxed</span>'
+      : '';
     return `<div class="node-card" onclick="location.href='/api/nodes/${n.node_id}'">
-      <div class="top"><div class="name">${esc(n.name||n.node_id)}</div><div class="status ${n.status}">${n.status}</div></div>
+      <div class="top"><div class="name">${esc(n.name||n.node_id)}</div><div style="display:flex;align-items:center;gap:6px;">${sandboxedBadge}<div class="status ${n.status}">${n.status}</div></div></div>
       <div class="meta">${esc(n.hostname||'')} - last seen ${ago}</div>
       <div class="metrics">
         <div class="metric"><div class="ml">Cost Today</div><div class="mv">$${cost}</div></div>
@@ -28889,6 +28969,55 @@ def api_health_stream():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@bp_health.route("/api/sandbox-status")
+def api_sandbox_status():
+    """Dedicated endpoint: generic sandbox, inference provider & security posture.
+
+    Returns:
+        {
+            "sandbox":   {"name": str, "status": str, "type": str} | null,
+            "inference": {"provider": str, "model": str} | null,
+            "security":  {"sandbox_enabled": bool, "network_policy": str} | null,
+        }
+
+    All top-level keys are always present; values are null when the respective
+    metadata cannot be detected (platform-agnostic, no vendor logos/assumptions).
+    """
+    sandbox_raw = _detect_sandbox_metadata()
+    inference_raw = _detect_inference_metadata()
+    security_raw = _detect_security_metadata()
+
+    # Normalise sandbox — keep only the three canonical fields
+    sandbox = None
+    if sandbox_raw and isinstance(sandbox_raw, dict):
+        sandbox = {
+            "name": sandbox_raw.get("name"),
+            "status": sandbox_raw.get("status", "running"),
+            "type": sandbox_raw.get("type"),
+        }
+
+    # Normalise inference — keep only the two canonical fields
+    inference = None
+    if inference_raw and isinstance(inference_raw, dict):
+        inference = {
+            "provider": inference_raw.get("provider"),
+            "model": inference_raw.get("model"),
+        }
+
+    # Normalise security — keep only the two canonical fields
+    security = None
+    if security_raw and isinstance(security_raw, dict):
+        sec_fields: dict = {}
+        if "sandbox_enabled" in security_raw:
+            sec_fields["sandbox_enabled"] = bool(security_raw["sandbox_enabled"])
+        if "network_policy" in security_raw:
+            sec_fields["network_policy"] = security_raw["network_policy"]
+        if sec_fields:
+            security = sec_fields
+
+    return jsonify({"sandbox": sandbox, "inference": inference, "security": security})
 
 
 @bp_config.route("/api/llmfit")
