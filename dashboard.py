@@ -865,6 +865,8 @@ def _get_active_alerts():
         return []
 
 
+_velocity_cache = {"ts": 0, "result": None, "mtimes": {}}
+
 def _compute_velocity_status():
     """Compute real-time token velocity across all active sessions.
 
@@ -877,6 +879,9 @@ def _compute_velocity_status():
       - reasons: list of human-readable trigger reasons
     """
     now = time.time()
+    # Cache for 30 seconds to avoid re-reading files
+    if _velocity_cache["result"] and (now - _velocity_cache["ts"]) < 30:
+        return _velocity_cache["result"]
     window_2min = now - 120
 
     sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
