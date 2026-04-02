@@ -2357,3 +2357,26 @@ if __name__ == "__main__":
             log.info("Restarting in 15 seconds...")
             time.sleep(15)
 
+
+
+def run_daemon() -> None:
+    """Run the sync daemon - main loop for continuous synchronization."""
+    config = load_config()
+    state = load_state()
+    paths = detect_paths()
+
+    log.info("Starting ClawMetry sync daemon...")
+
+    while True:
+        try:
+            sync_session_metadata(config, state)
+            sync_sessions(config, state, paths)
+            sync_logs(config, state, paths)
+            sync_crons(config, state, paths)
+            sync_memory(config, state, paths)
+            sync_system_snapshot(config, state, paths)
+            save_state(state)
+        except Exception as e:
+            log.error(f"Sync error: {e}")
+
+        time.sleep(60)
