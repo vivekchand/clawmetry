@@ -23529,6 +23529,7 @@ def _compute_transcript_analytics():
     sessions_dir = _get_sessions_dir()
     summaries = []
     plugin_stats = defaultdict(lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0})
+    plugin_daily_stats: dict = {}  # day -> plugin -> {tokens, cost, calls} (GH#201 trend)
     daily_tokens = {}
     daily_cost = {}
     model_usage = {}
@@ -23602,10 +23603,20 @@ def _compute_transcript_analytics():
                                     if cost > 0
                                     else 0.0
                                 )
+                                # Track daily breakdown for trend analysis (GH#201)
+                                # day is resolved when s_start is known; use fallback_dt day here
+                                _ev_day = fallback_dt.strftime("%Y-%m-%d")
                                 for p in plugins:
                                     plugin_stats[p]["tokens"] += share_tokens
                                     plugin_stats[p]["cost"] += share_cost
                                     plugin_stats[p]["calls"] += 1
+                                    if _ev_day not in plugin_daily_stats:
+                                        plugin_daily_stats[_ev_day] = {}
+                                    if p not in plugin_daily_stats[_ev_day]:
+                                        plugin_daily_stats[_ev_day][p] = {"tokens": 0.0, "cost": 0.0, "calls": 0}
+                                    plugin_daily_stats[_ev_day][p]["tokens"] += share_tokens
+                                    plugin_daily_stats[_ev_day][p]["cost"] += share_cost
+                                    plugin_daily_stats[_ev_day][p]["calls"] += 1
 
                         # Textual hints for cron matching
                         if isinstance(message.get("content"), list):
@@ -23658,6 +23669,7 @@ def _compute_transcript_analytics():
     result = {
         "sessions": summaries,
         "plugin_stats": plugin_stats,
+        "plugin_daily_stats": plugin_daily_stats,
         "daily_tokens": daily_tokens,
         "daily_cost": daily_cost,
         "model_usage": model_usage,
@@ -24141,32 +24153,140 @@ def api_anomaly_ack(anomaly_id):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _compute_plugin_trend(plugin_name, plugin_daily_stats, days=14):
+    """Return trend direction for a plugin: 'increasing', 'decreasing', or 'stable'.
+
+    Compares average daily cost share of the last 7 days vs the prior 7 days.
+    Closes vivekchand/clawmetry#201 (trend over time).
+    """
+    from datetime import date, timedelta
+    today = date.today()
+    recent_days = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 8)]
+    prior_days = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(8, 15)]
+
+    def _avg_share(day_list):
+        shares = []
+        for d in day_list:
+            day_data = plugin_daily_stats.get(d, {})
+            day_total = sum(v.get("tokens", 0.0) for v in day_data.values()) or 1.0
+            p_toks = day_data.get(plugin_name, {}).get("tokens", 0.0)
+            if p_toks > 0:
+                shares.append(p_toks / day_total * 100.0)
+        return sum(shares) / len(shares) if shares else 0.0
+
+    recent_avg = _avg_share(recent_days)
+    prior_avg = _avg_share(prior_days)
+
+    if prior_avg < 0.5:
+        return "stable"
+    delta_pct = (recent_avg - prior_avg) / prior_avg * 100.0
+    if delta_pct > 20:
+        return "increasing"
+    if delta_pct < -20:
+        return "decreasing"
+    return "stable"
+
+
 @bp_usage.route("/api/usage/by-plugin")
 def api_usage_by_plugin():
-    """Return plugin/skill token and cost attribution from transcript tool calls."""
+    """Return plugin/skill token and cost attribution from transcript tool calls.
+
+    Enhanced with trend direction (GH#201): compares recent 7-day vs prior 7-day
+    cost share to flag plugins getting more expensive. Also emits threshold warnings
+    when a plugin's cost share exceeds the configured limit (default 50%).
+    """
     analytics = _compute_transcript_analytics()
     plugin_stats = analytics.get("plugin_stats", {})
+    plugin_daily_stats = analytics.get("plugin_daily_stats", {})
     total_tokens = sum(
         float(v.get("tokens", 0.0) or 0.0) for v in plugin_stats.values()
     )
     total_tokens = total_tokens if total_tokens > 0 else 1.0
 
+    try:
+        threshold_pct = float(request.args.get("threshold", 50.0))
+    except (ValueError, TypeError):
+        threshold_pct = 50.0
+
+    warnings = []
     rows = []
     for plugin, stats in plugin_stats.items():
         toks = float(stats.get("tokens", 0.0) or 0.0)
         cost = float(stats.get("cost", 0.0) or 0.0)
         calls = int(stats.get("calls", 0) or 0)
+        pct = round((toks / total_tokens) * 100.0, 2)
+        trend = _compute_plugin_trend(plugin, plugin_daily_stats)
         rows.append(
             {
                 "plugin": plugin,
                 "total_tokens": int(round(toks)),
                 "cost_usd": round(cost, 6),
                 "call_count": calls,
-                "pct_of_total": round((toks / total_tokens) * 100.0, 2),
+                "pct_of_total": pct,
+                "trend": trend,
             }
         )
+        if pct >= threshold_pct:
+            warnings.append(
+                {
+                    "plugin": plugin,
+                    "pct_of_total": pct,
+                    "message": f"{plugin} accounts for {pct:.1f}% of total token usage "
+                               f"(threshold: {threshold_pct:.0f}%)",
+                    "trend": trend,
+                }
+            )
     rows.sort(key=lambda r: r["total_tokens"], reverse=True)
-    return jsonify({"plugins": rows})
+    return jsonify({"plugins": rows, "warnings": warnings})
+
+
+@bp_usage.route("/api/usage/by-plugin/trend")
+def api_usage_by_plugin_trend():
+    """Return per-day plugin token and cost breakdown for trend analysis (GH#201).
+
+    Response shape:
+      {
+        "days": ["2026-03-20", ...],
+        "plugins": {
+          "exec": [{"day": "2026-03-20", "tokens": 120, "cost_usd": 0.001, "calls": 3}, ...],
+          ...
+        }
+      }
+    """
+    analytics = _compute_transcript_analytics()
+    plugin_daily_stats = analytics.get("plugin_daily_stats", {})
+
+    try:
+        days_back = int(request.args.get("days", 14))
+    except (ValueError, TypeError):
+        days_back = 14
+    days_back = min(max(days_back, 1), 90)
+
+    from datetime import date, timedelta
+    today = date.today()
+    day_list = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days_back - 1, -1, -1)]
+
+    # Collect all plugin names that appear in the window
+    plugin_names: set = set()
+    for d in day_list:
+        plugin_names.update(plugin_daily_stats.get(d, {}).keys())
+
+    result: dict = {}
+    for p in sorted(plugin_names):
+        series = []
+        for d in day_list:
+            day_data = plugin_daily_stats.get(d, {}).get(p, {})
+            series.append(
+                {
+                    "day": d,
+                    "tokens": int(round(float(day_data.get("tokens", 0.0) or 0.0))),
+                    "cost_usd": round(float(day_data.get("cost", 0.0) or 0.0), 6),
+                    "calls": int(day_data.get("calls", 0) or 0),
+                }
+            )
+        result[p] = series
+
+    return jsonify({"days": day_list, "plugins": result})
 
 
 @bp_usage.route("/api/sessions/clusters")

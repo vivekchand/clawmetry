@@ -708,3 +708,49 @@ class TestTokenVelocity:
             assert d["alert"] is False, "alert should be False when level='ok'"
         else:
             assert d["alert"] is True, "alert should be True for warning/critical"
+
+
+class TestPluginTrend:
+    """Tests for GH #201 — per-plugin cost attribution trend endpoints."""
+
+    def test_by_plugin_returns_200(self, api, base_url):
+        """by-plugin endpoint returns HTTP 200."""
+        r = get(api, base_url, "/api/usage/by-plugin")
+        assert r.status_code == 200, (
+            f"Expected 200 for {r.url}, got {r.status_code}: {r.text[:200]}"
+        )
+
+    def test_by_plugin_structure(self, api, base_url):
+        """Response contains plugins list and warnings list."""
+        d = assert_ok(get(api, base_url, "/api/usage/by-plugin"))
+        assert_keys(d, "plugins", "warnings")
+        assert isinstance(d["plugins"], list), "plugins must be a list"
+        assert isinstance(d["warnings"], list), "warnings must be a list"
+
+    def test_by_plugin_row_has_trend(self, api, base_url):
+        """Each plugin row includes a trend field."""
+        d = assert_ok(get(api, base_url, "/api/usage/by-plugin"))
+        for row in d.get("plugins", []):
+            assert "trend" in row, f"Missing 'trend' key in plugin row: {row}"
+            assert row["trend"] in ("increasing", "decreasing", "stable"), (
+                f"Unexpected trend value: {row['trend']!r}"
+            )
+
+    def test_by_plugin_trend_endpoint_returns_200(self, api, base_url):
+        """by-plugin/trend endpoint returns HTTP 200."""
+        r = get(api, base_url, "/api/usage/by-plugin/trend")
+        assert r.status_code == 200, (
+            f"Expected 200 for {r.url}, got {r.status_code}: {r.text[:200]}"
+        )
+
+    def test_by_plugin_trend_structure(self, api, base_url):
+        """Trend response contains days list and plugins dict."""
+        d = assert_ok(get(api, base_url, "/api/usage/by-plugin/trend"))
+        assert_keys(d, "days", "plugins")
+        assert isinstance(d["days"], list), "days must be a list"
+        assert isinstance(d["plugins"], dict), "plugins must be a dict"
+
+    def test_by_plugin_trend_days_param(self, api, base_url):
+        """days param limits the response window."""
+        d = assert_ok(get(api, base_url, "/api/usage/by-plugin/trend?days=7"))
+        assert len(d["days"]) == 7, f"Expected 7 days, got {len(d['days'])}"
