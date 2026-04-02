@@ -134,6 +134,49 @@ class TestCrons:
         assert isinstance(d, (list, dict))
 
 
+class TestSkillCosts:
+    """Tests for /api/skill-attribution — per-skill cost attribution (GH #308)."""
+
+    def test_status(self, api, base_url):
+        r = get(api, base_url, "/api/skill-attribution")
+        assert_ok(r)
+
+    def test_top_level_keys(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skill-attribution"))
+        assert_keys(d, "skills", "top5_week", "total_cost", "note", "clawhub")
+
+    def test_skills_is_list(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skill-attribution"))
+        assert isinstance(d["skills"], list)
+
+    def test_top5_week_is_list(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skill-attribution"))
+        assert isinstance(d["top5_week"], list)
+        assert len(d["top5_week"]) <= 5
+
+    def test_total_cost_is_number(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skill-attribution"))
+        assert isinstance(d["total_cost"], (int, float))
+        assert d["total_cost"] >= 0
+
+    def test_clawhub_shape(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skill-attribution"))
+        ch = d["clawhub"]
+        assert isinstance(ch, dict)
+        assert "enabled" in ch
+        assert isinstance(ch["enabled"], bool)
+
+    def test_skill_shape_when_present(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skill-attribution"))
+        for skill in d["skills"]:
+            assert_keys(skill, "name", "invocations", "total_cost_usd", "avg_cost_usd", "clawhub_url")
+            assert isinstance(skill["invocations"], int)
+            assert skill["invocations"] >= 1
+            assert isinstance(skill["total_cost_usd"], (int, float))
+            assert isinstance(skill["avg_cost_usd"], (int, float))
+            assert skill["clawhub_url"].startswith("https://")
+
+
 class TestTranscripts:
     def test_status(self, api, base_url):
         r = get(api, base_url, "/api/transcripts")

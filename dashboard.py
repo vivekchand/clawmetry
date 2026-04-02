@@ -24018,6 +24018,144 @@ def api_model_attribution():
     })
 
 
+@bp_usage.route('/api/skill-attribution')
+def api_skill_attribution():
+    """Per-skill cost attribution with ClawHub integration hooks (GH #308).
+
+    Detects skill invocations by scanning session transcripts for SKILL.md file
+    reads. Each time a SKILL.md is read, the session's token cost is attributed
+    to that skill (shared equally when multiple skills are read in one session).
+
+    Returns:
+        {
+          "skills": [
+            {
+              "name": str,
+              "invocations": int,
+              "total_cost_usd": float,
+              "avg_cost_usd": float,
+              "last_used": str | null,   # ISO timestamp
+              "clawhub_url": str,        # future ClawHub skill marketplace link
+            }
+          ],
+          "top5_week": [...],            # top 5 by total_cost_usd in last 7 days
+          "total_cost": float,
+          "note": str,
+          "clawhub": {"enabled": false, "url": null},
+        }
+    """
+    import re as _re
+
+    sessions_dir = _get_sessions_dir()
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return jsonify({
+            "skills": [], "top5_week": [], "total_cost": 0.0,
+            "note": "No sessions directory found.",
+            "clawhub": {"enabled": False, "url": None},
+        })
+
+    SKILL_MD_RE = _re.compile(r'[/\\]([^/\\]+)[/\\]SKILL\.md', _re.IGNORECASE)
+    # Also match bare "SKILL.md" references with skill name in path context
+    SKILL_PATH_RE = _re.compile(r'skills[/\\]([^/\\]+)', _re.IGNORECASE)
+
+    skill_stats = {}   # name -> {invocations, total_cost, last_used_ts}
+    now_ts = time.time()
+    week_cutoff = now_ts - 7 * 86400
+    usd_per_token = _estimate_usd_per_token()
+
+    try:
+        for fname in os.listdir(sessions_dir):
+            if not fname.endswith('.jsonl'):
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            session_skills = set()
+            session_tokens = 0
+            session_cost = 0.0
+            session_ts = os.path.getmtime(fpath)
+
+            try:
+                with open(fpath, 'r', errors='replace') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+
+                        # Detect SKILL.md file reads in tool calls / tool results
+                        raw = json.dumps(obj)
+                        for m in SKILL_MD_RE.finditer(raw):
+                            skill_name = m.group(1)
+                            if skill_name and skill_name.lower() != 'skills':
+                                session_skills.add(skill_name)
+                        # Fallback: skills/ path pattern
+                        if not session_skills:
+                            for m in SKILL_PATH_RE.finditer(raw):
+                                candidate = m.group(1)
+                                if candidate and 'SKILL' in raw[m.start():m.end()+30].upper():
+                                    session_skills.add(candidate)
+
+                        # Accumulate session tokens/cost
+                        usage = _extract_usage_metrics(obj)
+                        if usage['tokens'] > 0:
+                            session_tokens += usage['tokens']
+                            session_cost += usage['cost'] if usage['cost'] > 0 else (
+                                usage['tokens'] * usd_per_token
+                            )
+            except Exception:
+                continue
+
+            if not session_skills:
+                continue
+
+            share = session_cost / len(session_skills) if session_skills else 0.0
+            for skill in session_skills:
+                if skill not in skill_stats:
+                    skill_stats[skill] = {'invocations': 0, 'total_cost': 0.0, 'last_used_ts': 0.0}
+                skill_stats[skill]['invocations'] += 1
+                skill_stats[skill]['total_cost'] += share
+                if session_ts > skill_stats[skill]['last_used_ts']:
+                    skill_stats[skill]['last_used_ts'] = session_ts
+    except Exception:
+        pass
+
+    skills_out = []
+    total_cost = 0.0
+    for name, st in sorted(skill_stats.items(), key=lambda x: -x[1]['total_cost']):
+        inv = st['invocations']
+        tc = round(float(st['total_cost']), 6)
+        avg = round(tc / inv, 6) if inv else 0.0
+        lts = st['last_used_ts']
+        last_used = datetime.utcfromtimestamp(lts).strftime('%Y-%m-%dT%H:%M:%SZ') if lts else None
+        total_cost += tc
+        skills_out.append({
+            'name': name,
+            'invocations': inv,
+            'total_cost_usd': tc,
+            'avg_cost_usd': avg,
+            'last_used': last_used,
+            'clawhub_url': f'https://clawhub.dev/skills/{name}',
+        })
+
+    # top5 this week
+    top5_week = [
+        s for s in skills_out
+        if s['last_used'] and s['last_used'] >= datetime.utcfromtimestamp(week_cutoff).strftime('%Y-%m-%dT%H:%M:%SZ')
+    ][:5]
+
+    note = 'Skills detected from SKILL.md file reads in session transcripts.'
+
+    return jsonify({
+        'skills': skills_out,
+        'top5_week': top5_week,
+        'total_cost': round(total_cost, 6),
+        'note': note,
+        'clawhub': {'enabled': False, 'url': None},
+    })
+
+
 @bp_usage.route('/api/token-velocity')
 def api_token_velocity():
     """Sliding 2-min token velocity endpoint — detects runaway agent loops (GH #313).
