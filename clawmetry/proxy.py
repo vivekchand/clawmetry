@@ -70,12 +70,14 @@ MODEL_PRICING = {
 
 # ── Configuration ──────────────────────────────────────────────────────
 
+
 @dataclass
 class BudgetConfig:
     daily_usd: float = 0.0
     monthly_usd: float = 0.0
     action: str = "block"  # "block" | "warn" | "downgrade"
     downgrade_model: str = "claude-3-haiku-20240307"
+
 
 @dataclass
 class LoopDetectionConfig:
@@ -84,18 +86,22 @@ class LoopDetectionConfig:
     max_similar: int = 5
     similarity_threshold: float = 0.85
 
+
 @dataclass
 class RoutingRule:
     """Route requests matching a pattern to a different model."""
-    match_model: str = ""        # regex pattern for model name
-    match_session: str = ""      # regex pattern for session header
-    target_model: str = ""       # model to route to
-    target_provider: str = ""    # provider to route to
+
+    match_model: str = ""  # regex pattern for model name
+    match_session: str = ""  # regex pattern for session header
+    target_model: str = ""  # model to route to
+    target_provider: str = ""  # provider to route to
+
 
 @dataclass
 class ProviderConfig:
     api_key_env: str = ""
     base_url: str = ""
+
 
 @dataclass
 class ProxyConfig:
@@ -137,7 +143,9 @@ class ProxyConfig:
                         daily_usd=b.get("daily_usd", 0.0),
                         monthly_usd=b.get("monthly_usd", 0.0),
                         action=b.get("action", "block"),
-                        downgrade_model=b.get("downgrade_model", "claude-3-haiku-20240307"),
+                        downgrade_model=b.get(
+                            "downgrade_model", "claude-3-haiku-20240307"
+                        ),
                     )
 
                 if "loop_detection" in raw:
@@ -151,12 +159,14 @@ class ProxyConfig:
 
                 if "routing" in raw and "rules" in raw["routing"]:
                     for r in raw["routing"]["rules"]:
-                        config.routing_rules.append(RoutingRule(
-                            match_model=r.get("match_model", ""),
-                            match_session=r.get("match_session", ""),
-                            target_model=r.get("target_model", ""),
-                            target_provider=r.get("target_provider", ""),
-                        ))
+                        config.routing_rules.append(
+                            RoutingRule(
+                                match_model=r.get("match_model", ""),
+                                match_session=r.get("match_session", ""),
+                                target_model=r.get("target_model", ""),
+                                target_provider=r.get("target_provider", ""),
+                            )
+                        )
 
                 if "providers" in raw:
                     for name, prov in raw["providers"].items():
@@ -218,9 +228,11 @@ class ProxyConfig:
             },
         }
         PROXY_CONFIG_FILE.write_text(json.dumps(data, indent=2))
+        PROXY_CONFIG_FILE.chmod(0o600)
 
 
 # ── Database (usage tracking & event log) ──────────────────────────────
+
 
 class ProxyDB:
     """SQLite-based storage for proxy usage data and enforcement events."""
@@ -278,11 +290,20 @@ class ProxyDB:
             conn.commit()
             conn.close()
 
-    def record_usage(self, provider: str, model: str, input_tokens: int,
-                     output_tokens: int, cost_usd: float, session_id: str = "",
-                     request_hash: str = "", latency_ms: float = 0.0,
-                     status: str = "ok", cache_read_tokens: int = 0,
-                     cache_creation_tokens: int = 0) -> None:
+    def record_usage(
+        self,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+        session_id: str = "",
+        request_hash: str = "",
+        latency_ms: float = 0.0,
+        status: str = "ok",
+        cache_read_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+    ) -> None:
         with self._lock:
             conn = self._connect()
             conn.execute(
@@ -291,22 +312,37 @@ class ProxyDB:
                     cache_read_tokens, cache_creation_tokens,
                     cost_usd, session_id, request_hash, latency_ms, status)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (time.time(), provider, model, input_tokens, output_tokens,
-                 cache_read_tokens, cache_creation_tokens,
-                 cost_usd, session_id, request_hash, latency_ms, status),
+                (
+                    time.time(),
+                    provider,
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
+                    cost_usd,
+                    session_id,
+                    request_hash,
+                    latency_ms,
+                    status,
+                ),
             )
             conn.commit()
             conn.close()
 
-    def record_event(self, event_type: str, message: str,
-                     severity: str = "info", details: dict = None) -> None:
+    def record_event(
+        self,
+        event_type: str,
+        message: str,
+        severity: str = "info",
+        details: dict = None,
+    ) -> None:
         with self._lock:
             conn = self._connect()
             conn.execute(
                 """INSERT INTO proxy_events (timestamp, event_type, severity, message, details)
                    VALUES (?, ?, ?, ?, ?)""",
-                (time.time(), event_type, severity, message,
-                 json.dumps(details or {})),
+                (time.time(), event_type, severity, message, json.dumps(details or {})),
             )
             conn.commit()
             conn.close()
@@ -322,15 +358,19 @@ class ProxyDB:
         return row["total"] if row else 0.0
 
     def get_daily_spending(self) -> float:
-        today_start = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ).timestamp()
+        today_start = (
+            datetime.now(timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .timestamp()
+        )
         return self.get_spending(today_start)
 
     def get_monthly_spending(self) -> float:
-        month_start = datetime.now(timezone.utc).replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        ).timestamp()
+        month_start = (
+            datetime.now(timezone.utc)
+            .replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            .timestamp()
+        )
         return self.get_spending(month_start)
 
     def get_recent_events(self, limit: int = 50, event_type: str = None) -> List[dict]:
@@ -365,7 +405,9 @@ class ProxyDB:
             conn.close()
             return dict(row) if row else {}
 
-    def get_recent_request_hashes(self, session_id: str, window_seconds: int) -> List[str]:
+    def get_recent_request_hashes(
+        self, session_id: str, window_seconds: int
+    ) -> List[str]:
         """Get recent request hashes for loop detection."""
         since = time.time() - window_seconds
         with self._lock:
@@ -392,8 +434,14 @@ class ProxyDB:
 
 # ── Cost Calculation ───────────────────────────────────────────────────
 
-def calculate_cost(model: str, input_tokens: int, output_tokens: int,
-                   cache_read_tokens: int = 0, cache_creation_tokens: int = 0) -> float:
+
+def calculate_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> float:
     """Calculate cost in USD for a request based on model and token counts."""
     model_lower = model.lower()
     pricing = MODEL_PRICING.get("default")
@@ -419,6 +467,7 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int,
 
 # ── Loop Detection ─────────────────────────────────────────────────────
 
+
 def compute_request_hash(body: dict) -> str:
     """Compute a content-based hash for loop detection.
 
@@ -433,9 +482,7 @@ def compute_request_hash(body: dict) -> str:
     # System prompt (Anthropic format)
     system = body.get("system", "")
     if isinstance(system, list):
-        system = " ".join(
-            b.get("text", "") for b in system if isinstance(b, dict)
-        )
+        system = " ".join(b.get("text", "") for b in system if isinstance(b, dict))
     if system:
         parts.append(system[:500])  # Truncate for efficiency
 
@@ -456,9 +503,11 @@ def compute_request_hash(body: dict) -> str:
 
 # ── SSE Stream Parsing ─────────────────────────────────────────────────
 
+
 @dataclass
 class StreamUsage:
     """Accumulated usage from a streaming response."""
+
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
@@ -526,6 +575,7 @@ def parse_openai_sse_chunk(line: str, usage: StreamUsage) -> None:
 
 # ── Provider Detection ─────────────────────────────────────────────────
 
+
 def detect_provider(path: str, headers: dict, body: dict) -> str:
     """Detect whether a request is for Anthropic or OpenAI based on path and headers."""
     if "/messages" in path:
@@ -547,6 +597,7 @@ def detect_provider(path: str, headers: dict, body: dict) -> str:
 
 # ── Budget Enforcer ────────────────────────────────────────────────────
 
+
 class BudgetEnforcer:
     """Checks spending against configured limits and decides whether to allow requests."""
 
@@ -567,15 +618,11 @@ class BudgetEnforcer:
         monthly_spent = self.db.get_monthly_spending()
 
         if self.config.daily_usd > 0 and daily_spent >= self.config.daily_usd:
-            reason = (
-                f"Daily budget exceeded: ${daily_spent:.2f} / ${self.config.daily_usd:.2f}"
-            )
+            reason = f"Daily budget exceeded: ${daily_spent:.2f} / ${self.config.daily_usd:.2f}"
             return False, reason
 
         if self.config.monthly_usd > 0 and monthly_spent >= self.config.monthly_usd:
-            reason = (
-                f"Monthly budget exceeded: ${monthly_spent:.2f} / ${self.config.monthly_usd:.2f}"
-            )
+            reason = f"Monthly budget exceeded: ${monthly_spent:.2f} / ${self.config.monthly_usd:.2f}"
             return False, reason
 
         return True, ""
@@ -590,14 +637,19 @@ class BudgetEnforcer:
             "daily_limit": self.config.daily_usd,
             "monthly_limit": self.config.monthly_usd,
             "daily_remaining": round(max(0, self.config.daily_usd - daily_spent), 4)
-                if self.config.daily_usd > 0 else None,
-            "monthly_remaining": round(max(0, self.config.monthly_usd - monthly_spent), 4)
-                if self.config.monthly_usd > 0 else None,
+            if self.config.daily_usd > 0
+            else None,
+            "monthly_remaining": round(
+                max(0, self.config.monthly_usd - monthly_spent), 4
+            )
+            if self.config.monthly_usd > 0
+            else None,
             "action": self.config.action,
         }
 
 
 # ── Loop Detector ──────────────────────────────────────────────────────
+
 
 class LoopDetector:
     """Detects repeated request patterns that indicate agent loops."""
@@ -633,13 +685,16 @@ class LoopDetector:
 
 # ── Model Router ───────────────────────────────────────────────────────
 
+
 class ModelRouter:
     """Routes requests to different models/providers based on rules."""
 
     def __init__(self, rules: List[RoutingRule]):
         self.rules = rules
 
-    def route(self, model: str, session_id: str = "") -> Tuple[Optional[str], Optional[str]]:
+    def route(
+        self, model: str, session_id: str = ""
+    ) -> Tuple[Optional[str], Optional[str]]:
         """Apply routing rules. Returns (new_model, new_provider) or (None, None)."""
         for rule in self.rules:
             model_match = True
@@ -648,7 +703,9 @@ class ModelRouter:
             if rule.match_model:
                 model_match = bool(re.search(rule.match_model, model, re.IGNORECASE))
             if rule.match_session:
-                session_match = bool(re.search(rule.match_session, session_id, re.IGNORECASE))
+                session_match = bool(
+                    re.search(rule.match_session, session_id, re.IGNORECASE)
+                )
 
             if model_match and session_match:
                 return (
@@ -660,6 +717,7 @@ class ModelRouter:
 
 
 # ── Proxy Server (Flask) ───────────────────────────────────────────────
+
 
 def create_proxy_app(config: ProxyConfig = None) -> "Flask":
     """Create the Flask proxy application."""
@@ -676,11 +734,17 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
     loop_detector = LoopDetector(config.loop_detection, db)
     router = ModelRouter(config.routing_rules)
 
-    _stats = {"requests": 0, "blocked": 0, "loops_detected": 0, "started_at": time.time()}
+    _stats = {
+        "requests": 0,
+        "blocked": 0,
+        "loops_detected": 0,
+        "started_at": time.time(),
+    }
     _stats_lock = threading.Lock()
 
-    def _error_response(status_code: int, error_type: str, message: str,
-                        provider: str = "anthropic") -> Response:
+    def _error_response(
+        status_code: int, error_type: str, message: str, provider: str = "anthropic"
+    ) -> Response:
         """Return an error response in the provider's expected format."""
         if provider == "openai":
             body = {
@@ -731,8 +795,9 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             return os.environ.get(prov_config.api_key_env, "")
         return ""
 
-    def _build_upstream_headers(provider: str, api_key: str,
-                                original_headers: dict) -> dict:
+    def _build_upstream_headers(
+        provider: str, api_key: str, original_headers: dict
+    ) -> dict:
         """Build headers for the upstream request."""
         headers = {"Content-Type": "application/json"}
 
@@ -749,8 +814,9 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
 
         return headers
 
-    def _forward_non_streaming(upstream_url: str, headers: dict,
-                               body_bytes: bytes, provider: str) -> Tuple[bytes, int, dict, StreamUsage]:
+    def _forward_non_streaming(
+        upstream_url: str, headers: dict, body_bytes: bytes, provider: str
+    ) -> Tuple[bytes, int, dict, StreamUsage]:
         """Forward a non-streaming request and return the full response."""
         usage = StreamUsage()
         req = Request(upstream_url, data=body_bytes, headers=headers, method="POST")
@@ -767,7 +833,9 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             usage.stop_reason = f"error_{e.code}"
             return resp_body, resp_status, resp_headers, usage
         except URLError as e:
-            error_body = json.dumps({"error": {"type": "proxy_error", "message": str(e)}}).encode()
+            error_body = json.dumps(
+                {"error": {"type": "proxy_error", "message": str(e)}}
+            ).encode()
             return error_body, 502, {}, usage
 
         try:
@@ -804,21 +872,23 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
         with _stats_lock:
             stats = dict(_stats)
         uptime = time.time() - stats["started_at"]
-        return jsonify({
-            "status": "running",
-            "uptime_seconds": round(uptime, 1),
-            "requests_total": stats["requests"],
-            "requests_blocked": stats["blocked"],
-            "loops_detected": stats["loops_detected"],
-            "budget": budget.get_status(),
-            "config": {
-                "port": config.port,
-                "host": config.host,
-                "budget_action": config.budget.action,
-                "loop_detection": config.loop_detection.enabled,
-                "routing_rules": len(config.routing_rules),
-            },
-        })
+        return jsonify(
+            {
+                "status": "running",
+                "uptime_seconds": round(uptime, 1),
+                "requests_total": stats["requests"],
+                "requests_blocked": stats["blocked"],
+                "loops_detected": stats["loops_detected"],
+                "budget": budget.get_status(),
+                "config": {
+                    "port": config.port,
+                    "host": config.host,
+                    "budget_action": config.budget.action,
+                    "loop_detection": config.loop_detection.enabled,
+                    "routing_rules": len(config.routing_rules),
+                },
+            }
+        )
 
     @app.route("/proxy/events", methods=["GET"])
     def proxy_events():
@@ -831,13 +901,17 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
     def proxy_usage():
         period = request.args.get("period", "day")
         if period == "day":
-            since = datetime.now(timezone.utc).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            ).timestamp()
+            since = (
+                datetime.now(timezone.utc)
+                .replace(hour=0, minute=0, second=0, microsecond=0)
+                .timestamp()
+            )
         elif period == "month":
-            since = datetime.now(timezone.utc).replace(
-                day=1, hour=0, minute=0, second=0, microsecond=0
-            ).timestamp()
+            since = (
+                datetime.now(timezone.utc)
+                .replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                .timestamp()
+            )
         else:
             since = 0
         summary = db.get_usage_summary(since)
@@ -845,19 +919,21 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
 
     @app.route("/proxy/config", methods=["GET"])
     def get_proxy_config():
-        return jsonify({
-            "budget": {
-                "daily_usd": config.budget.daily_usd,
-                "monthly_usd": config.budget.monthly_usd,
-                "action": config.budget.action,
-            },
-            "loop_detection": {
-                "enabled": config.loop_detection.enabled,
-                "window_seconds": config.loop_detection.window_seconds,
-                "max_similar": config.loop_detection.max_similar,
-            },
-            "routing_rules": len(config.routing_rules),
-        })
+        return jsonify(
+            {
+                "budget": {
+                    "daily_usd": config.budget.daily_usd,
+                    "monthly_usd": config.budget.monthly_usd,
+                    "action": config.budget.action,
+                },
+                "loop_detection": {
+                    "enabled": config.loop_detection.enabled,
+                    "window_seconds": config.loop_detection.window_seconds,
+                    "max_similar": config.loop_detection.max_similar,
+                },
+                "routing_rules": len(config.routing_rules),
+            }
+        )
 
     @app.route("/proxy/config", methods=["PATCH"])
     def update_proxy_config():
@@ -883,8 +959,12 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 config.loop_detection.max_similar = int(ld["max_similar"])
 
         config.save()
-        db.record_event("config_updated", "Proxy configuration updated via API",
-                        severity="info", details=data)
+        db.record_event(
+            "config_updated",
+            "Proxy configuration updated via API",
+            severity="info",
+            details=data,
+        )
         return jsonify({"ok": True})
 
     # ── Main proxy endpoint: catch-all for /v1/* ───────────────────────
@@ -911,15 +991,21 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             _stats["requests"] += 1
 
         if config.log_requests:
-            logger.info(f"Proxy request: {provider} {path} model={model} stream={is_streaming}")
+            logger.info(
+                f"Proxy request: {provider} {path} model={model} stream={is_streaming}"
+            )
 
         # ── Budget check ───────────────────────────────────────────────
         allowed, reason = budget.check(model)
         if not allowed:
             with _stats_lock:
                 _stats["blocked"] += 1
-            db.record_event("budget_blocked", reason, severity="warning",
-                            details={"model": model, "session_id": session_id})
+            db.record_event(
+                "budget_blocked",
+                reason,
+                severity="warning",
+                details={"model": model, "session_id": session_id},
+            )
             logger.warning(f"Budget blocked: {reason}")
 
             if config.budget.action == "downgrade":
@@ -927,10 +1013,12 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 model = config.budget.downgrade_model
                 body["model"] = model
                 body_bytes = json.dumps(body).encode()
-                db.record_event("model_downgraded",
-                                f"Downgraded {original_model} -> {model} (budget)",
-                                severity="info",
-                                details={"original": original_model, "downgraded_to": model})
+                db.record_event(
+                    "model_downgraded",
+                    f"Downgraded {original_model} -> {model} (budget)",
+                    severity="info",
+                    details={"original": original_model, "downgraded_to": model},
+                )
             elif config.budget.action == "warn":
                 pass  # Allow through with warning
             else:
@@ -942,9 +1030,16 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
         if is_loop:
             with _stats_lock:
                 _stats["loops_detected"] += 1
-            db.record_event("loop_detected", loop_reason, severity="warning",
-                            details={"model": model, "session_id": session_id,
-                                     "request_hash": req_hash})
+            db.record_event(
+                "loop_detected",
+                loop_reason,
+                severity="warning",
+                details={
+                    "model": model,
+                    "session_id": session_id,
+                    "request_hash": req_hash,
+                },
+            )
             logger.warning(f"Loop detected: {loop_reason}")
             return _error_response(429, "loop_detected", loop_reason, provider)
 
@@ -955,10 +1050,12 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             model = new_model
             body["model"] = model
             body_bytes = json.dumps(body).encode()
-            db.record_event("model_routed",
-                            f"Routed {original_model} -> {model}",
-                            severity="info",
-                            details={"original": original_model, "routed_to": model})
+            db.record_event(
+                "model_routed",
+                f"Routed {original_model} -> {model}",
+                severity="info",
+                details={"original": original_model, "routed_to": model},
+            )
         if new_provider:
             provider = new_provider
 
@@ -966,7 +1063,8 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
         api_key = _get_api_key(provider, req_headers)
         if not api_key:
             return _error_response(
-                401, "authentication_error",
+                401,
+                "authentication_error",
                 f"No API key found for provider '{provider}'. "
                 f"Set {config.providers.get(provider, ProviderConfig()).api_key_env} env var.",
                 provider,
@@ -980,11 +1078,18 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
 
             def stream_generator():
                 usage = StreamUsage()
-                parse_fn = (parse_anthropic_sse_chunk if provider == "anthropic"
-                            else parse_openai_sse_chunk)
+                parse_fn = (
+                    parse_anthropic_sse_chunk
+                    if provider == "anthropic"
+                    else parse_openai_sse_chunk
+                )
 
-                req = Request(upstream_url, data=body_bytes,
-                              headers=upstream_headers, method="POST")
+                req = Request(
+                    upstream_url,
+                    data=body_bytes,
+                    headers=upstream_headers,
+                    method="POST",
+                )
                 try:
                     resp = urlopen(req, timeout=300)
                 except HTTPError as e:
@@ -994,9 +1099,9 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                     usage_holder[0] = usage
                     return
                 except URLError as e:
-                    error_msg = json.dumps({
-                        "error": {"type": "proxy_error", "message": str(e)}
-                    })
+                    error_msg = json.dumps(
+                        {"error": {"type": "proxy_error", "message": str(e)}}
+                    )
                     yield error_msg.encode()
                     usage.stop_reason = "connection_error"
                     usage_holder[0] = usage
@@ -1029,8 +1134,10 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 latency_ms = (time.time() - start_time) * 1000
                 cost = calculate_cost(
                     usage.model or model,
-                    usage.input_tokens, usage.output_tokens,
-                    usage.cache_read_tokens, usage.cache_creation_tokens,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens,
+                    usage.cache_creation_tokens,
                 )
                 db.record_usage(
                     provider=provider,
@@ -1063,8 +1170,10 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             latency_ms = (time.time() - start_time) * 1000
             cost = calculate_cost(
                 usage.model or model,
-                usage.input_tokens, usage.output_tokens,
-                usage.cache_read_tokens, usage.cache_creation_tokens,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_tokens,
+                usage.cache_creation_tokens,
             )
             db.record_usage(
                 provider=provider,
@@ -1080,7 +1189,9 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 status=usage.stop_reason or "ok",
             )
 
-            resp = Response(resp_body, status=resp_status, content_type="application/json")
+            resp = Response(
+                resp_body, status=resp_status, content_type="application/json"
+            )
             resp.headers["X-ClawMetry-Proxy"] = "true"
             return resp
 
@@ -1101,6 +1212,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
 
 
 # ── Server Runner ──────────────────────────────────────────────────────
+
 
 def run_proxy(config: ProxyConfig = None, foreground: bool = True) -> None:
     """Start the proxy server."""
