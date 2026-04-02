@@ -3314,19 +3314,36 @@ function clawmetryLogout(){
         </div>
       </div>
       <div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Configure Alerts</div>
+        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Alert Channels (Webhooks)</div>
         <div style="display:grid;gap:8px;">
-          <input id="alert-webhook-url" type="text" placeholder="Generic webhook URL (JSON payload)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <input id="alert-slack-url" type="text" placeholder="Slack incoming webhook URL" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <input id="alert-discord-url" type="text" placeholder="Discord webhook URL" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="alert-webhook-url" type="text" placeholder="Generic webhook URL (JSON payload)" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <button onclick="testWebhookConfig('generic')" style="background:#374151;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="alert-slack-url" type="text" placeholder="Slack incoming webhook URL" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <button onclick="testWebhookConfig('slack')" style="background:#4a154b;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="alert-discord-url" type="text" placeholder="Discord webhook URL" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <button onclick="testWebhookConfig('discord')" style="background:#5865f2;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-cost-spike"> Cost spike alerts</label>
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-agent-error"> Agent error rate alerts</label>
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-security"> Security posture changes</label>
           </div>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+            <label style="font-size:12px;color:var(--text-muted);">Min severity:</label>
+            <select id="alert-min-severity" style="padding:4px 8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;">
+              <option value="info">Info (all alerts)</option>
+              <option value="warning" selected>Warning+</option>
+              <option value="critical">Critical only</option>
+            </select>
+          </div>
           <div style="display:flex;gap:8px;">
             <button onclick="saveWebhookConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save</button>
-            <button onclick="testWebhookConfig('all')" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Test</button>
+            <button onclick="testWebhookConfig('all')" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Test All</button>
             <span id="alert-webhook-status" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;"></span>
           </div>
         </div>
@@ -4504,13 +4521,15 @@ async function deleteAlertRule(id) {
 
 async function loadWebhookConfig() {
   try {
-    var cfg = await fetch('/api/alerts/webhook').then(function(r){return r.json();});
+    var cfg = await fetch('/api/alert-channels').then(function(r){return r.json();});
     document.getElementById('alert-webhook-url').value = cfg.webhook_url || '';
     document.getElementById('alert-slack-url').value = cfg.slack_webhook_url || '';
     document.getElementById('alert-discord-url').value = cfg.discord_webhook_url || '';
     document.getElementById('alert-toggle-cost-spike').checked = cfg.cost_spike_alerts !== false;
     document.getElementById('alert-toggle-agent-error').checked = cfg.agent_error_rate_alerts !== false;
     document.getElementById('alert-toggle-security').checked = cfg.security_posture_changes !== false;
+    var minSevEl = document.getElementById('alert-min-severity');
+    if (minSevEl) minSevEl.value = cfg.min_severity || 'warning';
     document.getElementById('alert-webhook-status').textContent = '';
   } catch(e) {}
 }
@@ -4518,6 +4537,7 @@ async function loadWebhookConfig() {
 async function saveWebhookConfig() {
   var status = document.getElementById('alert-webhook-status');
   status.textContent = 'Saving...';
+  var minSevEl = document.getElementById('alert-min-severity');
   var payload = {
     webhook_url: document.getElementById('alert-webhook-url').value.trim(),
     slack_webhook_url: document.getElementById('alert-slack-url').value.trim(),
@@ -4525,9 +4545,10 @@ async function saveWebhookConfig() {
     cost_spike_alerts: document.getElementById('alert-toggle-cost-spike').checked,
     agent_error_rate_alerts: document.getElementById('alert-toggle-agent-error').checked,
     security_posture_changes: document.getElementById('alert-toggle-security').checked,
+    min_severity: minSevEl ? minSevEl.value : 'warning',
   };
   try {
-    var r = await fetch('/api/alerts/webhook', {
+    var r = await fetch('/api/alert-channels', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify(payload)
@@ -4546,10 +4567,10 @@ async function testWebhookConfig(target) {
   status.style.color = 'var(--text-muted)';
   status.textContent = 'Sending test...';
   try {
-    var r = await fetch('/api/alerts/webhook/test', {
+    var r = await fetch('/api/alert-channels/test', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({target: target || 'all'})
+      body:JSON.stringify({target: target || 'all', severity: 'warning'})
     });
     var data = await r.json();
     if(data.ok) {
@@ -4557,7 +4578,7 @@ async function testWebhookConfig(target) {
       status.textContent = 'Test sent to: ' + (data.sent || []).join(', ');
     } else {
       status.style.color = 'var(--text-error)';
-      status.textContent = data.error || 'Test failed';
+      status.textContent = data.error || 'No URL configured for ' + (target || 'all');
     }
   } catch(e) {
     status.style.color = 'var(--text-error)';
@@ -6420,6 +6441,11 @@ def _set_budget_config(updates):
         db.close()
 
 
+_SEVERITY_LEVELS = {"info": 0, "warning": 1, "critical": 2}
+_SEVERITY_COLORS_SLACK = {"info": "#36a64f", "warning": "#f59e0b", "critical": "#ef4444"}
+_SEVERITY_COLORS_DISCORD = {"info": 3581519, "warning": 16023040, "critical": 15680580}
+
+
 def _default_alerts_webhook_config():
     return {
         "webhook_url": "",
@@ -6428,6 +6454,7 @@ def _default_alerts_webhook_config():
         "cost_spike_alerts": True,
         "agent_error_rate_alerts": True,
         "security_posture_changes": True,
+        "min_severity": "warning",
     }
 
 
@@ -6441,6 +6468,8 @@ def _load_alerts_webhook_config():
                 for k in cfg:
                     if k in data:
                         cfg[k] = data[k]
+                if "min_severity" in data:
+                    cfg["min_severity"] = data["min_severity"]
     except Exception:
         pass
     return cfg
@@ -6448,7 +6477,12 @@ def _load_alerts_webhook_config():
 
 def _save_alerts_webhook_config(updates):
     cfg = _load_alerts_webhook_config()
-    for k in cfg:
+    allowed = {
+        "webhook_url", "slack_webhook_url", "discord_webhook_url",
+        "cost_spike_alerts", "agent_error_rate_alerts", "security_posture_changes",
+        "min_severity",
+    }
+    for k in allowed:
         if k in updates:
             cfg[k] = updates[k]
     try:
@@ -6475,6 +6509,95 @@ def _should_send_webhook_for_type(alert_type):
     return True
 
 
+def _severity_passes_filter(severity):
+    """Return True if the given severity meets the configured minimum threshold."""
+    cfg = _load_alerts_webhook_config()
+    min_sev = str(cfg.get("min_severity", "warning")).lower()
+    min_level = _SEVERITY_LEVELS.get(min_sev, 1)
+    sev_level = _SEVERITY_LEVELS.get(str(severity).lower(), 1)
+    return sev_level >= min_level
+
+
+def _send_slack_alert(message, severity="warning", title="ClawMetry Alert"):
+    """Send a Slack-formatted attachment alert using the configured Slack webhook URL."""
+    cfg = _load_alerts_webhook_config()
+    url = str(cfg.get("slack_webhook_url", "")).strip()
+    if not url:
+        return
+    color = _SEVERITY_COLORS_SLACK.get(str(severity).lower(), "#f59e0b")
+    payload = {
+        "attachments": [
+            {
+                "color": color,
+                "title": title,
+                "text": message,
+                "footer": "ClawMetry",
+                "ts": int(time.time()),
+                "fields": [
+                    {"title": "Severity", "value": severity.upper(), "short": True},
+                ],
+            }
+        ]
+    }
+    _send_webhook_alert(url, payload, payload_type="generic")
+
+
+def _send_discord_alert(message, severity="warning", title="ClawMetry Alert"):
+    """Send a Discord embed alert using the configured Discord webhook URL."""
+    cfg = _load_alerts_webhook_config()
+    url = str(cfg.get("discord_webhook_url", "")).strip()
+    if not url:
+        return
+    color = _SEVERITY_COLORS_DISCORD.get(str(severity).lower(), 16023040)
+    payload = {
+        "embeds": [
+            {
+                "title": title,
+                "description": message,
+                "color": color,
+                "fields": [
+                    {"name": "Severity", "value": severity.upper(), "inline": True},
+                ],
+                "footer": {"text": "ClawMetry"},
+                "timestamp": datetime.utcfromtimestamp(time.time()).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+            }
+        ]
+    }
+    _send_webhook_alert(url, payload, payload_type="generic")
+
+
+def _dispatch_alert(title, message, severity="warning", alert_type=None):
+    """Dispatch an alert to all configured channels (Slack, Discord, generic webhook).
+
+    Respects the global min_severity filter and per-type toggles.
+    Called automatically from _fire_alert() so all alerts reach webhook channels.
+    """
+    if not _severity_passes_filter(severity):
+        return
+    if alert_type and not _should_send_webhook_for_type(alert_type):
+        return
+    cfg = _load_alerts_webhook_config()
+    generic_url = str(cfg.get("webhook_url", "")).strip()
+    slack_url = str(cfg.get("slack_webhook_url", "")).strip()
+    discord_url = str(cfg.get("discord_webhook_url", "")).strip()
+
+    if generic_url:
+        payload = {
+            "type": alert_type or "alert",
+            "title": title,
+            "message": message,
+            "severity": severity,
+            "timestamp": time.time(),
+        }
+        _send_webhook_alert(generic_url, payload, payload_type="generic")
+    if slack_url:
+        _send_slack_alert(message, severity=severity, title=title)
+    if discord_url:
+        _send_discord_alert(message, severity=severity, title=title)
+
+
 def _dispatch_configured_webhooks(alert_type, payload):
     if not _should_send_webhook_for_type(alert_type):
         return
@@ -6490,189 +6613,8 @@ def _dispatch_configured_webhooks(alert_type, payload):
         _send_webhook_alert(discord_url, payload, payload_type="discord")
 
 
-def _get_budget_status():
-    """Calculate current spending vs budget limits."""
-    global _budget_paused, _budget_paused_at, _budget_paused_reason
-    config = _get_budget_config()
-    now = time.time()
-    today_start = (
-        datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    )
-    week_start = (
-        (datetime.now() - timedelta(days=datetime.now().weekday()))
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .timestamp()
-    )
-    month_start = (
-        datetime.now()
-        .replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        .timestamp()
-    )
-
-    daily_spent = 0.0
-    weekly_spent = 0.0
-    monthly_spent = 0.0
-
-    with _metrics_lock:
-        for entry in metrics_store["cost"]:
-            ts = entry.get("timestamp", 0)
-            usd = entry.get("usd", 0)
-            if ts >= month_start:
-                monthly_spent += usd
-                if ts >= week_start:
-                    weekly_spent += usd
-                    if ts >= today_start:
-                        daily_spent += usd
-
-    daily_limit = config["daily_limit"]
-    weekly_limit = config["weekly_limit"]
-    monthly_limit = config["monthly_limit"]
-
-    return {
-        "daily_spent": round(daily_spent, 4),
-        "weekly_spent": round(weekly_spent, 4),
-        "monthly_spent": round(monthly_spent, 4),
-        "daily_limit": daily_limit,
-        "weekly_limit": weekly_limit,
-        "monthly_limit": monthly_limit,
-        "daily_pct": round(
-            (daily_spent / daily_limit * 100) if daily_limit > 0 else 0, 1
-        ),
-        "weekly_pct": round(
-            (weekly_spent / weekly_limit * 100) if weekly_limit > 0 else 0, 1
-        ),
-        "monthly_pct": round(
-            (monthly_spent / monthly_limit * 100) if monthly_limit > 0 else 0, 1
-        ),
-        "paused": _budget_paused,
-        "paused_at": _budget_paused_at,
-        "paused_reason": _budget_paused_reason,
-        "auto_pause_enabled": config["auto_pause_enabled"],
-        "warning_threshold_pct": config["warning_threshold_pct"],
-    }
-
-
-def _budget_check():
-    """Check budget limits and fire alerts/auto-pause if needed."""
-    global _budget_paused, _budget_paused_at, _budget_paused_reason
-    if _budget_paused:
-        return
-    now = time.time()
-    config = _get_budget_config()
-    status = _get_budget_status()
-    warning_pct = config["warning_threshold_pct"]
-    pause_pct = config["auto_pause_threshold_pct"]
-
-    # Check each period
-    for period in ["daily", "weekly", "monthly"]:
-        limit = config[f"{period}_limit"]
-        if limit <= 0:
-            continue
-        spent = status[f"{period}_spent"]
-        pct = (spent / limit * 100) if limit > 0 else 0
-
-        if period in ("daily", "weekly") and spent >= limit:
-            rule_id = f"webhook_{period}_threshold_breached"
-            last_fired = _budget_alert_cooldowns.get(rule_id, 0)
-            if now - last_fired >= 900:
-                _budget_alert_cooldowns[rule_id] = now
-                _dispatch_configured_webhooks(
-                    f"{period}_threshold_breached",
-                    {
-                        "type": f"{period}_threshold_breached",
-                        "agent": "main",
-                        "cost_usd": round(spent, 4),
-                        "threshold": round(limit, 4),
-                        "timestamp": now,
-                        "message": f"{period.capitalize()} cost threshold breached: ${spent:.2f} / ${limit:.2f}",
-                    },
-                )
-
-        # Warning alert
-        if pct >= warning_pct and pct < pause_pct:
-            _fire_alert(
-                rule_id=f"budget_{period}_warning",
-                alert_type="threshold",
-                message=f"Budget warning: {period} spending ${spent:.2f} is {pct:.0f}% of ${limit:.2f} limit",
-                channels=["banner", "telegram"],
-            )
-
-        # Auto-pause
-        if pct >= pause_pct and config["auto_pause_enabled"]:
-            _budget_paused = True
-            _budget_paused_at = time.time()
-            _budget_paused_reason = (
-                f"{period.capitalize()} budget exceeded: ${spent:.2f} / ${limit:.2f}"
-            )
-            _fire_alert(
-                rule_id=f"budget_{period}_exceeded",
-                alert_type="threshold",
-                message=f"BUDGET EXCEEDED: {period} spending ${spent:.2f} exceeds ${limit:.2f} limit. Gateway paused.",
-                channels=["banner", "telegram"],
-            )
-            _pause_gateway()
-            return
-
-
-def _pause_gateway():
-    """Attempt to pause the OpenClaw gateway."""
-    # Try gateway stop command
-    try:
-        subprocess.run(["openclaw", "gateway", "stop"], timeout=10, capture_output=True)
-        return
-    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-        pass
-    # Fallback: SIGTERM to gateway process (Unix only)
-    # Note: SIGSTOP (19) freezes process indefinitely with TCP held open.
-    if sys.platform != 'win32':
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", "openclaw-gatewa"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-            for pid in result.stdout.strip().split("\n"):
-                pid = pid.strip()
-                if pid:
-                    os.kill(int(pid), 15)  # SIGSTOP
-                    return
-        except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError):
-            pass  # process gone or can't access
-
-
-def _resume_gateway():
-    """Resume the OpenClaw gateway after budget pause."""
-    global _budget_paused, _budget_paused_at, _budget_paused_reason
-    # Try gateway start command
-    try:
-        subprocess.run(
-            ["openclaw", "gateway", "start"], timeout=10, capture_output=True
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-        pass
-    # Also try SIGCONT (Unix only)
-    if sys.platform != "win32":
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", "openclaw-gatewa"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-            for pid in result.stdout.strip().split("\n"):
-                pid = pid.strip()
-                if pid:
-                    os.kill(int(pid), 18)  # SIGCONT
-        except Exception:
-            pass
-    _budget_paused = False
-    _budget_paused_at = 0
-    _budget_paused_reason = ""
-
-
-def _fire_alert(rule_id, alert_type, message, channels=None):
-    """Fire an alert with cooldown check."""
+def _fire_alert(rule_id, alert_type, message, channels=None, severity="warning"):
+    """Fire an alert with cooldown check and dispatch to configured webhook channels."""
     global _budget_alert_cooldowns
     now = time.time()
 
@@ -6701,17 +6643,24 @@ def _fire_alert(rule_id, alert_type, message, channels=None):
     except Exception as e:
         print(f"Warning: Failed to save alert history: {e}")
 
-    # Send to channels
+    # Send to explicit channels (telegram, banner, webhook)
     for ch in channels:
         if ch == "telegram":
             _send_telegram_alert(message)
         elif ch == "webhook":
-            pass  # webhook sending handled by custom alert rules
+            pass  # legacy: webhook dispatch now handled below via _dispatch_alert
+
+    # Always dispatch to configured alert channels (Slack / Discord / generic webhook)
+    _dispatch_alert(
+        title=f"ClawMetry Alert [{alert_type}]",
+        message=message,
+        severity=severity,
+        alert_type=alert_type,
+    )
 
 
 def _send_telegram_alert(message):
     """Send alert via direct Telegram API (preferred) or gateway fallback."""
-    # Try direct Telegram API first (using budget config)
     try:
         cfg = _get_budget_config()
         token = str(cfg.get("telegram_bot_token", "")).strip()
@@ -6736,7 +6685,6 @@ def _send_telegram_alert(message):
             return
     except Exception as e:
         print(f"Warning: Direct Telegram alert failed: {e}")
-    # Fallback: send through gateway
     try:
         _gw_invoke(
             "message",
@@ -6750,35 +6698,76 @@ def _send_telegram_alert(message):
 
 
 def _send_webhook_alert(url, alert_data, payload_type="generic"):
-    """Send alert to a webhook URL (generic JSON, Slack, or Discord)."""
+    """Send alert to a webhook URL (generic JSON, Slack attachment, or Discord embed)."""
     try:
         import urllib.request as _ur
 
         if payload_type == "discord":
-            content = (
+            message_text = (
                 alert_data.get("message")
-                or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
+                or "[{t}] cost=${c} threshold=${th}".format(
+                    t=alert_data.get("type", "alert"),
+                    c=alert_data.get("cost_usd", 0),
+                    th=alert_data.get("threshold", 0),
+                )
             )
-            body = {"content": content}
+            severity = str(alert_data.get("severity", "warning")).lower()
+            color = _SEVERITY_COLORS_DISCORD.get(severity, 16023040)
+            body = {
+                "embeds": [
+                    {
+                        "title": alert_data.get("title", "ClawMetry Alert"),
+                        "description": message_text,
+                        "color": color,
+                        "fields": [
+                            {"name": "Severity", "value": severity.upper(), "inline": True},
+                            {"name": "Type", "value": str(alert_data.get("type", "alert")), "inline": True},
+                        ],
+                        "footer": {"text": "ClawMetry"},
+                        "timestamp": datetime.utcfromtimestamp(time.time()).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        ),
+                    }
+                ]
+            }
         elif payload_type == "slack":
-            text = (
+            message_text = (
                 alert_data.get("message")
-                or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
+                or "[{t}] cost=${c} threshold=${th}".format(
+                    t=alert_data.get("type", "alert"),
+                    c=alert_data.get("cost_usd", 0),
+                    th=alert_data.get("threshold", 0),
+                )
             )
-            body = {"text": text}
+            severity = str(alert_data.get("severity", "warning")).lower()
+            color = _SEVERITY_COLORS_SLACK.get(severity, "#f59e0b")
+            body = {
+                "attachments": [
+                    {
+                        "color": color,
+                        "title": alert_data.get("title", "ClawMetry Alert"),
+                        "text": message_text,
+                        "footer": "ClawMetry",
+                        "ts": int(time.time()),
+                        "fields": [
+                            {"title": "Severity", "value": severity.upper(), "short": True},
+                            {"title": "Type", "value": str(alert_data.get("type", "alert")), "short": True},
+                        ],
+                    }
+                ]
+            }
         else:
             body = alert_data
-        payload = json.dumps(body).encode()
+        data = json.dumps(body).encode()
         req = _ur.Request(
             url,
-            data=payload,
+            data=data,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         _ur.urlopen(req, timeout=10)
     except Exception:
         pass
-
 
 def _get_alert_rules():
     """Get all alert rules."""
@@ -9503,6 +9492,22 @@ function clawmetryLogout(){
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>
+    <!-- Session Replay Controls -->
+    <div id="replay-controls" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:10px;padding:12px 14px;margin-bottom:10px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+        <button id="replay-prev" onclick="replayPrev()" style="padding:5px 12px;border-radius:6px;border:none;background:var(--button-bg);color:var(--text-primary);cursor:pointer;font-size:14px;">&#9664;</button>
+        <span id="replay-pos" style="font-size:13px;color:var(--text-muted);min-width:60px;text-align:center;">0/0</span>
+        <button id="replay-next" onclick="replayNext()" style="padding:5px 12px;border-radius:6px;border:none;background:var(--button-bg);color:var(--text-primary);cursor:pointer;font-size:14px;">&#9654;</button>
+        <input type="range" id="replay-scrubber" min="0" max="0" value="0" oninput="replayJumpTo(parseInt(this.value))" style="flex:1;min-width:120px;accent-color:#6366f1;">
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="replay-filter active-filter" data-type="all" onclick="replayFilter('all')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:#6366f1;color:#fff;font-size:12px;cursor:pointer;">All</button>
+        <button class="replay-filter" data-type="tool_use" onclick="replayFilter('tool_use')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#128295; Tools</button>
+        <button class="replay-filter" data-type="thinking" onclick="replayFilter('thinking')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#129504; Thinking</button>
+        <button class="replay-filter" data-type="assistant" onclick="replayFilter('assistant')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#129776; AI</button>
+        <button class="replay-filter" data-type="user" onclick="replayFilter('user')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#128100; User</button>
+      </div>
+    </div>
     <div class="chat-messages" id="transcript-messages"></div>
   </div>
 </div>
@@ -10231,21 +10236,23 @@ async function deleteAlertRule(id) {
 
 async function loadWebhookConfig() {
   try {
-    var cfg = await fetch('/api/alerts/webhook').then(function(r){return r.json();});
+    var cfg = await fetch('/api/alert-channels').then(function(r){return r.json();});
     document.getElementById('alert-webhook-url').value = cfg.webhook_url || '';
     document.getElementById('alert-slack-url').value = cfg.slack_webhook_url || '';
     document.getElementById('alert-discord-url').value = cfg.discord_webhook_url || '';
     document.getElementById('alert-toggle-cost-spike').checked = cfg.cost_spike_alerts !== false;
     document.getElementById('alert-toggle-agent-error').checked = cfg.agent_error_rate_alerts !== false;
     document.getElementById('alert-toggle-security').checked = cfg.security_posture_changes !== false;
+    var minSevEl = document.getElementById('alert-min-severity');
+    if (minSevEl) minSevEl.value = cfg.min_severity || 'warning';
     document.getElementById('alert-webhook-status').textContent = '';
   } catch(e) {}
 }
 
 async function saveWebhookConfig() {
   var status = document.getElementById('alert-webhook-status');
-  status.style.color = 'var(--text-muted)';
   status.textContent = 'Saving...';
+  var minSevEl = document.getElementById('alert-min-severity');
   var payload = {
     webhook_url: document.getElementById('alert-webhook-url').value.trim(),
     slack_webhook_url: document.getElementById('alert-slack-url').value.trim(),
@@ -10253,9 +10260,10 @@ async function saveWebhookConfig() {
     cost_spike_alerts: document.getElementById('alert-toggle-cost-spike').checked,
     agent_error_rate_alerts: document.getElementById('alert-toggle-agent-error').checked,
     security_posture_changes: document.getElementById('alert-toggle-security').checked,
+    min_severity: minSevEl ? minSevEl.value : 'warning',
   };
   try {
-    var r = await fetch('/api/alerts/webhook', {
+    var r = await fetch('/api/alert-channels', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify(payload)
@@ -10274,10 +10282,10 @@ async function testWebhookConfig(target) {
   status.style.color = 'var(--text-muted)';
   status.textContent = 'Sending test...';
   try {
-    var r = await fetch('/api/alerts/webhook/test', {
+    var r = await fetch('/api/alert-channels/test', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({target: target || 'all'})
+      body:JSON.stringify({target: target || 'all', severity: 'warning'})
     });
     var data = await r.json();
     if(data.ok) {
@@ -10285,7 +10293,7 @@ async function testWebhookConfig(target) {
       status.textContent = 'Test sent to: ' + (data.sent || []).join(', ');
     } else {
       status.style.color = 'var(--text-error)';
-      status.textContent = data.error || 'Test failed';
+      status.textContent = data.error || 'No URL configured for ' + (target || 'all');
     }
   } catch(e) {
     status.style.color = 'var(--text-error)';
@@ -22030,6 +22038,70 @@ def api_alerts_velocity():
       - reasons: human-readable list of triggered thresholds
     """
     return jsonify(_compute_velocity_status())
+
+
+@bp_alerts.route("/api/alert-channels", methods=["GET", "POST"])
+def api_alert_channels():
+    """GET/POST alert channel configuration (webhook, Slack, Discord, severity filter).
+
+    This is the canonical endpoint for GH#204 alerting integrations.
+    GET  -> returns current config (webhook_url, slack_webhook_url, discord_webhook_url, min_severity, toggles)
+    POST -> saves config; accepts any subset of fields
+    """
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        allowed = {
+            "webhook_url",
+            "slack_webhook_url",
+            "discord_webhook_url",
+            "cost_spike_alerts",
+            "agent_error_rate_alerts",
+            "security_posture_changes",
+            "min_severity",
+        }
+        updates = {k: data[k] for k in data if k in allowed}
+        cfg = _save_alerts_webhook_config(updates)
+        return jsonify({"ok": True, "config": cfg})
+    return jsonify(_load_alerts_webhook_config())
+
+
+@bp_alerts.route("/api/alert-channels/test", methods=["POST"])
+def api_alert_channels_test():
+    """Send a test alert to one or all configured channels.
+
+    Body: { "target": "all" | "slack" | "discord" | "generic", "severity": "warning" | "critical" }
+    """
+    data = request.get_json(silent=True) or {}
+    target = str(data.get("target", "all")).strip().lower()
+    severity = str(data.get("severity", "warning")).strip().lower()
+    cfg = _load_alerts_webhook_config()
+    sent = []
+    title = "ClawMetry Test Alert"
+    message = "This is a test alert from ClawMetry webhook integrations."
+
+    if target in ("all", "generic"):
+        url = str(cfg.get("webhook_url", "")).strip()
+        if url:
+            _send_webhook_alert(
+                url,
+                {"type": "test", "title": title, "message": message, "severity": severity},
+                payload_type="generic",
+            )
+            sent.append("generic")
+    if target in ("all", "slack"):
+        url = str(cfg.get("slack_webhook_url", "")).strip()
+        if url:
+            _send_slack_alert(message, severity=severity, title=title)
+            sent.append("slack")
+    if target in ("all", "discord"):
+        url = str(cfg.get("discord_webhook_url", "")).strip()
+        if url:
+            _send_discord_alert(message, severity=severity, title=title)
+            sent.append("discord")
+
+    if not sent:
+        return jsonify({"ok": False, "error": "No configured webhook URL for selected target"}), 400
+    return jsonify({"ok": True, "sent": sent})
 
 
 # ── History / Time-Series API ────────────────────────────────────────────
