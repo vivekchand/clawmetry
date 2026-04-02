@@ -19,11 +19,16 @@ import os
 import sys
 
 # Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252)
-if sys.platform == 'win32':
+if sys.platform == "win32":
     import io
+
     try:
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace"
+        )
+        sys.stderr = io.TextIOWrapper(
+            sys.stderr.buffer, encoding="utf-8", errors="replace"
+        )
     except Exception:
         pass
 
@@ -37,11 +42,19 @@ import time
 import threading
 import select
 from datetime import datetime, timezone, timedelta
-from flask import Flask, render_template_string, request, jsonify, Response, make_response
+from flask import (
+    Flask,
+    render_template_string,
+    request,
+    jsonify,
+    Response,
+    make_response,
+)
 
 # History / time-series module
 try:
     from history import HistoryDB, HistoryCollector, AgentReliabilityScorer
+
     _HAS_HISTORY = True
 except ImportError:
     _HAS_HISTORY = False
@@ -57,6 +70,7 @@ _HAS_OTEL_PROTO = False
 try:
     from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2
     from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
+
     _HAS_OTEL_PROTO = True
 except ImportError:
     metrics_service_pb2 = None
@@ -67,9 +81,13 @@ __version__ = "0.12.99"
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
     from clawmetry.extensions import emit as _ext_emit, load_plugins as _ext_load
+
     _ext_load()
 except ImportError:
-    def _ext_emit(event, payload=None): pass  # noqa
+
+    def _ext_emit(event, payload=None):
+        pass  # noqa
+
 
 app = Flask(__name__)
 
@@ -78,40 +96,44 @@ import re as _re
 import tempfile as _tempfile
 import platform as _platform
 
+
 def _grep_log_file(filepath, pattern):
     """Cross-platform grep: return list of lines matching pattern (case-insensitive)."""
     results = []
     try:
-        with open(filepath, 'r', errors='replace') as _f:
+        with open(filepath, "r", errors="replace") as _f:
             for _line in _f:
                 if _re.search(pattern, _line, _re.IGNORECASE):
-                    results.append(_line.rstrip('\n'))
+                    results.append(_line.rstrip("\n"))
     except (OSError, IOError):
         pass
     return results
+
 
 def _tail_lines(filepath, n=200):
     """Cross-platform tail: return last n lines of a file as a list of strings."""
     try:
         fsize = os.path.getsize(filepath)
-        with open(filepath, 'rb') as _f:
+        with open(filepath, "rb") as _f:
             try:
                 _f.seek(-min(n * 500, fsize), 2)
             except OSError:
                 _f.seek(0)
-            return _f.read().decode('utf-8', errors='replace').splitlines()[-n:]
+            return _f.read().decode("utf-8", errors="replace").splitlines()[-n:]
     except (OSError, IOError):
         return []
 
+
 def _get_log_dirs():
     """Return platform-appropriate candidate log directories."""
-    if sys.platform == 'win32':
+    if sys.platform == "win32":
         return [
-            os.path.join(os.environ.get('APPDATA', ''), 'openclaw', 'logs'),
-            os.path.join(_tempfile.gettempdir(), 'openclaw'),
-            os.path.join(_tempfile.gettempdir(), 'moltbot'),
+            os.path.join(os.environ.get("APPDATA", ""), "openclaw", "logs"),
+            os.path.join(_tempfile.gettempdir(), "openclaw"),
+            os.path.join(_tempfile.gettempdir(), "moltbot"),
         ]
-    return ['/tmp/openclaw', '/tmp/moltbot']
+    return ["/tmp/openclaw", "/tmp/moltbot"]
+
 
 _CURRENT_PLATFORM = _platform.system().lower()
 # ── End cross-platform helpers ──────────────────────────────────────────
@@ -144,17 +166,17 @@ FLEET_NODE_TIMEOUT = 300  # seconds before node is considered offline
 # ── Budget & Alert Configuration ───────────────────────────────────────
 _budget_paused = False
 _budget_paused_at = 0
-_budget_paused_reason = ''
+_budget_paused_reason = ""
 _budget_alert_cooldowns = {}  # rule_id -> last_fired_timestamp
 _AGENT_DOWN_SECONDS = 300  # 5 min with no OTLP data = agent down alert
-_ALERTS_CONFIG_FILE = os.path.expanduser('~/.openclaw/clawmetry-alerts.json')
-_security_posture_hash = ''
-_ALERTS_CONFIG_FILE = os.path.expanduser('~/.openclaw/clawmetry-alerts.json')
-_security_posture_hash = ''
+_ALERTS_CONFIG_FILE = os.path.expanduser("~/.openclaw/clawmetry-alerts.json")
+_security_posture_hash = ""
+_ALERTS_CONFIG_FILE = os.path.expanduser("~/.openclaw/clawmetry-alerts.json")
+_security_posture_hash = ""
 # Token velocity alert thresholds (GH#313)
 _VELOCITY_TOKENS_PER_2MIN = 10000  # tokens in any 2-minute window
-_VELOCITY_CONSECUTIVE_TOOLS = 20   # consecutive tool calls without human turn
-_VELOCITY_COST_PER_MIN = 0.10      # USD/min cost rate
+_VELOCITY_CONSECUTIVE_TOOLS = 20  # consecutive tool calls without human turn
+_VELOCITY_COST_PER_MIN = 0.10  # USD/min cost rate
 
 # ── OTLP Metrics Store ─────────────────────────────────────────────────
 METRICS_FILE = None  # Set via CLI/env, defaults to {WORKSPACE}/.clawmetry-metrics.json
@@ -162,12 +184,12 @@ _metrics_lock = threading.Lock()
 _otel_last_received = 0  # timestamp of last OTLP data received
 
 metrics_store = {
-    "tokens": [],       # [{timestamp, input, output, total, model, channel, provider}]
-    "cost": [],         # [{timestamp, usd, model, channel, provider}]
-    "runs": [],         # [{timestamp, duration_ms, model, channel}]
-    "messages": [],     # [{timestamp, channel, outcome, duration_ms}]
-    "webhooks": [],     # [{timestamp, channel, type}]
-    "queues": [],       # [{timestamp, channel, depth}]
+    "tokens": [],  # [{timestamp, input, output, total, model, channel, provider}]
+    "cost": [],  # [{timestamp, usd, model, channel, provider}]
+    "runs": [],  # [{timestamp, duration_ms, model, channel}]
+    "messages": [],  # [{timestamp, channel, outcome, duration_ms}]
+    "webhooks": [],  # [{timestamp, channel, type}]
+    "queues": [],  # [{timestamp, channel, depth}]
 }
 MAX_STORE_ENTRIES = 10_000
 STORE_RETENTION_DAYS = 14
@@ -178,8 +200,8 @@ def _metrics_file_path():
     if METRICS_FILE:
         return METRICS_FILE
     if WORKSPACE:
-        return os.path.join(WORKSPACE, '.clawmetry-metrics.json')
-    return os.path.expanduser('~/.clawmetry-metrics.json')
+        return os.path.join(WORKSPACE, ".clawmetry-metrics.json")
+    return os.path.expanduser("~/.clawmetry-metrics.json")
 
 
 def _load_metrics_from_disk():
@@ -189,13 +211,13 @@ def _load_metrics_from_disk():
     if not os.path.exists(path):
         return
     try:
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             data = json.load(f)
         if isinstance(data, dict):
             for key in metrics_store:
                 if key in data and isinstance(data[key], list):
                     metrics_store[key] = data[key][-MAX_STORE_ENTRIES:]
-            _otel_last_received = data.get('_last_received', 0)
+            _otel_last_received = data.get("_last_received", 0)
         _expire_old_entries()
     except json.JSONDecodeError as e:
         print(f"[warn]  Warning: Failed to parse metrics file {path}: {e}")
@@ -223,10 +245,10 @@ def _save_metrics_to_disk():
         with _metrics_lock:
             for k in metrics_store:
                 data[k] = list(metrics_store[k])
-        data['_last_received'] = _otel_last_received
-        data['_saved_at'] = time.time()
-        tmp = path + '.tmp'
-        with open(tmp, 'w') as f:
+        data["_last_received"] = _otel_last_received
+        data["_saved_at"] = time.time()
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
             json.dump(data, f)
         os.replace(tmp, path)
     except OSError as e:
@@ -245,8 +267,7 @@ def _expire_old_entries():
     with _metrics_lock:
         for key in metrics_store:
             metrics_store[key] = [
-                e for e in metrics_store[key]
-                if e.get('timestamp', 0) > cutoff
+                e for e in metrics_store[key] if e.get("timestamp", 0) > cutoff
             ][-MAX_STORE_ENTRIES:]
 
 
@@ -259,12 +280,11 @@ def _add_metric(category, entry):
             metrics_store[category] = metrics_store[category][-MAX_STORE_ENTRIES:]
         _otel_last_received = time.time()
     # Check budget on cost entries
-    if category == 'cost':
+    if category == "cost":
         try:
             _budget_check()
         except Exception:
             pass
-
 
 
 def _metrics_flush_loop():
@@ -295,7 +315,6 @@ def _has_otel_data():
 
 # ── Multi-Node Fleet Database ───────────────────────────────────────────
 import sqlite3 as _sqlite3
-import hashlib as _hashlib
 
 _fleet_db_lock = threading.Lock()
 
@@ -312,18 +331,18 @@ def _fleet_db_path():
     if FLEET_DB_PATH:
         return FLEET_DB_PATH
     if WORKSPACE:
-        return os.path.join(WORKSPACE, '.clawmetry-fleet.db')
+        return os.path.join(WORKSPACE, ".clawmetry-fleet.db")
     # Always use ~/.clawmetry/fleet.db -- create the dir if the installer
     # has not run yet or this is a fresh pip install without curl | bash.
-    preferred_dir = os.path.expanduser('~/.clawmetry')
+    preferred_dir = os.path.expanduser("~/.clawmetry")
     try:
         os.makedirs(preferred_dir, exist_ok=True)
     except OSError:
         pass  # makedirs failed (permissions?), fall through to legacy path
     if os.path.isdir(preferred_dir):
-        return os.path.join(preferred_dir, 'fleet.db')
+        return os.path.join(preferred_dir, "fleet.db")
     # Last resort: legacy flat file in home dir (pre-installer environments)
-    return os.path.expanduser('~/.clawmetry-fleet.db')
+    return os.path.expanduser("~/.clawmetry-fleet.db")
 
 
 def _fleet_db():
@@ -376,7 +395,7 @@ def _fleet_check_key(req):
     """Validate fleet API key from request header. Returns True if valid."""
     if not FLEET_API_KEY:
         return True  # No key configured = open (for dev/testing)
-    key = req.headers.get('X-Fleet-Key', '')
+    key = req.headers.get("X-Fleet-Key", "")
     return key == FLEET_API_KEY
 
 
@@ -387,7 +406,7 @@ def _fleet_update_statuses():
         db = _fleet_db()
         db.execute(
             "UPDATE nodes SET status = 'offline' WHERE last_seen_at < ? AND status != 'offline'",
-            (cutoff,)
+            (cutoff,),
         )
         db.commit()
         db.close()
@@ -421,6 +440,7 @@ def _start_fleet_maintenance_thread():
 
 
 # ── Budget & Alert Database ────────────────────────────────────────────
+
 
 def _budget_init_db():
     """Initialize budget and alert tables in the fleet database."""
@@ -463,16 +483,16 @@ def _budget_init_db():
 def _get_budget_config():
     """Get all budget config as a dict."""
     defaults = {
-        'daily_limit': 0,
-        'weekly_limit': 0,
-        'monthly_limit': 0,
-        'auto_pause_enabled': False,
-        'auto_pause_threshold_pct': 100,
-        'auto_pause_threshold_usd': 0,
-        'auto_pause_action': 'pause',
-        'warning_threshold_pct': 80,
-        'telegram_bot_token': '',
-        'telegram_chat_id': '',
+        "daily_limit": 0,
+        "weekly_limit": 0,
+        "monthly_limit": 0,
+        "auto_pause_enabled": False,
+        "auto_pause_threshold_pct": 100,
+        "auto_pause_threshold_usd": 0,
+        "auto_pause_action": "pause",
+        "warning_threshold_pct": 80,
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
     }
     try:
         with _fleet_db_lock:
@@ -480,11 +500,11 @@ def _get_budget_config():
             rows = db.execute("SELECT key, value FROM budget_config").fetchall()
             db.close()
         for row in rows:
-            k = row['key']
-            v = row['value']
+            k = row["key"]
+            v = row["value"]
             if k in defaults:
                 if isinstance(defaults[k], bool):
-                    defaults[k] = v.lower() in ('true', '1', 'yes')
+                    defaults[k] = v.lower() in ("true", "1", "yes")
                 elif isinstance(defaults[k], (int, float)):
                     try:
                         defaults[k] = float(v)
@@ -505,7 +525,7 @@ def _set_budget_config(updates):
         for k, v in updates.items():
             db.execute(
                 "INSERT OR REPLACE INTO budget_config (key, value, updated_at) VALUES (?, ?, ?)",
-                (k, str(v), now)
+                (k, str(v), now),
             )
         db.commit()
         db.close()
@@ -513,12 +533,12 @@ def _set_budget_config(updates):
 
 def _default_alerts_webhook_config():
     return {
-        'webhook_url': '',
-        'slack_webhook_url': '',
-        'discord_webhook_url': '',
-        'cost_spike_alerts': True,
-        'agent_error_rate_alerts': True,
-        'security_posture_changes': True,
+        "webhook_url": "",
+        "slack_webhook_url": "",
+        "discord_webhook_url": "",
+        "cost_spike_alerts": True,
+        "agent_error_rate_alerts": True,
+        "security_posture_changes": True,
     }
 
 
@@ -526,7 +546,7 @@ def _load_alerts_webhook_config():
     cfg = _default_alerts_webhook_config()
     try:
         if os.path.exists(_ALERTS_CONFIG_FILE):
-            with open(_ALERTS_CONFIG_FILE, 'r') as f:
+            with open(_ALERTS_CONFIG_FILE, "r") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 for k in cfg:
@@ -544,7 +564,7 @@ def _save_alerts_webhook_config(updates):
             cfg[k] = updates[k]
     try:
         os.makedirs(os.path.dirname(_ALERTS_CONFIG_FILE), exist_ok=True)
-        with open(_ALERTS_CONFIG_FILE, 'w') as f:
+        with open(_ALERTS_CONFIG_FILE, "w") as f:
             json.dump(cfg, f, indent=2)
     except Exception:
         pass
@@ -553,12 +573,16 @@ def _save_alerts_webhook_config(updates):
 
 def _should_send_webhook_for_type(alert_type):
     cfg = _load_alerts_webhook_config()
-    if alert_type in ('cost_spike', 'daily_threshold_breached', 'weekly_threshold_breached'):
-        return bool(cfg.get('cost_spike_alerts', True))
-    if alert_type == 'agent_error_rate':
-        return bool(cfg.get('agent_error_rate_alerts', True))
-    if alert_type == 'security_posture_change':
-        return bool(cfg.get('security_posture_changes', True))
+    if alert_type in (
+        "cost_spike",
+        "daily_threshold_breached",
+        "weekly_threshold_breached",
+    ):
+        return bool(cfg.get("cost_spike_alerts", True))
+    if alert_type == "agent_error_rate":
+        return bool(cfg.get("agent_error_rate_alerts", True))
+    if alert_type == "security_posture_change":
+        return bool(cfg.get("security_posture_changes", True))
     return True
 
 
@@ -566,15 +590,15 @@ def _dispatch_configured_webhooks(alert_type, payload):
     if not _should_send_webhook_for_type(alert_type):
         return
     cfg = _load_alerts_webhook_config()
-    generic_url = str(cfg.get('webhook_url', '')).strip()
-    slack_url = str(cfg.get('slack_webhook_url', '')).strip()
-    discord_url = str(cfg.get('discord_webhook_url', '')).strip()
+    generic_url = str(cfg.get("webhook_url", "")).strip()
+    slack_url = str(cfg.get("slack_webhook_url", "")).strip()
+    discord_url = str(cfg.get("discord_webhook_url", "")).strip()
     if generic_url:
-        _send_webhook_alert(generic_url, payload, payload_type='generic')
+        _send_webhook_alert(generic_url, payload, payload_type="generic")
     if slack_url:
-        _send_webhook_alert(slack_url, payload, payload_type='slack')
+        _send_webhook_alert(slack_url, payload, payload_type="slack")
     if discord_url:
-        _send_webhook_alert(discord_url, payload, payload_type='discord')
+        _send_webhook_alert(discord_url, payload, payload_type="discord")
 
 
 def _get_budget_status():
@@ -582,19 +606,28 @@ def _get_budget_status():
     global _budget_paused, _budget_paused_at, _budget_paused_reason
     config = _get_budget_config()
     now = time.time()
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    week_start = (datetime.now() - timedelta(days=datetime.now().weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0).timestamp()
-    month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+    today_start = (
+        datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    )
+    week_start = (
+        (datetime.now() - timedelta(days=datetime.now().weekday()))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
+    month_start = (
+        datetime.now()
+        .replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
 
     daily_spent = 0.0
     weekly_spent = 0.0
     monthly_spent = 0.0
 
     with _metrics_lock:
-        for entry in metrics_store['cost']:
-            ts = entry.get('timestamp', 0)
-            usd = entry.get('usd', 0)
+        for entry in metrics_store["cost"]:
+            ts = entry.get("timestamp", 0)
+            usd = entry.get("usd", 0)
             if ts >= month_start:
                 monthly_spent += usd
                 if ts >= week_start:
@@ -602,27 +635,33 @@ def _get_budget_status():
                     if ts >= today_start:
                         daily_spent += usd
 
-    daily_limit = config['daily_limit']
-    weekly_limit = config['weekly_limit']
-    monthly_limit = config['monthly_limit']
+    daily_limit = config["daily_limit"]
+    weekly_limit = config["weekly_limit"]
+    monthly_limit = config["monthly_limit"]
 
     return {
-        'daily_spent': round(daily_spent, 4),
-        'weekly_spent': round(weekly_spent, 4),
-        'monthly_spent': round(monthly_spent, 4),
-        'daily_limit': daily_limit,
-        'weekly_limit': weekly_limit,
-        'monthly_limit': monthly_limit,
-        'daily_pct': round((daily_spent / daily_limit * 100) if daily_limit > 0 else 0, 1),
-        'weekly_pct': round((weekly_spent / weekly_limit * 100) if weekly_limit > 0 else 0, 1),
-        'monthly_pct': round((monthly_spent / monthly_limit * 100) if monthly_limit > 0 else 0, 1),
-        'paused': _budget_paused,
-        'paused_at': _budget_paused_at,
-        'paused_reason': _budget_paused_reason,
-        'auto_pause_enabled': config['auto_pause_enabled'],
-        'auto_pause_threshold_usd': config['auto_pause_threshold_usd'],
-        'auto_pause_action': config['auto_pause_action'],
-        'warning_threshold_pct': config['warning_threshold_pct'],
+        "daily_spent": round(daily_spent, 4),
+        "weekly_spent": round(weekly_spent, 4),
+        "monthly_spent": round(monthly_spent, 4),
+        "daily_limit": daily_limit,
+        "weekly_limit": weekly_limit,
+        "monthly_limit": monthly_limit,
+        "daily_pct": round(
+            (daily_spent / daily_limit * 100) if daily_limit > 0 else 0, 1
+        ),
+        "weekly_pct": round(
+            (weekly_spent / weekly_limit * 100) if weekly_limit > 0 else 0, 1
+        ),
+        "monthly_pct": round(
+            (monthly_spent / monthly_limit * 100) if monthly_limit > 0 else 0, 1
+        ),
+        "paused": _budget_paused,
+        "paused_at": _budget_paused_at,
+        "paused_reason": _budget_paused_reason,
+        "auto_pause_enabled": config["auto_pause_enabled"],
+        "auto_pause_threshold_usd": config["auto_pause_threshold_usd"],
+        "auto_pause_action": config["auto_pause_action"],
+        "warning_threshold_pct": config["warning_threshold_pct"],
     }
 
 
@@ -634,50 +673,55 @@ def _budget_check():
     now = time.time()
     config = _get_budget_config()
     status = _get_budget_status()
-    warning_pct = config['warning_threshold_pct']
-    pause_pct = config['auto_pause_threshold_pct']
+    warning_pct = config["warning_threshold_pct"]
+    pause_pct = config["auto_pause_threshold_pct"]
 
     # Check each period
-    for period in ['daily', 'weekly', 'monthly']:
-        limit = config[f'{period}_limit']
+    for period in ["daily", "weekly", "monthly"]:
+        limit = config[f"{period}_limit"]
         if limit <= 0:
             continue
-        spent = status[f'{period}_spent']
+        spent = status[f"{period}_spent"]
         pct = (spent / limit * 100) if limit > 0 else 0
 
-        if period in ('daily', 'weekly') and spent >= limit:
-            rule_id = f'webhook_{period}_threshold_breached'
+        if period in ("daily", "weekly") and spent >= limit:
+            rule_id = f"webhook_{period}_threshold_breached"
             last_fired = _budget_alert_cooldowns.get(rule_id, 0)
             if now - last_fired >= 900:
                 _budget_alert_cooldowns[rule_id] = now
-                _dispatch_configured_webhooks(f'{period}_threshold_breached', {
-                    'type': f'{period}_threshold_breached',
-                    'agent': 'main',
-                    'cost_usd': round(spent, 4),
-                    'threshold': round(limit, 4),
-                    'timestamp': now,
-                    'message': f'{period.capitalize()} cost threshold breached: ${spent:.2f} / ${limit:.2f}',
-                })
+                _dispatch_configured_webhooks(
+                    f"{period}_threshold_breached",
+                    {
+                        "type": f"{period}_threshold_breached",
+                        "agent": "main",
+                        "cost_usd": round(spent, 4),
+                        "threshold": round(limit, 4),
+                        "timestamp": now,
+                        "message": f"{period.capitalize()} cost threshold breached: ${spent:.2f} / ${limit:.2f}",
+                    },
+                )
 
         # Warning alert
         if pct >= warning_pct and pct < pause_pct:
             _fire_alert(
-                rule_id=f'budget_{period}_warning',
-                alert_type='threshold',
-                message=f'Budget warning: {period} spending ${spent:.2f} is {pct:.0f}% of ${limit:.2f} limit',
-                channels=['banner', 'telegram'],
+                rule_id=f"budget_{period}_warning",
+                alert_type="threshold",
+                message=f"Budget warning: {period} spending ${spent:.2f} is {pct:.0f}% of ${limit:.2f} limit",
+                channels=["banner", "telegram"],
             )
 
         # Auto-pause
-        if pct >= pause_pct and config['auto_pause_enabled']:
+        if pct >= pause_pct and config["auto_pause_enabled"]:
             _budget_paused = True
             _budget_paused_at = time.time()
-            _budget_paused_reason = f'{period.capitalize()} budget exceeded: ${spent:.2f} / ${limit:.2f}'
+            _budget_paused_reason = (
+                f"{period.capitalize()} budget exceeded: ${spent:.2f} / ${limit:.2f}"
+            )
             _fire_alert(
-                rule_id=f'budget_{period}_exceeded',
-                alert_type='threshold',
-                message=f'BUDGET EXCEEDED: {period} spending ${spent:.2f} exceeds ${limit:.2f} limit. Gateway paused.',
-                channels=['banner', 'telegram'],
+                rule_id=f"budget_{period}_exceeded",
+                alert_type="threshold",
+                message=f"BUDGET EXCEEDED: {period} spending ${spent:.2f} exceeds ${limit:.2f} limit. Gateway paused.",
+                channels=["banner", "telegram"],
             )
             _pause_gateway()
             return
@@ -687,17 +731,20 @@ def _pause_gateway():
     """Attempt to pause the OpenClaw gateway."""
     # Try gateway stop command
     try:
-        subprocess.run(['openclaw', 'gateway', 'stop'], timeout=10,
-                       capture_output=True)
+        subprocess.run(["openclaw", "gateway", "stop"], timeout=10, capture_output=True)
         return
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
     # Fallback: SIGSTOP to gateway process (Unix only)
-    if sys.platform != 'win32':
+    if sys.platform != "win32":
         try:
-            result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
-                                    capture_output=True, text=True, timeout=3)
-            for pid in result.stdout.strip().split('\n'):
+            result = subprocess.run(
+                ["pgrep", "-f", "openclaw-gatewa"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            for pid in result.stdout.strip().split("\n"):
                 pid = pid.strip()
                 if pid:
                     os.kill(int(pid), 19)  # SIGSTOP
@@ -711,16 +758,21 @@ def _resume_gateway():
     global _budget_paused, _budget_paused_at, _budget_paused_reason
     # Try gateway start command
     try:
-        subprocess.run(['openclaw', 'gateway', 'start'], timeout=10,
-                       capture_output=True)
+        subprocess.run(
+            ["openclaw", "gateway", "start"], timeout=10, capture_output=True
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
     # Also try SIGCONT (Unix only)
-    if sys.platform != 'win32':
+    if sys.platform != "win32":
         try:
-            result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
-                                    capture_output=True, text=True, timeout=3)
-            for pid in result.stdout.strip().split('\n'):
+            result = subprocess.run(
+                ["pgrep", "-f", "openclaw-gatewa"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            for pid in result.stdout.strip().split("\n"):
                 pid = pid.strip()
                 if pid:
                     os.kill(int(pid), 18)  # SIGCONT
@@ -728,7 +780,7 @@ def _resume_gateway():
             pass
     _budget_paused = False
     _budget_paused_at = 0
-    _budget_paused_reason = ''
+    _budget_paused_reason = ""
 
 
 def _fire_alert(rule_id, alert_type, message, channels=None):
@@ -746,7 +798,7 @@ def _fire_alert(rule_id, alert_type, message, channels=None):
 
     # Save to alert history
     if channels is None:
-        channels = ['banner']
+        channels = ["banner"]
     try:
         with _fleet_db_lock:
             db = _fleet_db()
@@ -754,7 +806,7 @@ def _fire_alert(rule_id, alert_type, message, channels=None):
                 db.execute(
                     "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
                     "VALUES (?, ?, ?, ?, ?)",
-                    (rule_id, alert_type, message, ch, now)
+                    (rule_id, alert_type, message, ch, now),
                 )
             db.commit()
             db.close()
@@ -763,9 +815,9 @@ def _fire_alert(rule_id, alert_type, message, channels=None):
 
     # Send to channels
     for ch in channels:
-        if ch == 'telegram':
+        if ch == "telegram":
             _send_telegram_alert(message)
-        elif ch == 'webhook':
+        elif ch == "webhook":
             pass  # webhook sending handled by custom alert rules
 
 
@@ -774,19 +826,23 @@ def _send_telegram_alert(message):
     # Try direct Telegram API first (using budget config)
     try:
         cfg = _get_budget_config()
-        token = str(cfg.get('telegram_bot_token', '')).strip()
-        chat_id = str(cfg.get('telegram_chat_id', '')).strip()
+        token = str(cfg.get("telegram_bot_token", "")).strip()
+        chat_id = str(cfg.get("telegram_chat_id", "")).strip()
         if token and chat_id:
             import urllib.request
-            url = f'https://api.telegram.org/bot{token}/sendMessage'
-            payload = json.dumps({
-                'chat_id': chat_id,
-                'text': f'[ClawMetry Alert] {message}',
-                'parse_mode': 'Markdown',
-            }).encode()
+
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload = json.dumps(
+                {
+                    "chat_id": chat_id,
+                    "text": f"[ClawMetry Alert] {message}",
+                    "parse_mode": "Markdown",
+                }
+            ).encode()
             req = urllib.request.Request(
-                url, data=payload,
-                headers={'Content-Type': 'application/json'},
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req, timeout=10)
             return
@@ -794,28 +850,43 @@ def _send_telegram_alert(message):
         print(f"Warning: Direct Telegram alert failed: {e}")
     # Fallback: send through gateway
     try:
-        _gw_invoke('message', {
-            'action': 'send',
-            'message': f'[ClawMetry Alert] {message}',
-        })
+        _gw_invoke(
+            "message",
+            {
+                "action": "send",
+                "message": f"[ClawMetry Alert] {message}",
+            },
+        )
     except Exception:
         pass
 
 
-def _send_webhook_alert(url, alert_data, payload_type='generic'):
+def _send_webhook_alert(url, alert_data, payload_type="generic"):
     """Send alert to a webhook URL (generic JSON, Slack, or Discord)."""
     try:
         import urllib.request as _ur
-        if payload_type == 'discord':
-            content = alert_data.get('message') or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
-            body = {'content': content}
-        elif payload_type == 'slack':
-            text = alert_data.get('message') or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
-            body = {'text': text}
+
+        if payload_type == "discord":
+            content = (
+                alert_data.get("message")
+                or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
+            )
+            body = {"content": content}
+        elif payload_type == "slack":
+            text = (
+                alert_data.get("message")
+                or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
+            )
+            body = {"text": text}
         else:
             body = alert_data
         payload = json.dumps(body).encode()
-        req = _ur.Request(url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        req = _ur.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         _ur.urlopen(req, timeout=10)
     except Exception:
         pass
@@ -826,7 +897,9 @@ def _get_alert_rules():
     try:
         with _fleet_db_lock:
             db = _fleet_db()
-            rows = db.execute("SELECT * FROM alert_rules ORDER BY created_at DESC").fetchall()
+            rows = db.execute(
+                "SELECT * FROM alert_rules ORDER BY created_at DESC"
+            ).fetchall()
             db.close()
         return [dict(r) for r in rows]
     except Exception:
@@ -839,8 +912,7 @@ def _get_alert_history(limit=50):
         with _fleet_db_lock:
             db = _fleet_db()
             rows = db.execute(
-                "SELECT * FROM alert_history ORDER BY fired_at DESC LIMIT ?",
-                (limit,)
+                "SELECT * FROM alert_history ORDER BY fired_at DESC LIMIT ?", (limit,)
             ).fetchall()
             db.close()
         return [dict(r) for r in rows]
@@ -857,7 +929,7 @@ def _get_active_alerts():
             rows = db.execute(
                 "SELECT * FROM alert_history WHERE acknowledged = 0 AND fired_at > ? "
                 "ORDER BY fired_at DESC LIMIT 20",
-                (cutoff,)
+                (cutoff,),
             ).fetchall()
             db.close()
         return [dict(r) for r in rows]
@@ -879,7 +951,9 @@ def _compute_velocity_status():
     now = time.time()
     window_2min = now - 120
 
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     total_tokens_2min = 0.0
     max_consecutive_tools = 0
     triggering_session = None
@@ -888,9 +962,13 @@ def _compute_velocity_status():
     try:
         if os.path.isdir(sessions_dir):
             candidates = sorted(
-                [f for f in os.listdir(sessions_dir) if f.endswith('.jsonl') and 'deleted' not in f],
+                [
+                    f
+                    for f in os.listdir(sessions_dir)
+                    if f.endswith(".jsonl") and "deleted" not in f
+                ],
                 key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
-                reverse=True
+                reverse=True,
             )[:20]  # check 20 most recent sessions
             for fname in candidates:
                 fpath = os.path.join(sessions_dir, fname)
@@ -901,7 +979,7 @@ def _compute_velocity_status():
                     tokens_2min = 0.0
                     consecutive_tools = 0
                     max_consecutive_in_session = 0
-                    with open(fpath, 'r', errors='replace') as f:
+                    with open(fpath, "r", errors="replace") as f:
                         lines = list(deque(f, maxlen=2000))
                     for line in lines:
                         try:
@@ -909,32 +987,50 @@ def _compute_velocity_status():
                         except Exception:
                             continue
                         ts = _json_ts_to_epoch(
-                            obj.get('timestamp') or obj.get('time') or obj.get('created_at')
+                            obj.get("timestamp")
+                            or obj.get("time")
+                            or obj.get("created_at")
                         )
                         if not ts:
                             continue
                         # Count consecutive tool calls (any tool_use role)
-                        msg = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
-                        role = msg.get('role', '') or obj.get('role', '')
-                        content = msg.get('content', [])
+                        msg = (
+                            obj.get("message", {})
+                            if isinstance(obj.get("message"), dict)
+                            else {}
+                        )
+                        role = msg.get("role", "") or obj.get("role", "")
+                        content = msg.get("content", [])
                         is_tool_call = False
                         if isinstance(content, list):
                             for blk in content:
-                                if isinstance(blk, dict) and blk.get('type') == 'tool_use':
+                                if (
+                                    isinstance(blk, dict)
+                                    and blk.get("type") == "tool_use"
+                                ):
                                     is_tool_call = True
                                     break
-                        if role == 'user' and not is_tool_call:
+                        if role == "user" and not is_tool_call:
                             consecutive_tools = 0  # human turn resets counter
-                        elif is_tool_call or role == 'assistant':
+                        elif is_tool_call or role == "assistant":
                             consecutive_tools += 1
-                            max_consecutive_in_session = max(max_consecutive_in_session, consecutive_tools)
+                            max_consecutive_in_session = max(
+                                max_consecutive_in_session, consecutive_tools
+                            )
                         # Sum tokens in last 2 minutes
                         if ts >= window_2min:
-                            usage = msg.get('usage', {}) if isinstance(msg.get('usage'), dict) else {}
+                            usage = (
+                                msg.get("usage", {})
+                                if isinstance(msg.get("usage"), dict)
+                                else {}
+                            )
                             tok = float(
-                                usage.get('total_tokens')
-                                or usage.get('totalTokens')
-                                or (usage.get('input_tokens', 0) + usage.get('output_tokens', 0))
+                                usage.get("total_tokens")
+                                or usage.get("totalTokens")
+                                or (
+                                    usage.get("input_tokens", 0)
+                                    + usage.get("output_tokens", 0)
+                                )
                                 or 0
                             )
                             tokens_2min += tok
@@ -942,11 +1038,11 @@ def _compute_velocity_status():
                     if max_consecutive_in_session > max_consecutive_tools:
                         max_consecutive_tools = max_consecutive_in_session
                     # Track highest burn session
-                    burn = _session_burn_stats(fname.replace('.jsonl', ''))
-                    tpm = burn.get('tokensPerMin', 0)
+                    burn = _session_burn_stats(fname.replace(".jsonl", ""))
+                    tpm = burn.get("tokensPerMin", 0)
                     if tpm > highest_tpm:
                         highest_tpm = tpm
-                        triggering_session = fname.replace('.jsonl', '')
+                        triggering_session = fname.replace(".jsonl", "")
                 except Exception:
                     continue
     except Exception:
@@ -961,33 +1057,33 @@ def _compute_velocity_status():
     if total_tokens_2min >= _VELOCITY_TOKENS_PER_2MIN:
         active = True
         reasons.append(
-            f'Token velocity: {int(total_tokens_2min):,} tokens in 2 min '
-            f'(threshold: {_VELOCITY_TOKENS_PER_2MIN:,})'
+            f"Token velocity: {int(total_tokens_2min):,} tokens in 2 min "
+            f"(threshold: {_VELOCITY_TOKENS_PER_2MIN:,})"
         )
     if cost_per_min >= _VELOCITY_COST_PER_MIN:
         active = True
         reasons.append(
-            f'Cost rate: ${cost_per_min:.3f}/min '
-            f'(threshold: ${_VELOCITY_COST_PER_MIN:.2f}/min)'
+            f"Cost rate: ${cost_per_min:.3f}/min "
+            f"(threshold: ${_VELOCITY_COST_PER_MIN:.2f}/min)"
         )
     if max_consecutive_tools >= _VELOCITY_CONSECUTIVE_TOOLS:
         active = True
         reasons.append(
-            f'Consecutive tool calls: {max_consecutive_tools} '
-            f'(threshold: {_VELOCITY_CONSECUTIVE_TOOLS})'
+            f"Consecutive tool calls: {max_consecutive_tools} "
+            f"(threshold: {_VELOCITY_CONSECUTIVE_TOOLS})"
         )
 
     return {
-        'active': active,
-        'tokensIn2Min': round(total_tokens_2min, 1),
-        'costPerMin': round(cost_per_min, 5),
-        'maxConsecutiveTools': max_consecutive_tools,
-        'triggeringSession': triggering_session,
-        'reasons': reasons,
-        'thresholds': {
-            'tokensIn2Min': _VELOCITY_TOKENS_PER_2MIN,
-            'costPerMin': _VELOCITY_COST_PER_MIN,
-            'consecutiveTools': _VELOCITY_CONSECUTIVE_TOOLS,
+        "active": active,
+        "tokensIn2Min": round(total_tokens_2min, 1),
+        "costPerMin": round(cost_per_min, 5),
+        "maxConsecutiveTools": max_consecutive_tools,
+        "triggeringSession": triggering_session,
+        "reasons": reasons,
+        "thresholds": {
+            "tokensIn2Min": _VELOCITY_TOKENS_PER_2MIN,
+            "costPerMin": _VELOCITY_COST_PER_MIN,
+            "consecutiveTools": _VELOCITY_CONSECUTIVE_TOOLS,
         },
     }
 
@@ -1001,83 +1097,102 @@ def _budget_monitor_loop():
             now = time.time()
 
             # Agent-down check
-            if _otel_last_received > 0 and (now - _otel_last_received) > _AGENT_DOWN_SECONDS:
+            if (
+                _otel_last_received > 0
+                and (now - _otel_last_received) > _AGENT_DOWN_SECONDS
+            ):
                 _fire_alert(
-                    rule_id='agent_down',
-                    alert_type='agent_down',
-                    message=f'Agent appears down: no OTLP data for {int((now - _otel_last_received) / 60)} minutes',
-                    channels=['banner', 'telegram'],
+                    rule_id="agent_down",
+                    alert_type="agent_down",
+                    message=f"Agent appears down: no OTLP data for {int((now - _otel_last_received) / 60)} minutes",
+                    channels=["banner", "telegram"],
                 )
 
             # Anomaly check: today's cost > 2x 7-day average
             status = _get_budget_status()
-            daily_spent = status['daily_spent']
+            daily_spent = status["daily_spent"]
             if daily_spent > 0:
-                week_avg = status['weekly_spent'] / 7 if status['weekly_spent'] > 0 else 0
+                week_avg = (
+                    status["weekly_spent"] / 7 if status["weekly_spent"] > 0 else 0
+                )
                 if week_avg > 0 and daily_spent > week_avg * 2:
-                    ratio = (daily_spent / week_avg)
+                    ratio = daily_spent / week_avg
                     _fire_alert(
-                        rule_id='anomaly_daily',
-                        alert_type='anomaly',
-                        message=f'Spending anomaly: today ${daily_spent:.2f} is {ratio:.1f}x the 7-day average (${week_avg:.2f}/day)',
-                        channels=['banner', 'telegram'],
+                        rule_id="anomaly_daily",
+                        alert_type="anomaly",
+                        message=f"Spending anomaly: today ${daily_spent:.2f} is {ratio:.1f}x the 7-day average (${week_avg:.2f}/day)",
+                        channels=["banner", "telegram"],
                     )
-                    _dispatch_configured_webhooks('cost_spike', {
-                        'type': 'cost_spike',
-                        'agent': 'main',
-                        'cost_usd': round(daily_spent, 4),
-                        'threshold': round(week_avg * 2, 4),
-                        'timestamp': now,
-                        'message': f'Cost spike detected: {ratio:.1f}x daily average',
-                    })
-
+                    _dispatch_configured_webhooks(
+                        "cost_spike",
+                        {
+                            "type": "cost_spike",
+                            "agent": "main",
+                            "cost_usd": round(daily_spent, 4),
+                            "threshold": round(week_avg * 2, 4),
+                            "timestamp": now,
+                            "message": f"Cost spike detected: {ratio:.1f}x daily average",
+                        },
+                    )
 
             # Token velocity alert (GH#313): detect runaway agent loops
             try:
                 vel = _compute_velocity_status()
-                if vel['active']:
-                    reasons_str = '; '.join(vel['reasons'])
-                    sid_hint = f' (session: {vel["triggeringSession"][:12]}...)' if vel.get('triggeringSession') else ''
-                    msg = f'\u26a1 Runaway loop detected{sid_hint}: {reasons_str}'
+                if vel["active"]:
+                    reasons_str = "; ".join(vel["reasons"])
+                    sid_hint = (
+                        f" (session: {vel['triggeringSession'][:12]}...)"
+                        if vel.get("triggeringSession")
+                        else ""
+                    )
+                    msg = f"\u26a1 Runaway loop detected{sid_hint}: {reasons_str}"
                     _fire_alert(
-                        rule_id='token_velocity',
-                        alert_type='token_velocity',
+                        rule_id="token_velocity",
+                        alert_type="token_velocity",
                         message=msg,
-                        channels=['banner', 'telegram'],
+                        channels=["banner", "telegram"],
                     )
             except Exception as _vel_err:
-                print(f'Warning: velocity check failed: {_vel_err}')
+                print(f"Warning: velocity check failed: {_vel_err}")
 
             # Agent error-rate check from webhook channel metrics (last 60 minutes)
             window_start = now - 3600
             total_wh = 0
             error_wh = 0
             with _metrics_lock:
-                for e in metrics_store.get('webhooks', []):
-                    ts = e.get('timestamp', 0)
+                for e in metrics_store.get("webhooks", []):
+                    ts = e.get("timestamp", 0)
                     if ts < window_start:
                         continue
                     total_wh += 1
-                    et = str(e.get('type', '')).lower()
-                    if et.endswith('.error') or 'error' in et:
+                    et = str(e.get("type", "")).lower()
+                    if et.endswith(".error") or "error" in et:
                         error_wh += 1
             if total_wh >= 10:
                 error_rate = (error_wh / total_wh) * 100.0
                 if error_rate >= 20.0:
-                    rule_id = 'agent_error_rate_high'
+                    rule_id = "agent_error_rate_high"
                     last_fired = _budget_alert_cooldowns.get(rule_id, 0)
                     if now - last_fired >= 1800:
                         _budget_alert_cooldowns[rule_id] = now
-                        msg = f'Agent error rate high: {error_rate:.1f}% ({error_wh}/{total_wh}) in the last hour'
-                        _fire_alert(rule_id=rule_id, alert_type='agent_error_rate', message=msg, channels=['banner', 'telegram'])
-                        _dispatch_configured_webhooks('agent_error_rate', {
-                            'type': 'agent_error_rate',
-                            'agent': 'main',
-                            'cost_usd': round(status.get('daily_spent', 0), 4),
-                            'threshold': 20.0,
-                            'timestamp': now,
-                            'message': msg,
-                        })
+                        msg = f"Agent error rate high: {error_rate:.1f}% ({error_wh}/{total_wh}) in the last hour"
+                        _fire_alert(
+                            rule_id=rule_id,
+                            alert_type="agent_error_rate",
+                            message=msg,
+                            channels=["banner", "telegram"],
+                        )
+                        _dispatch_configured_webhooks(
+                            "agent_error_rate",
+                            {
+                                "type": "agent_error_rate",
+                                "agent": "main",
+                                "cost_usd": round(status.get("daily_spent", 0), 4),
+                                "threshold": 20.0,
+                                "timestamp": now,
+                                "message": msg,
+                            },
+                        )
 
             # Security posture change check
             posture = _detect_security_metadata() or {}
@@ -1086,51 +1201,67 @@ def _budget_monitor_loop():
                 _security_posture_hash = posture_hash
             elif posture_hash != _security_posture_hash:
                 _security_posture_hash = posture_hash
-                msg = 'Security posture changed (sandbox/auth/network settings updated)'
-                _fire_alert(rule_id='security_posture_change', alert_type='security', message=msg, channels=['banner', 'telegram'])
-                _dispatch_configured_webhooks('security_posture_change', {
-                    'type': 'security_posture_change',
-                    'agent': 'main',
-                    'cost_usd': round(status.get('daily_spent', 0), 4),
-                    'threshold': 0,
-                    'timestamp': now,
-                    'message': msg,
-                })
+                msg = "Security posture changed (sandbox/auth/network settings updated)"
+                _fire_alert(
+                    rule_id="security_posture_change",
+                    alert_type="security",
+                    message=msg,
+                    channels=["banner", "telegram"],
+                )
+                _dispatch_configured_webhooks(
+                    "security_posture_change",
+                    {
+                        "type": "security_posture_change",
+                        "agent": "main",
+                        "cost_usd": round(status.get("daily_spent", 0), 4),
+                        "threshold": 0,
+                        "timestamp": now,
+                        "message": msg,
+                    },
+                )
 
             # Custom alert rules
             rules = _get_alert_rules()
             for rule in rules:
-                if not rule.get('enabled'):
+                if not rule.get("enabled"):
                     continue
-                rule_id = rule['id']
-                rtype = rule['type']
-                threshold = rule['threshold']
-                channels = json.loads(rule.get('channels', '["banner"]'))
-                cooldown = rule.get('cooldown_min', 30) * 60
+                rule_id = rule["id"]
+                rtype = rule["type"]
+                threshold = rule["threshold"]
+                channels = json.loads(rule.get("channels", '["banner"]'))
+                cooldown = rule.get("cooldown_min", 30) * 60
 
                 last_fired = _budget_alert_cooldowns.get(rule_id, 0)
                 if now - last_fired < cooldown:
                     continue
 
                 fired = False
-                msg = ''
+                msg = ""
 
-                if rtype == 'threshold':
-                    if status['daily_spent'] >= threshold:
-                        msg = f'Daily spending ${status["daily_spent"]:.2f} exceeded threshold ${threshold:.2f}'
+                if rtype == "threshold":
+                    if status["daily_spent"] >= threshold:
+                        msg = f"Daily spending ${status['daily_spent']:.2f} exceeded threshold ${threshold:.2f}"
                         fired = True
-                elif rtype == 'spike':
+                elif rtype == "spike":
                     # Spike: cost in last hour > threshold x average hourly rate
                     hour_ago = now - 3600
                     hour_cost = 0
                     with _metrics_lock:
-                        for e in metrics_store['cost']:
-                            if e.get('timestamp', 0) >= hour_ago:
-                                hour_cost += e.get('usd', 0)
-                    avg_hourly = status['daily_spent'] / max(1, (now - datetime.now().replace(
-                        hour=0, minute=0, second=0, microsecond=0).timestamp()) / 3600)
+                        for e in metrics_store["cost"]:
+                            if e.get("timestamp", 0) >= hour_ago:
+                                hour_cost += e.get("usd", 0)
+                    avg_hourly = status["daily_spent"] / max(
+                        1,
+                        (
+                            now
+                            - datetime.now()
+                            .replace(hour=0, minute=0, second=0, microsecond=0)
+                            .timestamp()
+                        )
+                        / 3600,
+                    )
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
-                        msg = f'Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost/avg_hourly):.1f}x average)'
+                        msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
 
                 if fired:
@@ -1142,21 +1273,22 @@ def _budget_monitor_loop():
                                 db.execute(
                                     "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
                                     "VALUES (?, ?, ?, ?, ?)",
-                                    (rule_id, rtype, msg, ch, now)
+                                    (rule_id, rtype, msg, ch, now),
                                 )
                             db.commit()
                             db.close()
                     except Exception:
                         pass
                     for ch in channels:
-                        if ch == 'telegram':
+                        if ch == "telegram":
                             _send_telegram_alert(msg)
-                        elif ch == 'webhook':
-                            webhook_url = rule.get('webhook_url', '')
+                        elif ch == "webhook":
+                            webhook_url = rule.get("webhook_url", "")
                             if webhook_url:
-                                _send_webhook_alert(webhook_url, {
-                                    'type': rtype, 'message': msg, 'timestamp': now
-                                })
+                                _send_webhook_alert(
+                                    webhook_url,
+                                    {"type": rtype, "message": msg, "timestamp": now},
+                                )
 
         except Exception as e:
             print(f"Warning: Budget monitor error: {e}")
@@ -1170,41 +1302,42 @@ def _start_budget_monitor_thread():
 
 # ── OTLP Protobuf Helpers ──────────────────────────────────────────────
 
+
 def _otel_attr_value(val):
     """Convert an OTel AnyValue to a Python value."""
-    if val.HasField('string_value'):
+    if val.HasField("string_value"):
         return val.string_value
-    if val.HasField('int_value'):
+    if val.HasField("int_value"):
         return val.int_value
-    if val.HasField('double_value'):
+    if val.HasField("double_value"):
         return val.double_value
-    if val.HasField('bool_value'):
+    if val.HasField("bool_value"):
         return val.bool_value
     return str(val)
 
 
 def _get_data_points(metric):
     """Extract data points from a metric regardless of type."""
-    if metric.HasField('sum'):
+    if metric.HasField("sum"):
         return metric.sum.data_points
-    elif metric.HasField('gauge'):
+    elif metric.HasField("gauge"):
         return metric.gauge.data_points
-    elif metric.HasField('histogram'):
+    elif metric.HasField("histogram"):
         return metric.histogram.data_points
-    elif metric.HasField('summary'):
+    elif metric.HasField("summary"):
         return metric.summary.data_points
     return []
 
 
 def _get_dp_value(dp):
     """Extract the numeric value from a data point."""
-    if hasattr(dp, 'as_double') and dp.as_double:
+    if hasattr(dp, "as_double") and dp.as_double:
         return dp.as_double
-    if hasattr(dp, 'as_int') and dp.as_int:
+    if hasattr(dp, "as_int") and dp.as_int:
         return dp.as_int
-    if hasattr(dp, 'sum') and dp.sum:
+    if hasattr(dp, "sum") and dp.sum:
         return dp.sum
-    if hasattr(dp, 'count') and dp.count:
+    if hasattr(dp, "count") and dp.count:
         return dp.count
     return 0
 
@@ -1233,68 +1366,130 @@ def _process_otlp_metrics(pb_data):
                 name = metric.name
                 ts = time.time()
 
-                if name == 'openclaw.tokens':
+                if name == "openclaw.tokens":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        _add_metric('tokens', {
-                            'timestamp': ts,
-                            'input': attrs.get('input_tokens', 0),
-                            'output': attrs.get('output_tokens', 0),
-                            'total': _get_dp_value(dp),
-                            'model': attrs.get('model', resource_attrs.get('model', '')),
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                            'provider': attrs.get('provider', resource_attrs.get('provider', '')),
-                        })
-                elif name == 'openclaw.cost.usd':
+                        _add_metric(
+                            "tokens",
+                            {
+                                "timestamp": ts,
+                                "input": attrs.get("input_tokens", 0),
+                                "output": attrs.get("output_tokens", 0),
+                                "total": _get_dp_value(dp),
+                                "model": attrs.get(
+                                    "model", resource_attrs.get("model", "")
+                                ),
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "provider": attrs.get(
+                                    "provider", resource_attrs.get("provider", "")
+                                ),
+                            },
+                        )
+                elif name == "openclaw.cost.usd":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        _add_metric('cost', {
-                            'timestamp': ts,
-                            'usd': _get_dp_value(dp),
-                            'model': attrs.get('model', resource_attrs.get('model', '')),
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                            'provider': attrs.get('provider', resource_attrs.get('provider', '')),
-                        })
-                elif name == 'openclaw.run.duration_ms':
+                        _add_metric(
+                            "cost",
+                            {
+                                "timestamp": ts,
+                                "usd": _get_dp_value(dp),
+                                "model": attrs.get(
+                                    "model", resource_attrs.get("model", "")
+                                ),
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "provider": attrs.get(
+                                    "provider", resource_attrs.get("provider", "")
+                                ),
+                            },
+                        )
+                elif name == "openclaw.run.duration_ms":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        _add_metric('runs', {
-                            'timestamp': ts,
-                            'duration_ms': _get_dp_value(dp),
-                            'model': attrs.get('model', resource_attrs.get('model', '')),
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                        })
-                elif name == 'openclaw.context.tokens':
+                        _add_metric(
+                            "runs",
+                            {
+                                "timestamp": ts,
+                                "duration_ms": _get_dp_value(dp),
+                                "model": attrs.get(
+                                    "model", resource_attrs.get("model", "")
+                                ),
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                            },
+                        )
+                elif name == "openclaw.context.tokens":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        _add_metric('tokens', {
-                            'timestamp': ts,
-                            'input': _get_dp_value(dp),
-                            'output': 0,
-                            'total': _get_dp_value(dp),
-                            'model': attrs.get('model', resource_attrs.get('model', '')),
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                            'provider': attrs.get('provider', resource_attrs.get('provider', '')),
-                        })
-                elif name in ('openclaw.message.processed', 'openclaw.message.queued', 'openclaw.message.duration_ms'):
+                        _add_metric(
+                            "tokens",
+                            {
+                                "timestamp": ts,
+                                "input": _get_dp_value(dp),
+                                "output": 0,
+                                "total": _get_dp_value(dp),
+                                "model": attrs.get(
+                                    "model", resource_attrs.get("model", "")
+                                ),
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "provider": attrs.get(
+                                    "provider", resource_attrs.get("provider", "")
+                                ),
+                            },
+                        )
+                elif name in (
+                    "openclaw.message.processed",
+                    "openclaw.message.queued",
+                    "openclaw.message.duration_ms",
+                ):
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        outcome = 'processed' if 'processed' in name else ('queued' if 'queued' in name else 'duration')
-                        _add_metric('messages', {
-                            'timestamp': ts,
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                            'outcome': outcome,
-                            'duration_ms': _get_dp_value(dp) if 'duration' in name else 0,
-                        })
-                elif name in ('openclaw.webhook.received', 'openclaw.webhook.error', 'openclaw.webhook.duration_ms'):
+                        outcome = (
+                            "processed"
+                            if "processed" in name
+                            else ("queued" if "queued" in name else "duration")
+                        )
+                        _add_metric(
+                            "messages",
+                            {
+                                "timestamp": ts,
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "outcome": outcome,
+                                "duration_ms": _get_dp_value(dp)
+                                if "duration" in name
+                                else 0,
+                            },
+                        )
+                elif name in (
+                    "openclaw.webhook.received",
+                    "openclaw.webhook.error",
+                    "openclaw.webhook.duration_ms",
+                ):
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        wtype = 'received' if 'received' in name else ('error' if 'error' in name else 'duration')
-                        _add_metric('webhooks', {
-                            'timestamp': ts,
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                            'type': wtype,
-                        })
+                        wtype = (
+                            "received"
+                            if "received" in name
+                            else ("error" if "error" in name else "duration")
+                        )
+                        _add_metric(
+                            "webhooks",
+                            {
+                                "timestamp": ts,
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "type": wtype,
+                            },
+                        )
 
 
 def _process_otlp_traces(pb_data):
@@ -1319,101 +1514,130 @@ def _process_otlp_traces(pb_data):
                 duration_ms = duration_ns / 1_000_000
 
                 span_name = span.name.lower()
-                if 'run' in span_name or 'completion' in span_name:
-                    _add_metric('runs', {
-                        'timestamp': ts,
-                        'duration_ms': duration_ms,
-                        'model': attrs.get('model', resource_attrs.get('model', '')),
-                        'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                    })
-                elif 'message' in span_name:
-                    _add_metric('messages', {
-                        'timestamp': ts,
-                        'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                        'outcome': 'processed',
-                        'duration_ms': duration_ms,
-                    })
+                if "run" in span_name or "completion" in span_name:
+                    _add_metric(
+                        "runs",
+                        {
+                            "timestamp": ts,
+                            "duration_ms": duration_ms,
+                            "model": attrs.get(
+                                "model", resource_attrs.get("model", "")
+                            ),
+                            "channel": attrs.get(
+                                "channel", resource_attrs.get("channel", "")
+                            ),
+                        },
+                    )
+                elif "message" in span_name:
+                    _add_metric(
+                        "messages",
+                        {
+                            "timestamp": ts,
+                            "channel": attrs.get(
+                                "channel", resource_attrs.get("channel", "")
+                            ),
+                            "outcome": "processed",
+                            "duration_ms": duration_ms,
+                        },
+                    )
 
 
 def _get_otel_usage_data():
     """Aggregate OTLP metrics into usage data for the Usage tab."""
     today = datetime.now()
     today_start = today.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    week_start = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+    week_start = (
+        (today - timedelta(days=today.weekday()))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
+    month_start = today.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    ).timestamp()
 
     daily_tokens = {}
     daily_cost = {}
     model_usage = {}
 
     with _metrics_lock:
-        for entry in metrics_store['tokens']:
-            ts = entry.get('timestamp', 0)
-            day = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
-            total = entry.get('total', 0)
+        for entry in metrics_store["tokens"]:
+            ts = entry.get("timestamp", 0)
+            day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            total = entry.get("total", 0)
             daily_tokens[day] = daily_tokens.get(day, 0) + total
-            model = entry.get('model', 'unknown') or 'unknown'
+            model = entry.get("model", "unknown") or "unknown"
             model_usage[model] = model_usage.get(model, 0) + total
 
-        for entry in metrics_store['cost']:
-            ts = entry.get('timestamp', 0)
-            day = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
-            daily_cost[day] = daily_cost.get(day, 0) + entry.get('usd', 0)
+        for entry in metrics_store["cost"]:
+            ts = entry.get("timestamp", 0)
+            day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            daily_cost[day] = daily_cost.get(day, 0) + entry.get("usd", 0)
 
     days = []
     for i in range(13, -1, -1):
         d = today - timedelta(days=i)
-        ds = d.strftime('%Y-%m-%d')
-        days.append({
-            'date': ds,
-            'tokens': daily_tokens.get(ds, 0),
-            'cost': daily_cost.get(ds, 0),
-        })
+        ds = d.strftime("%Y-%m-%d")
+        days.append(
+            {
+                "date": ds,
+                "tokens": daily_tokens.get(ds, 0),
+                "cost": daily_cost.get(ds, 0),
+            }
+        )
 
-    today_str = today.strftime('%Y-%m-%d')
+    today_str = today.strftime("%Y-%m-%d")
     today_tok = daily_tokens.get(today_str, 0)
-    week_tok = sum(v for k, v in daily_tokens.items()
-                   if _safe_date_ts(k) >= week_start)
-    month_tok = sum(v for k, v in daily_tokens.items()
-                    if _safe_date_ts(k) >= month_start)
+    week_tok = sum(v for k, v in daily_tokens.items() if _safe_date_ts(k) >= week_start)
+    month_tok = sum(
+        v for k, v in daily_tokens.items() if _safe_date_ts(k) >= month_start
+    )
     today_cost_val = daily_cost.get(today_str, 0)
-    week_cost_val = sum(v for k, v in daily_cost.items()
-                        if _safe_date_ts(k) >= week_start)
-    month_cost_val = sum(v for k, v in daily_cost.items()
-                         if _safe_date_ts(k) >= month_start)
+    week_cost_val = sum(
+        v for k, v in daily_cost.items() if _safe_date_ts(k) >= week_start
+    )
+    month_cost_val = sum(
+        v for k, v in daily_cost.items() if _safe_date_ts(k) >= month_start
+    )
 
     run_durations = []
     with _metrics_lock:
-        for entry in metrics_store['runs']:
-            run_durations.append(entry.get('duration_ms', 0))
+        for entry in metrics_store["runs"]:
+            run_durations.append(entry.get("duration_ms", 0))
     avg_run_ms = sum(run_durations) / len(run_durations) if run_durations else 0
 
-    msg_count = len(metrics_store['messages'])
+    msg_count = len(metrics_store["messages"])
 
     # Enhanced cost tracking for OTLP data
-    trend_data = _analyze_usage_trends(daily_tokens) 
+    trend_data = _analyze_usage_trends(daily_tokens)
     model_billing, billing_summary = _build_model_billing(model_usage)
-    warnings = _generate_cost_warnings(today_cost_val, week_cost_val, month_cost_val, trend_data, month_tok, billing_summary)
+    warnings = _generate_cost_warnings(
+        today_cost_val,
+        week_cost_val,
+        month_cost_val,
+        trend_data,
+        month_tok,
+        billing_summary,
+    )
 
     return {
-        'source': 'otlp',
-        'days': days,
-        'today': today_tok,
-        'week': week_tok,
-        'month': month_tok,
-        'todayCost': round(today_cost_val, 4),
-        'weekCost': round(week_cost_val, 4),
-        'monthCost': round(month_cost_val, 4),
-        'avgRunMs': round(avg_run_ms, 1),
-        'messageCount': msg_count,
-        'modelBreakdown': [
-            {'model': k, 'tokens': v}
+        "source": "otlp",
+        "days": days,
+        "today": today_tok,
+        "week": week_tok,
+        "month": month_tok,
+        "todayCost": round(today_cost_val, 4),
+        "weekCost": round(week_cost_val, 4),
+        "monthCost": round(month_cost_val, 4),
+        "avgRunMs": round(avg_run_ms, 1),
+        "messageCount": msg_count,
+        "modelBreakdown": [
+            {"model": k, "tokens": v}
             for k, v in sorted(model_usage.items(), key=lambda x: -x[1])
         ],
-        'modelBilling': model_billing,
-        'billingSummary': billing_summary,
-        'trend': trend_data,
-        'warnings': warnings,
+        "modelBilling": model_billing,
+        "billingSummary": billing_summary,
+        "trend": trend_data,
+        "warnings": warnings,
     }
 
 
@@ -1422,7 +1646,7 @@ def _safe_date_ts(date_str):
     if not date_str or not isinstance(date_str, str):
         return 0
     try:
-        return datetime.strptime(date_str, '%Y-%m-%d').timestamp()
+        return datetime.strptime(date_str, "%Y-%m-%d").timestamp()
     except ValueError:
         # Invalid date format - expected but handled gracefully
         return 0
@@ -1435,19 +1659,21 @@ def validate_configuration():
     """Validate the detected configuration and provide helpful feedback for new users."""
     warnings = []
     tips = []
-    
+
     # Check if workspace looks like a real OpenClaw setup
-    workspace_files = ['SOUL.md', 'AGENTS.md', 'MEMORY.md', 'memory']
+    workspace_files = ["SOUL.md", "AGENTS.md", "MEMORY.md", "memory"]
     found_files = []
     for f in workspace_files:
         path = os.path.join(WORKSPACE, f)
         if os.path.exists(path):
             found_files.append(f)
-    
+
     if not found_files:
         warnings.append(f"[warn]  No OpenClaw workspace files found in {WORKSPACE}")
-        tips.append("[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
-    
+        tips.append(
+            "[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace"
+        )
+
     # Check if log directory exists and has recent logs
     if not os.path.exists(LOG_DIR):
         warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
@@ -1455,24 +1681,27 @@ def validate_configuration():
     else:
         # Check for recent log files
         log_pattern = os.path.join(LOG_DIR, "*claw*.log")
-        recent_logs = [f for f in glob.glob(log_pattern) 
-                      if os.path.getmtime(f) > time.time() - 86400]  # Last 24h
+        recent_logs = [
+            f
+            for f in glob.glob(log_pattern)
+            if os.path.getmtime(f) > time.time() - 86400
+        ]  # Last 24h
         if not recent_logs:
             warnings.append(f"[warn]  No recent log files found in {LOG_DIR}")
             tips.append("[tip] Start your OpenClaw agent to see real-time data")
-    
+
     # Check if sessions directory exists
     if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
         warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
         tips.append("[tip] Sessions will appear when your agent starts conversations")
-    
+
     # Check if OpenClaw binary is available
     try:
-        subprocess.run(['openclaw', '--version'], capture_output=True, timeout=10)
+        subprocess.run(["openclaw", "--version"], capture_output=True, timeout=10)
     except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
         warnings.append("[warn]  OpenClaw binary not found in PATH")
         tips.append("[tip] Install OpenClaw: https://github.com/openclaw/openclaw")
-    
+
     return warnings, tips
 
 
@@ -1480,86 +1709,118 @@ def _auto_detect_data_dir():
     """Auto-detect OpenClaw data directory, including Docker volume mounts."""
     # Standard locations
     candidates = [
-        os.path.expanduser('~/.openclaw'),
-        os.path.expanduser('~/.clawdbot'),
+        os.path.expanduser("~/.openclaw"),
+        os.path.expanduser("~/.clawdbot"),
     ]
     # Docker volume mounts (Hostinger pattern: /docker/*/data/.openclaw)
     try:
         import glob as _glob
-        for pattern in ['/docker/*/data/.openclaw', '/docker/*/.openclaw',
-                        '/var/lib/docker/volumes/*/_data/.openclaw']:
+
+        for pattern in [
+            "/docker/*/data/.openclaw",
+            "/docker/*/.openclaw",
+            "/var/lib/docker/volumes/*/_data/.openclaw",
+        ]:
             candidates.extend(_glob.glob(pattern))
     except Exception:
         pass
     # Check Docker inspect for mount points
     try:
         import subprocess as _sp
-        container_ids = _sp.check_output(
-            ['docker', 'ps', '-q', '--filter', 'ancestor=*openclaw*'],
-            timeout=3, stderr=_sp.DEVNULL
-        ).decode().strip().split()
+
+        container_ids = (
+            _sp.check_output(
+                ["docker", "ps", "-q", "--filter", "ancestor=*openclaw*"],
+                timeout=3,
+                stderr=_sp.DEVNULL,
+            )
+            .decode()
+            .strip()
+            .split()
+        )
         if not container_ids:
             # Try all containers
-            container_ids = _sp.check_output(
-                ['docker', 'ps', '-q'], timeout=3, stderr=_sp.DEVNULL
-            ).decode().strip().split()
+            container_ids = (
+                _sp.check_output(["docker", "ps", "-q"], timeout=3, stderr=_sp.DEVNULL)
+                .decode()
+                .strip()
+                .split()
+            )
         for cid in container_ids[:3]:
             try:
-                mounts = _sp.check_output(
-                    ['docker', 'inspect', cid, '--format',
-                     '{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}'],
-                    timeout=3, stderr=_sp.DEVNULL
-                ).decode().strip().split()
+                mounts = (
+                    _sp.check_output(
+                        [
+                            "docker",
+                            "inspect",
+                            cid,
+                            "--format",
+                            "{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}",
+                        ],
+                        timeout=3,
+                        stderr=_sp.DEVNULL,
+                    )
+                    .decode()
+                    .strip()
+                    .split()
+                )
                 for mount in mounts:
-                    parts = mount.split(':')
+                    parts = mount.split(":")
                     if len(parts) >= 1:
                         src = parts[0]
-                        oc_path = os.path.join(src, '.openclaw')
+                        oc_path = os.path.join(src, ".openclaw")
                         if os.path.isdir(oc_path) and oc_path not in candidates:
                             candidates.insert(0, oc_path)
                         # Also check if the mount itself is the .openclaw dir
-                        if src.endswith('.openclaw') and os.path.isdir(src):
+                        if src.endswith(".openclaw") and os.path.isdir(src):
                             candidates.insert(0, src)
             except Exception:
                 pass
     except Exception:
         pass
     for c in candidates:
-        if c and os.path.isdir(c) and (
-            os.path.isdir(os.path.join(c, 'agents')) or
-            os.path.isdir(os.path.join(c, 'workspace')) or
-            os.path.exists(os.path.join(c, 'cron', 'jobs.json'))
+        if (
+            c
+            and os.path.isdir(c)
+            and (
+                os.path.isdir(os.path.join(c, "agents"))
+                or os.path.isdir(os.path.join(c, "workspace"))
+                or os.path.exists(os.path.join(c, "cron", "jobs.json"))
+            )
         ):
             return c
     return None
+
 
 def detect_config(args=None):
     """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
     global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
 
     # 0a. --openclaw-dir: set OpenClaw config directory (Issue #322 - Docker config bleed)
-    if args and getattr(args, 'openclaw_dir', None):
-        os.environ['CLAWMETRY_OPENCLAW_DIR'] = os.path.expanduser(args.openclaw_dir)
+    if args and getattr(args, "openclaw_dir", None):
+        os.environ["CLAWMETRY_OPENCLAW_DIR"] = os.path.expanduser(args.openclaw_dir)
 
     # 0. --data-dir: set defaults from OpenClaw data directory (e.g. /path/.openclaw)
     data_dir = None
-    if args and getattr(args, 'data_dir', None):
+    if args and getattr(args, "data_dir", None):
         data_dir = os.path.expanduser(args.data_dir)
     elif os.environ.get("OPENCLAW_DATA_DIR"):
         data_dir = os.path.expanduser(os.environ["OPENCLAW_DATA_DIR"])
     else:
         # Auto-detect: check common locations including Docker volumes
         data_dir = _auto_detect_data_dir()
-    
+
     if data_dir and os.path.isdir(data_dir):
         # Auto-set workspace, sessions, crons from data dir
-        ws = os.path.join(data_dir, 'workspace')
+        ws = os.path.join(data_dir, "workspace")
         if os.path.isdir(ws) and not (args and args.workspace):
             if not args:
-                import argparse; args = argparse.Namespace()
+                import argparse
+
+                args = argparse.Namespace()
             args.workspace = ws
-        sess = os.path.join(data_dir, 'agents', 'main', 'sessions')
-        if os.path.isdir(sess) and not (args and getattr(args, 'sessions_dir', None)):
+        sess = os.path.join(data_dir, "agents", "main", "sessions")
+        if os.path.isdir(sess) and not (args and getattr(args, "sessions_dir", None)):
             args.sessions_dir = sess
 
     # 1. Workspace - where agent files live (SOUL.md, MEMORY.md, memory/, etc.)
@@ -1580,11 +1841,15 @@ def detect_config(args=None):
             os.getcwd(),
         ]
         for c in candidates:
-            if c and os.path.isdir(c) and (
-                os.path.exists(os.path.join(c, "SOUL.md")) or
-                os.path.exists(os.path.join(c, "AGENTS.md")) or
-                os.path.exists(os.path.join(c, "MEMORY.md")) or
-                os.path.isdir(os.path.join(c, "memory"))
+            if (
+                c
+                and os.path.isdir(c)
+                and (
+                    os.path.exists(os.path.join(c, "SOUL.md"))
+                    or os.path.exists(os.path.join(c, "AGENTS.md"))
+                    or os.path.exists(os.path.join(c, "MEMORY.md"))
+                    or os.path.isdir(os.path.join(c, "memory"))
+                )
             ):
                 WORKSPACE = c
                 break
@@ -1603,26 +1868,32 @@ def detect_config(args=None):
         LOG_DIR = next((d for d in candidates if os.path.isdir(d)), _get_log_dirs()[0])
 
     # 3. Sessions directory (transcript .jsonl files)
-    if args and getattr(args, 'sessions_dir', None):
+    if args and getattr(args, "sessions_dir", None):
         SESSIONS_DIR = os.path.expanduser(args.sessions_dir)
     elif os.environ.get("OPENCLAW_SESSIONS_DIR"):
         SESSIONS_DIR = os.path.expanduser(os.environ["OPENCLAW_SESSIONS_DIR"])
     else:
         candidates = [
-            os.path.expanduser('~/.openclaw/agents/main/sessions'),
-            os.path.expanduser('~/.clawdbot/agents/main/sessions'),
-            os.path.join(WORKSPACE, 'sessions') if WORKSPACE else None,
-            os.path.expanduser('~/.openclaw/sessions'),
-            os.path.expanduser('~/.clawdbot/sessions'),
+            os.path.expanduser("~/.openclaw/agents/main/sessions"),
+            os.path.expanduser("~/.clawdbot/agents/main/sessions"),
+            os.path.join(WORKSPACE, "sessions") if WORKSPACE else None,
+            os.path.expanduser("~/.openclaw/sessions"),
+            os.path.expanduser("~/.clawdbot/sessions"),
         ]
         # Also scan agents dirs
-        for agents_base in [os.path.expanduser('~/.openclaw/agents'), os.path.expanduser('~/.clawdbot/agents')]:
+        for agents_base in [
+            os.path.expanduser("~/.openclaw/agents"),
+            os.path.expanduser("~/.clawdbot/agents"),
+        ]:
             if os.path.isdir(agents_base):
                 for agent in os.listdir(agents_base):
-                    p = os.path.join(agents_base, agent, 'sessions')
+                    p = os.path.join(agents_base, agent, "sessions")
                     if p not in candidates:
                         candidates.append(p)
-        SESSIONS_DIR = next((d for d in candidates if d and os.path.isdir(d)), candidates[0] if candidates else None)
+        SESSIONS_DIR = next(
+            (d for d in candidates if d and os.path.isdir(d)),
+            candidates[0] if candidates else None,
+        )
 
     # 4. User name (shown in Flow visualization)
     if args and args.name:
@@ -1660,7 +1931,7 @@ def _detect_workspace_from_config():
 def _detect_gateway_port():
     """Detect the OpenClaw gateway port from config files or environment."""
     # Check environment variable first
-    env_port = os.environ.get('OPENCLAW_GATEWAY_PORT', '').strip()
+    env_port = os.environ.get("OPENCLAW_GATEWAY_PORT", "").strip()
     if env_port:
         try:
             return int(env_port)
@@ -1670,35 +1941,36 @@ def _detect_gateway_port():
     # Try JSON configs first (openclaw.json / moltbot.json / clawdbot.json)
     _oc_dir = _get_openclaw_dir()
     json_paths = [
-        os.path.join(_oc_dir, 'openclaw.json'),
-        os.path.join(_oc_dir, 'moltbot.json'),
-        os.path.join(_oc_dir, 'clawdbot.json'),
-        os.path.expanduser('~/.clawdbot/clawdbot.json'),
+        os.path.join(_oc_dir, "openclaw.json"),
+        os.path.join(_oc_dir, "moltbot.json"),
+        os.path.join(_oc_dir, "clawdbot.json"),
+        os.path.expanduser("~/.clawdbot/clawdbot.json"),
     ]
     for jp in json_paths:
         try:
             import json as _json
+
             with open(jp) as f:
                 cfg = _json.load(f)
-            gw = cfg.get('gateway', {})
-            if isinstance(gw, dict) and 'port' in gw:
-                return int(gw['port'])
+            gw = cfg.get("gateway", {})
+            if isinstance(gw, dict) and "port" in gw:
+                return int(gw["port"])
         except (FileNotFoundError, ValueError, KeyError, TypeError):
             pass
     # Try YAML configs
     yaml_paths = [
-        os.path.expanduser('~/.openclaw/gateway.yaml'),
-        os.path.expanduser('~/.openclaw/gateway.yml'),
-        os.path.expanduser('~/.clawdbot/gateway.yaml'),
-        os.path.expanduser('~/.clawdbot/gateway.yml'),
+        os.path.expanduser("~/.openclaw/gateway.yaml"),
+        os.path.expanduser("~/.openclaw/gateway.yml"),
+        os.path.expanduser("~/.clawdbot/gateway.yaml"),
+        os.path.expanduser("~/.clawdbot/gateway.yml"),
     ]
     for cp in yaml_paths:
         try:
             with open(cp) as f:
                 for line in f:
                     line = line.strip()
-                    if line.startswith('port:'):
-                        port_val = line.split(':', 1)[1].strip()
+                    if line.startswith("port:"):
+                        port_val = line.split(":", 1)[1].strip()
                         return int(port_val)
         except (FileNotFoundError, ValueError, IndexError):
             pass
@@ -1708,22 +1980,28 @@ def _detect_gateway_port():
 def _detect_gateway_token():
     """Detect the OpenClaw gateway auth token from env, config files, or running process."""
     # 1. Environment variable (most reliable - matches running gateway)
-    env_token = os.environ.get('OPENCLAW_GATEWAY_TOKEN', '').strip()
+    env_token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
     if env_token:
         return env_token
     # 2. Try reading from running gateway process env (Linux only)
     try:
         import subprocess as _sp
-        result = _sp.run(['pgrep', '-f', 'openclaw-gatewa'], capture_output=True, text=True, timeout=3)
-        for pid in result.stdout.strip().split('\n'):
+
+        result = _sp.run(
+            ["pgrep", "-f", "openclaw-gatewa"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        for pid in result.stdout.strip().split("\n"):
             pid = pid.strip()
             if pid:
                 try:
-                    with open(f'/proc/{pid}/environ', 'r') as f:
+                    with open(f"/proc/{pid}/environ", "r") as f:
                         env_data = f.read()
-                    for entry in env_data.split('\0'):
-                        if entry.startswith('OPENCLAW_GATEWAY_TOKEN='):
-                            return entry.split('=', 1)[1]
+                    for entry in env_data.split("\0"):
+                        if entry.startswith("OPENCLAW_GATEWAY_TOKEN="):
+                            return entry.split("=", 1)[1]
                 except (PermissionError, FileNotFoundError):
                     pass
     except Exception:
@@ -1731,20 +2009,21 @@ def _detect_gateway_token():
     # 3. Config files
     _oc_dir = _get_openclaw_dir()
     json_paths = [
-        os.path.join(_oc_dir, 'openclaw.json'),
-        os.path.join(_oc_dir, 'moltbot.json'),
-        os.path.join(_oc_dir, 'clawdbot.json'),
-        os.path.expanduser('~/.clawdbot/clawdbot.json'),
+        os.path.join(_oc_dir, "openclaw.json"),
+        os.path.join(_oc_dir, "moltbot.json"),
+        os.path.join(_oc_dir, "clawdbot.json"),
+        os.path.expanduser("~/.clawdbot/clawdbot.json"),
     ]
     for jp in json_paths:
         try:
             import json as _json
+
             with open(jp) as f:
                 cfg = _json.load(f)
-            gw = cfg.get('gateway', {})
-            auth = gw.get('auth', {})
-            if isinstance(auth, dict) and 'token' in auth:
-                return auth['token']
+            gw = cfg.get("gateway", {})
+            auth = gw.get("auth", {})
+            if isinstance(auth, dict) and "token" in auth:
+                return auth["token"]
         except (FileNotFoundError, ValueError, KeyError, TypeError):
             pass
     return None
@@ -1752,17 +2031,26 @@ def _detect_gateway_token():
 
 def _detect_disk_mounts():
     """Detect mounted filesystems to monitor (root + any large data drives)."""
-    mounts = ['/']
+    mounts = ["/"]
     try:
-        with open('/proc/mounts') as f:
+        with open("/proc/mounts") as f:
             for line in f:
                 parts = line.split()
                 if len(parts) >= 2:
                     mount_point = parts[1]
-                    fs_type = parts[2] if len(parts) > 2 else ''
+                    fs_type = parts[2] if len(parts) > 2 else ""
                     # Include additional data mounts (skip virtual/special filesystems)
-                    if (mount_point.startswith('/mnt/') or mount_point.startswith('/data')) and \
-                       fs_type not in ('tmpfs', 'devtmpfs', 'proc', 'sysfs', 'cgroup', 'cgroup2'):
+                    if (
+                        mount_point.startswith("/mnt/")
+                        or mount_point.startswith("/data")
+                    ) and fs_type not in (
+                        "tmpfs",
+                        "devtmpfs",
+                        "proc",
+                        "sysfs",
+                        "cgroup",
+                        "cgroup2",
+                    ):
                         mounts.append(mount_point)
     except (IOError, OSError):
         pass
@@ -1773,7 +2061,13 @@ def get_public_ip():
     """Get the machine's public IP address (useful for cloud/VPS users)."""
     try:
         import urllib.request
-        return urllib.request.urlopen("https://api.ipify.org", timeout=2).read().decode().strip()
+
+        return (
+            urllib.request.urlopen("https://api.ipify.org", timeout=2)
+            .read()
+            .decode()
+            .strip()
+        )
     except Exception:
         return None
 
@@ -1787,7 +2081,7 @@ def get_local_ip():
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except (socket.error, OSError) as e:
+    except (socket.error, OSError):
         # Network unavailable or socket error - common in offline/restricted environments
         return "127.0.0.1"
     except Exception as e:
@@ -5154,26 +5448,22 @@ import os
 import sys
 
 # Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252)
-if sys.platform == 'win32':
+if sys.platform == "win32":
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-import glob
-import json
-import socket
-from collections import deque, defaultdict
-import argparse
-import subprocess
-import time
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 import threading
-import select
-from datetime import datetime, timezone, timedelta
-from flask import Flask, render_template_string, request, jsonify, Response, make_response
+from datetime import timezone, timedelta
+from flask import (
+    Flask,
+)
 
 # History / time-series module
 try:
     from history import HistoryDB, HistoryCollector, AgentReliabilityScorer
+
     _HAS_HISTORY = True
 except ImportError:
     _HAS_HISTORY = False
@@ -5189,6 +5479,7 @@ _HAS_OTEL_PROTO = False
 try:
     from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2
     from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
+
     _HAS_OTEL_PROTO = True
 except ImportError:
     metrics_service_pb2 = None
@@ -5198,44 +5489,46 @@ except ImportError:
 app = Flask(__name__)
 
 # ── Cross-platform helpers ──────────────────────────────────────────────
-import re as _re
-import tempfile as _tempfile
 import platform as _platform
+
 
 def _grep_log_file(filepath, pattern):
     """Cross-platform grep: return list of lines matching pattern (case-insensitive)."""
     results = []
     try:
-        with open(filepath, 'r', errors='replace') as _f:
+        with open(filepath, "r", errors="replace") as _f:
             for _line in _f:
                 if _re.search(pattern, _line, _re.IGNORECASE):
-                    results.append(_line.rstrip('\n'))
+                    results.append(_line.rstrip("\n"))
     except (OSError, IOError):
         pass
     return results
+
 
 def _tail_lines(filepath, n=200):
     """Cross-platform tail: return last n lines of a file as a list of strings."""
     try:
         fsize = os.path.getsize(filepath)
-        with open(filepath, 'rb') as _f:
+        with open(filepath, "rb") as _f:
             try:
                 _f.seek(-min(n * 500, fsize), 2)
             except OSError:
                 _f.seek(0)
-            return _f.read().decode('utf-8', errors='replace').splitlines()[-n:]
+            return _f.read().decode("utf-8", errors="replace").splitlines()[-n:]
     except (OSError, IOError):
         return []
 
+
 def _get_log_dirs():
     """Return platform-appropriate candidate log directories."""
-    if sys.platform == 'win32':
+    if sys.platform == "win32":
         return [
-            os.path.join(os.environ.get('APPDATA', ''), 'openclaw', 'logs'),
-            os.path.join(_tempfile.gettempdir(), 'openclaw'),
-            os.path.join(_tempfile.gettempdir(), 'moltbot'),
+            os.path.join(os.environ.get("APPDATA", ""), "openclaw", "logs"),
+            os.path.join(_tempfile.gettempdir(), "openclaw"),
+            os.path.join(_tempfile.gettempdir(), "moltbot"),
         ]
-    return ['/tmp/openclaw', '/tmp/moltbot']
+    return ["/tmp/openclaw", "/tmp/moltbot"]
+
 
 _CURRENT_PLATFORM = _platform.system().lower()
 # ── End cross-platform helpers ──────────────────────────────────────────
@@ -5268,7 +5561,7 @@ FLEET_NODE_TIMEOUT = 300  # seconds before node is considered offline
 # ── Budget & Alert Configuration ───────────────────────────────────────
 _budget_paused = False
 _budget_paused_at = 0
-_budget_paused_reason = ''
+_budget_paused_reason = ""
 _budget_alert_cooldowns = {}  # rule_id -> last_fired_timestamp
 _AGENT_DOWN_SECONDS = 300  # 5 min with no OTLP data = agent down alert
 
@@ -5277,24 +5570,31 @@ _last_heartbeat_ts = 0  # timestamp of last detected heartbeat event
 _heartbeat_interval_sec = 1800  # default 30 min, auto-detected from config
 _heartbeat_silent_since = 0  # when silence was first detected (0 = not silent)
 
+
 def _detect_heartbeat_interval():
     """Read heartbeat interval from OpenClaw config."""
     global _heartbeat_interval_sec
-    for cf in [os.path.expanduser('~/.clawdbot/openclaw.json'), os.path.expanduser('~/.openclaw/openclaw.json')]:
+    for cf in [
+        os.path.expanduser("~/.clawdbot/openclaw.json"),
+        os.path.expanduser("~/.openclaw/openclaw.json"),
+    ]:
         try:
             with open(cf) as f:
                 cfg = json.load(f)
-            hb = cfg.get('agents', {}).get('defaults', {}).get('heartbeat', {})
-            every = hb.get('every', '')
+            hb = cfg.get("agents", {}).get("defaults", {}).get("heartbeat", {})
+            every = hb.get("every", "")
             if every:
                 import re as _re_hb
-                m = _re_hb.match(r'^(\d+)\s*(m|min|h|hr|s|sec)?$', str(every).strip().lower())
+
+                m = _re_hb.match(
+                    r"^(\d+)\s*(m|min|h|hr|s|sec)?$", str(every).strip().lower()
+                )
                 if m:
                     val = int(m.group(1))
-                    unit = m.group(2) or 'm'
-                    if unit.startswith('h'):
+                    unit = m.group(2) or "m"
+                    if unit.startswith("h"):
                         _heartbeat_interval_sec = val * 3600
-                    elif unit.startswith('s'):
+                    elif unit.startswith("s"):
                         _heartbeat_interval_sec = val
                     else:
                         _heartbeat_interval_sec = val * 60
@@ -5302,69 +5602,71 @@ def _detect_heartbeat_interval():
         except Exception:
             continue
 
+
 def _record_heartbeat():
     """Record that a heartbeat event was observed."""
     global _last_heartbeat_ts, _heartbeat_silent_since
     _last_heartbeat_ts = time.time()
     _heartbeat_silent_since = 0  # reset silence tracker
 
+
 def _detect_sandbox_metadata():
     """Detect sandbox environment metadata. Returns dict or None."""
     sandbox = {}
     # Check environment variables (set by container wrappers like NemoClaw, Docker, etc.)
-    name = os.environ.get('SANDBOX_NAME') or os.environ.get('CONTAINER_NAME')
-    stype = os.environ.get('SANDBOX_TYPE') or os.environ.get('CONTAINER_TYPE')
-    status = os.environ.get('SANDBOX_STATUS', 'running')
+    name = os.environ.get("SANDBOX_NAME") or os.environ.get("CONTAINER_NAME")
+    stype = os.environ.get("SANDBOX_TYPE") or os.environ.get("CONTAINER_TYPE")
+    status = os.environ.get("SANDBOX_STATUS", "running")
     # Check if running inside Docker
-    in_docker = os.path.exists('/.dockerenv')
+    in_docker = os.path.exists("/.dockerenv")
     if not in_docker:
         try:
-            with open('/proc/1/cgroup', 'r') as f:
-                in_docker = 'docker' in f.read() or 'containerd' in f.read()
+            with open("/proc/1/cgroup", "r") as f:
+                in_docker = "docker" in f.read() or "containerd" in f.read()
         except Exception:
             pass
     # Check openclaw.json for sandbox config
     cfg = _load_gw_config()
-    sandbox_cfg = cfg.get('sandbox', {}) if isinstance(cfg, dict) else {}
+    sandbox_cfg = cfg.get("sandbox", {}) if isinstance(cfg, dict) else {}
     if isinstance(sandbox_cfg, dict) and sandbox_cfg:
-        name = name or sandbox_cfg.get('name')
-        stype = stype or sandbox_cfg.get('type')
-        status = sandbox_cfg.get('status', status)
+        name = name or sandbox_cfg.get("name")
+        stype = stype or sandbox_cfg.get("type")
+        status = sandbox_cfg.get("status", status)
     if name or stype or in_docker:
-        sandbox['name'] = name or ('Docker Container' if in_docker else 'Unknown')
-        sandbox['type'] = stype or ('docker' if in_docker else 'unknown')
-        sandbox['status'] = status
+        sandbox["name"] = name or ("Docker Container" if in_docker else "Unknown")
+        sandbox["type"] = stype or ("docker" if in_docker else "unknown")
+        sandbox["status"] = status
         return sandbox
     return None
 
 
 def _detect_inference_metadata():
     """Detect inference provider metadata. Returns dict or None."""
-    provider = os.environ.get('INFERENCE_PROVIDER')
-    model = os.environ.get('INFERENCE_MODEL')
+    provider = os.environ.get("INFERENCE_PROVIDER")
+    model = os.environ.get("INFERENCE_MODEL")
     # Check openclaw.json
     cfg = _load_gw_config()
     if isinstance(cfg, dict):
-        inf_cfg = cfg.get('inference', {})
+        inf_cfg = cfg.get("inference", {})
         if isinstance(inf_cfg, dict) and inf_cfg:
-            provider = provider or inf_cfg.get('provider')
-            model = model or inf_cfg.get('model')
+            provider = provider or inf_cfg.get("provider")
+            model = model or inf_cfg.get("model")
         # Also check default model from standard config
         if not model:
-            model = cfg.get('model') or cfg.get('default_model')
+            model = cfg.get("model") or cfg.get("default_model")
         if not provider and model:
             # Infer provider from model name
-            m = (model or '').lower()
-            if 'claude' in m or 'anthropic' in m:
-                provider = 'Anthropic'
-            elif 'gpt' in m or 'o1' in m or 'o3' in m or 'o4' in m:
-                provider = 'OpenAI'
-            elif 'gemini' in m:
-                provider = 'Google'
-            elif 'llama' in m or 'mistral' in m or 'mixtral' in m:
-                provider = 'Local/Ollama'
+            m = (model or "").lower()
+            if "claude" in m or "anthropic" in m:
+                provider = "Anthropic"
+            elif "gpt" in m or "o1" in m or "o3" in m or "o4" in m:
+                provider = "OpenAI"
+            elif "gemini" in m:
+                provider = "Google"
+            elif "llama" in m or "mistral" in m or "mixtral" in m:
+                provider = "Local/Ollama"
     if provider or model:
-        return {'provider': provider, 'model': model}
+        return {"provider": provider, "model": model}
     return None
 
 
@@ -5373,28 +5675,28 @@ def _detect_security_metadata():
     security = {}
     cfg = _load_gw_config()
     if isinstance(cfg, dict):
-        sec_cfg = cfg.get('security', {})
+        sec_cfg = cfg.get("security", {})
         if isinstance(sec_cfg, dict):
-            if 'sandbox_enabled' in sec_cfg:
-                security['sandbox_enabled'] = sec_cfg['sandbox_enabled']
-            if 'network_policy' in sec_cfg:
-                security['network_policy'] = sec_cfg['network_policy']
+            if "sandbox_enabled" in sec_cfg:
+                security["sandbox_enabled"] = sec_cfg["sandbox_enabled"]
+            if "network_policy" in sec_cfg:
+                security["network_policy"] = sec_cfg["network_policy"]
         # Check exec security mode
-        exec_cfg = cfg.get('exec', {})
-        if isinstance(exec_cfg, dict) and exec_cfg.get('security'):
-            security['exec_security'] = exec_cfg['security']
+        exec_cfg = cfg.get("exec", {})
+        if isinstance(exec_cfg, dict) and exec_cfg.get("security"):
+            security["exec_security"] = exec_cfg["security"]
         # Check if auth is configured
-        if cfg.get('auth') or cfg.get('token'):
-            security['auth_enabled'] = True
+        if cfg.get("auth") or cfg.get("token"):
+            security["auth_enabled"] = True
         # Check bind address
-        bind = cfg.get('bind') or cfg.get('host')
+        bind = cfg.get("bind") or cfg.get("host")
         if bind:
-            security['bind_address'] = bind
-            security['localhost_only'] = bind in ('127.0.0.1', 'localhost', '::1')
+            security["bind_address"] = bind
+            security["localhost_only"] = bind in ("127.0.0.1", "localhost", "::1")
     # Check Docker sandbox
-    if os.path.exists('/.dockerenv'):
-        security['sandbox_enabled'] = True
-        security['sandbox_type'] = 'docker'
+    if os.path.exists("/.dockerenv"):
+        security["sandbox_enabled"] = True
+        security["sandbox_type"] = "docker"
     if security:
         return security
     return None
@@ -5406,22 +5708,24 @@ def _get_heartbeat_status():
     interval = _heartbeat_interval_sec
     threshold = interval * 1.5
     gap_sec = (now - _last_heartbeat_ts) if _last_heartbeat_ts > 0 else 0
-    status = 'unknown'
+    status = "unknown"
     if _last_heartbeat_ts == 0:
-        status = 'unknown'
+        status = "unknown"
     elif gap_sec <= interval:
-        status = 'ok'
+        status = "ok"
     elif gap_sec <= threshold:
-        status = 'warning'
+        status = "warning"
     else:
-        status = 'silent'
+        status = "silent"
     return {
-        'status': status,
-        'last_heartbeat_ts': _last_heartbeat_ts,
-        'gap_seconds': int(gap_sec) if _last_heartbeat_ts > 0 else None,
-        'interval_seconds': interval,
-        'threshold_seconds': int(threshold),
-        'silent_since': _heartbeat_silent_since if _heartbeat_silent_since > 0 else None,
+        "status": status,
+        "last_heartbeat_ts": _last_heartbeat_ts,
+        "gap_seconds": int(gap_sec) if _last_heartbeat_ts > 0 else None,
+        "interval_seconds": interval,
+        "threshold_seconds": int(threshold),
+        "silent_since": _heartbeat_silent_since
+        if _heartbeat_silent_since > 0
+        else None,
     }
 
 
@@ -5431,12 +5735,12 @@ _metrics_lock = threading.Lock()
 _otel_last_received = 0  # timestamp of last OTLP data received
 
 metrics_store = {
-    "tokens": [],       # [{timestamp, input, output, total, model, channel, provider}]
-    "cost": [],         # [{timestamp, usd, model, channel, provider}]
-    "runs": [],         # [{timestamp, duration_ms, model, channel}]
-    "messages": [],     # [{timestamp, channel, outcome, duration_ms}]
-    "webhooks": [],     # [{timestamp, channel, type}]
-    "queues": [],       # [{timestamp, channel, depth}]
+    "tokens": [],  # [{timestamp, input, output, total, model, channel, provider}]
+    "cost": [],  # [{timestamp, usd, model, channel, provider}]
+    "runs": [],  # [{timestamp, duration_ms, model, channel}]
+    "messages": [],  # [{timestamp, channel, outcome, duration_ms}]
+    "webhooks": [],  # [{timestamp, channel, type}]
+    "queues": [],  # [{timestamp, channel, depth}]
 }
 MAX_STORE_ENTRIES = 10_000
 STORE_RETENTION_DAYS = 14
@@ -5447,8 +5751,8 @@ def _metrics_file_path():
     if METRICS_FILE:
         return METRICS_FILE
     if WORKSPACE:
-        return os.path.join(WORKSPACE, '.clawmetry-metrics.json')
-    return os.path.expanduser('~/.clawmetry-metrics.json')
+        return os.path.join(WORKSPACE, ".clawmetry-metrics.json")
+    return os.path.expanduser("~/.clawmetry-metrics.json")
 
 
 def _load_metrics_from_disk():
@@ -5458,13 +5762,13 @@ def _load_metrics_from_disk():
     if not os.path.exists(path):
         return
     try:
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             data = json.load(f)
         if isinstance(data, dict):
             for key in metrics_store:
                 if key in data and isinstance(data[key], list):
                     metrics_store[key] = data[key][-MAX_STORE_ENTRIES:]
-            _otel_last_received = data.get('_last_received', 0)
+            _otel_last_received = data.get("_last_received", 0)
         _expire_old_entries()
     except json.JSONDecodeError as e:
         print(f"[warn]  Warning: Failed to parse metrics file {path}: {e}")
@@ -5492,10 +5796,10 @@ def _save_metrics_to_disk():
         with _metrics_lock:
             for k in metrics_store:
                 data[k] = list(metrics_store[k])
-        data['_last_received'] = _otel_last_received
-        data['_saved_at'] = time.time()
-        tmp = path + '.tmp'
-        with open(tmp, 'w') as f:
+        data["_last_received"] = _otel_last_received
+        data["_saved_at"] = time.time()
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
             json.dump(data, f)
         os.replace(tmp, path)
     except OSError as e:
@@ -5514,8 +5818,7 @@ def _expire_old_entries():
     with _metrics_lock:
         for key in metrics_store:
             metrics_store[key] = [
-                e for e in metrics_store[key]
-                if e.get('timestamp', 0) > cutoff
+                e for e in metrics_store[key] if e.get("timestamp", 0) > cutoff
             ][-MAX_STORE_ENTRIES:]
 
 
@@ -5528,12 +5831,11 @@ def _add_metric(category, entry):
             metrics_store[category] = metrics_store[category][-MAX_STORE_ENTRIES:]
         _otel_last_received = time.time()
     # Check budget on cost entries
-    if category == 'cost':
+    if category == "cost":
         try:
             _budget_check()
         except Exception:
             pass
-
 
 
 def _metrics_flush_loop():
@@ -5563,8 +5865,6 @@ def _has_otel_data():
 
 
 # ── Multi-Node Fleet Database ───────────────────────────────────────────
-import sqlite3 as _sqlite3
-import hashlib as _hashlib
 
 _fleet_db_lock = threading.Lock()
 
@@ -5581,18 +5881,18 @@ def _fleet_db_path():
     if FLEET_DB_PATH:
         return FLEET_DB_PATH
     if WORKSPACE:
-        return os.path.join(WORKSPACE, '.clawmetry-fleet.db')
+        return os.path.join(WORKSPACE, ".clawmetry-fleet.db")
     # Always use ~/.clawmetry/fleet.db -- create the dir if the installer
     # has not run yet or this is a fresh pip install without curl | bash.
-    preferred_dir = os.path.expanduser('~/.clawmetry')
+    preferred_dir = os.path.expanduser("~/.clawmetry")
     try:
         os.makedirs(preferred_dir, exist_ok=True)
     except OSError:
         pass  # makedirs failed (permissions?), fall through to legacy path
     if os.path.isdir(preferred_dir):
-        return os.path.join(preferred_dir, 'fleet.db')
+        return os.path.join(preferred_dir, "fleet.db")
     # Last resort: legacy flat file in home dir (pre-installer environments)
-    return os.path.expanduser('~/.clawmetry-fleet.db')
+    return os.path.expanduser("~/.clawmetry-fleet.db")
 
 
 def _fleet_db():
@@ -5645,7 +5945,7 @@ def _fleet_check_key(req):
     """Validate fleet API key from request header. Returns True if valid."""
     if not FLEET_API_KEY:
         return True  # No key configured = open (for dev/testing)
-    key = req.headers.get('X-Fleet-Key', '')
+    key = req.headers.get("X-Fleet-Key", "")
     return key == FLEET_API_KEY
 
 
@@ -5656,7 +5956,7 @@ def _fleet_update_statuses():
         db = _fleet_db()
         db.execute(
             "UPDATE nodes SET status = 'offline' WHERE last_seen_at < ? AND status != 'offline'",
-            (cutoff,)
+            (cutoff,),
         )
         db.commit()
         db.close()
@@ -5690,6 +5990,7 @@ def _start_fleet_maintenance_thread():
 
 
 # ── Budget & Alert Database ────────────────────────────────────────────
+
 
 def _budget_init_db():
     """Initialize budget and alert tables in the fleet database."""
@@ -5732,14 +6033,14 @@ def _budget_init_db():
 def _get_budget_config():
     """Get all budget config as a dict."""
     defaults = {
-        'daily_limit': 0,
-        'weekly_limit': 0,
-        'monthly_limit': 0,
-        'auto_pause_enabled': False,
-        'auto_pause_threshold_pct': 100,
-        'warning_threshold_pct': 80,
-        'telegram_bot_token': '',
-        'telegram_chat_id': '',
+        "daily_limit": 0,
+        "weekly_limit": 0,
+        "monthly_limit": 0,
+        "auto_pause_enabled": False,
+        "auto_pause_threshold_pct": 100,
+        "warning_threshold_pct": 80,
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
     }
     try:
         with _fleet_db_lock:
@@ -5747,11 +6048,11 @@ def _get_budget_config():
             rows = db.execute("SELECT key, value FROM budget_config").fetchall()
             db.close()
         for row in rows:
-            k = row['key']
-            v = row['value']
+            k = row["key"]
+            v = row["value"]
             if k in defaults:
                 if isinstance(defaults[k], bool):
-                    defaults[k] = v.lower() in ('true', '1', 'yes')
+                    defaults[k] = v.lower() in ("true", "1", "yes")
                 elif isinstance(defaults[k], (int, float)):
                     try:
                         defaults[k] = float(v)
@@ -5772,7 +6073,7 @@ def _set_budget_config(updates):
         for k, v in updates.items():
             db.execute(
                 "INSERT OR REPLACE INTO budget_config (key, value, updated_at) VALUES (?, ?, ?)",
-                (k, str(v), now)
+                (k, str(v), now),
             )
         db.commit()
         db.close()
@@ -5780,12 +6081,12 @@ def _set_budget_config(updates):
 
 def _default_alerts_webhook_config():
     return {
-        'webhook_url': '',
-        'slack_webhook_url': '',
-        'discord_webhook_url': '',
-        'cost_spike_alerts': True,
-        'agent_error_rate_alerts': True,
-        'security_posture_changes': True,
+        "webhook_url": "",
+        "slack_webhook_url": "",
+        "discord_webhook_url": "",
+        "cost_spike_alerts": True,
+        "agent_error_rate_alerts": True,
+        "security_posture_changes": True,
     }
 
 
@@ -5793,7 +6094,7 @@ def _load_alerts_webhook_config():
     cfg = _default_alerts_webhook_config()
     try:
         if os.path.exists(_ALERTS_CONFIG_FILE):
-            with open(_ALERTS_CONFIG_FILE, 'r') as f:
+            with open(_ALERTS_CONFIG_FILE, "r") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 for k in cfg:
@@ -5811,7 +6112,7 @@ def _save_alerts_webhook_config(updates):
             cfg[k] = updates[k]
     try:
         os.makedirs(os.path.dirname(_ALERTS_CONFIG_FILE), exist_ok=True)
-        with open(_ALERTS_CONFIG_FILE, 'w') as f:
+        with open(_ALERTS_CONFIG_FILE, "w") as f:
             json.dump(cfg, f, indent=2)
     except Exception:
         pass
@@ -5820,12 +6121,16 @@ def _save_alerts_webhook_config(updates):
 
 def _should_send_webhook_for_type(alert_type):
     cfg = _load_alerts_webhook_config()
-    if alert_type in ('cost_spike', 'daily_threshold_breached', 'weekly_threshold_breached'):
-        return bool(cfg.get('cost_spike_alerts', True))
-    if alert_type == 'agent_error_rate':
-        return bool(cfg.get('agent_error_rate_alerts', True))
-    if alert_type == 'security_posture_change':
-        return bool(cfg.get('security_posture_changes', True))
+    if alert_type in (
+        "cost_spike",
+        "daily_threshold_breached",
+        "weekly_threshold_breached",
+    ):
+        return bool(cfg.get("cost_spike_alerts", True))
+    if alert_type == "agent_error_rate":
+        return bool(cfg.get("agent_error_rate_alerts", True))
+    if alert_type == "security_posture_change":
+        return bool(cfg.get("security_posture_changes", True))
     return True
 
 
@@ -5833,15 +6138,15 @@ def _dispatch_configured_webhooks(alert_type, payload):
     if not _should_send_webhook_for_type(alert_type):
         return
     cfg = _load_alerts_webhook_config()
-    generic_url = str(cfg.get('webhook_url', '')).strip()
-    slack_url = str(cfg.get('slack_webhook_url', '')).strip()
-    discord_url = str(cfg.get('discord_webhook_url', '')).strip()
+    generic_url = str(cfg.get("webhook_url", "")).strip()
+    slack_url = str(cfg.get("slack_webhook_url", "")).strip()
+    discord_url = str(cfg.get("discord_webhook_url", "")).strip()
     if generic_url:
-        _send_webhook_alert(generic_url, payload, payload_type='generic')
+        _send_webhook_alert(generic_url, payload, payload_type="generic")
     if slack_url:
-        _send_webhook_alert(slack_url, payload, payload_type='slack')
+        _send_webhook_alert(slack_url, payload, payload_type="slack")
     if discord_url:
-        _send_webhook_alert(discord_url, payload, payload_type='discord')
+        _send_webhook_alert(discord_url, payload, payload_type="discord")
 
 
 def _get_budget_status():
@@ -5849,19 +6154,28 @@ def _get_budget_status():
     global _budget_paused, _budget_paused_at, _budget_paused_reason
     config = _get_budget_config()
     now = time.time()
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    week_start = (datetime.now() - timedelta(days=datetime.now().weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0).timestamp()
-    month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+    today_start = (
+        datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    )
+    week_start = (
+        (datetime.now() - timedelta(days=datetime.now().weekday()))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
+    month_start = (
+        datetime.now()
+        .replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
 
     daily_spent = 0.0
     weekly_spent = 0.0
     monthly_spent = 0.0
 
     with _metrics_lock:
-        for entry in metrics_store['cost']:
-            ts = entry.get('timestamp', 0)
-            usd = entry.get('usd', 0)
+        for entry in metrics_store["cost"]:
+            ts = entry.get("timestamp", 0)
+            usd = entry.get("usd", 0)
             if ts >= month_start:
                 monthly_spent += usd
                 if ts >= week_start:
@@ -5869,25 +6183,31 @@ def _get_budget_status():
                     if ts >= today_start:
                         daily_spent += usd
 
-    daily_limit = config['daily_limit']
-    weekly_limit = config['weekly_limit']
-    monthly_limit = config['monthly_limit']
+    daily_limit = config["daily_limit"]
+    weekly_limit = config["weekly_limit"]
+    monthly_limit = config["monthly_limit"]
 
     return {
-        'daily_spent': round(daily_spent, 4),
-        'weekly_spent': round(weekly_spent, 4),
-        'monthly_spent': round(monthly_spent, 4),
-        'daily_limit': daily_limit,
-        'weekly_limit': weekly_limit,
-        'monthly_limit': monthly_limit,
-        'daily_pct': round((daily_spent / daily_limit * 100) if daily_limit > 0 else 0, 1),
-        'weekly_pct': round((weekly_spent / weekly_limit * 100) if weekly_limit > 0 else 0, 1),
-        'monthly_pct': round((monthly_spent / monthly_limit * 100) if monthly_limit > 0 else 0, 1),
-        'paused': _budget_paused,
-        'paused_at': _budget_paused_at,
-        'paused_reason': _budget_paused_reason,
-        'auto_pause_enabled': config['auto_pause_enabled'],
-        'warning_threshold_pct': config['warning_threshold_pct'],
+        "daily_spent": round(daily_spent, 4),
+        "weekly_spent": round(weekly_spent, 4),
+        "monthly_spent": round(monthly_spent, 4),
+        "daily_limit": daily_limit,
+        "weekly_limit": weekly_limit,
+        "monthly_limit": monthly_limit,
+        "daily_pct": round(
+            (daily_spent / daily_limit * 100) if daily_limit > 0 else 0, 1
+        ),
+        "weekly_pct": round(
+            (weekly_spent / weekly_limit * 100) if weekly_limit > 0 else 0, 1
+        ),
+        "monthly_pct": round(
+            (monthly_spent / monthly_limit * 100) if monthly_limit > 0 else 0, 1
+        ),
+        "paused": _budget_paused,
+        "paused_at": _budget_paused_at,
+        "paused_reason": _budget_paused_reason,
+        "auto_pause_enabled": config["auto_pause_enabled"],
+        "warning_threshold_pct": config["warning_threshold_pct"],
     }
 
 
@@ -5899,50 +6219,55 @@ def _budget_check():
     now = time.time()
     config = _get_budget_config()
     status = _get_budget_status()
-    warning_pct = config['warning_threshold_pct']
-    pause_pct = config['auto_pause_threshold_pct']
+    warning_pct = config["warning_threshold_pct"]
+    pause_pct = config["auto_pause_threshold_pct"]
 
     # Check each period
-    for period in ['daily', 'weekly', 'monthly']:
-        limit = config[f'{period}_limit']
+    for period in ["daily", "weekly", "monthly"]:
+        limit = config[f"{period}_limit"]
         if limit <= 0:
             continue
-        spent = status[f'{period}_spent']
+        spent = status[f"{period}_spent"]
         pct = (spent / limit * 100) if limit > 0 else 0
 
-        if period in ('daily', 'weekly') and spent >= limit:
-            rule_id = f'webhook_{period}_threshold_breached'
+        if period in ("daily", "weekly") and spent >= limit:
+            rule_id = f"webhook_{period}_threshold_breached"
             last_fired = _budget_alert_cooldowns.get(rule_id, 0)
             if now - last_fired >= 900:
                 _budget_alert_cooldowns[rule_id] = now
-                _dispatch_configured_webhooks(f'{period}_threshold_breached', {
-                    'type': f'{period}_threshold_breached',
-                    'agent': 'main',
-                    'cost_usd': round(spent, 4),
-                    'threshold': round(limit, 4),
-                    'timestamp': now,
-                    'message': f'{period.capitalize()} cost threshold breached: ${spent:.2f} / ${limit:.2f}',
-                })
+                _dispatch_configured_webhooks(
+                    f"{period}_threshold_breached",
+                    {
+                        "type": f"{period}_threshold_breached",
+                        "agent": "main",
+                        "cost_usd": round(spent, 4),
+                        "threshold": round(limit, 4),
+                        "timestamp": now,
+                        "message": f"{period.capitalize()} cost threshold breached: ${spent:.2f} / ${limit:.2f}",
+                    },
+                )
 
         # Warning alert
         if pct >= warning_pct and pct < pause_pct:
             _fire_alert(
-                rule_id=f'budget_{period}_warning',
-                alert_type='threshold',
-                message=f'Budget warning: {period} spending ${spent:.2f} is {pct:.0f}% of ${limit:.2f} limit',
-                channels=['banner', 'telegram'],
+                rule_id=f"budget_{period}_warning",
+                alert_type="threshold",
+                message=f"Budget warning: {period} spending ${spent:.2f} is {pct:.0f}% of ${limit:.2f} limit",
+                channels=["banner", "telegram"],
             )
 
         # Auto-pause
-        if pct >= pause_pct and config['auto_pause_enabled']:
+        if pct >= pause_pct and config["auto_pause_enabled"]:
             _budget_paused = True
             _budget_paused_at = time.time()
-            _budget_paused_reason = f'{period.capitalize()} budget exceeded: ${spent:.2f} / ${limit:.2f}'
+            _budget_paused_reason = (
+                f"{period.capitalize()} budget exceeded: ${spent:.2f} / ${limit:.2f}"
+            )
             _fire_alert(
-                rule_id=f'budget_{period}_exceeded',
-                alert_type='threshold',
-                message=f'BUDGET EXCEEDED: {period} spending ${spent:.2f} exceeds ${limit:.2f} limit. Gateway paused.',
-                channels=['banner', 'telegram'],
+                rule_id=f"budget_{period}_exceeded",
+                alert_type="threshold",
+                message=f"BUDGET EXCEEDED: {period} spending ${spent:.2f} exceeds ${limit:.2f} limit. Gateway paused.",
+                channels=["banner", "telegram"],
             )
             _pause_gateway()
             return
@@ -5952,17 +6277,20 @@ def _pause_gateway():
     """Attempt to pause the OpenClaw gateway."""
     # Try gateway stop command
     try:
-        subprocess.run(['openclaw', 'gateway', 'stop'], timeout=10,
-                       capture_output=True)
+        subprocess.run(["openclaw", "gateway", "stop"], timeout=10, capture_output=True)
         return
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
     # Fallback: SIGSTOP to gateway process (Unix only)
-    if sys.platform != 'win32':
+    if sys.platform != "win32":
         try:
-            result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
-                                    capture_output=True, text=True, timeout=3)
-            for pid in result.stdout.strip().split('\n'):
+            result = subprocess.run(
+                ["pgrep", "-f", "openclaw-gatewa"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            for pid in result.stdout.strip().split("\n"):
                 pid = pid.strip()
                 if pid:
                     os.kill(int(pid), 19)  # SIGSTOP
@@ -5976,16 +6304,21 @@ def _resume_gateway():
     global _budget_paused, _budget_paused_at, _budget_paused_reason
     # Try gateway start command
     try:
-        subprocess.run(['openclaw', 'gateway', 'start'], timeout=10,
-                       capture_output=True)
+        subprocess.run(
+            ["openclaw", "gateway", "start"], timeout=10, capture_output=True
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
     # Also try SIGCONT (Unix only)
-    if sys.platform != 'win32':
+    if sys.platform != "win32":
         try:
-            result = subprocess.run(['pgrep', '-f', 'openclaw-gatewa'],
-                                    capture_output=True, text=True, timeout=3)
-            for pid in result.stdout.strip().split('\n'):
+            result = subprocess.run(
+                ["pgrep", "-f", "openclaw-gatewa"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            for pid in result.stdout.strip().split("\n"):
                 pid = pid.strip()
                 if pid:
                     os.kill(int(pid), 18)  # SIGCONT
@@ -5993,7 +6326,7 @@ def _resume_gateway():
             pass
     _budget_paused = False
     _budget_paused_at = 0
-    _budget_paused_reason = ''
+    _budget_paused_reason = ""
 
 
 def _fire_alert(rule_id, alert_type, message, channels=None):
@@ -6011,7 +6344,7 @@ def _fire_alert(rule_id, alert_type, message, channels=None):
 
     # Save to alert history
     if channels is None:
-        channels = ['banner']
+        channels = ["banner"]
     try:
         with _fleet_db_lock:
             db = _fleet_db()
@@ -6019,7 +6352,7 @@ def _fire_alert(rule_id, alert_type, message, channels=None):
                 db.execute(
                     "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
                     "VALUES (?, ?, ?, ?, ?)",
-                    (rule_id, alert_type, message, ch, now)
+                    (rule_id, alert_type, message, ch, now),
                 )
             db.commit()
             db.close()
@@ -6028,9 +6361,9 @@ def _fire_alert(rule_id, alert_type, message, channels=None):
 
     # Send to channels
     for ch in channels:
-        if ch == 'telegram':
+        if ch == "telegram":
             _send_telegram_alert(message)
-        elif ch == 'webhook':
+        elif ch == "webhook":
             pass  # webhook sending handled by custom alert rules
 
 
@@ -6039,19 +6372,23 @@ def _send_telegram_alert(message):
     # Try direct Telegram API first (using budget config)
     try:
         cfg = _get_budget_config()
-        token = str(cfg.get('telegram_bot_token', '')).strip()
-        chat_id = str(cfg.get('telegram_chat_id', '')).strip()
+        token = str(cfg.get("telegram_bot_token", "")).strip()
+        chat_id = str(cfg.get("telegram_chat_id", "")).strip()
         if token and chat_id:
             import urllib.request
-            url = f'https://api.telegram.org/bot{token}/sendMessage'
-            payload = json.dumps({
-                'chat_id': chat_id,
-                'text': f'[ClawMetry Alert] {message}',
-                'parse_mode': 'Markdown',
-            }).encode()
+
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload = json.dumps(
+                {
+                    "chat_id": chat_id,
+                    "text": f"[ClawMetry Alert] {message}",
+                    "parse_mode": "Markdown",
+                }
+            ).encode()
             req = urllib.request.Request(
-                url, data=payload,
-                headers={'Content-Type': 'application/json'},
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req, timeout=10)
             return
@@ -6059,28 +6396,43 @@ def _send_telegram_alert(message):
         print(f"Warning: Direct Telegram alert failed: {e}")
     # Fallback: send through gateway
     try:
-        _gw_invoke('message', {
-            'action': 'send',
-            'message': f'[ClawMetry Alert] {message}',
-        })
+        _gw_invoke(
+            "message",
+            {
+                "action": "send",
+                "message": f"[ClawMetry Alert] {message}",
+            },
+        )
     except Exception:
         pass
 
 
-def _send_webhook_alert(url, alert_data, payload_type='generic'):
+def _send_webhook_alert(url, alert_data, payload_type="generic"):
     """Send alert to a webhook URL (generic JSON, Slack, or Discord)."""
     try:
         import urllib.request as _ur
-        if payload_type == 'discord':
-            content = alert_data.get('message') or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
-            body = {'content': content}
-        elif payload_type == 'slack':
-            text = alert_data.get('message') or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
-            body = {'text': text}
+
+        if payload_type == "discord":
+            content = (
+                alert_data.get("message")
+                or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
+            )
+            body = {"content": content}
+        elif payload_type == "slack":
+            text = (
+                alert_data.get("message")
+                or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
+            )
+            body = {"text": text}
         else:
             body = alert_data
         payload = json.dumps(body).encode()
-        req = _ur.Request(url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        req = _ur.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         _ur.urlopen(req, timeout=10)
     except Exception:
         pass
@@ -6091,7 +6443,9 @@ def _get_alert_rules():
     try:
         with _fleet_db_lock:
             db = _fleet_db()
-            rows = db.execute("SELECT * FROM alert_rules ORDER BY created_at DESC").fetchall()
+            rows = db.execute(
+                "SELECT * FROM alert_rules ORDER BY created_at DESC"
+            ).fetchall()
             db.close()
         return [dict(r) for r in rows]
     except Exception:
@@ -6104,8 +6458,7 @@ def _get_alert_history(limit=50):
         with _fleet_db_lock:
             db = _fleet_db()
             rows = db.execute(
-                "SELECT * FROM alert_history ORDER BY fired_at DESC LIMIT ?",
-                (limit,)
+                "SELECT * FROM alert_history ORDER BY fired_at DESC LIMIT ?", (limit,)
             ).fetchall()
             db.close()
         return [dict(r) for r in rows]
@@ -6122,7 +6475,7 @@ def _get_active_alerts():
             rows = db.execute(
                 "SELECT * FROM alert_history WHERE acknowledged = 0 AND fired_at > ? "
                 "ORDER BY fired_at DESC LIMIT 20",
-                (cutoff,)
+                (cutoff,),
             ).fetchall()
             db.close()
         return [dict(r) for r in rows]
@@ -6132,19 +6485,27 @@ def _get_active_alerts():
 
 def _budget_monitor_loop():
     """Background thread: check for anomalies, agent-down, and custom alert rules."""
-    global _budget_alert_cooldowns, _security_posture_hash, _budget_paused, _budget_paused_at, _budget_paused_reason
+    global \
+        _budget_alert_cooldowns, \
+        _security_posture_hash, \
+        _budget_paused, \
+        _budget_paused_at, \
+        _budget_paused_reason
     while True:
         time.sleep(60)
         try:
             now = time.time()
 
             # Agent-down check
-            if _otel_last_received > 0 and (now - _otel_last_received) > _AGENT_DOWN_SECONDS:
+            if (
+                _otel_last_received > 0
+                and (now - _otel_last_received) > _AGENT_DOWN_SECONDS
+            ):
                 _fire_alert(
-                    rule_id='agent_down',
-                    alert_type='agent_down',
-                    message=f'Agent appears down: no OTLP data for {int((now - _otel_last_received) / 60)} minutes',
-                    channels=['banner', 'telegram'],
+                    rule_id="agent_down",
+                    alert_type="agent_down",
+                    message=f"Agent appears down: no OTLP data for {int((now - _otel_last_received) / 60)} minutes",
+                    channels=["banner", "telegram"],
                 )
 
             # Heartbeat gap check
@@ -6153,84 +6514,100 @@ def _budget_monitor_loop():
                 hb_threshold = _heartbeat_interval_sec * 1.5
                 if hb_gap > hb_threshold:
                     if _heartbeat_silent_since == 0:
-                        globals()['_heartbeat_silent_since'] = now
+                        globals()["_heartbeat_silent_since"] = now
                     gap_min = int(hb_gap / 60)
                     _fire_alert(
-                        rule_id='heartbeat_gap',
-                        alert_type='heartbeat_silent',
-                        message=f'Agent heartbeat silent for {gap_min} minutes (expected every {int(_heartbeat_interval_sec / 60)}m)',
-                        channels=['banner', 'telegram'],
+                        rule_id="heartbeat_gap",
+                        alert_type="heartbeat_silent",
+                        message=f"Agent heartbeat silent for {gap_min} minutes (expected every {int(_heartbeat_interval_sec / 60)}m)",
+                        channels=["banner", "telegram"],
                     )
 
             # Anomaly check: today's cost > 2x 7-day average
             status = _get_budget_status()
-            daily_spent = status['daily_spent']
+            daily_spent = status["daily_spent"]
             if daily_spent > 0:
-                week_avg = status['weekly_spent'] / 7 if status['weekly_spent'] > 0 else 0
+                week_avg = (
+                    status["weekly_spent"] / 7 if status["weekly_spent"] > 0 else 0
+                )
                 if week_avg > 0 and daily_spent > week_avg * 2:
-                    ratio = (daily_spent / week_avg)
+                    ratio = daily_spent / week_avg
                     _fire_alert(
-                        rule_id='anomaly_daily',
-                        alert_type='anomaly',
-                        message=f'Spending anomaly: today ${daily_spent:.2f} is {ratio:.1f}x the 7-day average (${week_avg:.2f}/day)',
-                        channels=['banner', 'telegram'],
+                        rule_id="anomaly_daily",
+                        alert_type="anomaly",
+                        message=f"Spending anomaly: today ${daily_spent:.2f} is {ratio:.1f}x the 7-day average (${week_avg:.2f}/day)",
+                        channels=["banner", "telegram"],
                     )
-                    _dispatch_configured_webhooks('cost_spike', {
-                        'type': 'cost_spike',
-                        'agent': 'main',
-                        'cost_usd': round(daily_spent, 4),
-                        'threshold': round(week_avg * 2, 4),
-                        'timestamp': now,
-                        'message': f'Cost spike detected: {ratio:.1f}x daily average',
-                    })
-
+                    _dispatch_configured_webhooks(
+                        "cost_spike",
+                        {
+                            "type": "cost_spike",
+                            "agent": "main",
+                            "cost_usd": round(daily_spent, 4),
+                            "threshold": round(week_avg * 2, 4),
+                            "timestamp": now,
+                            "message": f"Cost spike detected: {ratio:.1f}x daily average",
+                        },
+                    )
 
             # Token velocity alert (GH#313): detect runaway agent loops
             try:
                 vel = _compute_velocity_status()
-                if vel['active']:
-                    reasons_str = '; '.join(vel['reasons'])
-                    sid_hint = f' (session: {vel["triggeringSession"][:12]}...)' if vel.get('triggeringSession') else ''
-                    msg = f'\u26a1 Runaway loop detected{sid_hint}: {reasons_str}'
+                if vel["active"]:
+                    reasons_str = "; ".join(vel["reasons"])
+                    sid_hint = (
+                        f" (session: {vel['triggeringSession'][:12]}...)"
+                        if vel.get("triggeringSession")
+                        else ""
+                    )
+                    msg = f"\u26a1 Runaway loop detected{sid_hint}: {reasons_str}"
                     _fire_alert(
-                        rule_id='token_velocity',
-                        alert_type='token_velocity',
+                        rule_id="token_velocity",
+                        alert_type="token_velocity",
                         message=msg,
-                        channels=['banner', 'telegram'],
+                        channels=["banner", "telegram"],
                     )
             except Exception as _vel_err:
-                print(f'Warning: velocity check failed: {_vel_err}')
+                print(f"Warning: velocity check failed: {_vel_err}")
 
             # Agent error-rate check from webhook channel metrics (last 60 minutes)
             window_start = now - 3600
             total_wh = 0
             error_wh = 0
             with _metrics_lock:
-                for e in metrics_store.get('webhooks', []):
-                    ts = e.get('timestamp', 0)
+                for e in metrics_store.get("webhooks", []):
+                    ts = e.get("timestamp", 0)
                     if ts < window_start:
                         continue
                     total_wh += 1
-                    et = str(e.get('type', '')).lower()
-                    if et.endswith('.error') or 'error' in et:
+                    et = str(e.get("type", "")).lower()
+                    if et.endswith(".error") or "error" in et:
                         error_wh += 1
             if total_wh >= 10:
                 error_rate = (error_wh / total_wh) * 100.0
                 if error_rate >= 20.0:
-                    rule_id = 'agent_error_rate_high'
+                    rule_id = "agent_error_rate_high"
                     last_fired = _budget_alert_cooldowns.get(rule_id, 0)
                     if now - last_fired >= 1800:
                         _budget_alert_cooldowns[rule_id] = now
-                        msg = f'Agent error rate high: {error_rate:.1f}% ({error_wh}/{total_wh}) in the last hour'
-                        _fire_alert(rule_id=rule_id, alert_type='agent_error_rate', message=msg, channels=['banner', 'telegram'])
-                        _dispatch_configured_webhooks('agent_error_rate', {
-                            'type': 'agent_error_rate',
-                            'agent': 'main',
-                            'cost_usd': round(status.get('daily_spent', 0), 4),
-                            'threshold': 20.0,
-                            'timestamp': now,
-                            'message': msg,
-                        })
+                        msg = f"Agent error rate high: {error_rate:.1f}% ({error_wh}/{total_wh}) in the last hour"
+                        _fire_alert(
+                            rule_id=rule_id,
+                            alert_type="agent_error_rate",
+                            message=msg,
+                            channels=["banner", "telegram"],
+                        )
+                        _dispatch_configured_webhooks(
+                            "agent_error_rate",
+                            {
+                                "type": "agent_error_rate",
+                                "agent": "main",
+                                "cost_usd": round(status.get("daily_spent", 0), 4),
+                                "threshold": 20.0,
+                                "timestamp": now,
+                                "message": msg,
+                            },
+                        )
 
             # Security posture change check
             posture = _detect_security_metadata() or {}
@@ -6239,91 +6616,118 @@ def _budget_monitor_loop():
                 _security_posture_hash = posture_hash
             elif posture_hash != _security_posture_hash:
                 _security_posture_hash = posture_hash
-                msg = 'Security posture changed (sandbox/auth/network settings updated)'
-                _fire_alert(rule_id='security_posture_change', alert_type='security', message=msg, channels=['banner', 'telegram'])
-                _dispatch_configured_webhooks('security_posture_change', {
-                    'type': 'security_posture_change',
-                    'agent': 'main',
-                    'cost_usd': round(status.get('daily_spent', 0), 4),
-                    'threshold': 0,
-                    'timestamp': now,
-                    'message': msg,
-                })
+                msg = "Security posture changed (sandbox/auth/network settings updated)"
+                _fire_alert(
+                    rule_id="security_posture_change",
+                    alert_type="security",
+                    message=msg,
+                    channels=["banner", "telegram"],
+                )
+                _dispatch_configured_webhooks(
+                    "security_posture_change",
+                    {
+                        "type": "security_posture_change",
+                        "agent": "main",
+                        "cost_usd": round(status.get("daily_spent", 0), 4),
+                        "threshold": 0,
+                        "timestamp": now,
+                        "message": msg,
+                    },
+                )
 
             # Daily threshold auto-pause/alert (absolute USD)
             cfg = _get_budget_config()
-            auto_thr = float(cfg.get('auto_pause_threshold_usd', 0) or 0)
-            auto_action = str(cfg.get('auto_pause_action', 'pause') or 'pause').lower()
-            if auto_thr > 0 and status.get('daily_spent', 0) >= auto_thr:
-                if auto_action == 'pause' and not _budget_paused:
+            auto_thr = float(cfg.get("auto_pause_threshold_usd", 0) or 0)
+            auto_action = str(cfg.get("auto_pause_action", "pause") or "pause").lower()
+            if auto_thr > 0 and status.get("daily_spent", 0) >= auto_thr:
+                if auto_action == "pause" and not _budget_paused:
                     _budget_paused = True
                     _budget_paused_at = now
-                    _budget_paused_reason = f'Auto-pause threshold exceeded: ${status["daily_spent"]:.2f} / ${auto_thr:.2f}'
+                    _budget_paused_reason = f"Auto-pause threshold exceeded: ${status['daily_spent']:.2f} / ${auto_thr:.2f}"
                     _fire_alert(
-                        rule_id='auto_pause_daily_usd',
-                        alert_type='threshold',
-                        message=f'AUTO-PAUSE: daily spend ${status["daily_spent"]:.2f} exceeded ${auto_thr:.2f}',
-                        channels=['banner', 'telegram'],
+                        rule_id="auto_pause_daily_usd",
+                        alert_type="threshold",
+                        message=f"AUTO-PAUSE: daily spend ${status['daily_spent']:.2f} exceeded ${auto_thr:.2f}",
+                        channels=["banner", "telegram"],
                     )
-                    _dispatch_configured_webhooks('daily_threshold_breached', {
-                        'type': 'daily_threshold_breached',
-                        'agent': 'main',
-                        'cost_usd': round(status.get('daily_spent', 0), 4),
-                        'threshold': round(auto_thr, 4),
-                        'timestamp': now,
-                        'message': _budget_paused_reason,
-                    })
+                    _dispatch_configured_webhooks(
+                        "daily_threshold_breached",
+                        {
+                            "type": "daily_threshold_breached",
+                            "agent": "main",
+                            "cost_usd": round(status.get("daily_spent", 0), 4),
+                            "threshold": round(auto_thr, 4),
+                            "timestamp": now,
+                            "message": _budget_paused_reason,
+                        },
+                    )
                     _pause_gateway()
-                elif auto_action == 'alert':
-                    rule_id = 'auto_pause_daily_alert_only'
+                elif auto_action == "alert":
+                    rule_id = "auto_pause_daily_alert_only"
                     last_fired = _budget_alert_cooldowns.get(rule_id, 0)
                     if now - last_fired >= 1800:
                         _budget_alert_cooldowns[rule_id] = now
-                        msg = f'Daily spend alert threshold exceeded: ${status["daily_spent"]:.2f} / ${auto_thr:.2f}'
-                        _fire_alert(rule_id=rule_id, alert_type='threshold', message=msg, channels=['banner', 'telegram'])
-                        _dispatch_configured_webhooks('daily_threshold_breached', {
-                            'type': 'daily_threshold_breached',
-                            'agent': 'main',
-                            'cost_usd': round(status.get('daily_spent', 0), 4),
-                            'threshold': round(auto_thr, 4),
-                            'timestamp': now,
-                            'message': msg,
-                        })
+                        msg = f"Daily spend alert threshold exceeded: ${status['daily_spent']:.2f} / ${auto_thr:.2f}"
+                        _fire_alert(
+                            rule_id=rule_id,
+                            alert_type="threshold",
+                            message=msg,
+                            channels=["banner", "telegram"],
+                        )
+                        _dispatch_configured_webhooks(
+                            "daily_threshold_breached",
+                            {
+                                "type": "daily_threshold_breached",
+                                "agent": "main",
+                                "cost_usd": round(status.get("daily_spent", 0), 4),
+                                "threshold": round(auto_thr, 4),
+                                "timestamp": now,
+                                "message": msg,
+                            },
+                        )
 
             # Custom alert rules
             rules = _get_alert_rules()
             for rule in rules:
-                if not rule.get('enabled'):
+                if not rule.get("enabled"):
                     continue
-                rule_id = rule['id']
-                rtype = rule['type']
-                threshold = rule['threshold']
-                channels = json.loads(rule.get('channels', '["banner"]'))
-                cooldown = rule.get('cooldown_min', 30) * 60
+                rule_id = rule["id"]
+                rtype = rule["type"]
+                threshold = rule["threshold"]
+                channels = json.loads(rule.get("channels", '["banner"]'))
+                cooldown = rule.get("cooldown_min", 30) * 60
 
                 last_fired = _budget_alert_cooldowns.get(rule_id, 0)
                 if now - last_fired < cooldown:
                     continue
 
                 fired = False
-                msg = ''
+                msg = ""
 
-                if rtype == 'threshold':
-                    if status['daily_spent'] >= threshold:
-                        msg = f'Daily spending ${status["daily_spent"]:.2f} exceeded threshold ${threshold:.2f}'
+                if rtype == "threshold":
+                    if status["daily_spent"] >= threshold:
+                        msg = f"Daily spending ${status['daily_spent']:.2f} exceeded threshold ${threshold:.2f}"
                         fired = True
-                elif rtype == 'spike':
+                elif rtype == "spike":
                     # Spike: cost in last hour > threshold x average hourly rate
                     hour_ago = now - 3600
                     hour_cost = 0
                     with _metrics_lock:
-                        for e in metrics_store['cost']:
-                            if e.get('timestamp', 0) >= hour_ago:
-                                hour_cost += e.get('usd', 0)
-                    avg_hourly = status['daily_spent'] / max(1, (now - datetime.now().replace(
-                        hour=0, minute=0, second=0, microsecond=0).timestamp()) / 3600)
+                        for e in metrics_store["cost"]:
+                            if e.get("timestamp", 0) >= hour_ago:
+                                hour_cost += e.get("usd", 0)
+                    avg_hourly = status["daily_spent"] / max(
+                        1,
+                        (
+                            now
+                            - datetime.now()
+                            .replace(hour=0, minute=0, second=0, microsecond=0)
+                            .timestamp()
+                        )
+                        / 3600,
+                    )
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
-                        msg = f'Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost/avg_hourly):.1f}x average)'
+                        msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
 
                 if fired:
@@ -6335,21 +6739,22 @@ def _budget_monitor_loop():
                                 db.execute(
                                     "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
                                     "VALUES (?, ?, ?, ?, ?)",
-                                    (rule_id, rtype, msg, ch, now)
+                                    (rule_id, rtype, msg, ch, now),
                                 )
                             db.commit()
                             db.close()
                     except Exception:
                         pass
                     for ch in channels:
-                        if ch == 'telegram':
+                        if ch == "telegram":
                             _send_telegram_alert(msg)
-                        elif ch == 'webhook':
-                            webhook_url = rule.get('webhook_url', '')
+                        elif ch == "webhook":
+                            webhook_url = rule.get("webhook_url", "")
                             if webhook_url:
-                                _send_webhook_alert(webhook_url, {
-                                    'type': rtype, 'message': msg, 'timestamp': now
-                                })
+                                _send_webhook_alert(
+                                    webhook_url,
+                                    {"type": rtype, "message": msg, "timestamp": now},
+                                )
 
         except Exception as e:
             print(f"Warning: Budget monitor error: {e}")
@@ -6363,41 +6768,42 @@ def _start_budget_monitor_thread():
 
 # ── OTLP Protobuf Helpers ──────────────────────────────────────────────
 
+
 def _otel_attr_value(val):
     """Convert an OTel AnyValue to a Python value."""
-    if val.HasField('string_value'):
+    if val.HasField("string_value"):
         return val.string_value
-    if val.HasField('int_value'):
+    if val.HasField("int_value"):
         return val.int_value
-    if val.HasField('double_value'):
+    if val.HasField("double_value"):
         return val.double_value
-    if val.HasField('bool_value'):
+    if val.HasField("bool_value"):
         return val.bool_value
     return str(val)
 
 
 def _get_data_points(metric):
     """Extract data points from a metric regardless of type."""
-    if metric.HasField('sum'):
+    if metric.HasField("sum"):
         return metric.sum.data_points
-    elif metric.HasField('gauge'):
+    elif metric.HasField("gauge"):
         return metric.gauge.data_points
-    elif metric.HasField('histogram'):
+    elif metric.HasField("histogram"):
         return metric.histogram.data_points
-    elif metric.HasField('summary'):
+    elif metric.HasField("summary"):
         return metric.summary.data_points
     return []
 
 
 def _get_dp_value(dp):
     """Extract the numeric value from a data point."""
-    if hasattr(dp, 'as_double') and dp.as_double:
+    if hasattr(dp, "as_double") and dp.as_double:
         return dp.as_double
-    if hasattr(dp, 'as_int') and dp.as_int:
+    if hasattr(dp, "as_int") and dp.as_int:
         return dp.as_int
-    if hasattr(dp, 'sum') and dp.sum:
+    if hasattr(dp, "sum") and dp.sum:
         return dp.sum
-    if hasattr(dp, 'count') and dp.count:
+    if hasattr(dp, "count") and dp.count:
         return dp.count
     return 0
 
@@ -6426,68 +6832,130 @@ def _process_otlp_metrics(pb_data):
                 name = metric.name
                 ts = time.time()
 
-                if name == 'openclaw.tokens':
+                if name == "openclaw.tokens":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        _add_metric('tokens', {
-                            'timestamp': ts,
-                            'input': attrs.get('input_tokens', 0),
-                            'output': attrs.get('output_tokens', 0),
-                            'total': _get_dp_value(dp),
-                            'model': attrs.get('model', resource_attrs.get('model', '')),
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                            'provider': attrs.get('provider', resource_attrs.get('provider', '')),
-                        })
-                elif name == 'openclaw.cost.usd':
+                        _add_metric(
+                            "tokens",
+                            {
+                                "timestamp": ts,
+                                "input": attrs.get("input_tokens", 0),
+                                "output": attrs.get("output_tokens", 0),
+                                "total": _get_dp_value(dp),
+                                "model": attrs.get(
+                                    "model", resource_attrs.get("model", "")
+                                ),
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "provider": attrs.get(
+                                    "provider", resource_attrs.get("provider", "")
+                                ),
+                            },
+                        )
+                elif name == "openclaw.cost.usd":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        _add_metric('cost', {
-                            'timestamp': ts,
-                            'usd': _get_dp_value(dp),
-                            'model': attrs.get('model', resource_attrs.get('model', '')),
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                            'provider': attrs.get('provider', resource_attrs.get('provider', '')),
-                        })
-                elif name == 'openclaw.run.duration_ms':
+                        _add_metric(
+                            "cost",
+                            {
+                                "timestamp": ts,
+                                "usd": _get_dp_value(dp),
+                                "model": attrs.get(
+                                    "model", resource_attrs.get("model", "")
+                                ),
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "provider": attrs.get(
+                                    "provider", resource_attrs.get("provider", "")
+                                ),
+                            },
+                        )
+                elif name == "openclaw.run.duration_ms":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        _add_metric('runs', {
-                            'timestamp': ts,
-                            'duration_ms': _get_dp_value(dp),
-                            'model': attrs.get('model', resource_attrs.get('model', '')),
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                        })
-                elif name == 'openclaw.context.tokens':
+                        _add_metric(
+                            "runs",
+                            {
+                                "timestamp": ts,
+                                "duration_ms": _get_dp_value(dp),
+                                "model": attrs.get(
+                                    "model", resource_attrs.get("model", "")
+                                ),
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                            },
+                        )
+                elif name == "openclaw.context.tokens":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        _add_metric('tokens', {
-                            'timestamp': ts,
-                            'input': _get_dp_value(dp),
-                            'output': 0,
-                            'total': _get_dp_value(dp),
-                            'model': attrs.get('model', resource_attrs.get('model', '')),
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                            'provider': attrs.get('provider', resource_attrs.get('provider', '')),
-                        })
-                elif name in ('openclaw.message.processed', 'openclaw.message.queued', 'openclaw.message.duration_ms'):
+                        _add_metric(
+                            "tokens",
+                            {
+                                "timestamp": ts,
+                                "input": _get_dp_value(dp),
+                                "output": 0,
+                                "total": _get_dp_value(dp),
+                                "model": attrs.get(
+                                    "model", resource_attrs.get("model", "")
+                                ),
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "provider": attrs.get(
+                                    "provider", resource_attrs.get("provider", "")
+                                ),
+                            },
+                        )
+                elif name in (
+                    "openclaw.message.processed",
+                    "openclaw.message.queued",
+                    "openclaw.message.duration_ms",
+                ):
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        outcome = 'processed' if 'processed' in name else ('queued' if 'queued' in name else 'duration')
-                        _add_metric('messages', {
-                            'timestamp': ts,
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                            'outcome': outcome,
-                            'duration_ms': _get_dp_value(dp) if 'duration' in name else 0,
-                        })
-                elif name in ('openclaw.webhook.received', 'openclaw.webhook.error', 'openclaw.webhook.duration_ms'):
+                        outcome = (
+                            "processed"
+                            if "processed" in name
+                            else ("queued" if "queued" in name else "duration")
+                        )
+                        _add_metric(
+                            "messages",
+                            {
+                                "timestamp": ts,
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "outcome": outcome,
+                                "duration_ms": _get_dp_value(dp)
+                                if "duration" in name
+                                else 0,
+                            },
+                        )
+                elif name in (
+                    "openclaw.webhook.received",
+                    "openclaw.webhook.error",
+                    "openclaw.webhook.duration_ms",
+                ):
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
-                        wtype = 'received' if 'received' in name else ('error' if 'error' in name else 'duration')
-                        _add_metric('webhooks', {
-                            'timestamp': ts,
-                            'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                            'type': wtype,
-                        })
+                        wtype = (
+                            "received"
+                            if "received" in name
+                            else ("error" if "error" in name else "duration")
+                        )
+                        _add_metric(
+                            "webhooks",
+                            {
+                                "timestamp": ts,
+                                "channel": attrs.get(
+                                    "channel", resource_attrs.get("channel", "")
+                                ),
+                                "type": wtype,
+                            },
+                        )
 
 
 def _process_otlp_traces(pb_data):
@@ -6512,101 +6980,130 @@ def _process_otlp_traces(pb_data):
                 duration_ms = duration_ns / 1_000_000
 
                 span_name = span.name.lower()
-                if 'run' in span_name or 'completion' in span_name:
-                    _add_metric('runs', {
-                        'timestamp': ts,
-                        'duration_ms': duration_ms,
-                        'model': attrs.get('model', resource_attrs.get('model', '')),
-                        'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                    })
-                elif 'message' in span_name:
-                    _add_metric('messages', {
-                        'timestamp': ts,
-                        'channel': attrs.get('channel', resource_attrs.get('channel', '')),
-                        'outcome': 'processed',
-                        'duration_ms': duration_ms,
-                    })
+                if "run" in span_name or "completion" in span_name:
+                    _add_metric(
+                        "runs",
+                        {
+                            "timestamp": ts,
+                            "duration_ms": duration_ms,
+                            "model": attrs.get(
+                                "model", resource_attrs.get("model", "")
+                            ),
+                            "channel": attrs.get(
+                                "channel", resource_attrs.get("channel", "")
+                            ),
+                        },
+                    )
+                elif "message" in span_name:
+                    _add_metric(
+                        "messages",
+                        {
+                            "timestamp": ts,
+                            "channel": attrs.get(
+                                "channel", resource_attrs.get("channel", "")
+                            ),
+                            "outcome": "processed",
+                            "duration_ms": duration_ms,
+                        },
+                    )
 
 
 def _get_otel_usage_data():
     """Aggregate OTLP metrics into usage data for the Usage tab."""
     today = datetime.now()
     today_start = today.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    week_start = (today - timedelta(days=today.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+    week_start = (
+        (today - timedelta(days=today.weekday()))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
+    month_start = today.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    ).timestamp()
 
     daily_tokens = {}
     daily_cost = {}
     model_usage = {}
 
     with _metrics_lock:
-        for entry in metrics_store['tokens']:
-            ts = entry.get('timestamp', 0)
-            day = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
-            total = entry.get('total', 0)
+        for entry in metrics_store["tokens"]:
+            ts = entry.get("timestamp", 0)
+            day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            total = entry.get("total", 0)
             daily_tokens[day] = daily_tokens.get(day, 0) + total
-            model = entry.get('model', 'unknown') or 'unknown'
+            model = entry.get("model", "unknown") or "unknown"
             model_usage[model] = model_usage.get(model, 0) + total
 
-        for entry in metrics_store['cost']:
-            ts = entry.get('timestamp', 0)
-            day = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
-            daily_cost[day] = daily_cost.get(day, 0) + entry.get('usd', 0)
+        for entry in metrics_store["cost"]:
+            ts = entry.get("timestamp", 0)
+            day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            daily_cost[day] = daily_cost.get(day, 0) + entry.get("usd", 0)
 
     days = []
     for i in range(13, -1, -1):
         d = today - timedelta(days=i)
-        ds = d.strftime('%Y-%m-%d')
-        days.append({
-            'date': ds,
-            'tokens': daily_tokens.get(ds, 0),
-            'cost': daily_cost.get(ds, 0),
-        })
+        ds = d.strftime("%Y-%m-%d")
+        days.append(
+            {
+                "date": ds,
+                "tokens": daily_tokens.get(ds, 0),
+                "cost": daily_cost.get(ds, 0),
+            }
+        )
 
-    today_str = today.strftime('%Y-%m-%d')
+    today_str = today.strftime("%Y-%m-%d")
     today_tok = daily_tokens.get(today_str, 0)
-    week_tok = sum(v for k, v in daily_tokens.items()
-                   if _safe_date_ts(k) >= week_start)
-    month_tok = sum(v for k, v in daily_tokens.items()
-                    if _safe_date_ts(k) >= month_start)
+    week_tok = sum(v for k, v in daily_tokens.items() if _safe_date_ts(k) >= week_start)
+    month_tok = sum(
+        v for k, v in daily_tokens.items() if _safe_date_ts(k) >= month_start
+    )
     today_cost_val = daily_cost.get(today_str, 0)
-    week_cost_val = sum(v for k, v in daily_cost.items()
-                        if _safe_date_ts(k) >= week_start)
-    month_cost_val = sum(v for k, v in daily_cost.items()
-                         if _safe_date_ts(k) >= month_start)
+    week_cost_val = sum(
+        v for k, v in daily_cost.items() if _safe_date_ts(k) >= week_start
+    )
+    month_cost_val = sum(
+        v for k, v in daily_cost.items() if _safe_date_ts(k) >= month_start
+    )
 
     run_durations = []
     with _metrics_lock:
-        for entry in metrics_store['runs']:
-            run_durations.append(entry.get('duration_ms', 0))
+        for entry in metrics_store["runs"]:
+            run_durations.append(entry.get("duration_ms", 0))
     avg_run_ms = sum(run_durations) / len(run_durations) if run_durations else 0
 
-    msg_count = len(metrics_store['messages'])
+    msg_count = len(metrics_store["messages"])
 
     # Enhanced cost tracking for OTLP data
-    trend_data = _analyze_usage_trends(daily_tokens) 
+    trend_data = _analyze_usage_trends(daily_tokens)
     model_billing, billing_summary = _build_model_billing(model_usage)
-    warnings = _generate_cost_warnings(today_cost_val, week_cost_val, month_cost_val, trend_data, month_tok, billing_summary)
+    warnings = _generate_cost_warnings(
+        today_cost_val,
+        week_cost_val,
+        month_cost_val,
+        trend_data,
+        month_tok,
+        billing_summary,
+    )
 
     return {
-        'source': 'otlp',
-        'days': days,
-        'today': today_tok,
-        'week': week_tok,
-        'month': month_tok,
-        'todayCost': round(today_cost_val, 4),
-        'weekCost': round(week_cost_val, 4),
-        'monthCost': round(month_cost_val, 4),
-        'avgRunMs': round(avg_run_ms, 1),
-        'messageCount': msg_count,
-        'modelBreakdown': [
-            {'model': k, 'tokens': v}
+        "source": "otlp",
+        "days": days,
+        "today": today_tok,
+        "week": week_tok,
+        "month": month_tok,
+        "todayCost": round(today_cost_val, 4),
+        "weekCost": round(week_cost_val, 4),
+        "monthCost": round(month_cost_val, 4),
+        "avgRunMs": round(avg_run_ms, 1),
+        "messageCount": msg_count,
+        "modelBreakdown": [
+            {"model": k, "tokens": v}
             for k, v in sorted(model_usage.items(), key=lambda x: -x[1])
         ],
-        'modelBilling': model_billing,
-        'billingSummary': billing_summary,
-        'trend': trend_data,
-        'warnings': warnings,
+        "modelBilling": model_billing,
+        "billingSummary": billing_summary,
+        "trend": trend_data,
+        "warnings": warnings,
     }
 
 
@@ -6615,397 +7112,13 @@ def _safe_date_ts(date_str):
     if not date_str or not isinstance(date_str, str):
         return 0
     try:
-        return datetime.strptime(date_str, '%Y-%m-%d').timestamp()
+        return datetime.strptime(date_str, "%Y-%m-%d").timestamp()
     except ValueError:
         # Invalid date format - expected but handled gracefully
         return 0
     except Exception as e:
         print(f"[warn]  Warning: Unexpected error parsing date '{date_str}': {e}")
         return 0
-
-
-def validate_configuration():
-    """Validate the detected configuration and provide helpful feedback for new users."""
-    warnings = []
-    tips = []
-    
-    # Check if workspace looks like a real OpenClaw setup
-    workspace_files = ['SOUL.md', 'AGENTS.md', 'MEMORY.md', 'memory']
-    found_files = []
-    for f in workspace_files:
-        path = os.path.join(WORKSPACE, f)
-        if os.path.exists(path):
-            found_files.append(f)
-    
-    if not found_files:
-        warnings.append(f"[warn]  No OpenClaw workspace files found in {WORKSPACE}")
-        tips.append("[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
-    
-    # Check if log directory exists and has recent logs
-    if not os.path.exists(LOG_DIR):
-        warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
-        tips.append("[tip] Make sure OpenClaw/Moltbot is running to generate logs")
-    else:
-        # Check for recent log files
-        log_pattern = os.path.join(LOG_DIR, "*claw*.log")
-        recent_logs = [f for f in glob.glob(log_pattern) 
-                      if os.path.getmtime(f) > time.time() - 86400]  # Last 24h
-        if not recent_logs:
-            warnings.append(f"[warn]  No recent log files found in {LOG_DIR}")
-            tips.append("[tip] Start your OpenClaw agent to see real-time data")
-    
-    # Check if sessions directory exists
-    if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
-        warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
-        tips.append("[tip] Sessions will appear when your agent starts conversations")
-    
-    # Check if OpenClaw binary is available
-    try:
-        subprocess.run(['openclaw', '--version'], capture_output=True, timeout=10)
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        warnings.append("[warn]  OpenClaw binary not found in PATH")
-        tips.append("[tip] Install OpenClaw: https://github.com/openclaw/openclaw")
-    
-    return warnings, tips
-
-
-def _auto_detect_data_dir():
-    """Auto-detect OpenClaw data directory, including Docker volume mounts."""
-    # Standard locations
-    candidates = [
-        os.path.expanduser('~/.openclaw'),
-        os.path.expanduser('~/.clawdbot'),
-    ]
-    # Docker volume mounts (Hostinger pattern: /docker/*/data/.openclaw)
-    try:
-        import glob as _glob
-        for pattern in ['/docker/*/data/.openclaw', '/docker/*/.openclaw',
-                        '/var/lib/docker/volumes/*/_data/.openclaw']:
-            candidates.extend(_glob.glob(pattern))
-    except Exception:
-        pass
-    # Check Docker inspect for mount points
-    try:
-        import subprocess as _sp
-        container_ids = _sp.check_output(
-            ['docker', 'ps', '-q', '--filter', 'ancestor=*openclaw*'],
-            timeout=3, stderr=_sp.DEVNULL
-        ).decode().strip().split()
-        if not container_ids:
-            # Try all containers
-            container_ids = _sp.check_output(
-                ['docker', 'ps', '-q'], timeout=3, stderr=_sp.DEVNULL
-            ).decode().strip().split()
-        for cid in container_ids[:3]:
-            try:
-                mounts = _sp.check_output(
-                    ['docker', 'inspect', cid, '--format',
-                     '{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}'],
-                    timeout=3, stderr=_sp.DEVNULL
-                ).decode().strip().split()
-                for mount in mounts:
-                    parts = mount.split(':')
-                    if len(parts) >= 1:
-                        src = parts[0]
-                        oc_path = os.path.join(src, '.openclaw')
-                        if os.path.isdir(oc_path) and oc_path not in candidates:
-                            candidates.insert(0, oc_path)
-                        # Also check if the mount itself is the .openclaw dir
-                        if src.endswith('.openclaw') and os.path.isdir(src):
-                            candidates.insert(0, src)
-            except Exception:
-                pass
-    except Exception:
-        pass
-    for c in candidates:
-        if c and os.path.isdir(c) and (
-            os.path.isdir(os.path.join(c, 'agents')) or
-            os.path.isdir(os.path.join(c, 'workspace')) or
-            os.path.exists(os.path.join(c, 'cron', 'jobs.json'))
-        ):
-            return c
-    return None
-
-def detect_config(args=None):
-    """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
-    global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
-
-    # 0a. --openclaw-dir: set OpenClaw config directory (Issue #322 - Docker config bleed)
-    if args and getattr(args, 'openclaw_dir', None):
-        os.environ['CLAWMETRY_OPENCLAW_DIR'] = os.path.expanduser(args.openclaw_dir)
-
-    # 0. --data-dir: set defaults from OpenClaw data directory (e.g. /path/.openclaw)
-    data_dir = None
-    if args and getattr(args, 'data_dir', None):
-        data_dir = os.path.expanduser(args.data_dir)
-    elif os.environ.get("OPENCLAW_DATA_DIR"):
-        data_dir = os.path.expanduser(os.environ["OPENCLAW_DATA_DIR"])
-    else:
-        # Auto-detect: check common locations including Docker volumes
-        data_dir = _auto_detect_data_dir()
-    
-    if data_dir and os.path.isdir(data_dir):
-        # Auto-set workspace, sessions, crons from data dir
-        ws = os.path.join(data_dir, 'workspace')
-        if os.path.isdir(ws) and not (args and args.workspace):
-            if not args:
-                import argparse; args = argparse.Namespace()
-            args.workspace = ws
-        sess = os.path.join(data_dir, 'agents', 'main', 'sessions')
-        if os.path.isdir(sess) and not (args and getattr(args, 'sessions_dir', None)):
-            args.sessions_dir = sess
-
-    # 1. Workspace - where agent files live (SOUL.md, MEMORY.md, memory/, etc.)
-    if args and args.workspace:
-        WORKSPACE = os.path.expanduser(args.workspace)
-    elif os.environ.get("OPENCLAW_HOME"):
-        WORKSPACE = os.path.expanduser(os.environ["OPENCLAW_HOME"])
-    elif os.environ.get("OPENCLAW_WORKSPACE"):
-        WORKSPACE = os.path.expanduser(os.environ["OPENCLAW_WORKSPACE"])
-    else:
-        # Auto-detect: check common locations
-        candidates = [
-            _detect_workspace_from_config(),
-            os.path.expanduser("~/.openclaw/workspace"),
-            os.path.expanduser("~/.clawdbot/workspace"),
-            os.path.expanduser("~/clawd"),
-            os.path.expanduser("~/openclaw"),
-            os.getcwd(),
-        ]
-        for c in candidates:
-            if c and os.path.isdir(c) and (
-                os.path.exists(os.path.join(c, "SOUL.md")) or
-                os.path.exists(os.path.join(c, "AGENTS.md")) or
-                os.path.exists(os.path.join(c, "MEMORY.md")) or
-                os.path.isdir(os.path.join(c, "memory"))
-            ):
-                WORKSPACE = c
-                break
-        if not WORKSPACE:
-            WORKSPACE = os.getcwd()
-
-    MEMORY_DIR = os.path.join(WORKSPACE, "memory")
-
-    # 2. Log directory
-    if args and args.log_dir:
-        LOG_DIR = os.path.expanduser(args.log_dir)
-    elif os.environ.get("OPENCLAW_LOG_DIR"):
-        LOG_DIR = os.path.expanduser(os.environ["OPENCLAW_LOG_DIR"])
-    else:
-        candidates = _get_log_dirs() + [os.path.expanduser("~/.clawdbot/logs")]
-        LOG_DIR = next((d for d in candidates if os.path.isdir(d)), _get_log_dirs()[0])
-
-    # 3. Sessions directory (transcript .jsonl files)
-    if args and getattr(args, 'sessions_dir', None):
-        SESSIONS_DIR = os.path.expanduser(args.sessions_dir)
-    elif os.environ.get("OPENCLAW_SESSIONS_DIR"):
-        SESSIONS_DIR = os.path.expanduser(os.environ["OPENCLAW_SESSIONS_DIR"])
-    else:
-        candidates = [
-            os.path.expanduser('~/.openclaw/agents/main/sessions'),
-            os.path.expanduser('~/.clawdbot/agents/main/sessions'),
-            os.path.join(WORKSPACE, 'sessions') if WORKSPACE else None,
-            os.path.expanduser('~/.openclaw/sessions'),
-            os.path.expanduser('~/.clawdbot/sessions'),
-        ]
-        # Also scan agents dirs
-        for agents_base in [os.path.expanduser('~/.openclaw/agents'), os.path.expanduser('~/.clawdbot/agents')]:
-            if os.path.isdir(agents_base):
-                for agent in os.listdir(agents_base):
-                    p = os.path.join(agents_base, agent, 'sessions')
-                    if p not in candidates:
-                        candidates.append(p)
-        SESSIONS_DIR = next((d for d in candidates if d and os.path.isdir(d)), candidates[0] if candidates else None)
-
-    # 4. User name (shown in Flow visualization)
-    if args and args.name:
-        USER_NAME = args.name
-    elif os.environ.get("OPENCLAW_USER"):
-        USER_NAME = os.environ["OPENCLAW_USER"]
-    else:
-        USER_NAME = "You"
-
-    # ── Register blueprints (Phase 4) ───────────────────────────────────────
-    app.register_blueprint(bp_alerts)
-    app.register_blueprint(bp_auth)
-    app.register_blueprint(bp_brain)
-    app.register_blueprint(bp_budget)
-    app.register_blueprint(bp_channels)
-    app.register_blueprint(bp_components)
-    app.register_blueprint(bp_config)
-    app.register_blueprint(bp_crons)
-    app.register_blueprint(bp_fleet)
-    app.register_blueprint(bp_gateway)
-    app.register_blueprint(bp_health)
-    app.register_blueprint(bp_history)
-    app.register_blueprint(bp_logs)
-    app.register_blueprint(bp_memory)
-    app.register_blueprint(bp_otel)
-    app.register_blueprint(bp_overview)
-    app.register_blueprint(bp_security)
-    app.register_blueprint(bp_sessions)
-    app.register_blueprint(bp_usage)
-    app.register_blueprint(bp_version)
-    app.register_blueprint(bp_version_impact)
-    app.register_blueprint(bp_clusters)
-    # ────────────────────────────────────────────────────────────────────────
-
-
-
-def _detect_workspace_from_config():
-    """Try to read workspace from Moltbot/OpenClaw agent config."""
-    config_paths = [
-        os.path.expanduser("~/.clawdbot/agents/main/config.json"),
-        os.path.expanduser("~/.clawdbot/config.json"),
-    ]
-    for cp in config_paths:
-        try:
-            with open(cp) as f:
-                data = json.load(f)
-                ws = data.get("workspace") or data.get("workspaceDir")
-                if ws:
-                    return os.path.expanduser(ws)
-        except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            pass
-    return None
-
-
-def _detect_gateway_port():
-    """Detect the OpenClaw gateway port from config files or environment."""
-    # Check environment variable first
-    env_port = os.environ.get('OPENCLAW_GATEWAY_PORT', '').strip()
-    if env_port:
-        try:
-            return int(env_port)
-        except ValueError:
-            pass
-    # Try reading from gateway config
-    # Try JSON configs first (openclaw.json / moltbot.json / clawdbot.json)
-    _oc_dir = _get_openclaw_dir()
-    json_paths = [
-        os.path.join(_oc_dir, 'openclaw.json'),
-        os.path.join(_oc_dir, 'moltbot.json'),
-        os.path.join(_oc_dir, 'clawdbot.json'),
-        os.path.expanduser('~/.clawdbot/clawdbot.json'),
-    ]
-    for jp in json_paths:
-        try:
-            import json as _json
-            with open(jp) as f:
-                cfg = _json.load(f)
-            gw = cfg.get('gateway', {})
-            if isinstance(gw, dict) and 'port' in gw:
-                return int(gw['port'])
-        except (FileNotFoundError, ValueError, KeyError, TypeError):
-            pass
-    # Try YAML configs
-    yaml_paths = [
-        os.path.expanduser('~/.openclaw/gateway.yaml'),
-        os.path.expanduser('~/.openclaw/gateway.yml'),
-        os.path.expanduser('~/.clawdbot/gateway.yaml'),
-        os.path.expanduser('~/.clawdbot/gateway.yml'),
-    ]
-    for cp in yaml_paths:
-        try:
-            with open(cp) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('port:'):
-                        port_val = line.split(':', 1)[1].strip()
-                        return int(port_val)
-        except (FileNotFoundError, ValueError, IndexError):
-            pass
-    return 18789  # Default OpenClaw gateway port
-
-
-def _detect_gateway_token():
-    """Detect the OpenClaw gateway auth token from env, config files, or running process."""
-    # 1. Environment variable (most reliable - matches running gateway)
-    env_token = os.environ.get('OPENCLAW_GATEWAY_TOKEN', '').strip()
-    if env_token:
-        return env_token
-    # 2. Try reading from running gateway process env (Linux only)
-    try:
-        import subprocess as _sp
-        result = _sp.run(['pgrep', '-f', 'openclaw-gatewa'], capture_output=True, text=True, timeout=3)
-        for pid in result.stdout.strip().split('\n'):
-            pid = pid.strip()
-            if pid:
-                try:
-                    with open(f'/proc/{pid}/environ', 'r') as f:
-                        env_data = f.read()
-                    for entry in env_data.split('\0'):
-                        if entry.startswith('OPENCLAW_GATEWAY_TOKEN='):
-                            return entry.split('=', 1)[1]
-                except (PermissionError, FileNotFoundError):
-                    pass
-    except Exception:
-        pass
-    # 3. Config files
-    _oc_dir = _get_openclaw_dir()
-    json_paths = [
-        os.path.join(_oc_dir, 'openclaw.json'),
-        os.path.join(_oc_dir, 'moltbot.json'),
-        os.path.join(_oc_dir, 'clawdbot.json'),
-        os.path.expanduser('~/.clawdbot/clawdbot.json'),
-    ]
-    for jp in json_paths:
-        try:
-            import json as _json
-            with open(jp) as f:
-                cfg = _json.load(f)
-            gw = cfg.get('gateway', {})
-            auth = gw.get('auth', {})
-            if isinstance(auth, dict) and 'token' in auth:
-                return auth['token']
-        except (FileNotFoundError, ValueError, KeyError, TypeError):
-            pass
-    return None
-
-
-def _detect_disk_mounts():
-    """Detect mounted filesystems to monitor (root + any large data drives)."""
-    mounts = ['/']
-    try:
-        with open('/proc/mounts') as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) >= 2:
-                    mount_point = parts[1]
-                    fs_type = parts[2] if len(parts) > 2 else ''
-                    # Include additional data mounts (skip virtual/special filesystems)
-                    if (mount_point.startswith('/mnt/') or mount_point.startswith('/data')) and \
-                       fs_type not in ('tmpfs', 'devtmpfs', 'proc', 'sysfs', 'cgroup', 'cgroup2'):
-                        mounts.append(mount_point)
-    except (IOError, OSError):
-        pass
-    return mounts
-
-
-def get_public_ip():
-    """Get the machine's public IP address (useful for cloud/VPS users)."""
-    try:
-        import urllib.request
-        return urllib.request.urlopen("https://api.ipify.org", timeout=2).read().decode().strip()
-    except Exception:
-        return None
-
-
-def get_local_ip():
-    """Get the machine's LAN IP address."""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(0.2)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except (socket.error, OSError) as e:
-        # Network unavailable or socket error - common in offline/restricted environments
-        return "127.0.0.1"
-    except Exception as e:
-        print(f"[warn]  Warning: Unexpected error getting local IP: {e}")
-        return "127.0.0.1"
 
 
 # ── HTML Template ───────────────────────────────────────────────────────
@@ -16239,21 +16352,25 @@ _updateCloudStatus();
 
 # ── API Routes ──────────────────────────────────────────────────────────
 
+
 def _acquire_stream_slot(kind):
     """Bound concurrent SSE clients per stream type."""
-    global _active_log_stream_clients, _active_health_stream_clients, _active_brain_stream_clients
+    global \
+        _active_log_stream_clients, \
+        _active_health_stream_clients, \
+        _active_brain_stream_clients
     with _stream_clients_lock:
-        if kind == 'log':
+        if kind == "log":
             if _active_log_stream_clients >= MAX_LOG_STREAM_CLIENTS:
                 return False
             _active_log_stream_clients += 1
             return True
-        if kind == 'health':
+        if kind == "health":
             if _active_health_stream_clients >= MAX_HEALTH_STREAM_CLIENTS:
                 return False
             _active_health_stream_clients += 1
             return True
-        if kind == 'brain':
+        if kind == "brain":
             if _active_brain_stream_clients >= MAX_BRAIN_STREAM_CLIENTS:
                 return False
             _active_brain_stream_clients += 1
@@ -16262,27 +16379,30 @@ def _acquire_stream_slot(kind):
 
 
 def _release_stream_slot(kind):
-    global _active_log_stream_clients, _active_health_stream_clients, _active_brain_stream_clients
+    global \
+        _active_log_stream_clients, \
+        _active_health_stream_clients, \
+        _active_brain_stream_clients
     with _stream_clients_lock:
-        if kind == 'log':
+        if kind == "log":
             _active_log_stream_clients = max(0, _active_log_stream_clients - 1)
-        elif kind == 'health':
+        elif kind == "health":
             _active_health_stream_clients = max(0, _active_health_stream_clients - 1)
-        elif kind == 'brain':
+        elif kind == "brain":
             _active_brain_stream_clients = max(0, _active_brain_stream_clients - 1)
 
 
 # ── Gateway API proxy (WebSocket JSON-RPC + HTTP fallback) ──────────────
 import urllib.request as _urllib_req
-import urllib.error as _urllib_err
 import uuid as _uuid
 
-_GW_CONFIG_FILE = os.path.expanduser('~/.clawmetry-gateway.json')
+_GW_CONFIG_FILE = os.path.expanduser("~/.clawmetry-gateway.json")
 
 
 def _get_openclaw_dir():
     """Return the OpenClaw config directory, respecting CLAWMETRY_OPENCLAW_DIR env var and --openclaw-dir CLI flag."""
-    return os.environ.get('CLAWMETRY_OPENCLAW_DIR', os.path.expanduser('~/.openclaw'))
+    return os.environ.get("CLAWMETRY_OPENCLAW_DIR", os.path.expanduser("~/.openclaw"))
+
 
 # ── WebSocket RPC Client ────────────────────────────────────────────────
 _ws_client = None
@@ -16299,32 +16419,46 @@ def _gw_ws_connect(url=None, token=None):
         return False
 
     cfg = _load_gw_config()
-    ws_url = (url or cfg.get('url', '') or '').replace('http://', 'ws://').replace('https://', 'wss://').rstrip('/')
-    tok = token or cfg.get('token', '')
+    ws_url = (
+        (url or cfg.get("url", "") or "")
+        .replace("http://", "ws://")
+        .replace("https://", "wss://")
+        .rstrip("/")
+    )
+    tok = token or cfg.get("token", "")
     if not ws_url or not tok:
         return False
 
     try:
-        ws = websocket.create_connection(f'{ws_url}/', timeout=5)
+        ws = websocket.create_connection(f"{ws_url}/", timeout=5)
         # Read challenge event
         ws.recv()
         # Send connect
         connect_msg = {
-            'type': 'req', 'id': 'clawmetry-connect', 'method': 'connect',
-            'params': {
-                'minProtocol': 3, 'maxProtocol': 3,
-                'client': {'id': 'cli', 'version': __version__, 'platform': _CURRENT_PLATFORM,
-                           'mode': 'cli', 'instanceId': f'clawmetry-{_uuid.uuid4().hex[:8]}'},
-                'role': 'operator', 'scopes': ['operator.admin'],
-                'auth': {'token': tok},
-            }
+            "type": "req",
+            "id": "clawmetry-connect",
+            "method": "connect",
+            "params": {
+                "minProtocol": 3,
+                "maxProtocol": 3,
+                "client": {
+                    "id": "cli",
+                    "version": __version__,
+                    "platform": _CURRENT_PLATFORM,
+                    "mode": "cli",
+                    "instanceId": f"clawmetry-{_uuid.uuid4().hex[:8]}",
+                },
+                "role": "operator",
+                "scopes": ["operator.admin"],
+                "auth": {"token": tok},
+            },
         }
         ws.send(json.dumps(connect_msg))
         # Wait for connect response
         for _ in range(5):
             r = json.loads(ws.recv())
-            if r.get('type') == 'res' and r.get('id') == 'clawmetry-connect':
-                if r.get('ok'):
+            if r.get("type") == "res" and r.get("id") == "clawmetry-connect":
+                if r.get("ok"):
                     _ws_client = ws
                     _ws_connected = True
                     return True
@@ -16345,15 +16479,15 @@ def _gw_ws_rpc(method, params=None):
             if not _gw_ws_connect():
                 return None
         try:
-            mid = f'cm-{_uuid.uuid4().hex[:8]}'
-            msg = {'type': 'req', 'id': mid, 'method': method, 'params': params or {}}
+            mid = f"cm-{_uuid.uuid4().hex[:8]}"
+            msg = {"type": "req", "id": mid, "method": method, "params": params or {}}
             _ws_client.send(json.dumps(msg))
             # Read responses, skipping events
             for _ in range(30):
                 r = json.loads(_ws_client.recv())
-                if r.get('type') == 'res' and r.get('id') == mid:
-                    if r.get('ok'):
-                        return r.get('payload', {})
+                if r.get("type") == "res" and r.get("id") == mid:
+                    if r.get("ok"):
+                        return r.get("payload", {})
                     else:
                         return None
         except Exception:
@@ -16384,7 +16518,7 @@ def _load_gw_config():
     if token:
         GATEWAY_TOKEN = token
         if not GATEWAY_URL:
-            GATEWAY_URL = f'http://127.0.0.1:{port}'
+            GATEWAY_URL = f"http://127.0.0.1:{port}"
         # Update cache file with fresh token (backward compat, not used for reads)
         try:
             cache = {}
@@ -16393,23 +16527,23 @@ def _load_gw_config():
                     cache = json.load(f)
             except Exception:
                 pass
-            cache['token'] = token
-            cache['url'] = GATEWAY_URL or f'http://127.0.0.1:{port}'
-            with open(_GW_CONFIG_FILE, 'w') as f:
+            cache["token"] = token
+            cache["url"] = GATEWAY_URL or f"http://127.0.0.1:{port}"
+            with open(_GW_CONFIG_FILE, "w") as f:
                 json.dump(cache, f)
             os.chmod(_GW_CONFIG_FILE, 0o600)
         except Exception:
             pass
-        return {'url': GATEWAY_URL, 'token': GATEWAY_TOKEN}
+        return {"url": GATEWAY_URL, "token": GATEWAY_TOKEN}
     # 2. Already set via CLI/env
     if GATEWAY_URL and GATEWAY_TOKEN:
-        return {'url': GATEWAY_URL, 'token': GATEWAY_TOKEN}
+        return {"url": GATEWAY_URL, "token": GATEWAY_TOKEN}
     # 3. Fallback to cache file (only if live config unavailable)
     try:
         with open(_GW_CONFIG_FILE) as f:
             cfg = json.load(f)
-            GATEWAY_URL = cfg.get('url', GATEWAY_URL)
-            GATEWAY_TOKEN = cfg.get('token', GATEWAY_TOKEN)
+            GATEWAY_URL = cfg.get("url", GATEWAY_URL)
+            GATEWAY_TOKEN = cfg.get("token", GATEWAY_TOKEN)
             return cfg
     except Exception:
         pass
@@ -16420,58 +16554,77 @@ def _gw_invoke(tool, args=None):
     """Invoke a tool via the OpenClaw gateway /tools/invoke endpoint.
     Tries: 1) Direct HTTP, 2) Docker exec fallback."""
     cfg = _load_gw_config()
-    token = cfg.get('token')
-    url = cfg.get('url')
-    
+    token = cfg.get("token")
+    url = cfg.get("url")
+
     # Try direct HTTP first
     if url and token:
         try:
-            payload = json.dumps({'tool': tool, 'args': args or {}}).encode()
+            payload = json.dumps({"tool": tool, "args": args or {}}).encode()
             req = _urllib_req.Request(
                 f"{url.rstrip('/')}/tools/invoke",
                 data=payload,
                 headers={
-                    'Authorization': f'Bearer {token}',
-                    'Content-Type': 'application/json',
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
                 },
-                method='POST'
+                method="POST",
             )
             with _urllib_req.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
-                if data.get('ok'):
-                    return data.get('result', {}).get('details', data.get('result', {}))
+                if data.get("ok"):
+                    return data.get("result", {}).get("details", data.get("result", {}))
         except Exception:
             pass
-    
+
     # Fallback: docker exec (for Hostinger/Docker installs where gateway binds to loopback)
     if token:
         result = _gw_invoke_docker(tool, args, token)
         if result:
             return result
-    
+
     return None
+
 
 def _gw_invoke_docker(tool, args=None, token=None):
     """Invoke gateway API via docker exec (when gateway is inside Docker)."""
     try:
-        container_id = subprocess.check_output(
-            ['docker', 'ps', '-q'], timeout=3, stderr=subprocess.DEVNULL
-        ).decode().strip().split('\n')[0]
+        container_id = (
+            subprocess.check_output(
+                ["docker", "ps", "-q"], timeout=3, stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+            .split("\n")[0]
+        )
         if not container_id:
             return None
-        payload = json.dumps({'tool': tool, 'args': args or {}})
+        payload = json.dumps({"tool": tool, "args": args or {}})
         cmd = [
-            'docker', 'exec', container_id, 'curl', '-s', '--max-time', '8',
-            '-X', 'POST', 'http://127.0.0.1:18789/tools/invoke',
-            '-H', f'Authorization: Bearer {token}',
-            '-H', 'Content-Type: application/json',
-            '-d', payload
+            "docker",
+            "exec",
+            container_id,
+            "curl",
+            "-s",
+            "--max-time",
+            "8",
+            "-X",
+            "POST",
+            "http://127.0.0.1:18789/tools/invoke",
+            "-H",
+            f"Authorization: Bearer {token}",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            payload,
         ]
-        output = subprocess.check_output(cmd, timeout=15, stderr=subprocess.DEVNULL).decode()
+        output = subprocess.check_output(
+            cmd, timeout=15, stderr=subprocess.DEVNULL
+        ).decode()
         if output:
             data = json.loads(output)
-            if data.get('ok'):
-                return data.get('result', {}).get('details', data.get('result', {}))
+            if data.get("ok"):
+                return data.get("result", {}).get("details", data.get("result", {}))
     except Exception:
         pass
     return None
@@ -16479,37 +16632,41 @@ def _gw_invoke_docker(tool, args=None, token=None):
 
 # ── Flask Blueprints (Phase 4) ────────────────────────────────────────────────
 from flask import Blueprint as _Blueprint
-bp_alerts = _Blueprint('alerts', __name__)
-bp_auth = _Blueprint('auth', __name__)
-bp_brain = _Blueprint('brain', __name__)
-bp_budget = _Blueprint('budget', __name__)
-bp_channels = _Blueprint('channels', __name__)
-bp_components = _Blueprint('components', __name__)
-bp_config = _Blueprint('config', __name__)
-bp_crons = _Blueprint('crons', __name__)
-bp_fleet = _Blueprint('fleet', __name__)
-bp_gateway = _Blueprint('gateway', __name__)
-bp_health = _Blueprint('health', __name__)
-bp_history = _Blueprint('history', __name__)
-bp_logs = _Blueprint('logs', __name__)
-bp_memory = _Blueprint('memory', __name__)
-bp_otel = _Blueprint('otel', __name__)
-bp_overview = _Blueprint('overview', __name__)
-bp_sessions = _Blueprint('sessions', __name__)
-bp_security = _Blueprint('security', __name__)
-bp_usage = _Blueprint('usage', __name__)
-bp_version = _Blueprint('version', __name__)
-bp_version_impact = _Blueprint('version_impact', __name__)
-bp_clusters = _Blueprint('clusters', __name__)
+
+bp_alerts = _Blueprint("alerts", __name__)
+bp_auth = _Blueprint("auth", __name__)
+bp_brain = _Blueprint("brain", __name__)
+bp_budget = _Blueprint("budget", __name__)
+bp_channels = _Blueprint("channels", __name__)
+bp_components = _Blueprint("components", __name__)
+bp_config = _Blueprint("config", __name__)
+bp_crons = _Blueprint("crons", __name__)
+bp_fleet = _Blueprint("fleet", __name__)
+bp_gateway = _Blueprint("gateway", __name__)
+bp_health = _Blueprint("health", __name__)
+bp_history = _Blueprint("history", __name__)
+bp_logs = _Blueprint("logs", __name__)
+bp_memory = _Blueprint("memory", __name__)
+bp_otel = _Blueprint("otel", __name__)
+bp_overview = _Blueprint("overview", __name__)
+bp_sessions = _Blueprint("sessions", __name__)
+bp_security = _Blueprint("security", __name__)
+bp_usage = _Blueprint("usage", __name__)
+bp_version = _Blueprint("version", __name__)
+bp_version_impact = _Blueprint("version_impact", __name__)
+bp_clusters = _Blueprint("clusters", __name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Version check & self-update routes ────────────────────────────────────────
 _pypi_cache = {"ts": 0, "version": None}
 
-@bp_version.route('/api/version')
+
+@bp_version.route("/api/version")
 def api_version():
     """Return current and latest version info."""
-    import time as _time, json as _json
+    import time as _time
+    import json as _json
+
     current = __version__
     latest = current
     update_available = False
@@ -16520,8 +16677,11 @@ def api_version():
     else:
         try:
             import urllib.request as _ur
-            req = _ur.Request("https://pypi.org/pypi/clawmetry/json",
-                              headers={"User-Agent": "clawmetry/" + current})
+
+            req = _ur.Request(
+                "https://pypi.org/pypi/clawmetry/json",
+                headers={"User-Agent": "clawmetry/" + current},
+            )
             with _ur.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode())
                 latest = data.get("info", {}).get("version", current)
@@ -16540,10 +16700,12 @@ def api_version():
     return {"current": current, "latest": latest, "update_available": update_available}
 
 
-@bp_version.route('/api/update', methods=['POST'])
+@bp_version.route("/api/update", methods=["POST"])
 def api_update():
     """Self-update clawmetry via pip, then schedule process restart."""
-    import subprocess as _sp, threading as _thr
+    import subprocess as _sp
+    import threading as _thr
+
     old_version = __version__
     try:
         _sp.check_call(
@@ -16567,141 +16729,165 @@ def api_update():
                 break
     except Exception:
         pass
+
     # Schedule restart after response is sent
     def _restart():
         import os as _os
+
         _os._exit(0)
+
     _thr.Timer(2.0, _restart).start()
     return {"ok": True, "old_version": old_version, "new_version": new_version}
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 
-@bp_gateway.route('/api/gw/config', methods=['GET', 'POST'])
+
+@bp_gateway.route("/api/gw/config", methods=["GET", "POST"])
 def api_gw_config():
     """Get or set gateway configuration."""
     global GATEWAY_URL, GATEWAY_TOKEN, _ws_client, _ws_connected
-    if request.method == 'POST':
+    if request.method == "POST":
         data = request.get_json(silent=True) or {}
-        token = data.get('token', '').strip()
+        token = data.get("token", "").strip()
         if not token:
-            return jsonify({'error': 'Token is required'}), 400
+            return jsonify({"error": "Token is required"}), 400
         # Auto-discover gateway port by scanning common ports
-        gw_url = data.get('url', '').strip()
+        gw_url = data.get("url", "").strip()
         if not gw_url:
             gw_url = _auto_discover_gateway(token)
         if not gw_url:
-            return jsonify({'error': 'Could not find OpenClaw gateway. Please provide URL.'}), 404
+            return jsonify(
+                {"error": "Could not find OpenClaw gateway. Please provide URL."}
+            ), 404
         # Validate the connection
         valid = False
-        
+
         # Docker mode: skip HTTP/WS, validate via docker exec
-        if gw_url.startswith('docker://'):
-            result = _gw_invoke_docker('session_status', {}, token)
+        if gw_url.startswith("docker://"):
+            result = _gw_invoke_docker("session_status", {}, token)
             if result:
                 valid = True
-        
+
         # WebSocket validation (non-docker)
-        if not valid and not gw_url.startswith('docker://'):
-            ws_url = gw_url.replace('http://', 'ws://').replace('https://', 'wss://')
+        if not valid and not gw_url.startswith("docker://"):
+            ws_url = gw_url.replace("http://", "ws://").replace("https://", "wss://")
             try:
                 import websocket
-                ws = websocket.create_connection(f'{ws_url}/', timeout=5)
+
+                ws = websocket.create_connection(f"{ws_url}/", timeout=5)
                 ws.recv()  # challenge
                 connect_msg = {
-                    'type': 'req', 'id': 'validate', 'method': 'connect',
-                    'params': {
-                        'minProtocol': 3, 'maxProtocol': 3,
-                        'client': {'id': 'cli', 'version': __version__, 'platform': _CURRENT_PLATFORM,
-                                   'mode': 'cli', 'instanceId': 'clawmetry-validate'},
-                        'role': 'operator', 'scopes': ['operator.admin'],
-                        'auth': {'token': token},
-                    }
+                    "type": "req",
+                    "id": "validate",
+                    "method": "connect",
+                    "params": {
+                        "minProtocol": 3,
+                        "maxProtocol": 3,
+                        "client": {
+                            "id": "cli",
+                            "version": __version__,
+                            "platform": _CURRENT_PLATFORM,
+                            "mode": "cli",
+                            "instanceId": "clawmetry-validate",
+                        },
+                        "role": "operator",
+                        "scopes": ["operator.admin"],
+                        "auth": {"token": token},
+                    },
                 }
                 ws.send(json.dumps(connect_msg))
                 for _ in range(5):
                     r = json.loads(ws.recv())
-                    if r.get('type') == 'res' and r.get('id') == 'validate':
-                        valid = r.get('ok', False)
+                    if r.get("type") == "res" and r.get("id") == "validate":
+                        valid = r.get("ok", False)
                         break
                 ws.close()
             except Exception:
                 pass
-        
+
         # HTTP fallback validation (non-docker)
-        if not valid and not gw_url.startswith('docker://'):
+        if not valid and not gw_url.startswith("docker://"):
             try:
-                payload = json.dumps({'tool': 'session_status', 'args': {}}).encode()
+                payload = json.dumps({"tool": "session_status", "args": {}}).encode()
                 req = _urllib_req.Request(
                     f"{gw_url.rstrip('/')}/tools/invoke",
                     data=payload,
-                    headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
-                    method='POST'
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
                 )
                 with _urllib_req.urlopen(req, timeout=5) as resp:
                     result = json.loads(resp.read())
-                    valid = result.get('ok', False)
+                    valid = result.get("ok", False)
             except Exception:
                 pass
-        
+
         # Docker exec fallback (last resort)
         if not valid:
-            result = _gw_invoke_docker('session_status', {}, token)
+            result = _gw_invoke_docker("session_status", {}, token)
             if result:
                 valid = True
-                gw_url = 'docker://localhost:18789'
-        
+                gw_url = "docker://localhost:18789"
+
         if not valid:
-            return jsonify({'error': 'Invalid token or gateway not responding'}), 401
+            return jsonify({"error": "Invalid token or gateway not responding"}), 401
         # Save config
         GATEWAY_URL = gw_url
         GATEWAY_TOKEN = token
         # Reset WS connection to use new credentials
         _ws_connected = False
         _ws_client = None
-        cfg = {'url': gw_url, 'token': token}
+        cfg = {"url": gw_url, "token": token}
         try:
-            with open(_GW_CONFIG_FILE, 'w') as f:
+            with open(_GW_CONFIG_FILE, "w") as f:
                 json.dump(cfg, f)
             os.chmod(_GW_CONFIG_FILE, 0o600)
         except Exception:
             pass
-        return jsonify({'ok': True, 'url': gw_url})
+        return jsonify({"ok": True, "url": gw_url})
     else:
         cfg = _load_gw_config()
-        return jsonify({
-            'configured': bool(cfg.get('url') and cfg.get('token')),
-            'url': cfg.get('url', ''),
-            'hasToken': bool(cfg.get('token')),
-        })
+        return jsonify(
+            {
+                "configured": bool(cfg.get("url") and cfg.get("token")),
+                "url": cfg.get("url", ""),
+                "hasToken": bool(cfg.get("token")),
+            }
+        )
 
 
-@bp_gateway.route('/api/gw/invoke', methods=['POST'])
+@bp_gateway.route("/api/gw/invoke", methods=["POST"])
 def api_gw_invoke():
     """Proxy a tool invocation to the OpenClaw gateway."""
     data = request.get_json(silent=True) or {}
-    tool = data.get('tool')
-    args = data.get('args', {})
+    tool = data.get("tool")
+    args = data.get("args", {})
     if not tool:
-        return jsonify({'error': 'tool is required'}), 400
-    if _budget_paused and tool in ('sessions_spawn', 'session_start', 'session.create'):
-        return jsonify({'error': 'Auto-pause active: refusing new session starts', 'paused': True}), 429
+        return jsonify({"error": "tool is required"}), 400
+    if _budget_paused and tool in ("sessions_spawn", "session_start", "session.create"):
+        return jsonify(
+            {"error": "Auto-pause active: refusing new session starts", "paused": True}
+        ), 429
     result = _gw_invoke(tool, args)
     if result is None:
-        return jsonify({'error': 'Gateway not configured or unreachable'}), 503
+        return jsonify({"error": "Gateway not configured or unreachable"}), 503
     return jsonify(result)
 
 
-@bp_gateway.route('/api/gw/rpc', methods=['POST'])
+@bp_gateway.route("/api/gw/rpc", methods=["POST"])
 def api_gw_rpc():
     """Proxy a JSON-RPC method call to the OpenClaw gateway via WebSocket."""
     data = request.get_json(silent=True) or {}
-    method = data.get('method', '')
-    params = data.get('params', {})
+    method = data.get("method", "")
+    params = data.get("params", {})
     if not method:
-        return jsonify({'error': 'method is required'}), 400
+        return jsonify({"error": "method is required"}), 400
     result = _gw_ws_rpc(method, params)
     if result is None:
-        return jsonify({'error': 'Gateway not connected or method failed'}), 503
+        return jsonify({"error": "Gateway not connected or method failed"}), 503
     return jsonify(result)
 
 
@@ -16709,19 +16895,22 @@ def _auto_discover_gateway(token):
     """Scan common ports to find an OpenClaw gateway."""
     common_ports = [18789, 56089]
     # Also check env and config files
-    env_port = os.environ.get('OPENCLAW_GATEWAY_PORT')
+    env_port = os.environ.get("OPENCLAW_GATEWAY_PORT")
     if env_port:
         try:
             common_ports.insert(0, int(env_port))
         except ValueError:
             pass
     # Add ports from config files
-    for cfg_name in ['moltbot.json', 'clawdbot.json', 'openclaw.json']:
-        for base in [os.path.expanduser('~/.openclaw'), os.path.expanduser('~/.clawdbot')]:
+    for cfg_name in ["moltbot.json", "clawdbot.json", "openclaw.json"]:
+        for base in [
+            os.path.expanduser("~/.openclaw"),
+            os.path.expanduser("~/.clawdbot"),
+        ]:
             try:
                 with open(os.path.join(base, cfg_name)) as f:
                     c = json.load(f)
-                    p = c.get('gateway', {}).get('port')
+                    p = c.get("gateway", {}).get("port")
                     if p and p not in common_ports:
                         common_ports.insert(0, int(p))
             except Exception:
@@ -16738,24 +16927,34 @@ def _auto_discover_gateway(token):
         ws_url = f"ws://127.0.0.1:{port}"
         try:
             import websocket
-            ws = websocket.create_connection(f'{ws_url}/', timeout=2)
+
+            ws = websocket.create_connection(f"{ws_url}/", timeout=2)
             ws.recv()  # challenge
             connect_msg = {
-                'type': 'req', 'id': 'discover', 'method': 'connect',
-                'params': {
-                    'minProtocol': 3, 'maxProtocol': 3,
-                    'client': {'id': 'cli', 'version': __version__, 'platform': _CURRENT_PLATFORM,
-                               'mode': 'cli', 'instanceId': 'clawmetry-discover'},
-                    'role': 'operator', 'scopes': ['operator.admin'],
-                    'auth': {'token': token},
-                }
+                "type": "req",
+                "id": "discover",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "client": {
+                        "id": "cli",
+                        "version": __version__,
+                        "platform": _CURRENT_PLATFORM,
+                        "mode": "cli",
+                        "instanceId": "clawmetry-discover",
+                    },
+                    "role": "operator",
+                    "scopes": ["operator.admin"],
+                    "auth": {"token": token},
+                },
             }
             ws.send(json.dumps(connect_msg))
             for _ in range(5):
                 r = json.loads(ws.recv())
-                if r.get('type') == 'res' and r.get('id') == 'discover':
+                if r.get("type") == "res" and r.get("id") == "discover":
                     ws.close()
-                    if r.get('ok'):
+                    if r.get("ok"):
                         return url
                     break
             try:
@@ -16766,79 +16965,93 @@ def _auto_discover_gateway(token):
             pass
         # HTTP fallback
         try:
-            payload = json.dumps({'tool': 'session_status', 'args': {}}).encode()
+            payload = json.dumps({"tool": "session_status", "args": {}}).encode()
             req = _urllib_req.Request(
                 f"{url}/tools/invoke",
                 data=payload,
-                headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
-                method='POST'
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
             )
             with _urllib_req.urlopen(req, timeout=2) as resp:
                 result = json.loads(resp.read())
-                if result.get('ok'):
+                if result.get("ok"):
                     return url
         except Exception:
             continue
-    
+
     # Last resort: try docker exec
     try:
-        result = _gw_invoke_docker('session_status', {}, token)
+        result = _gw_invoke_docker("session_status", {}, token)
         if result:
-            return 'docker://localhost:18789'  # sentinel value indicating docker mode
+            return "docker://localhost:18789"  # sentinel value indicating docker mode
     except Exception:
         pass
     return None
 
-@bp_auth.route('/api/auth/check')
+
+@bp_auth.route("/api/auth/check")
 def api_auth_check():
     """Check if auth is required and validate token."""
     if not GATEWAY_TOKEN:
-        return jsonify({'authRequired': True, 'valid': False, 'needsSetup': True})
-    token = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
+        return jsonify({"authRequired": True, "valid": False, "needsSetup": True})
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if not token:
-        token = request.args.get('token', '').strip()
+        token = request.args.get("token", "").strip()
     if token == GATEWAY_TOKEN:
-        try: _ext_emit('auth.check', {'ok': True})
-        except Exception: pass
-        return jsonify({'authRequired': True, 'valid': True})
-    return jsonify({'authRequired': True, 'valid': False})
+        try:
+            _ext_emit("auth.check", {"ok": True})
+        except Exception:
+            pass
+        return jsonify({"authRequired": True, "valid": True})
+    return jsonify({"authRequired": True, "valid": False})
 
 
 @app.before_request
 def _check_auth():
     """Require valid gateway token for all /api/* routes when GATEWAY_TOKEN is set."""
-    if request.path == '/api/auth/check':
+    if request.path == "/api/auth/check":
         return  # Auth check endpoint is always accessible
-    if request.path == '/api/gw/config':
+    if request.path == "/api/gw/config":
         return  # Gateway setup must work before auth is configured
-    if request.path.startswith('/api/nodes'):
+    if request.path.startswith("/api/nodes"):
         return  # Fleet API uses its own X-Fleet-Key authentication
-    if not request.path.startswith('/api/'):
+    if not request.path.startswith("/api/"):
         return  # HTML, static, etc. are fine
     # Trust localhost — the dashboard is a local tool; auth protects remote access only
-    remote = request.remote_addr or ''
-    if remote in ('127.0.0.1', '::1', 'localhost'):
+    remote = request.remote_addr or ""
+    if remote in ("127.0.0.1", "::1", "localhost"):
         return
     if not GATEWAY_TOKEN:
-        return jsonify({'error': 'Gateway token not configured. Please set up your gateway token first.', 'needsSetup': True}), 401
-    token = request.headers.get('Authorization', '').replace('Bearer ', '').strip()
+        return jsonify(
+            {
+                "error": "Gateway token not configured. Please set up your gateway token first.",
+                "needsSetup": True,
+            }
+        ), 401
+    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if not token:
-        token = request.args.get('token', '').strip()
+        token = request.args.get("token", "").strip()
     if token == GATEWAY_TOKEN:
         return
-    return jsonify({'error': 'Unauthorized', 'authRequired': True}), 401
+    return jsonify({"error": "Unauthorized", "authRequired": True}), 401
 
 
-@bp_auth.route('/auth')
+@bp_auth.route("/auth")
 def auth_token():
     """Accept ?token=XXX, store in localStorage via JS, redirect to /.
     Works for both OSS gateway tokens and cloud cm_ keys.
     URL: /auth?token=YOUR_TOKEN
     """
-    token = request.args.get('token', '').strip()
+    token = request.args.get("token", "").strip()
     if not token:
-        return '<html><body style="background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;padding:40px;">' \
-               '<h2>Missing token</h2><p>Usage: <code>/auth?token=YOUR_TOKEN</code></p></body></html>', 400
+        return (
+            '<html><body style="background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;padding:40px;">'
+            "<h2>Missing token</h2><p>Usage: <code>/auth?token=YOUR_TOKEN</code></p></body></html>",
+            400,
+        )
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"></head>
 <body style="background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;padding:40px;min-height:100vh;">
 <p>Authenticating...</p>
@@ -16850,20 +17063,39 @@ def auth_token():
 </body></html>"""
 
 
-@bp_auth.route('/')
+@bp_auth.route("/")
 def index():
     resp = make_response(render_template_string(DASHBOARD_HTML, version=__version__))
-    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return resp
 
 
-@bp_overview.route('/api/channels')
+@bp_overview.route("/api/channels")
 def api_channels():
     """Return list of configured channel names (telegram, signal, whatsapp, discord, webchat, imessage, etc.)."""
     KNOWN_CHANNELS = (
-        'telegram', 'signal', 'whatsapp', 'discord', 'webchat', 'imessage', 'irc', 'slack',
-        'googlechat', 'bluebubbles', 'matrix', 'mattermost', 'msteams', 'line', 'nostr',
-        'twitch', 'feishu', 'synology-chat', 'nextcloud-talk', 'tlon', 'zalo', 'zalouser',
+        "telegram",
+        "signal",
+        "whatsapp",
+        "discord",
+        "webchat",
+        "imessage",
+        "irc",
+        "slack",
+        "googlechat",
+        "bluebubbles",
+        "matrix",
+        "mattermost",
+        "msteams",
+        "line",
+        "nostr",
+        "twitch",
+        "feishu",
+        "synology-chat",
+        "nextcloud-talk",
+        "tlon",
+        "zalo",
+        "zalouser",
     )
     configured = []
 
@@ -16874,24 +17106,25 @@ def api_channels():
 
     # 1. Check gateway.yaml / gateway.yml (OpenClaw gateway config)
     yaml_candidates = [
-        os.path.expanduser('~/.openclaw/gateway.yaml'),
-        os.path.expanduser('~/.openclaw/gateway.yml'),
-        os.path.expanduser('~/.clawdbot/gateway.yaml'),
-        os.path.expanduser('~/.clawdbot/gateway.yml'),
+        os.path.expanduser("~/.openclaw/gateway.yaml"),
+        os.path.expanduser("~/.openclaw/gateway.yml"),
+        os.path.expanduser("~/.clawdbot/gateway.yaml"),
+        os.path.expanduser("~/.clawdbot/gateway.yml"),
     ]
     for yf in yaml_candidates:
         try:
             import yaml as _yaml
+
             with open(yf) as f:
                 ydata = _yaml.safe_load(f)
             if not isinstance(ydata, dict):
                 continue
             # channels: or plugins: section
-            for section_key in ('channels', 'plugins'):
+            for section_key in ("channels", "plugins"):
                 section = ydata.get(section_key, {})
                 if isinstance(section, dict):
                     for name, conf in section.items():
-                        if isinstance(conf, dict) and conf.get('enabled', True):
+                        if isinstance(conf, dict) and conf.get("enabled", True):
                             _add(name)
                         elif isinstance(conf, bool) and conf:
                             _add(name)
@@ -16906,22 +17139,22 @@ def api_channels():
     # 2. Check JSON config files (clawdbot/openclaw/moltbot)
     if not configured:
         config_files = [
-            os.path.expanduser('~/.openclaw/openclaw.json'),
-            os.path.expanduser('~/.clawdbot/openclaw.json'),
-            os.path.expanduser('~/.clawdbot/clawdbot.json'),
-            os.path.expanduser('~/.clawdbot/moltbot.json'),
+            os.path.expanduser("~/.openclaw/openclaw.json"),
+            os.path.expanduser("~/.clawdbot/openclaw.json"),
+            os.path.expanduser("~/.clawdbot/clawdbot.json"),
+            os.path.expanduser("~/.clawdbot/moltbot.json"),
         ]
         for cf in config_files:
             try:
                 with open(cf) as f:
                     data = json.load(f)
                 # Check plugins.entries for enabled channels
-                plugins = data.get('plugins', {}).get('entries', {})
+                plugins = data.get("plugins", {}).get("entries", {})
                 for name, pconf in plugins.items():
-                    if isinstance(pconf, dict) and pconf.get('enabled'):
+                    if isinstance(pconf, dict) and pconf.get("enabled"):
                         _add(name)
                 # Also check channels key
-                channels = data.get('channels', {})
+                channels = data.get("channels", {})
                 if isinstance(channels, dict):
                     for name in channels:
                         _add(name)
@@ -16936,14 +17169,29 @@ def api_channels():
     # Filter to channels that actually have data directories (proof of real usage)
     # Some channels (like imessage) use system paths, not openclaw dirs -- skip dir check for those
     DIR_EXEMPT_CHANNELS = {
-        'imessage', 'irc', 'googlechat', 'slack', 'webchat', 'bluebubbles',
-        'matrix', 'mattermost', 'msteams', 'line', 'nostr', 'twitch', 'feishu',
-        'synology-chat', 'nextcloud-talk', 'tlon', 'zalo', 'zalouser',
+        "imessage",
+        "irc",
+        "googlechat",
+        "slack",
+        "webchat",
+        "bluebubbles",
+        "matrix",
+        "mattermost",
+        "msteams",
+        "line",
+        "nostr",
+        "twitch",
+        "feishu",
+        "synology-chat",
+        "nextcloud-talk",
+        "tlon",
+        "zalo",
+        "zalouser",
     }
     if configured:
         active_channels = []
-        oc_dir = os.path.expanduser('~/.openclaw')
-        cb_dir = os.path.expanduser('~/.clawdbot')
+        oc_dir = os.path.expanduser("~/.openclaw")
+        cb_dir = os.path.expanduser("~/.clawdbot")
         for ch in configured:
             if ch in DIR_EXEMPT_CHANNELS:
                 active_channels.append(ch)
@@ -16954,114 +17202,150 @@ def api_channels():
 
     # Fallback: show all if nothing found
     if not configured:
-        configured = ['telegram', 'signal', 'whatsapp']
-    return jsonify({'channels': configured})
+        configured = ["telegram", "signal", "whatsapp"]
+    return jsonify({"channels": configured})
 
 
-@bp_overview.route('/api/overview')
+@bp_overview.route("/api/overview")
 def api_overview():
     # Try gateway API for sessions
-    gw_sessions = _gw_invoke('sessions_list', {'limit': 50, 'messageLimit': 0})
-    if gw_sessions and 'sessions' in gw_sessions:
-        sessions = gw_sessions['sessions']
+    gw_sessions = _gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
+    if gw_sessions and "sessions" in gw_sessions:
+        sessions = gw_sessions["sessions"]
     else:
         sessions = _get_sessions()
-    main = next((s for s in sessions if 'subagent' not in (s.get('key', s.get('sessionId', '')).lower())), sessions[0] if sessions else {})
+    main = next(
+        (
+            s
+            for s in sessions
+            if "subagent" not in (s.get("key", s.get("sessionId", "")).lower())
+        ),
+        sessions[0] if sessions else {},
+    )
 
     crons = _get_crons()
-    enabled = len([j for j in crons if j.get('enabled')])
+    enabled = len([j for j in crons if j.get("enabled")])
     disabled = len(crons) - enabled
 
     mem_files = _get_memory_files()
-    total_size = sum(f['size'] for f in mem_files)
+    total_size = sum(f["size"] for f in mem_files)
 
     # System info
     system = []
     try:
-        disk = subprocess.run(['df', '-h', '/'], capture_output=True, text=True).stdout.strip().split('\n')[-1].split()
-        disk_pct = int(disk[4].replace('%', '')) if len(disk) > 4 else 0
-        disk_color = 'green' if disk_pct < 80 else ('yellow' if disk_pct < 90 else 'red')
-        system.append(['Disk /', f'{disk[2]} / {disk[1]} ({disk[4]})', disk_color])
+        disk = (
+            subprocess.run(["df", "-h", "/"], capture_output=True, text=True)
+            .stdout.strip()
+            .split("\n")[-1]
+            .split()
+        )
+        disk_pct = int(disk[4].replace("%", "")) if len(disk) > 4 else 0
+        disk_color = (
+            "green" if disk_pct < 80 else ("yellow" if disk_pct < 90 else "red")
+        )
+        system.append(["Disk /", f"{disk[2]} / {disk[1]} ({disk[4]})", disk_color])
     except Exception:
-        system.append(['Disk /', '--', ''])
+        system.append(["Disk /", "--", ""])
 
     try:
-        mem = subprocess.run(['free', '-h'], capture_output=True, text=True).stdout.strip().split('\n')[1].split()
-        system.append(['RAM', f'{mem[2]} / {mem[1]}', ''])
+        mem = (
+            subprocess.run(["free", "-h"], capture_output=True, text=True)
+            .stdout.strip()
+            .split("\n")[1]
+            .split()
+        )
+        system.append(["RAM", f"{mem[2]} / {mem[1]}", ""])
     except Exception:
-        system.append(['RAM', '--', ''])
+        system.append(["RAM", "--", ""])
 
     try:
-        load = open('/proc/loadavg').read().split()[:3]
-        system.append(['Load', ' '.join(load), ''])
+        load = open("/proc/loadavg").read().split()[:3]
+        system.append(["Load", " ".join(load), ""])
     except Exception:
-        system.append(['Load', '--', ''])
+        system.append(["Load", "--", ""])
 
     try:
-        uptime = subprocess.run(['uptime', '-p'], capture_output=True, text=True).stdout.strip()
-        system.append(['Uptime', uptime.replace('up ', ''), ''])
+        uptime = subprocess.run(
+            ["uptime", "-p"], capture_output=True, text=True
+        ).stdout.strip()
+        system.append(["Uptime", uptime.replace("up ", ""), ""])
     except Exception:
-        system.append(['Uptime', '--', ''])
+        system.append(["Uptime", "--", ""])
 
-    if sys.platform != 'win32':
-        gw = subprocess.run(['pgrep', '-f', 'moltbot'], capture_output=True, text=True)
+    if sys.platform != "win32":
+        gw = subprocess.run(["pgrep", "-f", "moltbot"], capture_output=True, text=True)
         gw_running = gw.returncode == 0
     else:
         gw_running = False
-    system.append(['Gateway', 'Running' if gw_running else 'Stopped',
-                    'green' if gw_running else 'red'])
+    system.append(
+        [
+            "Gateway",
+            "Running" if gw_running else "Stopped",
+            "green" if gw_running else "red",
+        ]
+    )
 
     # Infrastructure details for Flow tab
     infra = {
-        'userName': USER_NAME,
-        'network': get_local_ip(),
+        "userName": USER_NAME,
+        "network": get_local_ip(),
     }
     try:
         import platform
+
         uname = platform.uname()
-        infra['machine'] = uname.node
-        infra['runtime'] = f'Node.js - {uname.system} {uname.release.split("-")[0]}'
+        infra["machine"] = uname.node
+        infra["runtime"] = f"Node.js - {uname.system} {uname.release.split('-')[0]}"
     except Exception:
-        infra['machine'] = 'Host'
-        infra['runtime'] = 'Runtime'
+        infra["machine"] = "Host"
+        infra["runtime"] = "Runtime"
 
     try:
-        disk_info = subprocess.run(['df', '-h', '/'], capture_output=True, text=True).stdout.strip().split('\n')[-1].split()
-        infra['storage'] = f'{disk_info[1]} root'
+        disk_info = (
+            subprocess.run(["df", "-h", "/"], capture_output=True, text=True)
+            .stdout.strip()
+            .split("\n")[-1]
+            .split()
+        )
+        infra["storage"] = f"{disk_info[1]} root"
     except Exception:
-        infra['storage'] = 'Disk'
+        infra["storage"] = "Disk"
 
-    model_name = main.get('model') or 'unknown'
-    return jsonify({
-        'model': model_name,
-        'provider': _infer_provider_from_model(model_name),
-        'sessionCount': len(sessions),
-        'sessions': len(sessions),  # alias for E2E compatibility
-        'activeSessions': len([s for s in sessions if s.get('active')]),
-        'mainSessionUpdated': main.get('updatedAt'),
-        'mainTokens': main.get('totalTokens', 0),
-        'contextWindow': main.get('contextTokens', 200000),
-        'cronCount': len(crons),
-        'cronEnabled': enabled,
-        'cronDisabled': disabled,
-        'memoryCount': len(mem_files),
-        'memorySize': total_size,
-        'system': system,
-        'infra': infra,
-    })
+    model_name = main.get("model") or "unknown"
+    return jsonify(
+        {
+            "model": model_name,
+            "provider": _infer_provider_from_model(model_name),
+            "sessionCount": len(sessions),
+            "sessions": len(sessions),  # alias for E2E compatibility
+            "activeSessions": len([s for s in sessions if s.get("active")]),
+            "mainSessionUpdated": main.get("updatedAt"),
+            "mainTokens": main.get("totalTokens", 0),
+            "contextWindow": main.get("contextTokens", 200000),
+            "cronCount": len(crons),
+            "cronEnabled": enabled,
+            "cronDisabled": disabled,
+            "memoryCount": len(mem_files),
+            "memorySize": total_size,
+            "system": system,
+            "infra": infra,
+        }
+    )
 
 
-@bp_overview.route('/api/main-activity')
+@bp_overview.route("/api/main-activity")
 def api_main_activity():
     """Return recent tool calls from the main (most recently modified) session."""
-    import glob as _glob
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     if not os.path.isdir(sessions_dir):
-        return jsonify({'calls': [], 'error': 'sessions dir not found'})
+        return jsonify({"calls": [], "error": "sessions dir not found"})
     # Find the main session: largest recently-modified JSONL (main sessions accumulate far more data)
     candidates = []
     for f in os.listdir(sessions_dir):
-        if not f.endswith('.jsonl'):
+        if not f.endswith(".jsonl"):
             continue
         fp = os.path.join(sessions_dir, f)
         try:
@@ -17072,30 +17356,41 @@ def api_main_activity():
         except Exception:
             continue
     if not candidates:
-        return jsonify({'calls': []})
+        return jsonify({"calls": []})
     # Pick most recently modified file (active main session)
     candidates.sort(key=lambda x: x[2], reverse=True)
     best = candidates[0][0]
     best_mt = candidates[0][2]
     if not best:
-        return jsonify({'calls': []})
+        return jsonify({"calls": []})
     # Read last ~200 lines to find tool calls
     try:
-        with open(best, 'rb') as fh:
+        with open(best, "rb") as fh:
             fh.seek(0, 2)
             size = fh.tell()
             chunk = min(size, 512000)
             fh.seek(max(0, size - chunk))
-            tail = fh.read().decode('utf-8', errors='replace')
-        lines = tail.strip().split('\n')
+            tail = fh.read().decode("utf-8", errors="replace")
+        lines = tail.strip().split("\n")
     except Exception:
-        return jsonify({'calls': []})
+        return jsonify({"calls": []})
     tool_icons = {
-        'exec': '🔧', 'Read': '📖', 'read': '📖', 'Edit': '✏️', 'edit': '✏️',
-        'Write': '✏️', 'write': '✏️',
-        'web_search': '🌐', 'web_fetch': '🌐', 'browser': '🖥️',
-        'message': '💬', 'tts': '🔊', 'image': '🖼️',
-        'canvas': '🎨', 'nodes': '📱', 'process': '🔧',
+        "exec": "🔧",
+        "Read": "📖",
+        "read": "📖",
+        "Edit": "✏️",
+        "edit": "✏️",
+        "Write": "✏️",
+        "write": "✏️",
+        "web_search": "🌐",
+        "web_fetch": "🌐",
+        "browser": "🖥️",
+        "message": "💬",
+        "tts": "🔊",
+        "image": "🖼️",
+        "canvas": "🎨",
+        "nodes": "📱",
+        "process": "🔧",
     }
     calls = []
     for line in lines:
@@ -17103,81 +17398,85 @@ def api_main_activity():
             obj = json.loads(line)
         except Exception:
             continue
-        msg = obj.get('message', obj)
-        ts = obj.get('timestamp') or msg.get('timestamp')
-        content = msg.get('content', [])
+        msg = obj.get("message", obj)
+        ts = obj.get("timestamp") or msg.get("timestamp")
+        content = msg.get("content", [])
         if not isinstance(content, list):
             continue
         for item in content:
-            if item.get('type') != 'toolCall':
+            if item.get("type") != "toolCall":
                 continue
-            name = item.get('name', '?')
-            args = item.get('arguments', {}) or {}
+            name = item.get("name", "?")
+            args = item.get("arguments", {}) or {}
             # Build summary
-            if name == 'exec':
-                summary = args.get('command', '')[:60]
-            elif name in ('Read', 'read'):
-                summary = (args.get('file_path') or args.get('path') or '')[:60]
-            elif name in ('Edit', 'edit'):
-                summary = (args.get('file_path') or args.get('path') or '')[:60]
-            elif name in ('Write', 'write'):
-                summary = (args.get('file_path') or args.get('path') or '')[:60]
-            elif name == 'web_search':
-                summary = args.get('query', '')[:60]
-            elif name == 'web_fetch':
-                summary = args.get('url', '')[:60]
-            elif name == 'browser':
-                summary = args.get('action', '')
-            elif name == 'message':
-                action = args.get('action', '')
-                target = args.get('target') or args.get('to') or args.get('channel', '')
-                msg = (args.get('message') or '')[:40]
-                summary = f"{action} -> {target}: {msg}" if msg else f"{action} -> {target}"
+            if name == "exec":
+                summary = args.get("command", "")[:60]
+            elif name in ("Read", "read"):
+                summary = (args.get("file_path") or args.get("path") or "")[:60]
+            elif name in ("Edit", "edit"):
+                summary = (args.get("file_path") or args.get("path") or "")[:60]
+            elif name in ("Write", "write"):
+                summary = (args.get("file_path") or args.get("path") or "")[:60]
+            elif name == "web_search":
+                summary = args.get("query", "")[:60]
+            elif name == "web_fetch":
+                summary = args.get("url", "")[:60]
+            elif name == "browser":
+                summary = args.get("action", "")
+            elif name == "message":
+                action = args.get("action", "")
+                target = args.get("target") or args.get("to") or args.get("channel", "")
+                msg = (args.get("message") or "")[:40]
+                summary = (
+                    f"{action} -> {target}: {msg}" if msg else f"{action} -> {target}"
+                )
                 summary = summary[:60]
-            elif name == 'tts':
-                summary = (args.get('text', '')[:60])
-            elif name == 'process':
-                action = args.get('action', '')
-                sid = args.get('sessionId', '')[:15]
+            elif name == "tts":
+                summary = args.get("text", "")[:60]
+            elif name == "process":
+                action = args.get("action", "")
+                sid = args.get("sessionId", "")[:15]
                 summary = f"{action}: {sid}" if sid else action
-            elif name == 'sessions_spawn':
-                task = (args.get('task', '') or args.get('label', ''))[:50]
+            elif name == "sessions_spawn":
+                task = (args.get("task", "") or args.get("label", ""))[:50]
                 summary = task
-            elif name == 'sessions_send':
-                label = args.get('label') or args.get('sessionKey', '')
+            elif name == "sessions_send":
+                label = args.get("label") or args.get("sessionKey", "")
                 summary = f"-> {label}"[:60]
-            elif name == 'cron':
-                action = args.get('action', '')
-                jid = args.get('jobId', '')[:10]
+            elif name == "cron":
+                action = args.get("action", "")
+                jid = args.get("jobId", "")[:10]
                 summary = f"{action} {jid}".strip()
-            elif name == 'gateway':
-                summary = args.get('action', '')
-            elif name == 'session_status':
-                summary = 'checking status'
-            elif name == 'image':
-                summary = (args.get('prompt', '') or args.get('image', ''))[:60]
+            elif name == "gateway":
+                summary = args.get("action", "")
+            elif name == "session_status":
+                summary = "checking status"
+            elif name == "image":
+                summary = (args.get("prompt", "") or args.get("image", ""))[:60]
             else:
                 # Clean up dict display
                 s = str(args)
-                if len(s) > 60: s = s[:57] + '...'
+                if len(s) > 60:
+                    s = s[:57] + "..."
                 summary = s
-            icon = tool_icons.get(name, '⚙️')
-            calls.append({'ts': ts, 'name': name, 'icon': icon, 'summary': summary})
+            icon = tool_icons.get(name, "⚙️")
+            calls.append({"ts": ts, "name": name, "icon": icon, "summary": summary})
     # Return last 20
     calls = calls[-20:]
-    return jsonify({'calls': calls, 'sessionFile': os.path.basename(best), 'lastModified': best_mt})
+    return jsonify(
+        {"calls": calls, "sessionFile": os.path.basename(best), "lastModified": best_mt}
+    )
 
 
-@bp_sessions.route('/api/sessions')
+@bp_sessions.route("/api/sessions")
 def api_sessions():
-    gw_data = _gw_invoke('sessions_list', {'limit': 50, 'messageLimit': 0})
-    if gw_data and 'sessions' in gw_data:
-        return jsonify({'sessions': _augment_sessions_with_burn(gw_data['sessions'])})
-    return jsonify({'sessions': _augment_sessions_with_burn(_get_sessions())})
+    gw_data = _gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
+    if gw_data and "sessions" in gw_data:
+        return jsonify({"sessions": _augment_sessions_with_burn(gw_data["sessions"])})
+    return jsonify({"sessions": _augment_sessions_with_burn(_get_sessions())})
 
 
-
-@bp_sessions.route('/api/delegation-tree')
+@bp_sessions.route("/api/delegation-tree")
 def api_delegation_tree():
     """Agent delegation chains -- inspired by AgentWeave provenance tracing.
 
@@ -17185,12 +17484,14 @@ def api_delegation_tree():
     and returns per-chain token totals and estimated cost.
     """
     sessions_dir = _get_sessions_dir()
-    index_path = os.path.join(sessions_dir, 'sessions.json')
+    index_path = os.path.join(sessions_dir, "sessions.json")
     try:
         with open(index_path) as f:
             all_sessions = json.load(f)
     except Exception:
-        return jsonify({'chains': [], 'total_subagents': 0, 'total_chain_cost_usd': 0.0})
+        return jsonify(
+            {"chains": [], "total_subagents": 0, "total_chain_cost_usd": 0.0}
+        )
 
     usd_per_tok = _estimate_usd_per_token()
     now_ms = time.time() * 1000
@@ -17200,64 +17501,76 @@ def api_delegation_tree():
     for key, val in all_sessions.items():
         if not isinstance(val, dict):
             continue
-        if ':subagent:' in key:
+        if ":subagent:" in key:
             subagent_sessions.append((key, val))
         else:
             main_sessions[key] = val
 
     chains_map = {}
     for key, sa in subagent_sessions:
-        parent_key = sa.get('spawnedBy', 'unknown')
+        parent_key = sa.get("spawnedBy", "unknown")
         if parent_key not in chains_map:
             chains_map[parent_key] = []
-        age_ms = now_ms - sa.get('updatedAt', 0)
-        status = 'active' if age_ms < 120000 else ('idle' if age_ms < 600000 else 'stale')
-        total_tok = int(sa.get('totalTokens') or 0)
-        chains_map[parent_key].append({
-            'key': key,
-            'label': sa.get('label') or key.split(':')[-1],
-            'model': sa.get('model', 'unknown'),
-            'prov_agent_type': 'subagent',
-            'prov_session_turn': 2,
-            'prov_parent_key': parent_key,
-            'prov_total_tokens': total_tok,
-            'input_tokens': int(sa.get('inputTokens') or 0),
-            'output_tokens': int(sa.get('outputTokens') or 0),
-            'total_tokens': total_tok,
-            'cost_usd': round(total_tok * usd_per_tok, 6),
-            'status': status,
-            'updated_at': sa.get('updatedAt', 0),
-        })
+        age_ms = now_ms - sa.get("updatedAt", 0)
+        status = (
+            "active" if age_ms < 120000 else ("idle" if age_ms < 600000 else "stale")
+        )
+        total_tok = int(sa.get("totalTokens") or 0)
+        chains_map[parent_key].append(
+            {
+                "key": key,
+                "label": sa.get("label") or key.split(":")[-1],
+                "model": sa.get("model", "unknown"),
+                "prov_agent_type": "subagent",
+                "prov_session_turn": 2,
+                "prov_parent_key": parent_key,
+                "prov_total_tokens": total_tok,
+                "input_tokens": int(sa.get("inputTokens") or 0),
+                "output_tokens": int(sa.get("outputTokens") or 0),
+                "total_tokens": total_tok,
+                "cost_usd": round(total_tok * usd_per_tok, 6),
+                "status": status,
+                "updated_at": sa.get("updatedAt", 0),
+            }
+        )
 
     chains = []
     total_chain_cost = 0.0
     for parent_key, children in chains_map.items():
-        parts = parent_key.split(':')
-        channel = parts[2] if len(parts) > 2 else 'unknown'
+        parts = parent_key.split(":")
+        channel = parts[2] if len(parts) > 2 else "unknown"
         display = parts[-1] if len(parts) > 0 else parent_key
-        chain_tokens = sum(c['total_tokens'] for c in children)
+        chain_tokens = sum(c["total_tokens"] for c in children)
         chain_cost = round(chain_tokens * usd_per_tok, 6)
         total_chain_cost += chain_cost
         parent_meta = main_sessions.get(parent_key, {})
-        chains.append({
-            'parent_key': parent_key,
-            'parent_display': parent_meta.get('displayName') or parent_meta.get('subject') or display,
-            'parent_channel': channel,
-            'children': sorted(children, key=lambda x: x['total_tokens'], reverse=True),
-            'chain_tokens': chain_tokens,
-            'chain_cost_usd': chain_cost,
-            'child_count': len(children),
-        })
+        chains.append(
+            {
+                "parent_key": parent_key,
+                "parent_display": parent_meta.get("displayName")
+                or parent_meta.get("subject")
+                or display,
+                "parent_channel": channel,
+                "children": sorted(
+                    children, key=lambda x: x["total_tokens"], reverse=True
+                ),
+                "chain_tokens": chain_tokens,
+                "chain_cost_usd": chain_cost,
+                "child_count": len(children),
+            }
+        )
 
-    chains.sort(key=lambda x: x['chain_tokens'], reverse=True)
-    return jsonify({
-        'chains': chains,
-        'total_subagents': len(subagent_sessions),
-        'total_chain_cost_usd': round(total_chain_cost, 4),
-    })
+    chains.sort(key=lambda x: x["chain_tokens"], reverse=True)
+    return jsonify(
+        {
+            "chains": chains,
+            "total_subagents": len(subagent_sessions),
+            "total_chain_cost_usd": round(total_chain_cost, 4),
+        }
+    )
 
 
-@bp_sessions.route('/api/export/otlp')
+@bp_sessions.route("/api/export/otlp")
 def api_export_otlp():
     """Export recent sessions as OTLP ResourceSpans JSON.
 
@@ -17266,12 +17579,12 @@ def api_export_otlp():
     import hashlib
 
     sessions_dir = _get_sessions_dir()
-    index_path = os.path.join(sessions_dir, 'sessions.json')
+    index_path = os.path.join(sessions_dir, "sessions.json")
     try:
         with open(index_path) as f:
             all_sessions = json.load(f)
     except Exception:
-        return jsonify({'resourceSpans': []})
+        return jsonify({"resourceSpans": []})
 
     cutoff_ms = (time.time() - 86400) * 1000
     resource_spans = []
@@ -17280,126 +17593,164 @@ def api_export_otlp():
     for key, val in all_sessions.items():
         if not isinstance(val, dict):
             continue
-        if val.get('updatedAt', 0) < cutoff_ms:
+        if val.get("updatedAt", 0) < cutoff_ms:
             continue
         if count >= 100:
             break
         count += 1
 
-        is_subagent = ':subagent:' in key
-        agent_type = 'subagent' if is_subagent else 'main'
-        session_id = val.get('sessionId', key.split(':')[-1])
+        is_subagent = ":subagent:" in key
+        agent_type = "subagent" if is_subagent else "main"
+        session_id = val.get("sessionId", key.split(":")[-1])
         trace_id = hashlib.md5(session_id.encode()).hexdigest()
         span_id = trace_id[:16]
-        total_tokens = int(val.get('totalTokens') or 0)
+        total_tokens = int(val.get("totalTokens") or 0)
 
         attrs = [
-            {'key': 'service.name', 'value': {'stringValue': 'clawmetry'}},
-            {'key': 'prov.agent.id', 'value': {'stringValue': key}},
-            {'key': 'prov.agent.type', 'value': {'stringValue': agent_type}},
-            {'key': 'prov.agent.model', 'value': {'stringValue': val.get('model', 'unknown')}},
-            {'key': 'prov.llm.total_tokens', 'value': {'intValue': total_tokens}},
-            {'key': 'prov.session.turn', 'value': {'intValue': 2 if is_subagent else 1}},
+            {"key": "service.name", "value": {"stringValue": "clawmetry"}},
+            {"key": "prov.agent.id", "value": {"stringValue": key}},
+            {"key": "prov.agent.type", "value": {"stringValue": agent_type}},
+            {
+                "key": "prov.agent.model",
+                "value": {"stringValue": val.get("model", "unknown")},
+            },
+            {"key": "prov.llm.total_tokens", "value": {"intValue": total_tokens}},
+            {
+                "key": "prov.session.turn",
+                "value": {"intValue": 2 if is_subagent else 1},
+            },
         ]
-        if is_subagent and val.get('spawnedBy'):
-            attrs.append({'key': 'prov.parent.session.id', 'value': {'stringValue': val['spawnedBy']}})
-        if val.get('label'):
-            attrs.append({'key': 'prov.task.label', 'value': {'stringValue': val['label']}})
+        if is_subagent and val.get("spawnedBy"):
+            attrs.append(
+                {
+                    "key": "prov.parent.session.id",
+                    "value": {"stringValue": val["spawnedBy"]},
+                }
+            )
+        if val.get("label"):
+            attrs.append(
+                {"key": "prov.task.label", "value": {"stringValue": val["label"]}}
+            )
 
-        updated_ns = int(val.get('updatedAt', 0)) * 1000000
+        updated_ns = int(val.get("updatedAt", 0)) * 1000000
 
-        resource_spans.append({
-            'resource': {'attributes': [
-                {'key': 'service.name', 'value': {'stringValue': 'clawmetry'}},
-            ]},
-            'scopeSpans': [{'scope': {'name': 'clawmetry.agent', 'version': '1.0'}, 'spans': [{
-                'traceId': trace_id,
-                'spanId': span_id,
-                'name': 'agent.turn',
-                'kind': 3,
-                'startTimeUnixNano': updated_ns - 1000000000,
-                'endTimeUnixNano': updated_ns,
-                'attributes': attrs,
-                'status': {'code': 1},
-            }]}]
-        })
+        resource_spans.append(
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": "clawmetry"}},
+                    ]
+                },
+                "scopeSpans": [
+                    {
+                        "scope": {"name": "clawmetry.agent", "version": "1.0"},
+                        "spans": [
+                            {
+                                "traceId": trace_id,
+                                "spanId": span_id,
+                                "name": "agent.turn",
+                                "kind": 3,
+                                "startTimeUnixNano": updated_ns - 1000000000,
+                                "endTimeUnixNano": updated_ns,
+                                "attributes": attrs,
+                                "status": {"code": 1},
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
 
-    return jsonify({'resourceSpans': resource_spans})
+    return jsonify({"resourceSpans": resource_spans})
 
 
-@bp_sessions.route('/api/sessions/cost-breakdown')
+@bp_sessions.route("/api/sessions/cost-breakdown")
 def api_sessions_cost_breakdown():
     """Per-session cost breakdown: top sessions by total cost, sorted descending."""
     analytics = _compute_transcript_analytics()
-    sessions = analytics.get('sessions', [])
+    sessions = analytics.get("sessions", [])
     usd_per_token = _estimate_usd_per_token()
     result = []
     for s in sessions:
-        cost = s.get('cost_usd', 0.0) or 0.0
-        tokens = s.get('tokens', 0) or 0
+        cost = s.get("cost_usd", 0.0) or 0.0
+        tokens = s.get("tokens", 0) or 0
         # Estimate cost from tokens if cost is zero
         if cost == 0.0 and tokens > 0:
             cost = tokens * usd_per_token
-        result.append({
-            'session_id': s.get('session_id', ''),
-            'tokens': tokens,
-            'cost_usd': round(cost, 6),
-            'model': s.get('model', 'unknown'),
-            'day': s.get('day', ''),
-            'start_ts': s.get('start_ts', 0),
-        })
-    result.sort(key=lambda x: x['cost_usd'], reverse=True)
+        result.append(
+            {
+                "session_id": s.get("session_id", ""),
+                "tokens": tokens,
+                "cost_usd": round(cost, 6),
+                "model": s.get("model", "unknown"),
+                "day": s.get("day", ""),
+                "start_ts": s.get("start_ts", 0),
+            }
+        )
+    result.sort(key=lambda x: x["cost_usd"], reverse=True)
     top10 = result[:10]
-    total_cost = sum(r['cost_usd'] for r in result)
-    return jsonify({'sessions': result, 'top10': top10, 'total_cost_usd': round(total_cost, 4)})
+    total_cost = sum(r["cost_usd"] for r in result)
+    return jsonify(
+        {"sessions": result, "top10": top10, "total_cost_usd": round(total_cost, 4)}
+    )
 
 
-@bp_sessions.route('/api/sessions/<session_id>/stop', methods=['POST'])
+@bp_sessions.route("/api/sessions/<session_id>/stop", methods=["POST"])
 def api_session_stop(session_id):
     """Emergency stop for a session: SIGTERM if pid is known and/or .stop signal file."""
     target = _resolve_session_stop_target(session_id)
-    sid = target.get('session_id', '')
+    sid = target.get("session_id", "")
     if not sid:
-        return jsonify({'ok': False, 'error': 'Invalid session id'}), 400
+        return jsonify({"ok": False, "error": "Invalid session id"}), 400
 
     did_signal = False
     did_file = False
     errors = []
-    pid = target.get('pid')
-    if isinstance(pid, int) and pid > 1 and sys.platform != 'win32':
+    pid = target.get("pid")
+    if isinstance(pid, int) and pid > 1 and sys.platform != "win32":
         try:
             os.kill(pid, 15)  # SIGTERM
             did_signal = True
         except Exception as e:
-            errors.append(f'sigterm_failed:{e}')
+            errors.append(f"sigterm_failed:{e}")
 
-    stop_path = target.get('stop_path', '')
+    stop_path = target.get("stop_path", "")
     try:
         if stop_path:
-            with open(stop_path, 'w') as f:
-                f.write(json.dumps({'timestamp': time.time(), 'reason': 'dashboard_emergency_stop'}))
+            with open(stop_path, "w") as f:
+                f.write(
+                    json.dumps(
+                        {"timestamp": time.time(), "reason": "dashboard_emergency_stop"}
+                    )
+                )
             did_file = True
     except Exception as e:
-        errors.append(f'stop_file_failed:{e}')
+        errors.append(f"stop_file_failed:{e}")
 
     if not did_signal and not did_file:
-        return jsonify({'ok': False, 'error': 'Unable to issue stop signal', 'details': errors}), 500
-    return jsonify({
-        'ok': True,
-        'session_id': sid,
-        'sigterm_sent': did_signal,
-        'stop_file_written': did_file,
-        'errors': errors,
-    })
+        return jsonify(
+            {"ok": False, "error": "Unable to issue stop signal", "details": errors}
+        ), 500
+    return jsonify(
+        {
+            "ok": True,
+            "session_id": sid,
+            "sigterm_sent": did_signal,
+            "stop_file_written": did_file,
+            "errors": errors,
+        }
+    )
 
 
-@bp_crons.route('/api/crons')
+@bp_crons.route("/api/crons")
 def api_crons():
     def _with_costs(jobs):
         if not isinstance(jobs, list):
             return jobs
         analytics = _compute_transcript_analytics()
-        sessions = [s for s in analytics.get('sessions', []) if s.get('is_cron_candidate')]
+        sessions = [
+            s for s in analytics.get("sessions", []) if s.get("is_cron_candidate")
+        ]
         if not sessions:
             return jobs
 
@@ -17416,11 +17767,11 @@ def api_crons():
                     best_score = score
                     best_idx = idx
             if best_idx is not None and best_score >= 20:
-                cost = float(sess.get('cost_usd', 0.0) or 0.0)
+                cost = float(sess.get("cost_usd", 0.0) or 0.0)
                 cost_by_job[best_idx] += cost
                 count_by_job[best_idx] += 1
                 if len(session_ids_by_job[best_idx]) < 10:
-                    session_ids_by_job[best_idx].append(sess.get('session_id', ''))
+                    session_ids_by_job[best_idx].append(sess.get("session_id", ""))
 
         out = []
         for idx, job in enumerate(jobs):
@@ -17428,123 +17779,133 @@ def api_crons():
                 out.append(job)
                 continue
             j2 = dict(job)
-            j2['cost_usd'] = round(cost_by_job.get(idx, 0.0), 6)
-            j2['cost_session_count'] = int(count_by_job.get(idx, 0))
-            j2['cost_session_ids'] = session_ids_by_job.get(idx, [])
+            j2["cost_usd"] = round(cost_by_job.get(idx, 0.0), 6)
+            j2["cost_session_count"] = int(count_by_job.get(idx, 0))
+            j2["cost_session_ids"] = session_ids_by_job.get(idx, [])
             out.append(j2)
         return out
 
     # Try gateway API first
-    gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': True})
-    if gw_data and 'jobs' in gw_data:
-        jobs = _with_costs(gw_data.get('jobs', []))
-        try: _ext_emit('cron.run', {'count': len(gw_data.get('jobs', []))})
-        except Exception: pass
-        return jsonify({'jobs': jobs})
-    return jsonify({'jobs': _with_costs(_get_crons())})
+    gw_data = _gw_invoke("cron", {"action": "list", "includeDisabled": True})
+    if gw_data and "jobs" in gw_data:
+        jobs = _with_costs(gw_data.get("jobs", []))
+        try:
+            _ext_emit("cron.run", {"count": len(gw_data.get("jobs", []))})
+        except Exception:
+            pass
+        return jsonify({"jobs": jobs})
+    return jsonify({"jobs": _with_costs(_get_crons())})
 
 
-@bp_crons.route('/api/cron/fix', methods=['POST'])
+@bp_crons.route("/api/cron/fix", methods=["POST"])
 def api_cron_fix():
     data = request.get_json(silent=True) or {}
-    job_id = data.get('jobId', '')
+    job_id = data.get("jobId", "")
     if not job_id:
-        return jsonify({'error': 'Missing jobId'}), 400
+        return jsonify({"error": "Missing jobId"}), 400
     # Find the job name for context
     job_name = job_id
     for j in _get_crons():
-        if j.get('id') == job_id:
-            job_name = j.get('name', job_id)
+        if j.get("id") == job_id:
+            job_name = j.get("name", job_id)
             break
     # TODO: integrate with AI agent messaging system
-    return jsonify({'ok': True, 'message': f'Fix request submitted for "{job_name}"'})
+    return jsonify({"ok": True, "message": f'Fix request submitted for "{job_name}"'})
 
 
-@bp_crons.route('/api/cron/run', methods=['POST'])
+@bp_crons.route("/api/cron/run", methods=["POST"])
 def api_cron_run():
     data = request.get_json(silent=True) or {}
-    job_id = data.get('jobId', '')
+    job_id = data.get("jobId", "")
     if not job_id:
-        return jsonify({'error': 'Missing jobId'}), 400
+        return jsonify({"error": "Missing jobId"}), 400
     if _budget_paused:
-        return jsonify({'error': 'Auto-pause active: refusing new session starts', 'paused': True}), 429
-    result = _gw_invoke('cron', {'action': 'run', 'jobId': job_id})
+        return jsonify(
+            {"error": "Auto-pause active: refusing new session starts", "paused": True}
+        ), 429
+    result = _gw_invoke("cron", {"action": "run", "jobId": job_id})
     if result is None:
-        return jsonify({'error': 'Gateway unavailable'}), 502
-    return jsonify({'ok': True, 'message': 'Job triggered', 'result': result})
+        return jsonify({"error": "Gateway unavailable"}), 502
+    return jsonify({"ok": True, "message": "Job triggered", "result": result})
 
 
-@bp_crons.route('/api/cron/toggle', methods=['POST'])
+@bp_crons.route("/api/cron/toggle", methods=["POST"])
 def api_cron_toggle():
     data = request.get_json(silent=True) or {}
-    job_id = data.get('jobId', '')
-    enabled = data.get('enabled', True)
+    job_id = data.get("jobId", "")
+    enabled = data.get("enabled", True)
     if not job_id:
-        return jsonify({'error': 'Missing jobId'}), 400
-    result = _gw_invoke('cron', {'action': 'update', 'jobId': job_id, 'patch': {'enabled': enabled}})
+        return jsonify({"error": "Missing jobId"}), 400
+    result = _gw_invoke(
+        "cron", {"action": "update", "jobId": job_id, "patch": {"enabled": enabled}}
+    )
     if result is None:
-        return jsonify({'error': 'Gateway unavailable'}), 502
-    return jsonify({'ok': True, 'message': 'Job enabled' if enabled else 'Job disabled'})
+        return jsonify({"error": "Gateway unavailable"}), 502
+    return jsonify(
+        {"ok": True, "message": "Job enabled" if enabled else "Job disabled"}
+    )
 
 
-@bp_crons.route('/api/cron/delete', methods=['POST'])
+@bp_crons.route("/api/cron/delete", methods=["POST"])
 def api_cron_delete():
     data = request.get_json(silent=True) or {}
-    job_id = data.get('jobId', '')
+    job_id = data.get("jobId", "")
     if not job_id:
-        return jsonify({'error': 'Missing jobId'}), 400
-    result = _gw_invoke('cron', {'action': 'remove', 'jobId': job_id})
+        return jsonify({"error": "Missing jobId"}), 400
+    result = _gw_invoke("cron", {"action": "remove", "jobId": job_id})
     if result is None:
-        return jsonify({'error': 'Gateway unavailable'}), 502
-    return jsonify({'ok': True, 'message': 'Job deleted'})
+        return jsonify({"error": "Gateway unavailable"}), 502
+    return jsonify({"ok": True, "message": "Job deleted"})
 
 
-@bp_crons.route('/api/cron/update', methods=['POST'])
+@bp_crons.route("/api/cron/update", methods=["POST"])
 def api_cron_update():
     data = request.get_json(silent=True) or {}
-    job_id = data.get('jobId', '')
-    patch = data.get('patch', {})
+    job_id = data.get("jobId", "")
+    patch = data.get("patch", {})
     if not job_id:
-        return jsonify({'error': 'Missing jobId'}), 400
+        return jsonify({"error": "Missing jobId"}), 400
     if not patch:
-        return jsonify({'error': 'Missing patch'}), 400
-    result = _gw_invoke('cron', {'action': 'update', 'jobId': job_id, 'patch': patch})
+        return jsonify({"error": "Missing patch"}), 400
+    result = _gw_invoke("cron", {"action": "update", "jobId": job_id, "patch": patch})
     if result is None:
-        return jsonify({'error': 'Gateway unavailable'}), 502
-    return jsonify({'ok': True, 'message': 'Job updated'})
+        return jsonify({"error": "Gateway unavailable"}), 502
+    return jsonify({"ok": True, "message": "Job updated"})
 
 
-@bp_crons.route('/api/cron/create', methods=['POST'])
+@bp_crons.route("/api/cron/create", methods=["POST"])
 def api_cron_create():
     data = request.get_json(silent=True) or {}
-    name = data.get('name', '').strip()
-    schedule = data.get('schedule')
-    enabled = data.get('enabled', True)
+    name = data.get("name", "").strip()
+    schedule = data.get("schedule")
+    enabled = data.get("enabled", True)
     if not name:
-        return jsonify({'error': 'Missing name'}), 400
+        return jsonify({"error": "Missing name"}), 400
     if not schedule:
-        return jsonify({'error': 'Missing schedule'}), 400
+        return jsonify({"error": "Missing schedule"}), 400
     if _budget_paused:
-        return jsonify({'error': 'Auto-pause active: refusing new session starts', 'paused': True}), 429
+        return jsonify(
+            {"error": "Auto-pause active: refusing new session starts", "paused": True}
+        ), 429
     args = {
-        'action': 'add',
-        'name': name,
-        'schedule': schedule,
-        'enabled': enabled,
+        "action": "add",
+        "name": name,
+        "schedule": schedule,
+        "enabled": enabled,
     }
-    if data.get('prompt'):
-        args['prompt'] = data['prompt']
-    if data.get('channel'):
-        args['channel'] = data['channel']
-    if data.get('model'):
-        args['model'] = data['model']
-    result = _gw_invoke('cron', args)
+    if data.get("prompt"):
+        args["prompt"] = data["prompt"]
+    if data.get("channel"):
+        args["channel"] = data["channel"]
+    if data.get("model"):
+        args["model"] = data["model"]
+    result = _gw_invoke("cron", args)
     if result is None:
-        return jsonify({'error': 'Gateway unavailable'}), 502
-    return jsonify({'ok': True, 'message': f'Job "{name}" created', 'result': result})
+        return jsonify({"error": "Gateway unavailable"}), 502
+    return jsonify({"ok": True, "message": f'Job "{name}" created', "result": result})
 
 
-@bp_crons.route('/api/cron/<job_id>/runs')
+@bp_crons.route("/api/cron/<job_id>/runs")
 def api_cron_runs(job_id):
     """Return run history for a specific cron job.
 
@@ -17553,9 +17914,9 @@ def api_cron_runs(job_id):
     Returns enriched list with p50/p95 duration stats.
     """
     # Try gateway API first
-    result = _gw_invoke('cron', {'action': 'runs', 'jobId': job_id, 'limit': 50})
+    result = _gw_invoke("cron", {"action": "runs", "jobId": job_id, "limit": 50})
     if result is not None:
-        runs = result.get('runs', result) if isinstance(result, dict) else result
+        runs = result.get("runs", result) if isinstance(result, dict) else result
         if isinstance(runs, list) and runs:
             return jsonify(_enrich_cron_runs(job_id, runs))
 
@@ -17567,12 +17928,18 @@ def api_cron_runs(job_id):
 def _enrich_cron_runs(job_id, runs):
     """Add p50/p95 duration and cost stats to a list of cron run records."""
     if not runs:
-        return {'jobId': job_id, 'runs': [], 'stats': {}}
+        return {"jobId": job_id, "runs": [], "stats": {}}
 
-    durations = sorted([r.get('durationMs', 0) for r in runs if r.get('durationMs')])
-    costs = [r.get('costUsd', 0.0) or r.get('cost_usd', 0.0) for r in runs if (r.get('costUsd') or r.get('cost_usd'))]
-    ok_count = sum(1 for r in runs if r.get('status') in ('ok', 'success', 'completed'))
-    err_count = sum(1 for r in runs if r.get('status') in ('error', 'failed', 'failure'))
+    durations = sorted([r.get("durationMs", 0) for r in runs if r.get("durationMs")])
+    costs = [
+        r.get("costUsd", 0.0) or r.get("cost_usd", 0.0)
+        for r in runs
+        if (r.get("costUsd") or r.get("cost_usd"))
+    ]
+    ok_count = sum(1 for r in runs if r.get("status") in ("ok", "success", "completed"))
+    err_count = sum(
+        1 for r in runs if r.get("status") in ("error", "failed", "failure")
+    )
 
     def _pct(lst, p):
         if not lst:
@@ -17581,101 +17948,116 @@ def _enrich_cron_runs(job_id, runs):
         return lst[min(idx, len(lst) - 1)]
 
     stats = {
-        'totalRuns': len(runs),
-        'successCount': ok_count,
-        'errorCount': err_count,
-        'successRate': round(ok_count / len(runs) * 100, 1) if runs else 0,
-        'avgDurationMs': int(sum(durations) / len(durations)) if durations else 0,
-        'p50DurationMs': _pct(durations, 50),
-        'p95DurationMs': _pct(durations, 95),
-        'avgCostUsd': round(sum(costs) / len(costs), 6) if costs else 0.0,
-        'totalCostUsd': round(sum(costs), 6),
+        "totalRuns": len(runs),
+        "successCount": ok_count,
+        "errorCount": err_count,
+        "successRate": round(ok_count / len(runs) * 100, 1) if runs else 0,
+        "avgDurationMs": int(sum(durations) / len(durations)) if durations else 0,
+        "p50DurationMs": _pct(durations, 50),
+        "p95DurationMs": _pct(durations, 95),
+        "avgCostUsd": round(sum(costs) / len(costs), 6) if costs else 0.0,
+        "totalCostUsd": round(sum(costs), 6),
     }
-    return {'jobId': job_id, 'runs': runs[:50], 'stats': stats}
+    return {"jobId": job_id, "runs": runs[:50], "stats": stats}
 
 
 def _cron_runs_from_transcripts(job_id):
     """Derive synthetic cron run records from JSONL session analytics."""
     analytics = _compute_transcript_analytics()
-    sessions = analytics.get('sessions', [])
+    sessions = analytics.get("sessions", [])
     jobs = _get_crons()
-    target_job = next((j for j in jobs if isinstance(j, dict) and j.get('id') == job_id), None)
+    target_job = next(
+        (j for j in jobs if isinstance(j, dict) and j.get("id") == job_id), None
+    )
 
     runs = []
     for sess in sessions:
-        if not sess.get('is_cron_candidate'):
+        if not sess.get("is_cron_candidate"):
             continue
         # Check if this session is attributed to the target job
-        score = _score_cron_match(sess, target_job or {'id': job_id}) if target_job else 0
-        explicit = job_id in (sess.get('explicit_cron_refs') or set())
+        score = (
+            _score_cron_match(sess, target_job or {"id": job_id}) if target_job else 0
+        )
+        explicit = job_id in (sess.get("explicit_cron_refs") or set())
         if score < 20 and not explicit:
             continue
 
-        start_ts = sess.get('start_ts', 0)
-        end_ts = sess.get('end_ts', 0)
+        start_ts = sess.get("start_ts", 0)
+        end_ts = sess.get("end_ts", 0)
         dur_ms = int((end_ts - start_ts) * 1000) if end_ts > start_ts else 0
-        runs.append({
-            'sessionId': sess.get('session_id', ''),
-            'timestamp': int(start_ts * 1000) if start_ts else 0,
-            'status': 'ok',
-            'durationMs': dur_ms,
-            'costUsd': round(float(sess.get('cost_usd', 0.0) or 0.0), 6),
-            'tokens': sess.get('tokens', 0),
-        })
+        runs.append(
+            {
+                "sessionId": sess.get("session_id", ""),
+                "timestamp": int(start_ts * 1000) if start_ts else 0,
+                "status": "ok",
+                "durationMs": dur_ms,
+                "costUsd": round(float(sess.get("cost_usd", 0.0) or 0.0), 6),
+                "tokens": sess.get("tokens", 0),
+            }
+        )
 
     # Most-recent first
-    runs.sort(key=lambda r: r.get('timestamp', 0), reverse=True)
+    runs.sort(key=lambda r: r.get("timestamp", 0), reverse=True)
     return runs[:50]
 
 
-@bp_crons.route('/api/cron/<job_id>/kill', methods=['POST'])
+@bp_crons.route("/api/cron/<job_id>/kill", methods=["POST"])
 def api_cron_kill(job_id):
     """Kill switch: disable a single cron job by ID.
 
     Sends update via gateway WebSocket RPC to disable the job immediately.
     Returns the updated job state or an error.
     """
-    result = _gw_invoke('cron', {'action': 'update', 'jobId': job_id, 'patch': {'enabled': False}})
+    result = _gw_invoke(
+        "cron", {"action": "update", "jobId": job_id, "patch": {"enabled": False}}
+    )
     if result is None:
-        return jsonify({'ok': False, 'error': 'Gateway unavailable — cannot disable cron remotely. Try restarting the gateway.'}), 502
-    return jsonify({'ok': True, 'jobId': job_id, 'enabled': False, 'result': result})
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Gateway unavailable — cannot disable cron remotely. Try restarting the gateway.",
+            }
+        ), 502
+    return jsonify({"ok": True, "jobId": job_id, "enabled": False, "result": result})
 
 
-@bp_crons.route('/api/cron-run-log')
+@bp_crons.route("/api/cron-run-log")
 def api_cron_run_log():
     """Return a parsed session transcript for a cron run (for the run-log modal)."""
-    session_id = request.args.get('session_id', '')
+    session_id = request.args.get("session_id", "")
     if not session_id:
-        return jsonify({'error': 'session_id required'}), 400
+        return jsonify({"error": "session_id required"}), 400
     sessions_dir = _get_sessions_dir()
-    fpath = os.path.join(sessions_dir, f'{session_id}.jsonl')
+    fpath = os.path.join(sessions_dir, f"{session_id}.jsonl")
     if not os.path.isfile(fpath):
-        return jsonify({'error': 'Session not found'}), 404
+        return jsonify({"error": "Session not found"}), 404
     events = []
     try:
-        with open(fpath, 'r', errors='replace') as f:
+        with open(fpath, "r", errors="replace") as f:
             for line in f:
                 try:
                     obj = json.loads(line.strip())
-                    if obj.get('type') == 'message':
-                        msg = obj.get('message', {})
-                        events.append({
-                            'role': msg.get('role', ''),
-                            'timestamp': obj.get('timestamp', ''),
-                            'content': str(msg.get('content', ''))[:500],
-                        })
+                    if obj.get("type") == "message":
+                        msg = obj.get("message", {})
+                        events.append(
+                            {
+                                "role": msg.get("role", ""),
+                                "timestamp": obj.get("timestamp", ""),
+                                "content": str(msg.get("content", ""))[:500],
+                            }
+                        )
                 except Exception:
                     continue
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    return jsonify({'sessionId': session_id, 'events': events})
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"sessionId": session_id, "events": events})
 
 
-@bp_crons.route('/api/cron/health-summary')
+@bp_crons.route("/api/cron/health-summary")
 def api_cron_health_summary():
     """Aggregate cron health: per-job success rate, cost, anomaly flags, silent detection."""
-    gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': True}) or {}
-    jobs = gw_data.get('jobs', []) or _get_crons()
+    gw_data = _gw_invoke("cron", {"action": "list", "includeDisabled": True}) or {}
+    jobs = gw_data.get("jobs", []) or _get_crons()
     if not isinstance(jobs, list):
         jobs = []
 
@@ -17686,56 +18068,61 @@ def api_cron_health_summary():
     for job in jobs:
         if not isinstance(job, dict):
             continue
-        job_id = job.get('id', '')
-        job_name = job.get('name', job_id)
-        state = job.get('state') or {}
-        enabled = job.get('enabled', True)
+        job_id = job.get("id", "")
+        job_name = job.get("name", job_id)
+        state = job.get("state") or {}
+        enabled = job.get("enabled", True)
 
-        last_run_ms = state.get('lastRunAtMs') or state.get('lastRunAt') or 0
+        last_run_ms = state.get("lastRunAtMs") or state.get("lastRunAt") or 0
         if isinstance(last_run_ms, str):
             try:
                 from dateutil import parser as _dtp
+
                 last_run_ms = int(_dtp.parse(last_run_ms).timestamp() * 1000)
             except Exception:
                 last_run_ms = 0
 
-        last_status = state.get('lastStatus', 'pending')
-        last_duration_ms = state.get('lastDurationMs') or 0
-        consecutive_failures = state.get('consecutiveFailures') or 0
-        last_error = state.get('lastError', '')
-        next_run_ms = state.get('nextRunAtMs') or 0
+        last_status = state.get("lastStatus", "pending")
+        last_duration_ms = state.get("lastDurationMs") or 0
+        consecutive_failures = state.get("consecutiveFailures") or 0
+        last_error = state.get("lastError", "")
+        next_run_ms = state.get("nextRunAtMs") or 0
 
         # Detect silent jobs: enabled, has run before, but hasn't run in >2.5x expected interval
         is_silent = False
         expected_interval_ms = None
-        sched = job.get('schedule') or {}
+        sched = job.get("schedule") or {}
         if isinstance(sched, dict):
-            every_ms = sched.get('everyMs')
+            every_ms = sched.get("everyMs")
             if every_ms:
                 expected_interval_ms = int(every_ms)
                 if enabled and last_run_ms and (now_ms - last_run_ms) > every_ms * 2.5:
                     is_silent = True
 
         # Cost attribution from existing api_crons enrichment
-        cost_usd = job.get('cost_usd') or 0.0
-        cost_session_count = job.get('cost_session_count') or 0
+        cost_usd = job.get("cost_usd") or 0.0
+        cost_session_count = job.get("cost_session_count") or 0
 
         # Anomaly: cost spike (last run vs average) — uses run history from gateway
-        run_history = job.get('runHistory') or []
+        run_history = job.get("runHistory") or []
         cost_spike = False
         avg_cost = None
         if run_history and len(run_history) > 2:
-            historical_costs = [r.get('costUsd', 0) for r in run_history[1:] if r.get('costUsd')]
+            historical_costs = [
+                r.get("costUsd", 0) for r in run_history[1:] if r.get("costUsd")
+            ]
             if historical_costs:
                 avg_cost = sum(historical_costs) / len(historical_costs)
-                last_cost = run_history[0].get('costUsd', 0) if run_history else 0
+                last_cost = run_history[0].get("costUsd", 0) if run_history else 0
                 if avg_cost > 0 and last_cost > avg_cost * 2.5:
                     cost_spike = True
 
         # Duration anomaly: last run >3x average
         duration_spike = False
         if run_history and len(run_history) > 2:
-            historical_durations = [r.get('durationMs', 0) for r in run_history[1:] if r.get('durationMs')]
+            historical_durations = [
+                r.get("durationMs", 0) for r in run_history[1:] if r.get("durationMs")
+            ]
             if historical_durations and last_duration_ms:
                 avg_dur = sum(historical_durations) / len(historical_durations)
                 if avg_dur > 0 and last_duration_ms > avg_dur * 3:
@@ -17743,17 +18130,17 @@ def api_cron_health_summary():
 
         # Health status
         if not enabled:
-            health = 'disabled'
+            health = "disabled"
         elif is_silent:
-            health = 'silent'
+            health = "silent"
             total_silent += 1
-        elif consecutive_failures >= 3 or last_status == 'error':
-            health = 'error'
+        elif consecutive_failures >= 3 or last_status == "error":
+            health = "error"
             total_err += 1
         elif cost_spike or duration_spike:
-            health = 'warning'
+            health = "warning"
         else:
-            health = 'ok'
+            health = "ok"
             total_ok += 1
 
         # Monthly cost projection
@@ -17764,53 +18151,57 @@ def api_cron_health_summary():
                 runs_per_month = (30 * 24 * 3600 * 1000) / expected_interval_ms
                 monthly_cost = avg_run_cost * runs_per_month
 
-        summary.append({
-            'id': job_id,
-            'name': job_name,
-            'enabled': enabled,
-            'health': health,
-            'lastStatus': last_status,
-            'lastRunAtMs': last_run_ms,
-            'lastDurationMs': last_duration_ms,
-            'nextRunAtMs': next_run_ms,
-            'consecutiveFailures': consecutive_failures,
-            'lastError': last_error,
-            'costUsd': round(float(cost_usd), 6),
-            'costSessionCount': cost_session_count,
-            'monthlyProjectedCost': round(monthly_cost, 4),
-            'avgCost': round(avg_cost, 6) if avg_cost else None,
-            'isSilent': is_silent,
-            'costSpike': cost_spike,
-            'durationSpike': duration_spike,
-            'expectedIntervalMs': expected_interval_ms,
-        })
+        summary.append(
+            {
+                "id": job_id,
+                "name": job_name,
+                "enabled": enabled,
+                "health": health,
+                "lastStatus": last_status,
+                "lastRunAtMs": last_run_ms,
+                "lastDurationMs": last_duration_ms,
+                "nextRunAtMs": next_run_ms,
+                "consecutiveFailures": consecutive_failures,
+                "lastError": last_error,
+                "costUsd": round(float(cost_usd), 6),
+                "costSessionCount": cost_session_count,
+                "monthlyProjectedCost": round(monthly_cost, 4),
+                "avgCost": round(avg_cost, 6) if avg_cost else None,
+                "isSilent": is_silent,
+                "costSpike": cost_spike,
+                "durationSpike": duration_spike,
+                "expectedIntervalMs": expected_interval_ms,
+            }
+        )
 
     total_jobs = len(summary)
-    has_anomalies = any(j['costSpike'] or j['durationSpike'] for j in summary)
+    has_anomalies = any(j["costSpike"] or j["durationSpike"] for j in summary)
     has_errors = total_err > 0
     has_silent = total_silent > 0
 
-    return jsonify({
-        'jobs': summary,
-        'totals': {
-            'total': total_jobs,
-            'ok': total_ok,
-            'error': total_err,
-            'silent': total_silent,
-            'disabled': sum(1 for j in summary if j['health'] == 'disabled'),
-            'warning': sum(1 for j in summary if j['health'] == 'warning'),
-        },
-        'hasAnomalies': has_anomalies,
-        'hasErrors': has_errors,
-        'hasSilent': has_silent,
-    })
+    return jsonify(
+        {
+            "jobs": summary,
+            "totals": {
+                "total": total_jobs,
+                "ok": total_ok,
+                "error": total_err,
+                "silent": total_silent,
+                "disabled": sum(1 for j in summary if j["health"] == "disabled"),
+                "warning": sum(1 for j in summary if j["health"] == "warning"),
+            },
+            "hasAnomalies": has_anomalies,
+            "hasErrors": has_errors,
+            "hasSilent": has_silent,
+        }
+    )
 
 
-@bp_crons.route('/api/cron/kill-all', methods=['POST'])
+@bp_crons.route("/api/cron/kill-all", methods=["POST"])
 def api_cron_kill_all():
     """Emergency: disable all enabled cron jobs. Returns count disabled."""
-    gw_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': False}) or {}
-    jobs = gw_data.get('jobs', []) or _get_crons()
+    gw_data = _gw_invoke("cron", {"action": "list", "includeDisabled": False}) or {}
+    jobs = gw_data.get("jobs", []) or _get_crons()
     if not isinstance(jobs, list):
         jobs = []
 
@@ -17819,34 +18210,38 @@ def api_cron_kill_all():
     for job in jobs:
         if not isinstance(job, dict):
             continue
-        if not job.get('enabled', True):
+        if not job.get("enabled", True):
             continue
-        job_id = job.get('id', '')
+        job_id = job.get("id", "")
         if not job_id:
             continue
-        result = _gw_invoke('cron', {'action': 'update', 'jobId': job_id, 'patch': {'enabled': False}})
+        result = _gw_invoke(
+            "cron", {"action": "update", "jobId": job_id, "patch": {"enabled": False}}
+        )
         if result is not None:
             disabled_count += 1
         else:
             errors.append(job_id)
 
-    return jsonify({
-        'ok': True,
-        'disabled': disabled_count,
-        'errors': errors,
-        'message': f'Emergency stop: {disabled_count} cron job(s) disabled.',
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "disabled": disabled_count,
+            "errors": errors,
+            "message": f"Emergency stop: {disabled_count} cron job(s) disabled.",
+        }
+    )
 
 
 def _find_log_file(ds):
     """Find log file for a given date string, trying multiple prefixes and dirs."""
     dirs = [LOG_DIR] + _get_log_dirs()
-    prefixes = ['openclaw-', 'moltbot-']
+    prefixes = ["openclaw-", "moltbot-"]
     for d in dirs:
         if not d or not os.path.isdir(d):
             continue
         for p in prefixes:
-            f = os.path.join(d, f'{p}{ds}.log')
+            f = os.path.join(d, f"{p}{ds}.log")
             if os.path.exists(f):
                 return f
     return None
@@ -17854,29 +18249,30 @@ def _find_log_file(ds):
 
 def _infer_provider_from_model(model_name):
     """Best-effort provider inference for display only."""
-    m = (model_name or '').lower()
+    m = (model_name or "").lower()
     if not m:
-        return 'unknown'
-    if 'claude' in m:
-        return 'anthropic'
-    if 'grok' in m or 'x-ai' in m or m.startswith('xai'):
-        return 'xai'
-    if 'gpt' in m or 'o1' in m or 'o3' in m or 'o4' in m:
-        return 'openai'
-    if 'gemini' in m:
-        return 'google'
-    if 'llama' in m or 'mistral' in m or 'qwen' in m or 'deepseek' in m:
-        return 'local/other'
-    return 'unknown'
+        return "unknown"
+    if "claude" in m:
+        return "anthropic"
+    if "grok" in m or "x-ai" in m or m.startswith("xai"):
+        return "xai"
+    if "gpt" in m or "o1" in m or "o3" in m or "o4" in m:
+        return "openai"
+    if "gemini" in m:
+        return "google"
+    if "llama" in m or "mistral" in m or "qwen" in m or "deepseek" in m:
+        return "local/other"
+    return "unknown"
 
-@bp_overview.route('/api/timeline')
+
+@bp_overview.route("/api/timeline")
 def api_timeline():
     """Return available dates with activity counts for time travel."""
     now = datetime.now()
     days = []
     for i in range(30, -1, -1):
         d = now - timedelta(days=i)
-        ds = d.strftime('%Y-%m-%d')
+        ds = d.strftime("%Y-%m-%d")
         log_file = _find_log_file(ds)
         count = 0
         hours = {}
@@ -17887,90 +18283,105 @@ def api_timeline():
                         count += 1
                         try:
                             obj = json.loads(line.strip())
-                            ts = obj.get('time') or ''
-                            if 'T' in ts:
-                                h = int(ts.split('T')[1][:2])
+                            ts = obj.get("time") or ""
+                            if "T" in ts:
+                                h = int(ts.split("T")[1][:2])
                                 hours[h] = hours.get(h, 0) + 1
                         except Exception:
                             pass
             except Exception:
                 pass
         # Also check memory files for that date
-        mem_file = os.path.join(MEMORY_DIR, f'{ds}.md') if MEMORY_DIR else None
+        mem_file = os.path.join(MEMORY_DIR, f"{ds}.md") if MEMORY_DIR else None
         has_memory = mem_file and os.path.exists(mem_file)
         if count > 0 or has_memory:
-            days.append({
-                'date': ds,
-                'label': d.strftime('%a %b %d'),
-                'events': count,
-                'hasMemory': has_memory,
-                'hours': hours,
-            })
-    return jsonify({'days': days, 'today': now.strftime('%Y-%m-%d')})
+            days.append(
+                {
+                    "date": ds,
+                    "label": d.strftime("%a %b %d"),
+                    "events": count,
+                    "hasMemory": has_memory,
+                    "hours": hours,
+                }
+            )
+    return jsonify({"days": days, "today": now.strftime("%Y-%m-%d")})
 
 
-
-
-@bp_overview.route('/api/cloud-cta/status')
+@bp_overview.route("/api/cloud-cta/status")
 def cloud_cta_status():
     token = _read_cloud_token()
-    return jsonify({'connected': bool(token)})
+    return jsonify({"connected": bool(token)})
 
 
-@bp_overview.route('/api/cloud-cta/send-otp', methods=['POST'])
+@bp_overview.route("/api/cloud-cta/send-otp", methods=["POST"])
 def cloud_cta_send_otp():
-    import urllib.request as _ur; import json as _jr
+    import urllib.request as _ur
+    import json as _jr
+
     data = request.get_json(silent=True) or {}
-    email = (data.get('email') or '').strip()
-    if not email or '@' not in email:
-        return jsonify({'ok': False, 'error': 'Invalid email'}), 400
+    email = (data.get("email") or "").strip()
+    if not email or "@" not in email:
+        return jsonify({"ok": False, "error": "Invalid email"}), 400
     try:
-        _body = _jr.dumps({'email': email, 'source': 'dashboard'}).encode()
-        _req = _ur.Request('https://app.clawmetry.com/api/otp/send', data=_body,
-                           headers={'Content-Type': 'application/json'}, method='POST')
+        _body = _jr.dumps({"email": email, "source": "dashboard"}).encode()
+        _req = _ur.Request(
+            "https://app.clawmetry.com/api/otp/send",
+            data=_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         with _ur.urlopen(_req, timeout=10) as _resp:
             result = _jr.loads(_resp.read())
-            return jsonify({'ok': True, 'error': result.get('error')})
+            return jsonify({"ok": True, "error": result.get("error")})
     except Exception as _ex:
-        _sc = getattr(getattr(_ex, 'code', None), '__class__', type(_ex)).__name__
+        _sc = getattr(getattr(_ex, "code", None), "__class__", type(_ex)).__name__
         try:
-            _eb = _jr.loads(_ex.read()) if hasattr(_ex, 'read') else {}
+            _eb = _jr.loads(_ex.read()) if hasattr(_ex, "read") else {}
         except Exception:
             _eb = {}
-        return jsonify({'ok': False, 'error': _eb.get('error', 'Could not reach ClawMetry server')}), 502
+        return jsonify(
+            {"ok": False, "error": _eb.get("error", "Could not reach ClawMetry server")}
+        ), 502
 
 
-@bp_overview.route('/api/cloud-cta/verify-otp', methods=['POST'])
+@bp_overview.route("/api/cloud-cta/verify-otp", methods=["POST"])
 def cloud_cta_verify_otp():
-    import urllib.request as _ur; import json as _jr
+    import urllib.request as _ur
+    import json as _jr
+
     data = request.get_json(silent=True) or {}
-    email = (data.get('email') or '').strip()
-    code = (data.get('code') or '').strip()
+    email = (data.get("email") or "").strip()
+    code = (data.get("code") or "").strip()
     if not email or not code:
-        return jsonify({'ok': False, 'error': 'Missing email or code'}), 400
+        return jsonify({"ok": False, "error": "Missing email or code"}), 400
     try:
-        _body = _jr.dumps({'email': email, 'code': code}).encode()
-        _req = _ur.Request('https://app.clawmetry.com/api/otp/verify', data=_body,
-                           headers={'Content-Type': 'application/json'}, method='POST')
+        _body = _jr.dumps({"email": email, "code": code}).encode()
+        _req = _ur.Request(
+            "https://app.clawmetry.com/api/otp/verify",
+            data=_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         with _ur.urlopen(_req, timeout=10) as _resp:
             result = _jr.loads(_resp.read())
-            if result.get('token'):
-                _write_cloud_token(result['token'])
-                return jsonify({'ok': True, 'token': result['token']})
-            return jsonify({'ok': False, 'error': result.get('error', 'Invalid code')})
+            if result.get("token"):
+                _write_cloud_token(result["token"])
+                return jsonify({"ok": True, "token": result["token"]})
+            return jsonify({"ok": False, "error": result.get("error", "Invalid code")})
     except Exception as _ex:
         try:
-            _eb = _jr.loads(_ex.read()) if hasattr(_ex, 'read') else {}
+            _eb = _jr.loads(_ex.read()) if hasattr(_ex, "read") else {}
         except Exception:
             _eb = {}
-        return jsonify({'ok': False, 'error': _eb.get('error', 'Invalid code')}), 502
+        return jsonify({"ok": False, "error": _eb.get("error", "Invalid code")}), 502
 
-@bp_logs.route('/api/logs')
+
+@bp_logs.route("/api/logs")
 def api_logs():
-    lines_count = int(request.args.get('lines', 100))
-    date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
-    hour_start = request.args.get('hour_start', None)
-    hour_end = request.args.get('hour_end', None)
+    lines_count = int(request.args.get("lines", 100))
+    date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    hour_start = request.args.get("hour_start", None)
+    hour_end = request.args.get("hour_end", None)
     log_file = _find_log_file(date_str)
     lines = []
     if log_file:
@@ -17983,9 +18394,9 @@ def api_logs():
                     for line in f:
                         try:
                             obj = json.loads(line.strip())
-                            ts = obj.get('time') or ''
-                            if 'T' in ts:
-                                hour = int(ts.split('T')[1][:2])
+                            ts = obj.get("time") or ""
+                            if "T" in ts:
+                                hour = int(ts.split("T")[1][:2])
                                 if h_start <= hour <= h_end:
                                     lines.append(line.strip())
                             else:
@@ -17997,39 +18408,49 @@ def api_logs():
                 pass
         else:
             lines = _tail_lines(log_file, lines_count)
-    try: _ext_emit('log.ingested', {'count': len(lines)})
-    except Exception: pass
-    return jsonify({'lines': lines, 'date': date_str})
+    try:
+        _ext_emit("log.ingested", {"count": len(lines)})
+    except Exception:
+        pass
+    return jsonify({"lines": lines, "date": date_str})
 
 
-@bp_brain.route('/api/brain-history')
+@bp_brain.route("/api/brain-history")
 def api_brain_history():
     # Return unified event stream - v2 no truncation
     events = []
 
     # Build sessionId to displayName map
-    session_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
-    index_path = os.path.join(session_dir, 'sessions.json')
+    session_dir = SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
+    index_path = os.path.join(session_dir, "sessions.json")
     sid_to_label = {}
     try:
-        with open(index_path, 'r') as f:
+        with open(index_path, "r") as f:
             index = json.load(f)
         for key, meta in index.items():
-            sid = meta.get('sessionId', '')
-            label = meta.get('displayName') or meta.get('label') or ''
+            sid = meta.get("sessionId", "")
+            label = meta.get("displayName") or meta.get("label") or ""
             if sid and label:
                 sid_to_label[sid] = label
     except Exception:
         pass
 
     # Color assignment
-    color_palette = ['#06b6d4', '#f59e0b', '#ec4899', '#8b5cf6', '#10b981', '#f97316', '#6366f1']
+    color_palette = [
+        "#06b6d4",
+        "#f59e0b",
+        "#ec4899",
+        "#8b5cf6",
+        "#10b981",
+        "#f97316",
+        "#6366f1",
+    ]
     agent_colors = {}
     color_idx = [0]
 
     def get_agent_color(source):
-        if source == 'main':
-            return '#a855f7'
+        if source == "main":
+            return "#a855f7"
         if source not in agent_colors:
             agent_colors[source] = color_palette[color_idx[0] % len(color_palette)]
             color_idx[0] += 1
@@ -18038,53 +18459,54 @@ def api_brain_history():
     # Tool name to event type
     def tool_to_type(tn):
         tn = tn.lower()
-        if tn == 'exec' or 'shell' in tn or 'bash' in tn or tn == 'process':
-            return 'EXEC'
-        if 'read' in tn:
-            return 'READ'
-        if 'write' in tn or 'edit' in tn:
-            return 'WRITE'
-        if 'browser' in tn or 'canvas' in tn or 'image' in tn:
-            return 'BROWSER'
-        if tn == 'message' or 'tts' in tn:
-            return 'MSG'
-        if 'web_search' in tn or 'web_fetch' in tn or 'search' in tn:
-            return 'SEARCH'
-        if 'subagent' in tn or 'spawn' in tn:
-            return 'SPAWN'
-        return 'TOOL'
+        if tn == "exec" or "shell" in tn or "bash" in tn or tn == "process":
+            return "EXEC"
+        if "read" in tn:
+            return "READ"
+        if "write" in tn or "edit" in tn:
+            return "WRITE"
+        if "browser" in tn or "canvas" in tn or "image" in tn:
+            return "BROWSER"
+        if tn == "message" or "tts" in tn:
+            return "MSG"
+        if "web_search" in tn or "web_fetch" in tn or "search" in tn:
+            return "SEARCH"
+        if "subagent" in tn or "spawn" in tn:
+            return "SPAWN"
+        return "TOOL"
 
     # Extract FULL detail from tool input - no truncation
     def extract_detail(tn, inp):
         tn = tn.lower()
         if not isinstance(inp, dict):
             return str(inp)
-        if tn == 'exec' or 'shell' in tn or 'bash' in tn or tn == 'process':
-            return inp.get('command') or inp.get('action') or ''
-        if 'read' in tn:
-            return inp.get('path') or inp.get('file_path') or ''
-        if 'write' in tn or 'edit' in tn:
-            return inp.get('path') or inp.get('file_path') or ''
-        if 'browser' in tn:
-            return inp.get('url') or inp.get('targetUrl') or inp.get('action') or ''
-        if tn == 'message':
-            return inp.get('message') or inp.get('target') or ''
-        if 'search' in tn or 'fetch' in tn:
-            return inp.get('query') or inp.get('url') or ''
-        if 'subagent' in tn or 'spawn' in tn:
-            return inp.get('label') or str(inp.get('message', ''))
+        if tn == "exec" or "shell" in tn or "bash" in tn or tn == "process":
+            return inp.get("command") or inp.get("action") or ""
+        if "read" in tn:
+            return inp.get("path") or inp.get("file_path") or ""
+        if "write" in tn or "edit" in tn:
+            return inp.get("path") or inp.get("file_path") or ""
+        if "browser" in tn:
+            return inp.get("url") or inp.get("targetUrl") or inp.get("action") or ""
+        if tn == "message":
+            return inp.get("message") or inp.get("target") or ""
+        if "search" in tn or "fetch" in tn:
+            return inp.get("query") or inp.get("url") or ""
+        if "subagent" in tn or "spawn" in tn:
+            return inp.get("label") or str(inp.get("message", ""))
         vals = list(inp.values())
-        return str(vals[0]) if vals else ''
+        return str(vals[0]) if vals else ""
 
     # Source 1: OpenClaw log files (main agent)
     import re as _re
-    log_tool_re = _re.compile(r'^\[(\w+)\]\s*(.*)', _re.DOTALL)
+
+    log_tool_re = _re.compile(r"^\[(\w+)\]\s*(.*)", _re.DOTALL)
 
     log_dirs = _get_log_dirs()
     log_files = []
     for d in log_dirs:
-        log_files += sorted(glob.glob(os.path.join(d, 'openclaw-*.log')))
-    log_files += sorted(glob.glob('/tmp/openclaw/openclaw-*.log'))
+        log_files += sorted(glob.glob(os.path.join(d, "openclaw-*.log")))
+    log_files += sorted(glob.glob("/tmp/openclaw/openclaw-*.log"))
     log_files = list(dict.fromkeys(log_files))
 
     for lf in log_files[-3:]:
@@ -18098,10 +18520,10 @@ def api_brain_history():
                     obj = json.loads(line)
                 except Exception:
                     continue
-                ts = obj.get('time') or obj.get('timestamp')
+                ts = obj.get("time") or obj.get("timestamp")
                 if not ts:
                     continue
-                msg = obj.get('0') or obj.get('message') or ''
+                msg = obj.get("0") or obj.get("message") or ""
                 if isinstance(msg, dict):
                     msg = json.dumps(msg)
                 m = log_tool_re.match(msg.strip())
@@ -18109,40 +18531,81 @@ def api_brain_history():
                     tool_kw = m.group(1).lower()
                     rest = m.group(2).strip()
                     ev_type = tool_to_type(tool_kw)
-                    detail = rest.split('\n')[0]
-                    events.append({'time': ts, 'source': 'main', 'sourceLabel': 'main',
-                                   'type': ev_type, 'detail': detail, 'color': '#a855f7'})
+                    detail = rest.split("\n")[0]
+                    events.append(
+                        {
+                            "time": ts,
+                            "source": "main",
+                            "sourceLabel": "main",
+                            "type": ev_type,
+                            "detail": detail,
+                            "color": "#a855f7",
+                        }
+                    )
                 else:
                     msg_lower = msg.lower()
-                    for kw in ('exec','browser','web_search','web_fetch','read','write','edit','message','spawn','subagents','tts','nodes','canvas'):
+                    for kw in (
+                        "exec",
+                        "browser",
+                        "web_search",
+                        "web_fetch",
+                        "read",
+                        "write",
+                        "edit",
+                        "message",
+                        "spawn",
+                        "subagents",
+                        "tts",
+                        "nodes",
+                        "canvas",
+                    ):
                         if kw in msg_lower:
                             ev_type = tool_to_type(kw)
                             try:
                                 start = msg_lower.index(kw)
-                                detail = msg[start:start+300].split('\n')[0].strip()
+                                detail = msg[start : start + 300].split("\n")[0].strip()
                             except Exception:
-                                detail = ''
-                            events.append({'time': ts, 'source': 'main', 'sourceLabel': 'main',
-                                           'type': ev_type, 'detail': detail, 'color': '#a855f7'})
+                                detail = ""
+                            events.append(
+                                {
+                                    "time": ts,
+                                    "source": "main",
+                                    "sourceLabel": "main",
+                                    "type": ev_type,
+                                    "detail": detail,
+                                    "color": "#a855f7",
+                                }
+                            )
                             break
         except Exception:
             pass
 
     # Source 2: Session JSONL files (sub-agent activity)
-    session_files = sorted(glob.glob(os.path.join(session_dir, '*.jsonl')))
+    session_files = sorted(glob.glob(os.path.join(session_dir, "*.jsonl")))
 
     for sf in session_files:
         try:
-            fname = os.path.basename(sf).replace('.jsonl', '')
-            label = sid_to_label.get(fname, '')
+            fname = os.path.basename(sf).replace(".jsonl", "")
+            label = sid_to_label.get(fname, "")
             source_id = fname
             import re as _re
-            source_label = label if label else ('agent:' + fname[:8] if _re.match(r'[0-9a-f-]{36}', fname) else fname)
+
+            source_label = (
+                label
+                if label
+                else (
+                    "agent:" + fname[:8]
+                    if _re.match(r"[0-9a-f-]{36}", fname)
+                    else fname
+                )
+            )
             color = get_agent_color(source_id)
 
-            with open(sf, 'r', errors='replace') as fh:
+            with open(sf, "r", errors="replace") as fh:
                 all_lines = fh.readlines()
-                raw_lines = all_lines[:20] + all_lines[-600:]  # first 20 (system context) + last 600
+                raw_lines = (
+                    all_lines[:20] + all_lines[-600:]
+                )  # first 20 (system context) + last 600
 
             for raw in raw_lines:
                 raw = raw.strip()
@@ -18152,90 +18615,147 @@ def api_brain_history():
                     obj = json.loads(raw)
                 except Exception:
                     continue
-                ts = obj.get('timestamp') or obj.get('time')
-                role = obj.get('role', '')
-                content_obj = obj.get('content', '')
+                ts = obj.get("timestamp") or obj.get("time")
+                role = obj.get("role", "")
+                content_obj = obj.get("content", "")
 
-                if obj.get('type') == 'message':
-                    inner = obj.get('message', {})
-                    role = inner.get('role', '')
-                    content_obj = inner.get('content', [])
+                if obj.get("type") == "message":
+                    inner = obj.get("message", {})
+                    role = inner.get("role", "")
+                    content_obj = inner.get("content", [])
 
                 # System context (injected files, workspace context)
-                if role == 'system' and ts:
-                    text = ''
+                if role == "system" and ts:
+                    text = ""
                     if isinstance(content_obj, str):
                         text = content_obj
                     elif isinstance(content_obj, list):
-                        parts = [b.get('text','') for b in content_obj if isinstance(b,dict) and b.get('type')=='text']
-                        text = ' '.join(parts)
+                        parts = [
+                            b.get("text", "")
+                            for b in content_obj
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        ]
+                        text = " ".join(parts)
                     if text:
                         # Extract file references from system context
                         import re as _re2
-                        file_refs = _re2.findall(r'## (/[^ ]+\.md)', text)
-                        detail = 'Context loaded: ' + ', '.join(file_refs) if file_refs else text[:300]
-                        events.append({'time': ts, 'source': source_id,
-                                       'sourceLabel': source_label, 'type': 'CONTEXT',
-                                       'detail': detail, 'color': color})
+
+                        file_refs = _re2.findall(r"## (/[^ ]+\.md)", text)
+                        detail = (
+                            "Context loaded: " + ", ".join(file_refs)
+                            if file_refs
+                            else text[:300]
+                        )
+                        events.append(
+                            {
+                                "time": ts,
+                                "source": source_id,
+                                "sourceLabel": source_label,
+                                "type": "CONTEXT",
+                                "detail": detail,
+                                "color": color,
+                            }
+                        )
 
                 # Tool results
-                if role == 'tool' and ts:
-                    tool_id = obj.get('tool_use_id', '') or (isinstance(content_obj, list) and content_obj[0].get('tool_use_id','') if isinstance(content_obj, list) and content_obj else '')
-                    text = ''
+                if role == "tool" and ts:
+                    tool_id = obj.get("tool_use_id", "") or (
+                        isinstance(content_obj, list)
+                        and content_obj[0].get("tool_use_id", "")
+                        if isinstance(content_obj, list) and content_obj
+                        else ""
+                    )
+                    text = ""
                     if isinstance(content_obj, str):
                         text = content_obj
                     elif isinstance(content_obj, list):
-                        parts = [b.get('text','') for b in content_obj if isinstance(b,dict) and b.get('type')=='text']
-                        text = ' '.join(parts)
+                        parts = [
+                            b.get("text", "")
+                            for b in content_obj
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        ]
+                        text = " ".join(parts)
                     if text:
-                        events.append({'time': ts, 'source': source_id,
-                                       'sourceLabel': source_label, 'type': 'RESULT',
-                                       'detail': text[:300], 'color': color})
+                        events.append(
+                            {
+                                "time": ts,
+                                "source": source_id,
+                                "sourceLabel": source_label,
+                                "type": "RESULT",
+                                "detail": text[:300],
+                                "color": color,
+                            }
+                        )
 
                 # User prompt
-                if role == 'user' and ts:
-                    text = ''
+                if role == "user" and ts:
+                    text = ""
                     if isinstance(content_obj, str):
                         text = content_obj
                     elif isinstance(content_obj, list):
-                        parts = [b.get('text','') for b in content_obj if isinstance(b,dict) and b.get('type')=='text']
-                        text = ' '.join(parts)
+                        parts = [
+                            b.get("text", "")
+                            for b in content_obj
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        ]
+                        text = " ".join(parts)
                     if text:
-                        events.append({'time': ts, 'source': source_id,
-                                       'sourceLabel': source_label, 'type': 'USER',
-                                       'detail': text[:300], 'color': color})
+                        events.append(
+                            {
+                                "time": ts,
+                                "source": source_id,
+                                "sourceLabel": source_label,
+                                "type": "USER",
+                                "detail": text[:300],
+                                "color": color,
+                            }
+                        )
 
-                if role == 'assistant' and isinstance(content_obj, list):
+                if role == "assistant" and isinstance(content_obj, list):
                     for block in content_obj:
                         if not isinstance(block, dict):
                             continue
-                        btype = block.get('type', '')
+                        btype = block.get("type", "")
 
                         # Thinking / reasoning block
-                        if btype == 'thinking' and ts:
-                            thinking_text = block.get('thinking', '')
+                        if btype == "thinking" and ts:
+                            thinking_text = block.get("thinking", "")
                             if thinking_text:
-                                events.append({'time': ts, 'source': source_id,
-                                               'sourceLabel': source_label, 'type': 'THINK',
-                                               'detail': thinking_text[:300], 'color': color})
+                                events.append(
+                                    {
+                                        "time": ts,
+                                        "source": source_id,
+                                        "sourceLabel": source_label,
+                                        "type": "THINK",
+                                        "detail": thinking_text[:300],
+                                        "color": color,
+                                    }
+                                )
                             continue
 
                         # Assistant text block
-                        if btype == 'text' and ts:
-                            text = block.get('text', '')
+                        if btype == "text" and ts:
+                            text = block.get("text", "")
                             if text:
-                                events.append({'time': ts, 'source': source_id,
-                                               'sourceLabel': source_label, 'type': 'AGENT',
-                                               'detail': text[:300], 'color': color})
+                                events.append(
+                                    {
+                                        "time": ts,
+                                        "source": source_id,
+                                        "sourceLabel": source_label,
+                                        "type": "AGENT",
+                                        "detail": text[:300],
+                                        "color": color,
+                                    }
+                                )
                             continue
 
                         # Tool calls
-                        if btype == 'tool_use':
-                            tool_name = block.get('name', '')
-                            inp = block.get('input', {})
-                        elif btype == 'toolCall':
-                            tool_name = block.get('name', '')
-                            inp = block.get('arguments', {})
+                        if btype == "tool_use":
+                            tool_name = block.get("name", "")
+                            inp = block.get("input", {})
+                        elif btype == "toolCall":
+                            tool_name = block.get("name", "")
+                            inp = block.get("arguments", {})
                         else:
                             continue
                         if not tool_name:
@@ -18243,72 +18763,131 @@ def api_brain_history():
                         ev_type = tool_to_type(tool_name)
                         detail = extract_detail(tool_name, inp)
                         if ts:
-                            events.append({'time': ts, 'source': source_id,
-                                           'sourceLabel': source_label, 'type': ev_type,
-                                           'detail': str(detail), 'color': color})
+                            events.append(
+                                {
+                                    "time": ts,
+                                    "source": source_id,
+                                    "sourceLabel": source_label,
+                                    "type": ev_type,
+                                    "detail": str(detail),
+                                    "color": color,
+                                }
+                            )
         except Exception:
             pass
 
     # Add synthetic CONTEXT events showing workspace files loaded at session start
-    workspace = os.environ.get('OPENCLAW_WORKSPACE') or os.path.expanduser('~/.openclaw/workspace')
-    context_files = ['SOUL.md', 'USER.md', 'MEMORY.md', 'AGENTS.md', 'IDENTITY.md', 'TOOLS.md', 'HEARTBEAT.md']
-    loaded_files = [f for f in context_files if os.path.isfile(os.path.join(workspace, f))]
+    workspace = os.environ.get("OPENCLAW_WORKSPACE") or os.path.expanduser(
+        "~/.openclaw/workspace"
+    )
+    context_files = [
+        "SOUL.md",
+        "USER.md",
+        "MEMORY.md",
+        "AGENTS.md",
+        "IDENTITY.md",
+        "TOOLS.md",
+        "HEARTBEAT.md",
+    ]
+    loaded_files = [
+        f for f in context_files if os.path.isfile(os.path.join(workspace, f))
+    ]
     if loaded_files and events:
-        earliest = min((ev.get('time','') for ev in events if ev.get('time')), default='')
+        earliest = min(
+            (ev.get("time", "") for ev in events if ev.get("time")), default=""
+        )
         if earliest:
-            events.append({'time': earliest, 'source': 'main', 'sourceLabel': 'main',
-                           'type': 'CONTEXT', 'detail': 'System context loaded: ' + ', '.join(loaded_files),
-                           'color': '#64748b'})
+            events.append(
+                {
+                    "time": earliest,
+                    "source": "main",
+                    "sourceLabel": "main",
+                    "type": "CONTEXT",
+                    "detail": "System context loaded: " + ", ".join(loaded_files),
+                    "color": "#64748b",
+                }
+            )
             # Show which files contain key info
             for f in loaded_files:
                 fpath = os.path.join(workspace, f)
                 try:
-                    first_lines = open(fpath, 'r', errors='replace').read(500).split('\n')[:5]
-                    preview = ' | '.join(l.strip() for l in first_lines if l.strip())[:200]
-                    events.append({'time': earliest, 'source': 'main', 'sourceLabel': 'main',
-                                   'type': 'CONTEXT', 'detail': f + ': ' + preview, 'color': '#64748b'})
+                    first_lines = (
+                        open(fpath, "r", errors="replace").read(500).split("\n")[:5]
+                    )
+                    preview = " | ".join(l.strip() for l in first_lines if l.strip())[
+                        :200
+                    ]
+                    events.append(
+                        {
+                            "time": earliest,
+                            "source": "main",
+                            "sourceLabel": "main",
+                            "type": "CONTEXT",
+                            "detail": f + ": " + preview,
+                            "color": "#64748b",
+                        }
+                    )
                 except Exception:
                     pass
 
-    events.sort(key=lambda ev: ev.get('time', '') or '', reverse=True)  # ISO string sort - correct across days
+    events.sort(
+        key=lambda ev: ev.get("time", "") or "", reverse=True
+    )  # ISO string sort - correct across days
     # Keep CONTEXT events + most recent 300
-    context_evts = [e for e in events if e.get('type') == 'CONTEXT']
-    other_evts = [e for e in events if e.get('type') != 'CONTEXT'][:300]
+    context_evts = [e for e in events if e.get("type") == "CONTEXT"]
+    other_evts = [e for e in events if e.get("type") != "CONTEXT"][:300]
     events = context_evts + other_evts
     sources_seen = []
     seen_set = set()
     for ev in events:
-        s = ev['source']
+        s = ev["source"]
         if s not in seen_set:
             seen_set.add(s)
-            sources_seen.append({'id': s, 'label': ev.get('sourceLabel', s), 'color': ev.get('color', '#888')})
-    try: _ext_emit('brain.event', {'count': len(events)})
-    except Exception: pass
-    return jsonify({'events': events, 'total': len(events), 'sources': sources_seen})
+            sources_seen.append(
+                {
+                    "id": s,
+                    "label": ev.get("sourceLabel", s),
+                    "color": ev.get("color", "#888"),
+                }
+            )
+    try:
+        _ext_emit("brain.event", {"count": len(events)})
+    except Exception:
+        pass
+    return jsonify({"events": events, "total": len(events), "sources": sources_seen})
 
 
-@bp_brain.route('/api/brain-stream')
+@bp_brain.route("/api/brain-stream")
 def api_brain_stream():
     """SSE endpoint — streams real-time brain activity events.
     Tails OpenClaw log files + all session JSONL files for new tool calls,
     agent messages, and sub-agent activity. Emits each event as SSE data.
     """
-    if not _acquire_stream_slot('brain'):
-        return jsonify({'error': 'Too many active brain streams'}), 429
+    if not _acquire_stream_slot("brain"):
+        return jsonify({"error": "Too many active brain streams"}), 429
 
     import re as _re_bs
-    log_tool_re = _re_bs.compile(r'^\[(\w+)\]\s*(.*)', _re_bs.DOTALL)
 
-    session_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    log_tool_re = _re_bs.compile(r"^\[(\w+)\]\s*(.*)", _re_bs.DOTALL)
+
+    session_dir = SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
 
     # Color assignment
-    color_palette = ['#06b6d4', '#f59e0b', '#ec4899', '#8b5cf6', '#10b981', '#f97316', '#6366f1']
+    color_palette = [
+        "#06b6d4",
+        "#f59e0b",
+        "#ec4899",
+        "#8b5cf6",
+        "#10b981",
+        "#f97316",
+        "#6366f1",
+    ]
     agent_colors = {}
     color_idx = [0]
 
     def get_agent_color(source):
-        if source == 'main':
-            return '#a855f7'
+        if source == "main":
+            return "#a855f7"
         if source not in agent_colors:
             agent_colors[source] = color_palette[color_idx[0] % len(color_palette)]
             color_idx[0] += 1
@@ -18316,103 +18895,132 @@ def api_brain_stream():
 
     def tool_to_type(tn):
         tn = tn.lower()
-        if tn == 'exec' or 'shell' in tn or 'bash' in tn or tn == 'process':
-            return 'EXEC'
-        if 'read' in tn:
-            return 'READ'
-        if 'write' in tn or 'edit' in tn:
-            return 'WRITE'
-        if 'browser' in tn or 'canvas' in tn or 'image' in tn:
-            return 'BROWSER'
-        if tn == 'message' or 'tts' in tn:
-            return 'MSG'
-        if 'web_search' in tn or 'web_fetch' in tn or 'search' in tn:
-            return 'SEARCH'
-        if 'subagent' in tn or 'spawn' in tn:
-            return 'SPAWN'
-        return 'TOOL'
+        if tn == "exec" or "shell" in tn or "bash" in tn or tn == "process":
+            return "EXEC"
+        if "read" in tn:
+            return "READ"
+        if "write" in tn or "edit" in tn:
+            return "WRITE"
+        if "browser" in tn or "canvas" in tn or "image" in tn:
+            return "BROWSER"
+        if tn == "message" or "tts" in tn:
+            return "MSG"
+        if "web_search" in tn or "web_fetch" in tn or "search" in tn:
+            return "SEARCH"
+        if "subagent" in tn or "spawn" in tn:
+            return "SPAWN"
+        return "TOOL"
 
     def extract_detail(tn, inp):
         tn = tn.lower()
         if not isinstance(inp, dict):
             return str(inp)[:300]
-        if tn == 'exec' or 'shell' in tn or 'bash' in tn or tn == 'process':
-            return (inp.get('command') or inp.get('action') or '')[:300]
-        if 'read' in tn:
-            return (inp.get('path') or inp.get('file_path') or '')[:300]
-        if 'write' in tn or 'edit' in tn:
-            return (inp.get('path') or inp.get('file_path') or '')[:300]
-        if 'browser' in tn:
-            return (inp.get('url') or inp.get('targetUrl') or inp.get('action') or '')[:300]
-        if tn == 'message':
-            return (inp.get('message') or inp.get('target') or '')[:300]
-        if 'search' in tn or 'fetch' in tn:
-            return (inp.get('query') or inp.get('url') or '')[:300]
-        if 'subagent' in tn or 'spawn' in tn:
-            return (inp.get('label') or str(inp.get('message', '')))[:300]
+        if tn == "exec" or "shell" in tn or "bash" in tn or tn == "process":
+            return (inp.get("command") or inp.get("action") or "")[:300]
+        if "read" in tn:
+            return (inp.get("path") or inp.get("file_path") or "")[:300]
+        if "write" in tn or "edit" in tn:
+            return (inp.get("path") or inp.get("file_path") or "")[:300]
+        if "browser" in tn:
+            return (inp.get("url") or inp.get("targetUrl") or inp.get("action") or "")[
+                :300
+            ]
+        if tn == "message":
+            return (inp.get("message") or inp.get("target") or "")[:300]
+        if "search" in tn or "fetch" in tn:
+            return (inp.get("query") or inp.get("url") or "")[:300]
+        if "subagent" in tn or "spawn" in tn:
+            return (inp.get("label") or str(inp.get("message", "")))[:300]
         vals = list(inp.values())
-        return (str(vals[0]) if vals else '')[:300]
+        return (str(vals[0]) if vals else "")[:300]
 
     def _parse_jsonl_event(obj, source_id, source_label, color):
         """Parse a JSONL line into a brain event dict, or return None."""
-        ts = obj.get('timestamp') or obj.get('time')
+        ts = obj.get("timestamp") or obj.get("time")
         if not ts:
             return None
-        role = obj.get('role', '')
-        content_obj = obj.get('content', '')
-        if obj.get('type') == 'message':
-            inner = obj.get('message', {})
-            role = inner.get('role', '')
-            content_obj = inner.get('content', [])
+        role = obj.get("role", "")
+        content_obj = obj.get("content", "")
+        if obj.get("type") == "message":
+            inner = obj.get("message", {})
+            role = inner.get("role", "")
+            content_obj = inner.get("content", [])
 
-        if role == 'assistant' and isinstance(content_obj, list):
+        if role == "assistant" and isinstance(content_obj, list):
             for block in content_obj:
                 if not isinstance(block, dict):
                     continue
-                btype = block.get('type', '')
-                if btype == 'thinking':
-                    thinking_text = block.get('thinking', '')
+                btype = block.get("type", "")
+                if btype == "thinking":
+                    thinking_text = block.get("thinking", "")
                     if thinking_text:
-                        return {'time': ts, 'source': source_id, 'sourceLabel': source_label,
-                                'type': 'THINK', 'detail': thinking_text[:300], 'color': color}
-                if btype == 'text':
-                    text = block.get('text', '')
+                        return {
+                            "time": ts,
+                            "source": source_id,
+                            "sourceLabel": source_label,
+                            "type": "THINK",
+                            "detail": thinking_text[:300],
+                            "color": color,
+                        }
+                if btype == "text":
+                    text = block.get("text", "")
                     if text:
-                        return {'time': ts, 'source': source_id, 'sourceLabel': source_label,
-                                'type': 'AGENT', 'detail': text[:300], 'color': color}
-                if btype == 'tool_use':
-                    tool_name = block.get('name', '')
-                    inp = block.get('input', {})
-                elif btype == 'toolCall':
-                    tool_name = block.get('name', '')
-                    inp = block.get('arguments', {})
+                        return {
+                            "time": ts,
+                            "source": source_id,
+                            "sourceLabel": source_label,
+                            "type": "AGENT",
+                            "detail": text[:300],
+                            "color": color,
+                        }
+                if btype == "tool_use":
+                    tool_name = block.get("name", "")
+                    inp = block.get("input", {})
+                elif btype == "toolCall":
+                    tool_name = block.get("name", "")
+                    inp = block.get("arguments", {})
                 else:
                     continue
                 if tool_name:
-                    return {'time': ts, 'source': source_id, 'sourceLabel': source_label,
-                            'type': tool_to_type(tool_name), 'detail': extract_detail(tool_name, inp),
-                            'color': color}
-        if role == 'user':
-            text = ''
+                    return {
+                        "time": ts,
+                        "source": source_id,
+                        "sourceLabel": source_label,
+                        "type": tool_to_type(tool_name),
+                        "detail": extract_detail(tool_name, inp),
+                        "color": color,
+                    }
+        if role == "user":
+            text = ""
             if isinstance(content_obj, str):
                 text = content_obj
             elif isinstance(content_obj, list):
-                parts = [b.get('text', '') for b in content_obj if isinstance(b, dict) and b.get('type') == 'text']
-                text = ' '.join(parts)
+                parts = [
+                    b.get("text", "")
+                    for b in content_obj
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ]
+                text = " ".join(parts)
             if text:
-                return {'time': ts, 'source': source_id, 'sourceLabel': source_label,
-                        'type': 'USER', 'detail': text[:300], 'color': color}
+                return {
+                    "time": ts,
+                    "source": source_id,
+                    "sourceLabel": source_label,
+                    "type": "USER",
+                    "detail": text[:300],
+                    "color": color,
+                }
         return None
 
     # Build session label map
-    index_path = os.path.join(session_dir, 'sessions.json')
+    index_path = os.path.join(session_dir, "sessions.json")
     sid_to_label = {}
     try:
-        with open(index_path, 'r') as f:
+        with open(index_path, "r") as f:
             index = json.load(f)
         for key, meta in index.items():
-            sid = meta.get('sessionId', '')
-            label = meta.get('displayName') or meta.get('label') or ''
+            sid = meta.get("sessionId", "")
+            label = meta.get("displayName") or meta.get("label") or ""
             if sid and label:
                 sid_to_label[sid] = label
     except Exception:
@@ -18425,25 +19033,29 @@ def api_brain_stream():
         log_dirs = _get_log_dirs()
         log_files = []
         for d in log_dirs:
-            log_files += sorted(glob.glob(os.path.join(d, 'openclaw-*.log')))
-        log_files += sorted(glob.glob('/tmp/openclaw/openclaw-*.log'))
+            log_files += sorted(glob.glob(os.path.join(d, "openclaw-*.log")))
+        log_files += sorted(glob.glob("/tmp/openclaw/openclaw-*.log"))
         log_files = list(dict.fromkeys(log_files))
 
         # Seek to end of all files
         log_positions = {}
         for lf in log_files[-3:]:
             try:
-                with open(lf, 'rb') as f:
+                with open(lf, "rb") as f:
                     f.seek(0, 2)
                     log_positions[lf] = f.tell()
             except Exception:
                 pass
 
         jsonl_positions = {}
-        jsonl_files = sorted(glob.glob(os.path.join(session_dir, '*.jsonl'))) if os.path.isdir(session_dir) else []
+        jsonl_files = (
+            sorted(glob.glob(os.path.join(session_dir, "*.jsonl")))
+            if os.path.isdir(session_dir)
+            else []
+        )
         for jf in jsonl_files:
             try:
-                with open(jf, 'rb') as f:
+                with open(jf, "rb") as f:
                     f.seek(0, 2)
                     jsonl_positions[jf] = f.tell()
             except Exception:
@@ -18465,11 +19077,11 @@ def api_brain_stream():
                 # Tail log files for main agent events
                 for lf in list(log_positions.keys()):
                     try:
-                        with open(lf, 'rb') as f:
+                        with open(lf, "rb") as f:
                             f.seek(log_positions[lf])
                             data = f.read()
                             log_positions[lf] = f.tell()
-                        for line in data.decode('utf-8', errors='replace').splitlines():
+                        for line in data.decode("utf-8", errors="replace").splitlines():
                             line = line.strip()
                             if not line:
                                 continue
@@ -18477,10 +19089,10 @@ def api_brain_stream():
                                 obj = json.loads(line)
                             except Exception:
                                 continue
-                            ts = obj.get('time') or obj.get('timestamp')
+                            ts = obj.get("time") or obj.get("timestamp")
                             if not ts:
                                 continue
-                            msg = obj.get('0') or obj.get('message') or ''
+                            msg = obj.get("0") or obj.get("message") or ""
                             if isinstance(msg, dict):
                                 msg = json.dumps(msg)
                             m = log_tool_re.match(msg.strip())
@@ -18488,26 +19100,42 @@ def api_brain_stream():
                                 tool_kw = m.group(1).lower()
                                 rest = m.group(2).strip()
                                 ev_type = tool_to_type(tool_kw)
-                                detail = rest.split('\n')[0][:300]
-                                events.append({'time': ts, 'source': 'main', 'sourceLabel': 'main',
-                                               'type': ev_type, 'detail': detail, 'color': '#a855f7'})
+                                detail = rest.split("\n")[0][:300]
+                                events.append(
+                                    {
+                                        "time": ts,
+                                        "source": "main",
+                                        "sourceLabel": "main",
+                                        "type": ev_type,
+                                        "detail": detail,
+                                        "color": "#a855f7",
+                                    }
+                                )
                     except Exception:
                         pass
 
                 # Tail session JSONL files for sub-agent events
                 for jf in list(jsonl_positions.keys()):
                     try:
-                        with open(jf, 'rb') as f:
+                        with open(jf, "rb") as f:
                             f.seek(jsonl_positions[jf])
                             data = f.read()
                             jsonl_positions[jf] = f.tell()
                         if not data:
                             continue
-                        fname = os.path.basename(jf).replace('.jsonl', '')
-                        label = sid_to_label.get(fname, '')
-                        source_label = label if label else ('agent:' + fname[:8] if _re_bs.match(r'[0-9a-f-]{36}', fname) else fname)
+                        fname = os.path.basename(jf).replace(".jsonl", "")
+                        label = sid_to_label.get(fname, "")
+                        source_label = (
+                            label
+                            if label
+                            else (
+                                "agent:" + fname[:8]
+                                if _re_bs.match(r"[0-9a-f-]{36}", fname)
+                                else fname
+                            )
+                        )
                         color = get_agent_color(fname)
-                        for line in data.decode('utf-8', errors='replace').splitlines():
+                        for line in data.decode("utf-8", errors="replace").splitlines():
                             line = line.strip()
                             if not line:
                                 continue
@@ -18524,11 +19152,15 @@ def api_brain_stream():
                 # Periodically check for new JSONL files (new sub-agents)
                 now = time.time()
                 if now - last_jsonl_scan > 10:
-                    new_files = sorted(glob.glob(os.path.join(session_dir, '*.jsonl'))) if os.path.isdir(session_dir) else []
+                    new_files = (
+                        sorted(glob.glob(os.path.join(session_dir, "*.jsonl")))
+                        if os.path.isdir(session_dir)
+                        else []
+                    )
                     for nf in new_files:
                         if nf not in jsonl_positions:
                             try:
-                                with open(nf, 'rb') as f:
+                                with open(nf, "rb") as f:
                                     f.seek(0, 2)
                                     jsonl_positions[nf] = f.tell()
                             except Exception:
@@ -18537,115 +19169,121 @@ def api_brain_stream():
 
                 # Emit events
                 for ev in events:
-                    yield f'data: {json.dumps(ev)}\n\n'
+                    yield f"data: {json.dumps(ev)}\n\n"
 
                 # Heartbeat every cycle to keep connection alive
                 if not events:
-                    yield ':\n\n'
+                    yield ":\n\n"
 
                 time.sleep(0.5)
         except GeneratorExit:
             pass
         finally:
-            _release_stream_slot('brain')
+            _release_stream_slot("brain")
 
-    return Response(generate(), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
-@bp_logs.route('/api/flow-events')
-@bp_logs.route('/api/flow')
+@bp_logs.route("/api/flow-events")
+@bp_logs.route("/api/flow")
 def api_flow_events():
     """SSE endpoint — emits typed flow events (msg_in, msg_out, tool_call, tool_result).
     No auth required. Tails gateway.log + active session JSONL on disk.
     Returns JSON status for non-SSE clients (HEAD requests or Accept: application/json).
     """
     # E2E health checks and non-SSE clients get a lightweight JSON response
-    accept = request.headers.get('Accept', '')
-    if request.method == 'HEAD' or 'text/event-stream' not in accept:
-        return jsonify({'ok': True, 'type': 'flow-events', 'streaming': True})
+    accept = request.headers.get("Accept", "")
+    if request.method == "HEAD" or "text/event-stream" not in accept:
+        return jsonify({"ok": True, "type": "flow-events", "streaming": True})
     import glob as _glob
 
     def _find_active_jsonl():
         sd = SESSIONS_DIR
         if not sd or not os.path.isdir(sd):
             return None
-        files = [f for f in _glob.glob(os.path.join(sd, '*.jsonl'))
-                 if 'deleted' not in f and os.path.getsize(f) > 0]
+        files = [
+            f
+            for f in _glob.glob(os.path.join(sd, "*.jsonl"))
+            if "deleted" not in f and os.path.getsize(f) > 0
+        ]
         return max(files, key=os.path.getmtime) if files else None
 
-    gw_log = os.path.join(os.path.expanduser('~'), '.openclaw', 'logs', 'gateway.log')
+    gw_log = os.path.join(os.path.expanduser("~"), ".openclaw", "logs", "gateway.log")
 
     _TOOL_MAP = {
-        'web_search': ('tool_call', 'search'),
-        'exec': ('tool_call', 'exec'),
-        'browser': ('tool_call', 'browser'),
-        'web_fetch': ('tool_call', 'browser'),
-        'memory_search': ('tool_call', 'memory'),
-        'memory_get': ('tool_call', 'memory'),
-        'message': ('msg_out', 'telegram'),
-        'tts': ('tool_call', 'tts'),
-        'sessions_spawn': ('tool_call', 'session'),
-        'cron': ('tool_call', 'cron'),
+        "web_search": ("tool_call", "search"),
+        "exec": ("tool_call", "exec"),
+        "browser": ("tool_call", "browser"),
+        "web_fetch": ("tool_call", "browser"),
+        "memory_search": ("tool_call", "memory"),
+        "memory_get": ("tool_call", "memory"),
+        "message": ("msg_out", "telegram"),
+        "tts": ("tool_call", "tts"),
+        "sessions_spawn": ("tool_call", "session"),
+        "cron": ("tool_call", "cron"),
     }
 
     def _parse_gw(line):
-        for ch in ('telegram', 'imessage', 'whatsapp', 'signal', 'discord'):
-            if f'[{ch}]' in line or f'channels/{ch}' in line:
-                if any(x in line for x in ('sendMessage ok', 'send ok', 'sent ok')):
-                    return {'type': 'msg_out', 'channel': ch}
-                if any(x in line for x in ('received', 'inbound', 'run start')):
-                    return {'type': 'msg_in', 'channel': ch}
+        for ch in ("telegram", "imessage", "whatsapp", "signal", "discord"):
+            if f"[{ch}]" in line or f"channels/{ch}" in line:
+                if any(x in line for x in ("sendMessage ok", "send ok", "sent ok")):
+                    return {"type": "msg_out", "channel": ch}
+                if any(x in line for x in ("received", "inbound", "run start")):
+                    return {"type": "msg_in", "channel": ch}
         return None
 
     def _parse_jsonl(obj, last_tool):
-        otype = obj.get('type')
-        role = obj.get('role')
-        if otype == 'tool_use':
-            name = obj.get('name', '')
+        otype = obj.get("type")
+        role = obj.get("role")
+        if otype == "tool_use":
+            name = obj.get("name", "")
             mapping = _TOOL_MAP.get(name)
             if mapping:
                 ev_type, tool_key = mapping
                 last_tool[0] = tool_key
-                if ev_type == 'msg_out':
-                    return {'type': 'msg_out', 'channel': tool_key}
-                return {'type': 'tool_call', 'tool': tool_key}
+                if ev_type == "msg_out":
+                    return {"type": "msg_out", "channel": tool_key}
+                return {"type": "tool_call", "tool": tool_key}
             last_tool[0] = name
-            return {'type': 'tool_call', 'tool': name}
-        if otype == 'tool_result':
-            return {'type': 'tool_result', 'tool': last_tool[0] or 'exec'}
-        if role == 'user':
-            content = obj.get('content', '')
+            return {"type": "tool_call", "tool": name}
+        if otype == "tool_result":
+            return {"type": "tool_result", "tool": last_tool[0] or "exec"}
+        if role == "user":
+            content = obj.get("content", "")
             if isinstance(content, list):
                 for item in content:
-                    if isinstance(item, dict) and item.get('type') == 'tool_result':
-                        return {'type': 'tool_result', 'tool': last_tool[0] or 'exec'}
-            return {'type': 'msg_in', 'channel': 'telegram'}
+                    if isinstance(item, dict) and item.get("type") == "tool_result":
+                        return {"type": "tool_result", "tool": last_tool[0] or "exec"}
+            return {"type": "msg_in", "channel": "telegram"}
         return None
 
     def generate():
         gw_pos = 0
         jsonl_pos = 0
         jsonl_path = None
-        last_tool = ['exec']
+        last_tool = ["exec"]
         last_jsonl_check = 0.0
         started = time.time()
 
         # Seek to end of existing files — only emit NEW events
         if os.path.exists(gw_log):
-            with open(gw_log, 'rb') as f:
+            with open(gw_log, "rb") as f:
                 f.seek(0, 2)
                 gw_pos = f.tell()
         jsonl_path = _find_active_jsonl()
         if jsonl_path:
-            with open(jsonl_path, 'rb') as f:
+            with open(jsonl_path, "rb") as f:
                 f.seek(0, 2)
                 jsonl_pos = f.tell()
 
         try:
             while True:
                 if time.time() - started > SSE_MAX_SECONDS:
-                    yield 'event: done\ndata: {}\n\n'
+                    yield "event: done\ndata: {}\n\n"
                     break
 
                 events = []
@@ -18653,11 +19291,11 @@ def api_flow_events():
                 # Tail gateway.log
                 if os.path.exists(gw_log):
                     try:
-                        with open(gw_log, 'rb') as f:
+                        with open(gw_log, "rb") as f:
                             f.seek(gw_pos)
                             data = f.read()
                             gw_pos = f.tell()
-                        for line in data.decode('utf-8', errors='replace').splitlines():
+                        for line in data.decode("utf-8", errors="replace").splitlines():
                             ev = _parse_gw(line)
                             if ev:
                                 events.append(ev)
@@ -18671,7 +19309,7 @@ def api_flow_events():
                     if new_path and new_path != jsonl_path:
                         jsonl_path = new_path
                         jsonl_pos = 0
-                        with open(jsonl_path, 'rb') as f:
+                        with open(jsonl_path, "rb") as f:
                             f.seek(0, 2)
                             jsonl_pos = f.tell()
                     last_jsonl_check = now
@@ -18679,11 +19317,11 @@ def api_flow_events():
                 # Tail session JSONL
                 if jsonl_path:
                     try:
-                        with open(jsonl_path, 'rb') as f:
+                        with open(jsonl_path, "rb") as f:
                             f.seek(jsonl_pos)
                             data = f.read()
                             jsonl_pos = f.tell()
-                        for line in data.decode('utf-8', errors='replace').splitlines():
+                        for line in data.decode("utf-8", errors="replace").splitlines():
                             line = line.strip()
                             if not line:
                                 continue
@@ -18697,34 +19335,39 @@ def api_flow_events():
                         pass
 
                 for ev in events:
-                    yield f'data: {json.dumps(ev)}\n\n'
+                    yield f"data: {json.dumps(ev)}\n\n"
 
                 time.sleep(0.5)
         except GeneratorExit:
             pass
 
-    return Response(generate(), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
-@bp_logs.route('/api/logs-stream')
+@bp_logs.route("/api/logs-stream")
 def api_logs_stream():
     """SSE endpoint - streams new log lines in real-time."""
-    if not _acquire_stream_slot('log'):
-        return jsonify({'error': 'Too many active log streams'}), 429
+    if not _acquire_stream_slot("log"):
+        return jsonify({"error": "Too many active log streams"}), 429
 
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.now().strftime("%Y-%m-%d")
     log_file = _find_log_file(today)
 
     def generate():
         started_at = time.time()
         if not log_file:
             yield 'data: {"line":"No log file found"}\n\n'
-            _release_stream_slot('log')
+            _release_stream_slot("log")
             return
         proc = subprocess.Popen(
-            ['tail', '-f', '-n', '0', log_file],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            ["tail", "-f", "-n", "0", log_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         try:
             while True:
@@ -18736,7 +19379,7 @@ def api_logs_stream():
                     continue
                 line = proc.stdout.readline()
                 if line:
-                    yield f'data: {json.dumps({"line": line.rstrip()})}\n\n'
+                    yield f"data: {json.dumps({'line': line.rstrip()})}\n\n"
         except GeneratorExit:
             pass
         finally:
@@ -18744,49 +19387,52 @@ def api_logs_stream():
                 proc.kill()
             except Exception:
                 pass
-            _release_stream_slot('log')
+            _release_stream_slot("log")
 
-    return Response(generate(), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
-@bp_memory.route('/api/memory-files')
-@bp_memory.route('/api/memory')
+@bp_memory.route("/api/memory-files")
+@bp_memory.route("/api/memory")
 def api_memory_files():
     return jsonify(_get_memory_files())
 
 
-@bp_memory.route('/api/file')
+@bp_memory.route("/api/file")
 def api_view_file():
     """Return the contents of a memory file."""
-    path = request.args.get('path', '')
+    path = request.args.get("path", "")
     full = os.path.normpath(os.path.join(WORKSPACE, path))
     if not full.startswith(os.path.normpath(WORKSPACE)):
-        return jsonify({'error': 'Access denied'}), 403
+        return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(full):
-        return jsonify({'error': 'File not found'}), 404
+        return jsonify({"error": "File not found"}), 404
     try:
-        with open(full, 'r') as f:
+        with open(full, "r") as f:
             content = f.read(100_000)
-        return jsonify({'path': path, 'content': content})
+        return jsonify({"path": path, "content": content})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-@bp_memory.route('/api/memory-analytics')
+@bp_memory.route("/api/memory-analytics")
 def api_memory_analytics():
     """Memory usage analytics with bloat detection and recommendations."""
     workspace = WORKSPACE or os.getcwd()
     memory_dir = MEMORY_DIR or os.path.join(workspace, "memory")
 
     # Configurable thresholds (bytes)
-    bloat_warn_kb = int(request.args.get('warn_kb', 8))
-    bloat_crit_kb = int(request.args.get('crit_kb', 16))
+    bloat_warn_kb = int(request.args.get("warn_kb", 8))
+    bloat_crit_kb = int(request.args.get("crit_kb", 16))
 
     files = _get_memory_files()
-    total_bytes = sum(f.get('size', 0) for f in files)
-    root_files = [f for f in files if '/' not in f['path']]
-    daily_files = [f for f in files if f['path'].startswith('memory/')]
+    total_bytes = sum(f.get("size", 0) for f in files)
+    root_files = [f for f in files if "/" not in f["path"]]
+    daily_files = [f for f in files if f["path"].startswith("memory/")]
 
     # Estimate tokens (rough: 1 token ~ 4 chars ~ 4 bytes for English text)
     est_tokens = total_bytes // 4
@@ -18796,28 +19442,32 @@ def api_memory_analytics():
     recommendations = []
     for f in files:
         entry = {
-            'path': f['path'],
-            'sizeBytes': f['size'],
-            'sizeKB': round(f['size'] / 1024, 1),
-            'estTokens': f['size'] // 4,
-            'status': 'ok',
+            "path": f["path"],
+            "sizeBytes": f["size"],
+            "sizeKB": round(f["size"] / 1024, 1),
+            "estTokens": f["size"] // 4,
+            "status": "ok",
         }
-        kb = f['size'] / 1024
+        kb = f["size"] / 1024
         if kb >= bloat_crit_kb:
-            entry['status'] = 'critical'
-            recommendations.append({
-                'file': f['path'],
-                'severity': 'critical',
-                'message': f"{f['path']} is {kb:.1f}KB ({f['size'] // 4} est. tokens). "
-                           f"Consider pruning to keep context window budget lean.",
-            })
+            entry["status"] = "critical"
+            recommendations.append(
+                {
+                    "file": f["path"],
+                    "severity": "critical",
+                    "message": f"{f['path']} is {kb:.1f}KB ({f['size'] // 4} est. tokens). "
+                    f"Consider pruning to keep context window budget lean.",
+                }
+            )
         elif kb >= bloat_warn_kb:
-            entry['status'] = 'warning'
-            recommendations.append({
-                'file': f['path'],
-                'severity': 'warning',
-                'message': f"{f['path']} is {kb:.1f}KB. Growing large, review for stale content.",
-            })
+            entry["status"] = "warning"
+            recommendations.append(
+                {
+                    "file": f["path"],
+                    "severity": "warning",
+                    "message": f"{f['path']} is {kb:.1f}KB. Growing large, review for stale content.",
+                }
+            )
         analysis.append(entry)
 
     # Daily memory dir growth (count files per date from filenames)
@@ -18825,104 +19475,121 @@ def api_memory_analytics():
     if os.path.isdir(memory_dir):
         date_sizes = {}
         for f in daily_files:
-            basename = f['path'].replace('memory/', '')
-            date_part = basename.replace('.md', '')[:10]  # YYYY-MM-DD
-            if len(date_part) == 10 and date_part[4] == '-':
-                date_sizes[date_part] = date_sizes.get(date_part, 0) + f['size']
+            basename = f["path"].replace("memory/", "")
+            date_part = basename.replace(".md", "")[:10]  # YYYY-MM-DD
+            if len(date_part) == 10 and date_part[4] == "-":
+                date_sizes[date_part] = date_sizes.get(date_part, 0) + f["size"]
         for d in sorted(date_sizes.keys())[-30:]:
-            daily_growth.append({'date': d, 'bytes': date_sizes[d]})
+            daily_growth.append({"date": d, "bytes": date_sizes[d]})
 
     # Context budget estimation
     # Common context windows: 200K tokens (Claude), 128K (GPT-4), 1M (Gemini)
     context_budgets = {}
-    for name, limit in [('claude_200k', 200000), ('gpt4_128k', 128000), ('gemini_1m', 1000000)]:
+    for name, limit in [
+        ("claude_200k", 200000),
+        ("gpt4_128k", 128000),
+        ("gemini_1m", 1000000),
+    ]:
         pct = round((est_tokens / limit) * 100, 1) if limit > 0 else 0
         context_budgets[name] = {
-            'limit': limit,
-            'memoryTokens': est_tokens,
-            'percentUsed': min(pct, 100),
-            'status': 'critical' if pct > 25 else ('warning' if pct > 10 else 'ok'),
+            "limit": limit,
+            "memoryTokens": est_tokens,
+            "percentUsed": min(pct, 100),
+            "status": "critical" if pct > 25 else ("warning" if pct > 10 else "ok"),
         }
 
     # Largest files
-    top_files = sorted(analysis, key=lambda x: x['sizeBytes'], reverse=True)[:5]
+    top_files = sorted(analysis, key=lambda x: x["sizeBytes"], reverse=True)[:5]
 
-    has_bloat = any(r['severity'] == 'critical' for r in recommendations)
-    has_warnings = any(r['severity'] == 'warning' for r in recommendations)
+    has_bloat = any(r["severity"] == "critical" for r in recommendations)
+    has_warnings = any(r["severity"] == "warning" for r in recommendations)
 
-    return jsonify({
-        'totalBytes': total_bytes,
-        'totalKB': round(total_bytes / 1024, 1),
-        'estTokens': est_tokens,
-        'fileCount': len(files),
-        'rootFileCount': len(root_files),
-        'dailyFileCount': len(daily_files),
-        'files': analysis,
-        'topFiles': top_files,
-        'dailyGrowth': daily_growth,
-        'contextBudgets': context_budgets,
-        'recommendations': recommendations,
-        'hasBloat': has_bloat,
-        'hasWarnings': has_warnings,
-        'thresholds': {'warnKB': bloat_warn_kb, 'critKB': bloat_crit_kb},
-    })
+    return jsonify(
+        {
+            "totalBytes": total_bytes,
+            "totalKB": round(total_bytes / 1024, 1),
+            "estTokens": est_tokens,
+            "fileCount": len(files),
+            "rootFileCount": len(root_files),
+            "dailyFileCount": len(daily_files),
+            "files": analysis,
+            "topFiles": top_files,
+            "dailyGrowth": daily_growth,
+            "contextBudgets": context_budgets,
+            "recommendations": recommendations,
+            "hasBloat": has_bloat,
+            "hasWarnings": has_warnings,
+            "thresholds": {"warnKB": bloat_warn_kb, "critKB": bloat_crit_kb},
+        }
+    )
 
 
 # ── OTLP Receiver Endpoints ─────────────────────────────────────────────
 
-@bp_otel.route('/v1/metrics', methods=['POST'])
+
+@bp_otel.route("/v1/metrics", methods=["POST"])
 def otlp_metrics():
     """OTLP/HTTP receiver for metrics (protobuf)."""
     if _budget_paused:
-        return jsonify({'error': 'Budget limit exceeded - intake paused', 'paused': True}), 429
+        return jsonify(
+            {"error": "Budget limit exceeded - intake paused", "paused": True}
+        ), 429
     if not _HAS_OTEL_PROTO:
-        return jsonify({
-            'error': 'opentelemetry-proto not installed',
-            'message': 'Install OTLP support: pip install clawmetry[otel]  '
-                       'or: pip install opentelemetry-proto protobuf',
-        }), 501
+        return jsonify(
+            {
+                "error": "opentelemetry-proto not installed",
+                "message": "Install OTLP support: pip install clawmetry[otel]  "
+                "or: pip install opentelemetry-proto protobuf",
+            }
+        ), 501
 
     try:
         pb_data = request.get_data()
         _process_otlp_metrics(pb_data)
-        return '{}', 200, {'Content-Type': 'application/json'}
+        return "{}", 200, {"Content-Type": "application/json"}
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
 
 
-@bp_otel.route('/v1/traces', methods=['POST'])
+@bp_otel.route("/v1/traces", methods=["POST"])
 def otlp_traces():
     """OTLP/HTTP receiver for traces (protobuf)."""
     if _budget_paused:
-        return jsonify({'error': 'Budget limit exceeded - intake paused', 'paused': True}), 429
+        return jsonify(
+            {"error": "Budget limit exceeded - intake paused", "paused": True}
+        ), 429
     if not _HAS_OTEL_PROTO:
-        return jsonify({
-            'error': 'opentelemetry-proto not installed',
-            'message': 'Install OTLP support: pip install clawmetry[otel]  '
-                       'or: pip install opentelemetry-proto protobuf',
-        }), 501
+        return jsonify(
+            {
+                "error": "opentelemetry-proto not installed",
+                "message": "Install OTLP support: pip install clawmetry[otel]  "
+                "or: pip install opentelemetry-proto protobuf",
+            }
+        ), 501
 
     try:
         pb_data = request.get_data()
         _process_otlp_traces(pb_data)
-        return '{}', 200, {'Content-Type': 'application/json'}
+        return "{}", 200, {"Content-Type": "application/json"}
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 400
 
 
-@bp_otel.route('/api/otel-status')
+@bp_otel.route("/api/otel-status")
 def api_otel_status():
     """Return OTLP receiver status."""
     counts = {}
     with _metrics_lock:
         for k in metrics_store:
             counts[k] = len(metrics_store[k])
-    return jsonify({
-        'available': _HAS_OTEL_PROTO,
-        'hasData': _has_otel_data(),
-        'lastReceived': _otel_last_received,
-        'counts': counts,
-    })
+    return jsonify(
+        {
+            "available": _HAS_OTEL_PROTO,
+            "hasData": _has_otel_data(),
+            "lastReceived": _otel_last_received,
+            "counts": counts,
+        }
+    )
 
 
 # ── Multi-Node Fleet API Routes ──────────────────────────────────────────
@@ -19093,51 +19760,56 @@ load(); setInterval(load, 30000);
 """
 
 
-@bp_fleet.route('/fleet')
+@bp_fleet.route("/fleet")
 def fleet_page():
     """Fleet overview page for multi-node monitoring."""
     return FLEET_HTML
 
 
-@bp_fleet.route('/api/nodes/register', methods=['POST'])
+@bp_fleet.route("/api/nodes/register", methods=["POST"])
 def api_nodes_register():
     """Register or update a remote node."""
     if not _fleet_check_key(request):
-        return jsonify({'error': 'Invalid or missing X-Fleet-Key'}), 401
+        return jsonify({"error": "Invalid or missing X-Fleet-Key"}), 401
 
     data = request.get_json(silent=True) or {}
-    node_id = data.get('node_id', '').strip()
+    node_id = data.get("node_id", "").strip()
     if not node_id:
-        return jsonify({'error': 'node_id is required'}), 400
+        return jsonify({"error": "node_id is required"}), 400
 
-    name = data.get('name', node_id)
-    hostname = data.get('hostname', '')
-    tags = json.dumps(data.get('tags', []))
-    version = data.get('version', '')
+    name = data.get("name", node_id)
+    hostname = data.get("hostname", "")
+    tags = json.dumps(data.get("tags", []))
+    version = data.get("version", "")
     now = time.time()
 
     with _fleet_db_lock:
         db = _fleet_db()
-        db.execute("""
+        db.execute(
+            """
             INSERT INTO nodes (node_id, name, hostname, tags, version, registered_at, last_seen_at, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, 'online')
             ON CONFLICT(node_id) DO UPDATE SET
                 name=excluded.name, hostname=excluded.hostname, tags=excluded.tags,
                 version=excluded.version, last_seen_at=excluded.last_seen_at, status='online'
-        """, (node_id, name, hostname, tags, version, now, now))
+        """,
+            (node_id, name, hostname, tags, version, now, now),
+        )
         db.commit()
         db.close()
 
-    try: _ext_emit('fleet.node_register', {'node_id': node_id})
-    except Exception: pass
-    return jsonify({'ok': True, 'node_id': node_id})
+    try:
+        _ext_emit("fleet.node_register", {"node_id": node_id})
+    except Exception:
+        pass
+    return jsonify({"ok": True, "node_id": node_id})
 
 
-@bp_fleet.route('/api/nodes/<node_id>/metrics', methods=['POST'])
+@bp_fleet.route("/api/nodes/<node_id>/metrics", methods=["POST"])
 def api_nodes_push_metrics(node_id):
     """Receive metrics push from a remote node."""
     if not _fleet_check_key(request):
-        return jsonify({'error': 'Invalid or missing X-Fleet-Key'}), 401
+        return jsonify({"error": "Invalid or missing X-Fleet-Key"}), 401
 
     data = request.get_json(silent=True) or {}
     now = time.time()
@@ -19147,20 +19819,20 @@ def api_nodes_push_metrics(node_id):
         # Update last_seen
         db.execute(
             "UPDATE nodes SET last_seen_at = ?, status = 'online' WHERE node_id = ?",
-            (now, node_id)
+            (now, node_id),
         )
         # Store metrics snapshot
         db.execute(
             "INSERT INTO node_metrics (node_id, timestamp, metrics_json) VALUES (?, ?, ?)",
-            (node_id, now, json.dumps(data))
+            (node_id, now, json.dumps(data)),
         )
         db.commit()
         db.close()
 
-    return jsonify({'ok': True, 'received_at': now})
+    return jsonify({"ok": True, "received_at": now})
 
 
-@bp_fleet.route('/api/nodes')
+@bp_fleet.route("/api/nodes")
 def api_nodes_list():
     """List all registered nodes with latest metrics."""
     _fleet_update_statuses()
@@ -19176,183 +19848,210 @@ def api_nodes_list():
 
         for node in nodes:
             n = dict(node)
-            n['tags'] = json.loads(n.get('tags') or '[]')
+            n["tags"] = json.loads(n.get("tags") or "[]")
 
             # Get latest metrics
             row = db.execute(
                 "SELECT metrics_json FROM node_metrics WHERE node_id = ? ORDER BY timestamp DESC LIMIT 1",
-                (n['node_id'],)
+                (n["node_id"],),
             ).fetchone()
-            n['latest_metrics'] = json.loads(row['metrics_json']) if row else {}
+            n["latest_metrics"] = json.loads(row["metrics_json"]) if row else {}
 
             # Aggregate stats
-            m = n['latest_metrics']
-            if m.get('cost', {}).get('today_usd'):
-                total_cost += m['cost']['today_usd']
-            if m.get('sessions', {}).get('total_today'):
-                total_sessions += m['sessions']['total_today']
+            m = n["latest_metrics"]
+            if m.get("cost", {}).get("today_usd"):
+                total_cost += m["cost"]["today_usd"]
+            if m.get("sessions", {}).get("total_today"):
+                total_sessions += m["sessions"]["total_today"]
 
-            if n['status'] == 'online':
+            if n["status"] == "online":
                 online_count += 1
             else:
                 offline_count += 1
 
             # Remove internal fields
-            n.pop('api_key_hash', None)
+            n.pop("api_key_hash", None)
             result.append(n)
 
         db.close()
 
-    return jsonify({
-        'nodes': result,
-        'fleet_summary': {
-            'total_nodes': len(result),
-            'online': online_count,
-            'offline': offline_count,
-            'total_cost_today': round(total_cost, 2),
-            'total_sessions_today': total_sessions,
+    return jsonify(
+        {
+            "nodes": result,
+            "fleet_summary": {
+                "total_nodes": len(result),
+                "online": online_count,
+                "offline": offline_count,
+                "total_cost_today": round(total_cost, 2),
+                "total_sessions_today": total_sessions,
+            },
         }
-    })
+    )
 
 
-@bp_fleet.route('/api/nodes/<node_id>')
+@bp_fleet.route("/api/nodes/<node_id>")
 def api_node_detail(node_id):
     """Get detailed info for a single node with metric history."""
     with _fleet_db_lock:
         db = _fleet_db()
-        node = db.execute("SELECT * FROM nodes WHERE node_id = ?", (node_id,)).fetchone()
+        node = db.execute(
+            "SELECT * FROM nodes WHERE node_id = ?", (node_id,)
+        ).fetchone()
         if not node:
             db.close()
-            return jsonify({'error': 'Node not found'}), 404
+            return jsonify({"error": "Node not found"}), 404
 
         n = dict(node)
-        n['tags'] = json.loads(n.get('tags') or '[]')
-        n.pop('api_key_hash', None)
+        n["tags"] = json.loads(n.get("tags") or "[]")
+        n.pop("api_key_hash", None)
 
         # Latest metrics
         latest_row = db.execute(
             "SELECT metrics_json FROM node_metrics WHERE node_id = ? ORDER BY timestamp DESC LIMIT 1",
-            (node_id,)
+            (node_id,),
         ).fetchone()
-        latest = json.loads(latest_row['metrics_json']) if latest_row else {}
+        latest = json.loads(latest_row["metrics_json"]) if latest_row else {}
 
         # 24h history
         cutoff = time.time() - 86400
         history_rows = db.execute(
             "SELECT timestamp, metrics_json FROM node_metrics WHERE node_id = ? AND timestamp > ? ORDER BY timestamp",
-            (node_id, cutoff)
+            (node_id, cutoff),
         ).fetchall()
-        history = [{'timestamp': r['timestamp'], 'metrics': json.loads(r['metrics_json'])} for r in history_rows]
+        history = [
+            {"timestamp": r["timestamp"], "metrics": json.loads(r["metrics_json"])}
+            for r in history_rows
+        ]
 
         db.close()
 
-    return jsonify({
-        'node': n,
-        'latest_metrics': latest,
-        'history': history,
-    })
+    return jsonify(
+        {
+            "node": n,
+            "latest_metrics": latest,
+            "history": history,
+        }
+    )
 
 
 # ── Budget & Alert API Routes ───────────────────────────────────────────
 
-@bp_budget.route('/api/budget/config', methods=['GET', 'POST'])
+
+@bp_budget.route("/api/budget/config", methods=["GET", "POST"])
 def api_budget_config():
     """Get or update budget configuration."""
-    if request.method == 'POST':
+    if request.method == "POST":
         data = request.get_json(silent=True) or {}
-        allowed = ['daily_limit', 'weekly_limit', 'monthly_limit',
-                    'auto_pause_enabled', 'auto_pause_threshold_pct',
-                    'auto_pause_threshold_usd', 'auto_pause_action',
-                    'warning_threshold_pct',
-                    'telegram_bot_token', 'telegram_chat_id']
+        allowed = [
+            "daily_limit",
+            "weekly_limit",
+            "monthly_limit",
+            "auto_pause_enabled",
+            "auto_pause_threshold_pct",
+            "auto_pause_threshold_usd",
+            "auto_pause_action",
+            "warning_threshold_pct",
+            "telegram_bot_token",
+            "telegram_chat_id",
+        ]
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
-            return jsonify({'error': 'No valid fields provided'}), 400
+            return jsonify({"error": "No valid fields provided"}), 400
         _set_budget_config(updates)
-        return jsonify({'ok': True})
+        return jsonify({"ok": True})
     return jsonify(_get_budget_config())
 
 
-@bp_budget.route('/api/budget/status')
+@bp_budget.route("/api/budget/status")
 def api_budget_status():
     """Get current budget status with spending totals."""
     return jsonify(_get_budget_status())
 
 
-@bp_budget.route('/api/budget/auto-pause', methods=['POST'])
+@bp_budget.route("/api/budget/auto-pause", methods=["POST"])
 def api_budget_auto_pause():
     """Set absolute daily auto-pause/alert threshold."""
     data = request.get_json(silent=True) or {}
-    threshold = data.get('threshold_usd')
-    action = str(data.get('action', 'pause')).strip().lower()
-    if action not in ('pause', 'alert'):
-        return jsonify({'ok': False, 'error': "action must be 'pause' or 'alert'"}), 400
+    threshold = data.get("threshold_usd")
+    action = str(data.get("action", "pause")).strip().lower()
+    if action not in ("pause", "alert"):
+        return jsonify({"ok": False, "error": "action must be 'pause' or 'alert'"}), 400
     try:
         threshold_val = float(threshold)
     except Exception:
-        return jsonify({'ok': False, 'error': 'threshold_usd must be a number'}), 400
+        return jsonify({"ok": False, "error": "threshold_usd must be a number"}), 400
     if threshold_val < 0:
-        return jsonify({'ok': False, 'error': 'threshold_usd must be >= 0'}), 400
-    _set_budget_config({'auto_pause_threshold_usd': threshold_val, 'auto_pause_action': action})
-    return jsonify({'ok': True, 'threshold_usd': threshold_val, 'action': action})
+        return jsonify({"ok": False, "error": "threshold_usd must be >= 0"}), 400
+    _set_budget_config(
+        {"auto_pause_threshold_usd": threshold_val, "auto_pause_action": action}
+    )
+    return jsonify({"ok": True, "threshold_usd": threshold_val, "action": action})
 
 
-@bp_budget.route('/api/budget/pause', methods=['POST'])
+@bp_budget.route("/api/budget/pause", methods=["POST"])
 def api_budget_pause():
     """Manually pause the gateway."""
     global _budget_paused, _budget_paused_at, _budget_paused_reason
     _budget_paused = True
     _budget_paused_at = time.time()
-    _budget_paused_reason = 'Manually paused from dashboard'
+    _budget_paused_reason = "Manually paused from dashboard"
     _pause_gateway()
-    return jsonify({'ok': True, 'paused': True})
+    return jsonify({"ok": True, "paused": True})
 
 
-@bp_budget.route('/api/budget/resume', methods=['POST'])
+@bp_budget.route("/api/budget/resume", methods=["POST"])
 def api_budget_resume():
     """Resume the gateway after budget pause."""
     _resume_gateway()
-    return jsonify({'ok': True, 'paused': False})
+    return jsonify({"ok": True, "paused": False})
 
 
-@bp_budget.route('/api/budget/test-telegram', methods=['POST'])
+@bp_budget.route("/api/budget/test-telegram", methods=["POST"])
 def api_budget_test_telegram():
     """Send a test Telegram notification using saved config."""
     cfg = _get_budget_config()
-    token = str(cfg.get('telegram_bot_token', '')).strip()
-    chat_id = str(cfg.get('telegram_chat_id', '')).strip()
+    token = str(cfg.get("telegram_bot_token", "")).strip()
+    chat_id = str(cfg.get("telegram_chat_id", "")).strip()
     if not token or not chat_id:
-        return jsonify({'ok': False, 'error': 'Set Telegram bot token and chat ID first'}), 400
+        return jsonify(
+            {"ok": False, "error": "Set Telegram bot token and chat ID first"}
+        ), 400
     try:
         import urllib.request
-        url = f'https://api.telegram.org/bot{token}/sendMessage'
-        payload = json.dumps({
-            'chat_id': chat_id,
-            'text': '\u2705 *ClawMetry Budget Alerts* - Test notification successful!',
-            'parse_mode': 'Markdown',
-        }).encode()
-        req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = json.dumps(
+            {
+                "chat_id": chat_id,
+                "text": "\u2705 *ClawMetry Budget Alerts* - Test notification successful!",
+                "parse_mode": "Markdown",
+            }
+        ).encode()
+        req = urllib.request.Request(
+            url, data=payload, headers={"Content-Type": "application/json"}
+        )
         urllib.request.urlopen(req, timeout=10)
-        return jsonify({'ok': True})
+        return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@bp_alerts.route('/api/alerts/rules', methods=['GET', 'POST'])
+@bp_alerts.route("/api/alerts/rules", methods=["GET", "POST"])
 def api_alert_rules():
     """List or create alert rules."""
-    if request.method == 'POST':
+    if request.method == "POST":
         data = request.get_json(silent=True) or {}
-        rtype = data.get('type', '')
-        threshold = data.get('threshold', 0)
-        channels = data.get('channels', ['banner'])
-        cooldown = data.get('cooldown_min', 30)
-        enabled = data.get('enabled', True)
-        if rtype not in ('threshold', 'spike', 'anomaly', 'agent_down'):
-            return jsonify({'error': 'Invalid alert type'}), 400
+        rtype = data.get("type", "")
+        threshold = data.get("threshold", 0)
+        channels = data.get("channels", ["banner"])
+        cooldown = data.get("cooldown_min", 30)
+        enabled = data.get("enabled", True)
+        if rtype not in ("threshold", "spike", "anomaly", "agent_down"):
+            return jsonify({"error": "Invalid alert type"}), 400
         if not isinstance(threshold, (int, float)) or threshold <= 0:
-            return jsonify({'error': 'Threshold must be a positive number'}), 400
+            return jsonify({"error": "Threshold must be a positive number"}), 400
         import uuid
+
         rule_id = str(uuid.uuid4())[:8]
         now = time.time()
         with _fleet_db_lock:
@@ -19360,37 +20059,48 @@ def api_alert_rules():
             db.execute(
                 "INSERT INTO alert_rules (id, type, threshold, channels, cooldown_min, enabled, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (rule_id, rtype, threshold, json.dumps(channels), cooldown, 1 if enabled else 0, now, now)
+                (
+                    rule_id,
+                    rtype,
+                    threshold,
+                    json.dumps(channels),
+                    cooldown,
+                    1 if enabled else 0,
+                    now,
+                    now,
+                ),
             )
             db.commit()
             db.close()
-        return jsonify({'ok': True, 'id': rule_id})
-    return jsonify({'rules': _get_alert_rules()})
+        return jsonify({"ok": True, "id": rule_id})
+    return jsonify({"rules": _get_alert_rules()})
 
 
-@bp_alerts.route('/api/alerts/rules/<rule_id>', methods=['PUT', 'DELETE'])
+@bp_alerts.route("/api/alerts/rules/<rule_id>", methods=["PUT", "DELETE"])
 def api_alert_rule(rule_id):
     """Update or delete an alert rule."""
-    if request.method == 'DELETE':
+    if request.method == "DELETE":
         with _fleet_db_lock:
             db = _fleet_db()
             db.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
             db.commit()
             db.close()
-        return jsonify({'ok': True})
+        return jsonify({"ok": True})
     # PUT
     data = request.get_json(silent=True) or {}
     sets = []
     vals = []
-    for field in ['threshold', 'cooldown_min', 'enabled']:
+    for field in ["threshold", "cooldown_min", "enabled"]:
         if field in data:
             sets.append(f"{field} = ?")
-            vals.append(data[field] if field != 'enabled' else (1 if data[field] else 0))
-    if 'channels' in data:
+            vals.append(
+                data[field] if field != "enabled" else (1 if data[field] else 0)
+            )
+    if "channels" in data:
         sets.append("channels = ?")
-        vals.append(json.dumps(data['channels']))
+        vals.append(json.dumps(data["channels"]))
     if not sets:
-        return jsonify({'error': 'No fields to update'}), 400
+        return jsonify({"error": "No fields to update"}), 400
     sets.append("updated_at = ?")
     vals.append(time.time())
     vals.append(rule_id)
@@ -19399,87 +20109,93 @@ def api_alert_rule(rule_id):
         db.execute(f"UPDATE alert_rules SET {', '.join(sets)} WHERE id = ?", vals)
         db.commit()
         db.close()
-    return jsonify({'ok': True})
+    return jsonify({"ok": True})
 
 
-@bp_alerts.route('/api/alerts/history')
+@bp_alerts.route("/api/alerts/history")
 def api_alert_history():
     """Get alert history."""
-    limit = request.args.get('limit', 50, type=int)
-    return jsonify({'alerts': _get_alert_history(limit)})
+    limit = request.args.get("limit", 50, type=int)
+    return jsonify({"alerts": _get_alert_history(limit)})
 
 
-@bp_alerts.route('/api/alerts/history/<int:alert_id>/ack', methods=['POST'])
+@bp_alerts.route("/api/alerts/history/<int:alert_id>/ack", methods=["POST"])
 def api_alert_ack(alert_id):
     """Acknowledge an alert."""
     with _fleet_db_lock:
         db = _fleet_db()
         db.execute(
             "UPDATE alert_history SET acknowledged = 1, ack_at = ? WHERE id = ?",
-            (time.time(), alert_id)
+            (time.time(), alert_id),
         )
         db.commit()
         db.close()
-    return jsonify({'ok': True})
+    return jsonify({"ok": True})
 
 
-@bp_alerts.route('/api/alerts/active')
+@bp_alerts.route("/api/alerts/active")
 def api_alerts_active():
     """Get active (unacknowledged) alerts."""
-    return jsonify({'alerts': _get_active_alerts()})
+    return jsonify({"alerts": _get_active_alerts()})
 
 
-@bp_alerts.route('/api/alerts/webhook', methods=['GET', 'POST'])
+@bp_alerts.route("/api/alerts/webhook", methods=["GET", "POST"])
 def api_alerts_webhook():
     """Get or update outgoing webhook configuration."""
-    if request.method == 'POST':
+    if request.method == "POST":
         data = request.get_json(silent=True) or {}
         allowed = {
-            'webhook_url', 'slack_webhook_url', 'discord_webhook_url',
-            'cost_spike_alerts', 'agent_error_rate_alerts', 'security_posture_changes'
+            "webhook_url",
+            "slack_webhook_url",
+            "discord_webhook_url",
+            "cost_spike_alerts",
+            "agent_error_rate_alerts",
+            "security_posture_changes",
         }
         updates = {k: data[k] for k in data if k in allowed}
         cfg = _save_alerts_webhook_config(updates)
-        return jsonify({'ok': True, 'config': cfg})
+        return jsonify({"ok": True, "config": cfg})
     return jsonify(_load_alerts_webhook_config())
 
 
-@bp_alerts.route('/api/alerts/webhook/test', methods=['POST'])
+@bp_alerts.route("/api/alerts/webhook/test", methods=["POST"])
 def api_alerts_webhook_test():
     """Send a test payload to configured outgoing webhooks."""
     data = request.get_json(silent=True) or {}
-    target = str(data.get('target', 'all')).strip().lower()
+    target = str(data.get("target", "all")).strip().lower()
     cfg = _load_alerts_webhook_config()
     payload = {
-        'type': 'test_alert',
-        'agent': 'main',
-        'cost_usd': 0,
-        'threshold': 0,
-        'timestamp': time.time(),
-        'message': 'ClawMetry webhook test alert',
+        "type": "test_alert",
+        "agent": "main",
+        "cost_usd": 0,
+        "threshold": 0,
+        "timestamp": time.time(),
+        "message": "ClawMetry webhook test alert",
     }
     sent = []
-    if target in ('all', 'generic'):
-        url = str(cfg.get('webhook_url', '')).strip()
+    if target in ("all", "generic"):
+        url = str(cfg.get("webhook_url", "")).strip()
         if url:
-            _send_webhook_alert(url, payload, payload_type='generic')
-            sent.append('generic')
-    if target in ('all', 'slack'):
-        url = str(cfg.get('slack_webhook_url', '')).strip()
+            _send_webhook_alert(url, payload, payload_type="generic")
+            sent.append("generic")
+    if target in ("all", "slack"):
+        url = str(cfg.get("slack_webhook_url", "")).strip()
         if url:
-            _send_webhook_alert(url, payload, payload_type='slack')
-            sent.append('slack')
-    if target in ('all', 'discord'):
-        url = str(cfg.get('discord_webhook_url', '')).strip()
+            _send_webhook_alert(url, payload, payload_type="slack")
+            sent.append("slack")
+    if target in ("all", "discord"):
+        url = str(cfg.get("discord_webhook_url", "")).strip()
         if url:
-            _send_webhook_alert(url, payload, payload_type='discord')
-            sent.append('discord')
+            _send_webhook_alert(url, payload, payload_type="discord")
+            sent.append("discord")
     if not sent:
-        return jsonify({'ok': False, 'error': 'No configured webhook URL for selected target'}), 400
-    return jsonify({'ok': True, 'sent': sent})
+        return jsonify(
+            {"ok": False, "error": "No configured webhook URL for selected target"}
+        ), 400
+    return jsonify({"ok": True, "sent": sent})
 
 
-@bp_alerts.route('/api/alerts/velocity')
+@bp_alerts.route("/api/alerts/velocity")
 def api_alerts_velocity():
     """Real-time token velocity status — detects runaway agent loops.
 
@@ -19495,80 +20211,82 @@ def api_alerts_velocity():
 
 # ── History / Time-Series API ────────────────────────────────────────────
 
-@bp_history.route('/api/history/metrics')
+
+@bp_history.route("/api/history/metrics")
 def api_history_metrics():
     """Query historical metrics. Params: metric, from, to, interval."""
     if not _history_db:
-        return jsonify({'error': 'History not available', 'data': []}), 200
-    metric = request.args.get('metric', 'tokens_in_total')
-    from_ts = request.args.get('from', type=float, default=time.time() - 3600)
-    to_ts = request.args.get('to', type=float, default=time.time())
-    interval = request.args.get('interval', None)
+        return jsonify({"error": "History not available", "data": []}), 200
+    metric = request.args.get("metric", "tokens_in_total")
+    from_ts = request.args.get("from", type=float, default=time.time() - 3600)
+    to_ts = request.args.get("to", type=float, default=time.time())
+    interval = request.args.get("interval", None)
     data = _history_db.query_metrics(metric, from_ts, to_ts, interval)
-    return jsonify({'data': data, 'metric': metric})
+    return jsonify({"data": data, "metric": metric})
 
 
-@bp_history.route('/api/history/metrics/list')
+@bp_history.route("/api/history/metrics/list")
 def api_history_metrics_list():
     """List available metric names."""
     if not _history_db:
-        return jsonify({'metrics': []})
-    return jsonify({'metrics': _history_db.get_available_metrics()})
+        return jsonify({"metrics": []})
+    return jsonify({"metrics": _history_db.get_available_metrics()})
 
 
-@bp_history.route('/api/history/sessions')
+@bp_history.route("/api/history/sessions")
 def api_history_sessions():
     """Query historical session data."""
     if not _history_db:
-        return jsonify({'data': []})
-    from_ts = request.args.get('from', type=float, default=time.time() - 3600)
-    to_ts = request.args.get('to', type=float, default=time.time())
-    session_key = request.args.get('session', None)
+        return jsonify({"data": []})
+    from_ts = request.args.get("from", type=float, default=time.time() - 3600)
+    to_ts = request.args.get("to", type=float, default=time.time())
+    session_key = request.args.get("session", None)
     data = _history_db.query_sessions(from_ts, to_ts, session_key)
-    return jsonify({'data': data})
+    return jsonify({"data": data})
 
 
-@bp_history.route('/api/history/crons')
+@bp_history.route("/api/history/crons")
 def api_history_crons():
     """Query historical cron run data."""
     if not _history_db:
-        return jsonify({'data': []})
-    from_ts = request.args.get('from', type=float, default=time.time() - 3600)
-    to_ts = request.args.get('to', type=float, default=time.time())
-    job_id = request.args.get('job_id', None)
+        return jsonify({"data": []})
+    from_ts = request.args.get("from", type=float, default=time.time() - 3600)
+    to_ts = request.args.get("to", type=float, default=time.time())
+    job_id = request.args.get("job_id", None)
     data = _history_db.query_crons(from_ts, to_ts, job_id)
-    return jsonify({'data': data})
+    return jsonify({"data": data})
 
 
-@bp_history.route('/api/history/snapshot/<float:timestamp>')
+@bp_history.route("/api/history/snapshot/<float:timestamp>")
 def api_history_snapshot(timestamp):
     """Get the snapshot closest to a given timestamp."""
     if not _history_db:
-        return jsonify({'error': 'History not available'}), 200
+        return jsonify({"error": "History not available"}), 200
     snap = _history_db.query_snapshot(timestamp)
     if snap:
         return jsonify(snap)
-    return jsonify({'error': 'No snapshot found'}), 404
+    return jsonify({"error": "No snapshot found"}), 404
 
 
-@bp_history.route('/api/history/stats')
+@bp_history.route("/api/history/stats")
 def api_history_stats():
     """Get history database stats."""
     if not _history_db:
-        return jsonify({'enabled': False})
+        return jsonify({"enabled": False})
     stats = _history_db.get_stats()
-    stats['enabled'] = True
+    stats["enabled"] = True
     return jsonify(stats)
 
 
-@bp_history.route('/api/history/reliability')
+@bp_history.route("/api/history/reliability")
 def api_history_reliability():
     """Cross-session behavioral reliability trend."""
     if not _history_db:
-        return jsonify({'error': 'History DB not available'}), 503
+        return jsonify({"error": "History DB not available"}), 503
     from history import AgentReliabilityScorer
+
     scorer = AgentReliabilityScorer(_history_db)
-    window = request.args.get('window', 30, type=int)
+    window = request.args.get("window", 30, type=int)
     result = scorer.score(window_days=window)
     return jsonify(result)
 
@@ -19577,12 +20295,16 @@ def api_history_reliability():
 
 _openclaw_cfg_cache = None
 
+
 def _load_openclaw_config_cached():
     """Load OpenClaw config once (best effort)."""
     global _openclaw_cfg_cache
     if _openclaw_cfg_cache is not None:
         return _openclaw_cfg_cache
-    for cf in [os.path.expanduser('~/.openclaw/openclaw.json'), os.path.expanduser('~/.clawdbot/openclaw.json')]:
+    for cf in [
+        os.path.expanduser("~/.openclaw/openclaw.json"),
+        os.path.expanduser("~/.clawdbot/openclaw.json"),
+    ]:
         try:
             with open(cf) as f:
                 _openclaw_cfg_cache = json.load(f)
@@ -19594,57 +20316,59 @@ def _load_openclaw_config_cached():
 
 
 def _provider_from_model(model_name):
-    m = str(model_name or '').lower()
-    if m.startswith('openai/') or 'gpt' in m or 'codex' in m or m.startswith('o1'):
-        return 'openai'
-    if m.startswith('anthropic/') or 'claude' in m:
-        return 'anthropic'
-    if m.startswith('google/') or 'gemini' in m:
-        return 'google'
-    if m.startswith('openrouter/'):
-        return 'openrouter'
-    if m.startswith('xai/') or 'grok' in m:
-        return 'xai'
-    return 'unknown'
+    m = str(model_name or "").lower()
+    if m.startswith("openai/") or "gpt" in m or "codex" in m or m.startswith("o1"):
+        return "openai"
+    if m.startswith("anthropic/") or "claude" in m:
+        return "anthropic"
+    if m.startswith("google/") or "gemini" in m:
+        return "google"
+    if m.startswith("openrouter/"):
+        return "openrouter"
+    if m.startswith("xai/") or "grok" in m:
+        return "xai"
+    return "unknown"
 
 
 def _provider_has_api_key(provider):
-    provider = str(provider or '').lower()
+    provider = str(provider or "").lower()
     env_map = {
-        'openai': ['OPENAI_API_KEY'],
-        'anthropic': ['ANTHROPIC_API_KEY'],
-        'google': ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
-        'openrouter': ['OPENROUTER_API_KEY'],
-        'xai': ['XAI_API_KEY'],
+        "openai": ["OPENAI_API_KEY"],
+        "anthropic": ["ANTHROPIC_API_KEY"],
+        "google": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+        "openrouter": ["OPENROUTER_API_KEY"],
+        "xai": ["XAI_API_KEY"],
     }
 
     # 1) Direct env check
     for key in env_map.get(provider, []):
-        if os.environ.get(key, '').strip():
+        if os.environ.get(key, "").strip():
             return True
 
     # 2) Config-based check -- try both legacy `providers` and OpenClaw `auth.profiles`
     cfg = _load_openclaw_config_cached()
 
     # 2a) Legacy: top-level `providers.<name>.apiKey`
-    providers = cfg.get('providers', {}) if isinstance(cfg, dict) else {}
+    providers = cfg.get("providers", {}) if isinstance(cfg, dict) else {}
     pconf = providers.get(provider, {}) if isinstance(providers, dict) else {}
     if isinstance(pconf, dict):
-        api_key = str(pconf.get('apiKey', '')).strip()
-        api_key_env = str(pconf.get('apiKeyEnv', '')).strip()
+        api_key = str(pconf.get("apiKey", "")).strip()
+        api_key_env = str(pconf.get("apiKeyEnv", "")).strip()
         if api_key:
             return True
-        if api_key_env and os.environ.get(api_key_env, '').strip():
+        if api_key_env and os.environ.get(api_key_env, "").strip():
             return True
 
     # 2b) OpenClaw style: `auth.profiles.<provider:*>.mode == "token"`
-    auth = cfg.get('auth', {}) if isinstance(cfg, dict) else {}
-    profiles = auth.get('profiles', {}) if isinstance(auth, dict) else {}
-    for profile_name, profile_cfg in (profiles.items() if isinstance(profiles, dict) else []):
+    auth = cfg.get("auth", {}) if isinstance(cfg, dict) else {}
+    profiles = auth.get("profiles", {}) if isinstance(auth, dict) else {}
+    for profile_name, profile_cfg in (
+        profiles.items() if isinstance(profiles, dict) else []
+    ):
         if not isinstance(profile_cfg, dict):
             continue
-        profile_provider = str(profile_cfg.get('provider', '')).lower()
-        if profile_provider == provider and profile_cfg.get('mode') == 'token':
+        profile_provider = str(profile_cfg.get("provider", "")).lower()
+        if profile_provider == provider and profile_cfg.get("mode") == "token":
             return True
 
     return False
@@ -19659,182 +20383,219 @@ def _build_model_billing(model_usage):
     for model, tokens in sorted(model_usage.items(), key=lambda x: -x[1]):
         provider = _provider_from_model(model)
         api_key_configured = _provider_has_api_key(provider)
-        mode = 'likely_api_key' if api_key_configured else 'likely_oauth_or_included'
+        mode = "likely_api_key" if api_key_configured else "likely_oauth_or_included"
         if api_key_configured:
             has_api_key_model = True
         else:
             has_non_api_key_model = True
 
-        model_billing.append({
-            'model': model,
-            'provider': provider,
-            'tokens': tokens,
-            'apiKeyConfigured': api_key_configured,
-            'billingMode': mode,
-        })
+        model_billing.append(
+            {
+                "model": model,
+                "provider": provider,
+                "tokens": tokens,
+                "apiKeyConfigured": api_key_configured,
+                "billingMode": mode,
+            }
+        )
 
     if has_api_key_model and has_non_api_key_model:
-        summary = 'mixed'
+        summary = "mixed"
     elif has_api_key_model:
-        summary = 'likely_api_key'
+        summary = "likely_api_key"
     else:
-        summary = 'likely_oauth_or_included'
+        summary = "likely_oauth_or_included"
 
     return model_billing, summary
 
 
 # ── Enhanced Cost Tracking Utilities ─────────────────────────────────────
 
+
 def _get_model_pricing():
     """Model-specific pricing per 1M tokens (input, output)."""
     return {
-        'claude-opus': (15.0, 75.0),      # Claude 3 Opus
-        'claude-sonnet': (3.0, 15.0),     # Claude 3 Sonnet  
-        'claude-haiku': (0.25, 1.25),     # Claude 3 Haiku
-        'gpt-4': (10.0, 30.0),            # GPT-4 Turbo
-        'gpt-3.5': (1.0, 2.0),            # GPT-3.5 Turbo
-        'default': (15.0, 45.0),          # Conservative estimate
+        "claude-opus": (15.0, 75.0),  # Claude 3 Opus
+        "claude-sonnet": (3.0, 15.0),  # Claude 3 Sonnet
+        "claude-haiku": (0.25, 1.25),  # Claude 3 Haiku
+        "gpt-4": (10.0, 30.0),  # GPT-4 Turbo
+        "gpt-3.5": (1.0, 2.0),  # GPT-3.5 Turbo
+        "default": (15.0, 45.0),  # Conservative estimate
     }
+
 
 def _calculate_enhanced_costs(daily_tokens, today_str, week_start, month_start):
     """Enhanced cost calculation with model-specific pricing."""
     pricing = _get_model_pricing()
-    
+
     # For log parsing fallback, assume 60/40 input/output ratio
     input_ratio, output_ratio = 0.6, 0.4
-    
-    def calc_cost(tokens, model_key='default'):
+
+    def calc_cost(tokens, model_key="default"):
         if tokens == 0:
             return 0.0
-        in_price, out_price = pricing.get(model_key, pricing['default'])
+        in_price, out_price = pricing.get(model_key, pricing["default"])
         input_cost = (tokens * input_ratio) * (in_price / 1_000_000)
         output_cost = (tokens * output_ratio) * (out_price / 1_000_000)
         return input_cost + output_cost
-    
+
     today_tok = daily_tokens.get(today_str, 0)
     week_tok = sum(v for k, v in daily_tokens.items() if k >= week_start)
     month_tok = sum(v for k, v in daily_tokens.items() if k >= month_start)
-    
+
     return (
         round(calc_cost(today_tok), 4),
-        round(calc_cost(week_tok), 4), 
-        round(calc_cost(month_tok), 4)
+        round(calc_cost(week_tok), 4),
+        round(calc_cost(month_tok), 4),
     )
+
 
 def _analyze_usage_trends(daily_tokens):
     """Analyze usage trends for predictions."""
     if len(daily_tokens) < 3:
-        return {'prediction': None, 'trend': 'insufficient_data'}
-    
+        return {"prediction": None, "trend": "insufficient_data"}
+
     # Get last 7 days of data
     recent_days = sorted(daily_tokens.items())[-7:]
     if len(recent_days) < 3:
-        return {'prediction': None, 'trend': 'insufficient_data'}
-    
+        return {"prediction": None, "trend": "insufficient_data"}
+
     tokens_series = [v for k, v in recent_days]
-    
+
     # Simple trend analysis
     if len(tokens_series) >= 3:
         recent_avg = sum(tokens_series[-3:]) / 3
-        older_avg = sum(tokens_series[:-3]) / max(1, len(tokens_series) - 3) if len(tokens_series) > 3 else recent_avg
-        
+        older_avg = (
+            sum(tokens_series[:-3]) / max(1, len(tokens_series) - 3)
+            if len(tokens_series) > 3
+            else recent_avg
+        )
+
         if recent_avg > older_avg * 1.2:
-            trend = 'increasing'
+            trend = "increasing"
         elif recent_avg < older_avg * 0.8:
-            trend = 'decreasing'
+            trend = "decreasing"
         else:
-            trend = 'stable'
-        
+            trend = "stable"
+
         # Monthly prediction based on recent average
         daily_avg = sum(tokens_series[-7:]) / len(tokens_series[-7:])
         monthly_prediction = daily_avg * 30
-        
-        return {
-            'trend': trend,
-            'dailyAvg': int(daily_avg),
-            'monthlyPrediction': int(monthly_prediction),
-        }
-    
-    return {'prediction': None, 'trend': 'stable'}
 
-def _generate_cost_warnings(today_cost, week_cost, month_cost, trend_data, month_tokens=0, billing_summary='unknown'):
+        return {
+            "trend": trend,
+            "dailyAvg": int(daily_avg),
+            "monthlyPrediction": int(monthly_prediction),
+        }
+
+    return {"prediction": None, "trend": "stable"}
+
+
+def _generate_cost_warnings(
+    today_cost,
+    week_cost,
+    month_cost,
+    trend_data,
+    month_tokens=0,
+    billing_summary="unknown",
+):
     """Generate cost warnings based on thresholds."""
     warnings = []
-    
+
     # Daily cost warnings
     if today_cost > 10.0:
-        warnings.append({
-            'type': 'high_daily_cost',
-            'level': 'error',
-            'message': f'High daily cost: ${today_cost:.2f} (threshold: $10)',
-        })
+        warnings.append(
+            {
+                "type": "high_daily_cost",
+                "level": "error",
+                "message": f"High daily cost: ${today_cost:.2f} (threshold: $10)",
+            }
+        )
     elif today_cost > 5.0:
-        warnings.append({
-            'type': 'elevated_daily_cost', 
-            'level': 'warning',
-            'message': f'Elevated daily cost: ${today_cost:.2f}',
-        })
-    
-    # Weekly cost warnings  
+        warnings.append(
+            {
+                "type": "elevated_daily_cost",
+                "level": "warning",
+                "message": f"Elevated daily cost: ${today_cost:.2f}",
+            }
+        )
+
+    # Weekly cost warnings
     if week_cost > 50.0:
-        warnings.append({
-            'type': 'high_weekly_cost',
-            'level': 'error', 
-            'message': f'High weekly cost: ${week_cost:.2f} (threshold: $50)',
-        })
+        warnings.append(
+            {
+                "type": "high_weekly_cost",
+                "level": "error",
+                "message": f"High weekly cost: ${week_cost:.2f} (threshold: $50)",
+            }
+        )
     elif week_cost > 25.0:
-        warnings.append({
-            'type': 'elevated_weekly_cost',
-            'level': 'warning',
-            'message': f'Elevated weekly cost: ${week_cost:.2f}',
-        })
-    
+        warnings.append(
+            {
+                "type": "elevated_weekly_cost",
+                "level": "warning",
+                "message": f"Elevated weekly cost: ${week_cost:.2f}",
+            }
+        )
+
     # Monthly cost warnings
     if month_cost > 200.0:
-        warnings.append({
-            'type': 'high_monthly_cost',
-            'level': 'error',
-            'message': f'High monthly cost: ${month_cost:.2f} (threshold: $200)', 
-        })
+        warnings.append(
+            {
+                "type": "high_monthly_cost",
+                "level": "error",
+                "message": f"High monthly cost: ${month_cost:.2f} (threshold: $200)",
+            }
+        )
     elif month_cost > 100.0:
-        warnings.append({
-            'type': 'elevated_monthly_cost',
-            'level': 'warning', 
-            'message': f'Elevated monthly cost: ${month_cost:.2f}',
-        })
-    
+        warnings.append(
+            {
+                "type": "elevated_monthly_cost",
+                "level": "warning",
+                "message": f"Elevated monthly cost: ${month_cost:.2f}",
+            }
+        )
+
     # Trend-based warnings (use observed effective rate, not hard-coded $/token)
-    if trend_data.get('trend') == 'increasing' and trend_data.get('monthlyPrediction', 0) > 300:
+    if (
+        trend_data.get("trend") == "increasing"
+        and trend_data.get("monthlyPrediction", 0) > 300
+    ):
         # If likely OAuth/included, avoid scary projected billing alerts.
-        if billing_summary != 'likely_oauth_or_included':
+        if billing_summary != "likely_oauth_or_included":
             projected_cost = 0.0
             if month_tokens and month_cost > 0:
                 effective_cost_per_token = month_cost / float(month_tokens)
-                projected_cost = trend_data.get('monthlyPrediction', 0) * effective_cost_per_token
+                projected_cost = (
+                    trend_data.get("monthlyPrediction", 0) * effective_cost_per_token
+                )
 
             if projected_cost > 0:
-                warnings.append({
-                    'type': 'trend_warning',
-                    'level': 'warning',
-                    'message': f'Usage trending up - projected monthly equivalent (if billed): ${projected_cost:.2f}',
-                })
-    
+                warnings.append(
+                    {
+                        "type": "trend_warning",
+                        "level": "warning",
+                        "message": f"Usage trending up - projected monthly equivalent (if billed): ${projected_cost:.2f}",
+                    }
+                )
+
     return warnings
 
+
 # ── Usage cache ─────────────────────────────────────────────────────────
-_usage_cache = {'data': None, 'ts': 0}
+_usage_cache = {"data": None, "ts": 0}
 _USAGE_CACHE_TTL = 60  # seconds
-_sessions_cache = {'data': None, 'ts': 0}
+_sessions_cache = {"data": None, "ts": 0}
 _SESSIONS_CACHE_TTL = 10  # seconds
-_transcript_analytics_cache = {'data': None, 'ts': 0}
+_transcript_analytics_cache = {"data": None, "ts": 0}
 _TRANSCRIPT_ANALYTICS_TTL = 60  # seconds
 
 
 def _get_sessions_dir():
-    base = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    base = SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
     if os.path.isdir(base):
         return base
-    fallback = os.path.expanduser('~/.moltbot/agents/main/sessions')
+    fallback = os.path.expanduser("~/.moltbot/agents/main/sessions")
     return fallback if os.path.isdir(fallback) else base
 
 
@@ -19845,7 +20606,7 @@ def _parse_event_timestamp(ts_val, fallback_ts=None):
         if isinstance(ts_val, (int, float)):
             return datetime.fromtimestamp(ts_val / 1000 if ts_val > 1e12 else ts_val)
         if isinstance(ts_val, str):
-            return datetime.fromisoformat(ts_val.replace('Z', '+00:00'))
+            return datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
     except Exception:
         pass
     return fallback_ts
@@ -19853,27 +20614,27 @@ def _parse_event_timestamp(ts_val, fallback_ts=None):
 
 def _extract_usage_metrics(obj):
     """Best-effort usage extraction from mixed transcript schemas."""
-    message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
-    usage = message.get('usage')
+    message = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
+    usage = message.get("usage")
     if not isinstance(usage, dict):
-        usage = obj.get('usage')
+        usage = obj.get("usage")
     if not isinstance(usage, dict):
-        usage = obj.get('tokens_used')
+        usage = obj.get("tokens_used")
     if not isinstance(usage, dict):
-        return {'tokens': 0, 'cost': 0.0}
+        return {"tokens": 0, "cost": 0.0}
 
-    in_toks = usage.get('input', usage.get('input_tokens', 0)) or 0
-    out_toks = usage.get('output', usage.get('output_tokens', 0)) or 0
-    cache_read = usage.get('cacheRead', usage.get('cache_read_tokens', 0)) or 0
-    cache_write = usage.get('cacheWrite', usage.get('cache_write_tokens', 0)) or 0
-    total = usage.get('totalTokens', usage.get('total_tokens', 0)) or 0
+    in_toks = usage.get("input", usage.get("input_tokens", 0)) or 0
+    out_toks = usage.get("output", usage.get("output_tokens", 0)) or 0
+    cache_read = usage.get("cacheRead", usage.get("cache_read_tokens", 0)) or 0
+    cache_write = usage.get("cacheWrite", usage.get("cache_write_tokens", 0)) or 0
+    total = usage.get("totalTokens", usage.get("total_tokens", 0)) or 0
     if not total:
         total = in_toks + out_toks + cache_read + cache_write
 
     cost = 0.0
-    cost_data = usage.get('cost', {})
+    cost_data = usage.get("cost", {})
     if isinstance(cost_data, dict):
-        raw = cost_data.get('total', cost_data.get('usd', 0))
+        raw = cost_data.get("total", cost_data.get("usd", 0))
         try:
             cost = float(raw or 0)
         except Exception:
@@ -19882,16 +20643,16 @@ def _extract_usage_metrics(obj):
         cost = float(cost_data)
 
     return {
-        'tokens': int(total or 0),
-        'cost': float(cost or 0.0),
+        "tokens": int(total or 0),
+        "cost": float(cost or 0.0),
     }
 
 
 def _normalize_plugin_name(tool_name):
-    name = str(tool_name or '').strip().lower()
+    name = str(tool_name or "").strip().lower()
     if not name:
-        return ''
-    for sep in ('/', ':', '.'):
+        return ""
+    for sep in ("/", ":", "."):
         if sep in name:
             name = name.split(sep, 1)[0]
             break
@@ -19901,30 +20662,32 @@ def _normalize_plugin_name(tool_name):
 def _extract_tool_plugins(obj):
     """Extract plugin/tool names from known tool call locations."""
     plugins = []
-    message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+    message = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
 
     # Newer format: message.content[{type:'toolCall', name:'...'}]
-    for part in (message.get('content') or []):
+    for part in message.get("content") or []:
         if not isinstance(part, dict):
             continue
-        if part.get('type') == 'toolCall':
-            p = _normalize_plugin_name(part.get('name', ''))
+        if part.get("type") == "toolCall":
+            p = _normalize_plugin_name(part.get("name", ""))
             if p:
                 plugins.append(p)
 
     # OpenAI-like tool call array
-    for tc in (obj.get('tool_calls') or []):
+    for tc in obj.get("tool_calls") or []:
         if not isinstance(tc, dict):
             continue
-        p = _normalize_plugin_name(tc.get('name') or (tc.get('function') or {}).get('name', ''))
+        p = _normalize_plugin_name(
+            tc.get("name") or (tc.get("function") or {}).get("name", "")
+        )
         if p:
             plugins.append(p)
 
     # Alternate key
-    for tc in (obj.get('tool_use') or []):
+    for tc in obj.get("tool_use") or []:
         if not isinstance(tc, dict):
             continue
-        p = _normalize_plugin_name(tc.get('name', ''))
+        p = _normalize_plugin_name(tc.get("name", ""))
         if p:
             plugins.append(p)
 
@@ -19936,7 +20699,16 @@ def _collect_cron_refs(obj, out_refs):
     if isinstance(obj, dict):
         for k, v in obj.items():
             lk = str(k).lower()
-            if lk in ('cronid', 'cron_id', 'cronjobid', 'cron_job_id', 'jobid', 'job_id', 'scheduleid', 'schedule_id'):
+            if lk in (
+                "cronid",
+                "cron_id",
+                "cronjobid",
+                "cron_job_id",
+                "jobid",
+                "job_id",
+                "scheduleid",
+                "schedule_id",
+            ):
                 if isinstance(v, (str, int, float)):
                     sv = str(v).strip().lower()
                     if sv:
@@ -19949,12 +20721,12 @@ def _collect_cron_refs(obj, out_refs):
 
 def _score_cron_match(session, job):
     """Heuristic score for mapping a session to a cron job."""
-    refs = session.get('explicit_cron_refs', set())
-    text = session.get('search_text', '')
+    refs = session.get("explicit_cron_refs", set())
+    text = session.get("search_text", "")
     score = 0
 
-    jid = str(job.get('id', '')).strip().lower()
-    jname = str(job.get('name', job.get('label', ''))).strip().lower()
+    jid = str(job.get("id", "")).strip().lower()
+    jname = str(job.get("name", job.get("label", ""))).strip().lower()
 
     if jid and jid in refs:
         score += 100
@@ -19965,11 +20737,20 @@ def _score_cron_match(session, job):
     if jname and len(jname) >= 4 and jname in text:
         score += 20
 
-    payload = job.get('payload') or job.get('config') or {}
+    payload = job.get("payload") or job.get("config") or {}
     if isinstance(payload, dict):
-        prompt = str(payload.get('prompt') or payload.get('text') or payload.get('message') or '').strip().lower()
+        prompt = (
+            str(
+                payload.get("prompt")
+                or payload.get("text")
+                or payload.get("message")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
         if prompt:
-            for w in [w for w in _re.split(r'[^a-z0-9_]+', prompt) if len(w) >= 5][:8]:
+            for w in [w for w in _re.split(r"[^a-z0-9_]+", prompt) if len(w) >= 5][:8]:
                 if w in text:
                     score += 1
     return score
@@ -19978,34 +20759,37 @@ def _score_cron_match(session, job):
 def _compute_transcript_analytics():
     """Parse transcript files once for usage, anomalies, cron attribution, and plugin breakdown."""
     now = time.time()
-    if _transcript_analytics_cache['data'] is not None and (now - _transcript_analytics_cache['ts']) < _TRANSCRIPT_ANALYTICS_TTL:
-        return _transcript_analytics_cache['data']
+    if (
+        _transcript_analytics_cache["data"] is not None
+        and (now - _transcript_analytics_cache["ts"]) < _TRANSCRIPT_ANALYTICS_TTL
+    ):
+        return _transcript_analytics_cache["data"]
 
     sessions_dir = _get_sessions_dir()
     summaries = []
-    plugin_stats = defaultdict(lambda: {'tokens': 0.0, 'cost': 0.0, 'calls': 0})
+    plugin_stats = defaultdict(lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0})
     daily_tokens = {}
     daily_cost = {}
     model_usage = {}
 
     if os.path.isdir(sessions_dir):
         for fname in os.listdir(sessions_dir):
-            if not fname.endswith('.jsonl'):
+            if not fname.endswith(".jsonl"):
                 continue
-            sid = fname.replace('.jsonl', '')
+            sid = fname.replace(".jsonl", "")
             fpath = os.path.join(sessions_dir, fname)
             fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
 
             s_tokens = 0
             s_cost = 0.0
-            s_model = 'unknown'
+            s_model = "unknown"
             s_start = None
             s_end = None
             search_parts = []
             explicit_cron_refs = set()
 
             try:
-                with open(fpath, 'r') as f:
+                with open(fpath, "r") as f:
                     for line in f:
                         try:
                             obj = json.loads(line.strip())
@@ -20013,8 +20797,10 @@ def _compute_transcript_analytics():
                             continue
 
                         ts = _parse_event_timestamp(
-                            obj.get('timestamp') or obj.get('time') or obj.get('created_at'),
-                            fallback_dt
+                            obj.get("timestamp")
+                            or obj.get("time")
+                            or obj.get("created_at"),
+                            fallback_dt,
                         )
                         if ts:
                             if s_start is None or ts < s_start:
@@ -20024,17 +20810,23 @@ def _compute_transcript_analytics():
 
                         # Collect cron hints from metadata and known custom session-info events
                         _collect_cron_refs(obj, explicit_cron_refs)
-                        if obj.get('customType') == 'openclaw.session-info':
-                            search_parts.append(json.dumps(obj.get('data', {}), default=str).lower())
+                        if obj.get("customType") == "openclaw.session-info":
+                            search_parts.append(
+                                json.dumps(obj.get("data", {}), default=str).lower()
+                            )
 
-                        message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
-                        model = message.get('model') or obj.get('model')
+                        message = (
+                            obj.get("message", {})
+                            if isinstance(obj.get("message"), dict)
+                            else {}
+                        )
+                        model = message.get("model") or obj.get("model")
                         if model:
                             s_model = model
 
                         usage_metrics = _extract_usage_metrics(obj)
-                        tokens = usage_metrics['tokens']
-                        cost = usage_metrics['cost']
+                        tokens = usage_metrics["tokens"]
+                        cost = usage_metrics["cost"]
 
                         if tokens > 0:
                             s_tokens += tokens
@@ -20044,22 +20836,28 @@ def _compute_transcript_analytics():
                             plugins = _extract_tool_plugins(obj)
                             if plugins:
                                 share_tokens = float(tokens) / float(len(plugins))
-                                share_cost = float(cost) / float(len(plugins)) if cost > 0 else 0.0
+                                share_cost = (
+                                    float(cost) / float(len(plugins))
+                                    if cost > 0
+                                    else 0.0
+                                )
                                 for p in plugins:
-                                    plugin_stats[p]['tokens'] += share_tokens
-                                    plugin_stats[p]['cost'] += share_cost
-                                    plugin_stats[p]['calls'] += 1
+                                    plugin_stats[p]["tokens"] += share_tokens
+                                    plugin_stats[p]["cost"] += share_cost
+                                    plugin_stats[p]["calls"] += 1
 
                         # Textual hints for cron matching
-                        if isinstance(message.get('content'), list):
-                            for part in message.get('content', []):
+                        if isinstance(message.get("content"), list):
+                            for part in message.get("content", []):
                                 if isinstance(part, dict):
-                                    txt = part.get('text')
+                                    txt = part.get("text")
                                     if isinstance(txt, str) and txt:
                                         search_parts.append(txt.lower())
-                        if obj.get('type') == 'custom':
+                        if obj.get("type") == "custom":
                             try:
-                                search_parts.append(json.dumps(obj, default=str).lower())
+                                search_parts.append(
+                                    json.dumps(obj, default=str).lower()
+                                )
                             except Exception:
                                 pass
 
@@ -20068,50 +20866,55 @@ def _compute_transcript_analytics():
                 if s_end is None:
                     s_end = fallback_dt
 
-                day = s_start.strftime('%Y-%m-%d')
+                day = s_start.strftime("%Y-%m-%d")
                 daily_tokens[day] = daily_tokens.get(day, 0) + s_tokens
                 daily_cost[day] = daily_cost.get(day, 0.0) + s_cost
                 model_usage[s_model] = model_usage.get(s_model, 0) + s_tokens
 
-                search_text = ' '.join(search_parts)
+                search_text = " ".join(search_parts)
                 if len(search_text) > 12000:
                     search_text = search_text[:12000]
 
-                summaries.append({
-                    'session_id': sid,
-                    'tokens': s_tokens,
-                    'cost_usd': s_cost,
-                    'model': s_model,
-                    'start_ts': s_start.timestamp() if s_start else 0,
-                    'end_ts': s_end.timestamp() if s_end else 0,
-                    'day': day,
-                    'search_text': search_text,
-                    'explicit_cron_refs': explicit_cron_refs,
-                    'is_cron_candidate': ('cron' in search_text) or bool(explicit_cron_refs),
-                })
+                summaries.append(
+                    {
+                        "session_id": sid,
+                        "tokens": s_tokens,
+                        "cost_usd": s_cost,
+                        "model": s_model,
+                        "start_ts": s_start.timestamp() if s_start else 0,
+                        "end_ts": s_end.timestamp() if s_end else 0,
+                        "day": day,
+                        "search_text": search_text,
+                        "explicit_cron_refs": explicit_cron_refs,
+                        "is_cron_candidate": ("cron" in search_text)
+                        or bool(explicit_cron_refs),
+                    }
+                )
             except Exception:
                 continue
 
-    summaries.sort(key=lambda s: s.get('start_ts', 0))
+    summaries.sort(key=lambda s: s.get("start_ts", 0))
     result = {
-        'sessions': summaries,
-        'plugin_stats': plugin_stats,
-        'daily_tokens': daily_tokens,
-        'daily_cost': daily_cost,
-        'model_usage': model_usage,
+        "sessions": summaries,
+        "plugin_stats": plugin_stats,
+        "daily_tokens": daily_tokens,
+        "daily_cost": daily_cost,
+        "model_usage": model_usage,
     }
-    _transcript_analytics_cache['data'] = result
-    _transcript_analytics_cache['ts'] = now
+    _transcript_analytics_cache["data"] = result
+    _transcript_analytics_cache["ts"] = now
     return result
-_transcript_analytics_cache = {'data': None, 'ts': 0}
+
+
+_transcript_analytics_cache = {"data": None, "ts": 0}
 _TRANSCRIPT_ANALYTICS_TTL = 60  # seconds
 
 
 def _get_sessions_dir():
-    base = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    base = SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
     if os.path.isdir(base):
         return base
-    fallback = os.path.expanduser('~/.moltbot/agents/main/sessions')
+    fallback = os.path.expanduser("~/.moltbot/agents/main/sessions")
     return fallback if os.path.isdir(fallback) else base
 
 
@@ -20122,7 +20925,7 @@ def _parse_event_timestamp(ts_val, fallback_ts=None):
         if isinstance(ts_val, (int, float)):
             return datetime.fromtimestamp(ts_val / 1000 if ts_val > 1e12 else ts_val)
         if isinstance(ts_val, str):
-            return datetime.fromisoformat(ts_val.replace('Z', '+00:00'))
+            return datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
     except Exception:
         pass
     return fallback_ts
@@ -20130,27 +20933,27 @@ def _parse_event_timestamp(ts_val, fallback_ts=None):
 
 def _extract_usage_metrics(obj):
     """Best-effort usage extraction from mixed transcript schemas."""
-    message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
-    usage = message.get('usage')
+    message = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
+    usage = message.get("usage")
     if not isinstance(usage, dict):
-        usage = obj.get('usage')
+        usage = obj.get("usage")
     if not isinstance(usage, dict):
-        usage = obj.get('tokens_used')
+        usage = obj.get("tokens_used")
     if not isinstance(usage, dict):
-        return {'tokens': 0, 'cost': 0.0}
+        return {"tokens": 0, "cost": 0.0}
 
-    in_toks = usage.get('input', usage.get('input_tokens', 0)) or 0
-    out_toks = usage.get('output', usage.get('output_tokens', 0)) or 0
-    cache_read = usage.get('cacheRead', usage.get('cache_read_tokens', 0)) or 0
-    cache_write = usage.get('cacheWrite', usage.get('cache_write_tokens', 0)) or 0
-    total = usage.get('totalTokens', usage.get('total_tokens', 0)) or 0
+    in_toks = usage.get("input", usage.get("input_tokens", 0)) or 0
+    out_toks = usage.get("output", usage.get("output_tokens", 0)) or 0
+    cache_read = usage.get("cacheRead", usage.get("cache_read_tokens", 0)) or 0
+    cache_write = usage.get("cacheWrite", usage.get("cache_write_tokens", 0)) or 0
+    total = usage.get("totalTokens", usage.get("total_tokens", 0)) or 0
     if not total:
         total = in_toks + out_toks + cache_read + cache_write
 
     cost = 0.0
-    cost_data = usage.get('cost', {})
+    cost_data = usage.get("cost", {})
     if isinstance(cost_data, dict):
-        raw = cost_data.get('total', cost_data.get('usd', 0))
+        raw = cost_data.get("total", cost_data.get("usd", 0))
         try:
             cost = float(raw or 0)
         except Exception:
@@ -20159,16 +20962,16 @@ def _extract_usage_metrics(obj):
         cost = float(cost_data)
 
     return {
-        'tokens': int(total or 0),
-        'cost': float(cost or 0.0),
+        "tokens": int(total or 0),
+        "cost": float(cost or 0.0),
     }
 
 
 def _normalize_plugin_name(tool_name):
-    name = str(tool_name or '').strip().lower()
+    name = str(tool_name or "").strip().lower()
     if not name:
-        return ''
-    for sep in ('/', ':', '.'):
+        return ""
+    for sep in ("/", ":", "."):
         if sep in name:
             name = name.split(sep, 1)[0]
             break
@@ -20178,30 +20981,32 @@ def _normalize_plugin_name(tool_name):
 def _extract_tool_plugins(obj):
     """Extract plugin/tool names from known tool call locations."""
     plugins = []
-    message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+    message = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
 
     # Newer format: message.content[{type:'toolCall', name:'...'}]
-    for part in (message.get('content') or []):
+    for part in message.get("content") or []:
         if not isinstance(part, dict):
             continue
-        if part.get('type') == 'toolCall':
-            p = _normalize_plugin_name(part.get('name', ''))
+        if part.get("type") == "toolCall":
+            p = _normalize_plugin_name(part.get("name", ""))
             if p:
                 plugins.append(p)
 
     # OpenAI-like tool call array
-    for tc in (obj.get('tool_calls') or []):
+    for tc in obj.get("tool_calls") or []:
         if not isinstance(tc, dict):
             continue
-        p = _normalize_plugin_name(tc.get('name') or (tc.get('function') or {}).get('name', ''))
+        p = _normalize_plugin_name(
+            tc.get("name") or (tc.get("function") or {}).get("name", "")
+        )
         if p:
             plugins.append(p)
 
     # Alternate key
-    for tc in (obj.get('tool_use') or []):
+    for tc in obj.get("tool_use") or []:
         if not isinstance(tc, dict):
             continue
-        p = _normalize_plugin_name(tc.get('name', ''))
+        p = _normalize_plugin_name(tc.get("name", ""))
         if p:
             plugins.append(p)
 
@@ -20213,7 +21018,16 @@ def _collect_cron_refs(obj, out_refs):
     if isinstance(obj, dict):
         for k, v in obj.items():
             lk = str(k).lower()
-            if lk in ('cronid', 'cron_id', 'cronjobid', 'cron_job_id', 'jobid', 'job_id', 'scheduleid', 'schedule_id'):
+            if lk in (
+                "cronid",
+                "cron_id",
+                "cronjobid",
+                "cron_job_id",
+                "jobid",
+                "job_id",
+                "scheduleid",
+                "schedule_id",
+            ):
                 if isinstance(v, (str, int, float)):
                     sv = str(v).strip().lower()
                     if sv:
@@ -20226,12 +21040,12 @@ def _collect_cron_refs(obj, out_refs):
 
 def _score_cron_match(session, job):
     """Heuristic score for mapping a session to a cron job."""
-    refs = session.get('explicit_cron_refs', set())
-    text = session.get('search_text', '')
+    refs = session.get("explicit_cron_refs", set())
+    text = session.get("search_text", "")
     score = 0
 
-    jid = str(job.get('id', '')).strip().lower()
-    jname = str(job.get('name', job.get('label', ''))).strip().lower()
+    jid = str(job.get("id", "")).strip().lower()
+    jname = str(job.get("name", job.get("label", ""))).strip().lower()
 
     if jid and jid in refs:
         score += 100
@@ -20242,11 +21056,20 @@ def _score_cron_match(session, job):
     if jname and len(jname) >= 4 and jname in text:
         score += 20
 
-    payload = job.get('payload') or job.get('config') or {}
+    payload = job.get("payload") or job.get("config") or {}
     if isinstance(payload, dict):
-        prompt = str(payload.get('prompt') or payload.get('text') or payload.get('message') or '').strip().lower()
+        prompt = (
+            str(
+                payload.get("prompt")
+                or payload.get("text")
+                or payload.get("message")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
         if prompt:
-            for w in [w for w in _re.split(r'[^a-z0-9_]+', prompt) if len(w) >= 5][:8]:
+            for w in [w for w in _re.split(r"[^a-z0-9_]+", prompt) if len(w) >= 5][:8]:
                 if w in text:
                     score += 1
     return score
@@ -20255,34 +21078,37 @@ def _score_cron_match(session, job):
 def _compute_transcript_analytics():
     """Parse transcript files once for usage, anomalies, cron attribution, and plugin breakdown."""
     now = time.time()
-    if _transcript_analytics_cache['data'] is not None and (now - _transcript_analytics_cache['ts']) < _TRANSCRIPT_ANALYTICS_TTL:
-        return _transcript_analytics_cache['data']
+    if (
+        _transcript_analytics_cache["data"] is not None
+        and (now - _transcript_analytics_cache["ts"]) < _TRANSCRIPT_ANALYTICS_TTL
+    ):
+        return _transcript_analytics_cache["data"]
 
     sessions_dir = _get_sessions_dir()
     summaries = []
-    plugin_stats = defaultdict(lambda: {'tokens': 0.0, 'cost': 0.0, 'calls': 0})
+    plugin_stats = defaultdict(lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0})
     daily_tokens = {}
     daily_cost = {}
     model_usage = {}
 
     if os.path.isdir(sessions_dir):
         for fname in os.listdir(sessions_dir):
-            if not fname.endswith('.jsonl'):
+            if not fname.endswith(".jsonl"):
                 continue
-            sid = fname.replace('.jsonl', '')
+            sid = fname.replace(".jsonl", "")
             fpath = os.path.join(sessions_dir, fname)
             fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
 
             s_tokens = 0
             s_cost = 0.0
-            s_model = 'unknown'
+            s_model = "unknown"
             s_start = None
             s_end = None
             search_parts = []
             explicit_cron_refs = set()
 
             try:
-                with open(fpath, 'r') as f:
+                with open(fpath, "r") as f:
                     for line in f:
                         try:
                             obj = json.loads(line.strip())
@@ -20290,8 +21116,10 @@ def _compute_transcript_analytics():
                             continue
 
                         ts = _parse_event_timestamp(
-                            obj.get('timestamp') or obj.get('time') or obj.get('created_at'),
-                            fallback_dt
+                            obj.get("timestamp")
+                            or obj.get("time")
+                            or obj.get("created_at"),
+                            fallback_dt,
                         )
                         if ts:
                             if s_start is None or ts < s_start:
@@ -20301,17 +21129,23 @@ def _compute_transcript_analytics():
 
                         # Collect cron hints from metadata and known custom session-info events
                         _collect_cron_refs(obj, explicit_cron_refs)
-                        if obj.get('customType') == 'openclaw.session-info':
-                            search_parts.append(json.dumps(obj.get('data', {}), default=str).lower())
+                        if obj.get("customType") == "openclaw.session-info":
+                            search_parts.append(
+                                json.dumps(obj.get("data", {}), default=str).lower()
+                            )
 
-                        message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
-                        model = message.get('model') or obj.get('model')
+                        message = (
+                            obj.get("message", {})
+                            if isinstance(obj.get("message"), dict)
+                            else {}
+                        )
+                        model = message.get("model") or obj.get("model")
                         if model:
                             s_model = model
 
                         usage_metrics = _extract_usage_metrics(obj)
-                        tokens = usage_metrics['tokens']
-                        cost = usage_metrics['cost']
+                        tokens = usage_metrics["tokens"]
+                        cost = usage_metrics["cost"]
 
                         if tokens > 0:
                             s_tokens += tokens
@@ -20321,22 +21155,28 @@ def _compute_transcript_analytics():
                             plugins = _extract_tool_plugins(obj)
                             if plugins:
                                 share_tokens = float(tokens) / float(len(plugins))
-                                share_cost = float(cost) / float(len(plugins)) if cost > 0 else 0.0
+                                share_cost = (
+                                    float(cost) / float(len(plugins))
+                                    if cost > 0
+                                    else 0.0
+                                )
                                 for p in plugins:
-                                    plugin_stats[p]['tokens'] += share_tokens
-                                    plugin_stats[p]['cost'] += share_cost
-                                    plugin_stats[p]['calls'] += 1
+                                    plugin_stats[p]["tokens"] += share_tokens
+                                    plugin_stats[p]["cost"] += share_cost
+                                    plugin_stats[p]["calls"] += 1
 
                         # Textual hints for cron matching
-                        if isinstance(message.get('content'), list):
-                            for part in message.get('content', []):
+                        if isinstance(message.get("content"), list):
+                            for part in message.get("content", []):
                                 if isinstance(part, dict):
-                                    txt = part.get('text')
+                                    txt = part.get("text")
                                     if isinstance(txt, str) and txt:
                                         search_parts.append(txt.lower())
-                        if obj.get('type') == 'custom':
+                        if obj.get("type") == "custom":
                             try:
-                                search_parts.append(json.dumps(obj, default=str).lower())
+                                search_parts.append(
+                                    json.dumps(obj, default=str).lower()
+                                )
                             except Exception:
                                 pass
 
@@ -20345,40 +21185,43 @@ def _compute_transcript_analytics():
                 if s_end is None:
                     s_end = fallback_dt
 
-                day = s_start.strftime('%Y-%m-%d')
+                day = s_start.strftime("%Y-%m-%d")
                 daily_tokens[day] = daily_tokens.get(day, 0) + s_tokens
                 daily_cost[day] = daily_cost.get(day, 0.0) + s_cost
                 model_usage[s_model] = model_usage.get(s_model, 0) + s_tokens
 
-                search_text = ' '.join(search_parts)
+                search_text = " ".join(search_parts)
                 if len(search_text) > 12000:
                     search_text = search_text[:12000]
 
-                summaries.append({
-                    'session_id': sid,
-                    'tokens': s_tokens,
-                    'cost_usd': s_cost,
-                    'model': s_model,
-                    'start_ts': s_start.timestamp() if s_start else 0,
-                    'end_ts': s_end.timestamp() if s_end else 0,
-                    'day': day,
-                    'search_text': search_text,
-                    'explicit_cron_refs': explicit_cron_refs,
-                    'is_cron_candidate': ('cron' in search_text) or bool(explicit_cron_refs),
-                })
+                summaries.append(
+                    {
+                        "session_id": sid,
+                        "tokens": s_tokens,
+                        "cost_usd": s_cost,
+                        "model": s_model,
+                        "start_ts": s_start.timestamp() if s_start else 0,
+                        "end_ts": s_end.timestamp() if s_end else 0,
+                        "day": day,
+                        "search_text": search_text,
+                        "explicit_cron_refs": explicit_cron_refs,
+                        "is_cron_candidate": ("cron" in search_text)
+                        or bool(explicit_cron_refs),
+                    }
+                )
             except Exception:
                 continue
 
-    summaries.sort(key=lambda s: s.get('start_ts', 0))
+    summaries.sort(key=lambda s: s.get("start_ts", 0))
     result = {
-        'sessions': summaries,
-        'plugin_stats': plugin_stats,
-        'daily_tokens': daily_tokens,
-        'daily_cost': daily_cost,
-        'model_usage': model_usage,
+        "sessions": summaries,
+        "plugin_stats": plugin_stats,
+        "daily_tokens": daily_tokens,
+        "daily_cost": daily_cost,
+        "model_usage": model_usage,
     }
-    _transcript_analytics_cache['data'] = result
-    _transcript_analytics_cache['ts'] = now
+    _transcript_analytics_cache["data"] = result
+    _transcript_analytics_cache["ts"] = now
     return result
 
 
@@ -20389,18 +21232,18 @@ def _compute_session_cost_anomalies(session_summaries):
     anomalies = []
 
     for i, sess in enumerate(session_summaries):
-        ts = sess.get('start_ts', 0) or 0
+        ts = sess.get("start_ts", 0) or 0
         if ts < day_ago:
             continue
-        cost = float(sess.get('cost_usd', 0.0) or 0.0)
+        cost = float(sess.get("cost_usd", 0.0) or 0.0)
         if cost <= 0:
             continue
 
         window_start = ts - (7 * 86400)
         window_costs = []
         for prev in session_summaries[:i]:
-            pts = prev.get('start_ts', 0) or 0
-            pc = float(prev.get('cost_usd', 0.0) or 0.0)
+            pts = prev.get("start_ts", 0) or 0
+            pc = float(prev.get("cost_usd", 0.0) or 0.0)
             if pts >= window_start and pts < ts and pc > 0:
                 window_costs.append(pc)
 
@@ -20410,43 +21253,53 @@ def _compute_session_cost_anomalies(session_summaries):
         if avg <= 0:
             continue
         if cost > (2.0 * avg):
-            anomalies.append({
-                'session_id': sess.get('session_id'),
-                'cost_usd': round(cost, 6),
-                'rolling_avg_usd': round(avg, 6),
-                'ratio': round(cost / avg, 3),
-                'timestamp': int(ts * 1000),
-            })
+            anomalies.append(
+                {
+                    "session_id": sess.get("session_id"),
+                    "cost_usd": round(cost, 6),
+                    "rolling_avg_usd": round(avg, 6),
+                    "ratio": round(cost / avg, 3),
+                    "timestamp": int(ts * 1000),
+                }
+            )
 
-    anomalies.sort(key=lambda a: a.get('ratio', 0), reverse=True)
+    anomalies.sort(key=lambda a: a.get("ratio", 0), reverse=True)
     return anomalies
+
 
 # ── New Feature APIs ────────────────────────────────────────────────────
 
-@bp_usage.route('/api/usage')
+
+@bp_usage.route("/api/usage")
 def api_usage():
     """Token/cost tracking from transcript files - Enhanced OTLP workaround."""
     import time as _time
+
     now = _time.time()
-    if _usage_cache['data'] is not None and (now - _usage_cache['ts']) < _USAGE_CACHE_TTL:
-        return jsonify(_usage_cache['data'])
+    if (
+        _usage_cache["data"] is not None
+        and (now - _usage_cache["ts"]) < _USAGE_CACHE_TTL
+    ):
+        return jsonify(_usage_cache["data"])
 
     # Prefer OTLP data when available
     if _has_otel_data():
         result = _get_otel_usage_data()
-        _usage_cache['data'] = result
-        _usage_cache['ts'] = now
-        try: _ext_emit('usage.compiled', {'ok': True})
-        except Exception: pass
+        _usage_cache["data"] = result
+        _usage_cache["ts"] = now
+        try:
+            _ext_emit("usage.compiled", {"ok": True})
+        except Exception:
+            pass
         return jsonify(result)
 
     analytics = _compute_transcript_analytics()
-    daily_tokens = analytics.get('daily_tokens', {})
-    daily_cost = analytics.get('daily_cost', {})
-    model_usage = analytics.get('model_usage', {})
-    session_summaries = analytics.get('sessions', [])
+    daily_tokens = analytics.get("daily_tokens", {})
+    daily_cost = analytics.get("daily_cost", {})
+    model_usage = analytics.get("model_usage", {})
+    session_summaries = analytics.get("sessions", [])
     session_costs = {
-        s.get('session_id', ''): round(float(s.get('cost_usd', 0.0) or 0.0), 6)
+        s.get("session_id", ""): round(float(s.get("cost_usd", 0.0) or 0.0), 6)
         for s in session_summaries
     }
     anomalies = _compute_session_cost_anomalies(session_summaries)
@@ -20456,80 +21309,90 @@ def api_usage():
     days = []
     for i in range(13, -1, -1):
         d = today - timedelta(days=i)
-        ds = d.strftime('%Y-%m-%d')
-        days.append({
-            'date': ds, 
-            'tokens': daily_tokens.get(ds, 0),
-            'cost': daily_cost.get(ds, 0)
-        })
+        ds = d.strftime("%Y-%m-%d")
+        days.append(
+            {
+                "date": ds,
+                "tokens": daily_tokens.get(ds, 0),
+                "cost": daily_cost.get(ds, 0),
+            }
+        )
 
     # Calculate aggregations
-    today_str = today.strftime('%Y-%m-%d')
-    week_start = (today - timedelta(days=today.weekday())).strftime('%Y-%m-%d')
-    month_start = today.strftime('%Y-%m-01')
-    
+    today_str = today.strftime("%Y-%m-%d")
+    week_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    month_start = today.strftime("%Y-%m-01")
+
     today_tok = daily_tokens.get(today_str, 0)
     week_tok = sum(v for k, v in daily_tokens.items() if k >= week_start)
     month_tok = sum(v for k, v in daily_tokens.items() if k >= month_start)
-    
+
     today_cost = daily_cost.get(today_str, 0)
     week_cost = sum(v for k, v in daily_cost.items() if k >= week_start)
     month_cost = sum(v for k, v in daily_cost.items() if k >= month_start)
-    
+
     # Trend analysis & predictions
     trend_data = _analyze_usage_trends(daily_tokens)
-    
+
     # Model breakdown for display
     model_breakdown = [
-        {'model': k, 'tokens': v}
+        {"model": k, "tokens": v}
         for k, v in sorted(model_usage.items(), key=lambda x: -x[1])
     ]
     model_billing, billing_summary = _build_model_billing(model_usage)
 
     # Cost warnings
-    warnings = _generate_cost_warnings(today_cost, week_cost, month_cost, trend_data, month_tok, billing_summary)
+    warnings = _generate_cost_warnings(
+        today_cost, week_cost, month_cost, trend_data, month_tok, billing_summary
+    )
 
     result = {
-        'source': 'transcripts',
-        'days': days,
-        'today': today_tok,
-        'week': week_tok, 
-        'month': month_tok,
-        'todayCost': round(today_cost, 4),
-        'weekCost': round(week_cost, 4),
-        'monthCost': round(month_cost, 4),
-        'modelBreakdown': model_breakdown,
-        'modelBilling': model_billing,
-        'billingSummary': billing_summary,
-        'sessionCosts': session_costs,
-        'anomalies': anomalies,
-        'anomalySessionIds': [a.get('session_id') for a in anomalies],
-        'trend': trend_data,
-        'warnings': warnings,
+        "source": "transcripts",
+        "days": days,
+        "today": today_tok,
+        "week": week_tok,
+        "month": month_tok,
+        "todayCost": round(today_cost, 4),
+        "weekCost": round(week_cost, 4),
+        "monthCost": round(month_cost, 4),
+        "modelBreakdown": model_breakdown,
+        "modelBilling": model_billing,
+        "billingSummary": billing_summary,
+        "sessionCosts": session_costs,
+        "anomalies": anomalies,
+        "anomalySessionIds": [a.get("session_id") for a in anomalies],
+        "trend": trend_data,
+        "warnings": warnings,
     }
     import time as _time
-    _usage_cache['data'] = result
-    _usage_cache['ts'] = _time.time()
+
+    _usage_cache["data"] = result
+    _usage_cache["ts"] = _time.time()
     return jsonify(result)
 
 
-@bp_usage.route('/api/usage/anomalies')
+@bp_usage.route("/api/usage/anomalies")
 def api_usage_anomalies():
     """Return session cost anomalies vs rolling 7-day baseline."""
     analytics = _compute_transcript_analytics()
-    session_summaries = analytics.get('sessions', [])
+    session_summaries = analytics.get("sessions", [])
     anomalies = _compute_session_cost_anomalies(session_summaries)
     baseline_costs = [
-        float(s.get('cost_usd', 0.0) or 0.0)
+        float(s.get("cost_usd", 0.0) or 0.0)
         for s in session_summaries
-        if (time.time() - float(s.get('start_ts', 0) or 0)) <= (7 * 86400) and float(s.get('cost_usd', 0.0) or 0.0) > 0
+        if (time.time() - float(s.get("start_ts", 0) or 0)) <= (7 * 86400)
+        and float(s.get("cost_usd", 0.0) or 0.0) > 0
     ]
-    baseline_avg = (sum(baseline_costs) / float(len(baseline_costs))) if baseline_costs else 0.0
-    return jsonify({
-        'anomalies': anomalies,
-        'baseline_7d_avg_usd': round(baseline_avg, 6),
-        'threshold_multiplier': 2.0,
-    })
+    baseline_avg = (
+        (sum(baseline_costs) / float(len(baseline_costs))) if baseline_costs else 0.0
+    )
+    return jsonify(
+        {
+            "anomalies": anomalies,
+            "baseline_7d_avg_usd": round(baseline_avg, 6),
+            "threshold_multiplier": 2.0,
+        }
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -20539,7 +21402,7 @@ def api_usage_anomalies():
 # against a 7-day rolling baseline derived from session transcripts.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_ANOMALY_DB_PATH = os.path.expanduser('~/.openclaw/clawmetry.db')
+_ANOMALY_DB_PATH = os.path.expanduser("~/.openclaw/clawmetry.db")
 _anomaly_db_conn = None
 _anomaly_db_lock = threading.Lock()
 
@@ -20555,11 +21418,13 @@ def _get_anomaly_db():
         if _anomaly_db_conn is None:
             db_dir = os.path.dirname(_ANOMALY_DB_PATH)
             os.makedirs(db_dir, exist_ok=True)
-            _anomaly_db_conn = sqlite3.connect(_ANOMALY_DB_PATH, check_same_thread=False)
+            _anomaly_db_conn = sqlite3.connect(
+                _ANOMALY_DB_PATH, check_same_thread=False
+            )
             _anomaly_db_conn.row_factory = sqlite3.Row
-            _anomaly_db_conn.execute('PRAGMA journal_mode=WAL')
-            _anomaly_db_conn.execute('PRAGMA synchronous=NORMAL')
-            _anomaly_db_conn.executescript('''
+            _anomaly_db_conn.execute("PRAGMA journal_mode=WAL")
+            _anomaly_db_conn.execute("PRAGMA synchronous=NORMAL")
+            _anomaly_db_conn.executescript("""
                 CREATE TABLE IF NOT EXISTS anomalies (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     detected_at REAL NOT NULL,
@@ -20574,7 +21439,7 @@ def _get_anomaly_db():
                 CREATE INDEX IF NOT EXISTS idx_anomalies_ts ON anomalies(detected_at);
                 CREATE INDEX IF NOT EXISTS idx_anomalies_session ON anomalies(session_key);
                 CREATE INDEX IF NOT EXISTS idx_anomalies_metric ON anomalies(metric);
-            ''')
+            """)
             _anomaly_db_conn.commit()
         return _anomaly_db_conn
 
@@ -20592,37 +21457,54 @@ def _detect_and_store_anomalies():
 
     Returns list of anomaly dicts (both freshly detected and stored).
     """
-    import sqlite3 as _sqlite3
 
     analytics = _compute_transcript_analytics()
-    sessions = analytics.get('sessions', [])
+    sessions = analytics.get("sessions", [])
     now_ts = time.time()
     window_7d = 7 * 86400
     window_24h = 86400
 
     # ── Build 7-day baseline ──────────────────────────────────────────────────
     baseline_window_start = now_ts - window_7d
-    baseline_sessions = [s for s in sessions if float(s.get('start_ts', 0) or 0) >= baseline_window_start]
+    baseline_sessions = [
+        s for s in sessions if float(s.get("start_ts", 0) or 0) >= baseline_window_start
+    ]
 
-    baseline_costs = [float(s.get('cost_usd', 0.0) or 0.0) for s in baseline_sessions if float(s.get('cost_usd', 0.0) or 0.0) > 0]
-    baseline_tokens = [int(s.get('tokens', 0) or 0) for s in baseline_sessions if int(s.get('tokens', 0) or 0) > 0]
+    baseline_costs = [
+        float(s.get("cost_usd", 0.0) or 0.0)
+        for s in baseline_sessions
+        if float(s.get("cost_usd", 0.0) or 0.0) > 0
+    ]
+    baseline_tokens = [
+        int(s.get("tokens", 0) or 0)
+        for s in baseline_sessions
+        if int(s.get("tokens", 0) or 0) > 0
+    ]
 
     avg_cost_7d = sum(baseline_costs) / len(baseline_costs) if baseline_costs else 0.0
-    avg_tokens_7d = sum(baseline_tokens) / len(baseline_tokens) if baseline_tokens else 0.0
+    avg_tokens_7d = (
+        sum(baseline_tokens) / len(baseline_tokens) if baseline_tokens else 0.0
+    )
 
     # Error-rate baseline: fraction of sessions in last 7d with errors
     # (We approximate via cost=0 + tokens>0 as proxy for "errored" sessions.)
     err_baseline_count = sum(
-        1 for s in baseline_sessions
-        if float(s.get('cost_usd', 0.0) or 0.0) == 0 and int(s.get('tokens', 0) or 0) > 100
+        1
+        for s in baseline_sessions
+        if float(s.get("cost_usd", 0.0) or 0.0) == 0
+        and int(s.get("tokens", 0) or 0) > 100
     )
     err_baseline_rate = err_baseline_count / max(len(baseline_sessions), 1)
 
     # 24h error rate
-    recent_sessions_24h = [s for s in sessions if float(s.get('start_ts', 0) or 0) >= now_ts - window_24h]
+    recent_sessions_24h = [
+        s for s in sessions if float(s.get("start_ts", 0) or 0) >= now_ts - window_24h
+    ]
     recent_err_count = sum(
-        1 for s in recent_sessions_24h
-        if float(s.get('cost_usd', 0.0) or 0.0) == 0 and int(s.get('tokens', 0) or 0) > 100
+        1
+        for s in recent_sessions_24h
+        if float(s.get("cost_usd", 0.0) or 0.0) == 0
+        and int(s.get("tokens", 0) or 0) > 100
     )
     recent_err_rate = recent_err_count / max(len(recent_sessions_24h), 1)
 
@@ -20631,53 +21513,59 @@ def _detect_and_store_anomalies():
     day_ago = now_ts - window_24h
 
     for sess in sessions:
-        ts = float(sess.get('start_ts', 0) or 0)
+        ts = float(sess.get("start_ts", 0) or 0)
         if ts < day_ago:
             continue
-        sid = sess.get('session_id', '')
-        cost = float(sess.get('cost_usd', 0.0) or 0.0)
-        tokens = int(sess.get('tokens', 0) or 0)
+        sid = sess.get("session_id", "")
+        cost = float(sess.get("cost_usd", 0.0) or 0.0)
+        tokens = int(sess.get("tokens", 0) or 0)
 
         # Cost spike
         if avg_cost_7d > 0 and cost > avg_cost_7d * 2.0:
             ratio = round(cost / avg_cost_7d, 3)
-            severity = 'critical' if ratio > 5 else 'high' if ratio > 3 else 'medium'
-            new_anomalies.append({
-                'session_key': sid,
-                'metric': 'cost_spike',
-                'value': cost,
-                'baseline': avg_cost_7d,
-                'ratio': ratio,
-                'severity': severity,
-                'detected_at': ts,
-            })
+            severity = "critical" if ratio > 5 else "high" if ratio > 3 else "medium"
+            new_anomalies.append(
+                {
+                    "session_key": sid,
+                    "metric": "cost_spike",
+                    "value": cost,
+                    "baseline": avg_cost_7d,
+                    "ratio": ratio,
+                    "severity": severity,
+                    "detected_at": ts,
+                }
+            )
 
         # Token spike
         if avg_tokens_7d > 0 and tokens > avg_tokens_7d * 2.0:
             ratio = round(tokens / avg_tokens_7d, 3)
-            severity = 'critical' if ratio > 5 else 'high' if ratio > 3 else 'medium'
-            new_anomalies.append({
-                'session_key': sid,
-                'metric': 'token_spike',
-                'value': tokens,
-                'baseline': avg_tokens_7d,
-                'ratio': ratio,
-                'severity': severity,
-                'detected_at': ts,
-            })
+            severity = "critical" if ratio > 5 else "high" if ratio > 3 else "medium"
+            new_anomalies.append(
+                {
+                    "session_key": sid,
+                    "metric": "token_spike",
+                    "value": tokens,
+                    "baseline": avg_tokens_7d,
+                    "ratio": ratio,
+                    "severity": severity,
+                    "detected_at": ts,
+                }
+            )
 
     # Error rate spike (aggregate — tied to a synthetic session_key)
     if err_baseline_rate > 0 and recent_err_rate > err_baseline_rate * 3.0:
         ratio = round(recent_err_rate / err_baseline_rate, 3)
-        new_anomalies.append({
-            'session_key': '__error_rate__',
-            'metric': 'error_rate_spike',
-            'value': round(recent_err_rate, 4),
-            'baseline': round(err_baseline_rate, 4),
-            'ratio': ratio,
-            'severity': 'high' if ratio > 5 else 'medium',
-            'detected_at': now_ts,
-        })
+        new_anomalies.append(
+            {
+                "session_key": "__error_rate__",
+                "metric": "error_rate_spike",
+                "value": round(recent_err_rate, 4),
+                "baseline": round(err_baseline_rate, 4),
+                "ratio": ratio,
+                "severity": "high" if ratio > 5 else "medium",
+                "detected_at": now_ts,
+            }
+        )
 
     # Session frequency spike: compare 24h session count vs 7-day daily average
     if len(baseline_sessions) > 0:
@@ -20686,15 +21574,17 @@ def _detect_and_store_anomalies():
         sessions_last_24h = len(recent_sessions_24h)
         if avg_sessions_per_day >= 2 and sessions_last_24h > avg_sessions_per_day * 2.5:
             freq_ratio = round(sessions_last_24h / avg_sessions_per_day, 3)
-            new_anomalies.append({
-                'session_key': '__session_frequency__',
-                'metric': 'session_frequency_spike',
-                'value': sessions_last_24h,
-                'baseline': round(avg_sessions_per_day, 2),
-                'ratio': freq_ratio,
-                'severity': 'high' if freq_ratio > 4 else 'medium',
-                'detected_at': now_ts,
-            })
+            new_anomalies.append(
+                {
+                    "session_key": "__session_frequency__",
+                    "metric": "session_frequency_spike",
+                    "value": sessions_last_24h,
+                    "baseline": round(avg_sessions_per_day, 2),
+                    "ratio": freq_ratio,
+                    "severity": "high" if freq_ratio > 4 else "medium",
+                    "detected_at": now_ts,
+                }
+            )
 
     # ── Persist new anomalies (deduplicate by session_key + metric within 24h) ──
     try:
@@ -20702,13 +21592,21 @@ def _detect_and_store_anomalies():
         with _anomaly_db_lock:
             for a in new_anomalies:
                 existing = db.execute(
-                    'SELECT id FROM anomalies WHERE session_key = ? AND metric = ? AND detected_at >= ?',
-                    (a['session_key'], a['metric'], a['detected_at'] - window_24h)
+                    "SELECT id FROM anomalies WHERE session_key = ? AND metric = ? AND detected_at >= ?",
+                    (a["session_key"], a["metric"], a["detected_at"] - window_24h),
                 ).fetchone()
                 if not existing:
                     db.execute(
-                        'INSERT INTO anomalies (detected_at, session_key, metric, value, baseline, ratio, severity) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                        (a['detected_at'], a['session_key'], a['metric'], a['value'], a['baseline'], a['ratio'], a['severity'])
+                        "INSERT INTO anomalies (detected_at, session_key, metric, value, baseline, ratio, severity) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            a["detected_at"],
+                            a["session_key"],
+                            a["metric"],
+                            a["value"],
+                            a["baseline"],
+                            a["ratio"],
+                            a["severity"],
+                        ),
                     )
             db.commit()
     except Exception as _e:
@@ -20719,8 +21617,8 @@ def _detect_and_store_anomalies():
         db = _get_anomaly_db()
         cutoff = now_ts - (2 * window_24h)
         rows = db.execute(
-            'SELECT * FROM anomalies WHERE detected_at >= ? ORDER BY detected_at DESC LIMIT 200',
-            (cutoff,)
+            "SELECT * FROM anomalies WHERE detected_at >= ? ORDER BY detected_at DESC LIMIT 200",
+            (cutoff,),
         ).fetchall()
         stored = [dict(r) for r in rows]
     except Exception:
@@ -20728,26 +21626,28 @@ def _detect_and_store_anomalies():
 
     # Compute session frequency baseline for return value
     _days_in_window = max((now_ts - baseline_window_start) / 86400, 1.0)
-    _avg_sessions_per_day = len(baseline_sessions) / _days_in_window if len(baseline_sessions) > 0 else 0.0
+    _avg_sessions_per_day = (
+        len(baseline_sessions) / _days_in_window if len(baseline_sessions) > 0 else 0.0
+    )
 
     return stored, {
-        'baseline_cost_7d': round(avg_cost_7d, 6),
-        'baseline_tokens_7d': round(avg_tokens_7d, 2),
-        'baseline_error_rate_7d': round(err_baseline_rate, 4),
-        'recent_error_rate_24h': round(recent_err_rate, 4),
-        'baseline_sessions_per_day_7d': round(_avg_sessions_per_day, 2),
-        'sessions_last_24h': len(recent_sessions_24h),
-        'session_count_7d': len(baseline_sessions),
+        "baseline_cost_7d": round(avg_cost_7d, 6),
+        "baseline_tokens_7d": round(avg_tokens_7d, 2),
+        "baseline_error_rate_7d": round(err_baseline_rate, 4),
+        "recent_error_rate_24h": round(recent_err_rate, 4),
+        "baseline_sessions_per_day_7d": round(_avg_sessions_per_day, 2),
+        "sessions_last_24h": len(recent_sessions_24h),
+        "session_count_7d": len(baseline_sessions),
     }
 
 
-_anomaly_detection_cache = {'data': None, 'ts': 0}
+_anomaly_detection_cache = {"data": None, "ts": 0}
 _ANOMALY_CACHE_TTL = 60  # seconds
 
 import sqlite3
 
 
-@bp_usage.route('/api/anomalies')
+@bp_usage.route("/api/anomalies")
 def api_anomalies():
     """Rolling-baseline anomaly detection endpoint.
 
@@ -20761,64 +21661,73 @@ def api_anomalies():
     - detected_at: Unix timestamp of detection
     """
     now = time.time()
-    if _anomaly_detection_cache['data'] is not None and (now - _anomaly_detection_cache['ts']) < _ANOMALY_CACHE_TTL:
-        return jsonify(_anomaly_detection_cache['data'])
+    if (
+        _anomaly_detection_cache["data"] is not None
+        and (now - _anomaly_detection_cache["ts"]) < _ANOMALY_CACHE_TTL
+    ):
+        return jsonify(_anomaly_detection_cache["data"])
 
     anomalies, baselines = _detect_and_store_anomalies()
-    active = [a for a in anomalies if not a.get('acknowledged')]
+    active = [a for a in anomalies if not a.get("acknowledged")]
     result = {
-        'anomalies': anomalies,
-        'active_count': len(active),
-        'has_active': bool(active),
-        'baselines': baselines,
-        'threshold_cost_multiplier': 2.0,
-        'threshold_token_multiplier': 2.0,
-        'threshold_error_multiplier': 3.0,
+        "anomalies": anomalies,
+        "active_count": len(active),
+        "has_active": bool(active),
+        "baselines": baselines,
+        "threshold_cost_multiplier": 2.0,
+        "threshold_token_multiplier": 2.0,
+        "threshold_error_multiplier": 3.0,
     }
-    _anomaly_detection_cache['data'] = result
-    _anomaly_detection_cache['ts'] = now
+    _anomaly_detection_cache["data"] = result
+    _anomaly_detection_cache["ts"] = now
     return jsonify(result)
 
 
-@bp_usage.route('/api/anomalies/<int:anomaly_id>/ack', methods=['POST'])
+@bp_usage.route("/api/anomalies/<int:anomaly_id>/ack", methods=["POST"])
 def api_anomaly_ack(anomaly_id):
     """Acknowledge an anomaly so it no longer appears in the active banner."""
     try:
         db = _get_anomaly_db()
         with _anomaly_db_lock:
-            db.execute('UPDATE anomalies SET acknowledged = 1 WHERE id = ?', (anomaly_id,))
+            db.execute(
+                "UPDATE anomalies SET acknowledged = 1 WHERE id = ?", (anomaly_id,)
+            )
             db.commit()
-        _anomaly_detection_cache['data'] = None  # invalidate cache
-        return jsonify({'ok': True, 'id': anomaly_id})
+        _anomaly_detection_cache["data"] = None  # invalidate cache
+        return jsonify({"ok": True, "id": anomaly_id})
     except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@bp_usage.route('/api/usage/by-plugin')
+@bp_usage.route("/api/usage/by-plugin")
 def api_usage_by_plugin():
     """Return plugin/skill token and cost attribution from transcript tool calls."""
     analytics = _compute_transcript_analytics()
-    plugin_stats = analytics.get('plugin_stats', {})
-    total_tokens = sum(float(v.get('tokens', 0.0) or 0.0) for v in plugin_stats.values())
+    plugin_stats = analytics.get("plugin_stats", {})
+    total_tokens = sum(
+        float(v.get("tokens", 0.0) or 0.0) for v in plugin_stats.values()
+    )
     total_tokens = total_tokens if total_tokens > 0 else 1.0
 
     rows = []
     for plugin, stats in plugin_stats.items():
-        toks = float(stats.get('tokens', 0.0) or 0.0)
-        cost = float(stats.get('cost', 0.0) or 0.0)
-        calls = int(stats.get('calls', 0) or 0)
-        rows.append({
-            'plugin': plugin,
-            'total_tokens': int(round(toks)),
-            'cost_usd': round(cost, 6),
-            'call_count': calls,
-            'pct_of_total': round((toks / total_tokens) * 100.0, 2),
-        })
-    rows.sort(key=lambda r: r['total_tokens'], reverse=True)
-    return jsonify({'plugins': rows})
+        toks = float(stats.get("tokens", 0.0) or 0.0)
+        cost = float(stats.get("cost", 0.0) or 0.0)
+        calls = int(stats.get("calls", 0) or 0)
+        rows.append(
+            {
+                "plugin": plugin,
+                "total_tokens": int(round(toks)),
+                "cost_usd": round(cost, 6),
+                "call_count": calls,
+                "pct_of_total": round((toks / total_tokens) * 100.0, 2),
+            }
+        )
+    rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+    return jsonify({"plugins": rows})
 
 
-@bp_usage.route('/api/sessions/clusters')
+@bp_usage.route("/api/sessions/clusters")
 def api_sessions_clusters():
     """Cluster sessions by behavior pattern (tool usage, cost profile, error type, model).
 
@@ -20831,20 +21740,27 @@ def api_sessions_clusters():
 
     # Optional time window filter (days)
     try:
-        days = int(request.args.get('days', 30))
+        days = int(request.args.get("days", 30))
     except (ValueError, TypeError):
         days = 30
     cutoff_ts = now_ts - (days * 86400)
 
     sessions_dir = _get_sessions_dir()
     if not sessions_dir or not os.path.isdir(sessions_dir):
-        return jsonify({'clusters': [], 'total_sessions': 0, 'days': days, 'generated_at': int(now_ts * 1000)})
+        return jsonify(
+            {
+                "clusters": [],
+                "total_sessions": 0,
+                "days": days,
+                "generated_at": int(now_ts * 1000),
+            }
+        )
 
     usd_per_tok = _estimate_usd_per_token()
     session_profiles = []
 
     for fname in os.listdir(sessions_dir):
-        if not fname.endswith('.jsonl'):
+        if not fname.endswith(".jsonl"):
             continue
         fpath = os.path.join(sessions_dir, fname)
         try:
@@ -20852,17 +21768,17 @@ def api_sessions_clusters():
             if fmtime < cutoff_ts:
                 continue
 
-            sid = fname.replace('.jsonl', '')
+            sid = fname.replace(".jsonl", "")
             tool_counts = defaultdict(int)
             error_count = 0
             s_tokens = 0
-            s_model = 'unknown'
+            s_model = "unknown"
             has_cron = False
             has_subagent = False
             turn_count = 0
             s_start = fmtime
 
-            with open(fpath, 'r') as f:
+            with open(fpath, "r") as f:
                 for line in f:
                     try:
                         obj = json.loads(line.strip())
@@ -20870,8 +21786,12 @@ def api_sessions_clusters():
                         continue
 
                     # Detect model
-                    message = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
-                    model = message.get('model') or obj.get('model')
+                    message = (
+                        obj.get("message", {})
+                        if isinstance(obj.get("message"), dict)
+                        else {}
+                    )
+                    model = message.get("model") or obj.get("model")
                     if model:
                         s_model = model
 
@@ -20881,54 +21801,56 @@ def api_sessions_clusters():
                         tool_counts[t] += 1
 
                     # Count errors
-                    if obj.get('type') in ('error', 'tool_error') or (
-                        isinstance(obj.get('error'), dict) and obj['error']
+                    if obj.get("type") in ("error", "tool_error") or (
+                        isinstance(obj.get("error"), dict) and obj["error"]
                     ):
                         error_count += 1
 
                     # Detect cron / subagent hints
                     content_str = json.dumps(obj, default=str).lower()
-                    if 'cron' in content_str or 'scheduled' in content_str:
+                    if "cron" in content_str or "scheduled" in content_str:
                         has_cron = True
-                    if 'subagent' in content_str or 'spawned' in content_str:
+                    if "subagent" in content_str or "spawned" in content_str:
                         has_subagent = True
 
                     # Usage metrics
                     metrics = _extract_usage_metrics(obj)
-                    if metrics['tokens'] > 0:
-                        s_tokens += metrics['tokens']
+                    if metrics["tokens"] > 0:
+                        s_tokens += metrics["tokens"]
                         turn_count += 1
 
             if s_tokens == 0 and not tool_counts:
                 continue
 
             total_tools = sum(tool_counts.values())
-            top_tool = max(tool_counts, key=tool_counts.get) if tool_counts else 'none'
+            top_tool = max(tool_counts, key=tool_counts.get) if tool_counts else "none"
             cost = round(s_tokens * usd_per_tok, 6)
 
             # Determine cost tier
             if cost >= 0.10:
-                cost_tier = 'expensive'
+                cost_tier = "expensive"
             elif cost >= 0.02:
-                cost_tier = 'medium'
+                cost_tier = "medium"
             else:
-                cost_tier = 'cheap'
+                cost_tier = "cheap"
 
-            session_profiles.append({
-                'session_id': sid,
-                'model': s_model,
-                'top_tool': top_tool,
-                'tool_counts': dict(tool_counts),
-                'total_tools': total_tools,
-                'error_count': error_count,
-                'tokens': s_tokens,
-                'cost_usd': cost,
-                'cost_tier': cost_tier,
-                'has_cron': has_cron,
-                'has_subagent': has_subagent,
-                'turn_count': turn_count,
-                'fmtime': fmtime,
-            })
+            session_profiles.append(
+                {
+                    "session_id": sid,
+                    "model": s_model,
+                    "top_tool": top_tool,
+                    "tool_counts": dict(tool_counts),
+                    "total_tools": total_tools,
+                    "error_count": error_count,
+                    "tokens": s_tokens,
+                    "cost_usd": cost,
+                    "cost_tier": cost_tier,
+                    "has_cron": has_cron,
+                    "has_subagent": has_subagent,
+                    "turn_count": turn_count,
+                    "fmtime": fmtime,
+                }
+            )
         except Exception:
             continue
 
@@ -20936,131 +21858,139 @@ def api_sessions_clusters():
     # Cluster key = (dominant_tool_category, cost_tier, error_presence, model_family)
 
     def _model_family(model_str):
-        m = (model_str or '').lower()
-        if 'claude' in m:
-            return 'claude'
-        if 'gpt' in m or 'openai' in m:
-            return 'gpt'
-        if 'gemini' in m or 'google' in m:
-            return 'gemini'
-        if 'llama' in m or 'mistral' in m or 'groq' in m:
-            return 'open-source'
-        return 'other'
+        m = (model_str or "").lower()
+        if "claude" in m:
+            return "claude"
+        if "gpt" in m or "openai" in m:
+            return "gpt"
+        if "gemini" in m or "google" in m:
+            return "gemini"
+        if "llama" in m or "mistral" in m or "groq" in m:
+            return "open-source"
+        return "other"
 
     def _tool_category(tool_name):
-        t = (tool_name or '').lower()
-        if t in ('none', ''):
-            return 'no-tools'
-        if t in ('exec', 'bash', 'shell', 'run'):
-            return 'code-execution'
-        if t in ('read', 'write', 'edit', 'file_read', 'file_write'):
-            return 'file-ops'
-        if t in ('web_search', 'web_fetch', 'browser'):
-            return 'web'
-        if t in ('message', 'tts', 'send_message'):
-            return 'communication'
-        if t in ('sessions_spawn', 'sessions_send', 'subagents'):
-            return 'orchestration'
-        if t in ('memory_search', 'memory_get'):
-            return 'memory'
-        return 'other-tools'
+        t = (tool_name or "").lower()
+        if t in ("none", ""):
+            return "no-tools"
+        if t in ("exec", "bash", "shell", "run"):
+            return "code-execution"
+        if t in ("read", "write", "edit", "file_read", "file_write"):
+            return "file-ops"
+        if t in ("web_search", "web_fetch", "browser"):
+            return "web"
+        if t in ("message", "tts", "send_message"):
+            return "communication"
+        if t in ("sessions_spawn", "sessions_send", "subagents"):
+            return "orchestration"
+        if t in ("memory_search", "memory_get"):
+            return "memory"
+        return "other-tools"
 
-    clusters_map = defaultdict(lambda: {
-        'sessions': [],
-        'total_tokens': 0,
-        'total_cost_usd': 0.0,
-        'error_count': 0,
-        'tool_freq': defaultdict(int),
-    })
+    clusters_map = defaultdict(
+        lambda: {
+            "sessions": [],
+            "total_tokens": 0,
+            "total_cost_usd": 0.0,
+            "error_count": 0,
+            "tool_freq": defaultdict(int),
+        }
+    )
 
     for sp in session_profiles:
-        mf = _model_family(sp['model'])
-        tc = _tool_category(sp['top_tool'])
-        has_errors = 'errors' if sp['error_count'] > 0 else 'clean'
+        mf = _model_family(sp["model"])
+        tc = _tool_category(sp["top_tool"])
+        has_errors = "errors" if sp["error_count"] > 0 else "clean"
         cluster_key = f"{tc}|{sp['cost_tier']}|{has_errors}|{mf}"
 
         c = clusters_map[cluster_key]
-        c['sessions'].append(sp['session_id'])
-        c['total_tokens'] += sp['tokens']
-        c['total_cost_usd'] += sp['cost_usd']
-        c['error_count'] += sp['error_count']
-        for tool, cnt in sp['tool_counts'].items():
-            c['tool_freq'][tool] += cnt
+        c["sessions"].append(sp["session_id"])
+        c["total_tokens"] += sp["tokens"]
+        c["total_cost_usd"] += sp["cost_usd"]
+        c["error_count"] += sp["error_count"]
+        for tool, cnt in sp["tool_counts"].items():
+            c["tool_freq"][tool] += cnt
 
         # Tag attributes (set once)
-        if 'tool_category' not in c:
-            c['tool_category'] = tc
-            c['cost_tier'] = sp['cost_tier']
-            c['has_errors'] = has_errors == 'errors'
-            c['model_family'] = mf
+        if "tool_category" not in c:
+            c["tool_category"] = tc
+            c["cost_tier"] = sp["cost_tier"]
+            c["has_errors"] = has_errors == "errors"
+            c["model_family"] = mf
 
     # ── Build response ──────────────────────────────────────────────────────────
     clusters_out = []
     for key, c in clusters_map.items():
-        n = len(c['sessions'])
-        avg_cost = c['total_cost_usd'] / n if n > 0 else 0.0
-        top_tools_sorted = sorted(c['tool_freq'].items(), key=lambda x: x[1], reverse=True)[:5]
+        n = len(c["sessions"])
+        avg_cost = c["total_cost_usd"] / n if n > 0 else 0.0
+        top_tools_sorted = sorted(
+            c["tool_freq"].items(), key=lambda x: x[1], reverse=True
+        )[:5]
 
         # Auto-label cluster
-        tc = c.get('tool_category', 'other')
-        cost_tier = c.get('cost_tier', 'cheap')
-        mf = c.get('model_family', 'other')
-        has_err = c.get('has_errors', False)
+        tc = c.get("tool_category", "other")
+        cost_tier = c.get("cost_tier", "cheap")
+        mf = c.get("model_family", "other")
+        has_err = c.get("has_errors", False)
         label_parts = []
-        if tc == 'code-execution':
-            label_parts.append('Code execution')
-        elif tc == 'file-ops':
-            label_parts.append('File operations')
-        elif tc == 'web':
-            label_parts.append('Web browsing')
-        elif tc == 'communication':
-            label_parts.append('Messaging')
-        elif tc == 'orchestration':
-            label_parts.append('Agent orchestration')
-        elif tc == 'memory':
-            label_parts.append('Memory access')
-        elif tc == 'no-tools':
-            label_parts.append('Conversational')
+        if tc == "code-execution":
+            label_parts.append("Code execution")
+        elif tc == "file-ops":
+            label_parts.append("File operations")
+        elif tc == "web":
+            label_parts.append("Web browsing")
+        elif tc == "communication":
+            label_parts.append("Messaging")
+        elif tc == "orchestration":
+            label_parts.append("Agent orchestration")
+        elif tc == "memory":
+            label_parts.append("Memory access")
+        elif tc == "no-tools":
+            label_parts.append("Conversational")
         else:
-            label_parts.append('Mixed tools')
-        if cost_tier == 'expensive':
-            label_parts.append('high-cost')
-        elif cost_tier == 'medium':
-            label_parts.append('medium-cost')
+            label_parts.append("Mixed tools")
+        if cost_tier == "expensive":
+            label_parts.append("high-cost")
+        elif cost_tier == "medium":
+            label_parts.append("medium-cost")
         if has_err:
-            label_parts.append('with errors')
-        if mf not in ('claude', 'other'):
+            label_parts.append("with errors")
+        if mf not in ("claude", "other"):
             label_parts.append(mf)
 
-        cluster_label = ' '.join(label_parts)
+        cluster_label = " ".join(label_parts)
 
-        clusters_out.append({
-            'cluster_id': key,
-            'label': cluster_label,
-            'session_count': n,
-            'session_ids': c['sessions'][:10],  # first 10 for drill-down
-            'total_tokens': c['total_tokens'],
-            'total_cost_usd': round(c['total_cost_usd'], 6),
-            'avg_cost_usd': round(avg_cost, 6),
-            'error_count': c['error_count'],
-            'tool_category': tc,
-            'cost_tier': cost_tier,
-            'has_errors': has_err,
-            'model_family': mf,
-            'top_tools': [{'tool': t, 'count': cnt} for t, cnt in top_tools_sorted],
-        })
+        clusters_out.append(
+            {
+                "cluster_id": key,
+                "label": cluster_label,
+                "session_count": n,
+                "session_ids": c["sessions"][:10],  # first 10 for drill-down
+                "total_tokens": c["total_tokens"],
+                "total_cost_usd": round(c["total_cost_usd"], 6),
+                "avg_cost_usd": round(avg_cost, 6),
+                "error_count": c["error_count"],
+                "tool_category": tc,
+                "cost_tier": cost_tier,
+                "has_errors": has_err,
+                "model_family": mf,
+                "top_tools": [{"tool": t, "count": cnt} for t, cnt in top_tools_sorted],
+            }
+        )
 
-    clusters_out.sort(key=lambda x: x['session_count'], reverse=True)
+    clusters_out.sort(key=lambda x: x["session_count"], reverse=True)
 
-    return jsonify({
-        'clusters': clusters_out,
-        'total_sessions': len(session_profiles),
-        'days': days,
-        'generated_at': int(now_ts * 1000),
-    })
+    return jsonify(
+        {
+            "clusters": clusters_out,
+            "total_sessions": len(session_profiles),
+            "days": days,
+            "generated_at": int(now_ts * 1000),
+        }
+    )
 
 
-@bp_usage.route('/api/usage/export')
+@bp_usage.route("/api/usage/export")
 def api_usage_export():
     """Export usage data as CSV."""
     try:
@@ -21069,93 +21999,133 @@ def api_usage_export():
             data = _get_otel_usage_data()
         else:
             # Call the same logic as /api/usage but get full data
-            sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+            sessions_dir = SESSIONS_DIR or os.path.expanduser(
+                "~/.openclaw/agents/main/sessions"
+            )
             daily_tokens = {}
-            
+
             if os.path.isdir(sessions_dir):
                 for fname in os.listdir(sessions_dir):
-                    if not fname.endswith('.jsonl'):
+                    if not fname.endswith(".jsonl"):
                         continue
                     fpath = os.path.join(sessions_dir, fname)
                     try:
                         fmtime = datetime.fromtimestamp(os.path.getmtime(fpath))
-                        with open(fpath, 'r') as f:
+                        with open(fpath, "r") as f:
                             for line in f:
                                 try:
                                     obj = json.loads(line.strip())
                                     tokens = 0
-                                    usage = obj.get('usage') or obj.get('tokens_used') or {}
+                                    usage = (
+                                        obj.get("usage") or obj.get("tokens_used") or {}
+                                    )
                                     if isinstance(usage, dict):
-                                        tokens = (usage.get('total_tokens') or usage.get('totalTokens')
-                                                  or (usage.get('input_tokens', 0) + usage.get('output_tokens', 0))
-                                                  or 0)
+                                        tokens = (
+                                            usage.get("total_tokens")
+                                            or usage.get("totalTokens")
+                                            or (
+                                                usage.get("input_tokens", 0)
+                                                + usage.get("output_tokens", 0)
+                                            )
+                                            or 0
+                                        )
                                     elif isinstance(usage, (int, float)):
                                         tokens = int(usage)
                                     if not tokens:
-                                        content = obj.get('content', '')
-                                        if isinstance(content, str) and len(content) > 0:
+                                        content = obj.get("content", "")
+                                        if (
+                                            isinstance(content, str)
+                                            and len(content) > 0
+                                        ):
                                             tokens = max(1, len(content) // 4)
                                         elif isinstance(content, list):
-                                            total_len = sum(len(str(c.get('text', ''))) for c in content if isinstance(c, dict))
-                                            tokens = max(1, total_len // 4) if total_len else 0
-                                    ts = obj.get('timestamp') or obj.get('time') or obj.get('created_at')
+                                            total_len = sum(
+                                                len(str(c.get("text", "")))
+                                                for c in content
+                                                if isinstance(c, dict)
+                                            )
+                                            tokens = (
+                                                max(1, total_len // 4)
+                                                if total_len
+                                                else 0
+                                            )
+                                    ts = (
+                                        obj.get("timestamp")
+                                        or obj.get("time")
+                                        or obj.get("created_at")
+                                    )
                                     if ts:
                                         if isinstance(ts, (int, float)):
-                                            dt = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
+                                            dt = datetime.fromtimestamp(
+                                                ts / 1000 if ts > 1e12 else ts
+                                            )
                                         else:
                                             try:
-                                                dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
+                                                dt = datetime.fromisoformat(
+                                                    str(ts).replace("Z", "+00:00")
+                                                )
                                             except Exception:
                                                 dt = fmtime
                                     else:
                                         dt = fmtime
-                                    day = dt.strftime('%Y-%m-%d')
+                                    day = dt.strftime("%Y-%m-%d")
                                     if tokens > 0:
-                                        daily_tokens[day] = daily_tokens.get(day, 0) + tokens
+                                        daily_tokens[day] = (
+                                            daily_tokens.get(day, 0) + tokens
+                                        )
                                 except (json.JSONDecodeError, ValueError):
                                     pass
                     except Exception:
                         pass
-            
+
             today = datetime.now()
-            today_str = today.strftime('%Y-%m-%d')
-            week_start = (today - timedelta(days=today.weekday())).strftime('%Y-%m-%d')
-            month_start = today.strftime('%Y-%m-01')
-            
+            today_str = today.strftime("%Y-%m-%d")
+            week_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+            month_start = today.strftime("%Y-%m-01")
+
             # Build data structure similar to OTLP
             days = []
             for i in range(30, -1, -1):  # Last 30 days for export
                 d = today - timedelta(days=i)
-                ds = d.strftime('%Y-%m-%d')
+                ds = d.strftime("%Y-%m-%d")
                 tokens = daily_tokens.get(ds, 0)
                 cost = round(tokens * (30.0 / 1_000_000), 4)  # Default pricing
-                days.append({'date': ds, 'tokens': tokens, 'cost': cost})
-                
-            data = {'days': days}
-        
-        # Generate CSV content
-        csv_lines = ['Date,Tokens,Cost']
-        for day in data['days']:
-            csv_lines.append(f"{day['date']},{day['tokens']},{day.get('cost', 0):.4f}")
-        
-        csv_content = '\n'.join(csv_lines)
-        
-        response = make_response(csv_content)
-        response.headers['Content-Type'] = 'text/csv'
-        response.headers['Content-Disposition'] = f'attachment; filename=openclaw-usage-{datetime.now().strftime("%Y%m%d")}.csv'
-        return response
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+                days.append({"date": ds, "tokens": tokens, "cost": cost})
 
-@bp_sessions.route('/api/transcripts')
+            data = {"days": days}
+
+        # Generate CSV content
+        csv_lines = ["Date,Tokens,Cost"]
+        for day in data["days"]:
+            csv_lines.append(f"{day['date']},{day['tokens']},{day.get('cost', 0):.4f}")
+
+        csv_content = "\n".join(csv_lines)
+
+        response = make_response(csv_content)
+        response.headers["Content-Type"] = "text/csv"
+        response.headers["Content-Disposition"] = (
+            f"attachment; filename=openclaw-usage-{datetime.now().strftime('%Y%m%d')}.csv"
+        )
+        return response
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp_sessions.route("/api/transcripts")
 def api_transcripts():
     """List available session transcript .jsonl files."""
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     transcripts = []
     if os.path.isdir(sessions_dir):
-        for fname in sorted(os.listdir(sessions_dir), key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)), reverse=True):
-            if not fname.endswith('.jsonl') or 'deleted' in fname:
+        for fname in sorted(
+            os.listdir(sessions_dir),
+            key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+            reverse=True,
+        ):
+            if not fname.endswith(".jsonl") or "deleted" in fname:
                 continue
             fpath = os.path.join(sessions_dir, fname)
             try:
@@ -21163,29 +22133,33 @@ def api_transcripts():
                 with open(fpath) as f:
                     for _ in f:
                         msg_count += 1
-                transcripts.append({
-                    'id': fname.replace('.jsonl', ''),
-                    'name': fname.replace('.jsonl', '')[:40],
-                    'messages': msg_count,
-                    'size': os.path.getsize(fpath),
-                    'modified': int(os.path.getmtime(fpath) * 1000),
-                })
+                transcripts.append(
+                    {
+                        "id": fname.replace(".jsonl", ""),
+                        "name": fname.replace(".jsonl", "")[:40],
+                        "messages": msg_count,
+                        "size": os.path.getsize(fpath),
+                        "modified": int(os.path.getmtime(fpath) * 1000),
+                    }
+                )
             except Exception:
                 pass
-    return jsonify({'transcripts': transcripts[:50]})
+    return jsonify({"transcripts": transcripts[:50]})
 
 
-@bp_sessions.route('/api/transcript/<session_id>')
+@bp_sessions.route("/api/transcript/<session_id>")
 def api_transcript(session_id):
     """Parse and return a session transcript for the chat viewer."""
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
-    fpath = os.path.join(sessions_dir, session_id + '.jsonl')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     # Sanitize path
     fpath = os.path.normpath(fpath)
     if not fpath.startswith(os.path.normpath(sessions_dir)):
-        return jsonify({'error': 'Access denied'}), 403
+        return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
-        return jsonify({'error': 'Transcript not found'}), 404
+        return jsonify({"error": "Transcript not found"}), 404
 
     messages = []
     model = None
@@ -21197,38 +22171,50 @@ def api_transcript(session_id):
             for line in f:
                 try:
                     obj = json.loads(line.strip())
-                    role = obj.get('role', obj.get('type', 'unknown'))
-                    content = obj.get('content', '')
+                    role = obj.get("role", obj.get("type", "unknown"))
+                    content = obj.get("content", "")
                     if isinstance(content, list):
                         parts = []
                         for part in content:
                             if isinstance(part, dict):
-                                parts.append(part.get('text', str(part)))
+                                parts.append(part.get("text", str(part)))
                             else:
                                 parts.append(str(part))
-                        content = '\n'.join(parts)
+                        content = "\n".join(parts)
                     elif not isinstance(content, str):
-                        content = str(content) if content else ''
+                        content = str(content) if content else ""
                     # Tool use handling
-                    if obj.get('tool_calls') or obj.get('tool_use'):
-                        tools = obj.get('tool_calls') or obj.get('tool_use') or []
+                    if obj.get("tool_calls") or obj.get("tool_use"):
+                        tools = obj.get("tool_calls") or obj.get("tool_use") or []
                         if isinstance(tools, list):
                             for tc in tools:
-                                tname = tc.get('name', tc.get('function', {}).get('name', 'tool'))
-                                messages.append({
-                                    'role': 'tool',
-                                    'content': f"[Tool Call: {tname}]\n{json.dumps(tc.get('input', tc.get('arguments', {})), indent=2)[:500]}",
-                                    'timestamp': obj.get('timestamp') or obj.get('time'),
-                                })
-                    if role == 'tool_result':
-                        role = 'tool'
-                    ts = obj.get('timestamp') or obj.get('time') or obj.get('created_at')
+                                tname = tc.get(
+                                    "name", tc.get("function", {}).get("name", "tool")
+                                )
+                                messages.append(
+                                    {
+                                        "role": "tool",
+                                        "content": f"[Tool Call: {tname}]\n{json.dumps(tc.get('input', tc.get('arguments', {})), indent=2)[:500]}",
+                                        "timestamp": obj.get("timestamp")
+                                        or obj.get("time"),
+                                    }
+                                )
+                    if role == "tool_result":
+                        role = "tool"
+                    ts = (
+                        obj.get("timestamp") or obj.get("time") or obj.get("created_at")
+                    )
                     if ts:
                         if isinstance(ts, (int, float)):
                             ts_ms = int(ts * 1000) if ts < 1e12 else int(ts)
                         else:
                             try:
-                                ts_ms = int(datetime.fromisoformat(str(ts).replace('Z', '+00:00')).timestamp() * 1000)
+                                ts_ms = int(
+                                    datetime.fromisoformat(
+                                        str(ts).replace("Z", "+00:00")
+                                    ).timestamp()
+                                    * 1000
+                                )
                             except Exception:
                                 ts_ms = None
                         if ts_ms:
@@ -21239,50 +22225,59 @@ def api_transcript(session_id):
                     else:
                         ts_ms = None
                     if not model:
-                        model = obj.get('model')
-                    usage = obj.get('usage', {})
+                        model = obj.get("model")
+                    usage = obj.get("usage", {})
                     if isinstance(usage, dict):
-                        total_tokens += usage.get('total_tokens', 0) or (
-                            usage.get('input_tokens', 0) + usage.get('output_tokens', 0))
-                    if content or role in ('user', 'assistant', 'system'):
-                        messages.append({
-                            'role': role, 'content': content, 'timestamp': ts_ms,
-                        })
+                        total_tokens += usage.get("total_tokens", 0) or (
+                            usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                        )
+                    if content or role in ("user", "assistant", "system"):
+                        messages.append(
+                            {
+                                "role": role,
+                                "content": content,
+                                "timestamp": ts_ms,
+                            }
+                        )
                 except (json.JSONDecodeError, ValueError):
                     pass
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
     duration = None
     if first_ts and last_ts and last_ts > first_ts:
         dur_sec = (last_ts - first_ts) / 1000
         if dur_sec < 60:
-            duration = f'{dur_sec:.0f}s'
+            duration = f"{dur_sec:.0f}s"
         elif dur_sec < 3600:
-            duration = f'{dur_sec / 60:.0f}m'
+            duration = f"{dur_sec / 60:.0f}m"
         else:
-            duration = f'{dur_sec / 3600:.1f}h'
+            duration = f"{dur_sec / 3600:.1f}h"
 
-    return jsonify({
-        'name': session_id[:40],
-        'messageCount': len(messages),
-        'model': model,
-        'totalTokens': total_tokens,
-        'duration': duration,
-        'messages': messages[:500],  # Cap at 500 messages
-    })
+    return jsonify(
+        {
+            "name": session_id[:40],
+            "messageCount": len(messages),
+            "model": model,
+            "totalTokens": total_tokens,
+            "duration": duration,
+            "messages": messages[:500],  # Cap at 500 messages
+        }
+    )
 
 
-@bp_sessions.route('/api/transcript-events/<session_id>')
+@bp_sessions.route("/api/transcript-events/<session_id>")
 def api_transcript_events(session_id):
     """Parse a session transcript JSONL into structured events for the detail modal."""
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
-    fpath = os.path.join(sessions_dir, session_id + '.jsonl')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.join(sessions_dir, session_id + ".jsonl")
     fpath = os.path.normpath(fpath)
     if not fpath.startswith(os.path.normpath(sessions_dir)):
-        return jsonify({'error': 'Access denied'}), 403
+        return jsonify({"error": "Access denied"}), 403
     if not os.path.exists(fpath):
-        return jsonify({'error': 'Transcript not found'}), 404
+        return jsonify({"error": "Transcript not found"}), 404
 
     events = []
     msg_count = 0
@@ -21294,112 +22289,202 @@ def api_transcript_events(session_id):
                 except (json.JSONDecodeError, ValueError):
                     continue
 
-                ts = obj.get('timestamp') or obj.get('time') or obj.get('created_at')
+                ts = obj.get("timestamp") or obj.get("time") or obj.get("created_at")
                 ts_val = None
                 if ts:
                     if isinstance(ts, (int, float)):
                         ts_val = int(ts * 1000) if ts < 1e12 else int(ts)
                     else:
                         try:
-                            ts_val = int(datetime.fromisoformat(str(ts).replace('Z', '+00:00')).timestamp() * 1000)
+                            ts_val = int(
+                                datetime.fromisoformat(
+                                    str(ts).replace("Z", "+00:00")
+                                ).timestamp()
+                                * 1000
+                            )
                         except Exception:
                             pass
 
-                obj_type = obj.get('type', '')
-                if obj_type == 'message':
-                    msg = obj.get('message', {})
-                    role = msg.get('role', '')
-                    content = msg.get('content', '')
+                obj_type = obj.get("type", "")
+                if obj_type == "message":
+                    msg = obj.get("message", {})
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
                     msg_count += 1
 
                     if isinstance(content, list):
                         for block in content:
                             if not isinstance(block, dict):
                                 continue
-                            btype = block.get('type', '')
-                            if btype == 'thinking':
-                                events.append({'type': 'thinking', 'text': block.get('thinking', '')[:2000], 'timestamp': ts_val})
-                            elif btype == 'text':
-                                text = block.get('text', '')
-                                if role == 'user':
-                                    events.append({'type': 'user', 'text': text[:3000], 'timestamp': ts_val})
-                                elif role == 'assistant':
-                                    events.append({'type': 'agent', 'text': text[:3000], 'timestamp': ts_val})
-                            elif btype in ('toolCall', 'tool_use'):
-                                name = block.get('name', '?')
-                                args = block.get('arguments') or block.get('input') or {}
-                                args_str = json.dumps(args, indent=2)[:1000] if isinstance(args, dict) else str(args)[:1000]
-                                if name == 'exec':
-                                    cmd = args.get('command', '') if isinstance(args, dict) else ''
-                                    events.append({'type': 'exec', 'command': cmd, 'toolName': name, 'args': args_str, 'timestamp': ts_val})
-                                elif name in ('Read', 'read'):
-                                    fp = (args.get('file_path') or args.get('path') or '') if isinstance(args, dict) else ''
-                                    events.append({'type': 'read', 'file': fp, 'toolName': name, 'args': args_str, 'timestamp': ts_val})
+                            btype = block.get("type", "")
+                            if btype == "thinking":
+                                events.append(
+                                    {
+                                        "type": "thinking",
+                                        "text": block.get("thinking", "")[:2000],
+                                        "timestamp": ts_val,
+                                    }
+                                )
+                            elif btype == "text":
+                                text = block.get("text", "")
+                                if role == "user":
+                                    events.append(
+                                        {
+                                            "type": "user",
+                                            "text": text[:3000],
+                                            "timestamp": ts_val,
+                                        }
+                                    )
+                                elif role == "assistant":
+                                    events.append(
+                                        {
+                                            "type": "agent",
+                                            "text": text[:3000],
+                                            "timestamp": ts_val,
+                                        }
+                                    )
+                            elif btype in ("toolCall", "tool_use"):
+                                name = block.get("name", "?")
+                                args = (
+                                    block.get("arguments") or block.get("input") or {}
+                                )
+                                args_str = (
+                                    json.dumps(args, indent=2)[:1000]
+                                    if isinstance(args, dict)
+                                    else str(args)[:1000]
+                                )
+                                if name == "exec":
+                                    cmd = (
+                                        args.get("command", "")
+                                        if isinstance(args, dict)
+                                        else ""
+                                    )
+                                    events.append(
+                                        {
+                                            "type": "exec",
+                                            "command": cmd,
+                                            "toolName": name,
+                                            "args": args_str,
+                                            "timestamp": ts_val,
+                                        }
+                                    )
+                                elif name in ("Read", "read"):
+                                    fp = (
+                                        (
+                                            args.get("file_path")
+                                            or args.get("path")
+                                            or ""
+                                        )
+                                        if isinstance(args, dict)
+                                        else ""
+                                    )
+                                    events.append(
+                                        {
+                                            "type": "read",
+                                            "file": fp,
+                                            "toolName": name,
+                                            "args": args_str,
+                                            "timestamp": ts_val,
+                                        }
+                                    )
                                 else:
-                                    events.append({'type': 'tool', 'toolName': name, 'args': args_str, 'timestamp': ts_val})
+                                    events.append(
+                                        {
+                                            "type": "tool",
+                                            "toolName": name,
+                                            "args": args_str,
+                                            "timestamp": ts_val,
+                                        }
+                                    )
                     elif isinstance(content, str) and content:
-                        if role == 'user':
-                            events.append({'type': 'user', 'text': content[:3000], 'timestamp': ts_val})
-                        elif role == 'assistant':
-                            events.append({'type': 'agent', 'text': content[:3000], 'timestamp': ts_val})
-                        elif role == 'toolResult':
-                            events.append({'type': 'result', 'text': content[:2000], 'timestamp': ts_val})
+                        if role == "user":
+                            events.append(
+                                {
+                                    "type": "user",
+                                    "text": content[:3000],
+                                    "timestamp": ts_val,
+                                }
+                            )
+                        elif role == "assistant":
+                            events.append(
+                                {
+                                    "type": "agent",
+                                    "text": content[:3000],
+                                    "timestamp": ts_val,
+                                }
+                            )
+                        elif role == "toolResult":
+                            events.append(
+                                {
+                                    "type": "result",
+                                    "text": content[:2000],
+                                    "timestamp": ts_val,
+                                }
+                            )
 
-                    if role == 'toolResult' and isinstance(content, list):
+                    if role == "toolResult" and isinstance(content, list):
                         text_parts = []
                         for block in content:
-                            if isinstance(block, dict) and block.get('type') == 'text':
-                                text_parts.append(block.get('text', ''))
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                text_parts.append(block.get("text", ""))
                         if text_parts:
-                            events.append({'type': 'result', 'text': '\n'.join(text_parts)[:2000], 'timestamp': ts_val})
+                            events.append(
+                                {
+                                    "type": "result",
+                                    "text": "\n".join(text_parts)[:2000],
+                                    "timestamp": ts_val,
+                                }
+                            )
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
-    return jsonify({'events': events[-500:], 'messageCount': msg_count, 'totalEvents': len(events)})
-
+    return jsonify(
+        {"events": events[-500:], "messageCount": msg_count, "totalEvents": len(events)}
+    )
 
 
 def _summarize_tool_input(name, inp):
     """Create a human-readable one-line summary of a tool call."""
-    if name == 'exec':
-        return (inp.get('command') or str(inp))[:150]
-    elif name in ('Read', 'read'):
+    if name == "exec":
+        return (inp.get("command") or str(inp))[:150]
+    elif name in ("Read", "read"):
         return f"📖 {inp.get('file_path') or inp.get('path') or '?'}"
-    elif name in ('Write', 'write'):
+    elif name in ("Write", "write"):
         return f"✏️ {inp.get('file_path') or inp.get('path') or '?'}"
-    elif name in ('Edit', 'edit'):
+    elif name in ("Edit", "edit"):
         return f"🔧 {inp.get('file_path') or inp.get('path') or '?'}"
-    elif name == 'web_search':
+    elif name == "web_search":
         return f"[check] {inp.get('query', '?')}"
-    elif name == 'web_fetch':
+    elif name == "web_fetch":
         return f"🌐 {inp.get('url', '?')[:80]}"
-    elif name == 'browser':
+    elif name == "browser":
         return f"🖥️ {inp.get('action', '?')}"
-    elif name == 'message':
+    elif name == "message":
         return f"💬 {inp.get('action', '?')} -> {inp.get('message', '')[:60]}"
-    elif name == 'tts':
+    elif name == "tts":
         return f"🔊 {inp.get('text', '')[:60]}"
     else:
         return str(inp)[:120]
 
 
-@bp_channels.route('/api/channel/telegram')
+@bp_channels.route("/api/channel/telegram")
 def api_channel_telegram():
     """Parse logs and session transcripts for Telegram message activity."""
     import re
-    limit = request.args.get('limit', 50, type=int)
-    offset = request.args.get('offset', 0, type=int)
+
+    limit = request.args.get("limit", 50, type=int)
+    offset = request.args.get("offset", 0, type=int)
 
     messages = []
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.now().strftime("%Y-%m-%d")
 
     # 1. Parse log files for telegram events using grep for speed
     log_dirs = _get_log_dirs()
     log_files = []
     for ld in log_dirs:
         if os.path.isdir(ld):
-            for f in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True):
+            for f in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True):
                 log_files.append(f)
     log_files = log_files[:2]  # Only today + yesterday
 
@@ -21407,7 +22492,9 @@ def api_channel_telegram():
     for lf in log_files:
         try:
             # Pre-filter: outbound = "sendMessage ok", inbound via JSONL
-            _grep_lines = _grep_log_file(lf, 'sendMessage ok\|sendMessage failed\|telegram message failed')
+            _grep_lines = _grep_log_file(
+                lf, r"sendMessage ok\|sendMessage failed\|telegram message failed"
+            )
             for line in _grep_lines:
                 line = line.strip()
                 if not line:
@@ -21416,35 +22503,46 @@ def api_channel_telegram():
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                msg1 = obj.get('1', '') or ''
-                ts = obj.get('time', '') or (obj.get('_meta', {}) or {}).get('date', '')
+                msg1 = obj.get("1", "") or ""
+                ts = obj.get("time", "") or (obj.get("_meta", {}) or {}).get("date", "")
 
                 # Outbound: "telegram sendMessage ok chat=1532693273 message=5961"
-                if 'sendmessage ok' in msg1.lower():
-                    chat_match = re.search(r'chat=(-?\d+)', msg1)
-                    msg_match = re.search(r'message=(\d+)', msg1)
-                    chat_id = chat_match.group(1) if chat_match else ''
-                    messages.append({
-                        'timestamp': ts, 'direction': 'out', 'sender': 'Bot',
-                        'text': f'(sent message {msg_match.group(1) if msg_match else ""})',
-                        'chatId': chat_id, 'sessionId': '',
-                    })
-                elif 'sendmessage' in msg1.lower() and 'failed' in msg1.lower():
-                    messages.append({
-                        'timestamp': ts, 'direction': 'out', 'sender': 'Bot',
-                        'text': '(delivery failed)', 'chatId': '', 'sessionId': '',
-                    })
+                if "sendmessage ok" in msg1.lower():
+                    chat_match = re.search(r"chat=(-?\d+)", msg1)
+                    msg_match = re.search(r"message=(\d+)", msg1)
+                    chat_id = chat_match.group(1) if chat_match else ""
+                    messages.append(
+                        {
+                            "timestamp": ts,
+                            "direction": "out",
+                            "sender": "Bot",
+                            "text": f"(sent message {msg_match.group(1) if msg_match else ''})",
+                            "chatId": chat_id,
+                            "sessionId": "",
+                        }
+                    )
+                elif "sendmessage" in msg1.lower() and "failed" in msg1.lower():
+                    messages.append(
+                        {
+                            "timestamp": ts,
+                            "direction": "out",
+                            "sender": "Bot",
+                            "text": "(delivery failed)",
+                            "chatId": "",
+                            "sessionId": "",
+                        }
+                    )
         except Exception:
             pass
 
     # 2. Parse session JSONL files for inbound messages (user role = incoming Telegram)
-    sessions_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
+    sessions_dir = os.path.expanduser("~/.openclaw/agents/main/sessions")
     for msg in messages:
-        if msg['direction'] == 'in' and msg['sessionId'] and not msg['text']:
-            sf = os.path.join(sessions_dir, msg['sessionId'] + '.jsonl')
+        if msg["direction"] == "in" and msg["sessionId"] and not msg["text"]:
+            sf = os.path.join(sessions_dir, msg["sessionId"] + ".jsonl")
             if os.path.exists(sf):
                 try:
-                    with open(sf, 'r', errors='replace') as f:
+                    with open(sf, "r", errors="replace") as f:
                         for sline in f:
                             sline = sline.strip()
                             if not sline:
@@ -21453,54 +22551,71 @@ def api_channel_telegram():
                                 sd = json.loads(sline)
                             except json.JSONDecodeError:
                                 continue
-                            sm = sd.get('message', {})
-                            if sm.get('role') == 'user':
-                                content = sm.get('content', '')
+                            sm = sd.get("message", {})
+                            if sm.get("role") == "user":
+                                content = sm.get("content", "")
                                 if isinstance(content, list):
                                     for c in content:
-                                        if isinstance(c, dict) and c.get('type') == 'text':
-                                            txt = c.get('text', '')
+                                        if (
+                                            isinstance(c, dict)
+                                            and c.get("type") == "text"
+                                        ):
+                                            txt = c.get("text", "")
                                             # Skip system/heartbeat messages
-                                            if txt and not txt.startswith('System:') and 'HEARTBEAT' not in txt:
-                                                msg['text'] = txt[:300]
+                                            if (
+                                                txt
+                                                and not txt.startswith("System:")
+                                                and "HEARTBEAT" not in txt
+                                            ):
+                                                msg["text"] = txt[:300]
                                                 # Extract real sender from [Telegram Name id:...] pattern
-                                                tg_name = re.search(r'\[Telegram\s+(.+?)\s+id:', txt)
+                                                tg_name = re.search(
+                                                    r"\[Telegram\s+(.+?)\s+id:", txt
+                                                )
                                                 if tg_name:
-                                                    msg['sender'] = tg_name.group(1)
+                                                    msg["sender"] = tg_name.group(1)
                                                 break
                                 elif isinstance(content, str) and content:
-                                    if not content.startswith('System:') and 'HEARTBEAT' not in content:
-                                        msg['text'] = content[:300]
-                                        tg_name = re.search(r'\[Telegram\s+(.+?)\s+id:', content)
+                                    if (
+                                        not content.startswith("System:")
+                                        and "HEARTBEAT" not in content
+                                    ):
+                                        msg["text"] = content[:300]
+                                        tg_name = re.search(
+                                            r"\[Telegram\s+(.+?)\s+id:", content
+                                        )
                                         if tg_name:
-                                            msg['sender'] = tg_name.group(1)
-                                if msg['text']:
+                                            msg["sender"] = tg_name.group(1)
+                                if msg["text"]:
                                     break
                 except Exception:
                     pass
 
     # 3. Also scan telegram session files for recent messages
     try:
-        with open(os.path.join(sessions_dir, 'sessions.json'), 'r') as f:
+        with open(os.path.join(sessions_dir, "sessions.json"), "r") as f:
             sess_data = json.load(f)
-        tg_sessions = [(sid, s) for sid, s in sess_data.items()
-                       if 'telegram' in sid and 'sessionId' in s]
-        tg_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+        tg_sessions = [
+            (sid, s)
+            for sid, s in sess_data.items()
+            if "telegram" in sid and "sessionId" in s
+        ]
+        tg_sessions.sort(key=lambda x: x[1].get("updatedAt", 0), reverse=True)
 
-        seen_sids = {m['sessionId'] for m in messages if m['sessionId']}
+        seen_sids = {m["sessionId"] for m in messages if m["sessionId"]}
         for sid_key, sinfo in tg_sessions[:5]:
-            uuid = sinfo['sessionId']
+            uuid = sinfo["sessionId"]
             if uuid in seen_sids:
                 continue
-            sf = os.path.join(sessions_dir, uuid + '.jsonl')
+            sf = os.path.join(sessions_dir, uuid + ".jsonl")
             if not os.path.exists(sf):
                 continue
             try:
-                chat_match = re.search(r':(-?\d+)$', sid_key)
-                chat_id = chat_match.group(1) if chat_match else ''
+                chat_match = re.search(r":(-?\d+)$", sid_key)
+                chat_id = chat_match.group(1) if chat_match else ""
                 # Read only last 64KB of session file for performance
                 fsize = os.path.getsize(sf)
-                with open(sf, 'r', errors='replace') as f:
+                with open(sf, "r", errors="replace") as f:
                     if fsize > 65536:
                         f.seek(fsize - 65536)
                         f.readline()  # skip partial line
@@ -21512,36 +22627,38 @@ def api_channel_telegram():
                             sd = json.loads(sline)
                         except json.JSONDecodeError:
                             continue
-                        sm = sd.get('message', {})
-                        ts = sd.get('timestamp', '')
-                        role = sm.get('role', '')
-                        if role not in ('user', 'assistant'):
+                        sm = sd.get("message", {})
+                        ts = sd.get("timestamp", "")
+                        role = sm.get("role", "")
+                        if role not in ("user", "assistant"):
                             continue
-                        content = sm.get('content', '')
-                        txt = ''
+                        content = sm.get("content", "")
+                        txt = ""
                         if isinstance(content, list):
                             for c in content:
-                                if isinstance(c, dict) and c.get('type') == 'text':
-                                    txt = c.get('text', '')
+                                if isinstance(c, dict) and c.get("type") == "text":
+                                    txt = c.get("text", "")
                                     break
                         elif isinstance(content, str):
                             txt = content
-                        if not txt or txt.startswith('System:') or 'HEARTBEAT' in txt:
+                        if not txt or txt.startswith("System:") or "HEARTBEAT" in txt:
                             continue
-                        direction = 'in' if role == 'user' else 'out'
-                        sender = 'User' if role == 'user' else 'Clawd'
-                        if direction == 'in':
-                            tg_name = re.search(r'\[Telegram\s+(.+?)\s+id:', txt)
+                        direction = "in" if role == "user" else "out"
+                        sender = "User" if role == "user" else "Clawd"
+                        if direction == "in":
+                            tg_name = re.search(r"\[Telegram\s+(.+?)\s+id:", txt)
                             if tg_name:
                                 sender = tg_name.group(1)
-                        messages.append({
-                            'timestamp': ts,
-                            'direction': direction,
-                            'sender': sender,
-                            'text': txt[:300],
-                            'chatId': chat_id,
-                            'sessionId': uuid,
-                        })
+                        messages.append(
+                            {
+                                "timestamp": ts,
+                                "direction": direction,
+                                "sender": sender,
+                                "text": txt[:300],
+                                "chatId": chat_id,
+                                "sessionId": uuid,
+                            }
+                        )
             except Exception:
                 pass
     except Exception:
@@ -21551,45 +22668,59 @@ def api_channel_telegram():
     seen = set()
     unique = []
     for m in messages:
-        key = (m['timestamp'], m['direction'], m['text'][:50])
+        key = (m["timestamp"], m["direction"], m["text"][:50])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+    unique.sort(key=lambda x: x["timestamp"], reverse=True)
 
     # Stats
-    today_in = sum(1 for m in unique if m['direction'] == 'in' and today in m.get('timestamp', ''))
-    today_out = sum(1 for m in unique if m['direction'] == 'out' and today in m.get('timestamp', ''))
+    today_in = sum(
+        1 for m in unique if m["direction"] == "in" and today in m.get("timestamp", "")
+    )
+    today_out = sum(
+        1 for m in unique if m["direction"] == "out" and today in m.get("timestamp", "")
+    )
 
     total = len(unique)
-    page = unique[offset:offset + limit]
-    return jsonify({'messages': page, 'total': total, 'todayIn': today_in, 'todayOut': today_out})
+    page = unique[offset : offset + limit]
+    return jsonify(
+        {"messages": page, "total": total, "todayIn": today_in, "todayOut": today_out}
+    )
 
 
-@bp_channels.route('/api/channel/imessage')
+@bp_channels.route("/api/channel/imessage")
 def api_channel_imessage():
     """Read iMessage history from ~/Library/Messages/chat.db."""
-    if sys.platform != 'darwin':
-        return jsonify({'messages': [], 'todayIn': 0, 'todayOut': 0,
-                        'note': 'iMessage is only available on macOS'})
+    if sys.platform != "darwin":
+        return jsonify(
+            {
+                "messages": [],
+                "todayIn": 0,
+                "todayOut": 0,
+                "note": "iMessage is only available on macOS",
+            }
+        )
     import sqlite3
-    limit = request.args.get('limit', 50, type=int)
+
+    limit = request.args.get("limit", 50, type=int)
 
     messages = []
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.now().strftime("%Y-%m-%d")
     # Apple epoch starts 2001-01-01; convert to Unix
     APPLE_EPOCH_OFFSET = 978307200
 
-    db_path = os.path.expanduser('~/Library/Messages/chat.db')
+    db_path = os.path.expanduser("~/Library/Messages/chat.db")
     db_ok = False
 
     if os.path.exists(db_path):
         try:
-            conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True, timeout=5)
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             # Get recent messages with handle info
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT m.ROWID, m.text, m.is_from_me,
                        m.date / 1000000000 AS date_sec,
                        h.id AS handle_id,
@@ -21599,24 +22730,32 @@ def api_channel_imessage():
                 WHERE m.text IS NOT NULL AND m.text != ''
                 ORDER BY m.date DESC
                 LIMIT ?
-            """, (limit,))
+            """,
+                (limit,),
+            )
             rows = cur.fetchall()
             conn.close()
             for row in rows:
-                direction = 'out' if row['is_from_me'] else 'in'
+                direction = "out" if row["is_from_me"] else "in"
                 # Convert Apple epoch (nanoseconds) to ISO timestamp
-                unix_ts = (row['date_sec'] or 0) + APPLE_EPOCH_OFFSET
-                ts = datetime.utcfromtimestamp(unix_ts).strftime('%Y-%m-%dT%H:%M:%SZ') if unix_ts > APPLE_EPOCH_OFFSET else ''
-                contact = row['uncanonicalized_id'] or row['handle_id'] or 'Unknown'
-                sender = 'Me' if direction == 'out' else contact
-                messages.append({
-                    'timestamp': ts,
-                    'direction': direction,
-                    'sender': sender,
-                    'text': (row['text'] or '')[:300],
-                    'chatId': contact,
-                    'sessionId': '',
-                })
+                unix_ts = (row["date_sec"] or 0) + APPLE_EPOCH_OFFSET
+                ts = (
+                    datetime.utcfromtimestamp(unix_ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if unix_ts > APPLE_EPOCH_OFFSET
+                    else ""
+                )
+                contact = row["uncanonicalized_id"] or row["handle_id"] or "Unknown"
+                sender = "Me" if direction == "out" else contact
+                messages.append(
+                    {
+                        "timestamp": ts,
+                        "direction": direction,
+                        "sender": sender,
+                        "text": (row["text"] or "")[:300],
+                        "chatId": contact,
+                        "sessionId": "",
+                    }
+                )
             db_ok = True
         except Exception:
             pass
@@ -21627,9 +22766,11 @@ def api_channel_imessage():
         for ld in log_dirs:
             if not os.path.isdir(ld):
                 continue
-            for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:2]:
+            for lf in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True)[:2]:
                 try:
-                    _grep_lines = _grep_log_file(lf, 'imessage\\|iMessage\\|messageChannel=imessage')
+                    _grep_lines = _grep_log_file(
+                        lf, "imessage\\|iMessage\\|messageChannel=imessage"
+                    )
                     for line in _grep_lines:
                         line = line.strip()
                         if not line:
@@ -21638,14 +22779,21 @@ def api_channel_imessage():
                             obj = json.loads(line)
                         except Exception:
                             continue
-                        ts = obj.get('time', '') or (obj.get('_meta', {}) or {}).get('date', '')
-                        msg1 = obj.get('1', '') or obj.get('0', '')
-                        direction = 'out' if 'deliver' in msg1.lower() else 'in'
-                        messages.append({
-                            'timestamp': ts, 'direction': direction,
-                            'sender': 'Me' if direction == 'out' else 'Contact',
-                            'text': msg1[:300], 'chatId': '', 'sessionId': '',
-                        })
+                        ts = obj.get("time", "") or (obj.get("_meta", {}) or {}).get(
+                            "date", ""
+                        )
+                        msg1 = obj.get("1", "") or obj.get("0", "")
+                        direction = "out" if "deliver" in msg1.lower() else "in"
+                        messages.append(
+                            {
+                                "timestamp": ts,
+                                "direction": direction,
+                                "sender": "Me" if direction == "out" else "Contact",
+                                "text": msg1[:300],
+                                "chatId": "",
+                                "sessionId": "",
+                            }
+                        )
                 except Exception:
                     pass
 
@@ -21653,40 +22801,49 @@ def api_channel_imessage():
     seen = set()
     unique = []
     for m in messages:
-        key = (m['timestamp'], m['direction'], m['text'][:50])
+        key = (m["timestamp"], m["direction"], m["text"][:50])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+    unique.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    today_in = sum(1 for m in unique if m['direction'] == 'in' and today in m.get('timestamp', ''))
-    today_out = sum(1 for m in unique if m['direction'] == 'out' and today in m.get('timestamp', ''))
+    today_in = sum(
+        1 for m in unique if m["direction"] == "in" and today in m.get("timestamp", "")
+    )
+    today_out = sum(
+        1 for m in unique if m["direction"] == "out" and today in m.get("timestamp", "")
+    )
 
     total = len(unique)
     page = unique[:limit]
-    return jsonify({'messages': page, 'total': total, 'todayIn': today_in, 'todayOut': today_out})
+    return jsonify(
+        {"messages": page, "total": total, "todayIn": today_in, "todayOut": today_out}
+    )
 
 
-@bp_channels.route('/api/channel/whatsapp')
+@bp_channels.route("/api/channel/whatsapp")
 def api_channel_whatsapp():
     """Parse logs and session transcripts for WhatsApp message activity."""
     import re
-    limit = request.args.get('limit', 50, type=int)
+
+    limit = request.args.get("limit", 50, type=int)
     messages = []
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.now().strftime("%Y-%m-%d")
 
     log_dirs = _get_log_dirs()
     log_files = []
     for ld in log_dirs:
         if os.path.isdir(ld):
-            for f in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:2]:
+            for f in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True)[:2]:
                 log_files.append(f)
 
-    sessions_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
+    sessions_dir = os.path.expanduser("~/.openclaw/agents/main/sessions")
 
     for lf in log_files:
         try:
-            _grep_lines = _grep_log_file(lf, 'messageChannel=whatsapp\\|whatsapp.*deliver')
+            _grep_lines = _grep_log_file(
+                lf, "messageChannel=whatsapp\\|whatsapp.*deliver"
+            )
             for line in _grep_lines:
                 line = line.strip()
                 if not line:
@@ -21695,44 +22852,69 @@ def api_channel_whatsapp():
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                msg1 = obj.get('1', '') or obj.get('0', '')
-                msg0 = obj.get('0', '')
-                ts = obj.get('time', '') or (obj.get('_meta', {}) or {}).get('date', '')
+                msg1 = obj.get("1", "") or obj.get("0", "")
+                msg0 = obj.get("0", "")
+                ts = obj.get("time", "") or (obj.get("_meta", {}) or {}).get("date", "")
 
-                if 'messageChannel=whatsapp' in msg1 and 'run start' in msg1:
-                    sid_match = re.search(r'sessionId=([a-f0-9-]+)', msg1)
-                    sid = sid_match.group(1) if sid_match else ''
-                    text = ''
+                if "messageChannel=whatsapp" in msg1 and "run start" in msg1:
+                    sid_match = re.search(r"sessionId=([a-f0-9-]+)", msg1)
+                    sid = sid_match.group(1) if sid_match else ""
+                    text = ""
                     if sid:
-                        sf = os.path.join(sessions_dir, sid + '.jsonl')
+                        sf = os.path.join(sessions_dir, sid + ".jsonl")
                         if os.path.exists(sf):
                             try:
-                                with open(sf, 'r', errors='replace') as f:
+                                with open(sf, "r", errors="replace") as f:
                                     for sline in f:
                                         try:
                                             sd = json.loads(sline.strip())
                                         except Exception:
                                             continue
-                                        sm = sd.get('message', {})
-                                        if sm.get('role') == 'user':
-                                            content = sm.get('content', '')
+                                        sm = sd.get("message", {})
+                                        if sm.get("role") == "user":
+                                            content = sm.get("content", "")
                                             if isinstance(content, list):
                                                 for c in content:
-                                                    if isinstance(c, dict) and c.get('type') == 'text':
-                                                        txt = c.get('text', '')
-                                                        if txt and 'HEARTBEAT' not in txt:
+                                                    if (
+                                                        isinstance(c, dict)
+                                                        and c.get("type") == "text"
+                                                    ):
+                                                        txt = c.get("text", "")
+                                                        if (
+                                                            txt
+                                                            and "HEARTBEAT" not in txt
+                                                        ):
                                                             text = txt[:300]
                                                             break
-                                            elif isinstance(content, str) and 'HEARTBEAT' not in content:
+                                            elif (
+                                                isinstance(content, str)
+                                                and "HEARTBEAT" not in content
+                                            ):
                                                 text = content[:300]
                                             if text:
                                                 break
                             except Exception:
                                 pass
-                    messages.append({'timestamp': ts, 'direction': 'in', 'sender': 'User', 'text': text, 'sessionId': sid})
+                    messages.append(
+                        {
+                            "timestamp": ts,
+                            "direction": "in",
+                            "sender": "User",
+                            "text": text,
+                            "sessionId": sid,
+                        }
+                    )
 
-                if 'whatsapp' in msg0.lower() and 'deliver' in msg0.lower():
-                    messages.append({'timestamp': ts, 'direction': 'out', 'sender': 'Clawd', 'text': '(message sent)', 'sessionId': ''})
+                if "whatsapp" in msg0.lower() and "deliver" in msg0.lower():
+                    messages.append(
+                        {
+                            "timestamp": ts,
+                            "direction": "out",
+                            "sender": "Clawd",
+                            "text": "(message sent)",
+                            "sessionId": "",
+                        }
+                    )
         except Exception:
             pass
 
@@ -21740,38 +22922,50 @@ def api_channel_whatsapp():
     seen = set()
     unique = []
     for m in messages:
-        key = (m['timestamp'], m['direction'], m['text'][:50])
+        key = (m["timestamp"], m["direction"], m["text"][:50])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+    unique.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    today_in = sum(1 for m in unique if m['direction'] == 'in' and today in m.get('timestamp', ''))
-    today_out = sum(1 for m in unique if m['direction'] == 'out' and today in m.get('timestamp', ''))
+    today_in = sum(
+        1 for m in unique if m["direction"] == "in" and today in m.get("timestamp", "")
+    )
+    today_out = sum(
+        1 for m in unique if m["direction"] == "out" and today in m.get("timestamp", "")
+    )
     total = len(unique)
-    return jsonify({'messages': unique[:limit], 'total': total, 'todayIn': today_in, 'todayOut': today_out})
+    return jsonify(
+        {
+            "messages": unique[:limit],
+            "total": total,
+            "todayIn": today_in,
+            "todayOut": today_out,
+        }
+    )
 
 
-@bp_channels.route('/api/channel/signal')
+@bp_channels.route("/api/channel/signal")
 def api_channel_signal():
     """Parse logs and session transcripts for Signal message activity."""
     import re
-    limit = request.args.get('limit', 50, type=int)
+
+    limit = request.args.get("limit", 50, type=int)
     messages = []
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.now().strftime("%Y-%m-%d")
 
     log_dirs = _get_log_dirs()
     log_files = []
     for ld in log_dirs:
         if os.path.isdir(ld):
-            for f in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:2]:
+            for f in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True)[:2]:
                 log_files.append(f)
 
-    sessions_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
+    sessions_dir = os.path.expanduser("~/.openclaw/agents/main/sessions")
 
     for lf in log_files:
         try:
-            _grep_lines = _grep_log_file(lf, 'messageChannel=signal\\|signal.*deliver')
+            _grep_lines = _grep_log_file(lf, "messageChannel=signal\\|signal.*deliver")
             for line in _grep_lines:
                 line = line.strip()
                 if not line:
@@ -21780,44 +22974,69 @@ def api_channel_signal():
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                msg1 = obj.get('1', '') or obj.get('0', '')
-                msg0 = obj.get('0', '')
-                ts = obj.get('time', '') or (obj.get('_meta', {}) or {}).get('date', '')
+                msg1 = obj.get("1", "") or obj.get("0", "")
+                msg0 = obj.get("0", "")
+                ts = obj.get("time", "") or (obj.get("_meta", {}) or {}).get("date", "")
 
-                if 'messageChannel=signal' in msg1 and 'run start' in msg1:
-                    sid_match = re.search(r'sessionId=([a-f0-9-]+)', msg1)
-                    sid = sid_match.group(1) if sid_match else ''
-                    text = ''
+                if "messageChannel=signal" in msg1 and "run start" in msg1:
+                    sid_match = re.search(r"sessionId=([a-f0-9-]+)", msg1)
+                    sid = sid_match.group(1) if sid_match else ""
+                    text = ""
                     if sid:
-                        sf = os.path.join(sessions_dir, sid + '.jsonl')
+                        sf = os.path.join(sessions_dir, sid + ".jsonl")
                         if os.path.exists(sf):
                             try:
-                                with open(sf, 'r', errors='replace') as f:
+                                with open(sf, "r", errors="replace") as f:
                                     for sline in f:
                                         try:
                                             sd = json.loads(sline.strip())
                                         except Exception:
                                             continue
-                                        sm = sd.get('message', {})
-                                        if sm.get('role') == 'user':
-                                            content = sm.get('content', '')
+                                        sm = sd.get("message", {})
+                                        if sm.get("role") == "user":
+                                            content = sm.get("content", "")
                                             if isinstance(content, list):
                                                 for c in content:
-                                                    if isinstance(c, dict) and c.get('type') == 'text':
-                                                        txt = c.get('text', '')
-                                                        if txt and 'HEARTBEAT' not in txt:
+                                                    if (
+                                                        isinstance(c, dict)
+                                                        and c.get("type") == "text"
+                                                    ):
+                                                        txt = c.get("text", "")
+                                                        if (
+                                                            txt
+                                                            and "HEARTBEAT" not in txt
+                                                        ):
                                                             text = txt[:300]
                                                             break
-                                            elif isinstance(content, str) and 'HEARTBEAT' not in content:
+                                            elif (
+                                                isinstance(content, str)
+                                                and "HEARTBEAT" not in content
+                                            ):
                                                 text = content[:300]
                                             if text:
                                                 break
                             except Exception:
                                 pass
-                    messages.append({'timestamp': ts, 'direction': 'in', 'sender': 'User', 'text': text, 'sessionId': sid})
+                    messages.append(
+                        {
+                            "timestamp": ts,
+                            "direction": "in",
+                            "sender": "User",
+                            "text": text,
+                            "sessionId": sid,
+                        }
+                    )
 
-                if 'signal' in msg0.lower() and 'deliver' in msg0.lower():
-                    messages.append({'timestamp': ts, 'direction': 'out', 'sender': 'Clawd', 'text': '(message sent)', 'sessionId': ''})
+                if "signal" in msg0.lower() and "deliver" in msg0.lower():
+                    messages.append(
+                        {
+                            "timestamp": ts,
+                            "direction": "out",
+                            "sender": "Clawd",
+                            "text": "(message sent)",
+                            "sessionId": "",
+                        }
+                    )
         except Exception:
             pass
 
@@ -21825,23 +23044,34 @@ def api_channel_signal():
     seen = set()
     unique = []
     for m in messages:
-        key = (m['timestamp'], m['direction'], m['text'][:50])
+        key = (m["timestamp"], m["direction"], m["text"][:50])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+    unique.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    today_in = sum(1 for m in unique if m['direction'] == 'in' and today in m.get('timestamp', ''))
-    today_out = sum(1 for m in unique if m['direction'] == 'out' and today in m.get('timestamp', ''))
+    today_in = sum(
+        1 for m in unique if m["direction"] == "in" and today in m.get("timestamp", "")
+    )
+    today_out = sum(
+        1 for m in unique if m["direction"] == "out" and today in m.get("timestamp", "")
+    )
     total = len(unique)
-    return jsonify({'messages': unique[:limit], 'total': total, 'todayIn': today_in, 'todayOut': today_out})
+    return jsonify(
+        {
+            "messages": unique[:limit],
+            "total": total,
+            "todayIn": today_in,
+            "todayOut": today_out,
+        }
+    )
 
 
 def _generic_channel_data(channel_key):
     """Generic channel data fetcher: scans session transcripts for channel metadata."""
-    import re
-    limit = request.args.get('limit', 50, type=int)
-    today = datetime.now().strftime('%Y-%m-%d')
+
+    limit = request.args.get("limit", 50, type=int)
+    today = datetime.now().strftime("%Y-%m-%d")
 
     messages = []
     today_in = 0
@@ -21852,25 +23082,28 @@ def _generic_channel_data(channel_key):
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
-        for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:2]:
+        for lf in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True)[:2]:
             try:
-                _grep_lines = _grep_log_file(lf, f'messageChannel={channel_key}')
+                _grep_lines = _grep_log_file(lf, f"messageChannel={channel_key}")
                 for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
                         continue
-                    msg1 = obj.get('1', '') or obj.get('0', '')
-                    ts = obj.get('time', '')
-                    if f'messageChannel={channel_key}' in msg1:
-                        direction = 'out' if 'deliver' in msg1.lower() else 'in'
-                        messages.append({
-                            'timestamp': ts, 'direction': direction,
-                            'sender': 'User' if direction == 'in' else 'Clawd',
-                            'text': msg1[:200],
-                        })
+                    msg1 = obj.get("1", "") or obj.get("0", "")
+                    ts = obj.get("time", "")
+                    if f"messageChannel={channel_key}" in msg1:
+                        direction = "out" if "deliver" in msg1.lower() else "in"
+                        messages.append(
+                            {
+                                "timestamp": ts,
+                                "direction": direction,
+                                "sender": "User" if direction == "in" else "Clawd",
+                                "text": msg1[:200],
+                            }
+                        )
                         if today and today in ts:
-                            if direction == 'in':
+                            if direction == "in":
                                 today_in += 1
                             else:
                                 today_out += 1
@@ -21879,26 +23112,29 @@ def _generic_channel_data(channel_key):
 
     # Also scan sessions.json for channel-tagged sessions
     for sessions_dir in [
-        os.path.expanduser('~/.openclaw/agents/main/sessions'),
-        os.path.expanduser('~/.clawdbot/agents/main/sessions'),
+        os.path.expanduser("~/.openclaw/agents/main/sessions"),
+        os.path.expanduser("~/.clawdbot/agents/main/sessions"),
     ]:
-        sessions_file = os.path.join(sessions_dir, 'sessions.json')
+        sessions_file = os.path.join(sessions_dir, "sessions.json")
         if not os.path.exists(sessions_file):
             continue
         try:
             with open(sessions_file) as f:
                 sess_data = json.load(f)
-            ch_sessions = [(sid, s) for sid, s in sess_data.items()
-                           if channel_key in sid.lower() and 'sessionId' in s]
-            ch_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+            ch_sessions = [
+                (sid, s)
+                for sid, s in sess_data.items()
+                if channel_key in sid.lower() and "sessionId" in s
+            ]
+            ch_sessions.sort(key=lambda x: x[1].get("updatedAt", 0), reverse=True)
             for sid_key, sinfo in ch_sessions[:5]:
-                uuid = sinfo['sessionId']
-                sf = os.path.join(sessions_dir, uuid + '.jsonl')
+                uuid = sinfo["sessionId"]
+                sf = os.path.join(sessions_dir, uuid + ".jsonl")
                 if not os.path.exists(sf):
                     continue
                 try:
                     fsize = os.path.getsize(sf)
-                    with open(sf, 'r', errors='replace') as f:
+                    with open(sf, "r", errors="replace") as f:
                         if fsize > 65536:
                             f.seek(fsize - 65536)
                             f.readline()
@@ -21910,30 +23146,37 @@ def _generic_channel_data(channel_key):
                                 sd = json.loads(sline)
                             except Exception:
                                 continue
-                            sm = sd.get('message', {})
-                            ts = sd.get('timestamp', '')
-                            role = sm.get('role', '')
-                            if role not in ('user', 'assistant'):
+                            sm = sd.get("message", {})
+                            ts = sd.get("timestamp", "")
+                            role = sm.get("role", "")
+                            if role not in ("user", "assistant"):
                                 continue
-                            content = sm.get('content', '')
-                            txt = ''
+                            content = sm.get("content", "")
+                            txt = ""
                             if isinstance(content, list):
                                 for c in content:
-                                    if isinstance(c, dict) and c.get('type') == 'text':
-                                        txt = c.get('text', '')
+                                    if isinstance(c, dict) and c.get("type") == "text":
+                                        txt = c.get("text", "")
                                         break
                             elif isinstance(content, str):
                                 txt = content
-                            if not txt or txt.startswith('System:') or 'HEARTBEAT' in txt:
+                            if (
+                                not txt
+                                or txt.startswith("System:")
+                                or "HEARTBEAT" in txt
+                            ):
                                 continue
-                            direction = 'in' if role == 'user' else 'out'
-                            messages.append({
-                                'timestamp': ts, 'direction': direction,
-                                'sender': 'User' if direction == 'in' else 'Clawd',
-                                'text': txt[:300],
-                            })
+                            direction = "in" if role == "user" else "out"
+                            messages.append(
+                                {
+                                    "timestamp": ts,
+                                    "direction": direction,
+                                    "sender": "User" if direction == "in" else "Clawd",
+                                    "text": txt[:300],
+                                }
+                            )
                             if today and today in ts:
-                                if direction == 'in':
+                                if direction == "in":
                                     today_in += 1
                                 else:
                                     today_out += 1
@@ -21946,28 +23189,31 @@ def _generic_channel_data(channel_key):
     seen = set()
     unique = []
     for m in messages:
-        key = (m['timestamp'], m['direction'], m['text'][:50])
+        key = (m["timestamp"], m["direction"], m["text"][:50])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+    unique.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    status = 'connected' if unique else 'configured'
-    return jsonify({
-        'messages': unique[:limit],
-        'total': len(unique),
-        'todayIn': today_in,
-        'todayOut': today_out,
-        'status': status,
-    })
+    status = "connected" if unique else "configured"
+    return jsonify(
+        {
+            "messages": unique[:limit],
+            "total": len(unique),
+            "todayIn": today_in,
+            "todayOut": today_out,
+            "status": status,
+        }
+    )
 
 
-@bp_channels.route('/api/channel/discord')
+@bp_channels.route("/api/channel/discord")
 def api_channel_discord():
     """Discord channel data: log-based with guild/channel extraction."""
     import re
-    limit = request.args.get('limit', 50, type=int)
-    today = datetime.now().strftime('%Y-%m-%d')
+
+    limit = request.args.get("limit", 50, type=int)
+    today = datetime.now().strftime("%Y-%m-%d")
     messages = []
     guilds = set()
     channels = set()
@@ -21979,46 +23225,65 @@ def api_channel_discord():
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
-        for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
+        for lf in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True)[:3]:
             try:
-                _grep_lines = _grep_log_file(lf, 'messageChannel=discord|discord.*deliver')
+                _grep_lines = _grep_log_file(
+                    lf, "messageChannel=discord|discord.*deliver"
+                )
                 for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
                         continue
-                    msg1 = obj.get('1', '') or obj.get('0', '')
-                    ts = obj.get('time', '')
-                    if 'messageChannel=discord' in msg1:
-                        direction = 'in'
-                        messages.append({'timestamp': ts, 'direction': 'in', 'sender': 'User', 'text': msg1[:300]})
+                    msg1 = obj.get("1", "") or obj.get("0", "")
+                    ts = obj.get("time", "")
+                    if "messageChannel=discord" in msg1:
+                        direction = "in"
+                        messages.append(
+                            {
+                                "timestamp": ts,
+                                "direction": "in",
+                                "sender": "User",
+                                "text": msg1[:300],
+                            }
+                        )
                         if today and today in ts:
                             today_in += 1
-                    elif re.search(r'discord.*deliver', msg1, re.IGNORECASE):
-                        messages.append({'timestamp': ts, 'direction': 'out', 'sender': 'Bot', 'text': msg1[:300]})
+                    elif re.search(r"discord.*deliver", msg1, re.IGNORECASE):
+                        messages.append(
+                            {
+                                "timestamp": ts,
+                                "direction": "out",
+                                "sender": "Bot",
+                                "text": msg1[:300],
+                            }
+                        )
                         if today and today in ts:
                             today_out += 1
             except Exception:
                 pass
 
     # Scan session transcripts for Discord messages and guild/channel info
-    sessions_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
-    sessions_file = os.path.join(sessions_dir, 'sessions.json')
+    sessions_dir = os.path.expanduser("~/.openclaw/agents/main/sessions")
+    sessions_file = os.path.join(sessions_dir, "sessions.json")
     if os.path.exists(sessions_file):
         try:
             with open(sessions_file) as f:
                 sess_data = json.load(f)
-            ch_sessions = [(sid, s) for sid, s in sess_data.items()
-                           if 'discord' in sid.lower() and 'sessionId' in s]
-            ch_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+            ch_sessions = [
+                (sid, s)
+                for sid, s in sess_data.items()
+                if "discord" in sid.lower() and "sessionId" in s
+            ]
+            ch_sessions.sort(key=lambda x: x[1].get("updatedAt", 0), reverse=True)
             for sid_key, sinfo in ch_sessions[:5]:
-                uuid = sinfo['sessionId']
-                sf = os.path.join(sessions_dir, uuid + '.jsonl')
+                uuid = sinfo["sessionId"]
+                sf = os.path.join(sessions_dir, uuid + ".jsonl")
                 if not os.path.exists(sf):
                     continue
                 try:
                     fsize = os.path.getsize(sf)
-                    with open(sf, 'r', errors='replace') as f:
+                    with open(sf, "r", errors="replace") as f:
                         if fsize > 65536:
                             f.seek(fsize - 65536)
                             f.readline()
@@ -22030,35 +23295,42 @@ def api_channel_discord():
                                 sd = json.loads(sline)
                             except Exception:
                                 continue
-                            sm = sd.get('message', {})
-                            ts = sd.get('timestamp', '')
-                            role = sm.get('role', '')
-                            if role not in ('user', 'assistant'):
+                            sm = sd.get("message", {})
+                            ts = sd.get("timestamp", "")
+                            role = sm.get("role", "")
+                            if role not in ("user", "assistant"):
                                 continue
-                            content = sm.get('content', '')
-                            txt = ''
+                            content = sm.get("content", "")
+                            txt = ""
                             if isinstance(content, list):
                                 for c in content:
-                                    if isinstance(c, dict) and c.get('type') == 'text':
-                                        txt = c.get('text', '')
+                                    if isinstance(c, dict) and c.get("type") == "text":
+                                        txt = c.get("text", "")
                                         break
                             elif isinstance(content, str):
                                 txt = content
-                            if not txt or txt.startswith('System:') or 'HEARTBEAT' in txt:
+                            if (
+                                not txt
+                                or txt.startswith("System:")
+                                or "HEARTBEAT" in txt
+                            ):
                                 continue
                             # Extract guild/channel from [Discord guildName channelName] pattern
-                            m = re.search(r'\[Discord\s+([^\]]+?)\s+#?(\S+)\]', txt)
+                            m = re.search(r"\[Discord\s+([^\]]+?)\s+#?(\S+)\]", txt)
                             if m:
                                 guilds.add(m.group(1))
                                 channels.add(m.group(2))
-                            direction = 'in' if role == 'user' else 'out'
-                            messages.append({
-                                'timestamp': ts, 'direction': direction,
-                                'sender': 'User' if direction == 'in' else 'Bot',
-                                'text': txt[:300],
-                            })
+                            direction = "in" if role == "user" else "out"
+                            messages.append(
+                                {
+                                    "timestamp": ts,
+                                    "direction": direction,
+                                    "sender": "User" if direction == "in" else "Bot",
+                                    "text": txt[:300],
+                                }
+                            )
                             if today and today in ts:
-                                if direction == 'in':
+                                if direction == "in":
                                     today_in += 1
                                 else:
                                     today_out += 1
@@ -22071,28 +23343,31 @@ def api_channel_discord():
     seen = set()
     unique = []
     for m in messages:
-        key = (m['timestamp'], m['direction'], m['text'][:50])
+        key = (m["timestamp"], m["direction"], m["text"][:50])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+    unique.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    return jsonify({
-        'messages': unique[:limit],
-        'total': len(unique),
-        'todayIn': today_in,
-        'todayOut': today_out,
-        'guilds': sorted(guilds),
-        'channels': sorted(channels),
-    })
+    return jsonify(
+        {
+            "messages": unique[:limit],
+            "total": len(unique),
+            "todayIn": today_in,
+            "todayOut": today_out,
+            "guilds": sorted(guilds),
+            "channels": sorted(channels),
+        }
+    )
 
 
-@bp_channels.route('/api/channel/slack')
+@bp_channels.route("/api/channel/slack")
 def api_channel_slack():
     """Slack channel data: log-based with workspace/channel extraction."""
     import re
-    limit = request.args.get('limit', 50, type=int)
-    today = datetime.now().strftime('%Y-%m-%d')
+
+    limit = request.args.get("limit", 50, type=int)
+    today = datetime.now().strftime("%Y-%m-%d")
     messages = []
     workspaces = set()
     channels = set()
@@ -22104,45 +23379,62 @@ def api_channel_slack():
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
-        for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
+        for lf in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True)[:3]:
             try:
-                _grep_lines = _grep_log_file(lf, 'messageChannel=slack|slack.*deliver')
+                _grep_lines = _grep_log_file(lf, "messageChannel=slack|slack.*deliver")
                 for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
                         continue
-                    msg1 = obj.get('1', '') or obj.get('0', '')
-                    ts = obj.get('time', '')
-                    if 'messageChannel=slack' in msg1:
-                        messages.append({'timestamp': ts, 'direction': 'in', 'sender': 'User', 'text': msg1[:300]})
+                    msg1 = obj.get("1", "") or obj.get("0", "")
+                    ts = obj.get("time", "")
+                    if "messageChannel=slack" in msg1:
+                        messages.append(
+                            {
+                                "timestamp": ts,
+                                "direction": "in",
+                                "sender": "User",
+                                "text": msg1[:300],
+                            }
+                        )
                         if today and today in ts:
                             today_in += 1
-                    elif re.search(r'slack.*deliver', msg1, re.IGNORECASE):
-                        messages.append({'timestamp': ts, 'direction': 'out', 'sender': 'Bot', 'text': msg1[:300]})
+                    elif re.search(r"slack.*deliver", msg1, re.IGNORECASE):
+                        messages.append(
+                            {
+                                "timestamp": ts,
+                                "direction": "out",
+                                "sender": "Bot",
+                                "text": msg1[:300],
+                            }
+                        )
                         if today and today in ts:
                             today_out += 1
             except Exception:
                 pass
 
     # Scan session transcripts for Slack messages and workspace/channel info
-    sessions_dir = os.path.expanduser('~/.openclaw/agents/main/sessions')
-    sessions_file = os.path.join(sessions_dir, 'sessions.json')
+    sessions_dir = os.path.expanduser("~/.openclaw/agents/main/sessions")
+    sessions_file = os.path.join(sessions_dir, "sessions.json")
     if os.path.exists(sessions_file):
         try:
             with open(sessions_file) as f:
                 sess_data = json.load(f)
-            ch_sessions = [(sid, s) for sid, s in sess_data.items()
-                           if 'slack' in sid.lower() and 'sessionId' in s]
-            ch_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+            ch_sessions = [
+                (sid, s)
+                for sid, s in sess_data.items()
+                if "slack" in sid.lower() and "sessionId" in s
+            ]
+            ch_sessions.sort(key=lambda x: x[1].get("updatedAt", 0), reverse=True)
             for sid_key, sinfo in ch_sessions[:5]:
-                uuid = sinfo['sessionId']
-                sf = os.path.join(sessions_dir, uuid + '.jsonl')
+                uuid = sinfo["sessionId"]
+                sf = os.path.join(sessions_dir, uuid + ".jsonl")
                 if not os.path.exists(sf):
                     continue
                 try:
                     fsize = os.path.getsize(sf)
-                    with open(sf, 'r', errors='replace') as f:
+                    with open(sf, "r", errors="replace") as f:
                         if fsize > 65536:
                             f.seek(fsize - 65536)
                             f.readline()
@@ -22154,39 +23446,46 @@ def api_channel_slack():
                                 sd = json.loads(sline)
                             except Exception:
                                 continue
-                            sm = sd.get('message', {})
-                            ts = sd.get('timestamp', '')
-                            role = sm.get('role', '')
-                            if role not in ('user', 'assistant'):
+                            sm = sd.get("message", {})
+                            ts = sd.get("timestamp", "")
+                            role = sm.get("role", "")
+                            if role not in ("user", "assistant"):
                                 continue
-                            content = sm.get('content', '')
-                            txt = ''
+                            content = sm.get("content", "")
+                            txt = ""
                             if isinstance(content, list):
                                 for c in content:
-                                    if isinstance(c, dict) and c.get('type') == 'text':
-                                        txt = c.get('text', '')
+                                    if isinstance(c, dict) and c.get("type") == "text":
+                                        txt = c.get("text", "")
                                         break
                             elif isinstance(content, str):
                                 txt = content
-                            if not txt or txt.startswith('System:') or 'HEARTBEAT' in txt:
+                            if (
+                                not txt
+                                or txt.startswith("System:")
+                                or "HEARTBEAT" in txt
+                            ):
                                 continue
                             # Extract workspace/channel from [Slack workspace #channel] pattern
-                            m = re.search(r'\[Slack\s+([^\]]+?)\s+#?(\S+)\]', txt)
+                            m = re.search(r"\[Slack\s+([^\]]+?)\s+#?(\S+)\]", txt)
                             if m:
                                 workspaces.add(m.group(1))
                                 channels.add(m.group(2))
                             # Also look for channel mentions like #general
-                            ch_m = re.findall(r'#([a-z0-9_-]+)', txt[:200])
+                            ch_m = re.findall(r"#([a-z0-9_-]+)", txt[:200])
                             for ch in ch_m:
                                 channels.add(ch)
-                            direction = 'in' if role == 'user' else 'out'
-                            messages.append({
-                                'timestamp': ts, 'direction': direction,
-                                'sender': 'User' if direction == 'in' else 'Bot',
-                                'text': txt[:300],
-                            })
+                            direction = "in" if role == "user" else "out"
+                            messages.append(
+                                {
+                                    "timestamp": ts,
+                                    "direction": direction,
+                                    "sender": "User" if direction == "in" else "Bot",
+                                    "text": txt[:300],
+                                }
+                            )
                             if today and today in ts:
-                                if direction == 'in':
+                                if direction == "in":
                                     today_in += 1
                                 else:
                                     today_out += 1
@@ -22199,28 +23498,36 @@ def api_channel_slack():
     seen = set()
     unique = []
     for m in messages:
-        key = (m['timestamp'], m['direction'], m['text'][:50])
+        key = (m["timestamp"], m["direction"], m["text"][:50])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+    unique.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    return jsonify({
-        'messages': unique[:limit],
-        'total': len(unique),
-        'todayIn': today_in,
-        'todayOut': today_out,
-        'workspaces': sorted(workspaces),
-        'channels': sorted(channels),
-    })
+    return jsonify(
+        {
+            "messages": unique[:limit],
+            "total": len(unique),
+            "todayIn": today_in,
+            "todayOut": today_out,
+            "workspaces": sorted(workspaces),
+            "channels": sorted(channels),
+        }
+    )
 
-@bp_channels.route('/api/channel/irc')
+
+@bp_channels.route("/api/channel/irc")
 def api_channel_irc():
     """IRC channel data: log-based, extracts channel names and nicks."""
     import re
-    limit = request.args.get('limit', 50, type=int)
-    today = datetime.now().strftime('%Y-%m-%d')
-    base = _generic_channel_data.__wrapped__('irc') if hasattr(_generic_channel_data, '__wrapped__') else None
+
+    limit = request.args.get("limit", 50, type=int)
+    today = datetime.now().strftime("%Y-%m-%d")
+    base = (
+        _generic_channel_data.__wrapped__("irc")
+        if hasattr(_generic_channel_data, "__wrapped__")
+        else None
+    )
 
     messages = []
     today_in = 0
@@ -22232,76 +23539,104 @@ def api_channel_irc():
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
-        for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
+        for lf in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True)[:3]:
             try:
-                _grep_lines = _grep_log_file(lf, 'messageChannel=irc')
+                _grep_lines = _grep_log_file(lf, "messageChannel=irc")
                 for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
                         continue
-                    msg1 = obj.get('1', '') or obj.get('0', '')
-                    ts = obj.get('time', '')
-                    direction = 'out' if 'deliver' in msg1.lower() else 'in'
-                    messages.append({'timestamp': ts, 'direction': direction,
-                                     'sender': 'User' if direction == 'in' else 'Clawd',
-                                     'text': msg1[:200]})
+                    msg1 = obj.get("1", "") or obj.get("0", "")
+                    ts = obj.get("time", "")
+                    direction = "out" if "deliver" in msg1.lower() else "in"
+                    messages.append(
+                        {
+                            "timestamp": ts,
+                            "direction": direction,
+                            "sender": "User" if direction == "in" else "Clawd",
+                            "text": msg1[:200],
+                        }
+                    )
                     if today and today in ts:
-                        if direction == 'in': today_in += 1
-                        else: today_out += 1
+                        if direction == "in":
+                            today_in += 1
+                        else:
+                            today_out += 1
                     # Extract IRC channels/nicks from log
-                    for ch in re.findall(r'#\w+', msg1): channels.add(ch)
-                    for nick in re.findall(r'nick[=:](\w+)', msg1, re.I): nicks.add(nick)
+                    for ch in re.findall(r"#\w+", msg1):
+                        channels.add(ch)
+                    for nick in re.findall(r"nick[=:](\w+)", msg1, re.I):
+                        nicks.add(nick)
             except Exception:
                 pass
 
     # Also scan session transcripts
     for sessions_dir in [
-        os.path.expanduser('~/.openclaw/agents/main/sessions'),
-        os.path.expanduser('~/.clawdbot/agents/main/sessions'),
+        os.path.expanduser("~/.openclaw/agents/main/sessions"),
+        os.path.expanduser("~/.clawdbot/agents/main/sessions"),
     ]:
-        sessions_file = os.path.join(sessions_dir, 'sessions.json')
+        sessions_file = os.path.join(sessions_dir, "sessions.json")
         if not os.path.exists(sessions_file):
             continue
         try:
             with open(sessions_file) as f:
                 sess_data = json.load(f)
-            ch_sessions = [(sid, s) for sid, s in sess_data.items()
-                           if 'irc' in sid.lower() and 'sessionId' in s]
-            ch_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+            ch_sessions = [
+                (sid, s)
+                for sid, s in sess_data.items()
+                if "irc" in sid.lower() and "sessionId" in s
+            ]
+            ch_sessions.sort(key=lambda x: x[1].get("updatedAt", 0), reverse=True)
             for sid_key, sinfo in ch_sessions[:5]:
-                uuid = sinfo['sessionId']
-                sf = os.path.join(sessions_dir, uuid + '.jsonl')
-                if not os.path.exists(sf): continue
+                uuid = sinfo["sessionId"]
+                sf = os.path.join(sessions_dir, uuid + ".jsonl")
+                if not os.path.exists(sf):
+                    continue
                 try:
-                    with open(sf, 'r', errors='replace') as f:
+                    with open(sf, "r", errors="replace") as f:
                         for sline in f:
                             sline = sline.strip()
-                            if not sline: continue
-                            try: sd = json.loads(sline)
-                            except Exception: continue
-                            sm = sd.get('message', {})
-                            ts = sd.get('timestamp', '')
-                            role = sm.get('role', '')
-                            if role not in ('user', 'assistant'): continue
-                            content = sm.get('content', '')
-                            txt = ''
+                            if not sline:
+                                continue
+                            try:
+                                sd = json.loads(sline)
+                            except Exception:
+                                continue
+                            sm = sd.get("message", {})
+                            ts = sd.get("timestamp", "")
+                            role = sm.get("role", "")
+                            if role not in ("user", "assistant"):
+                                continue
+                            content = sm.get("content", "")
+                            txt = ""
                             if isinstance(content, list):
                                 for c in content:
-                                    if isinstance(c, dict) and c.get('type') == 'text':
-                                        txt = c.get('text', ''); break
+                                    if isinstance(c, dict) and c.get("type") == "text":
+                                        txt = c.get("text", "")
+                                        break
                             elif isinstance(content, str):
                                 txt = content
-                            if not txt or 'HEARTBEAT' in txt: continue
-                            for ch in re.findall(r'\[IRC\s+(#\w+)', txt): channels.add(ch)
-                            for nick in re.findall(r'\[IRC\s+#\w+\s+(\w+)\]', txt): nicks.add(nick)
-                            direction = 'in' if role == 'user' else 'out'
-                            messages.append({'timestamp': ts, 'direction': direction,
-                                             'sender': 'User' if direction == 'in' else 'Clawd',
-                                             'text': txt[:300]})
+                            if not txt or "HEARTBEAT" in txt:
+                                continue
+                            for ch in re.findall(r"\[IRC\s+(#\w+)", txt):
+                                channels.add(ch)
+                            for nick in re.findall(r"\[IRC\s+#\w+\s+(\w+)\]", txt):
+                                nicks.add(nick)
+                            direction = "in" if role == "user" else "out"
+                            messages.append(
+                                {
+                                    "timestamp": ts,
+                                    "direction": direction,
+                                    "sender": "User" if direction == "in" else "Clawd",
+                                    "text": txt[:300],
+                                }
+                            )
                             if today and today in ts:
-                                if direction == 'in': today_in += 1
-                                else: today_out += 1
+                                if direction == "in":
+                                    today_in += 1
+                                else:
+                                    today_out += 1
                 except Exception:
                     pass
         except Exception:
@@ -22310,29 +23645,32 @@ def api_channel_irc():
     seen = set()
     unique = []
     for m in messages:
-        key = (m['timestamp'], m['direction'], m['text'][:50])
+        key = (m["timestamp"], m["direction"], m["text"][:50])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+    unique.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    return jsonify({
-        'messages': unique[:limit],
-        'total': len(unique),
-        'todayIn': today_in,
-        'todayOut': today_out,
-        'channels': sorted(channels),
-        'nicks': sorted(nicks),
-        'status': 'connected' if unique else 'configured',
-    })
+    return jsonify(
+        {
+            "messages": unique[:limit],
+            "total": len(unique),
+            "todayIn": today_in,
+            "todayOut": today_out,
+            "channels": sorted(channels),
+            "nicks": sorted(nicks),
+            "status": "connected" if unique else "configured",
+        }
+    )
 
 
-@bp_channels.route('/api/channel/webchat')
+@bp_channels.route("/api/channel/webchat")
 def api_channel_webchat():
     """Webchat channel data: parse logs + sessions, return active session info."""
     import re
-    limit = request.args.get('limit', 50, type=int)
-    today = datetime.now().strftime('%Y-%m-%d')
+
+    limit = request.args.get("limit", 50, type=int)
+    today = datetime.now().strftime("%Y-%m-%d")
 
     messages = []
     today_in = 0
@@ -22344,146 +23682,179 @@ def api_channel_webchat():
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
-        for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
+        for lf in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True)[:3]:
             try:
-                _grep_lines = _grep_log_file(lf, 'messageChannel=webchat')
+                _grep_lines = _grep_log_file(lf, "messageChannel=webchat")
                 for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
                         continue
-                    msg1 = obj.get('1', '') or obj.get('0', '')
-                    ts = obj.get('time', '')
-                    direction = 'out' if 'deliver' in msg1.lower() else 'in'
-                    messages.append({'timestamp': ts, 'direction': direction,
-                                     'sender': 'User' if direction == 'in' else 'Clawd',
-                                     'text': msg1[:200]})
+                    msg1 = obj.get("1", "") or obj.get("0", "")
+                    ts = obj.get("time", "")
+                    direction = "out" if "deliver" in msg1.lower() else "in"
+                    messages.append(
+                        {
+                            "timestamp": ts,
+                            "direction": direction,
+                            "sender": "User" if direction == "in" else "Clawd",
+                            "text": msg1[:200],
+                        }
+                    )
                     if today and today in ts:
-                        if direction == 'in': today_in += 1
-                        else: today_out += 1
+                        if direction == "in":
+                            today_in += 1
+                        else:
+                            today_out += 1
                     # Extract session IDs
-                    for sid in re.findall(r'sessionId=([a-f0-9\-]+)', msg1): active_sessions.add(sid)
-                    if ts and (last_active is None or ts > last_active): last_active = ts
+                    for sid in re.findall(r"sessionId=([a-f0-9\-]+)", msg1):
+                        active_sessions.add(sid)
+                    if ts and (last_active is None or ts > last_active):
+                        last_active = ts
             except Exception:
                 pass
 
     # Scan sessions for webchat sessions
     for sessions_dir in [
-        os.path.expanduser('~/.openclaw/agents/main/sessions'),
-        os.path.expanduser('~/.clawdbot/agents/main/sessions'),
+        os.path.expanduser("~/.openclaw/agents/main/sessions"),
+        os.path.expanduser("~/.clawdbot/agents/main/sessions"),
     ]:
-        sessions_file = os.path.join(sessions_dir, 'sessions.json')
+        sessions_file = os.path.join(sessions_dir, "sessions.json")
         if not os.path.exists(sessions_file):
             continue
         try:
             with open(sessions_file) as f:
                 sess_data = json.load(f)
-            wc_sessions = [(sid, s) for sid, s in sess_data.items()
-                           if 'webchat' in sid.lower() and 'sessionId' in s]
-            wc_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+            wc_sessions = [
+                (sid, s)
+                for sid, s in sess_data.items()
+                if "webchat" in sid.lower() and "sessionId" in s
+            ]
+            wc_sessions.sort(key=lambda x: x[1].get("updatedAt", 0), reverse=True)
             for sid_key, sinfo in wc_sessions[:10]:
-                active_sessions.add(sinfo['sessionId'])
-                upd = sinfo.get('updatedAt', 0)
+                active_sessions.add(sinfo["sessionId"])
+                upd = sinfo.get("updatedAt", 0)
                 if upd:
-                    ts_str = datetime.fromtimestamp(upd / 1000 if upd > 1e10 else upd).isoformat()
-                    if last_active is None or ts_str > last_active: last_active = ts_str
+                    ts_str = datetime.fromtimestamp(
+                        upd / 1000 if upd > 1e10 else upd
+                    ).isoformat()
+                    if last_active is None or ts_str > last_active:
+                        last_active = ts_str
             # Load messages from recent webchat sessions
             for sid_key, sinfo in wc_sessions[:3]:
-                uuid = sinfo['sessionId']
-                sf = os.path.join(sessions_dir, uuid + '.jsonl')
-                if not os.path.exists(sf): continue
+                uuid = sinfo["sessionId"]
+                sf = os.path.join(sessions_dir, uuid + ".jsonl")
+                if not os.path.exists(sf):
+                    continue
                 try:
                     fsize = os.path.getsize(sf)
-                    with open(sf, 'r', errors='replace') as f:
+                    with open(sf, "r", errors="replace") as f:
                         if fsize > 65536:
-                            f.seek(fsize - 65536); f.readline()
+                            f.seek(fsize - 65536)
+                            f.readline()
                         for sline in f:
                             sline = sline.strip()
-                            if not sline: continue
-                            try: sd = json.loads(sline)
-                            except Exception: continue
-                            sm = sd.get('message', {})
-                            ts = sd.get('timestamp', '')
-                            role = sm.get('role', '')
-                            if role not in ('user', 'assistant'): continue
-                            content = sm.get('content', '')
-                            txt = ''
+                            if not sline:
+                                continue
+                            try:
+                                sd = json.loads(sline)
+                            except Exception:
+                                continue
+                            sm = sd.get("message", {})
+                            ts = sd.get("timestamp", "")
+                            role = sm.get("role", "")
+                            if role not in ("user", "assistant"):
+                                continue
+                            content = sm.get("content", "")
+                            txt = ""
                             if isinstance(content, list):
                                 for c in content:
-                                    if isinstance(c, dict) and c.get('type') == 'text':
-                                        txt = c.get('text', ''); break
+                                    if isinstance(c, dict) and c.get("type") == "text":
+                                        txt = c.get("text", "")
+                                        break
                             elif isinstance(content, str):
                                 txt = content
-                            if not txt or 'HEARTBEAT' in txt: continue
-                            direction = 'in' if role == 'user' else 'out'
-                            messages.append({'timestamp': ts, 'direction': direction,
-                                             'sender': 'User' if direction == 'in' else 'Clawd',
-                                             'text': txt[:300]})
+                            if not txt or "HEARTBEAT" in txt:
+                                continue
+                            direction = "in" if role == "user" else "out"
+                            messages.append(
+                                {
+                                    "timestamp": ts,
+                                    "direction": direction,
+                                    "sender": "User" if direction == "in" else "Clawd",
+                                    "text": txt[:300],
+                                }
+                            )
                             if today and today in ts:
-                                if direction == 'in': today_in += 1
-                                else: today_out += 1
+                                if direction == "in":
+                                    today_in += 1
+                                else:
+                                    today_out += 1
                 except Exception:
                     pass
         except Exception:
             pass
 
     # Also check ~/.openclaw/webchat/ dir
-    wc_dir = os.path.expanduser('~/.openclaw/webchat')
+    wc_dir = os.path.expanduser("~/.openclaw/webchat")
     if os.path.isdir(wc_dir):
-        for f in glob.glob(os.path.join(wc_dir, '*.json'))[:5]:
-            active_sessions.add(os.path.basename(f).replace('.json', ''))
+        for f in glob.glob(os.path.join(wc_dir, "*.json"))[:5]:
+            active_sessions.add(os.path.basename(f).replace(".json", ""))
 
     seen = set()
     unique = []
     for m in messages:
-        key = (m['timestamp'], m['direction'], m['text'][:50])
+        key = (m["timestamp"], m["direction"], m["text"][:50])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+    unique.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    return jsonify({
-        'messages': unique[:limit],
-        'total': len(unique),
-        'todayIn': today_in,
-        'todayOut': today_out,
-        'activeSessions': len(active_sessions),
-        'lastActive': last_active,
-        'status': 'connected' if unique else 'configured',
-    })
+    return jsonify(
+        {
+            "messages": unique[:limit],
+            "total": len(unique),
+            "todayIn": today_in,
+            "todayOut": today_out,
+            "activeSessions": len(active_sessions),
+            "lastActive": last_active,
+            "status": "connected" if unique else "configured",
+        }
+    )
 
 
-@bp_channels.route('/api/channel/googlechat')
+@bp_channels.route("/api/channel/googlechat")
 def api_channel_googlechat():
-    result = _generic_channel_data('googlechat')
+    result = _generic_channel_data("googlechat")
     data = result.get_json()
-    data['spaces'] = []
+    data["spaces"] = []
     return jsonify(data)
 
-@bp_channels.route('/api/channel/bluebubbles')
+
+@bp_channels.route("/api/channel/bluebubbles")
 def api_channel_bluebubbles():
     """BlueBubbles channel: try REST API first, fallback to logs."""
-    import re
-    limit = request.args.get('limit', 50, type=int)
-    today = datetime.now().strftime('%Y-%m-%d')
+
+    limit = request.args.get("limit", 50, type=int)
+    today = datetime.now().strftime("%Y-%m-%d")
 
     messages = []
     today_in = 0
     today_out = 0
     chat_count = None
-    bb_status = 'configured'
+    bb_status = "configured"
 
     # Check for BlueBubbles config
-    cfg_path = os.path.expanduser('~/.openclaw/openclaw.json')
+    cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
     bb_url = None
     bb_pass = None
     if os.path.exists(cfg_path):
         try:
             with open(cfg_path) as f:
                 cfg = json.load(f)
-            bb_cfg = cfg.get('channels', {}).get('bluebubbles', {})
-            bb_url = bb_cfg.get('serverUrl', '').rstrip('/')
-            bb_pass = bb_cfg.get('password', '')
+            bb_cfg = cfg.get("channels", {}).get("bluebubbles", {})
+            bb_url = bb_cfg.get("serverUrl", "").rstrip("/")
+            bb_pass = bb_cfg.get("password", "")
         except Exception:
             pass
 
@@ -22491,17 +23862,24 @@ def api_channel_bluebubbles():
     if bb_url:
         try:
             import urllib.request
-            api_url = f'{bb_url}/api/v1/chat/count'
-            req = urllib.request.Request(api_url,
-                headers={'Authorization': f'Bearer {bb_pass}'} if bb_pass else {})
+
+            api_url = f"{bb_url}/api/v1/chat/count"
+            req = urllib.request.Request(
+                api_url,
+                headers={"Authorization": f"Bearer {bb_pass}"} if bb_pass else {},
+            )
             with urllib.request.urlopen(req, timeout=3) as resp:
                 bb_data = json.loads(resp.read().decode())
-                chat_count = bb_data.get('data', {}).get('total', bb_data.get('total', 0))
-                bb_status = 'connected'
+                chat_count = bb_data.get("data", {}).get(
+                    "total", bb_data.get("total", 0)
+                )
+                bb_status = "connected"
             # Try to get recent messages
-            msgs_url = f'{bb_url}/api/v1/message/count/me?limit=50'
-            req2 = urllib.request.Request(msgs_url,
-                headers={'Authorization': f'Bearer {bb_pass}'} if bb_pass else {})
+            msgs_url = f"{bb_url}/api/v1/message/count/me?limit=50"
+            req2 = urllib.request.Request(
+                msgs_url,
+                headers={"Authorization": f"Bearer {bb_pass}"} if bb_pass else {},
+            )
             with urllib.request.urlopen(req2, timeout=3) as resp2:
                 pass  # just count endpoint
         except Exception:
@@ -22512,71 +23890,97 @@ def api_channel_bluebubbles():
     for ld in log_dirs:
         if not os.path.isdir(ld):
             continue
-        for lf in sorted(glob.glob(os.path.join(ld, '*.log')), reverse=True)[:3]:
+        for lf in sorted(glob.glob(os.path.join(ld, "*.log")), reverse=True)[:3]:
             try:
-                _grep_lines = _grep_log_file(lf, 'messageChannel=bluebubbles')
+                _grep_lines = _grep_log_file(lf, "messageChannel=bluebubbles")
                 for line in _grep_lines:
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
                         continue
-                    msg1 = obj.get('1', '') or obj.get('0', '')
-                    ts = obj.get('time', '')
-                    direction = 'out' if 'deliver' in msg1.lower() else 'in'
-                    messages.append({'timestamp': ts, 'direction': direction,
-                                     'sender': 'User' if direction == 'in' else 'Clawd',
-                                     'text': msg1[:200]})
+                    msg1 = obj.get("1", "") or obj.get("0", "")
+                    ts = obj.get("time", "")
+                    direction = "out" if "deliver" in msg1.lower() else "in"
+                    messages.append(
+                        {
+                            "timestamp": ts,
+                            "direction": direction,
+                            "sender": "User" if direction == "in" else "Clawd",
+                            "text": msg1[:200],
+                        }
+                    )
                     if today and today in ts:
-                        if direction == 'in': today_in += 1
-                        else: today_out += 1
-                    if bb_status == 'configured': bb_status = 'log-only'
+                        if direction == "in":
+                            today_in += 1
+                        else:
+                            today_out += 1
+                    if bb_status == "configured":
+                        bb_status = "log-only"
             except Exception:
                 pass
 
     # Scan sessions
     for sessions_dir in [
-        os.path.expanduser('~/.openclaw/agents/main/sessions'),
-        os.path.expanduser('~/.clawdbot/agents/main/sessions'),
+        os.path.expanduser("~/.openclaw/agents/main/sessions"),
+        os.path.expanduser("~/.clawdbot/agents/main/sessions"),
     ]:
-        sessions_file = os.path.join(sessions_dir, 'sessions.json')
-        if not os.path.exists(sessions_file): continue
+        sessions_file = os.path.join(sessions_dir, "sessions.json")
+        if not os.path.exists(sessions_file):
+            continue
         try:
             with open(sessions_file) as f:
                 sess_data = json.load(f)
-            ch_sessions = [(sid, s) for sid, s in sess_data.items()
-                           if 'bluebubbles' in sid.lower() and 'sessionId' in s]
-            ch_sessions.sort(key=lambda x: x[1].get('updatedAt', 0), reverse=True)
+            ch_sessions = [
+                (sid, s)
+                for sid, s in sess_data.items()
+                if "bluebubbles" in sid.lower() and "sessionId" in s
+            ]
+            ch_sessions.sort(key=lambda x: x[1].get("updatedAt", 0), reverse=True)
             for sid_key, sinfo in ch_sessions[:3]:
-                uuid = sinfo['sessionId']
-                sf = os.path.join(sessions_dir, uuid + '.jsonl')
-                if not os.path.exists(sf): continue
+                uuid = sinfo["sessionId"]
+                sf = os.path.join(sessions_dir, uuid + ".jsonl")
+                if not os.path.exists(sf):
+                    continue
                 try:
-                    with open(sf, 'r', errors='replace') as f:
+                    with open(sf, "r", errors="replace") as f:
                         for sline in f:
                             sline = sline.strip()
-                            if not sline: continue
-                            try: sd = json.loads(sline)
-                            except Exception: continue
-                            sm = sd.get('message', {})
-                            ts = sd.get('timestamp', '')
-                            role = sm.get('role', '')
-                            if role not in ('user', 'assistant'): continue
-                            content = sm.get('content', '')
-                            txt = ''
+                            if not sline:
+                                continue
+                            try:
+                                sd = json.loads(sline)
+                            except Exception:
+                                continue
+                            sm = sd.get("message", {})
+                            ts = sd.get("timestamp", "")
+                            role = sm.get("role", "")
+                            if role not in ("user", "assistant"):
+                                continue
+                            content = sm.get("content", "")
+                            txt = ""
                             if isinstance(content, list):
                                 for c in content:
-                                    if isinstance(c, dict) and c.get('type') == 'text':
-                                        txt = c.get('text', ''); break
+                                    if isinstance(c, dict) and c.get("type") == "text":
+                                        txt = c.get("text", "")
+                                        break
                             elif isinstance(content, str):
                                 txt = content
-                            if not txt or 'HEARTBEAT' in txt: continue
-                            direction = 'in' if role == 'user' else 'out'
-                            messages.append({'timestamp': ts, 'direction': direction,
-                                             'sender': 'User' if direction == 'in' else 'Clawd',
-                                             'text': txt[:300]})
+                            if not txt or "HEARTBEAT" in txt:
+                                continue
+                            direction = "in" if role == "user" else "out"
+                            messages.append(
+                                {
+                                    "timestamp": ts,
+                                    "direction": direction,
+                                    "sender": "User" if direction == "in" else "Clawd",
+                                    "text": txt[:300],
+                                }
+                            )
                             if today and today in ts:
-                                if direction == 'in': today_in += 1
-                                else: today_out += 1
+                                if direction == "in":
+                                    today_in += 1
+                                else:
+                                    today_out += 1
                 except Exception:
                     pass
         except Exception:
@@ -22585,106 +23989,128 @@ def api_channel_bluebubbles():
     seen = set()
     unique = []
     for m in messages:
-        key = (m['timestamp'], m['direction'], m['text'][:50])
+        key = (m["timestamp"], m["direction"], m["text"][:50])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-    unique.sort(key=lambda x: x['timestamp'], reverse=True)
+    unique.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    return jsonify({
-        'messages': unique[:limit],
-        'total': len(unique),
-        'todayIn': today_in,
-        'todayOut': today_out,
-        'chatCount': chat_count,
-        'status': bb_status,
-    })
+    return jsonify(
+        {
+            "messages": unique[:limit],
+            "total": len(unique),
+            "todayIn": today_in,
+            "todayOut": today_out,
+            "chatCount": chat_count,
+            "status": bb_status,
+        }
+    )
 
-@bp_channels.route('/api/channel/msteams')
+
+@bp_channels.route("/api/channel/msteams")
 def api_channel_msteams():
-    result = _generic_channel_data('msteams')
+    result = _generic_channel_data("msteams")
     data = result.get_json()
-    data['teams'] = []
+    data["teams"] = []
     return jsonify(data)
 
-@bp_channels.route('/api/channel/matrix')
+
+@bp_channels.route("/api/channel/matrix")
 def api_channel_matrix():
-    return _generic_channel_data('matrix')
+    return _generic_channel_data("matrix")
 
-@bp_channels.route('/api/channel/mattermost')
+
+@bp_channels.route("/api/channel/mattermost")
 def api_channel_mattermost():
-    result = _generic_channel_data('mattermost')
+    result = _generic_channel_data("mattermost")
     data = result.get_json()
-    data['channels'] = []
+    data["channels"] = []
     return jsonify(data)
 
-@bp_channels.route('/api/channel/line')
+
+@bp_channels.route("/api/channel/line")
 def api_channel_line():
-    return _generic_channel_data('line')
+    return _generic_channel_data("line")
 
-@bp_channels.route('/api/channel/nostr')
+
+@bp_channels.route("/api/channel/nostr")
 def api_channel_nostr():
-    return _generic_channel_data('nostr')
+    return _generic_channel_data("nostr")
 
-@bp_channels.route('/api/channel/twitch')
+
+@bp_channels.route("/api/channel/twitch")
 def api_channel_twitch():
-    return _generic_channel_data('twitch')
+    return _generic_channel_data("twitch")
 
-@bp_channels.route('/api/channel/feishu')
+
+@bp_channels.route("/api/channel/feishu")
 def api_channel_feishu():
-    return _generic_channel_data('feishu')
+    return _generic_channel_data("feishu")
 
-@bp_channels.route('/api/channel/zalo')
+
+@bp_channels.route("/api/channel/zalo")
 def api_channel_zalo():
-    return _generic_channel_data('zalo')
+    return _generic_channel_data("zalo")
 
-@bp_channels.route('/api/channel/tlon')
+
+@bp_channels.route("/api/channel/tlon")
 def api_channel_tlon():
-    return _generic_channel_data('tlon')
+    return _generic_channel_data("tlon")
 
-@bp_channels.route('/api/channel/synology-chat')
+
+@bp_channels.route("/api/channel/synology-chat")
 def api_channel_synology_chat():
-    return _generic_channel_data('synology-chat')
+    return _generic_channel_data("synology-chat")
 
-@bp_channels.route('/api/channel/nextcloud-talk')
+
+@bp_channels.route("/api/channel/nextcloud-talk")
 def api_channel_nextcloud_talk():
-    return _generic_channel_data('nextcloud-talk')
+    return _generic_channel_data("nextcloud-talk")
 
 
 _api_tool_cache = {}
 _api_tool_cache_time = {}
 
-@bp_components.route('/api/component/tool/<name>')
+
+@bp_components.route("/api/component/tool/<name>")
 def api_component_tool(name):
     """Parse session transcripts for tool-specific events. Cached for 15s."""
     import time as _time
+
     now = _time.time()
     if name in _api_tool_cache and (now - _api_tool_cache_time.get(name, 0)) < 15:
         return jsonify(_api_tool_cache[name])
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     if not os.path.isdir(sessions_dir):
         for p in [
-            os.path.expanduser('~/.clawdbot/agents/main/sessions'),
-            os.path.expanduser('~/.moltbot/agents/main/sessions'),
-            os.path.expanduser('~/.openclaw/agents/main/sessions'),
+            os.path.expanduser("~/.clawdbot/agents/main/sessions"),
+            os.path.expanduser("~/.moltbot/agents/main/sessions"),
+            os.path.expanduser("~/.openclaw/agents/main/sessions"),
         ]:
             if os.path.isdir(p):
                 sessions_dir = p
                 break
     if not os.path.isdir(sessions_dir):
-        sessions_dir = os.path.expanduser('~/.clawdbot/agents/main/sessions')
+        sessions_dir = os.path.expanduser("~/.clawdbot/agents/main/sessions")
 
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.now().strftime("%Y-%m-%d")
 
     # Map tool key to tool names in transcripts
     TOOL_MAP = {
-        'session': ['sessions_spawn', 'sessions_send', 'sessions_list', 'sessions_poll'],
-        'exec': ['exec', 'process'],
-        'browser': ['browser', 'web_fetch'],
-        'search': ['web_search'],
-        'cron': ['cron'],
-        'tts': ['tts'],
-        'memory': ['Read', 'read', 'Write', 'write', 'Edit', 'edit'],
+        "session": [
+            "sessions_spawn",
+            "sessions_send",
+            "sessions_list",
+            "sessions_poll",
+        ],
+        "exec": ["exec", "process"],
+        "browser": ["browser", "web_fetch"],
+        "search": ["web_search"],
+        "cron": ["cron"],
+        "tts": ["tts"],
+        "memory": ["Read", "read", "Write", "write", "Edit", "edit"],
     }
 
     tool_names = TOOL_MAP.get(name, [name])
@@ -22694,337 +24120,479 @@ def api_component_tool(name):
 
     if os.path.isdir(sessions_dir):
         for fname in os.listdir(sessions_dir):
-            if not fname.endswith('.jsonl'):
+            if not fname.endswith(".jsonl"):
                 continue
             fpath = os.path.join(sessions_dir, fname)
             try:
                 mtime = os.path.getmtime(fpath)
-                if datetime.fromtimestamp(mtime).strftime('%Y-%m-%d') != today:
+                if datetime.fromtimestamp(mtime).strftime("%Y-%m-%d") != today:
                     continue
 
-                with open(fpath, 'r') as f:
+                with open(fpath, "r") as f:
                     for line in f:
                         try:
                             obj = json.loads(line.strip())
                         except json.JSONDecodeError:
                             continue
 
-                        if obj.get('type') != 'message':
+                        if obj.get("type") != "message":
                             continue
-                        msg = obj.get('message', {})
+                        msg = obj.get("message", {})
 
                         # Tool calls (assistant side)
-                        if msg.get('role') == 'assistant':
-                            for c in (msg.get('content') or []):
-                                if isinstance(c, dict) and c.get('type') == 'toolCall' and c.get('name') in tool_names:
-                                    ts = obj.get('timestamp', '')
+                        if msg.get("role") == "assistant":
+                            for c in msg.get("content") or []:
+                                if (
+                                    isinstance(c, dict)
+                                    and c.get("type") == "toolCall"
+                                    and c.get("name") in tool_names
+                                ):
+                                    ts = obj.get("timestamp", "")
                                     if not ts.startswith(today):
                                         continue
-                                    tn = c.get('name', '')
-                                    args = c.get('arguments', {})
+                                    tn = c.get("name", "")
+                                    args = c.get("arguments", {})
                                     today_calls += 1
 
-                                    evt = {'timestamp': ts, 'status': 'ok', 'tool': tn}
+                                    evt = {"timestamp": ts, "status": "ok", "tool": tn}
 
-                                    if name == 'exec':
-                                        evt['detail'] = (args.get('command') or str(args))[:200]
-                                        evt['action'] = 'exec'
-                                    elif name == 'browser':
-                                        evt['action'] = args.get('action', 'unknown')
-                                        evt['detail'] = args.get('targetUrl') or args.get('url') or args.get('selector') or evt['action']
-                                    elif name == 'search':
-                                        evt['detail'] = args.get('query', '?')
-                                        evt['action'] = 'search'
-                                    elif name == 'tts':
-                                        evt['detail'] = (args.get('text') or '')[:100]
-                                        evt['action'] = 'tts'
-                                        evt['voice'] = args.get('voice', '')
-                                    elif name == 'memory':
-                                        path = args.get('file_path') or args.get('path') or '?'
-                                        evt['detail'] = path
-                                        evt['action'] = 'write' if tn in ('Write', 'write', 'Edit', 'edit') else 'read'
-                                    elif name == 'session':
-                                        evt['detail'] = args.get('sessionId') or args.get('name') or tn
-                                        evt['action'] = tn
-                                        evt['session_status'] = 'running'
-                                    elif name == 'cron':
-                                        evt['detail'] = args.get('expr') or args.get('action') or str(args)[:80]
-                                        evt['action'] = 'cron'
+                                    if name == "exec":
+                                        evt["detail"] = (
+                                            args.get("command") or str(args)
+                                        )[:200]
+                                        evt["action"] = "exec"
+                                    elif name == "browser":
+                                        evt["action"] = args.get("action", "unknown")
+                                        evt["detail"] = (
+                                            args.get("targetUrl")
+                                            or args.get("url")
+                                            or args.get("selector")
+                                            or evt["action"]
+                                        )
+                                    elif name == "search":
+                                        evt["detail"] = args.get("query", "?")
+                                        evt["action"] = "search"
+                                    elif name == "tts":
+                                        evt["detail"] = (args.get("text") or "")[:100]
+                                        evt["action"] = "tts"
+                                        evt["voice"] = args.get("voice", "")
+                                    elif name == "memory":
+                                        path = (
+                                            args.get("file_path")
+                                            or args.get("path")
+                                            or "?"
+                                        )
+                                        evt["detail"] = path
+                                        evt["action"] = (
+                                            "write"
+                                            if tn in ("Write", "write", "Edit", "edit")
+                                            else "read"
+                                        )
+                                    elif name == "session":
+                                        evt["detail"] = (
+                                            args.get("sessionId")
+                                            or args.get("name")
+                                            or tn
+                                        )
+                                        evt["action"] = tn
+                                        evt["session_status"] = "running"
+                                    elif name == "cron":
+                                        evt["detail"] = (
+                                            args.get("expr")
+                                            or args.get("action")
+                                            or str(args)[:80]
+                                        )
+                                        evt["action"] = "cron"
                                     else:
-                                        evt['detail'] = str(args)[:120]
-                                        evt['action'] = tn
+                                        evt["detail"] = str(args)[:120]
+                                        evt["action"] = tn
 
                                     events.append(evt)
 
                         # Tool results
-                        elif msg.get('role') == 'toolResult' and msg.get('toolName') in tool_names:
-                            ts = obj.get('timestamp', '')
+                        elif (
+                            msg.get("role") == "toolResult"
+                            and msg.get("toolName") in tool_names
+                        ):
+                            ts = obj.get("timestamp", "")
                             if not ts.startswith(today):
                                 continue
-                            details = msg.get('details', {})
-                            is_error = msg.get('isError', False) or (isinstance(details, dict) and details.get('status') == 'error')
+                            details = msg.get("details", {})
+                            is_error = msg.get("isError", False) or (
+                                isinstance(details, dict)
+                                and details.get("status") == "error"
+                            )
                             if is_error:
                                 today_errors += 1
                                 # Mark last matching event as error
                                 for e in reversed(events):
-                                    if e.get('tool') == msg.get('toolName') and e.get('status') == 'ok':
-                                        e['status'] = 'error'
+                                    if (
+                                        e.get("tool") == msg.get("toolName")
+                                        and e.get("status") == "ok"
+                                    ):
+                                        e["status"] = "error"
                                         break
 
                             # Add duration from details
-                            if isinstance(details, dict) and details.get('duration_ms'):
+                            if isinstance(details, dict) and details.get("duration_ms"):
                                 for e in reversed(events):
-                                    if e.get('tool') == msg.get('toolName') and not e.get('duration_ms'):
-                                        e['duration_ms'] = details['duration_ms']
+                                    if e.get("tool") == msg.get(
+                                        "toolName"
+                                    ) and not e.get("duration_ms"):
+                                        e["duration_ms"] = details["duration_ms"]
                                         break
 
                             # For sessions, update status from result
-                            if name == 'session' and isinstance(details, dict):
+                            if name == "session" and isinstance(details, dict):
                                 for e in reversed(events):
-                                    if e.get('tool') == msg.get('toolName'):
-                                        if details.get('status') == 'done':
-                                            e['session_status'] = 'done'
-                                        if details.get('model'):
-                                            e['model'] = details['model']
-                                        if details.get('tokens'):
-                                            e['tokens'] = details['tokens']
+                                    if e.get("tool") == msg.get("toolName"):
+                                        if details.get("status") == "done":
+                                            e["session_status"] = "done"
+                                        if details.get("model"):
+                                            e["model"] = details["model"]
+                                        if details.get("tokens"):
+                                            e["tokens"] = details["tokens"]
                                         break
 
             except Exception:
                 continue
 
     # For cron, also pull from cron jobs data
-    if name == 'cron' and not events:
+    if name == "cron" and not events:
         try:
             crons = _get_crons()
             for cj in crons[:20]:
-                events.append({
-                    'timestamp': cj.get('lastRun') or cj.get('createdAt') or '',
-                    'action': 'cron',
-                    'detail': (cj.get('expr') or '') + ' -> ' + (cj.get('task') or cj.get('command') or '')[:60],
-                    'status': 'ok' if cj.get('lastStatus') != 'error' else 'error',
-                })
+                events.append(
+                    {
+                        "timestamp": cj.get("lastRun") or cj.get("createdAt") or "",
+                        "action": "cron",
+                        "detail": (cj.get("expr") or "")
+                        + " -> "
+                        + (cj.get("task") or cj.get("command") or "")[:60],
+                        "status": "ok" if cj.get("lastStatus") != "error" else "error",
+                    }
+                )
         except Exception:
             pass
 
     # For sessions, also pull live session data
-    if name == 'session' and not events:
+    if name == "session" and not events:
         try:
             sessions = _get_sessions()
             for sess in sessions[:20]:
-                events.append({
-                    'timestamp': datetime.fromtimestamp(sess['updatedAt'] / 1000).isoformat() if sess.get('updatedAt') else '',
-                    'action': 'session',
-                    'detail': sess.get('displayName') or sess.get('sessionId', '?')[:20],
-                    'session_status': 'running',
-                    'model': sess.get('model', ''),
-                    'tokens': sess.get('totalTokens', 0),
-                    'status': 'ok',
-                })
+                events.append(
+                    {
+                        "timestamp": datetime.fromtimestamp(
+                            sess["updatedAt"] / 1000
+                        ).isoformat()
+                        if sess.get("updatedAt")
+                        else "",
+                        "action": "session",
+                        "detail": sess.get("displayName")
+                        or sess.get("sessionId", "?")[:20],
+                        "session_status": "running",
+                        "model": sess.get("model", ""),
+                        "tokens": sess.get("totalTokens", 0),
+                        "status": "ok",
+                    }
+                )
         except Exception:
             pass
 
     # Sort by timestamp descending, limit to 50
-    events.sort(key=lambda e: e.get('timestamp', ''), reverse=True)
+    events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
     events = events[:50]
 
     result = {
-        'name': name,
-        'stats': {'today_calls': today_calls, 'today_errors': today_errors},
-        'events': events,
-        'total': today_calls,
+        "name": name,
+        "stats": {"today_calls": today_calls, "today_errors": today_errors},
+        "events": events,
+        "total": today_calls,
     }
 
     # Enrich with tool-specific data
-    if name == 'session':
+    if name == "session":
         # Add live sub-agent data
         try:
-            sa_data = api_subagents().get_json()
-            result['subagents'] = sa_data.get('subagents', [])
+            sa_data = {}
+            result["subagents"] = sa_data.get("subagents", [])
         except Exception:
-            result['subagents'] = []
+            result["subagents"] = []
 
-    elif name == 'exec':
+    elif name == "exec":
         # Check for running background processes
         running = []
         try:
-            proc_dir = os.path.expanduser('~/.openclaw/processes')
+            proc_dir = os.path.expanduser("~/.openclaw/processes")
             if not os.path.isdir(proc_dir):
-                proc_dir = os.path.expanduser('~/.clawdbot/processes')
+                proc_dir = os.path.expanduser("~/.clawdbot/processes")
             if os.path.isdir(proc_dir):
                 for pf in os.listdir(proc_dir):
                     try:
                         with open(os.path.join(proc_dir, pf)) as pfile:
                             pdata = json.load(pfile)
-                            if pdata.get('running', False):
-                                running.append({
-                                    'command': pdata.get('command', '?'),
-                                    'pid': pdata.get('pid', ''),
-                                })
+                            if pdata.get("running", False):
+                                running.append(
+                                    {
+                                        "command": pdata.get("command", "?"),
+                                        "pid": pdata.get("pid", ""),
+                                    }
+                                )
                     except Exception:
                         pass
         except Exception:
             pass
-        result['running_commands'] = running
+        result["running_commands"] = running
 
-    elif name == 'browser':
+    elif name == "browser":
         # Extract unique URLs from events
         seen = set()
         urls = []
         for evt in events:
-            url = evt.get('detail', '')
-            if url.startswith('http') and url not in seen:
+            url = evt.get("detail", "")
+            if url.startswith("http") and url not in seen:
                 seen.add(url)
-                urls.append({'url': url, 'timestamp': evt.get('timestamp', '')})
-        result['recent_urls'] = urls[:20]
+                urls.append({"url": url, "timestamp": evt.get("timestamp", "")})
+        result["recent_urls"] = urls[:20]
 
-    elif name == 'cron':
+    elif name == "cron":
         # Add full cron job list
         try:
             crons = _get_crons()
-            result['cron_jobs'] = []
+            result["cron_jobs"] = []
             for cj in crons:
-                result['cron_jobs'].append({
-                    'id': cj.get('id', ''),
-                    'name': cj.get('name') or cj.get('task') or cj.get('id', '?'),
-                    'expr': (cj['expr'].get('expr', str(cj['expr'])) if isinstance(cj.get('expr'), dict) else cj.get('expr') or cj.get('schedule', '')),
-                    'task': cj.get('task') or cj.get('command', ''),
-                    'channel': cj.get('channel', ''),
-                    'lastRun': cj.get('lastRun') or cj.get('lastRunAt', ''),
-                    'nextRun': cj.get('nextRun') or cj.get('nextRunAt', ''),
-                    'lastStatus': cj.get('lastStatus', 'ok'),
-                    'lastError': cj.get('lastError', ''),
-                })
+                result["cron_jobs"].append(
+                    {
+                        "id": cj.get("id", ""),
+                        "name": cj.get("name") or cj.get("task") or cj.get("id", "?"),
+                        "expr": (
+                            cj["expr"].get("expr", str(cj["expr"]))
+                            if isinstance(cj.get("expr"), dict)
+                            else cj.get("expr") or cj.get("schedule", "")
+                        ),
+                        "task": cj.get("task") or cj.get("command", ""),
+                        "channel": cj.get("channel", ""),
+                        "lastRun": cj.get("lastRun") or cj.get("lastRunAt", ""),
+                        "nextRun": cj.get("nextRun") or cj.get("nextRunAt", ""),
+                        "lastStatus": cj.get("lastStatus", "ok"),
+                        "lastError": cj.get("lastError", ""),
+                    }
+                )
         except Exception:
-            result['cron_jobs'] = []
+            result["cron_jobs"] = []
 
-    elif name == 'memory':
+    elif name == "memory":
         # Add workspace file listing
         try:
-            result['memory_files'] = _get_memory_files()
+            result["memory_files"] = _get_memory_files()
         except Exception:
-            result['memory_files'] = []
+            result["memory_files"] = []
 
     _api_tool_cache[name] = result
     _api_tool_cache_time[name] = _time.time()
     return jsonify(result)
 
 
-@bp_components.route('/api/component/runtime')
+@bp_components.route("/api/component/runtime")
 def api_component_runtime():
     """Return runtime environment info."""
     import platform
+
     items = []
-    items.append({'label': 'Python', 'value': platform.python_version(), 'status': 'ok'})
-    items.append({'label': 'OS', 'value': f'{platform.system()} {platform.release()}', 'status': 'ok'})
-    items.append({'label': 'Architecture', 'value': platform.machine(), 'status': 'ok'})
+    items.append(
+        {"label": "Python", "value": platform.python_version(), "status": "ok"}
+    )
+    items.append(
+        {
+            "label": "OS",
+            "value": f"{platform.system()} {platform.release()}",
+            "status": "ok",
+        }
+    )
+    items.append({"label": "Architecture", "value": platform.machine(), "status": "ok"})
     # OpenClaw version
     try:
-        oc_ver = subprocess.check_output(['openclaw', '--version'], stderr=subprocess.STDOUT, timeout=5).decode().strip()
-        items.append({'label': 'OpenClaw', 'value': oc_ver, 'status': 'ok'})
+        oc_ver = (
+            subprocess.check_output(
+                ["openclaw", "--version"], stderr=subprocess.STDOUT, timeout=5
+            )
+            .decode()
+            .strip()
+        )
+        items.append({"label": "OpenClaw", "value": oc_ver, "status": "ok"})
     except Exception:
-        items.append({'label': 'OpenClaw', 'value': 'unknown', 'status': 'warning'})
+        items.append({"label": "OpenClaw", "value": "unknown", "status": "warning"})
     # Uptime
     try:
-        up = subprocess.check_output(['uptime', '-p'], timeout=5).decode().strip()
-        items.append({'label': 'Uptime', 'value': up, 'status': 'ok'})
+        up = subprocess.check_output(["uptime", "-p"], timeout=5).decode().strip()
+        items.append({"label": "Uptime", "value": up, "status": "ok"})
     except Exception:
         pass
     # Memory
     try:
-        mem = subprocess.check_output(['free', '-h'], timeout=5).decode().strip().split('\n')
+        mem = (
+            subprocess.check_output(["free", "-h"], timeout=5)
+            .decode()
+            .strip()
+            .split("\n")
+        )
         if len(mem) >= 2:
             parts = mem[1].split()
             used, total = parts[2], parts[1]
-            items.append({'label': 'Memory', 'value': f'{used} / {total}', 'status': 'ok'})
+            items.append(
+                {"label": "Memory", "value": f"{used} / {total}", "status": "ok"}
+            )
     except Exception:
         pass
     # Disk
     try:
-        df = subprocess.check_output(['df', '-h', '/'], timeout=5).decode().strip().split('\n')
+        df = (
+            subprocess.check_output(["df", "-h", "/"], timeout=5)
+            .decode()
+            .strip()
+            .split("\n")
+        )
         if len(df) >= 2:
             parts = df[1].split()
-            items.append({'label': 'Disk /', 'value': f'{parts[2]} / {parts[1]} ({parts[4]} used)', 'status': 'critical' if int(parts[4].replace('%','')) > 90 else 'warning' if int(parts[4].replace('%','')) > 80 else 'ok'})
+            items.append(
+                {
+                    "label": "Disk /",
+                    "value": f"{parts[2]} / {parts[1]} ({parts[4]} used)",
+                    "status": "critical"
+                    if int(parts[4].replace("%", "")) > 90
+                    else "warning"
+                    if int(parts[4].replace("%", "")) > 80
+                    else "ok",
+                }
+            )
     except Exception:
         pass
     # Node.js
     try:
-        nv = subprocess.check_output(['node', '--version'], timeout=5).decode().strip()
-        items.append({'label': 'Node.js', 'value': nv, 'status': 'ok'})
+        nv = subprocess.check_output(["node", "--version"], timeout=5).decode().strip()
+        items.append({"label": "Node.js", "value": nv, "status": "ok"})
     except Exception:
         pass
-    return jsonify({'items': items})
+    return jsonify({"items": items})
 
 
-@bp_components.route('/api/component/machine')
+@bp_components.route("/api/component/machine")
 def api_component_machine():
     """Return machine/host hardware info."""
     import platform
+
     items = []
-    items.append({'label': 'Hostname', 'value': socket.gethostname(), 'status': 'ok'})
+    items.append({"label": "Hostname", "value": socket.gethostname(), "status": "ok"})
     # IP
-    items.append({'label': 'IP', 'value': get_local_ip(), 'status': 'ok'})
+    items.append({"label": "IP", "value": get_local_ip(), "status": "ok"})
     # CPU
     try:
-        with open('/proc/cpuinfo') as f:
+        with open("/proc/cpuinfo") as f:
             for line in f:
-                if line.startswith('model name'):
-                    items.append({'label': 'CPU', 'value': line.split(':')[1].strip(), 'status': 'ok'})
+                if line.startswith("model name"):
+                    items.append(
+                        {
+                            "label": "CPU",
+                            "value": line.split(":")[1].strip(),
+                            "status": "ok",
+                        }
+                    )
                     break
     except Exception:
-        items.append({'label': 'CPU', 'value': platform.processor() or 'unknown', 'status': 'ok'})
+        items.append(
+            {"label": "CPU", "value": platform.processor() or "unknown", "status": "ok"}
+        )
     # CPU cores
-    items.append({'label': 'CPU Cores', 'value': str(os.cpu_count() or '?'), 'status': 'ok'})
+    items.append(
+        {"label": "CPU Cores", "value": str(os.cpu_count() or "?"), "status": "ok"}
+    )
     # Load average
     try:
         load = os.getloadavg()
         cores = os.cpu_count() or 1
-        load_str = f'{load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}'
-        status = 'critical' if load[0] > cores * 2 else 'warning' if load[0] > cores else 'ok'
-        items.append({'label': 'Load (1/5/15m)', 'value': load_str, 'status': status})
+        load_str = f"{load[0]:.2f} / {load[1]:.2f} / {load[2]:.2f}"
+        status = (
+            "critical"
+            if load[0] > cores * 2
+            else "warning"
+            if load[0] > cores
+            else "ok"
+        )
+        items.append({"label": "Load (1/5/15m)", "value": load_str, "status": status})
     except Exception:
         pass
     # GPU
     try:
-        gpu = subprocess.check_output(['nvidia-smi', '--query-gpu=name,memory.used,memory.total,utilization.gpu', '--format=csv,noheader,nounits'], timeout=5).decode().strip()
-        for line in gpu.split('\n'):
-            parts = [p.strip() for p in line.split(',')]
+        gpu = (
+            subprocess.check_output(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=name,memory.used,memory.total,utilization.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+                timeout=5,
+            )
+            .decode()
+            .strip()
+        )
+        for line in gpu.split("\n"):
+            parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 4:
-                items.append({'label': 'GPU', 'value': f'{parts[0]}', 'status': 'ok'})
-                items.append({'label': 'GPU Memory', 'value': f'{parts[1]} MiB / {parts[2]} MiB', 'status': 'ok'})
-                items.append({'label': 'GPU Utilization', 'value': f'{parts[3]}%', 'status': 'warning' if int(parts[3]) > 80 else 'ok'})
+                items.append({"label": "GPU", "value": f"{parts[0]}", "status": "ok"})
+                items.append(
+                    {
+                        "label": "GPU Memory",
+                        "value": f"{parts[1]} MiB / {parts[2]} MiB",
+                        "status": "ok",
+                    }
+                )
+                items.append(
+                    {
+                        "label": "GPU Utilization",
+                        "value": f"{parts[3]}%",
+                        "status": "warning" if int(parts[3]) > 80 else "ok",
+                    }
+                )
     except Exception:
-        items.append({'label': 'GPU', 'value': 'N/A (no nvidia-smi)', 'status': 'ok'})
+        items.append({"label": "GPU", "value": "N/A (no nvidia-smi)", "status": "ok"})
     # Kernel
-    items.append({'label': 'Kernel', 'value': platform.release(), 'status': 'ok'})
-    return jsonify({'items': items})
+    items.append({"label": "Kernel", "value": platform.release(), "status": "ok"})
+    return jsonify({"items": items})
 
 
-@bp_components.route('/api/component/gateway')
+@bp_components.route("/api/component/gateway")
 def api_component_gateway():
     """Parse gateway routing events from today's log file."""
     import re
-    limit = int(request.args.get('limit', 50))
-    offset = int(request.args.get('offset', 0))
-    today = datetime.now().strftime('%Y-%m-%d')
+
+    limit = int(request.args.get("limit", 50))
+    offset = int(request.args.get("offset", 0))
+    today = datetime.now().strftime("%Y-%m-%d")
     # Try both openclaw and moltbot log dirs/naming
     candidates = (
-        [os.path.join(LOG_DIR, f'openclaw-{today}.log'),
-         os.path.join(LOG_DIR, f'moltbot-{today}.log')] +
-        [os.path.join(d, f'openclaw-{today}.log') for d in _get_log_dirs()] +
-        [os.path.join(d, f'moltbot-{today}.log') for d in _get_log_dirs()]
+        [
+            os.path.join(LOG_DIR, f"openclaw-{today}.log"),
+            os.path.join(LOG_DIR, f"moltbot-{today}.log"),
+        ]
+        + [os.path.join(d, f"openclaw-{today}.log") for d in _get_log_dirs()]
+        + [os.path.join(d, f"moltbot-{today}.log") for d in _get_log_dirs()]
     )
     candidates = list(dict.fromkeys(candidates))  # deduplicate preserving order
     log_path = next((p for p in candidates if os.path.exists(p)), None)
 
     routes = []
-    stats = {'today_messages': 0, 'today_heartbeats': 0, 'today_crons': 0, 'today_errors': 0}
+    stats = {
+        "today_messages": 0,
+        "today_heartbeats": 0,
+        "today_crons": 0,
+        "today_errors": 0,
+    }
 
     if not log_path:
-        return jsonify({'routes': [], 'stats': stats, 'total': 0})
+        return jsonify({"routes": [], "stats": stats, "total": 0})
 
     try:
-        with open(log_path, 'r') as f:
+        with open(log_path, "r") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -23034,51 +24602,65 @@ def api_component_gateway():
                 except json.JSONDecodeError:
                     continue
 
-                msg = entry.get('1', '') or entry.get('0', '')
-                ts = entry.get('time', '')
-                level = entry.get('_meta', {}).get('logLevelName', '')
+                msg = entry.get("1", "") or entry.get("0", "")
+                ts = entry.get("time", "")
+                level = entry.get("_meta", {}).get("logLevelName", "")
 
                 # embedded run start - main routing event
-                if 'embedded run start:' in msg:
-                    route = {'timestamp': ts, 'from': '', 'to': '', 'session': '', 'type': 'message', 'status': 'ok'}
+                if "embedded run start:" in msg:
+                    route = {
+                        "timestamp": ts,
+                        "from": "",
+                        "to": "",
+                        "session": "",
+                        "type": "message",
+                        "status": "ok",
+                    }
                     # Extract fields: model, messageChannel, sessionId
-                    m_model = re.search(r'model=(\S+)', msg)
-                    m_chan = re.search(r'messageChannel=(\S+)', msg)
-                    m_sid = re.search(r'sessionId=(\S+)', msg)
+                    m_model = re.search(r"model=(\S+)", msg)
+                    m_chan = re.search(r"messageChannel=(\S+)", msg)
+                    m_sid = re.search(r"sessionId=(\S+)", msg)
                     if m_model:
-                        route['to'] = m_model.group(1)
+                        route["to"] = m_model.group(1)
                     if m_chan:
                         ch = m_chan.group(1)
-                        route['from'] = ch
-                        if ch == 'heartbeat':
-                            route['type'] = 'heartbeat'
-                            stats['today_heartbeats'] += 1
+                        route["from"] = ch
+                        if ch == "heartbeat":
+                            route["type"] = "heartbeat"
+                            stats["today_heartbeats"] += 1
                             # Update heartbeat tracking for gap alerting
                             _record_heartbeat()
-                        elif ch == 'cron':
-                            route['type'] = 'cron'
-                            stats['today_crons'] += 1
+                        elif ch == "cron":
+                            route["type"] = "cron"
+                            stats["today_crons"] += 1
                         else:
-                            stats['today_messages'] += 1
+                            stats["today_messages"] += 1
                     else:
-                        stats['today_messages'] += 1
+                        stats["today_messages"] += 1
                     if m_sid:
-                        route['session'] = m_sid.group(1)[:12]
+                        route["session"] = m_sid.group(1)[:12]
                     # Check if it's a subagent
-                    if 'subagent' in msg.lower():
-                        route['type'] = 'subagent'
+                    if "subagent" in msg.lower():
+                        route["type"] = "subagent"
                     routes.append(route)
                     continue
 
                 # Delivery failures
-                if 'Delivery failed' in msg or ('Delivery' in msg and level == 'ERROR'):
-                    stats['today_errors'] += 1
+                if "Delivery failed" in msg or ("Delivery" in msg and level == "ERROR"):
+                    stats["today_errors"] += 1
                     # Try to annotate the last route
-                    route = {'timestamp': ts, 'from': '', 'to': '', 'session': '', 'type': 'message', 'status': 'error'}
-                    m_chan = re.search(r'\((\w+) to', msg)
+                    route = {
+                        "timestamp": ts,
+                        "from": "",
+                        "to": "",
+                        "session": "",
+                        "type": "message",
+                        "status": "error",
+                    }
+                    m_chan = re.search(r"\((\w+) to", msg)
                     if m_chan:
-                        route['from'] = m_chan.group(1)
-                    route['to'] = 'delivery'
+                        route["from"] = m_chan.group(1)
+                    route["to"] = "delivery"
                     routes.append(route)
                     continue
 
@@ -23088,22 +24670,24 @@ def api_component_gateway():
         pass
 
     # Sort by timestamp descending (newest first)
-    routes.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    routes.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     total = len(routes)
-    page = routes[offset:offset + limit]
+    page = routes[offset : offset + limit]
 
     # --- Enhanced: active sessions, config summary, uptime, restart history ---
-    import re as _re
 
     # Active sessions
     active_sessions = 0
     try:
-        sess_file = os.path.join(SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions'), 'sessions.json')
+        sess_file = os.path.join(
+            SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions"),
+            "sessions.json",
+        )
         with open(sess_file) as f:
             sess_data = json.load(f)
         now_ts = time.time() * 1000  # ms
         for sid, sinfo in sess_data.items():
-            updated = sinfo.get('updatedAt', 0)
+            updated = sinfo.get("updatedAt", 0)
             if now_ts - updated < 3600_000:  # active in last hour
                 active_sessions += 1
     except Exception:
@@ -23111,38 +24695,62 @@ def api_component_gateway():
 
     # Config summary
     config_summary = {}
-    for cf in [os.path.expanduser('~/.clawdbot/openclaw.json'), os.path.expanduser('~/.openclaw/openclaw.json')]:
+    for cf in [
+        os.path.expanduser("~/.clawdbot/openclaw.json"),
+        os.path.expanduser("~/.openclaw/openclaw.json"),
+    ]:
         try:
             with open(cf) as f:
                 cfg = json.load(f)
-            plugins = cfg.get('plugins', {}).get('entries', {})
-            config_summary['channels'] = [k for k, v in plugins.items() if v.get('enabled')]
-            ad = cfg.get('agents', {}).get('defaults', {})
-            config_summary['max_concurrent'] = ad.get('maxConcurrent', '?')
-            config_summary['max_subagents'] = ad.get('subagents', {}).get('maxConcurrent', '?')
-            hb = ad.get('heartbeat', {})
-            config_summary['heartbeat'] = hb.get('every', '?')
-            config_summary['workspace'] = ad.get('workspace', '?')
+            plugins = cfg.get("plugins", {}).get("entries", {})
+            config_summary["channels"] = [
+                k for k, v in plugins.items() if v.get("enabled")
+            ]
+            ad = cfg.get("agents", {}).get("defaults", {})
+            config_summary["max_concurrent"] = ad.get("maxConcurrent", "?")
+            config_summary["max_subagents"] = ad.get("subagents", {}).get(
+                "maxConcurrent", "?"
+            )
+            hb = ad.get("heartbeat", {})
+            config_summary["heartbeat"] = hb.get("every", "?")
+            config_summary["workspace"] = ad.get("workspace", "?")
             break
         except Exception:
             continue
 
     # Gateway uptime (from systemd)
-    uptime_str = ''
+    uptime_str = ""
     try:
-        r = subprocess.run(['systemctl', '--user', 'show', 'openclaw-gateway', '--property=ActiveEnterTimestamp'],
-                          capture_output=True, text=True, timeout=3)
+        r = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "openclaw-gateway",
+                "--property=ActiveEnterTimestamp",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
         ts_line = r.stdout.strip()
-        if '=' in ts_line:
-            uptime_str = ts_line.split('=', 1)[1].strip()
+        if "=" in ts_line:
+            uptime_str = ts_line.split("=", 1)[1].strip()
     except Exception:
         pass
-    if not uptime_str and sys.platform != 'win32':
+    if not uptime_str and sys.platform != "win32":
         try:
-            r = subprocess.run(['pgrep', '-a', 'openclaw'], capture_output=True, text=True, timeout=3)
+            r = subprocess.run(
+                ["pgrep", "-a", "openclaw"], capture_output=True, text=True, timeout=3
+            )
             if r.stdout.strip():
                 pid = r.stdout.strip().split()[0]
-                r2 = subprocess.run(['ps', '-o', 'etime=', '-p', pid], capture_output=True, text=True, timeout=3)
+                r2 = subprocess.run(
+                    ["ps", "-o", "etime=", "-p", pid],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
                 uptime_str = r2.stdout.strip()
         except Exception:
             pass
@@ -23151,35 +24759,39 @@ def api_component_gateway():
     restarts = []
     if log_path:
         try:
-            _restart_lines = _grep_log_file(log_path, r'gateway.*start|listening on|server started')
+            _restart_lines = _grep_log_file(
+                log_path, r"gateway.*start|listening on|server started"
+            )
             for line in _restart_lines[-5:]:  # last 5 restarts
                 try:
                     obj = json.loads(line.strip())
-                    restarts.append(obj.get('time', ''))
+                    restarts.append(obj.get("time", ""))
                 except Exception:
                     pass
         except Exception:
             pass
 
-    stats['active_sessions'] = active_sessions
-    stats['config'] = config_summary
-    stats['uptime'] = uptime_str
-    stats['restarts'] = restarts
+    stats["active_sessions"] = active_sessions
+    stats["config"] = config_summary
+    stats["uptime"] = uptime_str
+    stats["restarts"] = restarts
 
-    return jsonify({'routes': page, 'stats': stats, 'total': total})
+    return jsonify({"routes": page, "stats": stats, "total": total})
 
 
-@bp_components.route('/api/component/brain')
+@bp_components.route("/api/component/brain")
 def api_component_brain():
     """Parse session transcripts for LLM API call details."""
-    limit = int(request.args.get('limit', 50))
-    offset = int(request.args.get('offset', 0))
+    limit = int(request.args.get("limit", 50))
+    offset = int(request.args.get("offset", 0))
 
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     if not os.path.isdir(sessions_dir):
-        sessions_dir = os.path.expanduser('~/.moltbot/agents/main/sessions')
+        sessions_dir = os.path.expanduser("~/.moltbot/agents/main/sessions")
 
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = datetime.now().strftime("%Y-%m-%d")
     calls = []
     total_input = 0
     total_output = 0
@@ -23190,22 +24802,22 @@ def api_component_brain():
 
     if os.path.isdir(sessions_dir):
         for fname in os.listdir(sessions_dir):
-            if not fname.endswith('.jsonl'):
+            if not fname.endswith(".jsonl"):
                 continue
             fpath = os.path.join(sessions_dir, fname)
-            session_id = fname.replace('.jsonl', '')
+            session_id = fname.replace(".jsonl", "")
 
             try:
                 # Quick check: only process files modified today
                 mtime = os.path.getmtime(fpath)
-                file_date = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+                file_date = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
                 if file_date != today:
                     continue
 
                 # Detect if subagent from session metadata
-                session_label = 'main'
+                session_label = "main"
                 prev_ts = None
-                with open(fpath, 'r') as f:
+                with open(fpath, "r") as f:
                     for line in f:
                         try:
                             obj = json.loads(line.strip())
@@ -23213,31 +24825,37 @@ def api_component_brain():
                             continue
 
                         # Check session header for subagent hints
-                        if obj.get('type') == 'session':
+                        if obj.get("type") == "session":
                             continue
-                        if obj.get('type') == 'custom' and obj.get('customType') == 'openclaw.session-info':
-                            data = obj.get('data', {})
-                            if 'subagent' in str(data.get('session', '')):
-                                session_label = 'subagent:' + session_id[:8]
+                        if (
+                            obj.get("type") == "custom"
+                            and obj.get("customType") == "openclaw.session-info"
+                        ):
+                            data = obj.get("data", {})
+                            if "subagent" in str(data.get("session", "")):
+                                session_label = "subagent:" + session_id[:8]
 
-                        if obj.get('type') != 'message':
+                        if obj.get("type") != "message":
                             # Track user message timestamps for duration calc
-                            if obj.get('type') == 'message' or (isinstance(obj.get('message'), dict) and obj['message'].get('role') == 'user'):
+                            if obj.get("type") == "message" or (
+                                isinstance(obj.get("message"), dict)
+                                and obj["message"].get("role") == "user"
+                            ):
                                 pass
                             continue
 
-                        msg = obj.get('message', {})
-                        usage = msg.get('usage')
+                        msg = obj.get("message", {})
+                        usage = msg.get("usage")
                         if not usage or not isinstance(usage, dict):
                             # Track user message time for duration
-                            if msg.get('role') == 'user':
-                                prev_ts = obj.get('timestamp')
+                            if msg.get("role") == "user":
+                                prev_ts = obj.get("timestamp")
                             continue
 
-                        if msg.get('role') != 'assistant':
+                        if msg.get("role") != "assistant":
                             continue
 
-                        ts = obj.get('timestamp', '')
+                        ts = obj.get("timestamp", "")
                         if not ts:
                             continue
 
@@ -23246,32 +24864,40 @@ def api_component_brain():
                             prev_ts = None
                             continue
 
-                        model = msg.get('model', 'unknown') or 'unknown'
+                        model = msg.get("model", "unknown") or "unknown"
                         models_seen.add(model)
 
-                        tokens_in = usage.get('input', 0) + usage.get('cacheRead', 0) + usage.get('cacheWrite', 0)
-                        tokens_out = usage.get('output', 0)
-                        cache_read = usage.get('cacheRead', 0)
-                        cost_data = usage.get('cost', {})
-                        call_cost = float(cost_data.get('total', 0)) if isinstance(cost_data, dict) else 0.0
+                        tokens_in = (
+                            usage.get("input", 0)
+                            + usage.get("cacheRead", 0)
+                            + usage.get("cacheWrite", 0)
+                        )
+                        tokens_out = usage.get("output", 0)
+                        cache_read = usage.get("cacheRead", 0)
+                        cost_data = usage.get("cost", {})
+                        call_cost = (
+                            float(cost_data.get("total", 0))
+                            if isinstance(cost_data, dict)
+                            else 0.0
+                        )
 
-                        total_input += usage.get('input', 0)
+                        total_input += usage.get("input", 0)
                         total_output += tokens_out
                         total_cache_read += cache_read
                         total_cost += call_cost
 
                         # Detect thinking blocks
                         has_thinking = False
-                        for c in (msg.get('content') or []):
-                            if isinstance(c, dict) and c.get('type') == 'thinking':
+                        for c in msg.get("content") or []:
+                            if isinstance(c, dict) and c.get("type") == "thinking":
                                 has_thinking = True
                                 break
 
                         # Extract tools used
                         tools = []
-                        for c in (msg.get('content') or []):
-                            if isinstance(c, dict) and c.get('type') == 'toolCall':
-                                tool_name = c.get('name', '')
+                        for c in msg.get("content") or []:
+                            if isinstance(c, dict) and c.get("type") == "toolCall":
+                                tool_name = c.get("name", "")
                                 if tool_name and tool_name not in tools:
                                     tools.append(tool_name)
 
@@ -23279,38 +24905,42 @@ def api_component_brain():
                         duration_ms = 0
                         if prev_ts:
                             try:
-                                t1 = datetime.fromisoformat(prev_ts.replace('Z', '+00:00'))
-                                t2 = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                                t1 = datetime.fromisoformat(
+                                    prev_ts.replace("Z", "+00:00")
+                                )
+                                t2 = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                                 duration_ms = int((t2 - t1).total_seconds() * 1000)
                                 if 0 < duration_ms < 300000:  # sanity: < 5 min
                                     durations.append(duration_ms)
-                            except:
+                            except Exception:
                                 pass
 
                         # Detect subagent from content context
-                        if session_label == 'main':
-                            for c in (msg.get('content') or []):
-                                if isinstance(c, dict) and c.get('type') == 'text':
-                                    text = c.get('text', '')[:200]
-                                    if 'subagent' in text.lower():
-                                        session_label = 'subagent:' + session_id[:8]
+                        if session_label == "main":
+                            for c in msg.get("content") or []:
+                                if isinstance(c, dict) and c.get("type") == "text":
+                                    text = c.get("text", "")[:200]
+                                    if "subagent" in text.lower():
+                                        session_label = "subagent:" + session_id[:8]
                                         break
 
-                        calls.append({
-                            'timestamp': ts,
-                            'model': model,
-                            'tokens_in': tokens_in,
-                            'tokens_out': tokens_out,
-                            'cache_read': cache_read,
-                            'cache_write': usage.get('cacheWrite', 0),
-                            'thinking': has_thinking,
-                            'cost': '${:.4f}'.format(call_cost),
-                            'cost_raw': call_cost,
-                            'tools_used': tools,
-                            'duration_ms': duration_ms,
-                            'session': session_label,
-                            'stop_reason': msg.get('stopReason', ''),
-                        })
+                        calls.append(
+                            {
+                                "timestamp": ts,
+                                "model": model,
+                                "tokens_in": tokens_in,
+                                "tokens_out": tokens_out,
+                                "cache_read": cache_read,
+                                "cache_write": usage.get("cacheWrite", 0),
+                                "thinking": has_thinking,
+                                "cost": "${:.4f}".format(call_cost),
+                                "cost_raw": call_cost,
+                                "tools_used": tools,
+                                "duration_ms": duration_ms,
+                                "session": session_label,
+                                "stop_reason": msg.get("stopReason", ""),
+                            }
+                        )
 
                         prev_ts = ts
 
@@ -23318,230 +24948,235 @@ def api_component_brain():
                 continue
 
     # Sort by timestamp descending
-    calls.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    calls.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     total = len(calls)
     avg_ms = int(sum(durations) / len(durations)) if durations else 0
-    primary_model = max(models_seen, key=lambda m: sum(1 for c in calls if c['model'] == m)) if models_seen else 'unknown'
-    thinking_count = sum(1 for c in calls if c.get('thinking'))
-    cache_hit_count = sum(1 for c in calls if c.get('cache_read', 0) > 0)
-    total_cache_write = sum(c.get('cache_write', 0) for c in calls)
+    primary_model = (
+        max(models_seen, key=lambda m: sum(1 for c in calls if c["model"] == m))
+        if models_seen
+        else "unknown"
+    )
+    thinking_count = sum(1 for c in calls if c.get("thinking"))
+    cache_hit_count = sum(1 for c in calls if c.get("cache_read", 0) > 0)
+    total_cache_write = sum(c.get("cache_write", 0) for c in calls)
 
     result = {
-        'stats': {
-            'today_calls': total,
-            'today_tokens': {
-                'input': total_input,
-                'output': total_output,
-                'cache_read': total_cache_read,
-                'cache_write': total_cache_write,
+        "stats": {
+            "today_calls": total,
+            "today_tokens": {
+                "input": total_input,
+                "output": total_output,
+                "cache_read": total_cache_read,
+                "cache_write": total_cache_write,
             },
-            'today_cost': '${:.2f}'.format(total_cost),
-            'model': primary_model,
-            'avg_response_ms': avg_ms,
-            'thinking_calls': thinking_count,
-            'cache_hits': cache_hit_count,
+            "today_cost": "${:.2f}".format(total_cost),
+            "model": primary_model,
+            "avg_response_ms": avg_ms,
+            "thinking_calls": thinking_count,
+            "cache_hits": cache_hit_count,
         },
-        'calls': calls[offset:offset + limit],
-        'total': total,
+        "calls": calls[offset : offset + limit],
+        "total": total,
     }
     return jsonify(result)
 
 
-
 # ── Security Threat Detection Engine ─────────────────────────────────────────
-import re as _sec_re
+import re as _sec_re  # noqa: E402
 
 # Built-in threat signatures: pattern matching on tool call details
 _THREAT_SIGNATURES = [
     # Critical: Direct system compromise attempts
     {
-        'id': 'SEC-001',
-        'severity': 'critical',
-        'description': 'Reverse shell attempt via exec',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'(?:bash|sh|nc|ncat|netcat)\s.*-[ie]\s',
-            r'/dev/tcp/',
-            r'mkfifo\s+/tmp/',
-            r'\bsocat\b.*\bexec\b',
-            r'\btelnet\b.*\|.*\bsh\b',
+        "id": "SEC-001",
+        "severity": "critical",
+        "description": "Reverse shell attempt via exec",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"(?:bash|sh|nc|ncat|netcat)\s.*-[ie]\s",
+            r"/dev/tcp/",
+            r"mkfifo\s+/tmp/",
+            r"\bsocat\b.*\bexec\b",
+            r"\btelnet\b.*\|.*\bsh\b",
         ],
     },
     {
-        'id': 'SEC-002',
-        'severity': 'critical',
-        'description': 'Credential/secret file access',
-        'tool_types': ['READ', 'EXEC'],
-        'patterns': [
-            r'(?:/etc/shadow|/etc/passwd)',
-            r'\.ssh/(?:id_rsa|id_ed25519|authorized_keys)',
-            r'\.aws/credentials',
-            r'\.env(?:\b|$)',
-            r'(?:\.kube|kubeconfig)',
-            r'\.gnupg/private',
-            r'\.netrc',
+        "id": "SEC-002",
+        "severity": "critical",
+        "description": "Credential/secret file access",
+        "tool_types": ["READ", "EXEC"],
+        "patterns": [
+            r"(?:/etc/shadow|/etc/passwd)",
+            r"\.ssh/(?:id_rsa|id_ed25519|authorized_keys)",
+            r"\.aws/credentials",
+            r"\.env(?:\b|$)",
+            r"(?:\.kube|kubeconfig)",
+            r"\.gnupg/private",
+            r"\.netrc",
         ],
     },
     {
-        'id': 'SEC-003',
-        'severity': 'critical',
-        'description': 'Privilege escalation attempt',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'\bsudo\s+(?:su|bash|sh|chmod\s+[ugo]*s)',
-            r'\bchmod\s+[0-7]*4[0-7]{2}\b',
-            r'\bchmod\s+u\+s\b',
-            r'\bpkexec\b',
-            r'\bsu\s+-\s',
+        "id": "SEC-003",
+        "severity": "critical",
+        "description": "Privilege escalation attempt",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\bsudo\s+(?:su|bash|sh|chmod\s+[ugo]*s)",
+            r"\bchmod\s+[0-7]*4[0-7]{2}\b",
+            r"\bchmod\s+u\+s\b",
+            r"\bpkexec\b",
+            r"\bsu\s+-\s",
         ],
     },
     # High: Data exfiltration and suspicious network activity
     {
-        'id': 'SEC-004',
-        'severity': 'high',
-        'description': 'Potential data exfiltration via curl/wget POST',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'\bcurl\b.*\b-[dX]\b.*(?:POST|PUT)',
-            r'\bcurl\b.*--data(?:-binary|-raw|-urlencode)?\b',
-            r'\bwget\b.*--post-(?:data|file)\b',
+        "id": "SEC-004",
+        "severity": "high",
+        "description": "Potential data exfiltration via curl/wget POST",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\bcurl\b.*\b-[dX]\b.*(?:POST|PUT)",
+            r"\bcurl\b.*--data(?:-binary|-raw|-urlencode)?\b",
+            r"\bwget\b.*--post-(?:data|file)\b",
         ],
     },
     {
-        'id': 'SEC-005',
-        'severity': 'high',
-        'description': 'SSH/SCP to unknown external host',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'\bssh\b\s+(?!localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01]))',
-            r'\bscp\b\s+.*:',
-            r'\brsync\b.*(?<!localhost):',
+        "id": "SEC-005",
+        "severity": "high",
+        "description": "SSH/SCP to unknown external host",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\bssh\b\s+(?!localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01]))",
+            r"\bscp\b\s+.*:",
+            r"\brsync\b.*(?<!localhost):",
         ],
     },
     {
-        'id': 'SEC-006',
-        'severity': 'high',
-        'description': 'Cryptocurrency miner indicators',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'\bxmrig\b',
-            r'\bstratum\+tcp\b',
-            r'(?:mine|pool)\..*\.(?:com|net|org)',
-            r'\bcpuminer\b',
+        "id": "SEC-006",
+        "severity": "high",
+        "description": "Cryptocurrency miner indicators",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\bxmrig\b",
+            r"\bstratum\+tcp\b",
+            r"(?:mine|pool)\..*\.(?:com|net|org)",
+            r"\bcpuminer\b",
         ],
     },
     # Medium: Suspicious but potentially legitimate
     {
-        'id': 'SEC-007',
-        'severity': 'medium',
-        'description': 'Destructive file operation (rm -rf on system paths)',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'\brm\s+(?:-[rfRv]+\s+)*(?:/(?:etc|usr|var|boot|lib|bin|sbin|opt|root)\b|/\s*$)',
-            r'\brm\s+-[rfR]+\s+\*',
-            r'\bdd\s+.*of=/dev/',
-            r'\bmkfs\b',
+        "id": "SEC-007",
+        "severity": "medium",
+        "description": "Destructive file operation (rm -rf on system paths)",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\brm\s+(?:-[rfRv]+\s+)*(?:/(?:etc|usr|var|boot|lib|bin|sbin|opt|root)\b|/\s*$)",
+            r"\brm\s+-[rfR]+\s+\*",
+            r"\bdd\s+.*of=/dev/",
+            r"\bmkfs\b",
         ],
     },
     {
-        'id': 'SEC-008',
-        'severity': 'medium',
-        'description': 'Package manager running as agent (supply chain risk)',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'\bpip\s+install\b.*(?:--index-url|--extra-index-url|--trusted-host)',
-            r'\bnpm\s+install\b.*(?:--registry|--unsafe-perm)',
-            r'\bcurl\b.*\|\s*(?:sudo\s+)?(?:bash|sh)\b',
-            r'\bwget\b.*\|\s*(?:sudo\s+)?(?:bash|sh)\b',
+        "id": "SEC-008",
+        "severity": "medium",
+        "description": "Package manager running as agent (supply chain risk)",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\bpip\s+install\b.*(?:--index-url|--extra-index-url|--trusted-host)",
+            r"\bnpm\s+install\b.*(?:--registry|--unsafe-perm)",
+            r"\bcurl\b.*\|\s*(?:sudo\s+)?(?:bash|sh)\b",
+            r"\bwget\b.*\|\s*(?:sudo\s+)?(?:bash|sh)\b",
         ],
     },
     {
-        'id': 'SEC-009',
-        'severity': 'medium',
-        'description': 'Firewall or security policy modification',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'\b(?:ufw|iptables|nftables|firewall-cmd)\b.*(?:allow|disable|delete|flush)',
-            r'\bsetenforce\s+0\b',
-            r'\bsystemctl\s+(?:stop|disable)\s+(?:firewalld|ufw|apparmor)',
+        "id": "SEC-009",
+        "severity": "medium",
+        "description": "Firewall or security policy modification",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\b(?:ufw|iptables|nftables|firewall-cmd)\b.*(?:allow|disable|delete|flush)",
+            r"\bsetenforce\s+0\b",
+            r"\bsystemctl\s+(?:stop|disable)\s+(?:firewalld|ufw|apparmor)",
         ],
     },
     {
-        'id': 'SEC-010',
-        'severity': 'medium',
-        'description': 'Cron/systemd persistence mechanism',
-        'tool_types': ['EXEC', 'WRITE'],
-        'patterns': [
-            r'\bcrontab\b',
-            r'/etc/cron\.',
-            r'/etc/systemd/system/.*\.service',
-            r'systemctl\s+enable\b',
+        "id": "SEC-010",
+        "severity": "medium",
+        "description": "Cron/systemd persistence mechanism",
+        "tool_types": ["EXEC", "WRITE"],
+        "patterns": [
+            r"\bcrontab\b",
+            r"/etc/cron\.",
+            r"/etc/systemd/system/.*\.service",
+            r"systemctl\s+enable\b",
         ],
     },
     # Low: Informational security events
     {
-        'id': 'SEC-011',
-        'severity': 'low',
-        'description': 'Port scanning or network reconnaissance',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'\bnmap\b',
-            r'\bmasscan\b',
-            r'\bnetstat\s+-[tul]*p',
-            r'\bss\s+-[tul]*p',
+        "id": "SEC-011",
+        "severity": "low",
+        "description": "Port scanning or network reconnaissance",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\bnmap\b",
+            r"\bmasscan\b",
+            r"\bnetstat\s+-[tul]*p",
+            r"\bss\s+-[tul]*p",
         ],
     },
     {
-        'id': 'SEC-012',
-        'severity': 'low',
-        'description': 'Large file download (potential payload)',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'\bwget\b\s+https?://(?!github\.com|pypi\.org|registry\.npmjs\.org|dl\.google\.com)',
-            r'\bcurl\b\s+-[oOL]+\s+https?://(?!github\.com|pypi\.org|registry\.npmjs\.org)',
+        "id": "SEC-012",
+        "severity": "low",
+        "description": "Large file download (potential payload)",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\bwget\b\s+https?://(?!github\.com|pypi\.org|registry\.npmjs\.org|dl\.google\.com)",
+            r"\bcurl\b\s+-[oOL]+\s+https?://(?!github\.com|pypi\.org|registry\.npmjs\.org)",
         ],
     },
     {
-        'id': 'SEC-013',
-        'severity': 'medium',
-        'description': 'Environment variable or API key extraction',
-        'tool_types': ['EXEC', 'READ'],
-        'patterns': [
-            r'\bprintenv\b',
-            r'\benv\s*$',
-            r'\bset\s*\|\s*grep\b.*(?:KEY|SECRET|TOKEN|PASS)',
-            r'cat\s+.*(?:\.env|secrets|credentials)',
+        "id": "SEC-013",
+        "severity": "medium",
+        "description": "Environment variable or API key extraction",
+        "tool_types": ["EXEC", "READ"],
+        "patterns": [
+            r"\bprintenv\b",
+            r"\benv\s*$",
+            r"\bset\s*\|\s*grep\b.*(?:KEY|SECRET|TOKEN|PASS)",
+            r"cat\s+.*(?:\.env|secrets|credentials)",
         ],
     },
     {
-        'id': 'SEC-014',
-        'severity': 'high',
-        'description': 'Process injection or debugging attachment',
-        'tool_types': ['EXEC'],
-        'patterns': [
-            r'\bgdb\b.*-p\s*\d+',
-            r'\bstrace\b.*-p\s*\d+',
-            r'\bptrace\b',
-            r'\bLD_PRELOAD\b',
-            r'\b/proc/\d+/mem\b',
+        "id": "SEC-014",
+        "severity": "high",
+        "description": "Process injection or debugging attachment",
+        "tool_types": ["EXEC"],
+        "patterns": [
+            r"\bgdb\b.*-p\s*\d+",
+            r"\bstrace\b.*-p\s*\d+",
+            r"\bptrace\b",
+            r"\bLD_PRELOAD\b",
+            r"\b/proc/\d+/mem\b",
         ],
     },
     {
-        'id': 'SEC-015',
-        'severity': 'high',
-        'description': 'Browser tool accessing sensitive URLs',
-        'tool_types': ['BROWSER', 'SEARCH'],
-        'patterns': [
-            r'(?:bank|paypal|stripe\.com/dashboard|console\.aws|portal\.azure)',
-            r'(?:admin|phpmyadmin|wp-admin|cpanel)',
-            r'file:///etc/',
+        "id": "SEC-015",
+        "severity": "high",
+        "description": "Browser tool accessing sensitive URLs",
+        "tool_types": ["BROWSER", "SEARCH"],
+        "patterns": [
+            r"(?:bank|paypal|stripe\.com/dashboard|console\.aws|portal\.azure)",
+            r"(?:admin|phpmyadmin|wp-admin|cpanel)",
+            r"file:///etc/",
         ],
     },
 ]
 
 # Compile patterns once
 for _sig in _THREAT_SIGNATURES:
-    _sig['_compiled'] = [_sec_re.compile(p, _sec_re.IGNORECASE) for p in _sig['patterns']]
+    _sig["_compiled"] = [
+        _sec_re.compile(p, _sec_re.IGNORECASE) for p in _sig["patterns"]
+    ]
 
 
 def _scan_events_for_threats(events):
@@ -23551,56 +25186,61 @@ def _scan_events_for_threats(events):
     sessions_with_threats = set()
 
     for ev in events:
-        source = ev.get('source', '')
+        source = ev.get("source", "")
         sessions_seen.add(source)
-        ev_type = ev.get('type', '')
-        detail = ev.get('detail', '')
+        ev_type = ev.get("type", "")
+        detail = ev.get("detail", "")
         if not detail:
             continue
 
         for sig in _THREAT_SIGNATURES:
-            if ev_type not in sig['tool_types']:
+            if ev_type not in sig["tool_types"]:
                 continue
-            for compiled in sig['_compiled']:
+            for compiled in sig["_compiled"]:
                 if compiled.search(detail):
                     sessions_with_threats.add(source)
-                    threats.append({
-                        'rule_id': sig['id'],
-                        'severity': sig['severity'],
-                        'description': sig['description'],
-                        'detail': detail[:500],
-                        'time': ev.get('time', ''),
-                        'session': ev.get('sourceLabel', source),
-                        'source': source,
-                        'event_type': ev_type,
-                    })
+                    threats.append(
+                        {
+                            "rule_id": sig["id"],
+                            "severity": sig["severity"],
+                            "description": sig["description"],
+                            "detail": detail[:500],
+                            "time": ev.get("time", ""),
+                            "session": ev.get("sourceLabel", source),
+                            "source": source,
+                            "event_type": ev_type,
+                        }
+                    )
                     break  # One match per signature per event
 
     # Sort by severity then time
-    sev_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
-    threats.sort(key=lambda t: (sev_order.get(t['severity'], 9), t.get('time', '') or ''), reverse=False)
-    threats.sort(key=lambda t: t.get('time', '') or '', reverse=True)
+    sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    threats.sort(
+        key=lambda t: (sev_order.get(t["severity"], 9), t.get("time", "") or ""),
+        reverse=False,
+    )
+    threats.sort(key=lambda t: t.get("time", "") or "", reverse=True)
 
     counts = {
-        'critical': sum(1 for t in threats if t['severity'] == 'critical'),
-        'high': sum(1 for t in threats if t['severity'] == 'high'),
-        'medium': sum(1 for t in threats if t['severity'] == 'medium'),
-        'low': sum(1 for t in threats if t['severity'] == 'low'),
-        'total': len(threats),
-        'sessions_scanned': len(sessions_seen),
-        'clean_sessions': len(sessions_seen - sessions_with_threats),
+        "critical": sum(1 for t in threats if t["severity"] == "critical"),
+        "high": sum(1 for t in threats if t["severity"] == "high"),
+        "medium": sum(1 for t in threats if t["severity"] == "medium"),
+        "low": sum(1 for t in threats if t["severity"] == "low"),
+        "total": len(threats),
+        "sessions_scanned": len(sessions_seen),
+        "clean_sessions": len(sessions_seen - sessions_with_threats),
     }
     return threats, counts
 
 
-@bp_security.route('/api/security/threats')
+@bp_security.route("/api/security/threats")
 def api_security_threats():
     """Scan recent agent activity for security threats using built-in signatures."""
     try:
         # Call brain-history endpoint internally
         brain_resp = api_brain_history()
         brain_data = brain_resp.get_json()
-        events = brain_data.get('events', [])
+        events = brain_data.get("events", [])
     except Exception:
         events = []
 
@@ -23608,31 +25248,36 @@ def api_security_threats():
 
     # Fire alerts for critical/high threats (with cooldown via _fire_alert)
     for t in threats:
-        if t['severity'] in ('critical', 'high'):
+        if t["severity"] in ("critical", "high"):
             _fire_alert(
                 rule_id=f"security_{t['rule_id']}",
-                alert_type='security_threat',
+                alert_type="security_threat",
                 message=f"🛡️ Security: {t['severity'].upper()} - {t['description']}\n{t['detail'][:200]}",
-                channels=['banner', 'telegram'],
+                channels=["banner", "telegram"],
             )
 
-    return jsonify({'threats': threats, 'counts': counts, 'scanned_events': len(events)})
+    return jsonify(
+        {"threats": threats, "counts": counts, "scanned_events": len(events)}
+    )
 
 
-@bp_security.route('/api/security/signatures')
+@bp_security.route("/api/security/signatures")
 def api_security_signatures():
     """Return the built-in threat signature catalog."""
     sigs = []
     for sig in _THREAT_SIGNATURES:
-        sigs.append({
-            'id': sig['id'],
-            'severity': sig['severity'],
-            'description': sig['description'],
-            'tool_types': sig['tool_types'],
-            'pattern': ' | '.join(sig['patterns'][:2]) + ('...' if len(sig['patterns']) > 2 else ''),
-            'pattern_count': len(sig['patterns']),
-        })
-    return jsonify({'signatures': sigs, 'total': len(sigs)})
+        sigs.append(
+            {
+                "id": sig["id"],
+                "severity": sig["severity"],
+                "description": sig["description"],
+                "tool_types": sig["tool_types"],
+                "pattern": " | ".join(sig["patterns"][:2])
+                + ("..." if len(sig["patterns"]) > 2 else ""),
+                "pattern_count": len(sig["patterns"]),
+            }
+        )
+    return jsonify({"signatures": sigs, "total": len(sigs)})
 
 
 def _scan_security_posture():
@@ -23655,9 +25300,9 @@ def _scan_security_posture():
 
     # Strategy 1: Local filesystem
     for cf in [
-        os.path.expanduser('~/.openclaw/openclaw.json'),
-        os.path.expanduser('~/.clawdbot/openclaw.json'),
-        os.path.expanduser('~/.clawdbot/clawdbot.json'),
+        os.path.expanduser("~/.openclaw/openclaw.json"),
+        os.path.expanduser("~/.clawdbot/openclaw.json"),
+        os.path.expanduser("~/.clawdbot/clawdbot.json"),
     ]:
         try:
             with open(cf) as f:
@@ -23671,17 +25316,24 @@ def _scan_security_posture():
     if config_data is None:
         try:
             import subprocess as _sp
+
             # Find OpenClaw containers
             out = _sp.run(
                 ["docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}"],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
             if out.returncode == 0:
                 for line in out.stdout.strip().splitlines():
                     parts = line.split("\t")
                     if len(parts) < 3:
                         continue
                     cid, name, image = parts[0], parts[1], parts[2]
-                    if not any(k in (name + image).lower() for k in ["openclaw", "clawd", "claw"]):
+                    if not any(
+                        k in (name + image).lower()
+                        for k in ["openclaw", "clawd", "claw"]
+                    ):
                         continue
                     # Try to read config from inside container
                     for container_path in [
@@ -23693,7 +25345,10 @@ def _scan_security_posture():
                         try:
                             cat_out = _sp.run(
                                 ["docker", "exec", cid, "cat", container_path],
-                                capture_output=True, text=True, timeout=8)
+                                capture_output=True,
+                                text=True,
+                                timeout=8,
+                            )
                             if cat_out.returncode == 0 and cat_out.stdout.strip():
                                 config_data = json.loads(cat_out.stdout)
                                 config_path = f"docker:{cid[:12]}:{container_path}"
@@ -23710,321 +25365,520 @@ def _scan_security_posture():
     if config_data is None:
         try:
             gw_cfg = _load_gw_config()
-            gw_url = gw_cfg.get('url', GATEWAY_URL)
-            gw_token = gw_cfg.get('token', GATEWAY_TOKEN)
+            gw_url = gw_cfg.get("url", GATEWAY_URL)
+            gw_token = gw_cfg.get("token", GATEWAY_TOKEN)
             if gw_url and gw_token:
                 import urllib.request
+
                 req = urllib.request.Request(
                     f"{gw_url}/api/config",
-                    headers={"Authorization": f"Bearer {gw_token}", "Accept": "application/json"})
+                    headers={
+                        "Authorization": f"Bearer {gw_token}",
+                        "Accept": "application/json",
+                    },
+                )
                 with urllib.request.urlopen(req, timeout=8) as resp:
                     if resp.status == 200:
                         config_data = json.loads(resp.read().decode())
                         config_path = f"gateway:{gw_url}"
                         # Check if gateway reports Docker environment
-                        runtime = config_data.get('runtime', {})
-                        if runtime.get('container') or os.path.exists('/.dockerenv'):
+                        runtime = config_data.get("runtime", {})
+                        if runtime.get("container") or os.path.exists("/.dockerenv"):
                             is_docker = True
         except Exception:
             pass
 
     if config_data is None:
         return {
-            'score': 'U',
-            'score_label': 'Unknown',
-            'score_color': '#64748b',
-            'checks': [{'id': 'config_found', 'label': 'Configuration file', 'status': 'fail',
-                         'detail': 'No openclaw.json found (checked local files, Docker containers, and gateway API)',
-                         'remediation': 'Ensure OpenClaw is installed and configured. For Docker: verify the container is running. For remote: configure GATEWAY_URL and GATEWAY_TOKEN.',
-                         'severity': 'critical', 'weight': 20}],
-            'passed': 0, 'failed': 1, 'warnings': 0, 'total': 1,
+            "score": "U",
+            "score_label": "Unknown",
+            "score_color": "#64748b",
+            "checks": [
+                {
+                    "id": "config_found",
+                    "label": "Configuration file",
+                    "status": "fail",
+                    "detail": "No openclaw.json found (checked local files, Docker containers, and gateway API)",
+                    "remediation": "Ensure OpenClaw is installed and configured. For Docker: verify the container is running. For remote: configure GATEWAY_URL and GATEWAY_TOKEN.",
+                    "severity": "critical",
+                    "weight": 20,
+                }
+            ],
+            "passed": 0,
+            "failed": 1,
+            "warnings": 0,
+            "total": 1,
         }
 
     # Config found — add pass check with source info
-    source_label = 'local file' if not config_path.startswith(('docker:', 'gateway:')) else (
-        'Docker container' if config_path.startswith('docker:') else 'gateway API')
-    checks.append({
-        'id': 'config_found', 'label': 'Configuration file', 'status': 'pass',
-        'detail': f'Config loaded from {source_label} ({config_path})',
-        'remediation': None, 'severity': 'critical', 'weight': 20,
-    })
+    source_label = (
+        "local file"
+        if not config_path.startswith(("docker:", "gateway:"))
+        else (
+            "Docker container" if config_path.startswith("docker:") else "gateway API"
+        )
+    )
+    checks.append(
+        {
+            "id": "config_found",
+            "label": "Configuration file",
+            "status": "pass",
+            "detail": f"Config loaded from {source_label} ({config_path})",
+            "remediation": None,
+            "severity": "critical",
+            "weight": 20,
+        }
+    )
 
     # Docker-specific checks
     if is_docker:
-        checks.append({
-            'id': 'docker_isolation', 'label': 'Container isolation', 'status': 'pass',
-            'detail': 'OpenClaw is running inside a Docker container (network/filesystem isolation).',
-            'remediation': None, 'severity': 'high', 'weight': 5,
-        })
+        checks.append(
+            {
+                "id": "docker_isolation",
+                "label": "Container isolation",
+                "status": "pass",
+                "detail": "OpenClaw is running inside a Docker container (network/filesystem isolation).",
+                "remediation": None,
+                "severity": "high",
+                "weight": 5,
+            }
+        )
 
-    gateway = config_data.get('gateway', {})
-    plugins = config_data.get('plugins', {})
+    gateway = config_data.get("gateway", {})
+    plugins = config_data.get("plugins", {})
 
     # Check 1: Gateway auth token configured
-    auth_token = gateway.get('auth', {}).get('token') or gateway.get('authToken') or os.environ.get('OPENCLAW_AUTH_TOKEN')
+    auth_token = (
+        gateway.get("auth", {}).get("token")
+        or gateway.get("authToken")
+        or os.environ.get("OPENCLAW_AUTH_TOKEN")
+    )
     if auth_token and len(str(auth_token)) >= 8:
-        checks.append({
-            'id': 'auth_enabled', 'label': 'Gateway authentication', 'status': 'pass',
-            'detail': 'Auth token is configured (length: {})'.format(len(str(auth_token))),
-            'remediation': None, 'severity': 'critical', 'weight': 25,
-        })
+        checks.append(
+            {
+                "id": "auth_enabled",
+                "label": "Gateway authentication",
+                "status": "pass",
+                "detail": "Auth token is configured (length: {})".format(
+                    len(str(auth_token))
+                ),
+                "remediation": None,
+                "severity": "critical",
+                "weight": 25,
+            }
+        )
     else:
-        checks.append({
-            'id': 'auth_enabled', 'label': 'Gateway authentication', 'status': 'fail',
-            'detail': 'No auth token configured. Anyone on the network can control your agent.',
-            'remediation': 'Set gateway.auth.token in openclaw.json to a strong random string (32+ chars).',
-            'severity': 'critical', 'weight': 25,
-        })
+        checks.append(
+            {
+                "id": "auth_enabled",
+                "label": "Gateway authentication",
+                "status": "fail",
+                "detail": "No auth token configured. Anyone on the network can control your agent.",
+                "remediation": "Set gateway.auth.token in openclaw.json to a strong random string (32+ chars).",
+                "severity": "critical",
+                "weight": 25,
+            }
+        )
 
     # Check 2: Auth token strength (not default/weak)
-    weak_tokens = {'test', 'password', '12345678', 'changeme', 'openclaw', 'clawdbot', 'default', 'admin'}
+    weak_tokens = {
+        "test",
+        "password",
+        "12345678",
+        "changeme",
+        "openclaw",
+        "clawdbot",
+        "default",
+        "admin",
+    }
     if auth_token:
         token_str = str(auth_token).lower()
         if token_str in weak_tokens or len(token_str) < 16:
-            checks.append({
-                'id': 'auth_strength', 'label': 'Auth token strength', 'status': 'warn',
-                'detail': 'Token is too short or uses a common/default value.',
-                'remediation': 'Use a cryptographically random token: openssl rand -hex 32',
-                'severity': 'high', 'weight': 15,
-            })
+            checks.append(
+                {
+                    "id": "auth_strength",
+                    "label": "Auth token strength",
+                    "status": "warn",
+                    "detail": "Token is too short or uses a common/default value.",
+                    "remediation": "Use a cryptographically random token: openssl rand -hex 32",
+                    "severity": "high",
+                    "weight": 15,
+                }
+            )
         else:
-            checks.append({
-                'id': 'auth_strength', 'label': 'Auth token strength', 'status': 'pass',
-                'detail': 'Token appears strong ({} chars)'.format(len(token_str)),
-                'remediation': None, 'severity': 'high', 'weight': 15,
-            })
+            checks.append(
+                {
+                    "id": "auth_strength",
+                    "label": "Auth token strength",
+                    "status": "pass",
+                    "detail": "Token appears strong ({} chars)".format(len(token_str)),
+                    "remediation": None,
+                    "severity": "high",
+                    "weight": 15,
+                }
+            )
 
     # Check 3: Gateway bind address (should be localhost, not 0.0.0.0)
     # In Docker, binding to 0.0.0.0 is expected (Docker manages port exposure)
-    bind_host = gateway.get('host') or gateway.get('bind') or '127.0.0.1'
-    if bind_host in ('0.0.0.0', '::') and is_docker:
-        checks.append({
-            'id': 'bind_address', 'label': 'Gateway bind address', 'status': 'pass',
-            'detail': 'Gateway binds to {} inside Docker container (Docker manages network exposure via port mapping).'.format(bind_host),
-            'remediation': None, 'severity': 'critical', 'weight': 20,
-        })
-    elif bind_host in ('0.0.0.0', '::'):
-        checks.append({
-            'id': 'bind_address', 'label': 'Gateway bind address', 'status': 'fail',
-            'detail': 'Gateway binds to {} (all interfaces). Exposed to the network.'.format(bind_host),
-            'remediation': 'Set gateway.host to "127.0.0.1" unless you need remote access. Use a reverse proxy with TLS for remote.',
-            'severity': 'critical', 'weight': 20,
-        })
+    bind_host = gateway.get("host") or gateway.get("bind") or "127.0.0.1"
+    if bind_host in ("0.0.0.0", "::") and is_docker:
+        checks.append(
+            {
+                "id": "bind_address",
+                "label": "Gateway bind address",
+                "status": "pass",
+                "detail": "Gateway binds to {} inside Docker container (Docker manages network exposure via port mapping).".format(
+                    bind_host
+                ),
+                "remediation": None,
+                "severity": "critical",
+                "weight": 20,
+            }
+        )
+    elif bind_host in ("0.0.0.0", "::"):
+        checks.append(
+            {
+                "id": "bind_address",
+                "label": "Gateway bind address",
+                "status": "fail",
+                "detail": "Gateway binds to {} (all interfaces). Exposed to the network.".format(
+                    bind_host
+                ),
+                "remediation": 'Set gateway.host to "127.0.0.1" unless you need remote access. Use a reverse proxy with TLS for remote.',
+                "severity": "critical",
+                "weight": 20,
+            }
+        )
     else:
-        checks.append({
-            'id': 'bind_address', 'label': 'Gateway bind address', 'status': 'pass',
-            'detail': 'Gateway binds to {} (local only)'.format(bind_host),
-            'remediation': None, 'severity': 'critical', 'weight': 20,
-        })
+        checks.append(
+            {
+                "id": "bind_address",
+                "label": "Gateway bind address",
+                "status": "pass",
+                "detail": "Gateway binds to {} (local only)".format(bind_host),
+                "remediation": None,
+                "severity": "critical",
+                "weight": 20,
+            }
+        )
 
     # Check 4: Exec tool permissions
-    tools_config = config_data.get('tools', {})
-    exec_policy = tools_config.get('exec', {})
-    exec_security = exec_policy.get('security') or exec_policy.get('mode') or 'full'
-    if exec_security == 'full':
-        checks.append({
-            'id': 'exec_permissions', 'label': 'Exec tool permissions', 'status': 'warn',
-            'detail': 'Exec security is "full" (unrestricted shell access).',
-            'remediation': 'Consider "allowlist" mode with specific commands, or "deny" for high-risk environments.',
-            'severity': 'high', 'weight': 10,
-        })
-    elif exec_security == 'deny':
-        checks.append({
-            'id': 'exec_permissions', 'label': 'Exec tool permissions', 'status': 'pass',
-            'detail': 'Exec tool is disabled (deny mode).',
-            'remediation': None, 'severity': 'high', 'weight': 10,
-        })
+    tools_config = config_data.get("tools", {})
+    exec_policy = tools_config.get("exec", {})
+    exec_security = exec_policy.get("security") or exec_policy.get("mode") or "full"
+    if exec_security == "full":
+        checks.append(
+            {
+                "id": "exec_permissions",
+                "label": "Exec tool permissions",
+                "status": "warn",
+                "detail": 'Exec security is "full" (unrestricted shell access).',
+                "remediation": 'Consider "allowlist" mode with specific commands, or "deny" for high-risk environments.',
+                "severity": "high",
+                "weight": 10,
+            }
+        )
+    elif exec_security == "deny":
+        checks.append(
+            {
+                "id": "exec_permissions",
+                "label": "Exec tool permissions",
+                "status": "pass",
+                "detail": "Exec tool is disabled (deny mode).",
+                "remediation": None,
+                "severity": "high",
+                "weight": 10,
+            }
+        )
     else:
-        checks.append({
-            'id': 'exec_permissions', 'label': 'Exec tool permissions', 'status': 'pass',
-            'detail': 'Exec security mode: {}'.format(exec_security),
-            'remediation': None, 'severity': 'high', 'weight': 10,
-        })
+        checks.append(
+            {
+                "id": "exec_permissions",
+                "label": "Exec tool permissions",
+                "status": "pass",
+                "detail": "Exec security mode: {}".format(exec_security),
+                "remediation": None,
+                "severity": "high",
+                "weight": 10,
+            }
+        )
 
     # Check 5: TLS / HTTPS for gateway
-    gw_port = gateway.get('port', 18789)
-    gw_tls = gateway.get('tls', {})
-    has_tls = bool(gw_tls.get('cert') or gw_tls.get('key') or gw_tls.get('enabled'))
+    gw_port = gateway.get("port", 18789)
+    gw_tls = gateway.get("tls", {})
+    has_tls = bool(gw_tls.get("cert") or gw_tls.get("key") or gw_tls.get("enabled"))
     if has_tls:
-        checks.append({
-            'id': 'tls_enabled', 'label': 'TLS encryption', 'status': 'pass',
-            'detail': 'TLS is configured for the gateway.',
-            'remediation': None, 'severity': 'high', 'weight': 10,
-        })
-    elif bind_host in ('0.0.0.0', '::') and is_docker:
-        checks.append({
-            'id': 'tls_enabled', 'label': 'TLS encryption', 'status': 'warn',
-            'detail': 'No TLS configured on gateway (Docker). TLS is typically handled by the hosting provider or reverse proxy.',
-            'remediation': 'Verify your hosting provider (Hostinger, etc.) or reverse proxy terminates TLS before reaching the container.',
-            'severity': 'high', 'weight': 10,
-        })
-    elif bind_host in ('0.0.0.0', '::'):
-        checks.append({
-            'id': 'tls_enabled', 'label': 'TLS encryption', 'status': 'fail',
-            'detail': 'No TLS configured and gateway is network-exposed. Traffic is unencrypted.',
-            'remediation': 'Configure gateway.tls.cert and gateway.tls.key, or use a reverse proxy (nginx/caddy) with TLS.',
-            'severity': 'high', 'weight': 10,
-        })
+        checks.append(
+            {
+                "id": "tls_enabled",
+                "label": "TLS encryption",
+                "status": "pass",
+                "detail": "TLS is configured for the gateway.",
+                "remediation": None,
+                "severity": "high",
+                "weight": 10,
+            }
+        )
+    elif bind_host in ("0.0.0.0", "::") and is_docker:
+        checks.append(
+            {
+                "id": "tls_enabled",
+                "label": "TLS encryption",
+                "status": "warn",
+                "detail": "No TLS configured on gateway (Docker). TLS is typically handled by the hosting provider or reverse proxy.",
+                "remediation": "Verify your hosting provider (Hostinger, etc.) or reverse proxy terminates TLS before reaching the container.",
+                "severity": "high",
+                "weight": 10,
+            }
+        )
+    elif bind_host in ("0.0.0.0", "::"):
+        checks.append(
+            {
+                "id": "tls_enabled",
+                "label": "TLS encryption",
+                "status": "fail",
+                "detail": "No TLS configured and gateway is network-exposed. Traffic is unencrypted.",
+                "remediation": "Configure gateway.tls.cert and gateway.tls.key, or use a reverse proxy (nginx/caddy) with TLS.",
+                "severity": "high",
+                "weight": 10,
+            }
+        )
     else:
-        checks.append({
-            'id': 'tls_enabled', 'label': 'TLS encryption', 'status': 'pass',
-            'detail': 'TLS not needed (gateway is localhost only).',
-            'remediation': None, 'severity': 'high', 'weight': 10,
-        })
+        checks.append(
+            {
+                "id": "tls_enabled",
+                "label": "TLS encryption",
+                "status": "pass",
+                "detail": "TLS not needed (gateway is localhost only).",
+                "remediation": None,
+                "severity": "high",
+                "weight": 10,
+            }
+        )
 
     # Check 6: Plugin/channel security (telegram/discord tokens not in plaintext env)
-    plugin_entries = plugins.get('entries', {})
+    plugin_entries = plugins.get("entries", {})
     exposed_secrets = []
     for pname, pconf in plugin_entries.items():
         if isinstance(pconf, dict):
-            for key in ['token', 'apiKey', 'api_key', 'secret', 'webhook_secret']:
+            for key in ["token", "apiKey", "api_key", "secret", "webhook_secret"]:
                 val = pconf.get(key)
-                if val and isinstance(val, str) and not val.startswith('$') and not val.startswith('env:'):
-                    exposed_secrets.append('{}.{}'.format(pname, key))
+                if (
+                    val
+                    and isinstance(val, str)
+                    and not val.startswith("$")
+                    and not val.startswith("env:")
+                ):
+                    exposed_secrets.append("{}.{}".format(pname, key))
     if exposed_secrets:
-        checks.append({
-            'id': 'secrets_in_config', 'label': 'Secrets in config file', 'status': 'warn',
-            'detail': '{} secret(s) stored as plaintext in config: {}'.format(len(exposed_secrets), ', '.join(exposed_secrets[:3])),
-            'remediation': 'Use environment variables instead. E.g., set TELEGRAM_TOKEN env var and reference as "$TELEGRAM_TOKEN" in config.',
-            'severity': 'medium', 'weight': 5,
-        })
+        checks.append(
+            {
+                "id": "secrets_in_config",
+                "label": "Secrets in config file",
+                "status": "warn",
+                "detail": "{} secret(s) stored as plaintext in config: {}".format(
+                    len(exposed_secrets), ", ".join(exposed_secrets[:3])
+                ),
+                "remediation": 'Use environment variables instead. E.g., set TELEGRAM_TOKEN env var and reference as "$TELEGRAM_TOKEN" in config.',
+                "severity": "medium",
+                "weight": 5,
+            }
+        )
     else:
-        checks.append({
-            'id': 'secrets_in_config', 'label': 'Secrets in config file', 'status': 'pass',
-            'detail': 'No plaintext secrets detected in plugin config.',
-            'remediation': None, 'severity': 'medium', 'weight': 5,
-        })
+        checks.append(
+            {
+                "id": "secrets_in_config",
+                "label": "Secrets in config file",
+                "status": "pass",
+                "detail": "No plaintext secrets detected in plugin config.",
+                "remediation": None,
+                "severity": "medium",
+                "weight": 5,
+            }
+        )
 
     # Check 7: Workspace permissions (AGENTS.md, SOUL.md not world-readable)
-    oc_home = os.path.expanduser('~/.openclaw')
+    oc_home = os.path.expanduser("~/.openclaw")
     if os.path.isdir(oc_home):
         try:
             mode = oct(os.stat(oc_home).st_mode)[-3:]
-            if mode[-1] != '0':  # world-readable
-                checks.append({
-                    'id': 'workspace_perms', 'label': 'Workspace permissions', 'status': 'warn',
-                    'detail': 'OpenClaw home directory is world-readable (mode: {})'.format(mode),
-                    'remediation': 'Run: chmod 700 ~/.openclaw',
-                    'severity': 'medium', 'weight': 5,
-                })
+            if mode[-1] != "0":  # world-readable
+                checks.append(
+                    {
+                        "id": "workspace_perms",
+                        "label": "Workspace permissions",
+                        "status": "warn",
+                        "detail": "OpenClaw home directory is world-readable (mode: {})".format(
+                            mode
+                        ),
+                        "remediation": "Run: chmod 700 ~/.openclaw",
+                        "severity": "medium",
+                        "weight": 5,
+                    }
+                )
             else:
-                checks.append({
-                    'id': 'workspace_perms', 'label': 'Workspace permissions', 'status': 'pass',
-                    'detail': 'Workspace directory permissions are restrictive (mode: {})'.format(mode),
-                    'remediation': None, 'severity': 'medium', 'weight': 5,
-                })
+                checks.append(
+                    {
+                        "id": "workspace_perms",
+                        "label": "Workspace permissions",
+                        "status": "pass",
+                        "detail": "Workspace directory permissions are restrictive (mode: {})".format(
+                            mode
+                        ),
+                        "remediation": None,
+                        "severity": "medium",
+                        "weight": 5,
+                    }
+                )
         except Exception:
-            checks.append({
-                'id': 'workspace_perms', 'label': 'Workspace permissions', 'status': 'warn',
-                'detail': 'Could not check workspace permissions.',
-                'remediation': 'Run: chmod 700 ~/.openclaw',
-                'severity': 'medium', 'weight': 5,
-            })
+            checks.append(
+                {
+                    "id": "workspace_perms",
+                    "label": "Workspace permissions",
+                    "status": "warn",
+                    "detail": "Could not check workspace permissions.",
+                    "remediation": "Run: chmod 700 ~/.openclaw",
+                    "severity": "medium",
+                    "weight": 5,
+                }
+            )
     else:
-        checks.append({
-            'id': 'workspace_perms', 'label': 'Workspace permissions', 'status': 'pass',
-            'detail': 'Default workspace directory not found (custom location or containerized).',
-            'remediation': None, 'severity': 'medium', 'weight': 5,
-        })
+        checks.append(
+            {
+                "id": "workspace_perms",
+                "label": "Workspace permissions",
+                "status": "pass",
+                "detail": "Default workspace directory not found (custom location or containerized).",
+                "remediation": None,
+                "severity": "medium",
+                "weight": 5,
+            }
+        )
 
     # Check 8: Node/remote access configuration
-    nodes_config = config_data.get('nodes', {})
-    auto_approve = nodes_config.get('autoApprove', False)
+    nodes_config = config_data.get("nodes", {})
+    auto_approve = nodes_config.get("autoApprove", False)
     if auto_approve:
-        checks.append({
-            'id': 'node_auto_approve', 'label': 'Node auto-approve', 'status': 'warn',
-            'detail': 'Nodes are auto-approved without manual review.',
-            'remediation': 'Set nodes.autoApprove to false so you review each device before granting access.',
-            'severity': 'medium', 'weight': 5,
-        })
+        checks.append(
+            {
+                "id": "node_auto_approve",
+                "label": "Node auto-approve",
+                "status": "warn",
+                "detail": "Nodes are auto-approved without manual review.",
+                "remediation": "Set nodes.autoApprove to false so you review each device before granting access.",
+                "severity": "medium",
+                "weight": 5,
+            }
+        )
     else:
-        checks.append({
-            'id': 'node_auto_approve', 'label': 'Node auto-approve', 'status': 'pass',
-            'detail': 'Node pairing requires manual approval.',
-            'remediation': None, 'severity': 'medium', 'weight': 5,
-        })
+        checks.append(
+            {
+                "id": "node_auto_approve",
+                "label": "Node auto-approve",
+                "status": "pass",
+                "detail": "Node pairing requires manual approval.",
+                "remediation": None,
+                "severity": "medium",
+                "weight": 5,
+            }
+        )
 
     # Check 9: Elevated exec permissions
-    elevated = tools_config.get('elevated', {}) or exec_policy.get('elevated', {})
-    elevated_enabled = elevated.get('enabled', False) if isinstance(elevated, dict) else bool(elevated)
+    elevated = tools_config.get("elevated", {}) or exec_policy.get("elevated", {})
+    elevated_enabled = (
+        elevated.get("enabled", False) if isinstance(elevated, dict) else bool(elevated)
+    )
     if elevated_enabled:
-        checks.append({
-            'id': 'elevated_exec', 'label': 'Elevated (sudo) exec', 'status': 'warn',
-            'detail': 'Elevated/sudo exec is enabled. Agent can run commands as root.',
-            'remediation': 'Disable unless absolutely necessary. Use specific sudoers rules instead of blanket elevation.',
-            'severity': 'high', 'weight': 10,
-        })
+        checks.append(
+            {
+                "id": "elevated_exec",
+                "label": "Elevated (sudo) exec",
+                "status": "warn",
+                "detail": "Elevated/sudo exec is enabled. Agent can run commands as root.",
+                "remediation": "Disable unless absolutely necessary. Use specific sudoers rules instead of blanket elevation.",
+                "severity": "high",
+                "weight": 10,
+            }
+        )
     else:
-        checks.append({
-            'id': 'elevated_exec', 'label': 'Elevated (sudo) exec', 'status': 'pass',
-            'detail': 'Elevated exec is disabled.',
-            'remediation': None, 'severity': 'high', 'weight': 10,
-        })
+        checks.append(
+            {
+                "id": "elevated_exec",
+                "label": "Elevated (sudo) exec",
+                "status": "pass",
+                "detail": "Elevated exec is disabled.",
+                "remediation": None,
+                "severity": "high",
+                "weight": 10,
+            }
+        )
 
     # --- Calculate score ---
-    total_weight = sum(c['weight'] for c in checks)
-    earned = sum(c['weight'] for c in checks if c['status'] == 'pass')
+    total_weight = sum(c["weight"] for c in checks)
+    earned = sum(c["weight"] for c in checks if c["status"] == "pass")
     # warnings get half credit
-    earned += sum(c['weight'] * 0.5 for c in checks if c['status'] == 'warn')
+    earned += sum(c["weight"] * 0.5 for c in checks if c["status"] == "warn")
     pct = (earned / total_weight * 100) if total_weight > 0 else 0
 
     if pct >= 90:
-        score, label, color = 'A', 'Excellent', '#22c55e'
+        score, label, color = "A", "Excellent", "#22c55e"
     elif pct >= 75:
-        score, label, color = 'B', 'Good', '#84cc16'
+        score, label, color = "B", "Good", "#84cc16"
     elif pct >= 60:
-        score, label, color = 'C', 'Fair', '#f59e0b'
+        score, label, color = "C", "Fair", "#f59e0b"
     elif pct >= 40:
-        score, label, color = 'D', 'Poor', '#f97316'
+        score, label, color = "D", "Poor", "#f97316"
     else:
-        score, label, color = 'F', 'Critical', '#ef4444'
+        score, label, color = "F", "Critical", "#ef4444"
 
-    passed = sum(1 for c in checks if c['status'] == 'pass')
-    failed = sum(1 for c in checks if c['status'] == 'fail')
-    warnings = sum(1 for c in checks if c['status'] == 'warn')
+    passed = sum(1 for c in checks if c["status"] == "pass")
+    failed = sum(1 for c in checks if c["status"] == "fail")
+    warnings = sum(1 for c in checks if c["status"] == "warn")
 
     return {
-        'score': score,
-        'score_label': label,
-        'score_color': color,
-        'score_pct': round(pct, 1),
-        'checks': checks,
-        'passed': passed,
-        'failed': failed,
-        'warnings': warnings,
-        'total': len(checks),
-        'config_path': config_path,
-        'is_docker': is_docker,
-        'scanned_at': datetime.now().isoformat(),
+        "score": score,
+        "score_label": label,
+        "score_color": color,
+        "score_pct": round(pct, 1),
+        "checks": checks,
+        "passed": passed,
+        "failed": failed,
+        "warnings": warnings,
+        "total": len(checks),
+        "config_path": config_path,
+        "is_docker": is_docker,
+        "scanned_at": datetime.now().isoformat(),
     }
 
 
-@bp_security.route('/api/security/posture')
+@bp_security.route("/api/security/posture")
 def api_security_posture():
     """Scan OpenClaw configuration for security misconfigurations and return a posture score."""
     try:
         result = _scan_security_posture()
         return jsonify(result)
     except Exception as e:
-        return jsonify({'error': str(e), 'score': 'U', 'checks': []}), 500
+        return jsonify({"error": str(e), "score": "U", "checks": []}), 500
 
 
-@bp_health.route('/api/reliability')
+@bp_health.route("/api/reliability")
 def api_reliability():
     """Cross-session behavioral reliability trend (AgentReliabilityScorer)."""
     if not _history_db or not AgentReliabilityScorer:
-        return jsonify({'error': 'History module not available', 'direction': 'insufficient_data'}), 200
+        return jsonify(
+            {"error": "History module not available", "direction": "insufficient_data"}
+        ), 200
     try:
-        window = int(request.args.get('window', 30))
+        window = int(request.args.get("window", 30))
         window = max(1, min(window, 90))
         scorer = AgentReliabilityScorer(_history_db)
         result = scorer.score(window_days=window)
         return jsonify(result)
     except Exception as e:
-        return jsonify({'error': str(e), 'direction': 'insufficient_data'}), 500
+        return jsonify({"error": str(e), "direction": "insufficient_data"}), 500
 
 
-@bp_health.route('/api/heatmap')
+@bp_health.route("/api/heatmap")
 def api_heatmap():
     """Activity heatmap - events per hour for the last N days (default 7, max 90).
 
@@ -24032,7 +25886,7 @@ def api_heatmap():
       days: int  number of days to show (1-90, default 7)
     """
     try:
-        n_days = max(1, min(90, int(request.args.get('days', 7))))
+        n_days = max(1, min(90, int(request.args.get("days", 7))))
     except (ValueError, TypeError):
         n_days = 7
 
@@ -24042,15 +25896,15 @@ def api_heatmap():
     day_labels = []
     for i in range(n_days - 1, -1, -1):
         d = now - timedelta(days=i)
-        ds = d.strftime('%Y-%m-%d')
+        ds = d.strftime("%Y-%m-%d")
         grid[ds] = [0] * 24
-        lbl = d.strftime('%b %d') if n_days > 7 else d.strftime('%a %d')
-        day_labels.append({'date': ds, 'label': lbl})
+        lbl = d.strftime("%b %d") if n_days > 7 else d.strftime("%a %d")
+        day_labels.append({"date": ds, "label": lbl})
 
     # Source 1: log files
     for i in range(n_days):
         d = now - timedelta(days=i)
-        ds = d.strftime('%Y-%m-%d')
+        ds = d.strftime("%Y-%m-%d")
         log_file = _find_log_file(ds)
         if not log_file:
             continue
@@ -24059,13 +25913,21 @@ def api_heatmap():
                 for line in lf:
                     try:
                         obj = json.loads(line.strip())
-                        ts = obj.get('time') or (obj.get('_meta', {}).get('date') if isinstance(obj.get('_meta'), dict) else None)
+                        ts = obj.get("time") or (
+                            obj.get("_meta", {}).get("date")
+                            if isinstance(obj.get("_meta"), dict)
+                            else None
+                        )
                         if ts:
                             if isinstance(ts, (int, float)):
-                                dt = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
+                                dt = datetime.fromtimestamp(
+                                    ts / 1000 if ts > 1e12 else ts
+                                )
                             else:
-                                dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00').replace('+00:00', ''))
-                            day_key = dt.strftime('%Y-%m-%d')
+                                dt = datetime.fromisoformat(
+                                    str(ts).replace("Z", "+00:00").replace("+00:00", "")
+                                )
+                            day_key = dt.strftime("%Y-%m-%d")
                             if day_key in grid:
                                 grid[day_key][dt.hour] += 1
                     except Exception:
@@ -24075,33 +25937,49 @@ def api_heatmap():
             pass
 
     # Source 2: session JSONL files (fills gaps when log files missing)
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     cutoff = now - timedelta(days=n_days)
     if sessions_dir and os.path.isdir(sessions_dir):
         try:
             for fname in os.listdir(sessions_dir):
-                if not fname.endswith('.jsonl') or 'deleted' in fname:
+                if not fname.endswith(".jsonl") or "deleted" in fname:
                     continue
                 fpath = os.path.join(sessions_dir, fname)
                 try:
                     mtime = os.path.getmtime(fpath)
                     if datetime.fromtimestamp(mtime) < cutoff:
                         continue
-                    with open(fpath, errors='replace') as sf:
+                    with open(fpath, errors="replace") as sf:
                         for line in sf:
                             try:
                                 obj = json.loads(line.strip())
-                                ts = obj.get('timestamp') or obj.get('ts') or obj.get('time') or (
-                                    obj.get('_meta', {}).get('date') if isinstance(obj.get('_meta'), dict) else None)
+                                ts = (
+                                    obj.get("timestamp")
+                                    or obj.get("ts")
+                                    or obj.get("time")
+                                    or (
+                                        obj.get("_meta", {}).get("date")
+                                        if isinstance(obj.get("_meta"), dict)
+                                        else None
+                                    )
+                                )
                                 if not ts:
                                     continue
                                 if isinstance(ts, (int, float)):
-                                    dt = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
+                                    dt = datetime.fromtimestamp(
+                                        ts / 1000 if ts > 1e12 else ts
+                                    )
                                 else:
-                                    dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00').replace('+00:00', ''))
+                                    dt = datetime.fromisoformat(
+                                        str(ts)
+                                        .replace("Z", "+00:00")
+                                        .replace("+00:00", "")
+                                    )
                                 if dt < cutoff:
                                     continue
-                                day_key = dt.strftime('%Y-%m-%d')
+                                day_key = dt.strftime("%Y-%m-%d")
                                 if day_key in grid:
                                     grid[day_key][dt.hour] += 1
                             except Exception:
@@ -24114,9 +25992,9 @@ def api_heatmap():
     max_val = max(max(hours) for hours in grid.values()) if grid else 0
     days_out = []
     for dl in day_labels:
-        days_out.append({'label': dl['label'], 'hours': grid.get(dl['date'], [0] * 24)})
+        days_out.append({"label": dl["label"], "hours": grid.get(dl["date"], [0] * 24)})
 
-    return jsonify({'days': days_out, 'max': max_val, 'n_days': n_days})
+    return jsonify({"days": days_out, "max": max_val, "n_days": n_days})
 
 
 def _detect_channel_status():
@@ -24125,15 +26003,46 @@ def _detect_channel_status():
     Each entry: {'name': str, 'icon': str, 'status': 'connected'|'configured'|'unknown', 'detail': str}
     """
     CHANNEL_ICONS = {
-        'telegram': '✈️', 'discord': '🎮', 'slack': '💬', 'whatsapp': '📱',
-        'signal': '🔒', 'imessage': '🍎', 'webchat': '🌐', 'matrix': '🔢',
-        'msteams': '🏢', 'irc': '📡', 'googlechat': '🔵', 'mattermost': '⚡',
-        'line': '💚', 'nostr': '🟣', 'twitch': '💜', 'bluebubbles': '💙',
+        "telegram": "✈️",
+        "discord": "🎮",
+        "slack": "💬",
+        "whatsapp": "📱",
+        "signal": "🔒",
+        "imessage": "🍎",
+        "webchat": "🌐",
+        "matrix": "🔢",
+        "msteams": "🏢",
+        "irc": "📡",
+        "googlechat": "🔵",
+        "mattermost": "⚡",
+        "line": "💚",
+        "nostr": "🟣",
+        "twitch": "💜",
+        "bluebubbles": "💙",
     }
     KNOWN_CHANNELS = (
-        'telegram', 'signal', 'whatsapp', 'discord', 'webchat', 'imessage', 'irc', 'slack',
-        'googlechat', 'bluebubbles', 'matrix', 'mattermost', 'msteams', 'line', 'nostr',
-        'twitch', 'feishu', 'synology-chat', 'nextcloud-talk', 'tlon', 'zalo', 'zalouser',
+        "telegram",
+        "signal",
+        "whatsapp",
+        "discord",
+        "webchat",
+        "imessage",
+        "irc",
+        "slack",
+        "googlechat",
+        "bluebubbles",
+        "matrix",
+        "mattermost",
+        "msteams",
+        "line",
+        "nostr",
+        "twitch",
+        "feishu",
+        "synology-chat",
+        "nextcloud-talk",
+        "tlon",
+        "zalo",
+        "zalouser",
     )
 
     configured = []
@@ -24146,23 +26055,24 @@ def _detect_channel_status():
     # Detect from gateway YAML config
     oc_dir = _get_openclaw_dir()
     yaml_candidates = [
-        os.path.join(oc_dir, 'gateway.yaml'),
-        os.path.join(oc_dir, 'gateway.yml'),
-        os.path.expanduser('~/.clawdbot/gateway.yaml'),
-        os.path.expanduser('~/.clawdbot/gateway.yml'),
+        os.path.join(oc_dir, "gateway.yaml"),
+        os.path.join(oc_dir, "gateway.yml"),
+        os.path.expanduser("~/.clawdbot/gateway.yaml"),
+        os.path.expanduser("~/.clawdbot/gateway.yml"),
     ]
     for yf in yaml_candidates:
         try:
             import yaml as _yaml
+
             with open(yf) as f:
                 ydata = _yaml.safe_load(f)
             if not isinstance(ydata, dict):
                 continue
-            for section_key in ('channels', 'plugins'):
+            for section_key in ("channels", "plugins"):
                 section = ydata.get(section_key, {})
                 if isinstance(section, dict):
                     for name, conf in section.items():
-                        if isinstance(conf, dict) and conf.get('enabled', True):
+                        if isinstance(conf, dict) and conf.get("enabled", True):
                             _add(name)
                         elif isinstance(conf, bool) and conf:
                             _add(name)
@@ -24177,18 +26087,18 @@ def _detect_channel_status():
     # Detect from JSON config files
     if not configured:
         for cf in [
-            os.path.join(oc_dir, 'openclaw.json'),
-            os.path.expanduser('~/.clawdbot/openclaw.json'),
-            os.path.expanduser('~/.clawdbot/moltbot.json'),
+            os.path.join(oc_dir, "openclaw.json"),
+            os.path.expanduser("~/.clawdbot/openclaw.json"),
+            os.path.expanduser("~/.clawdbot/moltbot.json"),
         ]:
             try:
                 with open(cf) as f:
                     data = json.load(f)
-                plugins = data.get('plugins', {}).get('entries', {})
+                plugins = data.get("plugins", {}).get("entries", {})
                 for name, pconf in plugins.items():
-                    if isinstance(pconf, dict) and pconf.get('enabled'):
+                    if isinstance(pconf, dict) and pconf.get("enabled"):
                         _add(name)
-                channels = data.get('channels', {})
+                channels = data.get("channels", {})
                 if isinstance(channels, dict):
                     for name in channels:
                         _add(name)
@@ -24205,7 +26115,7 @@ def _detect_channel_status():
         try:
             sessions = _get_sessions()
             for s in sessions:
-                ch = s.get('channel') or s.get('channelName') or ''
+                ch = s.get("channel") or s.get("channelName") or ""
                 if ch:
                     _add(ch)
         except Exception:
@@ -24216,11 +26126,26 @@ def _detect_channel_status():
 
     # Filter to channels with data directories (evidence of real setup)
     DIR_EXEMPT = {
-        'imessage', 'irc', 'googlechat', 'slack', 'webchat', 'bluebubbles',
-        'matrix', 'mattermost', 'msteams', 'line', 'nostr', 'twitch', 'feishu',
-        'synology-chat', 'nextcloud-talk', 'tlon', 'zalo', 'zalouser',
+        "imessage",
+        "irc",
+        "googlechat",
+        "slack",
+        "webchat",
+        "bluebubbles",
+        "matrix",
+        "mattermost",
+        "msteams",
+        "line",
+        "nostr",
+        "twitch",
+        "feishu",
+        "synology-chat",
+        "nextcloud-talk",
+        "tlon",
+        "zalo",
+        "zalouser",
     }
-    cb_dir = os.path.expanduser('~/.clawdbot')
+    cb_dir = os.path.expanduser("~/.clawdbot")
     active = []
     for ch in configured:
         if ch in DIR_EXEMPT:
@@ -24233,57 +26158,77 @@ def _detect_channel_status():
     # Try to probe live connectivity for known channels
     results = []
     for ch in configured:
-        icon = CHANNEL_ICONS.get(ch, '📡')
-        status = 'configured'
-        detail = 'Configured'
+        icon = CHANNEL_ICONS.get(ch, "📡")
+        status = "configured"
+        detail = "Configured"
 
-        if ch == 'telegram':
+        if ch == "telegram":
             # Check if Telegram bot is reachable via getMe
             try:
                 budget_cfg = _get_budget_config()
-                tg_token = str(budget_cfg.get('telegram_bot_token', '')).strip()
+                tg_token = str(budget_cfg.get("telegram_bot_token", "")).strip()
                 if not tg_token:
                     # Try reading directly from openclaw.json
-                    for cf in [os.path.join(oc_dir, 'openclaw.json'), os.path.expanduser('~/.clawdbot/openclaw.json')]:
+                    for cf in [
+                        os.path.join(oc_dir, "openclaw.json"),
+                        os.path.expanduser("~/.clawdbot/openclaw.json"),
+                    ]:
                         try:
                             with open(cf) as f:
                                 d = json.load(f)
-                            tg_token = str(d.get('telegram', {}).get('token', '') or d.get('plugins', {}).get('entries', {}).get('telegram', {}).get('token', '')).strip()
+                            tg_token = str(
+                                d.get("telegram", {}).get("token", "")
+                                or d.get("plugins", {})
+                                .get("entries", {})
+                                .get("telegram", {})
+                                .get("token", "")
+                            ).strip()
                             if tg_token:
                                 break
                         except Exception:
                             pass
                 if tg_token:
                     import urllib.request as _ur
-                    req = _ur.Request(f'https://api.telegram.org/bot{tg_token}/getMe', method='GET')
-                    req.add_header('User-Agent', 'ClawMetry/1.0')
+
+                    req = _ur.Request(
+                        f"https://api.telegram.org/bot{tg_token}/getMe", method="GET"
+                    )
+                    req.add_header("User-Agent", "ClawMetry/1.0")
                     with _ur.urlopen(req, timeout=4) as resp:
                         data = json.loads(resp.read())
-                    if data.get('ok'):
-                        bot_name = data.get('result', {}).get('username', '')
-                        status = 'connected'
-                        detail = f'@{bot_name}' if bot_name else 'Connected'
+                    if data.get("ok"):
+                        bot_name = data.get("result", {}).get("username", "")
+                        status = "connected"
+                        detail = f"@{bot_name}" if bot_name else "Connected"
                     else:
-                        status = 'configured'
-                        detail = 'Token invalid'
+                        status = "configured"
+                        detail = "Token invalid"
                 else:
-                    status = 'configured'
-                    detail = 'No token configured'
+                    status = "configured"
+                    detail = "No token configured"
             except Exception as e:
                 err = str(e)
-                if 'timed out' in err or 'timeout' in err:
-                    status = 'configured'
-                    detail = 'Timeout checking'
+                if "timed out" in err or "timeout" in err:
+                    status = "configured"
+                    detail = "Timeout checking"
                 else:
-                    status = 'configured'
-                    detail = 'Check failed'
+                    status = "configured"
+                    detail = "Check failed"
 
-        results.append({'name': ch.capitalize(), 'id': ch, 'icon': icon, 'status': status, 'detail': detail})
+        results.append(
+            {
+                "name": ch.capitalize(),
+                "id": ch,
+                "icon": icon,
+                "status": status,
+                "detail": detail,
+            }
+        )
 
     return results
 
 
-@bp_health.route('/api/system-health')
+@bp_health.route("/api/system-health")
 def api_system_health():
     """Comprehensive system health for the Overview tab."""
     import shutil
@@ -24292,43 +26237,49 @@ def api_system_health():
     services = []
     # Always check OpenClaw Gateway (from gateway config or auto-detect)
     cfg = _load_gw_config()
-    if cfg.get('url'):
+    if cfg.get("url"):
         try:
             from urllib.parse import urlparse
-            gw_port = urlparse(cfg['url']).port or 18789
+
+            gw_port = urlparse(cfg["url"]).port or 18789
         except Exception:
             gw_port = _detect_gateway_port()
     else:
         gw_port = _detect_gateway_port()
-    service_checks = [('OpenClaw Gateway', gw_port)]
+    service_checks = [("OpenClaw Gateway", gw_port)]
     # Add any user-configured extra services
     for svc in EXTRA_SERVICES:
-        service_checks.append((svc['name'], svc['port']))
+        service_checks.append((svc["name"], svc["port"]))
     # Add Mission Control only if MC_URL is explicitly configured
     if MC_URL:
         try:
             from urllib.parse import urlparse
+
             mc_parsed = urlparse(MC_URL)
             mc_port = mc_parsed.port or 3002
-            service_checks.append(('Mission Control', mc_port))
+            service_checks.append(("Mission Control", mc_port))
         except Exception:
             pass
     for name, port in service_checks:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(2)
-            ok = s.connect_ex(('127.0.0.1', port)) == 0
+            ok = s.connect_ex(("127.0.0.1", port)) == 0
             s.close()
             # If direct socket fails and this is the gateway, try docker exec
-            if not ok and 'Gateway' in name:
+            if not ok and "Gateway" in name:
                 cfg_check = _load_gw_config()
-                if cfg_check.get('url', '').startswith('docker://') or cfg_check.get('token'):
-                    docker_result = _gw_invoke_docker('session_status', {}, cfg_check.get('token'))
+                if cfg_check.get("url", "").startswith("docker://") or cfg_check.get(
+                    "token"
+                ):
+                    docker_result = _gw_invoke_docker(
+                        "session_status", {}, cfg_check.get("token")
+                    )
                     if docker_result:
                         ok = True
-            services.append({'name': name, 'port': port, 'up': ok})
+            services.append({"name": name, "port": port, "up": ok})
         except Exception:
-            services.append({'name': name, 'port': port, 'up': False})
+            services.append({"name": name, "port": port, "up": False})
 
     # --- DISK USAGE ---
     disks = []
@@ -24338,80 +26289,99 @@ def api_system_health():
             used_gb = usage.used / (1024**3)
             total_gb = usage.total / (1024**3)
             pct = (usage.used / usage.total) * 100
-            disks.append({'mount': mount, 'used_gb': round(used_gb, 1), 'total_gb': round(total_gb, 1), 'pct': round(pct, 1)})
+            disks.append(
+                {
+                    "mount": mount,
+                    "used_gb": round(used_gb, 1),
+                    "total_gb": round(total_gb, 1),
+                    "pct": round(pct, 1),
+                }
+            )
         except Exception:
             pass
 
     # --- CRON JOBS ---
-    gw_cron_data = _gw_invoke('cron', {'action': 'list', 'includeDisabled': True})
-    crons = gw_cron_data.get('jobs', []) if gw_cron_data and 'jobs' in gw_cron_data else _get_crons()
-    cron_enabled = len([j for j in crons if j.get('enabled', True)])
+    gw_cron_data = _gw_invoke("cron", {"action": "list", "includeDisabled": True})
+    crons = (
+        gw_cron_data.get("jobs", [])
+        if gw_cron_data and "jobs" in gw_cron_data
+        else _get_crons()
+    )
+    cron_enabled = len([j for j in crons if j.get("enabled", True)])
     cron_ok_24h = 0
     cron_failed = []
     now_ts = time.time()
     for j in crons:
-        last = j.get('lastRun', {})
+        last = j.get("lastRun", {})
         if not last:
             continue
-        run_ts = last.get('timestamp', 0)
+        run_ts = last.get("timestamp", 0)
         if isinstance(run_ts, str):
             try:
-                run_ts = datetime.fromisoformat(run_ts.replace('Z', '+00:00')).timestamp()
+                run_ts = datetime.fromisoformat(
+                    run_ts.replace("Z", "+00:00")
+                ).timestamp()
             except Exception:
                 run_ts = 0
         if run_ts and (now_ts - run_ts) < 86400:
-            if last.get('exitCode', last.get('exit', 0)) == 0 and not last.get('error'):
+            if last.get("exitCode", last.get("exit", 0)) == 0 and not last.get("error"):
                 cron_ok_24h += 1
             else:
-                cron_failed.append(j.get('name', j.get('id', 'unknown')))
+                cron_failed.append(j.get("name", j.get("id", "unknown")))
 
     # --- SUB-AGENTS (24H) ---
     sessions = _get_sessions()
     sa_runs = 0
     sa_success = 0
     for s in sessions:
-        mtime = s.get('updatedAt', 0)
+        mtime = s.get("updatedAt", 0)
         if isinstance(mtime, (int, float)) and mtime > 1e12:
             mtime = mtime / 1000
         if mtime and (now_ts - mtime) < 86400:
-            sid = s.get('sessionId', '')
-            if 'subagent' in sid:
+            sid = s.get("sessionId", "")
+            if "subagent" in sid:
                 sa_runs += 1
                 sa_success += 1  # We don't track failure in session files currently
 
     sa_pct = round((sa_success / sa_runs * 100) if sa_runs > 0 else 100, 0)
 
     # Build compact service_status dict (fleet node card format)
-    gw_up = any(s['name'] == 'OpenClaw Gateway' and s['up'] for s in services)
-    resources_state = 'ok'
+    gw_up = any(s["name"] == "OpenClaw Gateway" and s["up"] for s in services)
+    resources_state = "ok"
     if disks:
-        max_pct = max(d['pct'] for d in disks)
+        max_pct = max(d["pct"] for d in disks)
         if max_pct >= 95:
-            resources_state = 'critical'
+            resources_state = "critical"
         elif max_pct >= 80:
-            resources_state = 'warn'
+            resources_state = "warn"
     service_status = {
-        'gateway': gw_up,
-        'channels': [],   # populated by sync daemon from live gateway data
-        'sync': True,     # dashboard is running = sync present
-        'resources': resources_state,
+        "gateway": gw_up,
+        "channels": [],  # populated by sync daemon from live gateway data
+        "sync": True,  # dashboard is running = sync present
+        "resources": resources_state,
     }
 
-    return jsonify({
-        'services': services,
-        'channels': _detect_channel_status(),
-        'disks': disks,
-        'crons': {'enabled': cron_enabled, 'ok24h': cron_ok_24h, 'failed': cron_failed},
-        'subagents': {'runs': sa_runs, 'successPct': sa_pct},
-        'heartbeat': _get_heartbeat_status(),
-        'sandbox': _detect_sandbox_metadata(),
-        'inference': _detect_inference_metadata(),
-        'security': _detect_security_metadata(),
-        'service_status': service_status,
-    })
+    return jsonify(
+        {
+            "services": services,
+            "channels": _detect_channel_status(),
+            "disks": disks,
+            "crons": {
+                "enabled": cron_enabled,
+                "ok24h": cron_ok_24h,
+                "failed": cron_failed,
+            },
+            "subagents": {"runs": sa_runs, "successPct": sa_pct},
+            "heartbeat": _get_heartbeat_status(),
+            "sandbox": _detect_sandbox_metadata(),
+            "inference": _detect_inference_metadata(),
+            "security": _detect_security_metadata(),
+            "service_status": service_status,
+        }
+    )
 
 
-@bp_health.route('/api/health')
+@bp_health.route("/api/health")
 def api_health():
     """System health checks."""
     checks = []
@@ -24420,87 +26390,218 @@ def api_health():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(2)
-        result = s.connect_ex(('127.0.0.1', gw_port))
+        result = s.connect_ex(("127.0.0.1", gw_port))
         s.close()
         if result == 0:
-            checks.append({'id': 'gateway', 'status': 'healthy', 'color': 'green', 'detail': f'Port {gw_port} responding'})
+            checks.append(
+                {
+                    "id": "gateway",
+                    "status": "healthy",
+                    "color": "green",
+                    "detail": f"Port {gw_port} responding",
+                }
+            )
         else:
             # Fallback: check process (Unix only)
             gw_proc = None
-            if sys.platform != 'win32':
-                gw_proc = subprocess.run(['pgrep', '-f', 'moltbot'], capture_output=True, text=True)
+            if sys.platform != "win32":
+                gw_proc = subprocess.run(
+                    ["pgrep", "-f", "moltbot"], capture_output=True, text=True
+                )
             if gw_proc and gw_proc.returncode == 0:
-                checks.append({'id': 'gateway', 'status': 'warning', 'color': 'yellow', 'detail': 'Process running, port not responding'})
+                checks.append(
+                    {
+                        "id": "gateway",
+                        "status": "warning",
+                        "color": "yellow",
+                        "detail": "Process running, port not responding",
+                    }
+                )
             else:
-                checks.append({'id': 'gateway', 'status': 'critical', 'color': 'red', 'detail': 'Not running'})
+                checks.append(
+                    {
+                        "id": "gateway",
+                        "status": "critical",
+                        "color": "red",
+                        "detail": "Not running",
+                    }
+                )
     except Exception:
-        checks.append({'id': 'gateway', 'status': 'critical', 'color': 'red', 'detail': 'Check failed'})
+        checks.append(
+            {
+                "id": "gateway",
+                "status": "critical",
+                "color": "red",
+                "detail": "Check failed",
+            }
+        )
 
     # 2. Disk space - warn if < 5GB free
     try:
-        st = os.statvfs('/')
-        free_gb = (st.f_bavail * st.f_frsize) / (1024 ** 3)
-        total_gb = (st.f_blocks * st.f_frsize) / (1024 ** 3)
+        st = os.statvfs("/")
+        free_gb = (st.f_bavail * st.f_frsize) / (1024**3)
+        total_gb = (st.f_blocks * st.f_frsize) / (1024**3)
         pct_used = ((total_gb - free_gb) / total_gb) * 100
         if free_gb < 2:
-            checks.append({'id': 'disk', 'status': 'critical', 'color': 'red', 'detail': f'{free_gb:.1f} GB free ({pct_used:.0f}% used)'})
+            checks.append(
+                {
+                    "id": "disk",
+                    "status": "critical",
+                    "color": "red",
+                    "detail": f"{free_gb:.1f} GB free ({pct_used:.0f}% used)",
+                }
+            )
         elif free_gb < 5:
-            checks.append({'id': 'disk', 'status': 'warning', 'color': 'yellow', 'detail': f'{free_gb:.1f} GB free ({pct_used:.0f}% used)'})
+            checks.append(
+                {
+                    "id": "disk",
+                    "status": "warning",
+                    "color": "yellow",
+                    "detail": f"{free_gb:.1f} GB free ({pct_used:.0f}% used)",
+                }
+            )
         else:
-            checks.append({'id': 'disk', 'status': 'healthy', 'color': 'green', 'detail': f'{free_gb:.1f} GB free ({pct_used:.0f}% used)'})
+            checks.append(
+                {
+                    "id": "disk",
+                    "status": "healthy",
+                    "color": "green",
+                    "detail": f"{free_gb:.1f} GB free ({pct_used:.0f}% used)",
+                }
+            )
     except Exception:
-        checks.append({'id': 'disk', 'status': 'warning', 'color': 'yellow', 'detail': 'Check failed'})
+        checks.append(
+            {
+                "id": "disk",
+                "status": "warning",
+                "color": "yellow",
+                "detail": "Check failed",
+            }
+        )
 
     # 3. Memory usage (RSS of this process + overall)
     try:
         import resource
-        rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024  # KB -> MB on Linux
-        mem = subprocess.run(['free', '-m'], capture_output=True, text=True)
-        mem_parts = mem.stdout.strip().split('\n')[1].split()
+
+        rss_mb = (
+            resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        )  # KB -> MB on Linux
+        mem = subprocess.run(["free", "-m"], capture_output=True, text=True)
+        mem_parts = mem.stdout.strip().split("\n")[1].split()
         used_mb = int(mem_parts[2])
         total_mb = int(mem_parts[1])
         pct = (used_mb / total_mb) * 100
         if pct > 90:
-            checks.append({'id': 'memory', 'status': 'critical', 'color': 'red', 'detail': f'{used_mb}MB / {total_mb}MB ({pct:.0f}%)'})
+            checks.append(
+                {
+                    "id": "memory",
+                    "status": "critical",
+                    "color": "red",
+                    "detail": f"{used_mb}MB / {total_mb}MB ({pct:.0f}%)",
+                }
+            )
         elif pct > 75:
-            checks.append({'id': 'memory', 'status': 'warning', 'color': 'yellow', 'detail': f'{used_mb}MB / {total_mb}MB ({pct:.0f}%)'})
+            checks.append(
+                {
+                    "id": "memory",
+                    "status": "warning",
+                    "color": "yellow",
+                    "detail": f"{used_mb}MB / {total_mb}MB ({pct:.0f}%)",
+                }
+            )
         else:
-            checks.append({'id': 'memory', 'status': 'healthy', 'color': 'green', 'detail': f'{used_mb}MB / {total_mb}MB ({pct:.0f}%)'})
+            checks.append(
+                {
+                    "id": "memory",
+                    "status": "healthy",
+                    "color": "green",
+                    "detail": f"{used_mb}MB / {total_mb}MB ({pct:.0f}%)",
+                }
+            )
     except Exception:
-        checks.append({'id': 'memory', 'status': 'warning', 'color': 'yellow', 'detail': 'Check failed'})
+        checks.append(
+            {
+                "id": "memory",
+                "status": "warning",
+                "color": "yellow",
+                "detail": "Check failed",
+            }
+        )
 
     # 4. Uptime
     try:
-        uptime = subprocess.run(['uptime', '-p'], capture_output=True, text=True).stdout.strip().replace('up ', '')
-        checks.append({'id': 'uptime', 'status': 'healthy', 'color': 'green', 'detail': uptime})
+        uptime = (
+            subprocess.run(["uptime", "-p"], capture_output=True, text=True)
+            .stdout.strip()
+            .replace("up ", "")
+        )
+        checks.append(
+            {"id": "uptime", "status": "healthy", "color": "green", "detail": uptime}
+        )
     except Exception:
-        checks.append({'id': 'uptime', 'status': 'warning', 'color': 'yellow', 'detail': 'Unknown'})
+        checks.append(
+            {
+                "id": "uptime",
+                "status": "warning",
+                "color": "yellow",
+                "detail": "Unknown",
+            }
+        )
 
     # 5. OTLP Metrics
     if _has_otel_data():
         ago = time.time() - _otel_last_received
         if ago < 300:  # <5min
             total = sum(len(metrics_store[k]) for k in metrics_store)
-            checks.append({'id': 'otel', 'status': 'healthy', 'color': 'green',
-                           'detail': f'Connected - {total} data points, last {int(ago)}s ago'})
+            checks.append(
+                {
+                    "id": "otel",
+                    "status": "healthy",
+                    "color": "green",
+                    "detail": f"Connected - {total} data points, last {int(ago)}s ago",
+                }
+            )
         elif ago < 3600:
-            checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
-                           'detail': f'Stale - last data {int(ago/60)}m ago'})
+            checks.append(
+                {
+                    "id": "otel",
+                    "status": "warning",
+                    "color": "yellow",
+                    "detail": f"Stale - last data {int(ago / 60)}m ago",
+                }
+            )
         else:
-            checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
-                           'detail': f'Stale - last data {int(ago/3600)}h ago'})
+            checks.append(
+                {
+                    "id": "otel",
+                    "status": "warning",
+                    "color": "yellow",
+                    "detail": f"Stale - last data {int(ago / 3600)}h ago",
+                }
+            )
     elif _HAS_OTEL_PROTO:
-        checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
-                       'detail': 'OTLP ready - no data received yet'})
+        checks.append(
+            {
+                "id": "otel",
+                "status": "warning",
+                "color": "yellow",
+                "detail": "OTLP ready - no data received yet",
+            }
+        )
     else:
-        checks.append({'id': 'otel', 'status': 'warning', 'color': 'yellow',
-                       'detail': 'Not installed - pip install clawmetry[otel]'})
+        checks.append(
+            {
+                "id": "otel",
+                "status": "warning",
+                "color": "yellow",
+                "detail": "Not installed - pip install clawmetry[otel]",
+            }
+        )
 
-    return jsonify({'checks': checks})
+    return jsonify({"checks": checks})
 
 
-
-@bp_health.route('/api/service-status')
+@bp_health.route("/api/service-status")
 def api_service_status():
     """Compact service status for fleet heartbeat payloads.
 
@@ -24523,16 +26624,17 @@ def api_service_status():
     cfg = _load_gw_config()
     # ── Gateway ──────────────────────────────────────────────────────────────
     gw_port = _detect_gateway_port()
-    if cfg.get('url'):
+    if cfg.get("url"):
         try:
             from urllib.parse import urlparse as _upl
-            gw_port = _upl(cfg['url']).port or gw_port
+
+            gw_port = _upl(cfg["url"]).port or gw_port
         except Exception:
             pass
     try:
         _s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         _s.settimeout(2)
-        gw_up = _s.connect_ex(('127.0.0.1', gw_port)) == 0
+        gw_up = _s.connect_ex(("127.0.0.1", gw_port)) == 0
         _s.close()
     except Exception:
         gw_up = False
@@ -24540,35 +26642,41 @@ def api_service_status():
     # ── Channels ─────────────────────────────────────────────────────────────
     channels_out = []
     try:
-        gw_data = _gw_invoke('status', {})
-        if gw_data and isinstance(gw_data.get('channels'), list):
-            for ch in gw_data['channels']:
-                channels_out.append({
-                    'name': str(ch.get('name', ch.get('kind', 'unknown'))),
-                    'connected': bool(ch.get('connected', ch.get('ok', False))),
-                })
+        gw_data = _gw_invoke("status", {})
+        if gw_data and isinstance(gw_data.get("channels"), list):
+            for ch in gw_data["channels"]:
+                channels_out.append(
+                    {
+                        "name": str(ch.get("name", ch.get("kind", "unknown"))),
+                        "connected": bool(ch.get("connected", ch.get("ok", False))),
+                    }
+                )
     except Exception:
         pass
     # Fallback: detect from config file
     if not channels_out:
         try:
-            raw_cfg = cfg.get('channels') or []
+            raw_cfg = cfg.get("channels") or []
             for ch in raw_cfg:
                 if isinstance(ch, dict):
-                    channels_out.append({
-                        'name': str(ch.get('kind', ch.get('name', 'channel'))),
-                        'connected': None,  # unknown without live data
-                    })
+                    channels_out.append(
+                        {
+                            "name": str(ch.get("kind", ch.get("name", "channel"))),
+                            "connected": None,  # unknown without live data
+                        }
+                    )
         except Exception:
             pass
 
     # ── Sync daemon (is clawmetry running?) ──────────────────────────────────
     sync_up = False
     try:
-        if sys.platform != 'win32':
+        if sys.platform != "win32":
             result = subprocess.run(
-                ['pgrep', '-f', 'clawmetry'],
-                capture_output=True, text=True, timeout=3,
+                ["pgrep", "-f", "clawmetry"],
+                capture_output=True,
+                text=True,
+                timeout=3,
             )
             sync_up = result.returncode == 0
         else:
@@ -24577,57 +26685,61 @@ def api_service_status():
         sync_up = True  # dashboard IS running, so sync is present
 
     # ── Resources ────────────────────────────────────────────────────────────
-    resources = 'ok'
+    resources = "ok"
     try:
-        st = os.statvfs('/')
-        free_gb = (st.f_bavail * st.f_frsize) / (1024 ** 3)
+        st = os.statvfs("/")
+        free_gb = (st.f_bavail * st.f_frsize) / (1024**3)
         if free_gb < 2:
-            resources = 'critical'
+            resources = "critical"
         elif free_gb < 5:
-            resources = 'warn'
+            resources = "warn"
     except Exception:
         pass
     try:
-        mem_out = subprocess.run(['free', '-m'], capture_output=True, text=True, timeout=3)
+        mem_out = subprocess.run(
+            ["free", "-m"], capture_output=True, text=True, timeout=3
+        )
         if mem_out.returncode == 0:
-            parts = mem_out.stdout.strip().split('\n')[1].split()
+            parts = mem_out.stdout.strip().split("\n")[1].split()
             used_mb = int(parts[2])
             total_mb = int(parts[1])
             if total_mb > 0 and (used_mb / total_mb) > 0.95:
-                resources = 'critical' if resources == 'ok' else resources
+                resources = "critical" if resources == "ok" else resources
             elif total_mb > 0 and (used_mb / total_mb) > 0.85:
-                resources = 'warn' if resources == 'ok' else resources
+                resources = "warn" if resources == "ok" else resources
     except Exception:
         pass
 
-    return jsonify({
-        'service_status': {
-            'gateway': gw_up,
-            'channels': channels_out,
-            'sync': sync_up,
-            'resources': resources,
+    return jsonify(
+        {
+            "service_status": {
+                "gateway": gw_up,
+                "channels": channels_out,
+                "sync": sync_up,
+                "resources": resources,
+            }
         }
-    })
+    )
 
 
-@bp_health.route('/api/heartbeat-status')
+@bp_health.route("/api/heartbeat-status")
 def api_heartbeat_status():
     """Return heartbeat gap alerting status."""
     return jsonify(_get_heartbeat_status())
 
 
-@bp_health.route('/api/heartbeat-ping', methods=['POST'])
+@bp_health.route("/api/heartbeat-ping", methods=["POST"])
 def api_heartbeat_ping():
     """Called by frontend when a heartbeat event is detected in log stream."""
     _record_heartbeat()
-    return jsonify({'ok': True})
+    return jsonify({"ok": True})
 
 
-@bp_health.route('/api/health-stream')
+@bp_health.route("/api/health-stream")
 def api_health_stream():
     """SSE endpoint - auto-refresh health checks every 30 seconds."""
-    if not _acquire_stream_slot('health'):
-        return jsonify({'error': 'Too many active health streams'}), 429
+    if not _acquire_stream_slot("health"):
+        return jsonify({"error": "Too many active health streams"}), 429
 
     def generate():
         started_at = time.time()
@@ -24640,38 +26752,45 @@ def api_health_stream():
                     with app.test_request_context():
                         resp = api_health()
                         data = resp.get_json()
-                        yield f'data: {json.dumps(data)}\n\n'
+                        yield f"data: {json.dumps(data)}\n\n"
                 except Exception:
-                    yield f'data: {json.dumps({"checks": []})}\n\n'
+                    yield f"data: {json.dumps({'checks': []})}\n\n"
                 time.sleep(30)
         finally:
-            _release_stream_slot('health')
+            _release_stream_slot("health")
 
-    return Response(generate(), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
-@bp_config.route('/api/llmfit')
+@bp_config.route("/api/llmfit")
 def api_llmfit():
     """Passthrough: run llmfit recommend and return raw JSON."""
     import shutil
-    if not shutil.which('llmfit'):
-        return jsonify({'error': 'llmfit not installed', 'models': [], 'system': {}})
+
+    if not shutil.which("llmfit"):
+        return jsonify({"error": "llmfit not installed", "models": [], "system": {}})
     try:
         result = subprocess.run(
-            ['llmfit', 'recommend', '--json', '--limit', '20'],
-            capture_output=True, text=True, timeout=20
+            ["llmfit", "recommend", "--json", "--limit", "20"],
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         data = json.loads(result.stdout) if result.returncode == 0 else {}
         return jsonify(data)
     except Exception as e:
-        return jsonify({'error': str(e), 'models': [], 'system': {}})
+        return jsonify({"error": str(e), "models": [], "system": {}})
 
 
-@bp_config.route('/api/cost-optimizer')
+@bp_config.route("/api/cost-optimizer")
 def api_cost_optimizer():
     """Enhanced cost optimizer: llmfit recommendations + task-level suggestions."""
     import shutil
+
     try:
         # Cost data from existing helpers
         costs = _get_cost_summary()
@@ -24680,61 +26799,87 @@ def api_cost_optimizer():
 
         # Run llmfit
         llmfit_raw = {}
-        if shutil.which('llmfit'):
+        if shutil.which("llmfit"):
             try:
-                r = subprocess.run(['llmfit', 'recommend', '--json', '--limit', '10'],
-                                   capture_output=True, text=True, timeout=20)
+                r = subprocess.run(
+                    ["llmfit", "recommend", "--json", "--limit", "10"],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
                 if r.returncode == 0:
                     llmfit_raw = json.loads(r.stdout)
             except Exception:
                 pass
 
-        sys_info = llmfit_raw.get('system', {})
-        cpu = sys_info.get('cpu_name', 'Apple M2 Pro')
-        is_apple = 'apple' in cpu.lower() or 'M2' in cpu or 'M1' in cpu or 'M3' in cpu or 'M4' in cpu
+        sys_info = llmfit_raw.get("system", {})
+        cpu = sys_info.get("cpu_name", "Apple M2 Pro")
+        is_apple = (
+            "apple" in cpu.lower()
+            or "M2" in cpu
+            or "M1" in cpu
+            or "M3" in cpu
+            or "M4" in cpu
+        )
 
         system_out = {
-            'cpu': cpu or 'Apple M2 Pro',
-            'cores': sys_info.get('cpu_cores', 12),
-            'ram_gb': sys_info.get('total_ram_gb', 32),
-            'backend': 'Apple Metal (unified)' if is_apple else sys_info.get('backend', 'CPU'),
+            "cpu": cpu or "Apple M2 Pro",
+            "cores": sys_info.get("cpu_cores", 12),
+            "ram_gb": sys_info.get("total_ram_gb", 32),
+            "backend": "Apple Metal (unified)"
+            if is_apple
+            else sys_info.get("backend", "CPU"),
         }
 
         # Map llmfit models to localModels format
         use_case_map = {
-            'coding': ['coding', 'code generation'],
-            'chat': ['chat', 'instruction following'],
+            "coding": ["coding", "code generation"],
+            "chat": ["chat", "instruction following"],
         }
         ollama_shortcuts = {
-            'deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct': 'deepseek-coder-v2:16b',
-            'lmstudio-community/Qwen3-4B-Instruct-2507-MLX-8bit': 'qwen3:4b',
-            'bigcode/starcoder2-7b': 'starcoder2:7b',
-            'alpindale/Llama-3.2-1B-Instruct': 'llama3.2:1b',
+            "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct": "deepseek-coder-v2:16b",
+            "lmstudio-community/Qwen3-4B-Instruct-2507-MLX-8bit": "qwen3:4b",
+            "bigcode/starcoder2-7b": "starcoder2:7b",
+            "alpindale/Llama-3.2-1B-Instruct": "llama3.2:1b",
         }
-        savings_by_cat = {'coding': '~$0.50/day for coding crons', 'chat': '~$0.30/day for heartbeats'}
+        savings_by_cat = {
+            "coding": "~$0.50/day for coding crons",
+            "chat": "~$0.30/day for heartbeats",
+        }
 
         local_models = []
-        for m in llmfit_raw.get('models', [])[:8]:
-            full_name = m.get('name', '')
-            short = full_name.split('/')[-1] if '/' in full_name else full_name
-            cat = (m.get('category') or 'Chat').lower()
-            use_case_str = m.get('use_case', cat)
+        for m in llmfit_raw.get("models", [])[:8]:
+            full_name = m.get("name", "")
+            short = full_name.split("/")[-1] if "/" in full_name else full_name
+            cat = (m.get("category") or "Chat").lower()
+            use_case_str = m.get("use_case", cat)
             ollama_name = ollama_shortcuts.get(full_name)
             if not ollama_name:
-                ollama_name = short.lower().replace('-instruct','').replace('-fp8','').replace('-awq','').replace('-mlx-8bit','')
-                ollama_name = ''.join(c if c in 'abcdefghijklmnopqrstuvwxyz0123456789.-:' else '-' for c in ollama_name).strip('-')
-            tps = m.get('estimated_tps', 0) or 0
-            local_models.append({
-                'name': short,
-                'fullName': full_name,
-                'useCase': use_case_str,
-                'estimatedTps': round(tps * 3.5, 1),  # Metal multiplier
-                'ramRequired': f"{m.get('memory_required_gb', '?')}GB",
-                'score': m.get('score', 0),
-                'ollamaName': ollama_name,
-                'savingsEstimate': savings_by_cat.get(cat, '~$0.20/day'),
-                'memoryRequiredGb': m.get('memory_required_gb', 0),
-            })
+                ollama_name = (
+                    short.lower()
+                    .replace("-instruct", "")
+                    .replace("-fp8", "")
+                    .replace("-awq", "")
+                    .replace("-mlx-8bit", "")
+                )
+                ollama_name = "".join(
+                    c if c in "abcdefghijklmnopqrstuvwxyz0123456789.-:" else "-"
+                    for c in ollama_name
+                ).strip("-")
+            tps = m.get("estimated_tps", 0) or 0
+            local_models.append(
+                {
+                    "name": short,
+                    "fullName": full_name,
+                    "useCase": use_case_str,
+                    "estimatedTps": round(tps * 3.5, 1),  # Metal multiplier
+                    "ramRequired": f"{m.get('memory_required_gb', '?')}GB",
+                    "score": m.get("score", 0),
+                    "ollamaName": ollama_name,
+                    "savingsEstimate": savings_by_cat.get(cat, "~$0.20/day"),
+                    "memoryRequiredGb": m.get("memory_required_gb", 0),
+                }
+            )
 
         # Task recommendations
         task_recs = []
@@ -24742,163 +26887,201 @@ def api_cost_optimizer():
         try:
             crons = _get_crons()
             for cron in crons[:5]:
-                model = cron.get('model', cron.get('modelRef', 'claude-sonnet-4-6'))
-                name = cron.get('name', cron.get('label', 'Cron job'))
-                prompt = (cron.get('prompt', '') or '').lower()
-                is_heartbeat = any(w in prompt for w in ['heartbeat', 'check', 'status', 'health', 'ping'])
+                model = cron.get("model", cron.get("modelRef", "claude-sonnet-4-6"))
+                name = cron.get("name", cron.get("label", "Cron job"))
+                prompt = (cron.get("prompt", "") or "").lower()
+                is_heartbeat = any(
+                    w in prompt
+                    for w in ["heartbeat", "check", "status", "health", "ping"]
+                )
                 if is_heartbeat or not prompt.strip():
-                    task_recs.append({
-                        'task': f'Cron: {name}',
-                        'currentModel': model or 'claude-sonnet-4-6',
-                        'suggestedLocal': 'qwen3:4b',
-                        'reason': "Simple periodic checks don't need frontier models",
-                        'estimatedSavings': '~$2-5/month',
-                    })
+                    task_recs.append(
+                        {
+                            "task": f"Cron: {name}",
+                            "currentModel": model or "claude-sonnet-4-6",
+                            "suggestedLocal": "qwen3:4b",
+                            "reason": "Simple periodic checks don't need frontier models",
+                            "estimatedSavings": "~$2-5/month",
+                        }
+                    )
         except Exception:
             pass
 
         # Generic recommendations
-        task_recs.append({
-            'task': 'Heartbeat / periodic checks',
-            'currentModel': 'claude-sonnet-4-6',
-            'suggestedLocal': 'qwen3:4b',
-            'reason': "Heartbeats (email, calendar, weather) work well with tiny fast models",
-            'estimatedSavings': '~$2-5/month',
-        })
-        task_recs.append({
-            'task': 'Coding sub-agents',
-            'currentModel': 'claude-sonnet-4-6',
-            'suggestedLocal': 'deepseek-coder-v2:16b',
-            'reason': 'Well-scoped coding tasks (linting, formatting, small fixes) run locally',
-            'estimatedSavings': '~$3-8/month',
-        })
-        task_recs.append({
-            'task': 'Main conversation (Diya)',
-            'currentModel': 'claude-sonnet-4-6',
-            'suggestedLocal': None,
-            'reason': 'Complex reasoning, tool use, and planning still benefit from frontier models',
-            'estimatedSavings': 'Keep as-is',
-        })
+        task_recs.append(
+            {
+                "task": "Heartbeat / periodic checks",
+                "currentModel": "claude-sonnet-4-6",
+                "suggestedLocal": "qwen3:4b",
+                "reason": "Heartbeats (email, calendar, weather) work well with tiny fast models",
+                "estimatedSavings": "~$2-5/month",
+            }
+        )
+        task_recs.append(
+            {
+                "task": "Coding sub-agents",
+                "currentModel": "claude-sonnet-4-6",
+                "suggestedLocal": "deepseek-coder-v2:16b",
+                "reason": "Well-scoped coding tasks (linting, formatting, small fixes) run locally",
+                "estimatedSavings": "~$3-8/month",
+            }
+        )
+        task_recs.append(
+            {
+                "task": "Main conversation (Diya)",
+                "currentModel": "claude-sonnet-4-6",
+                "suggestedLocal": None,
+                "reason": "Complex reasoning, tool use, and planning still benefit from frontier models",
+                "estimatedSavings": "Keep as-is",
+            }
+        )
 
-        today = costs.get('today', 0) or 0
-        projected = costs.get('projected', 0) or (today * 30)
+        today = costs.get("today", 0) or 0
+        projected = costs.get("projected", 0) or (today * 30)
 
-        return jsonify({
-            'system': system_out,
-            'localModels': local_models,
-            'taskRecommendations': task_recs[:6],
-            'todayCost': today,
-            'projectedMonthlyCost': projected,
-            'potentialSavings': '60-80% with local models for crons/heartbeats',
-            'expensiveOps': expensive_ops,
-            'ollamaInstalled': ollama_installed,
-            'llmfitAvailable': bool(llmfit_raw),
-        })
+        return jsonify(
+            {
+                "system": system_out,
+                "localModels": local_models,
+                "taskRecommendations": task_recs[:6],
+                "todayCost": today,
+                "projectedMonthlyCost": projected,
+                "potentialSavings": "60-80% with local models for crons/heartbeats",
+                "expensiveOps": expensive_ops,
+                "ollamaInstalled": ollama_installed,
+                "llmfitAvailable": bool(llmfit_raw),
+            }
+        )
     except Exception as e:
-        return jsonify({
-            'system': {'cpu': 'Apple M2 Pro', 'cores': 12, 'ram_gb': 32, 'backend': 'Apple Metal (unified)'},
-            'localModels': [],
-            'taskRecommendations': [],
-            'todayCost': 0,
-            'projectedMonthlyCost': 0,
-            'potentialSavings': 'Install llmfit for recommendations',
-            'error': str(e),
-            'ollamaInstalled': False,
-            'llmfitAvailable': False,
-        })
+        return jsonify(
+            {
+                "system": {
+                    "cpu": "Apple M2 Pro",
+                    "cores": 12,
+                    "ram_gb": 32,
+                    "backend": "Apple Metal (unified)",
+                },
+                "localModels": [],
+                "taskRecommendations": [],
+                "todayCost": 0,
+                "projectedMonthlyCost": 0,
+                "potentialSavings": "Install llmfit for recommendations",
+                "error": str(e),
+                "ollamaInstalled": False,
+                "llmfitAvailable": False,
+            }
+        )
 
 
-@bp_config.route('/api/cost-optimization')
+@bp_config.route("/api/cost-optimization")
 def api_cost_optimization():
     """Cost optimization analysis and local model fallback recommendations."""
     try:
         # Get cost metrics
         costs = _get_cost_summary()
-        
+
         # Check Ollama availability
         local_models_ollama = _check_ollama_availability()
-        
+
         # Generate recommendations
         recommendations = _generate_cost_recommendations(costs, local_models_ollama)
-        
+
         # Get recent expensive operations
         expensive_ops = _get_expensive_operations()
-        
+
         # Get llmfit local model recommendations
         llmfit_data = _get_llmfit_recommendations()
-        
+
         # Check if ollama binary is installed
         ollama_installed = _detect_ollama()
-        
+
         # Build savings opportunities
         savings = _generate_savings_opportunities()
-        
-        return jsonify({
-            'costs': costs,
-            'localModels': local_models_ollama,
-            'recommendations': recommendations,
-            'expensiveOps': expensive_ops,
-            'llmfit': llmfit_data,
-            'ollamaInstalled': ollama_installed,
-            'llmfitAvailable': llmfit_data.get('available', False),
-            'savingsOpportunities': savings,
-        })
+
+        return jsonify(
+            {
+                "costs": costs,
+                "localModels": local_models_ollama,
+                "recommendations": recommendations,
+                "expensiveOps": expensive_ops,
+                "llmfit": llmfit_data,
+                "ollamaInstalled": ollama_installed,
+                "llmfitAvailable": llmfit_data.get("available", False),
+                "savingsOpportunities": savings,
+            }
+        )
     except Exception as e:
-        return jsonify({
-            'costs': {'today': 0, 'week': 0, 'month': 0, 'projected': 0},
-            'localModels': {'available': False, 'count': 0, 'models': []},
-            'recommendations': [{'title': 'API Error', 'description': str(e), 'priority': 'low'}],
-            'expensiveOps': [],
-            'llmfit': {'available': False, 'recommendations': [], 'codingModels': [], 'chatModels': [], 'system': {}},
-            'ollamaInstalled': False,
-            'llmfitAvailable': False,
-            'savingsOpportunities': [],
-        })
+        return jsonify(
+            {
+                "costs": {"today": 0, "week": 0, "month": 0, "projected": 0},
+                "localModels": {"available": False, "count": 0, "models": []},
+                "recommendations": [
+                    {"title": "API Error", "description": str(e), "priority": "low"}
+                ],
+                "expensiveOps": [],
+                "llmfit": {
+                    "available": False,
+                    "recommendations": [],
+                    "codingModels": [],
+                    "chatModels": [],
+                    "system": {},
+                },
+                "ollamaInstalled": False,
+                "llmfitAvailable": False,
+                "savingsOpportunities": [],
+            }
+        )
 
 
-@bp_config.route('/api/automation-analysis')
+@bp_config.route("/api/automation-analysis")
 def api_automation_analysis():
     """Automation pattern analysis and suggestions for new cron jobs or skills."""
     try:
         # Analyze recent patterns
         patterns = _analyze_work_patterns()
-        
+
         # Generate automation suggestions
         suggestions = _generate_automation_suggestions(patterns)
-        
-        return jsonify({
-            'patterns': patterns,
-            'suggestions': suggestions,
-            'lastAnalysis': datetime.now(timezone.utc).isoformat()
-        })
-    except Exception as e:
-        return jsonify({
-            'patterns': [],
-            'suggestions': [],
-            'error': str(e),
-            'lastAnalysis': datetime.now(timezone.utc).isoformat()
-        })
 
-
-# ── Context Inspector (GH #9) ─────────────────────────────────────────
+        return jsonify(
+            {
+                "patterns": patterns,
+                "suggestions": suggestions,
+                "lastAnalysis": datetime.now(timezone.utc).isoformat(),
+            }
+        )
     except Exception as e:
-        return jsonify({'error': str(e), 'agents': [], 'lintWarnings': [], 'summary': {}}), 500
+        return jsonify(
+            {
+                "patterns": [],
+                "suggestions": [],
+                "error": str(e),
+                "lastAnalysis": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    # ── Context Inspector (GH #9) ─────────────────────────────────────────
+    except Exception as e:
+        return jsonify(
+            {"error": str(e), "agents": [], "lintWarnings": [], "summary": {}}
+        ), 500
 
 
 # ── Upgrade Impact Dashboard (GH #408) ────────────────────────────────────────
 
+
 def _get_openclaw_version():
     """Detect current OpenClaw version from openclaw.json meta field or CLI."""
     # Try meta.lastTouchedVersion from openclaw.json
-    oc_config = os.path.expanduser('~/.openclaw/openclaw.json')
+    oc_config = os.path.expanduser("~/.openclaw/openclaw.json")
     try:
         with open(oc_config) as f:
             data = json.load(f)
-        v = (data.get('meta') or {}).get('lastTouchedVersion')
+        v = (data.get("meta") or {}).get("lastTouchedVersion")
         if v:
             return str(v)
         # Also try wizard.lastRunVersion
-        v = (data.get('wizard') or {}).get('lastRunVersion')
+        v = (data.get("wizard") or {}).get("lastRunVersion")
         if v:
             return str(v)
     except Exception:
@@ -24906,11 +27089,18 @@ def _get_openclaw_version():
     # Fallback: run openclaw --version
     try:
         import subprocess
-        out = subprocess.check_output(['openclaw', '--version'],
-                                      stderr=subprocess.STDOUT, timeout=5).decode().strip()
+
+        out = (
+            subprocess.check_output(
+                ["openclaw", "--version"], stderr=subprocess.STDOUT, timeout=5
+            )
+            .decode()
+            .strip()
+        )
         # Extract semver-like from output e.g. "openclaw/2026.3.13 ..."
         import re
-        m = re.search(r'(\d{4}\.\d+\.\d+|\d+\.\d+\.\d+)', out)
+
+        m = re.search(r"(\d{4}\.\d+\.\d+|\d+\.\d+\.\d+)", out)
         if m:
             return m.group(1)
     except Exception:
@@ -24920,12 +27110,12 @@ def _get_openclaw_version():
 
 def _version_impact_db():
     """Get SQLite connection for version tracking, reusing history.db."""
-    db_path = os.path.expanduser('~/.clawmetry/history.db')
+    db_path = os.path.expanduser("~/.clawmetry/history.db")
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     db = _sqlite3.connect(db_path, timeout=10)
     db.row_factory = _sqlite3.Row
-    db.execute('PRAGMA journal_mode=WAL')
-    db.executescript('''
+    db.execute("PRAGMA journal_mode=WAL")
+    db.executescript("""
         CREATE TABLE IF NOT EXISTS version_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             version TEXT NOT NULL,
@@ -24933,7 +27123,7 @@ def _version_impact_db():
             source TEXT DEFAULT 'openclaw.json'
         );
         CREATE INDEX IF NOT EXISTS idx_ve_ts ON version_events(detected_at);
-    ''')
+    """)
     return db
 
 
@@ -24944,14 +27134,14 @@ def _record_version_if_changed(current_version):
     db = _version_impact_db()
     try:
         row = db.execute(
-            'SELECT version FROM version_events ORDER BY detected_at DESC LIMIT 1'
+            "SELECT version FROM version_events ORDER BY detected_at DESC LIMIT 1"
         ).fetchone()
-        if row and row['version'] == current_version:
+        if row and row["version"] == current_version:
             db.close()
             return
         db.execute(
-            'INSERT INTO version_events (version, detected_at) VALUES (?, ?)',
-            (current_version, time.time())
+            "INSERT INTO version_events (version, detected_at) VALUES (?, ?)",
+            (current_version, time.time()),
         )
         db.commit()
     finally:
@@ -24961,19 +27151,19 @@ def _record_version_if_changed(current_version):
 def _compute_session_stats_in_range(sessions_dir, start_ts, end_ts):
     """Compute aggregate session stats for sessions whose mtime falls in [start_ts, end_ts)."""
     stats = {
-        'session_count': 0,
-        'total_cost': 0.0,
-        'total_tokens': 0,
-        'error_count': 0,
-        'tool_calls': 0,
-        'duration_ms_total': 0,
-        'duration_sessions': 0,
+        "session_count": 0,
+        "total_cost": 0.0,
+        "total_tokens": 0,
+        "error_count": 0,
+        "tool_calls": 0,
+        "duration_ms_total": 0,
+        "duration_sessions": 0,
     }
     if not sessions_dir or not os.path.isdir(sessions_dir):
         return stats
 
     for fname in os.listdir(sessions_dir):
-        if not fname.endswith('.jsonl'):
+        if not fname.endswith(".jsonl"):
             continue
         fpath = os.path.join(sessions_dir, fname)
         try:
@@ -24983,7 +27173,7 @@ def _compute_session_stats_in_range(sessions_dir, start_ts, end_ts):
         except OSError:
             continue
 
-        stats['session_count'] += 1
+        stats["session_count"] += 1
         session_cost = 0.0
         session_tokens = 0
         session_errors = 0
@@ -24992,7 +27182,7 @@ def _compute_session_stats_in_range(sessions_dir, start_ts, end_ts):
         last_ts = None
 
         try:
-            with open(fpath, 'r', errors='replace') as f:
+            with open(fpath, "r", errors="replace") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -25001,10 +27191,12 @@ def _compute_session_stats_in_range(sessions_dir, start_ts, end_ts):
                         ev = json.loads(line)
                     except Exception:
                         continue
-                    ts_str = ev.get('timestamp', '')
+                    ts_str = ev.get("timestamp", "")
                     if ts_str:
                         try:
-                            ts_dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                            ts_dt = datetime.fromisoformat(
+                                ts_str.replace("Z", "+00:00")
+                            )
                             ts_f = ts_dt.timestamp()
                             if first_ts is None or ts_f < first_ts:
                                 first_ts = ts_f
@@ -25012,69 +27204,88 @@ def _compute_session_stats_in_range(sessions_dir, start_ts, end_ts):
                                 last_ts = ts_f
                         except Exception:
                             pass
-                    ev_type = ev.get('type', '')
-                    if ev_type == 'message':
-                        msg = ev.get('message', {})
-                        role = msg.get('role', '')
-                        if role == 'assistant':
-                            usage = msg.get('usage', {})
+                    ev_type = ev.get("type", "")
+                    if ev_type == "message":
+                        msg = ev.get("message", {})
+                        role = msg.get("role", "")
+                        if role == "assistant":
+                            usage = msg.get("usage", {})
                             if isinstance(usage, dict):
-                                cost_obj = usage.get('cost', {})
+                                cost_obj = usage.get("cost", {})
                                 if isinstance(cost_obj, dict):
-                                    session_cost += float(cost_obj.get('total', 0))
+                                    session_cost += float(cost_obj.get("total", 0))
                                 elif isinstance(cost_obj, (int, float)):
                                     session_cost += float(cost_obj)
-                                tok_in = usage.get('input', 0) or usage.get('inputTokens', 0) or 0
-                                tok_out = usage.get('output', 0) or usage.get('outputTokens', 0) or 0
+                                tok_in = (
+                                    usage.get("input", 0)
+                                    or usage.get("inputTokens", 0)
+                                    or 0
+                                )
+                                tok_out = (
+                                    usage.get("output", 0)
+                                    or usage.get("outputTokens", 0)
+                                    or 0
+                                )
                                 session_tokens += int(tok_in) + int(tok_out)
-                        if isinstance(msg.get('content'), list):
-                            for part in msg['content']:
-                                if isinstance(part, dict) and part.get('type') == 'toolCall':
+                        if isinstance(msg.get("content"), list):
+                            for part in msg["content"]:
+                                if (
+                                    isinstance(part, dict)
+                                    and part.get("type") == "toolCall"
+                                ):
                                     session_tools += 1
-                    elif ev_type == 'error':
+                    elif ev_type == "error":
                         session_errors += 1
         except Exception:
             pass
 
-        stats['total_cost'] += session_cost
-        stats['total_tokens'] += session_tokens
-        stats['error_count'] += session_errors
-        stats['tool_calls'] += session_tools
+        stats["total_cost"] += session_cost
+        stats["total_tokens"] += session_tokens
+        stats["error_count"] += session_errors
+        stats["tool_calls"] += session_tools
         if first_ts and last_ts and last_ts > first_ts:
-            stats['duration_ms_total'] += int((last_ts - first_ts) * 1000)
-            stats['duration_sessions'] += 1
+            stats["duration_ms_total"] += int((last_ts - first_ts) * 1000)
+            stats["duration_sessions"] += 1
 
     return stats
 
 
 def _stats_to_summary(stats):
-    n = max(stats['session_count'], 1)
+    n = max(stats["session_count"], 1)
     return {
-        'session_count': stats['session_count'],
-        'avg_cost': round(stats['total_cost'] / n, 6),
-        'avg_tokens': int(stats['total_tokens'] / n),
-        'avg_tool_calls': round(stats['tool_calls'] / n, 1),
-        'error_rate': round(stats['error_count'] / n, 3),
-        'avg_duration_ms': int(stats['duration_ms_total'] / max(stats['duration_sessions'], 1)),
-        'total_cost': round(stats['total_cost'], 6),
+        "session_count": stats["session_count"],
+        "avg_cost": round(stats["total_cost"] / n, 6),
+        "avg_tokens": int(stats["total_tokens"] / n),
+        "avg_tool_calls": round(stats["tool_calls"] / n, 1),
+        "error_rate": round(stats["error_count"] / n, 3),
+        "avg_duration_ms": int(
+            stats["duration_ms_total"] / max(stats["duration_sessions"], 1)
+        ),
+        "total_cost": round(stats["total_cost"], 6),
     }
 
 
 def _compute_diff(before, after):
     """Compute percentage change between before and after summaries."""
     diff = {}
-    for key in ('avg_cost', 'avg_tokens', 'avg_tool_calls', 'error_rate', 'avg_duration_ms'):
+    for key in (
+        "avg_cost",
+        "avg_tokens",
+        "avg_tool_calls",
+        "error_rate",
+        "avg_duration_ms",
+    ):
         b = before.get(key, 0)
         a = after.get(key, 0)
         if b == 0:
             pct = None
         else:
             pct = round((a - b) / abs(b) * 100, 1)
-        diff[key] = {'before': b, 'after': a, 'pct_change': pct}
+        diff[key] = {"before": b, "after": a, "pct_change": pct}
     return diff
 
 
-@bp_version_impact.route('/api/version-impact')
+@bp_version_impact.route("/api/version-impact")
 def api_version_impact():
     """Return version transition list with before/after metric comparisons."""
     current_version = _get_openclaw_version()
@@ -25083,82 +27294,102 @@ def api_version_impact():
     db = _version_impact_db()
     try:
         rows = db.execute(
-            'SELECT version, detected_at FROM version_events ORDER BY detected_at ASC'
+            "SELECT version, detected_at FROM version_events ORDER BY detected_at ASC"
         ).fetchall()
     finally:
         db.close()
 
     if not rows:
-        return jsonify({
-            'current_version': current_version or 'unknown',
-            'transitions': [],
-            'version_detected': bool(current_version),
-            'note': 'No version history yet. Version tracking starts from first load.' if not current_version else
-                    'First version recorded. Comparisons will appear after next version upgrade.',
-        })
+        return jsonify(
+            {
+                "current_version": current_version or "unknown",
+                "transitions": [],
+                "version_detected": bool(current_version),
+                "note": "No version history yet. Version tracking starts from first load."
+                if not current_version
+                else "First version recorded. Comparisons will appear after next version upgrade.",
+            }
+        )
 
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     transitions = []
     now_ts = time.time()
 
     for i in range(len(rows)):
         row = rows[i]
-        version = row['version']
-        start_ts = row['detected_at']
-        end_ts = rows[i + 1]['detected_at'] if i + 1 < len(rows) else now_ts
+        version = row["version"]
+        start_ts = row["detected_at"]
+        end_ts = rows[i + 1]["detected_at"] if i + 1 < len(rows) else now_ts
 
         if i > 0:
             prev_row = rows[i - 1]
-            prev_version = prev_row['version']
-            prev_start = prev_row['detected_at']
+            prev_version = prev_row["version"]
+            prev_start = prev_row["detected_at"]
             prev_end = start_ts
 
-            before_stats = _compute_session_stats_in_range(sessions_dir, prev_start, prev_end)
-            after_stats = _compute_session_stats_in_range(sessions_dir, start_ts, end_ts)
+            before_stats = _compute_session_stats_in_range(
+                sessions_dir, prev_start, prev_end
+            )
+            after_stats = _compute_session_stats_in_range(
+                sessions_dir, start_ts, end_ts
+            )
 
             before_summary = _stats_to_summary(before_stats)
             after_summary = _stats_to_summary(after_stats)
             diff = _compute_diff(before_summary, after_summary)
 
-            transitions.append({
-                'from_version': prev_version,
-                'to_version': version,
-                'upgraded_at': datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat(),
-                'before': before_summary,
-                'after': after_summary,
-                'diff': diff,
-            })
+            transitions.append(
+                {
+                    "from_version": prev_version,
+                    "to_version": version,
+                    "upgraded_at": datetime.fromtimestamp(
+                        start_ts, tz=timezone.utc
+                    ).isoformat(),
+                    "before": before_summary,
+                    "after": after_summary,
+                    "diff": diff,
+                }
+            )
 
-    return jsonify({
-        'current_version': current_version or (rows[-1]['version'] if rows else 'unknown'),
-        'version_detected': bool(current_version),
-        'version_history': [
-            {'version': r['version'],
-             'detected_at': datetime.fromtimestamp(r['detected_at'], tz=timezone.utc).isoformat()}
-            for r in rows
-        ],
-        'transitions': transitions,
-    })
+    return jsonify(
+        {
+            "current_version": current_version
+            or (rows[-1]["version"] if rows else "unknown"),
+            "version_detected": bool(current_version),
+            "version_history": [
+                {
+                    "version": r["version"],
+                    "detected_at": datetime.fromtimestamp(
+                        r["detected_at"], tz=timezone.utc
+                    ).isoformat(),
+                }
+                for r in rows
+            ],
+            "transitions": transitions,
+        }
+    )
 
 
 # ── Trace Clustering (GH #406) ───────────────────────────────────────────────
 
 _CLUSTER_TOOL_GROUPS = {
-    'browsing': {'browser', 'web_fetch', 'web_search'},
-    'coding': {'exec', 'Read', 'Write', 'Edit', 'process'},
-    'messaging': {'message', 'tts'},
-    'pdf': {'pdf', 'image'},
-    'files': {'Read', 'Write', 'Edit'},
+    "browsing": {"browser", "web_fetch", "web_search"},
+    "coding": {"exec", "Read", "Write", "Edit", "process"},
+    "messaging": {"message", "tts"},
+    "pdf": {"pdf", "image"},
+    "files": {"Read", "Write", "Edit"},
 }
 
 _CLUSTER_PATTERNS = [
     # (cluster_label, dominant_tools_required, min_fraction)
-    ('browsing-heavy', {'browser', 'web_fetch', 'web_search'}, 0.4),
-    ('code-heavy', {'exec', 'Read', 'Write', 'Edit'}, 0.4),
-    ('messaging', {'message', 'tts'}, 0.3),
-    ('doc-analysis', {'pdf', 'image'}, 0.2),
-    ('mixed-research', {'web_search', 'exec', 'Read'}, 0.15),
-    ('cron-light', set(), 0.0),  # fallback for very short sessions
+    ("browsing-heavy", {"browser", "web_fetch", "web_search"}, 0.4),
+    ("code-heavy", {"exec", "Read", "Write", "Edit"}, 0.4),
+    ("messaging", {"message", "tts"}, 0.3),
+    ("doc-analysis", {"pdf", "image"}, 0.2),
+    ("mixed-research", {"web_search", "exec", "Read"}, 0.15),
+    ("cron-light", set(), 0.0),  # fallback for very short sessions
 ]
 
 
@@ -25172,7 +27403,7 @@ def _extract_session_fingerprint(fpath):
     last_ts = None
 
     try:
-        with open(fpath, 'r', errors='replace') as f:
+        with open(fpath, "r", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -25182,10 +27413,12 @@ def _extract_session_fingerprint(fpath):
                 except Exception:
                     continue
 
-                ts_str = ev.get('timestamp', '')
+                ts_str = ev.get("timestamp", "")
                 if ts_str:
                     try:
-                        ts_f = datetime.fromisoformat(ts_str.replace('Z', '+00:00')).timestamp()
+                        ts_f = datetime.fromisoformat(
+                            ts_str.replace("Z", "+00:00")
+                        ).timestamp()
                         if first_ts is None or ts_f < first_ts:
                             first_ts = ts_f
                         if last_ts is None or ts_f > last_ts:
@@ -25193,63 +27426,78 @@ def _extract_session_fingerprint(fpath):
                     except Exception:
                         pass
 
-                ev_type = ev.get('type', '')
-                if ev_type == 'error':
+                ev_type = ev.get("type", "")
+                if ev_type == "error":
                     has_error = True
-                elif ev_type == 'message':
-                    msg = ev.get('message', {})
-                    if msg.get('role') == 'assistant':
-                        usage = msg.get('usage', {})
+                elif ev_type == "message":
+                    msg = ev.get("message", {})
+                    if msg.get("role") == "assistant":
+                        usage = msg.get("usage", {})
                         if isinstance(usage, dict):
-                            cost_obj = usage.get('cost', {})
+                            cost_obj = usage.get("cost", {})
                             if isinstance(cost_obj, dict):
-                                cost += float(cost_obj.get('total', 0))
-                            tok_in = usage.get('input', 0) or usage.get('inputTokens', 0) or 0
-                            tok_out = usage.get('output', 0) or usage.get('outputTokens', 0) or 0
+                                cost += float(cost_obj.get("total", 0))
+                            tok_in = (
+                                usage.get("input", 0)
+                                or usage.get("inputTokens", 0)
+                                or 0
+                            )
+                            tok_out = (
+                                usage.get("output", 0)
+                                or usage.get("outputTokens", 0)
+                                or 0
+                            )
                             tokens += int(tok_in) + int(tok_out)
-                        if isinstance(msg.get('content'), list):
-                            for part in msg['content']:
-                                if isinstance(part, dict) and part.get('type') == 'toolCall':
-                                    tn = part.get('name', '')
+                        if isinstance(msg.get("content"), list):
+                            for part in msg["content"]:
+                                if (
+                                    isinstance(part, dict)
+                                    and part.get("type") == "toolCall"
+                                ):
+                                    tn = part.get("name", "")
                                     if tn:
                                         tools_seq.append(tn)
     except Exception:
         pass
 
-    duration_ms = int((last_ts - first_ts) * 1000) if (first_ts and last_ts and last_ts > first_ts) else 0
+    duration_ms = (
+        int((last_ts - first_ts) * 1000)
+        if (first_ts and last_ts and last_ts > first_ts)
+        else 0
+    )
 
     # Cost bucket (calibrated to typical agent session costs)
     if cost < 0.10:
-        cost_bucket = 'low'
+        cost_bucket = "low"
     elif cost < 1.0:
-        cost_bucket = 'medium'
+        cost_bucket = "medium"
     else:
-        cost_bucket = 'high'
+        cost_bucket = "high"
 
     return {
-        'tools_seq': tools_seq,
-        'tool_set': list(set(tools_seq)),
-        'cost': round(cost, 6),
-        'tokens': tokens,
-        'has_error': has_error,
-        'cost_bucket': cost_bucket,
-        'duration_ms': duration_ms,
-        'tool_count': len(tools_seq),
+        "tools_seq": tools_seq,
+        "tool_set": list(set(tools_seq)),
+        "cost": round(cost, 6),
+        "tokens": tokens,
+        "has_error": has_error,
+        "cost_bucket": cost_bucket,
+        "duration_ms": duration_ms,
+        "tool_count": len(tools_seq),
     }
 
 
 def _assign_cluster_label(fp):
     """Assign a cluster label to a session based on its fingerprint."""
-    tools = set(fp['tool_set'])
-    n = fp['tool_count']
-    cost = fp['cost']
-    has_error = fp['has_error']
+    tools = set(fp["tool_set"])
+    n = fp["tool_count"]
+    cost = fp["cost"]
+    has_error = fp["has_error"]
 
     if n == 0:
-        return 'cron-light'
+        return "cron-light"
 
     # Score each cluster pattern by fraction of required tools present in session tool set
-    best_label = 'general'
+    best_label = "general"
     best_score = 0.0
 
     for label, required_tools, min_frac in _CLUSTER_PATTERNS:
@@ -25264,11 +27512,11 @@ def _assign_cluster_label(fp):
 
     # Override only truly extreme outliers (cost > $5 or pure exec-only)
     if cost > 5.0:
-        best_label = 'expensive-outlier'
+        best_label = "expensive-outlier"
 
     # Suffix for error-heavy sessions
-    if has_error and best_label not in ('expensive-outlier',):
-        best_label += '+errors'
+    if has_error and best_label not in ("expensive-outlier",):
+        best_label += "+errors"
 
     return best_label
 
@@ -25279,77 +27527,95 @@ def _build_clusters(sessions_dir, limit=200):
         return {}
 
     files = sorted(
-        [f for f in os.listdir(sessions_dir) if f.endswith('.jsonl') and 'deleted' not in f],
+        [
+            f
+            for f in os.listdir(sessions_dir)
+            if f.endswith(".jsonl") and "deleted" not in f
+        ],
         key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
-        reverse=True
+        reverse=True,
     )[:limit]
 
     clusters = {}  # label -> {sessions, total_cost, total_tokens, error_count, rep_session}
 
     for fname in files:
         fpath = os.path.join(sessions_dir, fname)
-        sid = fname.replace('.jsonl', '')
+        sid = fname.replace(".jsonl", "")
         fp = _extract_session_fingerprint(fpath)
         label = _assign_cluster_label(fp)
 
         if label not in clusters:
             clusters[label] = {
-                'label': label,
-                'sessions': [],
-                'total_cost': 0.0,
-                'total_tokens': 0,
-                'error_count': 0,
-                'rep_session': None,
+                "label": label,
+                "sessions": [],
+                "total_cost": 0.0,
+                "total_tokens": 0,
+                "error_count": 0,
+                "rep_session": None,
             }
 
         c = clusters[label]
-        c['sessions'].append({
-            'id': sid,
-            'cost': fp['cost'],
-            'tokens': fp['tokens'],
-            'tools': fp['tool_set'][:8],
-            'has_error': fp['has_error'],
-            'cost_bucket': fp['cost_bucket'],
-            'duration_ms': fp['duration_ms'],
-        })
-        c['total_cost'] += fp['cost']
-        c['total_tokens'] += fp['tokens']
-        if fp['has_error']:
-            c['error_count'] += 1
+        c["sessions"].append(
+            {
+                "id": sid,
+                "cost": fp["cost"],
+                "tokens": fp["tokens"],
+                "tools": fp["tool_set"][:8],
+                "has_error": fp["has_error"],
+                "cost_bucket": fp["cost_bucket"],
+                "duration_ms": fp["duration_ms"],
+            }
+        )
+        c["total_cost"] += fp["cost"]
+        c["total_tokens"] += fp["tokens"]
+        if fp["has_error"]:
+            c["error_count"] += 1
         # Representative session: highest cost/complexity
-        if c['rep_session'] is None or fp['cost'] > c['rep_session'].get('cost', 0):
-            c['rep_session'] = {'id': sid, 'cost': fp['cost'], 'tools': fp['tool_set'][:8]}
+        if c["rep_session"] is None or fp["cost"] > c["rep_session"].get("cost", 0):
+            c["rep_session"] = {
+                "id": sid,
+                "cost": fp["cost"],
+                "tools": fp["tool_set"][:8],
+            }
 
     # Compute summaries
     result = []
-    for label, c in sorted(clusters.items(), key=lambda x: len(x[1]['sessions']), reverse=True):
-        n = len(c['sessions'])
-        result.append({
-            'label': label,
-            'session_count': n,
-            'avg_cost': round(c['total_cost'] / n, 6),
-            'avg_tokens': int(c['total_tokens'] / n),
-            'error_rate': round(c['error_count'] / n, 3),
-            'rep_session': c['rep_session'],
-            'sessions': c['sessions'][:20],  # cap for response size
-        })
+    for label, c in sorted(
+        clusters.items(), key=lambda x: len(x[1]["sessions"]), reverse=True
+    ):
+        n = len(c["sessions"])
+        result.append(
+            {
+                "label": label,
+                "session_count": n,
+                "avg_cost": round(c["total_cost"] / n, 6),
+                "avg_tokens": int(c["total_tokens"] / n),
+                "error_rate": round(c["error_count"] / n, 3),
+                "rep_session": c["rep_session"],
+                "sessions": c["sessions"][:20],  # cap for response size
+            }
+        )
 
     return result
 
 
-@bp_clusters.route('/api/clusters')
+@bp_clusters.route("/api/clusters")
 def api_clusters():
     """Return session clusters grouped by tool call pattern, cost, and error types."""
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     try:
         clusters = _build_clusters(sessions_dir)
-        return jsonify({
-            'clusters': clusters,
-            'total_clusters': len(clusters),
-            'sessions_dir': sessions_dir,
-        })
+        return jsonify(
+            {
+                "clusters": clusters,
+                "total_clusters": len(clusters),
+                "sessions_dir": sessions_dir,
+            }
+        )
     except Exception as e:
-        return jsonify({'error': str(e), 'clusters': []}), 500
+        return jsonify({"error": str(e), "clusters": []}), 500
 
 
 def _build_context_inspector_data():
@@ -25366,15 +27632,22 @@ def _build_context_inspector_data():
           generatedAt: ISO string,
         }
     """
-    import math
 
-    workspace = WORKSPACE or os.path.expanduser('~')
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    workspace = WORKSPACE or os.path.expanduser("~")
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
 
     # ── 1. Discover workspace context files ──────────────────────────────
     KNOWN_CONTEXT_FILES = [
-        'SOUL.md', 'AGENTS.md', 'MEMORY.md', 'USER.md', 'IDENTITY.md',
-        'HEARTBEAT.md', 'CODING.md', 'TOOLS.md',
+        "SOUL.md",
+        "AGENTS.md",
+        "MEMORY.md",
+        "USER.md",
+        "IDENTITY.md",
+        "HEARTBEAT.md",
+        "CODING.md",
+        "TOOLS.md",
     ]
     context_files_info = []
     existing_context_files = set()
@@ -25388,19 +27661,19 @@ def _build_context_inspector_data():
                 existing_context_files.add(fname.lower())
             except OSError:
                 pass
-        context_files_info.append({'name': fname, 'sizeKB': size_kb, 'exists': exists})
+        context_files_info.append({"name": fname, "sizeKB": size_kb, "exists": exists})
 
     # Also check memory/ subdirectory
-    mem_dir = os.path.join(workspace, 'memory')
+    mem_dir = os.path.join(workspace, "memory")
     memory_file_count = 0
     if os.path.isdir(mem_dir):
         try:
-            memory_file_count = sum(1 for f in os.listdir(mem_dir) if f.endswith('.md'))
+            memory_file_count = sum(1 for f in os.listdir(mem_dir) if f.endswith(".md"))
         except OSError:
             pass
 
     # ── 2. Parse sessions.json to build agent tree ──────────────────────
-    index_path = os.path.join(sessions_dir, 'sessions.json')
+    index_path = os.path.join(sessions_dir, "sessions.json")
     sessions_raw = []
     try:
         with open(index_path) as f:
@@ -25410,14 +27683,16 @@ def _build_context_inspector_data():
         pass
 
     # Limit to 50 most recent to keep response fast
-    sessions_raw = sorted(sessions_raw, key=lambda s: s.get('lastActiveMs', 0), reverse=True)[:50]
+    sessions_raw = sorted(
+        sessions_raw, key=lambda s: s.get("lastActiveMs", 0), reverse=True
+    )[:50]
 
     # ── 3. For each session read the first few lines to extract spawn task ─
     def _extract_spawn_task(sess_id):
         """Return first user message text (truncated) — this is the task the agent got."""
-        fpath = os.path.join(sessions_dir, sess_id + '.jsonl')
+        fpath = os.path.join(sessions_dir, sess_id + ".jsonl")
         if not os.path.isfile(fpath):
-            return ''
+            return ""
         try:
             with open(fpath) as f:
                 for line in f:
@@ -25425,19 +27700,22 @@ def _build_context_inspector_data():
                         obj = json.loads(line.strip())
                     except (json.JSONDecodeError, ValueError):
                         continue
-                    if obj.get('type') == 'message':
-                        msg = obj.get('message', {})
-                        if msg.get('role') == 'user':
-                            content = msg.get('content', '')
+                    if obj.get("type") == "message":
+                        msg = obj.get("message", {})
+                        if msg.get("role") == "user":
+                            content = msg.get("content", "")
                             if isinstance(content, str):
                                 return content[:300]
                             if isinstance(content, list):
                                 for block in content:
-                                    if isinstance(block, dict) and block.get('type') == 'text':
-                                        return block.get('text', '')[:300]
+                                    if (
+                                        isinstance(block, dict)
+                                        and block.get("type") == "text"
+                                    ):
+                                        return block.get("text", "")[:300]
         except OSError:
             pass
-        return ''
+        return ""
 
     def _compute_coverage_score(sess, task_text):
         """Heuristic 0-100 coverage score.
@@ -25453,11 +27731,11 @@ def _build_context_inspector_data():
         if task_text:
             score += 20
         txt_lower = task_text.lower()
-        if 'soul' in txt_lower or 'soul.md' in existing_context_files:
+        if "soul" in txt_lower or "soul.md" in existing_context_files:
             score += 20
-        if 'agents.md' in existing_context_files:
+        if "agents.md" in existing_context_files:
             score += 15
-        if 'memory.md' in existing_context_files:
+        if "memory.md" in existing_context_files:
             score += 15
         if len(task_text) >= 50:
             score += 15
@@ -25470,19 +27748,42 @@ def _build_context_inspector_data():
         warnings = []
         txt_lower = task_text.lower()
         # Warn if task mentions user-specific data but no memory files
-        user_data_hints = ['vivek', 'user', 'my ', "i'm", 'password', 'email', 'phone']
-        if any(h in txt_lower for h in user_data_hints) and 'user.md' not in existing_context_files:
-            warnings.append({'severity': 'warn', 'message': 'Task references user data but USER.md not found in workspace'})
+        user_data_hints = ["vivek", "user", "my ", "i'm", "password", "email", "phone"]
+        if (
+            any(h in txt_lower for h in user_data_hints)
+            and "user.md" not in existing_context_files
+        ):
+            warnings.append(
+                {
+                    "severity": "warn",
+                    "message": "Task references user data but USER.md not found in workspace",
+                }
+            )
         # Warn if sub-agent task is very short (context starvation risk)
-        depth = sess.get('depth', 0) or 0
+        depth = sess.get("depth", 0) or 0
         if depth > 0 and len(task_text) < 50:
-            warnings.append({'severity': 'error', 'message': f'Sub-agent (depth {depth}) has a very short task — possible context starvation (<50 chars)'})
+            warnings.append(
+                {
+                    "severity": "error",
+                    "message": f"Sub-agent (depth {depth}) has a very short task — possible context starvation (<50 chars)",
+                }
+            )
         # Warn if no SOUL.md
-        if 'soul.md' not in existing_context_files:
-            warnings.append({'severity': 'warn', 'message': 'SOUL.md not found — agent identity/persona context is missing'})
+        if "soul.md" not in existing_context_files:
+            warnings.append(
+                {
+                    "severity": "warn",
+                    "message": "SOUL.md not found — agent identity/persona context is missing",
+                }
+            )
         # Warn if no MEMORY.md
-        if 'memory.md' not in existing_context_files:
-            warnings.append({'severity': 'info', 'message': 'MEMORY.md not found — long-term memory context unavailable'})
+        if "memory.md" not in existing_context_files:
+            warnings.append(
+                {
+                    "severity": "info",
+                    "message": "MEMORY.md not found — long-term memory context unavailable",
+                }
+            )
         return warnings
 
     # ── 4. Build agent list ───────────────────────────────────────────────
@@ -25490,14 +27791,14 @@ def _build_context_inspector_data():
     all_lint_warnings = []
 
     for sess in sessions_raw:
-        sess_id = sess.get('sessionId') or sess.get('key', '')
+        sess_id = sess.get("sessionId") or sess.get("key", "")
         if not sess_id:
             continue
 
-        display = sess.get('displayName') or sess_id[:16]
-        depth = int(sess.get('depth', 0) or 0)
-        parent_id = sess.get('spawnedBy') or sess.get('parentKey') or None
-        tokens_in = sess.get('inputTokens') or sess.get('totalTokens', 0) or 0
+        display = sess.get("displayName") or sess_id[:16]
+        depth = int(sess.get("depth", 0) or 0)
+        parent_id = sess.get("spawnedBy") or sess.get("parentKey") or None
+        tokens_in = sess.get("inputTokens") or sess.get("totalTokens", 0) or 0
 
         task_text = _extract_spawn_task(sess_id)
         coverage = _compute_coverage_score(sess, task_text)
@@ -25508,77 +27809,89 @@ def _build_context_inspector_data():
         missing = [f for f in referenced if f.lower() not in existing_context_files]
 
         agent_entry = {
-            'sessionId': sess_id,
-            'displayName': display,
-            'depth': depth,
-            'parentId': parent_id,
-            'coverageScore': coverage,
-            'lintWarnings': lint,
-            'spawnTaskSnippet': task_text[:200] if task_text else '',
-            'referencedContextFiles': referenced,
-            'missingContextFiles': missing,
-            'tokensIn': tokens_in,
-            'lastActiveMs': sess.get('lastActiveMs', 0),
-            'model': sess.get('model') or sess.get('modelRef', 'unknown'),
+            "sessionId": sess_id,
+            "displayName": display,
+            "depth": depth,
+            "parentId": parent_id,
+            "coverageScore": coverage,
+            "lintWarnings": lint,
+            "spawnTaskSnippet": task_text[:200] if task_text else "",
+            "referencedContextFiles": referenced,
+            "missingContextFiles": missing,
+            "tokensIn": tokens_in,
+            "lastActiveMs": sess.get("lastActiveMs", 0),
+            "model": sess.get("model") or sess.get("modelRef", "unknown"),
         }
         agents.append(agent_entry)
 
         for w in lint:
-            all_lint_warnings.append({'sessionId': sess_id, 'displayName': display, **w})
+            all_lint_warnings.append(
+                {"sessionId": sess_id, "displayName": display, **w}
+            )
 
     # Deduplicate global lint warnings (same message across sessions)
     seen_msgs = set()
     deduped_warnings = []
     for w in all_lint_warnings:
-        key = w['message']
+        key = w["message"]
         if key not in seen_msgs:
             seen_msgs.add(key)
             deduped_warnings.append(w)
 
-    avg_coverage = round(sum(a['coverageScore'] for a in agents) / len(agents), 1) if agents else 0
+    avg_coverage = (
+        round(sum(a["coverageScore"] for a in agents) / len(agents), 1) if agents else 0
+    )
 
     return {
-        'agents': agents,
-        'lintWarnings': deduped_warnings,
-        'summary': {
-            'totalAgents': len(agents),
-            'avgCoverage': avg_coverage,
-            'totalWarnings': len(all_lint_warnings),
-            'contextFilesFound': len(existing_context_files),
-            'memoryFileCount': memory_file_count,
+        "agents": agents,
+        "lintWarnings": deduped_warnings,
+        "summary": {
+            "totalAgents": len(agents),
+            "avgCoverage": avg_coverage,
+            "totalWarnings": len(all_lint_warnings),
+            "contextFilesFound": len(existing_context_files),
+            "memoryFileCount": memory_file_count,
         },
-        'contextFiles': context_files_info,
-        'generatedAt': datetime.now(timezone.utc).isoformat(),
+        "contextFiles": context_files_info,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
     }
 
 
 # ── Data Helpers ────────────────────────────────────────────────────────
 
+
 def _get_sessions():
     """Get sessions via gateway API first, file fallback."""
     now = time.time()
-    if _sessions_cache['data'] is not None and (now - _sessions_cache['ts']) < _SESSIONS_CACHE_TTL:
-        return _sessions_cache['data']
+    if (
+        _sessions_cache["data"] is not None
+        and (now - _sessions_cache["ts"]) < _SESSIONS_CACHE_TTL
+    ):
+        return _sessions_cache["data"]
 
     # Try WebSocket RPC first
-    api_data = _gw_ws_rpc('sessions.list')
-    if api_data and 'sessions' in api_data:
+    api_data = _gw_ws_rpc("sessions.list")
+    if api_data and "sessions" in api_data:
         sessions = []
-        for s in api_data['sessions'][:30]:
-            sessions.append({
-                'sessionId': s.get('key', ''),
-                'key': s.get('key', '')[:12] + '...',
-                'displayName': s.get('displayName', s.get('key', '')[:20]),
-                'updatedAt': s.get('updatedAtMs', s.get('lastActiveMs', 0)),
-                'model': s.get('model', s.get('modelRef', 'unknown')),
-                'channel': s.get('channel', 'unknown'),
-                'totalTokens': s.get('totalTokens', 0),
-                'contextTokens': api_data.get('defaults', {}).get('contextTokens', 200000),
-                'kind': s.get('kind', 'direct'),
-                'agent': s.get('agentId', 'main'),
-            })
-        _sessions_cache['data'] = sessions
-        _sessions_cache['ts'] = now
+        for s in api_data["sessions"][:30]:
+            sessions.append(
+                {
+                    "sessionId": s.get("key", ""),
+                    "key": s.get("key", "")[:12] + "...",
+                    "displayName": s.get("displayName", s.get("key", "")[:20]),
+                    "updatedAt": s.get("updatedAtMs", s.get("lastActiveMs", 0)),
+                    "model": s.get("model", s.get("modelRef", "unknown")),
+                    "channel": s.get("channel", "unknown"),
+                    "totalTokens": s.get("totalTokens", 0),
+                    "contextTokens": api_data.get("defaults", {}).get(
+                        "contextTokens", 200000
+                    ),
+                    "kind": s.get("kind", "direct"),
+                    "agent": s.get("agentId", "main"),
+                }
+            )
+        _sessions_cache["data"] = sessions
+        _sessions_cache["ts"] = now
         return sessions
 
     # File-based fallback
@@ -25593,34 +27906,38 @@ def _get_sessions_from_files():
         """Best-effort model extraction from the tail of a session file."""
         try:
             lines = []
-            with open(file_path, 'r') as f:
+            with open(file_path, "r") as f:
                 lines = list(deque(f, maxlen=400))
                 for line in reversed(lines):
                     try:
                         obj = json.loads(line.strip())
                     except Exception:
                         continue
-                    if obj.get('type') != 'message':
+                    if obj.get("type") != "message":
                         continue
-                    msg = obj.get('message', {})
+                    msg = obj.get("message", {})
                     if not isinstance(msg, dict):
                         continue
-                    model = msg.get('model')
+                    model = msg.get("model")
                     if model:
                         return model
         except Exception:
             pass
-        return 'unknown'
+        return "unknown"
 
     sessions = []
     try:
-        base = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+        base = SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
         if not os.path.isdir(base):
             return sessions
         idx_files = sorted(
-            [f for f in os.listdir(base) if f.endswith('.jsonl') and 'deleted' not in f],
+            [
+                f
+                for f in os.listdir(base)
+                if f.endswith(".jsonl") and "deleted" not in f
+            ],
             key=lambda f: os.path.getmtime(os.path.join(base, f)),
-            reverse=True
+            reverse=True,
         )
         for fname in idx_files[:30]:
             fpath = os.path.join(base, fname)
@@ -25629,32 +27946,36 @@ def _get_sessions_from_files():
                 size = os.path.getsize(fpath)
                 with open(fpath) as f:
                     first = json.loads(f.readline())
-                sid = fname.replace('.jsonl', '')
-                sessions.append({
-                    'sessionId': sid,
-                    'key': sid[:12] + '...',
-                    'displayName': sid[:20],
-                    'updatedAt': int(mtime * 1000),
-                    'model': _read_session_model_fast(fpath),
-                    'channel': 'unknown',
-                    'totalTokens': size,
-                    'contextTokens': 200000,
-                })
+                sid = fname.replace(".jsonl", "")
+                sessions.append(
+                    {
+                        "sessionId": sid,
+                        "key": sid[:12] + "...",
+                        "displayName": sid[:20],
+                        "updatedAt": int(mtime * 1000),
+                        "model": _read_session_model_fast(fpath),
+                        "channel": "unknown",
+                        "totalTokens": size,
+                        "contextTokens": 200000,
+                    }
+                )
             except Exception:
                 pass
     except Exception:
         pass
-    _sessions_cache['data'] = sessions
-    _sessions_cache['ts'] = now
-    try: _ext_emit('session.snapshot', {'count': len(sessions)})
-    except Exception: pass
+    _sessions_cache["data"] = sessions
+    _sessions_cache["ts"] = now
+    try:
+        _ext_emit("session.snapshot", {"count": len(sessions)})
+    except Exception:
+        pass
     return sessions
 
 
 def _safe_session_id(raw_id):
-    sid = str(raw_id or '').strip()
-    if not sid or '/' in sid or '\\' in sid or '\x00' in sid or '..' in sid:
-        return ''
+    sid = str(raw_id or "").strip()
+    if not sid or "/" in sid or "\\" in sid or "\x00" in sid or ".." in sid:
+        return ""
     return sid
 
 
@@ -25662,29 +27983,36 @@ def _resolve_session_stop_target(session_id):
     """Resolve stop target info for a session id/key."""
     sid = _safe_session_id(session_id)
     if not sid:
-        return {'session_id': '', 'jsonl_path': '', 'stop_path': '', 'pid': None}
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+        return {"session_id": "", "jsonl_path": "", "stop_path": "", "pid": None}
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
     final_sid = sid
     pid = None
 
-    direct_jsonl = os.path.join(sessions_dir, f'{sid}.jsonl')
+    direct_jsonl = os.path.join(sessions_dir, f"{sid}.jsonl")
     if os.path.exists(direct_jsonl):
-        stop_path = os.path.join(sessions_dir, f'{sid}.stop')
-        return {'session_id': sid, 'jsonl_path': direct_jsonl, 'stop_path': stop_path, 'pid': None}
+        stop_path = os.path.join(sessions_dir, f"{sid}.stop")
+        return {
+            "session_id": sid,
+            "jsonl_path": direct_jsonl,
+            "stop_path": stop_path,
+            "pid": None,
+        }
 
-    idx = os.path.join(sessions_dir, 'sessions.json')
+    idx = os.path.join(sessions_dir, "sessions.json")
     try:
-        with open(idx, 'r') as f:
+        with open(idx, "r") as f:
             mapping = json.load(f)
         if isinstance(mapping, dict):
             for key, meta in mapping.items():
                 if not isinstance(meta, dict):
                     continue
-                mapped_sid = str(meta.get('sessionId', '')).strip()
+                mapped_sid = str(meta.get("sessionId", "")).strip()
                 if sid in (key, mapped_sid):
                     if mapped_sid:
                         final_sid = mapped_sid
-                    pid_raw = meta.get('pid') or meta.get('processId')
+                    pid_raw = meta.get("pid") or meta.get("processId")
                     try:
                         pid = int(pid_raw)
                     except Exception:
@@ -25693,9 +28021,14 @@ def _resolve_session_stop_target(session_id):
     except Exception:
         pass
 
-    jsonl_path = os.path.join(sessions_dir, f'{final_sid}.jsonl')
-    stop_path = os.path.join(sessions_dir, f'{final_sid}.stop')
-    return {'session_id': final_sid, 'jsonl_path': jsonl_path, 'stop_path': stop_path, 'pid': pid}
+    jsonl_path = os.path.join(sessions_dir, f"{final_sid}.jsonl")
+    stop_path = os.path.join(sessions_dir, f"{final_sid}.stop")
+    return {
+        "session_id": final_sid,
+        "jsonl_path": jsonl_path,
+        "stop_path": stop_path,
+        "pid": pid,
+    }
 
 
 def _estimate_usd_per_token():
@@ -25705,12 +28038,12 @@ def _estimate_usd_per_token():
     total_tokens = 0.0
     total_cost = 0.0
     with _metrics_lock:
-        for t in metrics_store.get('tokens', []):
-            if t.get('timestamp', 0) >= start:
-                total_tokens += float(t.get('total', 0) or 0)
-        for c in metrics_store.get('cost', []):
-            if c.get('timestamp', 0) >= start:
-                total_cost += float(c.get('usd', 0) or 0)
+        for t in metrics_store.get("tokens", []):
+            if t.get("timestamp", 0) >= start:
+                total_tokens += float(t.get("total", 0) or 0)
+        for c in metrics_store.get("cost", []):
+            if c.get("timestamp", 0) >= start:
+                total_cost += float(c.get("usd", 0) or 0)
     if total_tokens > 0 and total_cost > 0:
         return total_cost / total_tokens
     return 3.0 / 1_000_000.0
@@ -25725,7 +28058,7 @@ def _json_ts_to_epoch(v):
             return iv / 1000.0
         return iv
     try:
-        return datetime.fromisoformat(str(v).replace('Z', '+00:00')).timestamp()
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
     except Exception:
         return None
 
@@ -25733,56 +28066,60 @@ def _json_ts_to_epoch(v):
 def _session_burn_stats(session_id):
     sid = _safe_session_id(session_id)
     if not sid:
-        return {'tokensPerMin': 0, 'projectedCostUsd': 0.0, 'burnSeries': [0] * 10}
-    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
-    fpath = os.path.join(sessions_dir, f'{sid}.jsonl')
+        return {"tokensPerMin": 0, "projectedCostUsd": 0.0, "burnSeries": [0] * 10}
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.join(sessions_dir, f"{sid}.jsonl")
     if not os.path.exists(fpath):
-        return {'tokensPerMin': 0, 'projectedCostUsd': 0.0, 'burnSeries': [0] * 10}
+        return {"tokensPerMin": 0, "projectedCostUsd": 0.0, "burnSeries": [0] * 10}
 
     points = []
     try:
-        with open(fpath, 'r', errors='replace') as f:
+        with open(fpath, "r", errors="replace") as f:
             lines = list(deque(f, maxlen=1200))
         for line in lines:
             try:
                 obj = json.loads(line.strip())
             except Exception:
                 continue
-            ts = _json_ts_to_epoch(obj.get('timestamp') or obj.get('time') or obj.get('created_at'))
+            ts = _json_ts_to_epoch(
+                obj.get("timestamp") or obj.get("time") or obj.get("created_at")
+            )
             if not ts:
                 continue
             tok = 0.0
-            msg = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
-            usage = msg.get('usage', {}) if isinstance(msg.get('usage'), dict) else {}
+            msg = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
+            usage = msg.get("usage", {}) if isinstance(msg.get("usage"), dict) else {}
             tok = float(
-                usage.get('total_tokens')
-                or usage.get('totalTokens')
-                or usage.get('input_tokens', 0) + usage.get('output_tokens', 0)
+                usage.get("total_tokens")
+                or usage.get("totalTokens")
+                or usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
                 or 0
             )
             if tok <= 0:
-                content = msg.get('content', [])
-                text = ''
+                content = msg.get("content", [])
+                text = ""
                 if isinstance(content, str):
                     text = content
                 elif isinstance(content, list):
                     parts = []
                     for b in content:
                         if isinstance(b, dict):
-                            if b.get('type') == 'text':
-                                parts.append(str(b.get('text', '')))
-                            elif b.get('type') == 'thinking':
-                                parts.append(str(b.get('thinking', '')))
-                    text = ' '.join(parts)
+                            if b.get("type") == "text":
+                                parts.append(str(b.get("text", "")))
+                            elif b.get("type") == "thinking":
+                                parts.append(str(b.get("thinking", "")))
+                    text = " ".join(parts)
                 if text:
                     tok = max(1.0, len(text) / 4.0)
             if tok > 0:
                 points.append((ts, tok))
     except Exception:
-        return {'tokensPerMin': 0, 'projectedCostUsd': 0.0, 'burnSeries': [0] * 10}
+        return {"tokensPerMin": 0, "projectedCostUsd": 0.0, "burnSeries": [0] * 10}
 
     if not points:
-        return {'tokensPerMin': 0, 'projectedCostUsd': 0.0, 'burnSeries': [0] * 10}
+        return {"tokensPerMin": 0, "projectedCostUsd": 0.0, "burnSeries": [0] * 10}
 
     end_ts = max(ts for ts, _ in points)
     start_ts = end_ts - 600
@@ -25802,9 +28139,9 @@ def _session_burn_stats(session_id):
     usd_per_token = _estimate_usd_per_token()
     projected_cost = tokens_per_min * 60.0 * usd_per_token
     return {
-        'tokensPerMin': round(tokens_per_min, 2),
-        'projectedCostUsd': round(projected_cost, 4),
-        'burnSeries': [round(x, 2) for x in buckets],
+        "tokensPerMin": round(tokens_per_min, 2),
+        "projectedCostUsd": round(projected_cost, 4),
+        "burnSeries": [round(x, 2) for x in buckets],
     }
 
 
@@ -25815,8 +28152,8 @@ def _augment_sessions_with_burn(sessions):
             out.append(s)
             continue
         row = dict(s)
-        sid = row.get('sessionId') or row.get('id') or row.get('key') or ''
-        row['sessionId'] = sid
+        sid = row.get("sessionId") or row.get("id") or row.get("key") or ""
+        row["sessionId"] = sid
         row.update(_session_burn_stats(sid))
         out.append(row)
     return out
@@ -25825,9 +28162,9 @@ def _augment_sessions_with_burn(sessions):
 def _get_crons():
     """Get crons via gateway API first, file fallback."""
     # Try WebSocket RPC first
-    api_data = _gw_ws_rpc('cron.list')
-    if api_data and 'jobs' in api_data:
-        return api_data['jobs']
+    api_data = _gw_ws_rpc("cron.list")
+    if api_data and "jobs" in api_data:
+        return api_data["jobs"]
     # File-based fallback
     return _get_crons_from_files()
 
@@ -25835,13 +28172,13 @@ def _get_crons():
 def _get_crons_from_files():
     """Read crons from OpenClaw/moltbot state (file-based fallback)."""
     candidates = [
-        os.path.expanduser('~/.openclaw/cron/jobs.json'),
-        os.path.expanduser('~/.clawdbot/cron/jobs.json'),
+        os.path.expanduser("~/.openclaw/cron/jobs.json"),
+        os.path.expanduser("~/.clawdbot/cron/jobs.json"),
     ]
     # Also check data dir if set via env
-    data_dir = os.environ.get('OPENCLAW_DATA_DIR', '')
+    data_dir = os.environ.get("OPENCLAW_DATA_DIR", "")
     if data_dir:
-        candidates.insert(0, os.path.join(data_dir, 'cron', 'jobs.json'))
+        candidates.insert(0, os.path.join(data_dir, "cron", "jobs.json"))
     for crons_file in candidates:
         try:
             if os.path.exists(crons_file):
@@ -25850,7 +28187,7 @@ def _get_crons_from_files():
                     if isinstance(data, list):
                         return data
                     if isinstance(data, dict):
-                        return data.get('jobs', list(data.values()))
+                        return data.get("jobs", list(data.values()))
         except Exception:
             pass
     return []
@@ -25862,192 +28199,264 @@ def _get_memory_files():
     workspace = WORKSPACE or os.getcwd()
     memory_dir = MEMORY_DIR or os.path.join(workspace, "memory")
 
-    for name in ['MEMORY.md', 'SOUL.md', 'IDENTITY.md', 'USER.md', 'AGENTS.md', 'TOOLS.md', 'HEARTBEAT.md']:
+    for name in [
+        "MEMORY.md",
+        "SOUL.md",
+        "IDENTITY.md",
+        "USER.md",
+        "AGENTS.md",
+        "TOOLS.md",
+        "HEARTBEAT.md",
+    ]:
         path = os.path.join(workspace, name)
         if os.path.exists(path):
-            result.append({'path': name, 'size': os.path.getsize(path)})
+            result.append({"path": name, "size": os.path.getsize(path)})
     if os.path.isdir(memory_dir):
-        pattern = os.path.join(memory_dir, '*.md')
+        pattern = os.path.join(memory_dir, "*.md")
         for f in sorted(glob.glob(pattern), reverse=True):
-            name = 'memory/' + os.path.basename(f)
-            result.append({'path': name, 'size': os.path.getsize(f)})
+            name = "memory/" + os.path.basename(f)
+            result.append({"path": name, "size": os.path.getsize(f)})
     return result
 
 
 def _get_llmfit_recommendations():
     """Run llmfit to get local model recommendations for this hardware."""
     import shutil
-    if not shutil.which('llmfit'):
-        return {'available': False, 'recommendations': [], 'codingModels': [], 'chatModels': [], 'system': {}}
-    
+
+    if not shutil.which("llmfit"):
+        return {
+            "available": False,
+            "recommendations": [],
+            "codingModels": [],
+            "chatModels": [],
+            "system": {},
+        }
+
     try:
         # General recommendations
         result = subprocess.run(
-            ['llmfit', 'recommend', '--json', '--limit', '8'],
-            capture_output=True, text=True, timeout=15
+            ["llmfit", "recommend", "--json", "--limit", "8"],
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         all_data = json.loads(result.stdout) if result.returncode == 0 else {}
-        
+
         # Coding-specific
         coding_result = subprocess.run(
-            ['llmfit', 'recommend', '--json', '--use-case', 'coding', '--limit', '5'],
-            capture_output=True, text=True, timeout=15
+            ["llmfit", "recommend", "--json", "--use-case", "coding", "--limit", "5"],
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
-        coding_data = json.loads(coding_result.stdout) if coding_result.returncode == 0 else {}
-        
+        coding_data = (
+            json.loads(coding_result.stdout) if coding_result.returncode == 0 else {}
+        )
+
         # Chat-specific
         chat_result = subprocess.run(
-            ['llmfit', 'recommend', '--json', '--use-case', 'chat', '--limit', '5'],
-            capture_output=True, text=True, timeout=15
+            ["llmfit", "recommend", "--json", "--use-case", "chat", "--limit", "5"],
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
-        chat_data = json.loads(chat_result.stdout) if chat_result.returncode == 0 else {}
-        
-        system_info = all_data.get('system', {})
+        chat_data = (
+            json.loads(chat_result.stdout) if chat_result.returncode == 0 else {}
+        )
+
+        system_info = all_data.get("system", {})
         # Annotate: llmfit doesn't detect Apple Silicon GPU but Metal makes it 3-5x faster
-        cpu = system_info.get('cpu_name', '')
-        if 'apple' in cpu.lower() or 'M1' in cpu or 'M2' in cpu or 'M3' in cpu or 'M4' in cpu:
-            system_info['note'] = 'Apple Silicon -- Metal GPU available (3-5x faster than llmfit estimates)'
-            system_info['has_metal'] = True
-        
+        cpu = system_info.get("cpu_name", "")
+        if (
+            "apple" in cpu.lower()
+            or "M1" in cpu
+            or "M2" in cpu
+            or "M3" in cpu
+            or "M4" in cpu
+        ):
+            system_info["note"] = (
+                "Apple Silicon -- Metal GPU available (3-5x faster than llmfit estimates)"
+            )
+            system_info["has_metal"] = True
+
         def _clean_model(m):
             # Extract short name from full HF path
-            name = m.get('name', '')
-            short = name.split('/')[-1] if '/' in name else name
+            name = m.get("name", "")
+            short = name.split("/")[-1] if "/" in name else name
             return {
-                'name': short,
-                'fullName': name,
-                'provider': m.get('provider', ''),
-                'category': m.get('category', ''),
-                'useCase': m.get('use_case', ''),
-                'estimatedTps': m.get('estimated_tps', 0),
-                'memoryRequiredGb': m.get('memory_required_gb', 0),
-                'parameterCount': m.get('parameter_count', ''),
-                'contextLength': m.get('context_length', 0),
-                'score': m.get('score', 0),
-                'bestQuant': m.get('best_quant', ''),
-                'fitLevel': m.get('fit_level', ''),
+                "name": short,
+                "fullName": name,
+                "provider": m.get("provider", ""),
+                "category": m.get("category", ""),
+                "useCase": m.get("use_case", ""),
+                "estimatedTps": m.get("estimated_tps", 0),
+                "memoryRequiredGb": m.get("memory_required_gb", 0),
+                "parameterCount": m.get("parameter_count", ""),
+                "contextLength": m.get("context_length", 0),
+                "score": m.get("score", 0),
+                "bestQuant": m.get("best_quant", ""),
+                "fitLevel": m.get("fit_level", ""),
             }
-        
+
         return {
-            'available': True,
-            'system': system_info,
-            'recommendations': [_clean_model(m) for m in all_data.get('models', [])[:8]],
-            'codingModels': [_clean_model(m) for m in coding_data.get('models', [])[:5]],
-            'chatModels': [_clean_model(m) for m in chat_data.get('models', [])[:5]],
+            "available": True,
+            "system": system_info,
+            "recommendations": [
+                _clean_model(m) for m in all_data.get("models", [])[:8]
+            ],
+            "codingModels": [
+                _clean_model(m) for m in coding_data.get("models", [])[:5]
+            ],
+            "chatModels": [_clean_model(m) for m in chat_data.get("models", [])[:5]],
         }
     except Exception as e:
-        return {'available': False, 'error': str(e), 'recommendations': [], 'codingModels': [], 'chatModels': [], 'system': {}}
+        return {
+            "available": False,
+            "error": str(e),
+            "recommendations": [],
+            "codingModels": [],
+            "chatModels": [],
+            "system": {},
+        }
 
 
 def _generate_savings_opportunities():
     """Identify tasks/crons that could use local models instead of expensive cloud models."""
     opportunities = []
-    
-    expensive_models = ['claude-sonnet', 'claude-opus', 'gpt-4', 'o1', 'o3']
-    
+
+    expensive_models = ["claude-sonnet", "claude-opus", "gpt-4", "o1", "o3"]
+
     # Check cron jobs
     try:
         crons = _get_crons()
         for cron in crons:
-            model = cron.get('model', cron.get('modelRef', ''))
-            name = cron.get('name', cron.get('label', 'Unknown cron'))
-            if any(m in (model or '').lower() for m in expensive_models):
-                prompt = (cron.get('prompt', '') or '').lower()
+            model = cron.get("model", cron.get("modelRef", ""))
+            name = cron.get("name", cron.get("label", "Unknown cron"))
+            if any(m in (model or "").lower() for m in expensive_models):
+                prompt = (cron.get("prompt", "") or "").lower()
                 # Heuristic: heartbeat/status checks are simple tasks
-                is_simple = any(w in prompt for w in ['heartbeat', 'check', 'status', 'ping', 'monitor', 'health'])
+                is_simple = any(
+                    w in prompt
+                    for w in [
+                        "heartbeat",
+                        "check",
+                        "status",
+                        "ping",
+                        "monitor",
+                        "health",
+                    ]
+                )
                 if is_simple or not prompt:
-                    opportunities.append({
-                        'task': f'Cron: {name}',
-                        'currentModel': model or 'claude-sonnet-4-6',
-                        'suggestedModel': 'Qwen2.5-Coder-3B via Ollama',
-                        'estimatedSavings': '~$1-3/month',
-                        'reason': 'Periodic checks and status tasks don\'t need frontier models',
-                    })
+                    opportunities.append(
+                        {
+                            "task": f"Cron: {name}",
+                            "currentModel": model or "claude-sonnet-4-6",
+                            "suggestedModel": "Qwen2.5-Coder-3B via Ollama",
+                            "estimatedSavings": "~$1-3/month",
+                            "reason": "Periodic checks and status tasks don't need frontier models",
+                        }
+                    )
     except Exception:
         pass
-    
+
     # Always suggest heartbeat optimization
-    opportunities.append({
-        'task': 'Heartbeat cron (periodic checks)',
-        'currentModel': 'claude-sonnet-4-6',
-        'suggestedModel': 'Qwen3-4B via Ollama',
-        'estimatedSavings': '~$2-5/month',
-        'reason': 'Simple periodic checks (email, calendar, weather) don\'t need frontier model',
-    })
-    opportunities.append({
-        'task': 'Summarization & formatting tasks',
-        'currentModel': 'claude-sonnet-4-6',
-        'suggestedModel': 'Llama-3.2-1B-Instruct via Ollama',
-        'estimatedSavings': '~$1-2/month',
-        'reason': 'Text formatting, summarization, and simple rewrites work well locally',
-    })
-    opportunities.append({
-        'task': 'Sub-agent coding tasks',
-        'currentModel': 'claude-sonnet-4-6',
-        'suggestedModel': 'DeepSeek-Coder-V2-Lite via Ollama',
-        'estimatedSavings': '~$3-8/month',
-        'reason': 'Small, well-scoped coding subtasks can run on local coding models',
-    })
-    
+    opportunities.append(
+        {
+            "task": "Heartbeat cron (periodic checks)",
+            "currentModel": "claude-sonnet-4-6",
+            "suggestedModel": "Qwen3-4B via Ollama",
+            "estimatedSavings": "~$2-5/month",
+            "reason": "Simple periodic checks (email, calendar, weather) don't need frontier model",
+        }
+    )
+    opportunities.append(
+        {
+            "task": "Summarization & formatting tasks",
+            "currentModel": "claude-sonnet-4-6",
+            "suggestedModel": "Llama-3.2-1B-Instruct via Ollama",
+            "estimatedSavings": "~$1-2/month",
+            "reason": "Text formatting, summarization, and simple rewrites work well locally",
+        }
+    )
+    opportunities.append(
+        {
+            "task": "Sub-agent coding tasks",
+            "currentModel": "claude-sonnet-4-6",
+            "suggestedModel": "DeepSeek-Coder-V2-Lite via Ollama",
+            "estimatedSavings": "~$3-8/month",
+            "reason": "Small, well-scoped coding subtasks can run on local coding models",
+        }
+    )
+
     return opportunities[:6]
 
 
 def _get_cost_summary():
     """Calculate cost summary from metrics store."""
     now = datetime.now(CET)
-    today = now.strftime('%Y-%m-%d')
-    week_start = (now - timedelta(days=7)).strftime('%Y-%m-%d')
-    month_start = (now - timedelta(days=30)).strftime('%Y-%m-%d')
-    
-    costs = {'today': 0, 'week': 0, 'month': 0, 'projected': 0}
-    
+    today = now.strftime("%Y-%m-%d")
+    week_start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    month_start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+
+    costs = {"today": 0, "week": 0, "month": 0, "projected": 0}
+
     with _metrics_lock:
-        for entry in metrics_store.get('cost', []):
-            entry_date = datetime.fromtimestamp(entry.get('timestamp', 0) / 1000, CET).strftime('%Y-%m-%d')
-            entry_cost = entry.get('usd', 0)
-            
+        for entry in metrics_store.get("cost", []):
+            entry_date = datetime.fromtimestamp(
+                entry.get("timestamp", 0) / 1000, CET
+            ).strftime("%Y-%m-%d")
+            entry_cost = entry.get("usd", 0)
+
             if entry_date == today:
-                costs['today'] += entry_cost
+                costs["today"] += entry_cost
             if entry_date >= week_start:
-                costs['week'] += entry_cost
+                costs["week"] += entry_cost
             if entry_date >= month_start:
-                costs['month'] += entry_cost
-    
+                costs["month"] += entry_cost
+
     # Project monthly cost based on current daily average
-    if costs['month'] > 0:
-        days_in_period = min(30, (now - datetime.strptime(month_start, '%Y-%m-%d').replace(tzinfo=CET)).days + 1)
-        daily_avg = costs['month'] / days_in_period
-        costs['projected'] = daily_avg * 30
-    
+    if costs["month"] > 0:
+        days_in_period = min(
+            30,
+            (now - datetime.strptime(month_start, "%Y-%m-%d").replace(tzinfo=CET)).days
+            + 1,
+        )
+        daily_avg = costs["month"] / days_in_period
+        costs["projected"] = daily_avg * 30
+
     return costs
 
 
 def _detect_ollama():
     """Detect Ollama installation using multiple strategies."""
     import shutil
+
     # Strategy 1: shutil.which (respects PATH)
-    if shutil.which('ollama'):
+    if shutil.which("ollama"):
         return True
     # Strategy 2: Check common installation paths
     common_paths = [
-        '/opt/homebrew/bin/ollama',      # macOS Homebrew (Apple Silicon)
-        '/usr/local/bin/ollama',          # macOS Homebrew (Intel) / Linux manual
-        '/usr/bin/ollama',               # Linux package manager
-        os.path.expanduser('~/.ollama/ollama'),  # Custom install
+        "/opt/homebrew/bin/ollama",  # macOS Homebrew (Apple Silicon)
+        "/usr/local/bin/ollama",  # macOS Homebrew (Intel) / Linux manual
+        "/usr/bin/ollama",  # Linux package manager
+        os.path.expanduser("~/.ollama/ollama"),  # Custom install
     ]
     # Windows paths
-    if os.name == 'nt':
-        common_paths.extend([
-            os.path.expandvars(r'%LOCALAPPDATA%\Programs\Ollama\ollama.exe'),
-            os.path.expandvars(r'%LOCALAPPDATA%\Ollama\ollama.exe'),
-        ])
+    if os.name == "nt":
+        common_paths.extend(
+            [
+                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
+                os.path.expandvars(r"%LOCALAPPDATA%\Ollama\ollama.exe"),
+            ]
+        )
     for p in common_paths:
         if os.path.isfile(p):
             return True
     # Strategy 3: Try HTTP ping (ollama might be running even if binary not in PATH)
     try:
         import urllib.request
-        req = urllib.request.Request('http://localhost:11434/api/version', method='GET')
+
+        req = urllib.request.Request("http://localhost:11434/api/version", method="GET")
         with urllib.request.urlopen(req, timeout=2) as resp:
             if resp.status == 200:
                 return True
@@ -26060,368 +28469,465 @@ def _check_ollama_availability():
     """Check if Ollama is running and what models are available."""
     try:
         import requests
-        response = requests.get('http://localhost:11434/api/tags', timeout=3)
+
+        response = requests.get("http://localhost:11434/api/tags", timeout=3)
         if response.status_code == 200:
             data = response.json()
-            models = data.get('models', [])
+            models = data.get("models", [])
             tool_capable_models = []
-            
+
             for model in models:
                 # Check if model supports tools (simplified check)
-                model_name = model.get('name', '')
+                model_name = model.get("name", "")
                 # Common tool-capable models
-                if any(x in model_name.lower() for x in ['llama3', 'qwen', 'gpt-oss', 'mistral', 'deepseek']):
+                if any(
+                    x in model_name.lower()
+                    for x in ["llama3", "qwen", "gpt-oss", "mistral", "deepseek"]
+                ):
                     tool_capable_models.append(model_name)
-            
+
             return {
-                'available': True,
-                'count': len(tool_capable_models),
-                'models': tool_capable_models[:10]  # Limit display
+                "available": True,
+                "count": len(tool_capable_models),
+                "models": tool_capable_models[:10],  # Limit display
             }
     except Exception:
         pass
 
     # Fallback: use robust detection (binary found or HTTP reachable)
     if _detect_ollama():
-        return {'available': True, 'count': 0, 'models': []}
+        return {"available": True, "count": 0, "models": []}
 
-    return {'available': False, 'count': 0, 'models': []}
+    return {"available": False, "count": 0, "models": []}
 
 
 def _generate_cost_recommendations(costs, local_models):
     """Generate cost optimization recommendations."""
     recommendations = []
-    
+
     # High cost alerts
-    if costs['today'] > 1.0:
-        recommendations.append({
-            'title': 'High Daily Cost',
-            'description': f"Today's usage (${costs['today']:.3f}) is high. Consider using local models for routine tasks.",
-            'priority': 'high',
-            'action': 'Review recent expensive operations below'
-        })
-    
+    if costs["today"] > 1.0:
+        recommendations.append(
+            {
+                "title": "High Daily Cost",
+                "description": f"Today's usage (${costs['today']:.3f}) is high. Consider using local models for routine tasks.",
+                "priority": "high",
+                "action": "Review recent expensive operations below",
+            }
+        )
+
     # Local model setup
-    if not local_models['available']:
-        recommendations.append({
-            'title': 'Install Local Models',
-            'description': 'Set up Ollama with local models to reduce API costs for formatting, simple lookups, and drafts.',
-            'priority': 'medium',
-            'action': 'curl -fsSL https://ollama.ai/install.sh | sh && ollama pull llama3.3'
-        })
-    elif local_models['count'] < 2:
-        recommendations.append({
-            'title': 'Expand Local Model Selection',
-            'description': 'Add more local models for better task coverage and cost optimization.',
-            'priority': 'low',
-            'action': 'ollama pull qwen2.5-coder:32b'
-        })
-    
+    if not local_models["available"]:
+        recommendations.append(
+            {
+                "title": "Install Local Models",
+                "description": "Set up Ollama with local models to reduce API costs for formatting, simple lookups, and drafts.",
+                "priority": "medium",
+                "action": "curl -fsSL https://ollama.ai/install.sh | sh && ollama pull llama3.3",
+            }
+        )
+    elif local_models["count"] < 2:
+        recommendations.append(
+            {
+                "title": "Expand Local Model Selection",
+                "description": "Add more local models for better task coverage and cost optimization.",
+                "priority": "low",
+                "action": "ollama pull qwen2.5-coder:32b",
+            }
+        )
+
     # Projected cost warning
-    if costs['projected'] > 50.0:
-        recommendations.append({
-            'title': 'High Monthly Projection',
-            'description': f"Projected monthly cost (${costs['projected']:.2f}) is high. Implement local model fallback urgently.",
-            'priority': 'high',
-            'action': 'Configure cost thresholds and local model routing'
-        })
-    
+    if costs["projected"] > 50.0:
+        recommendations.append(
+            {
+                "title": "High Monthly Projection",
+                "description": f"Projected monthly cost (${costs['projected']:.2f}) is high. Implement local model fallback urgently.",
+                "priority": "high",
+                "action": "Configure cost thresholds and local model routing",
+            }
+        )
+
     # Low-stakes task identification
     with _metrics_lock:
-        recent_calls = metrics_store.get('tokens', [])[-100:]  # Last 100 calls
-        high_cost_calls = [c for c in recent_calls if c.get('total', 0) > 10000]
+        recent_calls = metrics_store.get("tokens", [])[-100:]  # Last 100 calls
+        high_cost_calls = [c for c in recent_calls if c.get("total", 0) > 10000]
         if len(high_cost_calls) > 20:
-            recommendations.append({
-                'title': 'High Token Usage Detected',
-                'description': 'Many recent calls use >10K tokens. Review if all require cloud models.',
-                'priority': 'medium',
-                'action': 'Implement task classification for local vs cloud routing'
-            })
-    
+            recommendations.append(
+                {
+                    "title": "High Token Usage Detected",
+                    "description": "Many recent calls use >10K tokens. Review if all require cloud models.",
+                    "priority": "medium",
+                    "action": "Implement task classification for local vs cloud routing",
+                }
+            )
+
     return recommendations
 
 
 def _get_expensive_operations():
     """Get recent high-cost operations for analysis."""
     expensive_ops = []
-    
+
     with _metrics_lock:
         # Combine cost and token data
-        recent_tokens = metrics_store.get('tokens', [])[-50:]
-        recent_costs = metrics_store.get('cost', [])[-50:]
-        
+        recent_tokens = metrics_store.get("tokens", [])[-50:]
+        recent_costs = metrics_store.get("cost", [])[-50:]
+
         # Match tokens with costs by timestamp (approximate)
         for cost_entry in recent_costs:
-            if cost_entry.get('usd', 0) > 0.01:  # Only show operations >$0.01
-                timestamp = cost_entry.get('timestamp', 0)
-                model = cost_entry.get('model', 'unknown')
-                cost = cost_entry.get('usd', 0)
-                
+            if cost_entry.get("usd", 0) > 0.01:  # Only show operations >$0.01
+                timestamp = cost_entry.get("timestamp", 0)
+                model = cost_entry.get("model", "unknown")
+                cost = cost_entry.get("usd", 0)
+
                 # Find matching token entry
                 token_entry = None
                 for t in recent_tokens:
-                    if abs(t.get('timestamp', 0) - timestamp) < 5000:  # Within 5 seconds
-                        if t.get('model', '') == model:
+                    if (
+                        abs(t.get("timestamp", 0) - timestamp) < 5000
+                    ):  # Within 5 seconds
+                        if t.get("model", "") == model:
                             token_entry = t
                             break
-                
-                tokens = token_entry.get('total', 0) if token_entry else 0
-                time_ago = datetime.fromtimestamp(timestamp / 1000, CET).strftime('%H:%M')
-                
+
+                tokens = token_entry.get("total", 0) if token_entry else 0
+                time_ago = datetime.fromtimestamp(timestamp / 1000, CET).strftime(
+                    "%H:%M"
+                )
+
                 # Determine if this operation could be optimized
                 can_optimize = False
                 if tokens > 0:
                     # Simple heuristic: high token count with low complexity ratio might be local-model suitable
                     # This is a simplified check - in practice you'd analyze the actual request content
-                    if tokens < 5000 and 'gpt' not in model.lower() and 'simple' in model.lower():
+                    if (
+                        tokens < 5000
+                        and "gpt" not in model.lower()
+                        and "simple" in model.lower()
+                    ):
                         can_optimize = True
-                
-                expensive_ops.append({
-                    'model': model,
-                    'cost': cost,
-                    'tokens': f"{tokens:,}" if tokens > 0 else "unknown",
-                    'timeAgo': time_ago,
-                    'canOptimize': can_optimize
-                })
-    
-    return sorted(expensive_ops, key=lambda x: x['cost'], reverse=True)[:10]
+
+                expensive_ops.append(
+                    {
+                        "model": model,
+                        "cost": cost,
+                        "tokens": f"{tokens:,}" if tokens > 0 else "unknown",
+                        "timeAgo": time_ago,
+                        "canOptimize": can_optimize,
+                    }
+                )
+
+    return sorted(expensive_ops, key=lambda x: x["cost"], reverse=True)[:10]
 
 
 def _analyze_work_patterns():
     """Analyze recent work patterns from logs and metrics to detect repetitive tasks."""
     patterns = []
-    
+
     try:
         # Analyze recent log files for repetitive patterns
         log_files = _get_recent_log_files(7)  # Last 7 days
         command_frequency = {}
         tool_frequency = {}
         error_patterns = {}
-        
+
         for log_file in log_files:
             try:
-                with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
                     for line in f:
                         line = line.strip()
                         if not line:
                             continue
-                        
+
                         # Track tool usage patterns
-                        if 'tool_call' in line and 'exec' in line:
+                        if "tool_call" in line and "exec" in line:
                             try:
                                 if '"command"' in line:
                                     # Extract command from tool call
                                     import re
-                                    cmd_match = re.search(r'"command":\s*"([^"]+)"', line)
+
+                                    cmd_match = re.search(
+                                        r'"command":\s*"([^"]+)"', line
+                                    )
                                     if cmd_match:
-                                        cmd = cmd_match.group(1).split()[0]  # First word only
-                                        command_frequency[cmd] = command_frequency.get(cmd, 0) + 1
-                            except:
+                                        cmd = cmd_match.group(1).split()[
+                                            0
+                                        ]  # First word only
+                                        command_frequency[cmd] = (
+                                            command_frequency.get(cmd, 0) + 1
+                                        )
+                            except Exception:
                                 pass
-                        
+
                         # Track tool names
-                        for tool in ['curl', 'git', 'npm', 'systemctl', 'grep', 'find', 'ls']:
-                            if tool in line and 'tool_call' in line:
+                        for tool in [
+                            "curl",
+                            "git",
+                            "npm",
+                            "systemctl",
+                            "grep",
+                            "find",
+                            "ls",
+                        ]:
+                            if tool in line and "tool_call" in line:
                                 tool_frequency[tool] = tool_frequency.get(tool, 0) + 1
-                        
+
                         # Track common error patterns
-                        if 'error' in line.lower() or 'failed' in line.lower():
-                            for pattern in ['connection failed', 'timeout', 'not found', 'permission denied']:
+                        if "error" in line.lower() or "failed" in line.lower():
+                            for pattern in [
+                                "connection failed",
+                                "timeout",
+                                "not found",
+                                "permission denied",
+                            ]:
                                 if pattern in line.lower():
-                                    error_patterns[pattern] = error_patterns.get(pattern, 0) + 1
-                                    
+                                    error_patterns[pattern] = (
+                                        error_patterns.get(pattern, 0) + 1
+                                    )
+
             except Exception:
                 continue
-        
+
         # Generate pattern insights
         # High-frequency commands
         for cmd, count in command_frequency.items():
             if count >= 5:  # Used 5+ times in the past week
                 confidence = min(90, count * 10)  # Higher frequency = higher confidence
-                priority = 'high' if count >= 15 else 'medium' if count >= 10 else 'low'
-                patterns.append({
-                    'title': f'Frequent "{cmd}" command usage',
-                    'description': f'Command "{cmd}" has been used {count} times in the past week. This might be a candidate for automation.',
-                    'frequency': f'{count} times/week',
-                    'confidence': confidence,
-                    'priority': priority,
-                    'type': 'command',
-                    'target': cmd
-                })
-        
+                priority = "high" if count >= 15 else "medium" if count >= 10 else "low"
+                patterns.append(
+                    {
+                        "title": f'Frequent "{cmd}" command usage',
+                        "description": f'Command "{cmd}" has been used {count} times in the past week. This might be a candidate for automation.',
+                        "frequency": f"{count} times/week",
+                        "confidence": confidence,
+                        "priority": priority,
+                        "type": "command",
+                        "target": cmd,
+                    }
+                )
+
         # Repeated error handling
         for error, count in error_patterns.items():
             if count >= 3:
-                patterns.append({
-                    'title': f'Recurring error: {error}',
-                    'description': f'This error pattern has occurred {count} times. Consider adding error handling automation.',
-                    'frequency': f'{count} occurrences/week',
-                    'confidence': 75,
-                    'priority': 'medium',
-                    'type': 'error',
-                    'target': error
-                })
-        
+                patterns.append(
+                    {
+                        "title": f"Recurring error: {error}",
+                        "description": f"This error pattern has occurred {count} times. Consider adding error handling automation.",
+                        "frequency": f"{count} occurrences/week",
+                        "confidence": 75,
+                        "priority": "medium",
+                        "type": "error",
+                        "target": error,
+                    }
+                )
+
         # Check for Mission Control task patterns (only if MC_URL is configured)
         if MC_URL:
             try:
-                mc_response = subprocess.run(['curl', '-s', f'{MC_URL}/api/tasks'],
-                                           capture_output=True, text=True, timeout=5)
+                mc_response = subprocess.run(
+                    ["curl", "-s", f"{MC_URL}/api/tasks"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
                 if mc_response.returncode == 0:
                     mc_data = json.loads(mc_response.stdout)
-                    if 'tasks' in mc_data:
+                    if "tasks" in mc_data:
                         task_types = {}
-                        for task in mc_data['tasks']:
-                            title = task.get('title', '').lower()
-                            for keyword in ['deploy', 'fix', 'update', 'build', 'test', 'backup']:
+                        for task in mc_data["tasks"]:
+                            title = task.get("title", "").lower()
+                            for keyword in [
+                                "deploy",
+                                "fix",
+                                "update",
+                                "build",
+                                "test",
+                                "backup",
+                            ]:
                                 if keyword in title:
                                     task_types[keyword] = task_types.get(keyword, 0) + 1
                         for task_type, count in task_types.items():
                             if count >= 3:
-                                patterns.append({
-                                    'title': f'Frequent {task_type} tasks',
-                                    'description': f'You have {count} tasks involving "{task_type}". This could be automated.',
-                                    'frequency': f'{count} tasks',
-                                    'confidence': 80,
-                                    'priority': 'medium',
-                                    'type': 'task',
-                                    'target': task_type
-                                })
+                                patterns.append(
+                                    {
+                                        "title": f"Frequent {task_type} tasks",
+                                        "description": f'You have {count} tasks involving "{task_type}". This could be automated.',
+                                        "frequency": f"{count} tasks",
+                                        "confidence": 80,
+                                        "priority": "medium",
+                                        "type": "task",
+                                        "target": task_type,
+                                    }
+                                )
             except Exception:
                 pass
-            
+
     except Exception as e:
         # Add a debug pattern if analysis fails
-        patterns.append({
-            'title': 'Pattern analysis limited',
-            'description': f'Could not fully analyze patterns: {str(e)}',
-            'frequency': 'unknown',
-            'confidence': 10,
-            'priority': 'low',
-            'type': 'debug',
-            'target': 'analysis'
-        })
-    
-    return sorted(patterns, key=lambda x: (x['priority'] == 'high', x['priority'] == 'medium', x['confidence']), reverse=True)
+        patterns.append(
+            {
+                "title": "Pattern analysis limited",
+                "description": f"Could not fully analyze patterns: {str(e)}",
+                "frequency": "unknown",
+                "confidence": 10,
+                "priority": "low",
+                "type": "debug",
+                "target": "analysis",
+            }
+        )
+
+    return sorted(
+        patterns,
+        key=lambda x: (
+            x["priority"] == "high",
+            x["priority"] == "medium",
+            x["confidence"],
+        ),
+        reverse=True,
+    )
 
 
 def _generate_automation_suggestions(patterns):
     """Generate concrete automation suggestions based on detected patterns."""
     suggestions = []
-    
+
     for pattern in patterns:
-        if pattern['type'] == 'command' and pattern['target']:
-            cmd = pattern['target']
-            
+        if pattern["type"] == "command" and pattern["target"]:
+            cmd = pattern["target"]
+
             # Command-specific automation suggestions
-            if cmd in ['curl', 'git', 'systemctl']:
-                suggestions.append({
-                    'title': f'Automate {cmd} monitoring',
-                    'description': f'Create a cron job to monitor and auto-fix common {cmd} operations.',
-                    'type': 'cron',
-                    'implementation': f'# Add to cron: */15 * * * * /path/to/auto-{cmd}.sh',
-                    'impact': 'Medium - reduces manual monitoring',
-                    'effort': 'Low - single script creation'
-                })
-            
-            elif cmd in ['npm', 'git']:
-                suggestions.append({
-                    'title': f'{cmd.upper()} automation skill',
-                    'description': f'Create a skill that automates common {cmd} workflows with error handling.',
-                    'type': 'skill',
-                    'implementation': f'Skills/{cmd}-automation/SKILL.md - wrapper with retry logic',
-                    'impact': 'High - automates entire workflow',
-                    'effort': 'Medium - requires skill development'
-                })
-        
-        elif pattern['type'] == 'error':
-            error_type = pattern['target']
-            suggestions.append({
-                'title': f'Auto-recovery for {error_type}',
-                'description': f'Create monitoring that detects "{error_type}" errors and attempts automatic recovery.',
-                'type': 'cron',
-                'implementation': f'*/10 * * * * /scripts/auto-recover-{error_type.replace(" ", "-")}.sh',
-                'impact': 'High - prevents manual intervention',
-                'effort': 'Medium - requires error detection logic'
-            })
-        
-        elif pattern['type'] == 'task':
-            task_type = pattern['target']
-            if task_type in ['deploy', 'build', 'update']:
-                suggestions.append({
-                    'title': f'CI/CD pipeline for {task_type}',
-                    'description': f'Automate {task_type} tasks with GitHub Actions or cron-based pipeline.',
-                    'type': 'automation',
-                    'implementation': f'.github/workflows/{task_type}.yml or cron-based pipeline',
-                    'impact': 'Very High - eliminates manual tasks',
-                    'effort': 'High - requires pipeline setup'
-                })
-    
+            if cmd in ["curl", "git", "systemctl"]:
+                suggestions.append(
+                    {
+                        "title": f"Automate {cmd} monitoring",
+                        "description": f"Create a cron job to monitor and auto-fix common {cmd} operations.",
+                        "type": "cron",
+                        "implementation": f"# Add to cron: */15 * * * * /path/to/auto-{cmd}.sh",
+                        "impact": "Medium - reduces manual monitoring",
+                        "effort": "Low - single script creation",
+                    }
+                )
+
+            elif cmd in ["npm", "git"]:
+                suggestions.append(
+                    {
+                        "title": f"{cmd.upper()} automation skill",
+                        "description": f"Create a skill that automates common {cmd} workflows with error handling.",
+                        "type": "skill",
+                        "implementation": f"Skills/{cmd}-automation/SKILL.md - wrapper with retry logic",
+                        "impact": "High - automates entire workflow",
+                        "effort": "Medium - requires skill development",
+                    }
+                )
+
+        elif pattern["type"] == "error":
+            error_type = pattern["target"]
+            suggestions.append(
+                {
+                    "title": f"Auto-recovery for {error_type}",
+                    "description": f'Create monitoring that detects "{error_type}" errors and attempts automatic recovery.',
+                    "type": "cron",
+                    "implementation": f"*/10 * * * * /scripts/auto-recover-{error_type.replace(' ', '-')}.sh",
+                    "impact": "High - prevents manual intervention",
+                    "effort": "Medium - requires error detection logic",
+                }
+            )
+
+        elif pattern["type"] == "task":
+            task_type = pattern["target"]
+            if task_type in ["deploy", "build", "update"]:
+                suggestions.append(
+                    {
+                        "title": f"CI/CD pipeline for {task_type}",
+                        "description": f"Automate {task_type} tasks with GitHub Actions or cron-based pipeline.",
+                        "type": "automation",
+                        "implementation": f".github/workflows/{task_type}.yml or cron-based pipeline",
+                        "impact": "Very High - eliminates manual tasks",
+                        "effort": "High - requires pipeline setup",
+                    }
+                )
+
     # Add some universal automation suggestions
-    suggestions.extend([
-        {
-            'title': 'Health monitoring cron',
-            'description': 'Create a cron job that monitors system health and alerts on issues.',
-            'type': 'cron',
-            'implementation': '0 */6 * * * /scripts/health-check.sh | logger',
-            'impact': 'Medium - proactive issue detection',
-            'effort': 'Low - single monitoring script'
-        },
-        {
-            'title': 'Log rotation automation',
-            'description': 'Automate log cleanup to prevent disk space issues.',
-            'type': 'cron',
-            'implementation': '0 2 * * 0 find /var/log -type f -name "*.log" -mtime +7 -delete',
-            'impact': 'Medium - prevents disk space issues',
-            'effort': 'Very Low - single command cron'
-        },
-        {
-            'title': 'Backup verification skill',
-            'description': 'Create a skill that verifies backup integrity and reports status.',
-            'type': 'skill',
-            'implementation': 'Skills/backup-monitor/SKILL.md - checks backup health',
-            'impact': 'High - ensures backup reliability',
-            'effort': 'Medium - requires backup checking logic'
-        }
-    ])
-    
+    suggestions.extend(
+        [
+            {
+                "title": "Health monitoring cron",
+                "description": "Create a cron job that monitors system health and alerts on issues.",
+                "type": "cron",
+                "implementation": "0 */6 * * * /scripts/health-check.sh | logger",
+                "impact": "Medium - proactive issue detection",
+                "effort": "Low - single monitoring script",
+            },
+            {
+                "title": "Log rotation automation",
+                "description": "Automate log cleanup to prevent disk space issues.",
+                "type": "cron",
+                "implementation": '0 2 * * 0 find /var/log -type f -name "*.log" -mtime +7 -delete',
+                "impact": "Medium - prevents disk space issues",
+                "effort": "Very Low - single command cron",
+            },
+            {
+                "title": "Backup verification skill",
+                "description": "Create a skill that verifies backup integrity and reports status.",
+                "type": "skill",
+                "implementation": "Skills/backup-monitor/SKILL.md - checks backup health",
+                "impact": "High - ensures backup reliability",
+                "effort": "Medium - requires backup checking logic",
+            },
+        ]
+    )
+
     # Remove duplicates and limit to top suggestions
     seen_titles = set()
     unique_suggestions = []
     for suggestion in suggestions:
-        if suggestion['title'] not in seen_titles:
-            seen_titles.add(suggestion['title'])
+        if suggestion["title"] not in seen_titles:
+            seen_titles.add(suggestion["title"])
             unique_suggestions.append(suggestion)
-    
+
     return unique_suggestions[:8]  # Limit to 8 suggestions max
 
 
 def _get_recent_log_files(days=7):
     """Get list of recent log files to analyze."""
     log_files = []
-    
+
     if LOG_DIR and os.path.isdir(LOG_DIR):
         # OpenClaw/Moltbot logs
         for i in range(days):
-            date = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
-            log_file = os.path.join(LOG_DIR, f'moltbot-{date}.log')
+            date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            log_file = os.path.join(LOG_DIR, f"moltbot-{date}.log")
             if os.path.isfile(log_file):
                 log_files.append(log_file)
-    
+
     # Also check journalctl if available
     try:
-        result = subprocess.run(['journalctl', '--user', '-u', 'moltbot-gateway', 
-                               '--since', f'{days} days ago', '--no-pager'], 
-                              capture_output=True, text=True, timeout=10)
+        result = subprocess.run(
+            [
+                "journalctl",
+                "--user",
+                "-u",
+                "moltbot-gateway",
+                "--since",
+                f"{days} days ago",
+                "--no-pager",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
         if result.returncode == 0 and result.stdout.strip():
             # Create temporary file with journalctl output for analysis
             import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".log", delete=False
+            ) as f:
                 f.write(result.stdout)
                 log_files.append(f.name)
-    except:
+    except Exception:
         pass
-    
+
     return log_files
 
 
@@ -26488,32 +28994,40 @@ Examples:
 Docs: https://docs.clawmetry.com
 """
 
-PID_FILE = '/tmp/clawmetry.pid'
-LAUNCHD_LABEL = 'com.clawmetry.dashboard'
-LAUNCHD_PLIST = os.path.expanduser(f'~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist')
-SYSTEMD_SERVICE = os.path.expanduser('~/.config/systemd/user/clawmetry-dashboard.service')
+PID_FILE = "/tmp/clawmetry.pid"
+LAUNCHD_LABEL = "com.clawmetry.dashboard"
+LAUNCHD_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist")
+SYSTEMD_SERVICE = os.path.expanduser(
+    "~/.config/systemd/user/clawmetry-dashboard.service"
+)
 
 # Sync daemon uses separate service names
-SYNC_LAUNCHD_LABEL = 'com.clawmetry.sync'
-SYNC_LAUNCHD_PLIST = os.path.expanduser(f'~/Library/LaunchAgents/{SYNC_LAUNCHD_LABEL}.plist')
-SYNC_SYSTEMD_SERVICE = os.path.expanduser('~/.config/systemd/user/clawmetry-sync.service')
+SYNC_LAUNCHD_LABEL = "com.clawmetry.sync"
+SYNC_LAUNCHD_PLIST = os.path.expanduser(
+    f"~/Library/LaunchAgents/{SYNC_LAUNCHD_LABEL}.plist"
+)
+SYNC_SYSTEMD_SERVICE = os.path.expanduser(
+    "~/.config/systemd/user/clawmetry-sync.service"
+)
 
 
 # ---------------------------------------------------------------------------
 # Daemon helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_script_path():
     """Return absolute path to the clawmetry executable / this script."""
     import shutil
-    exe = shutil.which('clawmetry')
+
+    exe = shutil.which("clawmetry")
     if exe:
         return os.path.realpath(exe)
     return os.path.realpath(sys.argv[0])
 
 
 def _write_pid(pid):
-    with open(PID_FILE, 'w') as f:
+    with open(PID_FILE, "w") as f:
         f.write(str(pid))
 
 
@@ -26534,19 +29048,19 @@ def _is_pid_running(pid):
 
 
 def _is_macos():
-    return sys.platform == 'darwin'
+    return sys.platform == "darwin"
 
 
 def _is_linux():
-    return sys.platform.startswith('linux')
+    return sys.platform.startswith("linux")
 
 
 def _launchd_running():
     import subprocess
+
     try:
         result = subprocess.run(
-            ['launchctl', 'list', LAUNCHD_LABEL],
-            capture_output=True, text=True
+            ["launchctl", "list", LAUNCHD_LABEL], capture_output=True, text=True
         )
         return result.returncode == 0
     except Exception:
@@ -26555,10 +29069,11 @@ def _launchd_running():
 
 def _systemd_running():
     import subprocess
+
     try:
         result = subprocess.run(
-            ['systemctl', '--user', 'is-active', '--quiet', 'clawmetry'],
-            capture_output=True
+            ["systemctl", "--user", "is-active", "--quiet", "clawmetry"],
+            capture_output=True,
         )
         return result.returncode == 0
     except Exception:
@@ -26579,15 +29094,15 @@ def _get_service_pid():
     """Try to get running PID from launchd/systemd/pid file."""
     if _is_macos():
         import subprocess
+
         try:
             result = subprocess.run(
-                ['launchctl', 'list', LAUNCHD_LABEL],
-                capture_output=True, text=True
+                ["launchctl", "list", LAUNCHD_LABEL], capture_output=True, text=True
             )
             for line in result.stdout.splitlines():
                 line = line.strip()
-                if line and not line.startswith('"') and '\t' in line:
-                    parts = line.split('\t')
+                if line and not line.startswith('"') and "\t" in line:
+                    parts = line.split("\t")
                     if len(parts) >= 1:
                         try:
                             return int(parts[0])
@@ -26597,14 +29112,16 @@ def _get_service_pid():
             pass
     elif _is_linux():
         import subprocess
+
         try:
             result = subprocess.run(
-                ['systemctl', '--user', 'show', 'clawmetry', '--property=MainPID'],
-                capture_output=True, text=True
+                ["systemctl", "--user", "show", "clawmetry", "--property=MainPID"],
+                capture_output=True,
+                text=True,
             )
             for line in result.stdout.splitlines():
-                if line.startswith('MainPID='):
-                    pid = int(line.split('=', 1)[1].strip())
+                if line.startswith("MainPID="):
+                    pid = int(line.split("=", 1)[1].strip())
                     return pid if pid > 0 else None
         except Exception:
             pass
@@ -26614,51 +29131,50 @@ def _get_service_pid():
 def _get_uptime_str(pid):
     try:
         import subprocess
+
         if _is_macos():
             result = subprocess.run(
-                ['ps', '-o', 'etime=', '-p', str(pid)],
-                capture_output=True, text=True
+                ["ps", "-o", "etime=", "-p", str(pid)], capture_output=True, text=True
             )
-            return result.stdout.strip() or '?'
+            return result.stdout.strip() or "?"
         else:
             result = subprocess.run(
-                ['ps', '-o', 'etime=', '-p', str(pid)],
-                capture_output=True, text=True
+                ["ps", "-o", "etime=", "-p", str(pid)], capture_output=True, text=True
             )
-            return result.stdout.strip() or '?'
+            return result.stdout.strip() or "?"
     except Exception:
-        return '?'
+        return "?"
 
 
 def _read_cloud_token():
-    cfg_path = os.path.expanduser('~/.openclaw/openclaw.json')
+    cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
     try:
         with open(cfg_path) as f:
             data = json.load(f)
-        return data.get('clawmetry', {}).get('cloudToken')
+        return data.get("clawmetry", {}).get("cloudToken")
     except Exception:
         return None
 
 
 def _write_cloud_token(token):
-    cfg_path = os.path.expanduser('~/.openclaw/openclaw.json')
+    cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
     try:
         with open(cfg_path) as f:
             data = json.load(f)
     except Exception:
         data = {}
-    if 'clawmetry' not in data:
-        data['clawmetry'] = {}
-    data['clawmetry']['cloudToken'] = token
+    if "clawmetry" not in data:
+        data["clawmetry"] = {}
+    data["clawmetry"]["cloudToken"] = token
     os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
-    with open(cfg_path, 'w') as f:
+    with open(cfg_path, "w") as f:
         json.dump(data, f, indent=2)
 
 
-def _build_plist(python_exe, script_path, port, host, log_path='/tmp/clawmetry.log'):
+def _build_plist(python_exe, script_path, port, host, log_path="/tmp/clawmetry.log"):
     extra = []
-    if host != '127.0.0.1':
-        extra += ['<string>--host</string>', f'<string>{host}</string>']
+    if host != "127.0.0.1":
+        extra += ["<string>--host</string>", f"<string>{host}</string>"]
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -26672,7 +29188,7 @@ def _build_plist(python_exe, script_path, port, host, log_path='/tmp/clawmetry.l
         <string>--no-debug</string>
         <string>--port</string>
         <string>{port}</string>
-        {''.join(extra)}
+        {"".join(extra)}
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -26688,7 +29204,7 @@ def _build_plist(python_exe, script_path, port, host, log_path='/tmp/clawmetry.l
 
 
 def _build_systemd_unit(python_exe, script_path, port, host):
-    extra = f' --host {host}' if host != '127.0.0.1' else ''
+    extra = f" --host {host}" if host != "127.0.0.1" else ""
     return f"""[Unit]
 Description=ClawMetry Dashboard
 After=network.target
@@ -26707,9 +29223,11 @@ WantedBy=default.target
 # CLI subcommands
 # ---------------------------------------------------------------------------
 
+
 def cmd_start(args):
     """Start ClawMetry as a background daemon."""
     import subprocess
+
     port = args.port
     host = args.host
     python_exe = sys.executable
@@ -26726,8 +29244,9 @@ def cmd_start(args):
 
     # Before loading daemon: if port is busy, only kill if it's our own stale process
     import socket as _socket
+
     _s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-    _port_busy = _s.connect_ex(('127.0.0.1', port)) == 0
+    _port_busy = _s.connect_ex(("127.0.0.1", port)) == 0
     _s.close()
     if _port_busy:
         _old_pid = None
@@ -26739,103 +29258,136 @@ def cmd_start(args):
         if _old_pid:
             try:
                 import subprocess as _sp
-                _r = _sp.run(['ps', '-p', str(_old_pid), '-o', 'command='],
-                             capture_output=True, text=True)
+
+                _r = _sp.run(
+                    ["ps", "-p", str(_old_pid), "-o", "command="],
+                    capture_output=True,
+                    text=True,
+                )
                 _cmd = _r.stdout
-                if 'clawmetry' in _cmd or 'dashboard.py' in _cmd:
+                if "clawmetry" in _cmd or "dashboard.py" in _cmd:
                     import signal as _signal
+
                     os.kill(_old_pid, _signal.SIGTERM)
-                    import time as _time; _time.sleep(1)
+                    import time as _time
+
+                    _time.sleep(1)
                 else:
-                    print(f"❌ Port {port} is in use by another application. Choose a different port with --port.")
+                    print(
+                        f"❌ Port {port} is in use by another application. Choose a different port with --port."
+                    )
                     sys.exit(1)
             except Exception:
                 pass
         else:
-            print(f"❌ Port {port} is in use by another application. Choose a different port with --port.")
+            print(
+                f"❌ Port {port} is in use by another application. Choose a different port with --port."
+            )
             sys.exit(1)
 
     if _is_macos():
         # Write plist
         plist_content = _build_plist(python_exe, script_path, port, host)
         os.makedirs(os.path.dirname(LAUNCHD_PLIST), exist_ok=True)
-        with open(LAUNCHD_PLIST, 'w') as f:
+        with open(LAUNCHD_PLIST, "w") as f:
             f.write(plist_content)
 
         # Unload if already loaded (ignore errors)
-        subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST],
-                       capture_output=True)
-        result = subprocess.run(['launchctl', 'load', LAUNCHD_PLIST],
-                                capture_output=True, text=True)
+        subprocess.run(["launchctl", "unload", LAUNCHD_PLIST], capture_output=True)
+        result = subprocess.run(
+            ["launchctl", "load", LAUNCHD_PLIST], capture_output=True, text=True
+        )
         if result.returncode != 0:
             print(f"❌ Failed to load service: {result.stderr.strip()}")
             sys.exit(1)
 
         import time
+
         time.sleep(1)
         if _launchd_running():
             print(f"[ok] ClawMetry started  ->  http://localhost:{port}")
-            print(f"   Auto-starts on login - logs: /tmp/clawmetry.log")
-            print(f"   Stop with: clawmetry stop")
+            print("   Auto-starts on login - logs: /tmp/clawmetry.log")
+            print("   Stop with: clawmetry stop")
         else:
-            print("[warn]  Service loaded but may still be starting. Check: clawmetry status")
+            print(
+                "[warn]  Service loaded but may still be starting. Check: clawmetry status"
+            )
 
     elif _is_linux():
         unit_content = _build_systemd_unit(python_exe, script_path, port, host)
         os.makedirs(os.path.dirname(SYSTEMD_SERVICE), exist_ok=True)
-        with open(SYSTEMD_SERVICE, 'w') as f:
+        with open(SYSTEMD_SERVICE, "w") as f:
             f.write(unit_content)
 
-        subprocess.run(['systemctl', '--user', 'daemon-reload'], capture_output=True)
-        subprocess.run(['systemctl', '--user', 'enable', 'clawmetry'], capture_output=True)
-        result = subprocess.run(_systemctl_cmd('restart'),
-                                capture_output=True, text=True)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        subprocess.run(
+            ["systemctl", "--user", "enable", "clawmetry"], capture_output=True
+        )
+        result = subprocess.run(
+            _systemctl_cmd("restart"), capture_output=True, text=True
+        )
         if result.returncode != 0:
             print(f"❌ Failed to start service: {result.stderr.strip()}")
             sys.exit(1)
 
         import time
+
         time.sleep(1)
         if _systemd_running():
             print(f"[ok] ClawMetry started  ->  http://localhost:{port}")
-            print(f"   Auto-starts on login - logs: journalctl --user -u clawmetry -f")
-            print(f"   Stop with: clawmetry stop")
+            print("   Auto-starts on login - logs: journalctl --user -u clawmetry -f")
+            print("   Stop with: clawmetry stop")
         else:
-            print("[warn]  Service started but may still be initialising. Check: clawmetry status")
+            print(
+                "[warn]  Service started but may still be initialising. Check: clawmetry status"
+            )
     else:
-        print("[warn]  Daemon mode not supported on this OS. Running in foreground instead.")
+        print(
+            "[warn]  Daemon mode not supported on this OS. Running in foreground instead."
+        )
         _run_server(args)
 
 
 def cmd_stop(args):
     """Stop the ClawMetry dashboard daemon (sync keeps running)."""
     import subprocess
+
     if _is_macos():
         if not os.path.exists(LAUNCHD_PLIST):
             # Try legacy service name
-            _old = os.path.expanduser('~/Library/LaunchAgents/com.clawmetry.plist')
+            _old = os.path.expanduser("~/Library/LaunchAgents/com.clawmetry.plist")
             if os.path.exists(_old):
-                subprocess.run(['launchctl', 'unload', _old], capture_output=True)
+                subprocess.run(["launchctl", "unload", _old], capture_output=True)
                 print("[ok] Stopped legacy ClawMetry service.")
             else:
-                print("ℹ️  No service file found. ClawMetry may not be installed as a service.")
+                print(
+                    "ℹ️  No service file found. ClawMetry may not be installed as a service."
+                )
             sys.exit(0)
-        result = subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST],
-                                capture_output=True, text=True)
+        result = subprocess.run(
+            ["launchctl", "unload", LAUNCHD_PLIST], capture_output=True, text=True
+        )
         if result.returncode == 0:
             print("[ok] ClawMetry dashboard stopped. Cloud sync still running.")
         else:
-            print(f"[warn]  {result.stderr.strip() or 'Service may already be stopped.'}")
+            print(
+                f"[warn]  {result.stderr.strip() or 'Service may already be stopped.'}"
+            )
     elif _is_linux():
         # Stop dashboard service (new or legacy name)
-        result = subprocess.run(_systemctl_cmd('stop', 'clawmetry-dashboard'),
-                                capture_output=True, text=True)
+        result = subprocess.run(
+            _systemctl_cmd("stop", "clawmetry-dashboard"),
+            capture_output=True,
+            text=True,
+        )
         # Also try legacy name
-        subprocess.run(_systemctl_cmd('stop', 'clawmetry'), capture_output=True)
+        subprocess.run(_systemctl_cmd("stop", "clawmetry"), capture_output=True)
         if result.returncode == 0:
             print("[ok] ClawMetry dashboard stopped. Cloud sync still running.")
         else:
-            print(f"[warn]  {result.stderr.strip() or 'Service may already be stopped.'}")
+            print(
+                f"[warn]  {result.stderr.strip() or 'Service may already be stopped.'}"
+            )
     else:
         # Fallback: kill via PID file
         pid = _read_pid()
@@ -26849,21 +29401,24 @@ def cmd_stop(args):
 def cmd_restart(args):
     """Restart the ClawMetry dashboard daemon (sync keeps running)."""
     import subprocess
+
     if _is_macos():
         if not os.path.exists(LAUNCHD_PLIST):
             print("ℹ️  No service installed. Use: clawmetry start")
             sys.exit(1)
-        subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST], capture_output=True)
-        result = subprocess.run(['launchctl', 'load', LAUNCHD_PLIST],
-                                capture_output=True, text=True)
+        subprocess.run(["launchctl", "unload", LAUNCHD_PLIST], capture_output=True)
+        result = subprocess.run(
+            ["launchctl", "load", LAUNCHD_PLIST], capture_output=True, text=True
+        )
         if result.returncode == 0:
             print("[ok] ClawMetry restarted.")
         else:
             print(f"❌ {result.stderr.strip()}")
             sys.exit(1)
     elif _is_linux():
-        result = subprocess.run(_systemctl_cmd('restart'),
-                                capture_output=True, text=True)
+        result = subprocess.run(
+            _systemctl_cmd("restart"), capture_output=True, text=True
+        )
         if result.returncode == 0:
             print("[ok] ClawMetry restarted.")
         else:
@@ -26877,26 +29432,26 @@ def cmd_status(args):
     """Show ClawMetry service status."""
     running = _service_running()
     pid = _get_service_pid() if running else None
-    uptime = _get_uptime_str(pid) if pid else '--'
+    uptime = _get_uptime_str(pid) if pid else "--"
     token = _read_cloud_token()
     port = args.port
 
     if _is_macos():
-        svc_type = 'launchd'
+        svc_type = "launchd"
     elif _is_linux():
-        svc_type = 'systemd'
+        svc_type = "systemd"
     else:
-        svc_type = 'process'
+        svc_type = "process"
 
-    status_icon = '[ok] Running' if running else '❌ Stopped'
-    cloud_status = f'[ok] Connected' if token else '❌ Not connected'
+    status_icon = "[ok] Running" if running else "❌ Stopped"
+    cloud_status = "[ok] Connected" if token else "❌ Not connected"
 
     print(f"""
 🦞 ClawMetry Status
 
   Service:   {status_icon} ({svc_type})
   Port:      {port}
-  PID:       {pid or '--'}
+  PID:       {pid or "--"}
   Uptime:    {uptime}
   URL:       http://localhost:{port}
   Version:   {__version__}
@@ -26906,9 +29461,13 @@ def cmd_status(args):
 
 def _kill_all_sync_procs():
     """Kill ALL running clawmetry sync processes (any platform)."""
-    import subprocess, signal
+    import subprocess
+    import signal
+
     try:
-        subprocess.run(['pkill', '-9', '-f', 'clawmetry.*sync'], capture_output=True, timeout=5)
+        subprocess.run(
+            ["pkill", "-9", "-f", "clawmetry.*sync"], capture_output=True, timeout=5
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     pid = _read_pid()
@@ -26918,39 +29477,57 @@ def _kill_all_sync_procs():
         except OSError:
             pass
 
+
 def _is_root():
     return os.geteuid() == 0 if hasattr(os, "geteuid") else False
+
 
 def _systemctl_cmd(action, service="clawmetry-dashboard"):
     """Build systemctl command -- omit --user when running as root."""
     if _is_root():
         return ["systemctl", action, service] if service else ["systemctl", action]
-    return ["systemctl", "--user", action, service] if service else ["systemctl", "--user", action]
+    return (
+        ["systemctl", "--user", action, service]
+        if service
+        else ["systemctl", "--user", action]
+    )
+
 
 def _start_daemon_background():
     """Start sync daemon as a background process (fallback for non-service setups)."""
-    import subprocess, pathlib as _pl
+    import subprocess
+    import pathlib as _pl
+
     proc = subprocess.Popen(
         [sys.executable, "-m", "clawmetry.sync"],
-        stdout=open(os.devnull, "w"), stderr=open(os.devnull, "w"),
-        start_new_session=True)
+        stdout=open(os.devnull, "w"),
+        stderr=open(os.devnull, "w"),
+        start_new_session=True,
+    )
     pid_file = _pl.Path.home() / ".clawmetry" / "sync.pid"
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(proc.pid))
     print(f"  Sync daemon started (background, PID {proc.pid})")
 
+
 def _is_sync_running():
     """Check if any clawmetry sync process is running."""
     import subprocess
+
     try:
-        r = subprocess.run(["pgrep", "-f", "clawmetry.*sync"], capture_output=True, timeout=3)
+        r = subprocess.run(
+            ["pgrep", "-f", "clawmetry.*sync"], capture_output=True, timeout=3
+        )
         return r.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
+
 def _ensure_systemd_service():
     """Create systemd service file if needed (supports root and user mode)."""
-    import pathlib as _pl, subprocess
+    import pathlib as _pl
+    import subprocess
+
     if _is_root():
         svc_dir = _pl.Path("/etc/systemd/system")
     else:
@@ -26981,11 +29558,16 @@ WantedBy={target}
         subprocess.run(["systemctl", "enable", "clawmetry-sync"], capture_output=True)
     else:
         subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-        subprocess.run(["systemctl", "--user", "enable", "clawmetry-sync"], capture_output=True)
+        subprocess.run(
+            ["systemctl", "--user", "enable", "clawmetry-sync"], capture_output=True
+        )
+
 
 def cmd_connect(args):
     """Connect to ClawMetry Cloud."""
-    import subprocess, pathlib
+    import subprocess
+    import pathlib
+
     print()
     print("ClawMetry Cloud Connect")
     print()
@@ -27021,7 +29603,9 @@ def cmd_connect(args):
 
     _write_cloud_token(token)
     print()
-    print(f"  Connected! View your fleet at: https://app.clawmetry.com/fleet/?token={token}")
+    print(
+        f"  Connected! View your fleet at: https://app.clawmetry.com/fleet/?token={token}"
+    )
     print()
 
     # Install + start service
@@ -27044,6 +29628,7 @@ def cmd_connect(args):
 
     # Verify after 3s
     import time
+
     time.sleep(3)
     if _is_sync_running():
         print("  Sync daemon is running -- your node will appear in ~60 seconds")
@@ -27061,22 +29646,23 @@ def cmd_connect(args):
 def cmd_uninstall(args):
     """Stop and remove the ClawMetry service."""
     import subprocess
+
     print("🗑️  Uninstalling ClawMetry service...")
 
     if _is_macos():
         if os.path.exists(LAUNCHD_PLIST):
-            subprocess.run(['launchctl', 'unload', LAUNCHD_PLIST], capture_output=True)
+            subprocess.run(["launchctl", "unload", LAUNCHD_PLIST], capture_output=True)
             os.remove(LAUNCHD_PLIST)
             print(f"  Removed: {LAUNCHD_PLIST}")
         else:
             print("  No launchd service found.")
     elif _is_linux():
-        subprocess.run(_systemctl_cmd('stop'), capture_output=True)
-        subprocess.run(_systemctl_cmd('disable'), capture_output=True)
+        subprocess.run(_systemctl_cmd("stop"), capture_output=True)
+        subprocess.run(_systemctl_cmd("disable"), capture_output=True)
         if os.path.exists(SYSTEMD_SERVICE):
             os.remove(SYSTEMD_SERVICE)
             print(f"  Removed: {SYSTEMD_SERVICE}")
-        subprocess.run(['systemctl', '--user', 'daemon-reload'], capture_output=True)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
     else:
         print("  Daemon mode not supported on this OS.")
 
@@ -27089,6 +29675,7 @@ def cmd_uninstall(args):
 
 def _run_server(args):
     import sys as _sys
+
     # Windows: guard against closed/detached stdout/stderr before Flask or
     # click try to use them.  Two scenarios cause problems:
     #
@@ -27105,14 +29692,15 @@ def _run_server(args):
     #   a) Try fileno() first — if it raises, the stream is closed/detached;
     #      replace with a devnull sink so click/Flask banners never crash.
     #   b) If the stream is open, reconfigure() to UTF-8 (Python 3.7+).
-    if _sys.platform == 'win32':
+    if _sys.platform == "win32":
         import io as _io
-        for _attr in ('stdout', 'stderr'):
+
+        for _attr in ("stdout", "stderr"):
             _stream = getattr(_sys, _attr, None)
             if _stream is None:
                 # Completely absent — attach a null sink
                 try:
-                    setattr(_sys, _attr, open(os.devnull, 'w', encoding='utf-8'))
+                    setattr(_sys, _attr, open(os.devnull, "w", encoding="utf-8"))
                 except OSError:
                     setattr(_sys, _attr, _io.StringIO())
                 continue
@@ -27122,13 +29710,13 @@ def _run_server(args):
                 # Stream is closed or has no real file descriptor.
                 # Replace with devnull so click._winconsole never calls fileno().
                 try:
-                    setattr(_sys, _attr, open(os.devnull, 'w', encoding='utf-8'))
+                    setattr(_sys, _attr, open(os.devnull, "w", encoding="utf-8"))
                 except OSError:
                     setattr(_sys, _attr, _io.StringIO())
                 continue
             # Stream is open — reconfigure to UTF-8 to avoid CP1252 issues.
             try:
-                _stream.reconfigure(encoding='utf-8', errors='replace')
+                _stream.reconfigure(encoding="utf-8", errors="replace")
             except (AttributeError, Exception):
                 pass
     """Start the Flask server (foreground). Called by foreground mode and cmd_start on unsupported OS."""
@@ -27138,14 +29726,20 @@ def _run_server(args):
     # Parse --monitor-service flags
     global EXTRA_SERVICES, MC_URL
     for svc_spec in args.monitor_service:
-        if ':' in svc_spec:
-            name, port_str = svc_spec.rsplit(':', 1)
+        if ":" in svc_spec:
+            name, port_str = svc_spec.rsplit(":", 1)
             try:
-                EXTRA_SERVICES.append({'name': name.strip(), 'port': int(port_str.strip())})
+                EXTRA_SERVICES.append(
+                    {"name": name.strip(), "port": int(port_str.strip())}
+                )
             except ValueError:
-                print(f"[warn]  Invalid --monitor-service format: {svc_spec} (expected NAME:PORT)")
+                print(
+                    f"[warn]  Invalid --monitor-service format: {svc_spec} (expected NAME:PORT)"
+                )
         else:
-            print(f"[warn]  Invalid --monitor-service format: {svc_spec} (expected NAME:PORT)")
+            print(
+                f"[warn]  Invalid --monitor-service format: {svc_spec} (expected NAME:PORT)"
+            )
 
     if args.mc_url:
         MC_URL = args.mc_url
@@ -27155,13 +29749,13 @@ def _run_server(args):
     global METRICS_FILE
     if args.metrics_file:
         METRICS_FILE = os.path.expanduser(args.metrics_file)
-    elif os.environ.get('OPENCLAW_METRICS_FILE'):
-        METRICS_FILE = os.path.expanduser(os.environ['OPENCLAW_METRICS_FILE'])
+    elif os.environ.get("OPENCLAW_METRICS_FILE"):
+        METRICS_FILE = os.path.expanduser(os.environ["OPENCLAW_METRICS_FILE"])
 
     global SSE_MAX_SECONDS, MAX_LOG_STREAM_CLIENTS, MAX_HEALTH_STREAM_CLIENTS
     sse_max = args.sse_max_seconds
     if sse_max is None:
-        env_sse_max = os.environ.get('OPENCLAW_SSE_MAX_SECONDS', '').strip()
+        env_sse_max = os.environ.get("OPENCLAW_SSE_MAX_SECONDS", "").strip()
         if env_sse_max:
             try:
                 sse_max = int(env_sse_max)
@@ -27177,7 +29771,7 @@ def _run_server(args):
 
     global _history_db, _history_collector
     if _HAS_HISTORY:
-        history_db_path = os.environ.get('CLAWMETRY_HISTORY_DB', None)
+        history_db_path = os.environ.get("CLAWMETRY_HISTORY_DB", None)
         _history_db = HistoryDB(history_db_path)
         _history_collector = HistoryCollector(_history_db, _gw_invoke)
         _history_collector.start()
@@ -27214,16 +29808,22 @@ def _run_server(args):
         print(f"  Logs:       {LOG_DIR}")
         print(f"  Metrics:    {_metrics_file_path()}")
         if _HAS_OTEL_PROTO:
-            print(f"  OTLP:       [ok] Ready (opentelemetry-proto installed)")
+            print("  OTLP:       [ok] Ready (opentelemetry-proto installed)")
         print(f"  User:       {USER_NAME}")
-        print(f"  Mode:       {'[dev]  Dev (auto-reload ON)' if args.debug else '[prod] Prod (auto-reload OFF)'}")
-        print(f"  SSE Limits: {SSE_MAX_SECONDS}s max duration - logs {MAX_LOG_STREAM_CLIENTS} clients - health {MAX_HEALTH_STREAM_CLIENTS} clients")
+        print(
+            f"  Mode:       {'[dev]  Dev (auto-reload ON)' if args.debug else '[prod] Prod (auto-reload OFF)'}"
+        )
+        print(
+            f"  SSE Limits: {SSE_MAX_SECONDS}s max duration - logs {MAX_LOG_STREAM_CLIENTS} clients - health {MAX_HEALTH_STREAM_CLIENTS} clients"
+        )
         print(f"  Fleet DB:   {_fleet_db_path()}")
-        print(f"  Fleet Auth: {'Enabled (key set)' if FLEET_API_KEY else 'Open (no key - set --fleet-api-key for production)'}")
+        print(
+            f"  Fleet Auth: {'Enabled (key set)' if FLEET_API_KEY else 'Open (no key - set --fleet-api-key for production)'}"
+        )
         if _HAS_HISTORY and _history_db:
             print(f"  History DB: {_history_db.db_path}")
         else:
-            print(f"  History:    Disabled (history.py not found)")
+            print("  History:    Disabled (history.py not found)")
         print()
 
         warnings, tips = validate_configuration()
@@ -27235,7 +29835,9 @@ def _run_server(args):
                 print(f"  {tip}")
             print()
             if warnings:
-                print("[tip] The dashboard will work with limited functionality. See tips above for full experience.")
+                print(
+                    "[tip] The dashboard will work with limited functionality. See tips above for full experience."
+                )
                 print()
     except (ValueError, OSError):
         pass  # stdout may be closed/redirected on Windows
@@ -27244,39 +29846,50 @@ def _run_server(args):
         local_ip = get_local_ip()
         public_ip = get_public_ip()
         print(f"  -> http://localhost:{args.port}")
-        if local_ip != '127.0.0.1':
+        if local_ip != "127.0.0.1":
             print(f"  -> http://{local_ip}:{args.port}  (LAN)")
         if public_ip and public_ip != local_ip:
-            print(f"  -> http://{public_ip}:{args.port}  (Public - ensure port is open)")
+            print(
+                f"  -> http://{public_ip}:{args.port}  (Public - ensure port is open)"
+            )
         if _HAS_OTEL_PROTO:
             print(f"  -> OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
         print()
         # Cloud nudge — only if not already connected
-        _already_connected = bool(os.environ.get('CLAWMETRY_API_KEY') or os.environ.get('CLAWMETRY_NODE_ID'))
+        _already_connected = bool(
+            os.environ.get("CLAWMETRY_API_KEY") or os.environ.get("CLAWMETRY_NODE_ID")
+        )
         if not _already_connected:
             _sep = "  -" if sys.platform == "win32" else "  \u2500"
             print(_sep * 25)
             print()
             _globe = "[web]" if sys.platform == "win32" else "🌐 "
-            _lock  = "[enc]" if sys.platform == "win32" else "🔒 "
-            print(f"  {_globe}  Run clawmetry connect to access your dashboard from app.clawmetry.com")
-            print(f"      {_lock}  E2E encrypted with your local key — decrypted in the dashboard on demand.")
+            _lock = "[enc]" if sys.platform == "win32" else "🔒 "
+            print(
+                f"  {_globe}  Run clawmetry connect to access your dashboard from app.clawmetry.com"
+            )
+            print(
+                f"      {_lock}  E2E encrypted with your local key — decrypted in the dashboard on demand."
+            )
             print("      Free 7-day trial · no credit card required.")
             print()
 
         if not args.debug:
-            print(f"  Tip: run as background service with: clawmetry start")
+            print("  Tip: run as background service with: clawmetry start")
             print()
     except (ValueError, OSError):
         pass  # stdout may be closed/redirected on Windows
 
     if args.debug:
         # Dev mode -- use Flask's reloader
-        app.run(host=args.host, port=args.port, debug=True, use_reloader=True, threaded=True)
+        app.run(
+            host=args.host, port=args.port, debug=True, use_reloader=True, threaded=True
+        )
     else:
         # Prod mode -- use Waitress (no WSGI warning, multi-threaded)
         try:
             from waitress import serve
+
             serve(app, host=args.host, port=args.port, threads=8)
         except ImportError:
             # Waitress not installed -- fall back to Flask dev server.
@@ -27284,23 +29897,31 @@ def _run_server(args):
             # Flask/Click banner printing crashes on closed file handles.
             # Unconditionally redirect to devnull on Windows to prevent it.
             import logging
-            log = logging.getLogger('werkzeug')
+
+            log = logging.getLogger("werkzeug")
             log.setLevel(logging.ERROR)
-            if os.name == 'nt':
-                sys.stdout = open(os.devnull, 'w', encoding='utf-8')
-                sys.stderr = open(os.devnull, 'w', encoding='utf-8')
-            app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=True)
+            if os.name == "nt":
+                sys.stdout = open(os.devnull, "w", encoding="utf-8")
+                sys.stderr = open(os.devnull, "w", encoding="utf-8")
+            app.run(
+                host=args.host,
+                port=args.port,
+                debug=False,
+                use_reloader=False,
+                threaded=True,
+            )
 
 
 def _init_data_provider():
     """Phase 3: Initialize the active DataProvider after path detection."""
     try:
         from clawmetry.providers import init_providers
+
         return init_providers(
-            sessions_dir=SESSIONS_DIR or '',
-            log_dir=LOG_DIR or '',
-            workspace=WORKSPACE or '',
-            metrics_file=METRICS_FILE or '',
+            sessions_dir=SESSIONS_DIR or "",
+            log_dir=LOG_DIR or "",
+            workspace=WORKSPACE or "",
+            metrics_file=METRICS_FILE or "",
         )
     except Exception:
         return None
@@ -27312,78 +29933,125 @@ def main():
     # (and to foreground mode when no subcommand is given).
     # -----------------------------------------------------------------------
     shared = argparse.ArgumentParser(add_help=False)
-    shared.add_argument('--port', '-p', type=int, default=8900, help='Port (default: 8900)')
-    shared.add_argument('--host', '-H', type=str, default='127.0.0.1', help='Host (default: 127.0.0.1)')
-    shared.add_argument('--workspace', '-w', type=str, help='Agent workspace directory')
-    shared.add_argument('--data-dir', '-d', type=str, help='OpenClaw data directory (e.g. ~/.openclaw).')
-    shared.add_argument('--openclaw-dir', type=str, help='OpenClaw config directory (default: ~/.openclaw). Env: CLAWMETRY_OPENCLAW_DIR')
-    shared.add_argument('--log-dir', '-l', type=str, help='Log directory')
-    shared.add_argument('--sessions-dir', '-s', type=str, help='Sessions directory (transcript .jsonl files)')
-    shared.add_argument('--metrics-file', '-m', type=str, help='Path to metrics persistence JSON file')
-    shared.add_argument('--name', '-n', type=str, help='Your name (shown in Flow tab)')
-    shared.add_argument('--debug', dest='debug', action='store_true', default=True)
-    shared.add_argument('--no-debug', dest='debug', action='store_false', help='Disable debug mode and auto-reload')
-    shared.add_argument('--sse-max-seconds', type=int, default=None)
-    shared.add_argument('--max-log-stream-clients', type=int, default=10)
-    shared.add_argument('--max-health-stream-clients', type=int, default=10)
-    shared.add_argument('--monitor-service', action='append', default=[], metavar='NAME:PORT')
-    shared.add_argument('--mc-url', type=str)
-    shared.add_argument('--fleet-api-key', type=str)
-    shared.add_argument('--fleet-db', type=str)
+    shared.add_argument(
+        "--port", "-p", type=int, default=8900, help="Port (default: 8900)"
+    )
+    shared.add_argument(
+        "--host", "-H", type=str, default="127.0.0.1", help="Host (default: 127.0.0.1)"
+    )
+    shared.add_argument("--workspace", "-w", type=str, help="Agent workspace directory")
+    shared.add_argument(
+        "--data-dir", "-d", type=str, help="OpenClaw data directory (e.g. ~/.openclaw)."
+    )
+    shared.add_argument(
+        "--openclaw-dir",
+        type=str,
+        help="OpenClaw config directory (default: ~/.openclaw). Env: CLAWMETRY_OPENCLAW_DIR",
+    )
+    shared.add_argument("--log-dir", "-l", type=str, help="Log directory")
+    shared.add_argument(
+        "--sessions-dir",
+        "-s",
+        type=str,
+        help="Sessions directory (transcript .jsonl files)",
+    )
+    shared.add_argument(
+        "--metrics-file", "-m", type=str, help="Path to metrics persistence JSON file"
+    )
+    shared.add_argument("--name", "-n", type=str, help="Your name (shown in Flow tab)")
+    shared.add_argument("--debug", dest="debug", action="store_true", default=True)
+    shared.add_argument(
+        "--no-debug",
+        dest="debug",
+        action="store_false",
+        help="Disable debug mode and auto-reload",
+    )
+    shared.add_argument("--sse-max-seconds", type=int, default=None)
+    shared.add_argument("--max-log-stream-clients", type=int, default=10)
+    shared.add_argument("--max-health-stream-clients", type=int, default=10)
+    shared.add_argument(
+        "--monitor-service", action="append", default=[], metavar="NAME:PORT"
+    )
+    shared.add_argument("--mc-url", type=str)
+    shared.add_argument("--fleet-api-key", type=str)
+    shared.add_argument("--fleet-db", type=str)
 
     # -----------------------------------------------------------------------
     # Top-level parser
     # -----------------------------------------------------------------------
     parser = argparse.ArgumentParser(
-        prog='clawmetry',
+        prog="clawmetry",
         description=HELP_TEXT.format(version=__version__),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[shared],
     )
+
     class _SafeVersion(argparse.Action):
         def __call__(self, parser, namespace, values, option_string=None):
             try:
                 import sys
-                sys.stdout.write(f'clawmetry {__version__}\n')
+
+                sys.stdout.write(f"clawmetry {__version__}\n")
                 sys.stdout.flush()
             except Exception:
                 pass
             parser.exit()
-    parser.add_argument('--version', '-v', nargs=0, action=_SafeVersion, help='Show version')
 
-    subparsers = parser.add_subparsers(dest='command', metavar='command')
+    parser.add_argument(
+        "--version", "-v", nargs=0, action=_SafeVersion, help="Show version"
+    )
+
+    subparsers = parser.add_subparsers(dest="command", metavar="command")
 
     # clawmetry start
-    p_start = subparsers.add_parser('start', parents=[shared], add_help=True,
-                                    help='Start ClawMetry as a background service')
+    p_start = subparsers.add_parser(
+        "start",
+        parents=[shared],
+        add_help=True,
+        help="Start ClawMetry as a background service",
+    )
 
     # clawmetry stop
-    p_stop = subparsers.add_parser('stop', parents=[shared], add_help=True,
-                                   help='Stop the background service')
+    p_stop = subparsers.add_parser(
+        "stop", parents=[shared], add_help=True, help="Stop the background service"
+    )
 
     # clawmetry restart
-    p_restart = subparsers.add_parser('restart', parents=[shared], add_help=True,
-                                      help='Restart the background service')
+    p_restart = subparsers.add_parser(
+        "restart",
+        parents=[shared],
+        add_help=True,
+        help="Restart the background service",
+    )
 
     # clawmetry status
-    p_status = subparsers.add_parser('status', parents=[shared], add_help=True,
-                                     help='Show service status, port, and uptime')
+    p_status = subparsers.add_parser(
+        "status",
+        parents=[shared],
+        add_help=True,
+        help="Show service status, port, and uptime",
+    )
 
     # clawmetry connect
-    p_connect = subparsers.add_parser('connect', parents=[shared], add_help=True,
-                                      help=argparse.SUPPRESS)
+    p_connect = subparsers.add_parser(
+        "connect", parents=[shared], add_help=True, help=argparse.SUPPRESS
+    )
 
     # clawmetry uninstall
-    p_uninstall = subparsers.add_parser('uninstall', parents=[shared], add_help=True,
-                                        help='Remove the background service')
+    p_uninstall = subparsers.add_parser(
+        "uninstall",
+        parents=[shared],
+        add_help=True,
+        help="Remove the background service",
+    )
 
     # clawmetry help (alias)
-    subparsers.add_parser('help', add_help=True, help='Show this help message')
+    subparsers.add_parser("help", add_help=True, help="Show this help message")
 
     args = parser.parse_args()
 
     # "clawmetry help" -> print help and exit
-    if args.command == 'help':
+    if args.command == "help":
         try:
             parser.print_help()
         except (ValueError, OSError):
@@ -27391,17 +30059,17 @@ def main():
         sys.exit(0)
 
     # Dispatch to subcommand handlers
-    if args.command == 'start':
+    if args.command == "start":
         cmd_start(args)
-    elif args.command == 'stop':
+    elif args.command == "stop":
         cmd_stop(args)
-    elif args.command == 'restart':
+    elif args.command == "restart":
         cmd_restart(args)
-    elif args.command == 'status':
+    elif args.command == "status":
         cmd_status(args)
-    elif args.command == 'connect':
+    elif args.command == "connect":
         cmd_connect(args)
-    elif args.command == 'uninstall':
+    elif args.command == "uninstall":
         cmd_uninstall(args)
     else:
         # No subcommand -> foreground server (original behaviour)
@@ -27417,5 +30085,5 @@ def main():
         _run_server(args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

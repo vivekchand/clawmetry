@@ -1,4 +1,5 @@
 """Provider registry for ClawMetry data backends."""
+
 from __future__ import annotations
 import logging
 import os
@@ -31,17 +32,24 @@ def set_active_provider(provider: ClawMetryDataProvider) -> None:
     _active_provider = provider
 
 
-def init_providers(sessions_dir: str = "", log_dir: str = "", workspace: str = "",
-                   metrics_file: str = "", fleet_db: str = "") -> ClawMetryDataProvider:
+def init_providers(
+    sessions_dir: str = "",
+    log_dir: str = "",
+    workspace: str = "",
+    metrics_file: str = "",
+    fleet_db: str = "",
+) -> ClawMetryDataProvider:
     """
     Initialize built-in providers and set the active one.
     Called once at dashboard startup after path detection.
     """
     from clawmetry.providers.local import LocalDataProvider
+
     register_provider("local", LocalDataProvider)
 
     try:
         from clawmetry.providers.turso import TursoDataProvider
+
         register_provider("turso", TursoDataProvider)
     except Exception as e:
         logger.debug("Turso provider not available: %s", e)
@@ -49,6 +57,7 @@ def init_providers(sessions_dir: str = "", log_dir: str = "", workspace: str = "
     # Load 3rd-party providers via entry points
     try:
         import importlib.metadata
+
         for ep in importlib.metadata.entry_points(group="clawmetry.providers"):
             try:
                 cls = ep.load()

@@ -16,6 +16,7 @@ Design goals:
   - Thread-safe JSONL writes
   - Never crashes the host application
 """
+
 from __future__ import annotations
 
 import json
@@ -37,9 +38,12 @@ _LLM_URL_PATTERNS = [
     "openrouter.ai",
 ]
 
+
 # Output file — in OpenClaw dir so ClawMetry sync picks it up
 def _get_output_file() -> Path:
-    openclaw_dir = os.environ.get("CLAWMETRY_OPENCLAW_DIR", str(Path.home() / ".openclaw"))
+    openclaw_dir = os.environ.get(
+        "CLAWMETRY_OPENCLAW_DIR", str(Path.home() / ".openclaw")
+    )
     return Path(openclaw_dir) / "clawmetry-intercepted.jsonl"
 
 
@@ -80,7 +84,9 @@ _PRICING: Dict[str, Dict[str, float]] = {
 }
 
 
-def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> Optional[float]:
+def _estimate_cost(
+    model: str, input_tokens: int, output_tokens: int
+) -> Optional[float]:
     """Estimate cost in USD for given model and token counts."""
     if not model or (input_tokens == 0 and output_tokens == 0):
         return None
@@ -88,12 +94,15 @@ def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> Optiona
     model_lower = model.lower()
     for key, prices in _PRICING.items():
         if key in model_lower:
-            cost = (input_tokens * prices["input"] + output_tokens * prices["output"]) / 1_000_000
+            cost = (
+                input_tokens * prices["input"] + output_tokens * prices["output"]
+            ) / 1_000_000
             return round(cost, 8)
     return None
 
 
 # ── URL detection ──────────────────────────────────────────────────────────────
+
 
 def _is_llm_url(url: str) -> bool:
     """Return True if the URL looks like an LLM provider endpoint."""
@@ -118,6 +127,7 @@ def _detect_provider(url: str) -> str:
 
 
 # ── Request/Response parsing ───────────────────────────────────────────────────
+
 
 def _extract_model_from_body(body_bytes: bytes, url: str) -> Optional[str]:
     """Try to extract model name from request body JSON."""
@@ -184,6 +194,7 @@ def _extract_model_from_response(body_bytes: bytes, provider: str) -> Optional[s
 
 # ── JSONL writer ───────────────────────────────────────────────────────────────
 
+
 def _write_event(event: Dict[str, Any]) -> None:
     """Thread-safely append an event to the JSONL output file."""
     try:
@@ -230,6 +241,7 @@ def _build_event(
 
 # ── httpx patching ─────────────────────────────────────────────────────────────
 
+
 def _patch_httpx() -> bool:
     """Monkey-patch httpx.Client.send. Returns True on success."""
     global _patched_httpx
@@ -240,7 +252,9 @@ def _patch_httpx() -> bool:
 
         _original_send = httpx.Client.send
 
-        def _intercepted_send(self: httpx.Client, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        def _intercepted_send(
+            self: httpx.Client, request: httpx.Request, **kwargs: Any
+        ) -> httpx.Response:
             url = str(request.url)
             if not _is_llm_url(url):
                 return _original_send(self, request, **kwargs)
@@ -347,6 +361,7 @@ def _patch_httpx() -> bool:
 
 # ── requests patching ──────────────────────────────────────────────────────────
 
+
 def _patch_requests() -> bool:
     """Monkey-patch requests.Session.send. Returns True on success."""
     global _patched_requests
@@ -418,6 +433,7 @@ def _patch_requests() -> bool:
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
+
 
 def activate() -> Dict[str, bool]:
     """
