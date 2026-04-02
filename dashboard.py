@@ -9293,6 +9293,10 @@ function clawmetryLogout(){
     <div class="heatmap-wrap"><div id="heatmap-grid" class="heatmap-grid">Loading...</div></div>
     <div id="heatmap-legend" class="heatmap-legend"></div>
   </div>
+  <div class="section-title">🎯 Skill Cost Leaderboard <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">heuristic attribution — 30s window</span></div>
+  <div class="card" id="skill-leaderboard-card">
+    <div id="skill-leaderboard-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+  </div>
 </div>
 
 <!-- CRONS -->
@@ -13777,6 +13781,65 @@ async function loadModelAttribution() {
   } catch(e) {
     console.error('loadModelAttribution', e);
   }
+}
+
+// ===== Skill Attribution =====
+async function loadSkillAttribution() {
+  var el = document.getElementById('skill-leaderboard-content');
+  if (!el) return;
+  try {
+    var data = await fetch('/api/skill-attribution').then(function(r) { return r.json(); });
+    var top5 = data.top5_week || [];
+    var allSkills = data.skills || [];
+    var totalCost = data.total_cost || 0;
+    function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+    if (top5.length === 0) {
+      el.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No skill invocations detected yet. Skills are detected when SKILL.md files are read during sessions.</span>';
+      return;
+    }
+    var html = '<table class="usage-table" style="width:100%;">';
+    html += '<thead><tr><th>Skill</th><th style="text-align:right;">Invocations</th><th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Total Cost</th><th></th></tr></thead><tbody>';
+    top5.forEach(function(s) {
+      html += '<tr>';
+      html += '<td style="padding:6px 8px;font-size:13px;font-weight:600;">' + escHtml(s.name) + '</td>';
+      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;color:var(--text-muted);">' + s.invocations + '</td>';
+      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;">' + fmtCost(s.avg_cost) + '</td>';
+      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;color:var(--text-accent);">' + fmtCost(s.total_cost) + '</td>';
+      html += '<td style="padding:6px 8px;font-size:12px;text-align:right;"><a href="' + escHtml(s.clawhub_url) + '" target="_blank" style="color:#4caf50;text-decoration:none;">ClawHub ↗</a></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    if (allSkills.length > 5) {
+      html += '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Showing top 5 of ' + allSkills.length + ' skills this week. <a href="#" onclick="loadAllSkills();return false;" style="color:#4caf50;">View all</a></div>';
+    }
+    html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">All-time total: ' + fmtCost(totalCost) + ' · ' + escHtml(data.note || '') + '</div>';
+    el.innerHTML = html;
+  } catch(e) {
+    if (el) el.innerHTML = '<span style="color:var(--text-muted)">Skill attribution unavailable</span>';
+    console.error('loadSkillAttribution', e);
+  }
+}
+
+function loadAllSkills() {
+  var el = document.getElementById('skill-leaderboard-content');
+  if (!el) return;
+  fetch('/api/skill-attribution').then(function(r) { return r.json(); }).then(function(data) {
+    var allSkills = data.skills || [];
+    function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+    var html = '<table class="usage-table" style="width:100%;">';
+    html += '<thead><tr><th>Skill</th><th style="text-align:right;">Invocations</th><th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Total Cost</th><th></th></tr></thead><tbody>';
+    allSkills.forEach(function(s) {
+      html += '<tr><td style="padding:6px 8px;font-size:13px;font-weight:600;">' + escHtml(s.name) + '</td>';
+      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;color:var(--text-muted);">' + s.invocations + '</td>';
+      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;">' + fmtCost(s.avg_cost) + '</td>';
+      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;color:var(--text-accent);">' + fmtCost(s.total_cost) + '</td>';
+      html += '<td style="padding:6px 8px;font-size:12px;text-align:right;"><a href="' + escHtml(s.clawhub_url) + '" target="_blank" style="color:#4caf50;text-decoration:none;">ClawHub ↗</a></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">All-time total: ' + fmtCost(data.total_cost || 0) + ' · ' + escHtml(data.note || '') + '</div>';
+    el.innerHTML = html;
+  }).catch(function() {});
 }
 
 // ===== Transcripts =====
