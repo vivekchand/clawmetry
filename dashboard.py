@@ -3482,6 +3482,21 @@ function clawmetryLogout(){
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
         <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
+        <!-- 🔍 Diagnostics Panel (GH#28) -->
+        <div id="sh-diagnostics-wrap">
+          <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;">🔍 Configuration Diagnostics</div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button id="sh-diagnostics-copy" onclick="event.stopPropagation();copyDiagnostics();" style="font-size:10px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:4px;color:var(--text-muted);cursor:pointer;">📋 Copy</button>
+              <span class="diag-chevron" style="font-size:10px;color:var(--text-muted);">▼</span>
+            </div>
+          </div>
+          <div id="sh-diagnostics-body" style="margin-bottom:14px;">
+            <div id="sh-diagnostics" style="font-family:\'JetBrains Mono\',monospace;font-size:12px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:10px 12px;line-height:1.9;">
+              <div style="color:var(--text-muted);">Loading diagnostics...</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -4968,6 +4983,7 @@ async function loadAll() {
     loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -9249,6 +9265,21 @@ function clawmetryLogout(){
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
         <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
+        <!-- 🔍 Diagnostics Panel (GH#28) -->
+        <div id="sh-diagnostics-wrap">
+          <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;">🔍 Configuration Diagnostics</div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button id="sh-diagnostics-copy" onclick="event.stopPropagation();copyDiagnostics();" style="font-size:10px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:4px;color:var(--text-muted);cursor:pointer;">📋 Copy</button>
+              <span class="diag-chevron" style="font-size:10px;color:var(--text-muted);">▼</span>
+            </div>
+          </div>
+          <div id="sh-diagnostics-body" style="margin-bottom:14px;">
+            <div id="sh-diagnostics" style="font-family:\'JetBrains Mono\',monospace;font-size:12px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:10px 12px;line-height:1.9;">
+              <div style="color:var(--text-muted);">Loading diagnostics...</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -10836,6 +10867,7 @@ async function loadAll() {
     loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -28883,6 +28915,74 @@ def api_health():
         )
 
     return jsonify({"checks": checks})
+
+
+@bp_health.route("/api/diagnostics")
+def api_diagnostics():
+    """Surface detected configuration for the Diagnostics panel (GH#28).
+
+    Returns a snapshot of the auto-detected config so users can verify what
+    ClawMetry found without digging through env vars or config files.
+
+    Shape::
+
+        {
+          "gateway_url":        "http://localhost:18789",
+          "gateway_port":       18789,
+          "workspace_path":     "/home/user/clawd",
+          "auth_token_status":  "present" | "missing",
+          "openclaw_flags":     {"reasoning": "enabled", "model": "claude-3-5-sonnet"},
+          "warnings":           ["[warn]  ..."],
+          "auto_detected":      ["workspace", "gateway_port"]
+        }
+    """
+    auto_detected = []
+
+    # Gateway URL & port
+    gw_port = _detect_gateway_port()
+    gw_url = GATEWAY_URL or f"http://localhost:{gw_port}"
+    if not GATEWAY_URL:
+        auto_detected.append("gateway_port")
+
+    # Workspace
+    ws = WORKSPACE or os.getcwd()
+    if WORKSPACE:
+        auto_detected.append("workspace")
+
+    # Auth token — never expose the value, only whether it is present
+    token = GATEWAY_TOKEN or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+    auth_token_status = "present" if token else "missing"
+
+    # OpenClaw runtime flags from environment
+    openclaw_flags = {}
+    flag_map = {
+        "OPENCLAW_MODEL": "model",
+        "OPENCLAW_REASONING": "reasoning",
+        "OPENCLAW_THINKING": "thinking",
+        "OPENCLAW_MAX_TOKENS": "max_tokens",
+    }
+    for env_key, flag_name in flag_map.items():
+        val = os.environ.get(env_key, "").strip()
+        if val:
+            openclaw_flags[flag_name] = val
+
+    # Run validate_configuration for warnings/tips
+    try:
+        warnings_list, _tips = validate_configuration()
+    except Exception:
+        warnings_list = []
+
+    return jsonify(
+        {
+            "gateway_url": gw_url,
+            "gateway_port": gw_port,
+            "workspace_path": ws,
+            "auth_token_status": auth_token_status,
+            "openclaw_flags": openclaw_flags,
+            "warnings": warnings_list,
+            "auto_detected": auto_detected,
+        }
+    )
 
 
 @bp_health.route("/api/service-status")
