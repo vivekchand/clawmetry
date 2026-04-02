@@ -3,6 +3,7 @@ ClawMetry configuration dataclass.
 Phase 2: defines the Config structure that will replace global variables in Phase 3.
 Currently used for type hints and documentation. dashboard.py globals remain unchanged.
 """
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -16,6 +17,7 @@ class ClawMetryConfig:
     In Phase 3, this will replace the module-level globals in dashboard.py:
     WORKSPACE, SESSIONS_DIR, LOG_DIR, MEMORY_DIR, METRICS_FILE, etc.
     """
+
     # Paths
     workspace: str = ""
     sessions_dir: str = ""
@@ -44,6 +46,7 @@ class ClawMetryConfig:
         """Populate from dashboard.py module-level globals (migration bridge)."""
         try:
             import dashboard as d
+
             self.workspace = getattr(d, "WORKSPACE", "") or ""
             self.sessions_dir = getattr(d, "SESSIONS_DIR", "") or ""
             self.log_dir = getattr(d, "LOG_DIR", "") or ""

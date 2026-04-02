@@ -1,4 +1,5 @@
 """Abstract data provider interface for ClawMetry."""
+
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -63,9 +64,15 @@ class ClawMetryDataProvider(ABC):
     All methods are synchronous. Cloud providers use connection pooling internally.
     """
 
-    def __init__(self, sessions_dir: str = "", log_dir: str = "",
-                 workspace: str = "", metrics_file: str = "",
-                 fleet_db: str = "", **kwargs):
+    def __init__(
+        self,
+        sessions_dir: str = "",
+        log_dir: str = "",
+        workspace: str = "",
+        metrics_file: str = "",
+        fleet_db: str = "",
+        **kwargs,
+    ):
         self.sessions_dir = sessions_dir
         self.log_dir = log_dir
         self.workspace = workspace
@@ -75,8 +82,12 @@ class ClawMetryDataProvider(ABC):
     # ── Sessions ──────────────────────────────────────────────────────────────
 
     @abstractmethod
-    def list_sessions(self, limit: int = 30, include_subagents: bool = True,
-                      since_ms: Optional[int] = None) -> List[Session]:
+    def list_sessions(
+        self,
+        limit: int = 30,
+        include_subagents: bool = True,
+        since_ms: Optional[int] = None,
+    ) -> List[Session]:
         """Return recent sessions, newest first."""
         ...
 
@@ -93,16 +104,18 @@ class ClawMetryDataProvider(ABC):
     # ── Events ────────────────────────────────────────────────────────────────
 
     @abstractmethod
-    def get_events(self, session_id: str, limit: int = 500,
-                   tail_bytes: Optional[int] = None) -> List[Event]:
+    def get_events(
+        self, session_id: str, limit: int = 500, tail_bytes: Optional[int] = None
+    ) -> List[Event]:
         """Return events for a session. tail_bytes: read only last N bytes of JSONL."""
         ...
 
     # ── Logs ──────────────────────────────────────────────────────────────────
 
     @abstractmethod
-    def get_log_lines(self, date_str: Optional[str] = None,
-                      limit: int = 1000) -> List[str]:
+    def get_log_lines(
+        self, date_str: Optional[str] = None, limit: int = 1000
+    ) -> List[str]:
         """Return raw log lines for a date (YYYY-MM-DD). None = today."""
         ...
 

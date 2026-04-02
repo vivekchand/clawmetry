@@ -721,7 +721,7 @@ def _detect_docker_openclaw() -> dict:
 
 
 def detect_paths() -> dict:
-    home = Path.home()
+    Path.home()
     # Try Docker/NemoClaw container detection first
     docker_paths = _detect_docker_openclaw()
     if docker_paths.get("sessions_dir"):
@@ -1218,7 +1218,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
     last_hash = state.get("cron_hash", "")
 
     # Find cron jobs.json
-    home = Path.home()
+    Path.home()
     cron_candidates = [
         Path(_get_openclaw_dir()) / "cron" / "jobs.json",
         Path(_get_openclaw_dir()) / "agents" / "main" / "cron" / "jobs.json",
@@ -1298,7 +1298,7 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
         state = {}
     last_mtimes: dict = state.setdefault("session_mtimes", {})
     try:
-        home = Path.home()
+        Path.home()
         sessions_candidates = [
             Path(_get_openclaw_dir()) / "agents" / "main" / "sessions",
             Path("/data/agents/main/sessions"),
@@ -2046,7 +2046,7 @@ def _build_tool_stats():
 def _build_channel_list(config):
     """Build list of configured channels."""
     try:
-        home = str(Path.home())
+        str(Path.home())
         oc_config = os.path.join(_get_openclaw_dir(), "openclaw.json")
         if not os.path.isfile(oc_config):
             return []
@@ -2081,7 +2081,7 @@ def _build_channel_data(config):
     import re as _re
 
     try:
-        home = str(Path.home())
+        str(Path.home())
         today = datetime.now().strftime("%Y-%m-%d")
         gw_log = os.path.join(_get_openclaw_dir(), "logs", "gateway.log")
         session_dir = os.path.join(_get_openclaw_dir(), "agents", "main", "sessions")
@@ -2452,7 +2452,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     cron_enabled = 0
     cron_disabled = 0
     try:
-        home = os.path.expanduser("~")
+        os.path.expanduser("~")
         cron_candidates = [
             os.path.join(_get_openclaw_dir(), "cron", "jobs.json"),
             os.path.join(_get_openclaw_dir(), "agents", "main", "cron", "jobs.json"),
@@ -2508,7 +2508,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "channels": _build_channel_data(config),
         "toolStats": _build_tool_stats(),
         "brainData": _build_brain_data(),
-        "gateway": _build_gateway_data(paths),
+        "gateway": {},
         "runtimeInfo": _build_runtime_info(),
         "machineInfo": _build_machine_info(),
         "channelList": _build_channel_list(config),

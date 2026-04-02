@@ -16,4 +16,4 @@ test-e2e:
 
 lint:
 	python3 -c "import ast; ast.parse(open('dashboard.py').read()); print('Syntax OK')"
-	ruff check dashboard.py || true
+	ruff check dashboard.py dashboard_claudecode.py clawmetry/

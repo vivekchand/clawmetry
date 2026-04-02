@@ -1,4 +1,5 @@
 """CLI entry point for the clawmetry package."""
+
 from __future__ import annotations
 import sys
 import os
@@ -15,7 +16,8 @@ if os.environ.get("CLAWMETRY_INTERCEPT") == "1":
 def _get_openclaw_dir():
     """Return the OpenClaw config directory, respecting CLAWMETRY_OPENCLAW_DIR env var."""
     import os
-    return os.environ.get('CLAWMETRY_OPENCLAW_DIR', os.path.expanduser('~/.openclaw'))
+
+    return os.environ.get("CLAWMETRY_OPENCLAW_DIR", os.path.expanduser("~/.openclaw"))
 
 
 def _get_nemoclaw_preset_script() -> str | None:
@@ -25,7 +27,11 @@ def _get_nemoclaw_preset_script() -> str | None:
     if not shutil.which("nemoclaw"):
         return None
 
-    script_path = Path(__file__).resolve().parent / "resources" / "add-nemoclaw-clawmetry-preset.sh"
+    script_path = (
+        Path(__file__).resolve().parent
+        / "resources"
+        / "add-nemoclaw-clawmetry-preset.sh"
+    )
     if script_path.exists():
         return str(script_path)
     return None
@@ -61,7 +67,9 @@ def _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM) -> None:
         print()
 
     if choice not in ("y", "yes"):
-        print(f"  {DIM('Run this later if you want cloud access inside NemoClaw sandboxes:')}")
+        print(
+            f"  {DIM('Run this later if you want cloud access inside NemoClaw sandboxes:')}"
+        )
         print(f"    {CYAN(f'bash {script_path}')}")
         print()
         return
@@ -77,23 +85,22 @@ def _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM) -> None:
     print()
 
 
-
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
 
-
-
 def _is_sync_running() -> bool:
     """Check if clawmetry.sync is running — no pgrep needed."""
     import os
+
     try:
         import psutil
-        for p in psutil.process_iter(['cmdline']):
+
+        for p in psutil.process_iter(["cmdline"]):
             try:
-                cmd = ' '.join(p.info.get('cmdline') or [])
-                if 'clawmetry.sync' in cmd or 'clawmetry/sync.py' in cmd:
+                cmd = " ".join(p.info.get("cmdline") or [])
+                if "clawmetry.sync" in cmd or "clawmetry/sync.py" in cmd:
                     return True
             except Exception:
                 pass
@@ -101,12 +108,12 @@ def _is_sync_running() -> bool:
     except ImportError:
         pass
     try:
-        for pid_str in os.listdir('/proc'):
+        for pid_str in os.listdir("/proc"):
             if not pid_str.isdigit():
                 continue
             try:
-                cmdline = open(f'/proc/{pid_str}/cmdline').read().replace('\x00', ' ')
-                if 'clawmetry.sync' in cmdline or 'clawmetry/sync.py' in cmdline:
+                cmdline = open(f"/proc/{pid_str}/cmdline").read().replace("\x00", " ")
+                if "clawmetry.sync" in cmdline or "clawmetry/sync.py" in cmdline:
                     return True
             except Exception:
                 pass
@@ -117,13 +124,16 @@ def _is_sync_running() -> bool:
 
 def _kill_sync_daemon() -> None:
     """Kill clawmetry.sync processes — no pkill needed."""
-    import os, signal
+    import os
+    import signal
+
     try:
         import psutil
-        for p in psutil.process_iter(['pid', 'cmdline']):
+
+        for p in psutil.process_iter(["pid", "cmdline"]):
             try:
-                cmd = ' '.join(p.info.get('cmdline') or [])
-                if 'clawmetry.sync' in cmd or 'clawmetry/sync.py' in cmd:
+                cmd = " ".join(p.info.get("cmdline") or [])
+                if "clawmetry.sync" in cmd or "clawmetry/sync.py" in cmd:
                     os.kill(p.pid, signal.SIGTERM)
             except Exception:
                 pass
@@ -131,12 +141,12 @@ def _kill_sync_daemon() -> None:
     except ImportError:
         pass
     try:
-        for pid_str in os.listdir('/proc'):
+        for pid_str in os.listdir("/proc"):
             if not pid_str.isdigit():
                 continue
             try:
-                cmdline = open(f'/proc/{pid_str}/cmdline').read().replace('\x00', ' ')
-                if 'clawmetry.sync' in cmdline or 'clawmetry/sync.py' in cmdline:
+                cmdline = open(f"/proc/{pid_str}/cmdline").read().replace("\x00", " ")
+                if "clawmetry.sync" in cmdline or "clawmetry/sync.py" in cmdline:
                     os.kill(int(pid_str), signal.SIGTERM)
             except Exception:
                 pass
@@ -146,10 +156,13 @@ def _kill_sync_daemon() -> None:
 
 def _stop_existing_daemon() -> None:
     """Stop any running sync daemon, deregister old node, clear stale state."""
-    import subprocess, platform, json
+    import subprocess
+    import platform
+    import json
     from clawmetry.sync import STATE_FILE, LOG_FILE, CONFIG_FILE
+
     system = platform.system()
-    
+
     # Read old config before stopping (to deregister old node_id)
     old_node_id = None
     old_api_key = None
@@ -160,32 +173,49 @@ def _stop_existing_daemon() -> None:
             old_api_key = old_cfg.get("api_key")
         except Exception:
             pass
-    
+
     # Stop the daemon
     if system == "Darwin":
         label = "com.clawmetry.sync"
-        plist = __import__("pathlib").Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-        subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
+        plist = (
+            __import__("pathlib").Path.home()
+            / "Library"
+            / "LaunchAgents"
+            / f"{label}.plist"
+        )
+        subprocess.run(
+            ["launchctl", "unload", str(plist)], check=False, capture_output=True
+        )
     elif system == "Linux":
         if __import__("shutil").which("systemctl"):
-            subprocess.run(["systemctl", "--user", "stop", "clawmetry-sync"], check=False, capture_output=True)
+            subprocess.run(
+                ["systemctl", "--user", "stop", "clawmetry-sync"],
+                check=False,
+                capture_output=True,
+            )
         else:
             _kill_sync_daemon()
-    
+
     # Send offline heartbeat for old node to deregister it from cloud
     if old_node_id and old_api_key:
         try:
             from clawmetry.sync import _post
             from datetime import datetime, timezone
-            _post("/ingest/heartbeat", {
-                "node_id": old_node_id,
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "status": "offline",
-                "platform": platform.system(),
-            }, old_api_key, timeout=5)
+
+            _post(
+                "/ingest/heartbeat",
+                {
+                    "node_id": old_node_id,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "status": "offline",
+                    "platform": platform.system(),
+                },
+                old_api_key,
+                timeout=5,
+            )
         except Exception:
             pass  # Best effort
-    
+
     # Clear stale state so the new daemon does a fresh initial sync
     if STATE_FILE.exists():
         STATE_FILE.unlink()
@@ -193,15 +223,19 @@ def _stop_existing_daemon() -> None:
     if LOG_FILE.exists():
         LOG_FILE.write_text("")
 
+
 def _get_api_key_interactive() -> str:
     """Interactive API key acquisition: email OTP or direct paste."""
-    import getpass, urllib.request, urllib.error, json as _json
+    import getpass
+    import urllib.request
+    import urllib.error
+    import json as _json
 
     # When stdin is piped (e.g. curl | bash install), open /dev/tty so prompts work
     _tty = None
     if not sys.stdin.isatty():
         try:
-            _tty = open('/dev/tty', 'r')
+            _tty = open("/dev/tty", "r")
         except OSError:
             pass
 
@@ -211,7 +245,7 @@ def _get_api_key_interactive() -> str:
             sys.stdout.write(prompt)
             sys.stdout.flush()
             line = _tty.readline()
-            return line.rstrip('\n')
+            return line.rstrip("\n")
         return input(prompt)
 
     INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
@@ -219,9 +253,9 @@ def _get_api_key_interactive() -> str:
     def _api_call(path, body):
         url = INGEST_URL.rstrip("/") + path
         data = _json.dumps(body).encode()
-        req = urllib.request.Request(url, data=data,
-                                     headers={"Content-Type": "application/json"},
-                                     method="POST")
+        req = urllib.request.Request(
+            url, data=data, headers={"Content-Type": "application/json"}, method="POST"
+        )
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return _json.loads(resp.read())
@@ -239,7 +273,8 @@ def _get_api_key_interactive() -> str:
 
     # Email flow: send OTP
     import re as _re
-    if not _re.match(r'^[^@]+@[^@]+\.[^@]+$', entry):
+
+    if not _re.match(r"^[^@]+@[^@]+\.[^@]+$", entry):
         print("  ❌  That doesn't look like a valid email.")
         return getpass.getpass("  API key (cm_…): ").strip()
 
@@ -259,7 +294,9 @@ def _get_api_key_interactive() -> str:
         if not otp:
             continue
         print("  Verifying…", end="", flush=True)
-        r2 = _api_call("/api/auth/email-otp", {"action": "verify", "email": email, "otp": otp})
+        r2 = _api_call(
+            "/api/auth/email-otp", {"action": "verify", "email": email, "otp": otp}
+        )
         if r2.get("error"):
             print(f" ❌  {r2['error']}")
             if attempt < 2:
@@ -281,12 +318,14 @@ def _get_api_key_interactive() -> str:
 
 def _verify_key_ownership(api_key: str) -> None:
     """Require email OTP to prove key ownership (prevents misuse on shared machines)."""
-    import urllib.request, urllib.error, json as _json
+    import urllib.request
+    import urllib.error
+    import json as _json
 
     _tty = None
     if not sys.stdin.isatty():
         try:
-            _tty = open('/dev/tty', 'r')
+            _tty = open("/dev/tty", "r")
         except OSError:
             print("\n  ❌  OTP verification requires an interactive terminal.")
             print("  Run 'clawmetry connect --key cm_xxx' from an interactive shell,")
@@ -297,7 +336,7 @@ def _verify_key_ownership(api_key: str) -> None:
         if _tty is not None:
             sys.stdout.write(prompt)
             sys.stdout.flush()
-            return _tty.readline().rstrip('\n')
+            return _tty.readline().rstrip("\n")
         return input(prompt)
 
     INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
@@ -305,9 +344,9 @@ def _verify_key_ownership(api_key: str) -> None:
     def _api(path, body):
         url = INGEST_URL.rstrip("/") + path
         data = _json.dumps(body).encode()
-        req = urllib.request.Request(url, data=data,
-                                     headers={"Content-Type": "application/json"},
-                                     method="POST")
+        req = urllib.request.Request(
+            url, data=data, headers={"Content-Type": "application/json"}, method="POST"
+        )
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return _json.loads(resp.read())
@@ -324,7 +363,7 @@ def _verify_key_ownership(api_key: str) -> None:
         print(f" ❌  {r['error']}")
         sys.exit(1)
     _masked = r.get("masked_email", "your email")
-    print(f" ✅")
+    print(" ✅")
     print(f"  📧 Code sent to {_masked}")
     print()
 
@@ -335,7 +374,10 @@ def _verify_key_ownership(api_key: str) -> None:
         # Verify using the masked email — server resolves from key
         # We need the real email for verify, so use a key-based verify too
         print("  Verifying…", end="", flush=True)
-        r2 = _api("/api/auth/email-otp", {"action": "verify_by_key", "api_key": api_key, "otp": otp})
+        r2 = _api(
+            "/api/auth/email-otp",
+            {"action": "verify_by_key", "api_key": api_key, "otp": otp},
+        )
         if r2.get("error"):
             print(f" ❌  {r2['error']}")
             if attempt < 2:
@@ -355,7 +397,7 @@ def _cmd_connect(args) -> None:
     _tty = None
     if not sys.stdin.isatty():
         try:
-            _tty = open('/dev/tty', 'r')
+            _tty = open("/dev/tty", "r")
         except OSError:
             pass
 
@@ -363,26 +405,27 @@ def _cmd_connect(args) -> None:
         if _tty is not None:
             sys.stdout.write(prompt)
             sys.stdout.flush()
-            return _tty.readline().rstrip('\n')
+            return _tty.readline().rstrip("\n")
         return input(prompt)
 
     # Read existing config BEFORE stopping daemon (preserve node_id + encryption_key)
-    _saved_node_id = ''
-    _saved_enc_key = ''
+    _saved_node_id = ""
+    _saved_enc_key = ""
     try:
         import json as _jcfg_pre
-        _cfgpath_pre = os.path.expanduser('~/.clawmetry/config.json')
+
+        _cfgpath_pre = os.path.expanduser("~/.clawmetry/config.json")
         _cfg_pre = _jcfg_pre.load(open(_cfgpath_pre))
-        _saved_node_id = _cfg_pre.get('node_id', '')
-        _saved_enc_key = _cfg_pre.get('encryption_key', '')
-        _saved_api_key = _cfg_pre.get('api_key', '')
+        _saved_node_id = _cfg_pre.get("node_id", "")
+        _saved_enc_key = _cfg_pre.get("encryption_key", "")
+        _saved_api_key = _cfg_pre.get("api_key", "")
     except Exception:
-        _saved_api_key = ''
+        _saved_api_key = ""
 
     _stop_existing_daemon()
-    import getpass
-    from clawmetry.sync import validate_key, save_config, CONFIG_FILE, CONFIG_DIR
-    import platform, socket
+    from clawmetry.sync import validate_key, save_config
+    import platform
+    import socket
 
     api_key = args.key or os.environ.get("CLAWMETRY_API_KEY") or ""
     if not api_key:
@@ -400,20 +443,27 @@ def _cmd_connect(args) -> None:
         else:
             _verify_key_ownership(api_key)
 
-    custom_name = getattr(args, 'custom_node_id', None) or ''
+    custom_name = getattr(args, "custom_node_id", None) or ""
     machine_hostname = custom_name or socket.gethostname()
     _existing_node_id = _saved_node_id
     print("Connecting to ClawMetry Cloud… ", end="", flush=True)
     try:
-        result = validate_key(api_key, hostname=machine_hostname, existing_node_id=_existing_node_id)
+        result = validate_key(
+            api_key, hostname=machine_hostname, existing_node_id=_existing_node_id
+        )
         node_id = result.get("node_id") or machine_hostname
-        print(f"✅")
+        print("✅")
     except Exception as e:
         err = str(e)
         # Allow saving config if network/server issues (ingest may not be live yet)
-        if any(x in err for x in ["443", "Connection", "unreachable", "405", "404", "timed out"]):
+        if any(
+            x in err
+            for x in ["443", "Connection", "unreachable", "405", "404", "timed out"]
+        ):
             node_id = machine_hostname
-            print("⚠️  Could not reach server right now. Your config has been saved and will sync when connected.")
+            print(
+                "⚠️  Could not reach server right now. Your config has been saved and will sync when connected."
+            )
         else:
             print(f"❌  {e}")
             sys.exit(1)
@@ -423,20 +473,22 @@ def _cmd_connect(args) -> None:
     # Always prompt for encryption key — be transparent
     # Store the raw passphrase as-is; normalization happens at encrypt/decrypt time
     # Use --enc-key if provided (non-interactive sandbox/automated use)
-    _enc_key_arg = getattr(args, 'enc_key', None) or ''
+    _enc_key_arg = getattr(args, "enc_key", None) or ""
 
     print()
     print("🔐 Encryption key protects your data end-to-end.")
     if _enc_key_arg:
         enc_key = _enc_key_arg
-        print(f"  Using provided encryption key.")
+        print("  Using provided encryption key.")
     elif _saved_enc_key:
-        masked = _saved_enc_key[:6] + '…' + _saved_enc_key[-4:]
+        masked = _saved_enc_key[:6] + "…" + _saved_enc_key[-4:]
         print(f"  Existing key: {masked}")
         custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
         enc_key = custom_key if custom_key else _saved_enc_key
     else:
-        custom_key = _input("  Enter a custom secret key (or press Enter to auto-generate): ").strip()
+        custom_key = _input(
+            "  Enter a custom secret key (or press Enter to auto-generate): "
+        ).strip()
         enc_key = custom_key if custom_key else generate_encryption_key()
 
     config = {
@@ -453,7 +505,7 @@ def _cmd_connect(args) -> None:
     print()
 
     # --key-only: just save config, don't start daemon (for host-side NemoClaw OTP flow)
-    if getattr(args, 'key_only', False):
+    if getattr(args, "key_only", False):
         print(f"  API key:      {api_key}")
         print(f"  Enc key:      {enc_key}")
         print()
@@ -466,7 +518,7 @@ def _cmd_connect(args) -> None:
         print()
 
     # --no-daemon: skip daemon start (managed by supervisord externally)
-    if getattr(args, 'no_daemon', False):
+    if getattr(args, "no_daemon", False):
         print()
         return
 
@@ -479,14 +531,13 @@ def _cmd_connect(args) -> None:
 
 def _start_daemon(config: dict, args) -> None:
     """Start the sync daemon (as background process or system service)."""
-    import subprocess, sys
-    from clawmetry.sync import CONFIG_DIR, LOG_FILE
 
     system = __import__("platform").system()
 
     if getattr(args, "foreground", False):
         print("Running in foreground (Ctrl+C to stop)…")
         from clawmetry.sync import run_daemon
+
         run_daemon()
         return
 
@@ -501,16 +552,26 @@ def _start_daemon(config: dict, args) -> None:
 
 def _register_nemoclaw_sandbox_daemons() -> None:
     """Register a LaunchAgent per NemoClaw sandbox that keeps sync daemon alive via kubectl exec."""
-    import subprocess, shutil, os, platform
+    import subprocess
+    import shutil
+    import os
+    import platform
+
     if platform.system() != "Darwin":
         return
     if not shutil.which("docker"):
         return
 
     try:
-        r = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
-                           capture_output=True, text=True, timeout=5)
-        cluster = next((n for n in r.stdout.splitlines() if "openshell-cluster" in n), None)
+        r = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        cluster = next(
+            (n for n in r.stdout.splitlines() if "openshell-cluster" in n), None
+        )
     except Exception:
         return
     if not cluster:
@@ -518,19 +579,32 @@ def _register_nemoclaw_sandbox_daemons() -> None:
 
     try:
         r = subprocess.run(
-            ["docker", "exec", cluster, "kubectl", "get", "pods",
-             "-n", "openshell", "--no-headers", "-o",
-             "custom-columns=NAME:.metadata.name"],
-            capture_output=True, text=True, timeout=10
+            [
+                "docker",
+                "exec",
+                cluster,
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                "openshell",
+                "--no-headers",
+                "-o",
+                "custom-columns=NAME:.metadata.name",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
-        pods = [p for p in r.stdout.splitlines() if p and not p.startswith("openshell-")]
+        pods = [
+            p for p in r.stdout.splitlines() if p and not p.startswith("openshell-")
+        ]
     except Exception:
         return
 
     launch_agents = __import__("pathlib").Path.home() / "Library" / "LaunchAgents"
     launch_agents.mkdir(parents=True, exist_ok=True)
     docker_path = shutil.which("docker") or "/usr/local/bin/docker"
-    kubectl_path = "/opt/homebrew/bin/kubectl"
 
     for pod in pods:
         label = f"com.clawmetry.sandbox.{pod}"
@@ -565,20 +639,35 @@ def _register_nemoclaw_sandbox_daemons() -> None:
         plist_path.write_text(plist)
         uid = os.getuid()
         # Unload first in case it was already registered
-        subprocess.run(["launchctl", "bootout", f"gui/{uid}", str(plist_path)],
-                      capture_output=True, check=False)
-        r = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
-                          capture_output=True, check=False)
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{uid}", str(plist_path)],
+            capture_output=True,
+            check=False,
+        )
+        r = subprocess.run(
+            ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+            capture_output=True,
+            check=False,
+        )
         if r.returncode != 0:
-            subprocess.run(["launchctl", "load", "-w", str(plist_path)],
-                          capture_output=True, check=False)
+            subprocess.run(
+                ["launchctl", "load", "-w", str(plist_path)],
+                capture_output=True,
+                check=False,
+            )
         print(f"  ✅  Sandbox daemon registered (launchd: {label})")
 
 
 def _register_launchd(config: dict) -> None:
-    from clawmetry.sync import CONFIG_DIR, LOG_FILE
+    from clawmetry.sync import LOG_FILE
+
     label = "com.clawmetry.sync"
-    plist_path = __import__("pathlib").Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+    plist_path = (
+        __import__("pathlib").Path.home()
+        / "Library"
+        / "LaunchAgents"
+        / f"{label}.plist"
+    )
     # Use the current interpreter (venv-aware) so the daemon finds clawmetry
     python = sys.executable
     plist = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -602,21 +691,30 @@ def _register_launchd(config: dict) -> None:
 
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     plist_path.write_text(plist)
-    import subprocess as _sp, os as _os
+    import subprocess as _sp
+    import os as _os
+
     uid = _os.getuid()
     # Use modern bootstrap (macOS 10.11+), fall back silently to legacy
-    r = _sp.run(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
-                capture_output=True, check=False)
+    r = _sp.run(
+        ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+        capture_output=True,
+        check=False,
+    )
     if r.returncode != 0:
-        _sp.run(["launchctl", "load", "-w", str(plist_path)],
-                capture_output=True, check=False)
+        _sp.run(
+            ["launchctl", "load", "-w", str(plist_path)],
+            capture_output=True,
+            check=False,
+        )
     print("  Running in the background. Your data is syncing to the cloud.")
-    print('  To stop: clawmetry disconnect')
+    print("  To stop: clawmetry disconnect")
 
 
 def _register_systemd(config: dict) -> None:
     from clawmetry.sync import LOG_FILE
     import subprocess
+
     label = "clawmetry-sync"
     service_dir = __import__("pathlib").Path.home() / ".config" / "systemd" / "user"
     service_dir.mkdir(parents=True, exist_ok=True)
@@ -641,11 +739,12 @@ WantedBy=default.target
     service_path.write_text(unit)
     # Check if systemctl is available (not in Docker/containers without systemd)
     import shutil
+
     if shutil.which("systemctl"):
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
         subprocess.run(["systemctl", "--user", "enable", "--now", label], check=False)
         print("  Running in the background. Your data is syncing to the cloud.")
-        print('  To stop: clawmetry disconnect')
+        print("  To stop: clawmetry disconnect")
     else:
         if sys.stdout.isatty():
             print("  ⚠️  systemctl not available (container/Docker?).")
@@ -654,12 +753,18 @@ WantedBy=default.target
 
 
 def _start_subprocess() -> None:
-    import subprocess, shutil
+    import subprocess
+    import shutil
+
     sync_script = str(__import__("pathlib").Path(__file__).parent / "sync.py")
     log_file = str(__import__("pathlib").Path.home() / ".clawmetry" / "sync.log")
 
     # Use setsid if available — ensures daemon survives kubectl exec session end
-    cmd = ["setsid", sys.executable, sync_script] if shutil.which("setsid") else [sys.executable, sync_script]
+    cmd = (
+        ["setsid", sys.executable, sync_script]
+        if shutil.which("setsid")
+        else [sys.executable, sync_script]
+    )
     proc = subprocess.Popen(
         cmd,
         stdout=open(log_file, "a"),
@@ -680,15 +785,32 @@ def _cmd_disconnect(args) -> None:
     system = platform.system()
     if system == "Darwin":
         label = "com.clawmetry.sync"
-        plist = __import__("pathlib").Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-        subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
+        plist = (
+            __import__("pathlib").Path.home()
+            / "Library"
+            / "LaunchAgents"
+            / f"{label}.plist"
+        )
+        subprocess.run(
+            ["launchctl", "unload", str(plist)], check=False, capture_output=True
+        )
         if plist.exists():
             plist.unlink()
         print(f"✅  Stopped launchd daemon ({label})")
     elif system == "Linux":
         if __import__("shutil").which("systemctl"):
-            subprocess.run(["systemctl", "--user", "disable", "--now", "clawmetry-sync"], check=False, capture_output=True)
-            svc = __import__("pathlib").Path.home() / ".config" / "systemd" / "user" / "clawmetry-sync.service"
+            subprocess.run(
+                ["systemctl", "--user", "disable", "--now", "clawmetry-sync"],
+                check=False,
+                capture_output=True,
+            )
+            svc = (
+                __import__("pathlib").Path.home()
+                / ".config"
+                / "systemd"
+                / "user"
+                / "clawmetry-sync.service"
+            )
             if svc.exists():
                 svc.unlink()
             print("✅  Stopped systemd daemon (clawmetry-sync)")
@@ -707,35 +829,66 @@ def _cmd_disconnect(args) -> None:
 
 def _get_nemoclaw_sandboxes() -> list:
     """Return list of NemoClaw sandbox pod names if docker + nemoclaw available."""
-    import subprocess, shutil, os
+    import subprocess
+    import shutil
+    import os
+
     # Augment PATH with common macOS install locations
     extra = ["/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin")]
     env = os.environ.copy()
     env["PATH"] = ":".join(extra) + ":" + env.get("PATH", "")
+
     def _which(cmd):
         return shutil.which(cmd, path=env["PATH"])
+
     if not _which("docker") or not _which("nemoclaw"):
         return []
     try:
         docker = _which("docker")
-        r = subprocess.run([docker, "ps", "--format", "{{.Names}}"],
-                           capture_output=True, text=True, timeout=5, env=env)
-        cluster = next((n for n in r.stdout.splitlines() if "openshell-cluster" in n), None)
+        r = subprocess.run(
+            [docker, "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
+        cluster = next(
+            (n for n in r.stdout.splitlines() if "openshell-cluster" in n), None
+        )
         if not cluster:
             return []
         r2 = subprocess.run(
-            [docker, "exec", cluster, "kubectl", "get", "pods",
-             "-n", "openshell", "--no-headers", "-o",
-             "custom-columns=NAME:.metadata.name"],
-            capture_output=True, text=True, timeout=10, env=env)
-        return [p for p in r2.stdout.splitlines() if p and not p.startswith("openshell-")]
+            [
+                docker,
+                "exec",
+                cluster,
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                "openshell",
+                "--no-headers",
+                "-o",
+                "custom-columns=NAME:.metadata.name",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
+        return [
+            p for p in r2.stdout.splitlines() if p and not p.startswith("openshell-")
+        ]
     except Exception:
         return []
 
 
-def _uninstall_nemoclaw_sandbox(cluster: str, pod: str, docker_bin: str = "docker") -> None:
+def _uninstall_nemoclaw_sandbox(
+    cluster: str, pod: str, docker_bin: str = "docker"
+) -> None:
     """Stop supervisord daemon and remove ClawMetry config from a NemoClaw sandbox."""
     import subprocess
+
     cmd = (
         "supervisorctl -c /etc/supervisor/supervisord.conf stop clawmetry-sync 2>/dev/null || true; "
         "supervisorctl -c /etc/supervisor/supervisord.conf shutdown 2>/dev/null || true; "
@@ -746,16 +899,32 @@ def _uninstall_nemoclaw_sandbox(cluster: str, pod: str, docker_bin: str = "docke
     )
     try:
         subprocess.run(
-            [docker_bin, "exec", cluster, "kubectl", "exec", "-n", "openshell", pod,
-             "--", "bash", "-c", cmd],
-            capture_output=True, timeout=30)
+            [
+                docker_bin,
+                "exec",
+                cluster,
+                "kubectl",
+                "exec",
+                "-n",
+                "openshell",
+                pod,
+                "--",
+                "bash",
+                "-c",
+                cmd,
+            ],
+            capture_output=True,
+            timeout=30,
+        )
     except Exception:
         pass
 
 
 def _cmd_uninstall() -> None:
     """clawmetry uninstall — fully remove clawmetry, stop daemons, delete all files."""
-    import shutil, platform, subprocess
+    import shutil
+    import platform
+    import subprocess
     from pathlib import Path
     from clawmetry.sync import CONFIG_FILE, STATE_FILE, LOG_FILE
 
@@ -809,7 +978,9 @@ def _cmd_uninstall() -> None:
     # 5. NemoClaw sandboxes
     _nemoclaw_sandboxes = _get_nemoclaw_sandboxes()
     for _sb in _nemoclaw_sandboxes:
-        items.append(("NemoClaw", f"Sandbox {_sb}: stop daemon, remove config + clawmetry"))
+        items.append(
+            ("NemoClaw", f"Sandbox {_sb}: stop daemon, remove config + clawmetry")
+        )
 
     # 6. pip package
     items.append(("Package", "pip package: clawmetry"))
@@ -849,13 +1020,19 @@ def _cmd_uninstall() -> None:
     if system == "Darwin":
         plist = home / "Library" / "LaunchAgents" / "com.clawmetry.sync.plist"
         if plist.exists():
-            subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
+            subprocess.run(
+                ["launchctl", "unload", str(plist)], check=False, capture_output=True
+            )
             plist.unlink()
             print("  ✅  Stopped and removed launchd daemon")
     elif system == "Linux":
         svc = home / ".config" / "systemd" / "user" / "clawmetry-sync.service"
         if shutil.which("systemctl"):
-            subprocess.run(["systemctl", "--user", "disable", "--now", "clawmetry-sync"], check=False, capture_output=True)
+            subprocess.run(
+                ["systemctl", "--user", "disable", "--now", "clawmetry-sync"],
+                check=False,
+                capture_output=True,
+            )
         _kill_sync_daemon()
         if svc.exists():
             svc.unlink()
@@ -863,8 +1040,11 @@ def _cmd_uninstall() -> None:
 
     # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
     print("  ⏳  Uninstalling pip package...")
-    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "clawmetry"],
-                   check=False, capture_output=True)
+    subprocess.run(
+        [sys.executable, "-m", "pip", "uninstall", "-y", "clawmetry"],
+        check=False,
+        capture_output=True,
+    )
     print("  ✅  Uninstalled clawmetry pip package")
 
     # 3. Remove config directory (includes venv)
@@ -900,16 +1080,26 @@ def _cmd_uninstall() -> None:
 
     # 7. NemoClaw sandboxes
     if _nemoclaw_sandboxes:
-        import subprocess as _sp, os as _os
+        import subprocess as _sp
+        import os as _os
+
         _extra = ["/opt/homebrew/bin", "/usr/local/bin"]
         _env = _os.environ.copy()
         _env["PATH"] = ":".join(_extra) + ":" + _env.get("PATH", "")
         import shutil as _sh
+
         _docker = _sh.which("docker", path=_env["PATH"]) or "docker"
         try:
-            r = _sp.run([_docker, "ps", "--format", "{{.Names}}"],
-                        capture_output=True, text=True, timeout=5, env=_env)
-            cluster = next((n for n in r.stdout.splitlines() if "openshell-cluster" in n), None)
+            r = _sp.run(
+                [_docker, "ps", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=_env,
+            )
+            cluster = next(
+                (n for n in r.stdout.splitlines() if "openshell-cluster" in n), None
+            )
         except Exception:
             cluster = None
         if cluster:
@@ -920,7 +1110,9 @@ def _cmd_uninstall() -> None:
 
     print()
     print("  \033[1m\033[92m✓ ClawMetry fully uninstalled.\033[0m")
-    print("  \033[2mTo reinstall: curl -fsSL https://clawmetry.com/install.sh | bash\033[0m")
+    print(
+        "  \033[2mTo reinstall: curl -fsSL https://clawmetry.com/install.sh | bash\033[0m"
+    )
     print()
 
 
@@ -935,23 +1127,26 @@ def _cmd_status(args) -> None:
     if CONFIG_FILE.exists():
         try:
             import json
+
             cfg = json.loads(CONFIG_FILE.read_text())
             api_key = cfg.get("api_key", "")
             enc_key = cfg.get("encryption_key", "")
-            masked_api = api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
-            print(f"  Cloud sync:  ✅  Connected")
+            masked_api = (
+                api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
+            )
+            print("  Cloud sync:  ✅  Connected")
             print(f"  API key:     {masked_api}")
             print(f"  Node ID:     {cfg.get('node_id', '?')}")
             print(f"  Connected:   {cfg.get('connected_at', '?')[:19]}")
             if enc_key:
-                if getattr(args, 'show_key', False):
+                if getattr(args, "show_key", False):
                     print(f"  Secret key:     {enc_key}")
                 else:
                     masked_enc = enc_key[:6] + "…" + enc_key[-4:]
                     print(f"  Secret key:     {masked_enc}  (--show-key to reveal)")
-                print(f"  E2E:         🔒 enabled")
+                print("  E2E:         🔒 enabled")
             else:
-                print(f"  E2E:         ⚠️  disabled (no secret key in config)")
+                print("  E2E:         ⚠️  disabled (no secret key in config)")
         except Exception as e:
             print(f"  Config error: {e}")
     else:
@@ -961,6 +1156,7 @@ def _cmd_status(args) -> None:
     if STATE_FILE.exists():
         try:
             import json
+
             st = json.loads(STATE_FILE.read_text())
             print(f"  Last sync:   {(st.get('last_sync') or '?')[:19]}")
             print(f"  Files seen:  {len(st.get('last_event_ids', {}))}")
@@ -972,20 +1168,33 @@ def _cmd_status(args) -> None:
     print()
     if system == "Darwin":
         import subprocess
-        r = subprocess.run(["launchctl", "list", "com.clawmetry.sync"], capture_output=True, text=True)
+
+        r = subprocess.run(
+            ["launchctl", "list", "com.clawmetry.sync"], capture_output=True, text=True
+        )
         if r.returncode == 0:
             print("  Daemon:      ✅  Running (launchd)")
         else:
             print("  Daemon:      ○  Not running")
     elif system == "Linux":
-        import subprocess, shutil
+        import subprocess
+        import shutil
+
         if shutil.which("systemctl"):
-            r = subprocess.run(["systemctl", "--user", "is-active", "clawmetry-sync"], capture_output=True, text=True)
+            r = subprocess.run(
+                ["systemctl", "--user", "is-active", "clawmetry-sync"],
+                capture_output=True,
+                text=True,
+            )
             running = r.stdout.strip() == "active"
-            print(f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}")
+            print(
+                f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}"
+            )
         else:
             running = _is_sync_running()
-            print(f"  Daemon:      {'✅  Running (subprocess)' if running else '○  Not running'}")
+            print(
+                f"  Daemon:      {'✅  Running (subprocess)' if running else '○  Not running'}"
+            )
 
     if LOG_FILE.exists():
         print(f"  Log:         {LOG_FILE}")
@@ -1000,16 +1209,23 @@ def _cmd_status(args) -> None:
 
 def _print_nemoclaw_nodes(args) -> None:
     """Show status of ClawMetry on all NemoClaw sandboxes."""
-    import subprocess, shutil, json as _json
+    import subprocess
+    import shutil
 
     if not shutil.which("docker"):
         return
 
     # Find cluster container
     try:
-        r = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
-                           capture_output=True, text=True, timeout=5)
-        cluster = next((n for n in r.stdout.splitlines() if "openshell-cluster" in n), None)
+        r = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        cluster = next(
+            (n for n in r.stdout.splitlines() if "openshell-cluster" in n), None
+        )
     except Exception:
         return
 
@@ -1019,12 +1235,26 @@ def _print_nemoclaw_nodes(args) -> None:
     # Get sandbox pod names
     try:
         r = subprocess.run(
-            ["docker", "exec", cluster, "kubectl", "get", "pods",
-             "-n", "openshell", "--no-headers", "-o",
-             "custom-columns=NAME:.metadata.name"],
-            capture_output=True, text=True, timeout=10
+            [
+                "docker",
+                "exec",
+                cluster,
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                "openshell",
+                "--no-headers",
+                "-o",
+                "custom-columns=NAME:.metadata.name",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
-        pods = [p for p in r.stdout.splitlines() if p and not p.startswith("openshell-")]
+        pods = [
+            p for p in r.stdout.splitlines() if p and not p.startswith("openshell-")
+        ]
     except Exception:
         return
 
@@ -1036,16 +1266,28 @@ def _print_nemoclaw_nodes(args) -> None:
     for pod in pods:
         try:
             r = subprocess.run(
-                ["docker", "exec", cluster, "kubectl", "exec",
-                 "-n", "openshell", pod, "--",
-                 "bash", "-c",
-                 "cfg=/root/.clawmetry/config.json; "
-                 "[ -f /sandbox/.clawmetry/config.json ] && cfg=/sandbox/.clawmetry/config.json; "
-                 "test -f $cfg && "
-                 "python3 -c \"import json,sys; c=json.load(open(sys.argv[1])); "
-                 "print(c.get('api_key','') + '|' + c.get('node_id','') + '|' + c.get('encryption_key',''))\" $cfg "
-                 "2>/dev/null || echo 'NOT_CONNECTED'"],
-                capture_output=True, text=True, timeout=10
+                [
+                    "docker",
+                    "exec",
+                    cluster,
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    "openshell",
+                    pod,
+                    "--",
+                    "bash",
+                    "-c",
+                    "cfg=/root/.clawmetry/config.json; "
+                    "[ -f /sandbox/.clawmetry/config.json ] && cfg=/sandbox/.clawmetry/config.json; "
+                    "test -f $cfg && "
+                    'python3 -c "import json,sys; c=json.load(open(sys.argv[1])); '
+                    "print(c.get('api_key','') + '|' + c.get('node_id','') + '|' + c.get('encryption_key',''))\" $cfg "
+                    "2>/dev/null || echo 'NOT_CONNECTED'",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             out = r.stdout.strip()
         except Exception:
@@ -1057,35 +1299,53 @@ def _print_nemoclaw_nodes(args) -> None:
             api_key = parts[0] if len(parts) > 0 else ""
             node_id = parts[1] if len(parts) > 1 else pod
             enc_key = parts[2] if len(parts) > 2 else ""
-            masked_api = api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
-            print(f"  Cloud sync:  ✅  Connected")
+            masked_api = (
+                api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
+            )
+            print("  Cloud sync:  ✅  Connected")
             print(f"  API key:     {masked_api}")
             print(f"  Node ID:     {node_id}")
             if enc_key:
-                if getattr(args, 'show_key', False):
+                if getattr(args, "show_key", False):
                     print(f"  Secret key:  {enc_key}")
                 else:
                     masked_enc = enc_key[:6] + "…" + enc_key[-4:]
                     print(f"  Secret key:  {masked_enc}  (--show-key to reveal)")
-                print(f"  E2E:         🔒 enabled")
+                print("  E2E:         🔒 enabled")
             # Check daemon
             try:
                 rd = subprocess.run(
-                    ["docker", "exec", cluster, "kubectl", "exec",
-                     "-n", "openshell", pod, "--",
-                     "bash", "-c",
-                     "supervisorctl status clawmetry-sync 2>/dev/null | grep -q RUNNING && echo running || { "
-                     "for pf in /sandbox/.clawmetry/sync.pid /root/.clawmetry/sync.pid; do "
-                     "[ -f $pf ] && kill -0 $(cat $pf) 2>/dev/null && echo running && exit 0; "
-                     "done; echo stopped; }"],
-                    capture_output=True, text=True, timeout=5
+                    [
+                        "docker",
+                        "exec",
+                        cluster,
+                        "kubectl",
+                        "exec",
+                        "-n",
+                        "openshell",
+                        pod,
+                        "--",
+                        "bash",
+                        "-c",
+                        "supervisorctl status clawmetry-sync 2>/dev/null | grep -q RUNNING && echo running || { "
+                        "for pf in /sandbox/.clawmetry/sync.pid /root/.clawmetry/sync.pid; do "
+                        "[ -f $pf ] && kill -0 $(cat $pf) 2>/dev/null && echo running && exit 0; "
+                        "done; echo stopped; }",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 daemon_status = rd.stdout.strip()
-                print(f"  Daemon:      {'✅  Running' if daemon_status == 'running' else '○  Not running'}")
+                print(
+                    f"  Daemon:      {'✅  Running' if daemon_status == 'running' else '○  Not running'}"
+                )
             except Exception:
                 pass
         else:
-            print(f"  Cloud sync:  ○  Not connected  (run: clawmetry connect inside sandbox)")
+            print(
+                "  Cloud sync:  ○  Not connected  (run: clawmetry connect inside sandbox)"
+            )
 
 
 def _cmd_onboard(args) -> None:
@@ -1093,17 +1353,27 @@ def _cmd_onboard(args) -> None:
     import os as _os
 
     _is_tty = sys.stdout.isatty()
-    def _c(code, text): return f"\033[{code}m{text}\033[0m" if _is_tty else text
-    BOLD = lambda t: _c("1", t)
-    GREEN = lambda t: _c("32", t)
-    CYAN = lambda t: _c("36", t)
-    DIM = lambda t: _c("2", t)
+
+    def _c(code, text):
+        return f"\033[{code}m{text}\033[0m" if _is_tty else text
+
+    def BOLD(t):
+        return _c("1", t)
+
+    def GREEN(t):
+        return _c("32", t)
+
+    def CYAN(t):
+        return _c("36", t)
+
+    def DIM(t):
+        return _c("2", t)
 
     # When stdin is piped (curl | bash), read from /dev/tty
     _tty = None
     if not sys.stdin.isatty():
         try:
-            _tty = open('/dev/tty', 'r')
+            _tty = open("/dev/tty", "r")
         except OSError:
             pass
 
@@ -1111,10 +1381,12 @@ def _cmd_onboard(args) -> None:
         if _tty is not None:
             sys.stdout.write(prompt)
             sys.stdout.flush()
-            return _tty.readline().rstrip('\n')
+            return _tty.readline().rstrip("\n")
         return input(prompt)
 
-    already_connected = bool(_os.environ.get("CLAWMETRY_API_KEY") or _os.environ.get("CLAWMETRY_NODE_ID"))
+    already_connected = bool(
+        _os.environ.get("CLAWMETRY_API_KEY") or _os.environ.get("CLAWMETRY_NODE_ID")
+    )
     if already_connected:
         print(f"\n  {GREEN(BOLD('✓ Already connected to ClawMetry Cloud'))}")
         _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
@@ -1129,16 +1401,17 @@ def _cmd_onboard(args) -> None:
     print(f"          {DIM('Enable cloud anytime: clawmetry connect')}\n")
 
     try:
-        choice = _input("  → [Y/n]: ").strip().lower() or 'y'
+        choice = _input("  → [Y/n]: ").strip().lower() or "y"
     except (EOFError, KeyboardInterrupt):
-        choice = 'n'
+        choice = "n"
         print()
 
     print()
 
-    if choice in ('y', 'yes'):
+    if choice in ("y", "yes"):
         print()
         import argparse as _ap
+
         _fake_args = _ap.Namespace(key=None, foreground=False, custom_node_id=None)
         _cmd_connect(_fake_args)
 
@@ -1154,14 +1427,19 @@ def _cmd_onboard(args) -> None:
 
         try:
             import webbrowser
+
             webbrowser.open("https://app.clawmetry.com")
         except Exception:
             pass
     else:
         print(f"  {GREEN('✓')} ClawMetry installed (local mode)\n")
-        print(f"  Start your dashboard:")
-        print(f"    {CYAN('clawmetry --host 0.0.0.0 --port 8900')}          {DIM('# foreground (LAN)')}")
-        print(f"    {CYAN('clawmetry start --host 0.0.0.0 --port 8900')}    {DIM('# background service')}\n")
+        print("  Start your dashboard:")
+        print(
+            f"    {CYAN('clawmetry --host 0.0.0.0 --port 8900')}          {DIM('# foreground (LAN)')}"
+        )
+        print(
+            f"    {CYAN('clawmetry start --host 0.0.0.0 --port 8900')}    {DIM('# background service')}\n"
+        )
         print(f"  {DIM('Connect to cloud later: clawmetry connect')}\n")
         _print_nemoclaw_preset_hint(BOLD, CYAN, DIM)
 
@@ -1169,17 +1447,32 @@ def _cmd_onboard(args) -> None:
 def _cmd_proxy(args) -> None:
     """clawmetry proxy — manage the enforcement proxy."""
     from clawmetry.proxy import (
-        ProxyConfig, run_proxy, stop_proxy, proxy_status as _proxy_status,
+        ProxyConfig,
+        run_proxy,
+        stop_proxy,
+        proxy_status as _proxy_status,
         PROXY_CONFIG_FILE,
     )
 
     _is_tty = sys.stdout.isatty()
-    def _c(code, text): return f"\033[{code}m{text}\033[0m" if _is_tty else text
-    BOLD = lambda t: _c("1", t)
-    GREEN = lambda t: _c("32", t)
-    CYAN = lambda t: _c("36", t)
-    DIM = lambda t: _c("2", t)
-    YELLOW = lambda t: _c("33", t)
+
+    def _c(code, text):
+        return f"\033[{code}m{text}\033[0m" if _is_tty else text
+
+    def BOLD(t):
+        return _c("1", t)
+
+    def GREEN(t):
+        return _c("32", t)
+
+    def CYAN(t):
+        return _c("36", t)
+
+    def DIM(t):
+        return _c("2", t)
+
+    def YELLOW(t):
+        return _c("33", t)
 
     proxy_cmd = getattr(args, "proxy_cmd", None)
 
@@ -1208,7 +1501,9 @@ def _cmd_proxy(args) -> None:
         print(f"  Listening on {CYAN(f'http://{config.host}:{config.port}')}")
         print()
         print(f"  Budget:         {_format_budget(config, GREEN, YELLOW, DIM)}")
-        print(f"  Loop detection: {GREEN('on') if config.loop_detection.enabled else DIM('off')}")
+        print(
+            f"  Loop detection: {GREEN('on') if config.loop_detection.enabled else DIM('off')}"
+        )
         print(f"  Routing rules:  {len(config.routing_rules)}")
         print()
         print(f"  {BOLD('To activate, set in your environment:')}")
@@ -1218,10 +1513,17 @@ def _cmd_proxy(args) -> None:
 
         if not args.foreground:
             import subprocess
+
             proc = subprocess.Popen(
-                [sys.executable, "-m", "clawmetry.proxy",
-                 "--port", str(config.port),
-                 "--host", config.host],
+                [
+                    sys.executable,
+                    "-m",
+                    "clawmetry.proxy",
+                    "--port",
+                    str(config.port),
+                    "--host",
+                    config.host,
+                ],
                 stdout=open(str(PROXY_CONFIG_FILE.parent / "proxy.log"), "a"),
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
@@ -1231,7 +1533,7 @@ def _cmd_proxy(args) -> None:
             print(f"  {DIM(f'Log: {_log_path}')} ")
             print()
         else:
-            print(f"  Running in foreground (Ctrl+C to stop)")
+            print("  Running in foreground (Ctrl+C to stop)")
             print()
             run_proxy(config, foreground=True)
 
@@ -1245,25 +1547,34 @@ def _cmd_proxy(args) -> None:
         status = _proxy_status()
         if getattr(args, "as_json", False):
             import json
+
             print(json.dumps(status, indent=2))
             return
 
         if status.get("running"):
             print(f"  Proxy: {GREEN('running')} (pid {status['pid']})")
             try:
-                import urllib.request, json
+                import urllib.request
+                import json
+
                 config = ProxyConfig.load()
                 url = f"http://{config.host}:{config.port}/proxy/status"
                 with urllib.request.urlopen(url, timeout=3) as r:
                     detail = json.loads(r.read())
                 print(f"  Uptime:    {_format_uptime(detail.get('uptime_seconds', 0))}")
-                print(f"  Requests:  {detail.get('requests_total', 0)} total, {detail.get('requests_blocked', 0)} blocked")
+                print(
+                    f"  Requests:  {detail.get('requests_total', 0)} total, {detail.get('requests_blocked', 0)} blocked"
+                )
                 print(f"  Loops:     {detail.get('loops_detected', 0)} detected")
                 b = detail.get("budget", {})
                 if b.get("daily_limit", 0) > 0:
-                    print(f"  Daily:     ${b['daily_spent']:.2f} / ${b['daily_limit']:.2f}")
+                    print(
+                        f"  Daily:     ${b['daily_spent']:.2f} / ${b['daily_limit']:.2f}"
+                    )
                 if b.get("monthly_limit", 0) > 0:
-                    print(f"  Monthly:   ${b['monthly_spent']:.2f} / ${b['monthly_limit']:.2f}")
+                    print(
+                        f"  Monthly:   ${b['monthly_spent']:.2f} / ${b['monthly_limit']:.2f}"
+                    )
             except Exception:
                 pass
         else:
@@ -1284,7 +1595,7 @@ def _cmd_proxy(args) -> None:
             config.budget.action = args.action
             changed = True
         if args.loop_detection is not None:
-            config.loop_detection.enabled = (args.loop_detection == "on")
+            config.loop_detection.enabled = args.loop_detection == "on"
             changed = True
 
         if changed:
@@ -1295,10 +1606,16 @@ def _cmd_proxy(args) -> None:
         print(f"  {'─' * 40}")
         print(f"  Port:           {config.port}")
         print(f"  Host:           {config.host}")
-        print(f"  Daily budget:   {'$' + str(config.budget.daily_usd) if config.budget.daily_usd > 0 else DIM('unlimited')}")
-        print(f"  Monthly budget: {'$' + str(config.budget.monthly_usd) if config.budget.monthly_usd > 0 else DIM('unlimited')}")
+        print(
+            f"  Daily budget:   {'$' + str(config.budget.daily_usd) if config.budget.daily_usd > 0 else DIM('unlimited')}"
+        )
+        print(
+            f"  Monthly budget: {'$' + str(config.budget.monthly_usd) if config.budget.monthly_usd > 0 else DIM('unlimited')}"
+        )
         print(f"  Action:         {config.budget.action}")
-        print(f"  Loop detection: {GREEN('on') if config.loop_detection.enabled else DIM('off')}")
+        print(
+            f"  Loop detection: {GREEN('on') if config.loop_detection.enabled else DIM('off')}"
+        )
         print(f"  Routing rules:  {len(config.routing_rules)}")
         print(f"\n  Config file: {DIM(str(PROXY_CONFIG_FILE))}")
         print()
@@ -1307,14 +1624,14 @@ def _cmd_proxy(args) -> None:
         print(f"\n  {BOLD('🦞 ClawMetry Proxy')} — enforcement layer for LLM API calls")
         print()
         print(f"  {BOLD('Commands:')}")
-        print(f"    clawmetry proxy start    Start the proxy server")
-        print(f"    clawmetry proxy stop     Stop the proxy server")
-        print(f"    clawmetry proxy status   Show proxy status")
-        print(f"    clawmetry proxy config   View/update proxy config")
+        print("    clawmetry proxy start    Start the proxy server")
+        print("    clawmetry proxy stop     Stop the proxy server")
+        print("    clawmetry proxy status   Show proxy status")
+        print("    clawmetry proxy config   View/update proxy config")
         print()
         print(f"  {BOLD('Quick start:')}")
-        print(f"    clawmetry proxy start --daily-budget 10")
-        print(f"    export ANTHROPIC_BASE_URL=http://localhost:4100")
+        print("    clawmetry proxy start --daily-budget 10")
+        print("    export ANTHROPIC_BASE_URL=http://localhost:4100")
         print()
 
 
@@ -1344,6 +1661,7 @@ def _format_uptime(seconds):
 def _cmd_update() -> None:
     """Self-update clawmetry to the latest PyPI version."""
     import subprocess
+
     try:
         from dashboard import __version__ as current
     except Exception:
@@ -1359,8 +1677,14 @@ def _cmd_update() -> None:
             # Check new version
             try:
                 new_ver = subprocess.run(
-                    [sys.executable, "-c", "from dashboard import __version__; print(__version__)"],
-                    capture_output=True, text=True, timeout=10,
+                    [
+                        sys.executable,
+                        "-c",
+                        "from dashboard import __version__; print(__version__)",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 ).stdout.strip()
             except Exception:
                 new_ver = "unknown"
@@ -1371,10 +1695,14 @@ def _cmd_update() -> None:
                 # Restart daemon if running
                 try:
                     from clawmetry.sync import CONFIG_FILE
+
                     if CONFIG_FILE.exists():
                         print("Restarting sync daemon...")
-                        subprocess.run(["clawmetry", "daemon", "restart"],
-                                       capture_output=True, timeout=15)
+                        subprocess.run(
+                            ["clawmetry", "daemon", "restart"],
+                            capture_output=True,
+                            timeout=15,
+                        )
                         print("Daemon restarted with new version")
                 except Exception:
                     print("Tip: restart the daemon to use the new version")
@@ -1406,6 +1734,7 @@ def main() -> None:
     # We *also* replace closed handles with devnull sinks so later code is safe.
     if sys.platform == "win32":
         import io as _io
+
         os.environ.setdefault("NO_COLOR", "1")
         for _attr in ("stdout", "stderr"):
             _stream = getattr(sys, _attr, None)
@@ -1424,26 +1753,62 @@ def main() -> None:
                     setattr(sys, _attr, _io.StringIO())
 
     parser = argparse.ArgumentParser(prog="clawmetry", add_help=False)
-    parser.add_argument('--openclaw-dir', type=str, help='OpenClaw config directory (default: ~/.openclaw). Env: CLAWMETRY_OPENCLAW_DIR')
+    parser.add_argument(
+        "--openclaw-dir",
+        type=str,
+        help="OpenClaw config directory (default: ~/.openclaw). Env: CLAWMETRY_OPENCLAW_DIR",
+    )
     sub = parser.add_subparsers(dest="cmd")
 
     # onboard — first-time setup wizard (called by install.sh)
-    p_onboard = sub.add_parser("onboard", help="First-time setup wizard (run after install)")
+    p_onboard = sub.add_parser(
+        "onboard", help="First-time setup wizard (run after install)"
+    )
     p_onboard.add_argument("--key", metavar="cm_xxx", help="API key (skip prompt)")
-    p_onboard.add_argument("--foreground", action="store_true", help="Run daemon in foreground")
-    p_onboard.add_argument("--node-id", metavar="NAME", dest="custom_node_id", help="Custom node name (default: hostname)")
+    p_onboard.add_argument(
+        "--foreground", action="store_true", help="Run daemon in foreground"
+    )
+    p_onboard.add_argument(
+        "--node-id",
+        metavar="NAME",
+        dest="custom_node_id",
+        help="Custom node name (default: hostname)",
+    )
 
     # connect
     p_connect = sub.add_parser("connect", help="Activate cloud sync")
     p_connect.add_argument("--key", metavar="cm_xxx", help="API key (skip prompt)")
-    p_connect.add_argument("--enc-key", metavar="KEY", dest="enc_key", help="Encryption key (skip prompt, for automated/sandbox use)")
-    p_connect.add_argument("--key-only", action="store_true", help="Save key + config only, do not start daemon (for NemoClaw host use)")
-    p_connect.add_argument("--no-daemon", action="store_true", help="Connect but do not start daemon (daemon managed externally, e.g. supervisord)")
-    p_connect.add_argument("--foreground", action="store_true", help="Run daemon in foreground")
-    p_connect.add_argument("--node-id", metavar="NAME", dest="custom_node_id", help="Custom node name (default: hostname)")
+    p_connect.add_argument(
+        "--enc-key",
+        metavar="KEY",
+        dest="enc_key",
+        help="Encryption key (skip prompt, for automated/sandbox use)",
+    )
+    p_connect.add_argument(
+        "--key-only",
+        action="store_true",
+        help="Save key + config only, do not start daemon (for NemoClaw host use)",
+    )
+    p_connect.add_argument(
+        "--no-daemon",
+        action="store_true",
+        help="Connect but do not start daemon (daemon managed externally, e.g. supervisord)",
+    )
+    p_connect.add_argument(
+        "--foreground", action="store_true", help="Run daemon in foreground"
+    )
+    p_connect.add_argument(
+        "--node-id",
+        metavar="NAME",
+        dest="custom_node_id",
+        help="Custom node name (default: hostname)",
+    )
 
     # nemoclaw-daemons
-    sub.add_parser("nemoclaw-daemons", help="Register LaunchAgents to keep NemoClaw sandbox daemons alive (macOS)")
+    sub.add_parser(
+        "nemoclaw-daemons",
+        help="Register LaunchAgents to keep NemoClaw sandbox daemons alive (macOS)",
+    )
 
     # disconnect
     sub.add_parser("disconnect", help="Stop cloud sync and remove key")
@@ -1453,42 +1818,80 @@ def main() -> None:
     p_status.add_argument("--show-key", action="store_true", help="Reveal secret key")
 
     # proxy
-    p_proxy = sub.add_parser("proxy", help="Local enforcement proxy (budget, loops, routing)")
+    p_proxy = sub.add_parser(
+        "proxy", help="Local enforcement proxy (budget, loops, routing)"
+    )
     proxy_sub = p_proxy.add_subparsers(dest="proxy_cmd")
 
     p_proxy_start = proxy_sub.add_parser("start", help="Start the proxy server")
     p_proxy_start.add_argument("--port", type=int, help="Port (default: 4100)")
-    p_proxy_start.add_argument("--host", default=None, help="Bind host (default: 127.0.0.1)")
-    p_proxy_start.add_argument("--foreground", action="store_true", help="Run in foreground")
-    p_proxy_start.add_argument("--daily-budget", type=float, metavar="USD", help="Daily budget limit in USD")
-    p_proxy_start.add_argument("--monthly-budget", type=float, metavar="USD", help="Monthly budget limit in USD")
-    p_proxy_start.add_argument("--no-loop-detection", action="store_true", help="Disable loop detection")
-    p_proxy_start.add_argument("--log-requests", action="store_true", help="Log all proxied requests")
+    p_proxy_start.add_argument(
+        "--host", default=None, help="Bind host (default: 127.0.0.1)"
+    )
+    p_proxy_start.add_argument(
+        "--foreground", action="store_true", help="Run in foreground"
+    )
+    p_proxy_start.add_argument(
+        "--daily-budget", type=float, metavar="USD", help="Daily budget limit in USD"
+    )
+    p_proxy_start.add_argument(
+        "--monthly-budget",
+        type=float,
+        metavar="USD",
+        help="Monthly budget limit in USD",
+    )
+    p_proxy_start.add_argument(
+        "--no-loop-detection", action="store_true", help="Disable loop detection"
+    )
+    p_proxy_start.add_argument(
+        "--log-requests", action="store_true", help="Log all proxied requests"
+    )
 
     proxy_sub.add_parser("stop", help="Stop the proxy server")
 
     p_proxy_status = proxy_sub.add_parser("status", help="Show proxy status")
-    p_proxy_status.add_argument("--json", action="store_true", dest="as_json", help="Output as JSON")
+    p_proxy_status.add_argument(
+        "--json", action="store_true", dest="as_json", help="Output as JSON"
+    )
 
     p_proxy_config = proxy_sub.add_parser("config", help="Show or update proxy config")
-    p_proxy_config.add_argument("--daily-budget", type=float, metavar="USD", help="Set daily budget")
-    p_proxy_config.add_argument("--monthly-budget", type=float, metavar="USD", help="Set monthly budget")
-    p_proxy_config.add_argument("--action", choices=["block", "warn", "downgrade"], help="Budget action")
-    p_proxy_config.add_argument("--loop-detection", choices=["on", "off"], help="Toggle loop detection")
+    p_proxy_config.add_argument(
+        "--daily-budget", type=float, metavar="USD", help="Set daily budget"
+    )
+    p_proxy_config.add_argument(
+        "--monthly-budget", type=float, metavar="USD", help="Set monthly budget"
+    )
+    p_proxy_config.add_argument(
+        "--action", choices=["block", "warn", "downgrade"], help="Budget action"
+    )
+    p_proxy_config.add_argument(
+        "--loop-detection", choices=["on", "off"], help="Toggle loop detection"
+    )
 
     # update — self-update to latest PyPI version
     sub.add_parser("update", help="Update clawmetry to the latest version")
 
     # uninstall — fully remove clawmetry
-    sub.add_parser("uninstall", help="Fully uninstall clawmetry (stop daemons, remove all files)")
+    sub.add_parser(
+        "uninstall", help="Fully uninstall clawmetry (stop daemons, remove all files)"
+    )
 
     # Parse just the first token to decide if it's a sub-command or dashboard flag
-    _subcmds = ("onboard", "connect", "disconnect", "status", "proxy", "update", "uninstall", "nemoclaw-daemons")
+    _subcmds = (
+        "onboard",
+        "connect",
+        "disconnect",
+        "status",
+        "proxy",
+        "update",
+        "uninstall",
+        "nemoclaw-daemons",
+    )
     if len(sys.argv) > 1 and sys.argv[1] in _subcmds:
         args = parser.parse_args()
         # Issue #322: Set OpenClaw config directory from CLI flag
-        if getattr(args, 'openclaw_dir', None):
-            os.environ['CLAWMETRY_OPENCLAW_DIR'] = os.path.expanduser(args.openclaw_dir)
+        if getattr(args, "openclaw_dir", None):
+            os.environ["CLAWMETRY_OPENCLAW_DIR"] = os.path.expanduser(args.openclaw_dir)
 
         if args.cmd == "onboard":
             _cmd_onboard(args)
