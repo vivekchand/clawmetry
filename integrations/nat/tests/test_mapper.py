@@ -1,6 +1,8 @@
 """Tests for NATEventMapper."""
+
+import logging
 import pytest
-from clawmetry_nat.mapper import NATEventMapper
+from clawmetry_nat.mapper import NATEventMapper, _safe_str
 
 
 SESSION_ID = "test-session-1234"
@@ -14,6 +16,7 @@ def make_mapper():
 # Dict-style NAT step helpers
 # ---------------------------------------------------------------------------
 
+
 def _step(event_type, name="", metadata=None):
     return {"event_type": event_type, "name": name, "metadata": metadata or {}}
 
@@ -21,6 +24,7 @@ def _step(event_type, name="", metadata=None):
 # ---------------------------------------------------------------------------
 # Session events
 # ---------------------------------------------------------------------------
+
 
 class TestSessionEvents:
     def test_workflow_start_maps_to_session_start(self):
@@ -38,7 +42,9 @@ class TestSessionEvents:
 
     def test_workflow_end_maps_to_session_end(self):
         mapper = make_mapper()
-        ev = mapper.map(_step("WORKFLOW_END", metadata={"total_tokens": 1000, "total_cost": 0.05}))
+        ev = mapper.map(
+            _step("WORKFLOW_END", metadata={"total_tokens": 1000, "total_cost": 0.05})
+        )
         assert ev["type"] == "session"
         assert ev["data"]["event"] == "end"
         assert ev["data"]["summary"]["total_tokens"] == 1000
@@ -54,10 +60,13 @@ class TestSessionEvents:
 # LLM events
 # ---------------------------------------------------------------------------
 
+
 class TestLLMEvents:
     def test_llm_start_maps_to_user_message(self):
         mapper = make_mapper()
-        ev = mapper.map(_step("LLM_START", metadata={"prompt": "Hello?", "model": "gpt-4"}))
+        ev = mapper.map(
+            _step("LLM_START", metadata={"prompt": "Hello?", "model": "gpt-4"})
+        )
         assert ev["type"] == "message"
         assert ev["message"]["role"] == "user"
         assert ev["message"]["content"] == "Hello?"
@@ -69,12 +78,16 @@ class TestLLMEvents:
         start = _step("LLM_START", name="span-1", metadata={"prompt": "test"})
         mapper.map(start)
 
-        end = _step("LLM_END", name="span-1", metadata={
-            "output": "Hi there!",
-            "input_tokens": 100,
-            "output_tokens": 50,
-            "cost": 0.002,
-        })
+        end = _step(
+            "LLM_END",
+            name="span-1",
+            metadata={
+                "output": "Hi there!",
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cost": 0.002,
+            },
+        )
         ev = mapper.map(end)
         assert ev["message"]["role"] == "assistant"
         assert ev["message"]["content"] == "Hi there!"
@@ -85,13 +98,17 @@ class TestLLMEvents:
     def test_llm_end_duration_computed(self):
         mapper = make_mapper()
         mapper.map(_step("LLM_START", name="dur-test"))
-        import time; time.sleep(0.01)
+        import time
+
+        time.sleep(0.01)
         ev = mapper.map(_step("LLM_END", name="dur-test", metadata={"output": "ok"}))
         assert ev["durationMs"] >= 0
 
     def test_llm_call_alias(self):
         mapper = make_mapper()
-        ev = mapper.map(_step("llm_call", metadata={"input_tokens": 10, "output_tokens": 5}))
+        ev = mapper.map(
+            _step("llm_call", metadata={"input_tokens": 10, "output_tokens": 5})
+        )
         # llm_call is in LLM_START_TYPES — maps to user message
         assert ev["message"]["role"] == "user"
 
@@ -100,12 +117,17 @@ class TestLLMEvents:
 # Tool events
 # ---------------------------------------------------------------------------
 
+
 class TestToolEvents:
     def test_tool_start_maps_to_tool_call(self):
         mapper = make_mapper()
-        ev = mapper.map(_step("TOOL_START", name="web_search", metadata={
-            "tool_input": {"query": "ClawMetry NAT"}
-        }))
+        ev = mapper.map(
+            _step(
+                "TOOL_START",
+                name="web_search",
+                metadata={"tool_input": {"query": "ClawMetry NAT"}},
+            )
+        )
         assert ev["type"] == "message"
         assert ev["message"]["role"] == "assistant"
         content = ev["message"]["content"]
@@ -117,9 +139,9 @@ class TestToolEvents:
     def test_tool_end_maps_to_tool_result(self):
         mapper = make_mapper()
         mapper.map(_step("TOOL_START", name="my_tool"))
-        ev = mapper.map(_step("TOOL_END", name="my_tool", metadata={
-            "tool_output": "result text"
-        }))
+        ev = mapper.map(
+            _step("TOOL_END", name="my_tool", metadata={"tool_output": "result text"})
+        )
         assert ev["message"]["role"] == "tool"
         content = ev["message"]["content"]
         assert content[0]["type"] == "toolResult"
@@ -129,9 +151,9 @@ class TestToolEvents:
     def test_tool_end_with_error(self):
         mapper = make_mapper()
         mapper.map(_step("TOOL_START", name="err_tool"))
-        ev = mapper.map(_step("TOOL_END", name="err_tool", metadata={
-            "error": "timeout"
-        }))
+        ev = mapper.map(
+            _step("TOOL_END", name="err_tool", metadata={"error": "timeout"})
+        )
         assert ev["message"]["content"][0]["error"] == "timeout"
 
     def test_tool_call_alias(self):
@@ -143,6 +165,7 @@ class TestToolEvents:
 # ---------------------------------------------------------------------------
 # Object-style NAT step (duck-typed)
 # ---------------------------------------------------------------------------
+
 
 class TestObjectStyleStep:
     def test_object_with_event_type_attr(self):
@@ -158,7 +181,8 @@ class TestObjectStyleStep:
 
     def test_enum_event_type(self):
         class FakeEnum:
-            def __init__(self, val): self.value = val
+            def __init__(self, val):
+                self.value = val
 
         class FakeStep:
             def __init__(self):
@@ -176,6 +200,7 @@ class TestObjectStyleStep:
 # Unknown event type
 # ---------------------------------------------------------------------------
 
+
 class TestUnknownEvent:
     def test_unknown_type_returns_none(self):
         mapper = make_mapper()
@@ -186,3 +211,24 @@ class TestUnknownEvent:
         mapper = make_mapper()
         ev = mapper.map({})
         assert ev is None
+
+
+# ---------------------------------------------------------------------------
+# Truncation warnings
+# ---------------------------------------------------------------------------
+
+
+class TestTruncationWarning:
+    def test_safe_str_logs_warning_when_truncating(self, caplog):
+        long_string = "x" * 5000
+        with caplog.at_level(logging.WARNING):
+            result = _safe_str(long_string, limit=4000)
+        assert len(result) == 4000
+        assert "truncat" in caplog.text.lower()
+
+    def test_safe_str_no_warning_under_limit(self, caplog):
+        short_string = "hello"
+        with caplog.at_level(logging.WARNING):
+            result = _safe_str(short_string, limit=4000)
+        assert result == "hello"
+        assert "truncat" not in caplog.text.lower()

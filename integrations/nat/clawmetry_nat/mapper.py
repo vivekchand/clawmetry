@@ -17,12 +17,16 @@ ClawMetry brain event fields (subset):
     tool_name, tool_input, tool_output, duration_ms, error
   }
 """
+
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -33,7 +37,10 @@ def _safe_str(value: Any, limit: int = 4000) -> str:
     if value is None:
         return ""
     s = str(value)
-    return s[:limit] if len(s) > limit else s
+    if len(s) > limit:
+        logger.warning("Data truncated from %d to %d chars", len(s), limit)
+        return s[:limit]
+    return s
 
 
 class NATEventMapper:
@@ -46,18 +53,23 @@ class NATEventMapper:
     """
 
     # NAT event type strings — cover both the enum names and string keys
-    WORKFLOW_START_TYPES = {"WORKFLOW_START", "workflow_start", "task_start", "TASK_START"}
-    WORKFLOW_END_TYPES   = {"WORKFLOW_END",   "workflow_end",   "task_end",   "TASK_END"}
-    LLM_START_TYPES      = {"LLM_START",      "llm_start",      "llm_call"}
-    LLM_END_TYPES        = {"LLM_END",        "llm_end",        "llm_response"}
-    TOOL_START_TYPES     = {"TOOL_START",      "tool_start",     "tool_call"}
-    TOOL_END_TYPES       = {"TOOL_END",        "tool_end",       "tool_result"}
+    WORKFLOW_START_TYPES = {
+        "WORKFLOW_START",
+        "workflow_start",
+        "task_start",
+        "TASK_START",
+    }
+    WORKFLOW_END_TYPES = {"WORKFLOW_END", "workflow_end", "task_end", "TASK_END"}
+    LLM_START_TYPES = {"LLM_START", "llm_start", "llm_call"}
+    LLM_END_TYPES = {"LLM_END", "llm_end", "llm_response"}
+    TOOL_START_TYPES = {"TOOL_START", "tool_start", "tool_call"}
+    TOOL_END_TYPES = {"TOOL_END", "tool_end", "tool_result"}
 
     def __init__(self, session_id: Optional[str] = None, model: str = "nat-agent"):
         self.session_id = session_id or str(uuid.uuid4())
         self.model = model
         # Track open LLM/tool spans so we can compute durations on END events
-        self._llm_spans: Dict[str, float]  = {}   # span_id → start_time_ms
+        self._llm_spans: Dict[str, float] = {}  # span_id → start_time_ms
         self._tool_spans: Dict[str, float] = {}
 
     # ------------------------------------------------------------------
@@ -130,10 +142,10 @@ class NATEventMapper:
 
     def _base_event(self, etype: str) -> Dict[str, Any]:
         return {
-            "type":       etype,
+            "type": etype,
             "session_id": self.session_id,
-            "timestamp":  _now_iso(),
-            "source":     "nat",
+            "timestamp": _now_iso(),
+            "source": "nat",
         }
 
     # ── Session events ────────────────────────────────────────────────
@@ -142,9 +154,11 @@ class NATEventMapper:
         meta = self._get_metadata(step)
         ev = self._base_event("session")
         ev["data"] = {
-            "event":      "start",
-            "label":      meta.get("workflow_name") or self._get_name(step) or "nat-workflow",
-            "model":      meta.get("model") or self.model,
+            "event": "start",
+            "label": meta.get("workflow_name")
+            or self._get_name(step)
+            or "nat-workflow",
+            "model": meta.get("model") or self.model,
             "nat_config": meta.get("config") or {},
         }
         return ev
@@ -153,13 +167,15 @@ class NATEventMapper:
         meta = self._get_metadata(step)
         ev = self._base_event("session")
         ev["data"] = {
-            "event":    "end",
-            "label":    meta.get("workflow_name") or self._get_name(step) or "nat-workflow",
+            "event": "end",
+            "label": meta.get("workflow_name")
+            or self._get_name(step)
+            or "nat-workflow",
             "summary": {
                 "total_tokens": meta.get("total_tokens") or 0,
-                "total_cost":   meta.get("total_cost") or 0.0,
-                "status":       meta.get("status") or "completed",
-                "error":        _safe_str(meta.get("error")),
+                "total_cost": meta.get("total_cost") or 0.0,
+                "status": meta.get("status") or "completed",
+                "error": _safe_str(meta.get("error")),
             },
         }
         return ev
@@ -173,9 +189,9 @@ class NATEventMapper:
         meta = self._get_metadata(step)
         ev = self._base_event("message")
         ev["message"] = {
-            "role":    "user",
+            "role": "user",
             "content": _safe_str(meta.get("prompt") or meta.get("input") or ""),
-            "model":   meta.get("model") or self.model,
+            "model": meta.get("model") or self.model,
         }
         ev["_span_id"] = span_id
         return ev
@@ -188,26 +204,40 @@ class NATEventMapper:
         meta = self._get_metadata(step)
 
         # Token usage — NAT stores these under various key names
-        tok_in  = (meta.get("input_tokens")  or meta.get("prompt_tokens")   or
-                   meta.get("tokens_input")  or 0)
-        tok_out = (meta.get("output_tokens") or meta.get("completion_tokens") or
-                   meta.get("tokens_output") or 0)
+        tok_in = (
+            meta.get("input_tokens")
+            or meta.get("prompt_tokens")
+            or meta.get("tokens_input")
+            or 0
+        )
+        tok_out = (
+            meta.get("output_tokens")
+            or meta.get("completion_tokens")
+            or meta.get("tokens_output")
+            or 0
+        )
 
         # Cost — NAT may give us a cost dict or a scalar
         cost_raw = meta.get("cost") or meta.get("total_cost") or 0.0
-        cost = float(cost_raw) if isinstance(cost_raw, (int, float)) else (
-            float(cost_raw.get("total", 0)) if isinstance(cost_raw, dict) else 0.0
+        cost = (
+            float(cost_raw)
+            if isinstance(cost_raw, (int, float))
+            else (
+                float(cost_raw.get("total", 0)) if isinstance(cost_raw, dict) else 0.0
+            )
         )
 
         ev = self._base_event("message")
         ev["message"] = {
-            "role":    "assistant",
-            "content": _safe_str(meta.get("output") or meta.get("response") or meta.get("text") or ""),
-            "model":   meta.get("model") or self.model,
+            "role": "assistant",
+            "content": _safe_str(
+                meta.get("output") or meta.get("response") or meta.get("text") or ""
+            ),
+            "model": meta.get("model") or self.model,
             "usage": {
-                "input":      int(tok_in),
-                "output":     int(tok_out),
-                "cacheRead":  int(meta.get("cache_read_tokens") or 0),
+                "input": int(tok_in),
+                "output": int(tok_out),
+                "cacheRead": int(meta.get("cache_read_tokens") or 0),
                 "cacheWrite": int(meta.get("cache_write_tokens") or 0),
                 "cost": {"total": cost},
             },
@@ -229,9 +259,12 @@ class NATEventMapper:
             "role": "assistant",
             "content": [
                 {
-                    "type":      "toolCall",
-                    "name":      name,
-                    "arguments": meta.get("tool_input") or meta.get("args") or meta.get("inputs") or {},
+                    "type": "toolCall",
+                    "name": name,
+                    "arguments": meta.get("tool_input")
+                    or meta.get("args")
+                    or meta.get("inputs")
+                    or {},
                 }
             ],
             "model": self.model,
@@ -253,10 +286,14 @@ class NATEventMapper:
             "role": "tool",
             "content": [
                 {
-                    "type":   "toolResult",
-                    "name":   name,
-                    "output": _safe_str(meta.get("tool_output") or meta.get("output") or meta.get("result")),
-                    "error":  _safe_str(error) if error else None,
+                    "type": "toolResult",
+                    "name": name,
+                    "output": _safe_str(
+                        meta.get("tool_output")
+                        or meta.get("output")
+                        or meta.get("result")
+                    ),
+                    "error": _safe_str(error) if error else None,
                 }
             ],
             "model": self.model,
