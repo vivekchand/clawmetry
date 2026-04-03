@@ -14,9 +14,9 @@ import sqlite3
 import threading
 from datetime import datetime, timezone, timedelta
 
-__all__ = ['HistoryDB', 'HistoryCollector']
+__all__ = ["HistoryDB", "HistoryCollector"]
 
-DEFAULT_DB_PATH = os.path.expanduser('~/.clawmetry/history.db')
+DEFAULT_DB_PATH = os.path.expanduser("~/.clawmetry/history.db")
 POLL_INTERVAL = 60  # seconds
 RETENTION_DAYS = 90
 ROLLUP_AFTER_DAYS = 7  # aggregate into hourly after 7 days
@@ -26,22 +26,24 @@ class HistoryDB:
     """SQLite-backed time-series store for ClawMetry."""
 
     def __init__(self, db_path=None):
-        self.db_path = db_path or os.environ.get('CLAWMETRY_HISTORY_DB', DEFAULT_DB_PATH)
+        self.db_path = db_path or os.environ.get(
+            "CLAWMETRY_HISTORY_DB", DEFAULT_DB_PATH
+        )
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._local = threading.local()
         self._init_schema()
 
     def _get_conn(self):
-        if not hasattr(self._local, 'conn') or self._local.conn is None:
+        if not hasattr(self._local, "conn") or self._local.conn is None:
             self._local.conn = sqlite3.connect(self.db_path, timeout=10)
             self._local.conn.row_factory = sqlite3.Row
-            self._local.conn.execute('PRAGMA journal_mode=WAL')
-            self._local.conn.execute('PRAGMA synchronous=NORMAL')
+            self._local.conn.execute("PRAGMA journal_mode=WAL")
+            self._local.conn.execute("PRAGMA synchronous=NORMAL")
         return self._local.conn
 
     def _init_schema(self):
         conn = self._get_conn()
-        conn.executescript('''
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS metrics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp REAL NOT NULL,
@@ -99,15 +101,26 @@ class HistoryDB:
                 labels_json TEXT DEFAULT '{}'
             );
             CREATE INDEX IF NOT EXISTS idx_rollup_ts ON metrics_rollup(metric_name, interval, timestamp);
-        ''')
+        """)
         conn.commit()
+
+    def close(self):
+        if hasattr(self._local, "conn") and self._local.conn is not None:
+            self._local.conn.close()
+            self._local.conn = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
     def insert_metric(self, name, value, labels=None, ts=None):
         ts = ts or time.time()
         conn = self._get_conn()
         conn.execute(
-            'INSERT INTO metrics (timestamp, metric_name, metric_value, labels_json) VALUES (?, ?, ?, ?)',
-            (ts, name, value, json.dumps(labels or {}))
+            "INSERT INTO metrics (timestamp, metric_name, metric_value, labels_json) VALUES (?, ?, ?, ?)",
+            (ts, name, value, json.dumps(labels or {})),
         )
         conn.commit()
 
@@ -115,26 +128,47 @@ class HistoryDB:
         """rows: list of (ts, name, value, labels_dict)"""
         conn = self._get_conn()
         conn.executemany(
-            'INSERT INTO metrics (timestamp, metric_name, metric_value, labels_json) VALUES (?, ?, ?, ?)',
-            [(ts, n, v, json.dumps(l or {})) for ts, n, v, l in rows]
+            "INSERT INTO metrics (timestamp, metric_name, metric_value, labels_json) VALUES (?, ?, ?, ?)",
+            [(ts, n, v, json.dumps(l or {})) for ts, n, v, l in rows],
         )
         conn.commit()
 
-    def insert_session(self, session_key, tokens_in, tokens_out, cost, model, status='active', ts=None, extra=None):
+    def insert_session(
+        self,
+        session_key,
+        tokens_in,
+        tokens_out,
+        cost,
+        model,
+        status="active",
+        ts=None,
+        extra=None,
+    ):
         ts = ts or time.time()
         conn = self._get_conn()
         conn.execute(
-            'INSERT INTO sessions_log (timestamp, session_key, tokens_in, tokens_out, cost, model, status, extra_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            (ts, session_key, tokens_in, tokens_out, cost, model, status, json.dumps(extra or {}))
+            "INSERT INTO sessions_log (timestamp, session_key, tokens_in, tokens_out, cost, model, status, extra_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ts,
+                session_key,
+                tokens_in,
+                tokens_out,
+                cost,
+                model,
+                status,
+                json.dumps(extra or {}),
+            ),
         )
         conn.commit()
 
-    def insert_cron_run(self, job_id, job_name, status, duration_ms=0, error='', ts=None, extra=None):
+    def insert_cron_run(
+        self, job_id, job_name, status, duration_ms=0, error="", ts=None, extra=None
+    ):
         ts = ts or time.time()
         conn = self._get_conn()
         conn.execute(
-            'INSERT INTO cron_runs (timestamp, job_id, job_name, status, duration_ms, error, extra_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (ts, job_id, job_name, status, duration_ms, error, json.dumps(extra or {}))
+            "INSERT INTO cron_runs (timestamp, job_id, job_name, status, duration_ms, error, extra_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ts, job_id, job_name, status, duration_ms, error, json.dumps(extra or {})),
         )
         conn.commit()
 
@@ -142,8 +176,8 @@ class HistoryDB:
         ts = ts or time.time()
         conn = self._get_conn()
         conn.execute(
-            'INSERT INTO snapshots (timestamp, raw_json) VALUES (?, ?)',
-            (ts, json.dumps(raw_data) if isinstance(raw_data, dict) else raw_data)
+            "INSERT INTO snapshots (timestamp, raw_json) VALUES (?, ?)",
+            (ts, json.dumps(raw_data) if isinstance(raw_data, dict) else raw_data),
         )
         conn.commit()
 
@@ -153,9 +187,10 @@ class HistoryDB:
         """
         conn = self._get_conn()
 
-        if interval and interval in ('minute', 'hour', 'day'):
-            divisor = {'minute': 60, 'hour': 3600, 'day': 86400}[interval]
-            rows = conn.execute('''
+        if interval and interval in ("minute", "hour", "day"):
+            divisor = {"minute": 60, "hour": 3600, "day": 86400}[interval]
+            rows = conn.execute(
+                """
                 SELECT CAST(timestamp / ? AS INTEGER) * ? as bucket_ts,
                        AVG(metric_value) as avg_val,
                        MIN(metric_value) as min_val,
@@ -166,60 +201,80 @@ class HistoryDB:
                 WHERE metric_name = ? AND timestamp >= ? AND timestamp <= ?
                 GROUP BY bucket_ts
                 ORDER BY bucket_ts
-            ''', (divisor, divisor, metric_name, from_ts, to_ts)).fetchall()
+            """,
+                (divisor, divisor, metric_name, from_ts, to_ts),
+            ).fetchall()
             return [dict(r) for r in rows]
         else:
-            rows = conn.execute('''
+            rows = conn.execute(
+                """
                 SELECT timestamp, metric_value, labels_json
                 FROM metrics
                 WHERE metric_name = ? AND timestamp >= ? AND timestamp <= ?
                 ORDER BY timestamp
-            ''', (metric_name, from_ts, to_ts)).fetchall()
+            """,
+                (metric_name, from_ts, to_ts),
+            ).fetchall()
             return [dict(r) for r in rows]
 
     def query_sessions(self, from_ts, to_ts, session_key=None):
         conn = self._get_conn()
         if session_key:
-            rows = conn.execute('''
+            rows = conn.execute(
+                """
                 SELECT * FROM sessions_log
                 WHERE timestamp >= ? AND timestamp <= ? AND session_key = ?
                 ORDER BY timestamp
-            ''', (from_ts, to_ts, session_key)).fetchall()
+            """,
+                (from_ts, to_ts, session_key),
+            ).fetchall()
         else:
-            rows = conn.execute('''
+            rows = conn.execute(
+                """
                 SELECT * FROM sessions_log
                 WHERE timestamp >= ? AND timestamp <= ?
                 ORDER BY timestamp
-            ''', (from_ts, to_ts)).fetchall()
+            """,
+                (from_ts, to_ts),
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def query_crons(self, from_ts, to_ts, job_id=None):
         conn = self._get_conn()
         if job_id:
-            rows = conn.execute('''
+            rows = conn.execute(
+                """
                 SELECT * FROM cron_runs
                 WHERE timestamp >= ? AND timestamp <= ? AND job_id = ?
                 ORDER BY timestamp
-            ''', (from_ts, to_ts, job_id)).fetchall()
+            """,
+                (from_ts, to_ts, job_id),
+            ).fetchall()
         else:
-            rows = conn.execute('''
+            rows = conn.execute(
+                """
                 SELECT * FROM cron_runs
                 WHERE timestamp >= ? AND timestamp <= ?
                 ORDER BY timestamp
-            ''', (from_ts, to_ts)).fetchall()
+            """,
+                (from_ts, to_ts),
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def query_snapshot(self, timestamp):
         """Get the snapshot closest to a given timestamp."""
         conn = self._get_conn()
-        row = conn.execute('''
+        row = conn.execute(
+            """
             SELECT * FROM snapshots
             ORDER BY ABS(timestamp - ?) LIMIT 1
-        ''', (timestamp,)).fetchone()
+        """,
+            (timestamp,),
+        ).fetchone()
         if row:
             d = dict(row)
             try:
-                d['raw_json'] = json.loads(d['raw_json'])
+                d["raw_json"] = json.loads(d["raw_json"])
             except (json.JSONDecodeError, TypeError):
                 pass
             return d
@@ -228,15 +283,19 @@ class HistoryDB:
     def get_available_metrics(self):
         """List all distinct metric names."""
         conn = self._get_conn()
-        rows = conn.execute('SELECT DISTINCT metric_name FROM metrics ORDER BY metric_name').fetchall()
-        return [r['metric_name'] for r in rows]
+        rows = conn.execute(
+            "SELECT DISTINCT metric_name FROM metrics ORDER BY metric_name"
+        ).fetchall()
+        return [r["metric_name"] for r in rows]
 
     def get_stats(self):
         """DB stats for debugging."""
         conn = self._get_conn()
         stats = {}
-        for table in ['metrics', 'sessions_log', 'cron_runs', 'snapshots']:
-            row = conn.execute(f'SELECT COUNT(*) as cnt, MIN(timestamp) as oldest, MAX(timestamp) as newest FROM {table}').fetchone()
+        for table in ["metrics", "sessions_log", "cron_runs", "snapshots"]:
+            row = conn.execute(
+                f"SELECT COUNT(*) as cnt, MIN(timestamp) as oldest, MAX(timestamp) as newest FROM {table}"
+            ).fetchone()
             stats[table] = dict(row)
         return stats
 
@@ -248,24 +307,27 @@ class HistoryDB:
         conn = self._get_conn()
 
         # Create hourly rollups for data older than ROLLUP_AFTER_DAYS
-        conn.execute('''
+        conn.execute(
+            """
             INSERT OR IGNORE INTO metrics_rollup (timestamp, metric_name, interval, avg_value, min_value, max_value, sum_value, count, labels_json)
             SELECT CAST(timestamp / 3600 AS INTEGER) * 3600, metric_name, 'hour',
                    AVG(metric_value), MIN(metric_value), MAX(metric_value), SUM(metric_value), COUNT(*), '{}'
             FROM metrics
             WHERE timestamp < ?
             GROUP BY CAST(timestamp / 3600 AS INTEGER) * 3600, metric_name
-        ''', (rollup_cutoff,))
+        """,
+            (rollup_cutoff,),
+        )
 
         # Delete old raw data
-        for table in ['metrics', 'sessions_log', 'cron_runs', 'snapshots']:
-            conn.execute(f'DELETE FROM {table} WHERE timestamp < ?', (cutoff,))
+        for table in ["metrics", "sessions_log", "cron_runs", "snapshots"]:
+            conn.execute(f"DELETE FROM {table} WHERE timestamp < ?", (cutoff,))
 
         # Delete old rollups
-        conn.execute('DELETE FROM metrics_rollup WHERE timestamp < ?', (cutoff,))
+        conn.execute("DELETE FROM metrics_rollup WHERE timestamp < ?", (cutoff,))
 
         conn.commit()
-        conn.execute('PRAGMA optimize')
+        conn.execute("PRAGMA optimize")
 
 
 class AgentReliabilityScorer:
@@ -300,41 +362,43 @@ class AgentReliabilityScorer:
         # Group by session_key: take latest snapshot per session
         by_key = {}
         for s in sessions:
-            key = s.get('session_key', '')
+            key = s.get("session_key", "")
             if not key:
                 continue
             prev = by_key.get(key)
-            if prev is None or s['timestamp'] > prev['timestamp']:
+            if prev is None or s["timestamp"] > prev["timestamp"]:
                 by_key[key] = s
 
         if len(by_key) < min_sessions:
             return self._empty_result(len(by_key), window_days)
 
         # Build per-session reliability points, ordered by timestamp
-        ordered = sorted(by_key.values(), key=lambda s: s['timestamp'])
+        ordered = sorted(by_key.values(), key=lambda s: s["timestamp"])
         points = []
         for s in ordered:
-            tokens_in = max(s.get('tokens_in', 0) or 0, 1)
-            tokens_out = s.get('tokens_out', 0) or 0
-            cost = s.get('cost', 0) or 0
-            status = (s.get('status', '') or '').lower()
+            tokens_in = max(s.get("tokens_in", 0) or 0, 1)
+            tokens_out = s.get("tokens_out", 0) or 0
+            cost = s.get("cost", 0) or 0
+            status = (s.get("status", "") or "").lower()
             total_tokens = max(tokens_in + tokens_out, 1)
 
             # Delivery score: 1.0 for completed/active, 0.0 for error/stalled
-            if status in ('error', 'stalled', 'failed', 'timeout'):
+            if status in ("error", "stalled", "failed", "timeout"):
                 delivery = 0.0
-            elif status in ('completed', 'done', 'active', ''):
+            elif status in ("completed", "done", "active", ""):
                 delivery = 1.0
             else:
                 delivery = 0.5
 
-            points.append({
-                'session_key': s.get('session_key', ''),
-                'timestamp': s['timestamp'],
-                'delivery_score': delivery,
-                'token_efficiency': tokens_out / tokens_in,
-                'cost_per_token': cost / total_tokens,
-            })
+            points.append(
+                {
+                    "session_key": s.get("session_key", ""),
+                    "timestamp": s["timestamp"],
+                    "delivery_score": delivery,
+                    "token_efficiency": tokens_out / tokens_in,
+                    "cost_per_token": cost / total_tokens,
+                }
+            )
 
         # OLS slope per dimension (stdlib only)
         def _ols_slope(ys):
@@ -348,43 +412,43 @@ class AgentReliabilityScorer:
             den = sum((x - x_mean) ** 2 for x in xs)
             return num / den if den else 0.0
 
-        delivery_slope = _ols_slope([p['delivery_score'] for p in points])
-        efficiency_slope = _ols_slope([p['token_efficiency'] for p in points])
-        cost_slope = _ols_slope([p['cost_per_token'] for p in points])
+        delivery_slope = _ols_slope([p["delivery_score"] for p in points])
+        efficiency_slope = _ols_slope([p["token_efficiency"] for p in points])
+        cost_slope = _ols_slope([p["cost_per_token"] for p in points])
 
         # Primary signal: delivery_score trend
         overall_slope = delivery_slope
         threshold = 0.02
         if overall_slope < -threshold:
-            direction = 'degrading'
+            direction = "degrading"
         elif overall_slope > threshold:
-            direction = 'improving'
+            direction = "improving"
         else:
-            direction = 'stable'
+            direction = "stable"
 
         degrading = []
         if delivery_slope < -threshold:
-            degrading.append('delivery_score')
+            degrading.append("delivery_score")
         if efficiency_slope < -0.05:
-            degrading.append('token_efficiency')
+            degrading.append("token_efficiency")
         if cost_slope > 0.00001:  # cost going up is bad
-            degrading.append('cost_per_token')
+            degrading.append("cost_per_token")
 
         return {
-            'direction': direction,
-            'slope_per_session': round(overall_slope, 6),
-            'significant': abs(overall_slope) > threshold,
-            'session_count': len(points),
-            'window_days': window_days,
-            'degrading_dimensions': degrading,
-            'delivery_slope': round(delivery_slope, 6),
-            'efficiency_slope': round(efficiency_slope, 6),
-            'cost_slope': round(cost_slope, 8),
-            'points': [
+            "direction": direction,
+            "slope_per_session": round(overall_slope, 6),
+            "significant": abs(overall_slope) > threshold,
+            "session_count": len(points),
+            "window_days": window_days,
+            "degrading_dimensions": degrading,
+            "delivery_slope": round(delivery_slope, 6),
+            "efficiency_slope": round(efficiency_slope, 6),
+            "cost_slope": round(cost_slope, 8),
+            "points": [
                 {
-                    'ts': p['timestamp'],
-                    'delivery': round(p['delivery_score'], 2),
-                    'efficiency': round(p['token_efficiency'], 4),
+                    "ts": p["timestamp"],
+                    "delivery": round(p["delivery_score"], 2),
+                    "efficiency": round(p["token_efficiency"], 4),
                 }
                 for p in points[-60:]  # last 60 for sparkline
             ],
@@ -392,16 +456,16 @@ class AgentReliabilityScorer:
 
     def _empty_result(self, count, window_days):
         return {
-            'direction': 'insufficient_data',
-            'slope_per_session': 0.0,
-            'significant': False,
-            'session_count': count,
-            'window_days': window_days,
-            'degrading_dimensions': [],
-            'delivery_slope': 0.0,
-            'efficiency_slope': 0.0,
-            'cost_slope': 0.0,
-            'points': [],
+            "direction": "insufficient_data",
+            "slope_per_session": 0.0,
+            "significant": False,
+            "session_count": count,
+            "window_days": window_days,
+            "degrading_dimensions": [],
+            "delivery_slope": 0.0,
+            "efficiency_slope": 0.0,
+            "cost_slope": 0.0,
+            "points": [],
         }
 
 
@@ -421,7 +485,9 @@ class HistoryCollector:
     def start(self):
         if self._thread and self._thread.is_alive():
             return
-        self._thread = threading.Thread(target=self._run, daemon=True, name='history-collector')
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="history-collector"
+        )
         self._thread.start()
 
     def stop(self):
@@ -452,10 +518,12 @@ class HistoryCollector:
         snapshot = {}
 
         # Collect sessions
-        sessions_data = self._gw_invoke('sessions_list', {'limit': 100, 'messageLimit': 0})
-        if sessions_data and 'sessions' in sessions_data:
-            sessions = sessions_data['sessions']
-            snapshot['sessions'] = sessions
+        sessions_data = self._gw_invoke(
+            "sessions_list", {"limit": 100, "messageLimit": 0}
+        )
+        if sessions_data and "sessions" in sessions_data:
+            sessions = sessions_data["sessions"]
+            snapshot["sessions"] = sessions
 
             total_tokens_in = 0
             total_tokens_out = 0
@@ -463,11 +531,11 @@ class HistoryCollector:
             active_count = 0
 
             for s in sessions:
-                key = s.get('key', s.get('sessionId', 'unknown'))
-                tokens_in = s.get('inputTokens', s.get('tokensIn', 0)) or 0
-                tokens_out = s.get('outputTokens', s.get('tokensOut', 0)) or 0
-                cost = s.get('totalCost', s.get('cost', 0)) or 0
-                model = s.get('model', '')
+                key = s.get("key", s.get("sessionId", "unknown"))
+                tokens_in = s.get("inputTokens", s.get("tokensIn", 0)) or 0
+                tokens_out = s.get("outputTokens", s.get("tokensOut", 0)) or 0
+                cost = s.get("totalCost", s.get("cost", 0)) or 0
+                model = s.get("model", "")
                 total = tokens_in + tokens_out
 
                 total_tokens_in += tokens_in
@@ -475,11 +543,13 @@ class HistoryCollector:
                 total_cost += cost
 
                 # Check if session is active (updated in last 5 min)
-                updated = s.get('updatedAt', '')
+                updated = s.get("updatedAt", "")
                 if updated:
                     try:
                         if isinstance(updated, str):
-                            ut = datetime.fromisoformat(updated.replace('Z', '+00:00')).timestamp()
+                            ut = datetime.fromisoformat(
+                                updated.replace("Z", "+00:00")
+                            ).timestamp()
                         else:
                             ut = updated / 1000 if updated > 1e12 else updated
                         if ts - ut < 300:
@@ -488,65 +558,85 @@ class HistoryCollector:
                         pass
 
                 # Log session snapshot
-                self.db.insert_session(key, tokens_in, tokens_out, cost, model, 'active', ts)
+                self.db.insert_session(
+                    key, tokens_in, tokens_out, cost, model, "active", ts
+                )
 
             # Aggregate metrics
             metrics_batch = [
-                (ts, 'tokens_in_total', total_tokens_in, {}),
-                (ts, 'tokens_out_total', total_tokens_out, {}),
-                (ts, 'cost_total', total_cost, {}),
-                (ts, 'sessions_active', active_count, {}),
-                (ts, 'sessions_count', len(sessions), {}),
+                (ts, "tokens_in_total", total_tokens_in, {}),
+                (ts, "tokens_out_total", total_tokens_out, {}),
+                (ts, "cost_total", total_cost, {}),
+                (ts, "sessions_active", active_count, {}),
+                (ts, "sessions_count", len(sessions), {}),
             ]
 
             # Per-model breakdown
             by_model = {}
             for s in sessions:
-                m = s.get('model', 'unknown')
+                m = s.get("model", "unknown")
                 if m not in by_model:
-                    by_model[m] = {'tokens_in': 0, 'tokens_out': 0, 'cost': 0}
-                by_model[m]['tokens_in'] += s.get('inputTokens', s.get('tokensIn', 0)) or 0
-                by_model[m]['tokens_out'] += s.get('outputTokens', s.get('tokensOut', 0)) or 0
-                by_model[m]['cost'] += s.get('totalCost', s.get('cost', 0)) or 0
+                    by_model[m] = {"tokens_in": 0, "tokens_out": 0, "cost": 0}
+                by_model[m]["tokens_in"] += (
+                    s.get("inputTokens", s.get("tokensIn", 0)) or 0
+                )
+                by_model[m]["tokens_out"] += (
+                    s.get("outputTokens", s.get("tokensOut", 0)) or 0
+                )
+                by_model[m]["cost"] += s.get("totalCost", s.get("cost", 0)) or 0
 
             for model, vals in by_model.items():
-                metrics_batch.append((ts, 'tokens_in_by_model', vals['tokens_in'], {'model': model}))
-                metrics_batch.append((ts, 'tokens_out_by_model', vals['tokens_out'], {'model': model}))
-                metrics_batch.append((ts, 'cost_by_model', vals['cost'], {'model': model}))
+                metrics_batch.append(
+                    (ts, "tokens_in_by_model", vals["tokens_in"], {"model": model})
+                )
+                metrics_batch.append(
+                    (ts, "tokens_out_by_model", vals["tokens_out"], {"model": model})
+                )
+                metrics_batch.append(
+                    (ts, "cost_by_model", vals["cost"], {"model": model})
+                )
 
             self.db.insert_metrics_batch(metrics_batch)
 
         # Collect crons
-        crons_data = self._gw_invoke('cron', {'action': 'list', 'includeDisabled': True})
-        if crons_data and 'jobs' in crons_data:
-            jobs = crons_data['jobs']
-            snapshot['crons'] = jobs
+        crons_data = self._gw_invoke(
+            "cron", {"action": "list", "includeDisabled": True}
+        )
+        if crons_data and "jobs" in crons_data:
+            jobs = crons_data["jobs"]
+            snapshot["crons"] = jobs
 
-            enabled = sum(1 for j in jobs if j.get('enabled'))
-            self.db.insert_metric('crons_enabled', enabled, ts=ts)
-            self.db.insert_metric('crons_total', len(jobs), ts=ts)
+            enabled = sum(1 for j in jobs if j.get("enabled"))
+            self.db.insert_metric("crons_enabled", enabled, ts=ts)
+            self.db.insert_metric("crons_total", len(jobs), ts=ts)
 
             # Check for recent runs
             for job in jobs:
-                jid = job.get('id', '')
-                jname = job.get('name', job.get('label', ''))
-                last_run = job.get('lastRun', {})
-                if isinstance(last_run, dict) and last_run.get('startedAt'):
-                    run_ts_str = last_run.get('startedAt', '')
+                jid = job.get("id", "")
+                jname = job.get("name", job.get("label", ""))
+                last_run = job.get("lastRun", {})
+                if isinstance(last_run, dict) and last_run.get("startedAt"):
+                    run_ts_str = last_run.get("startedAt", "")
                     try:
                         if isinstance(run_ts_str, str):
-                            run_ts = datetime.fromisoformat(run_ts_str.replace('Z', '+00:00')).timestamp()
+                            run_ts = datetime.fromisoformat(
+                                run_ts_str.replace("Z", "+00:00")
+                            ).timestamp()
                         else:
-                            run_ts = run_ts_str / 1000 if run_ts_str > 1e12 else run_ts_str
+                            run_ts = (
+                                run_ts_str / 1000 if run_ts_str > 1e12 else run_ts_str
+                            )
                     except (ValueError, TypeError):
                         run_ts = 0
 
                     seen = self._last_cron_runs.get(jid, set())
                     if run_ts and run_ts not in seen:
-                        status = last_run.get('status', 'unknown')
-                        duration = last_run.get('durationMs', 0) or 0
-                        error = last_run.get('error', '') or ''
-                        self.db.insert_cron_run(jid, jname, status, duration, error, ts=run_ts)
+                        status = last_run.get("status", "unknown")
+                        duration = last_run.get("durationMs", 0) or 0
+                        error = last_run.get("error", "") or ""
+                        self.db.insert_cron_run(
+                            jid, jname, status, duration, error, ts=run_ts
+                        )
                         seen.add(run_ts)
                         self._last_cron_runs[jid] = seen
 
