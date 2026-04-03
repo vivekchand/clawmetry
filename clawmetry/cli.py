@@ -362,9 +362,8 @@ def _verify_key_ownership(api_key: str) -> None:
     if r.get("error"):
         print(f" ❌  {r['error']}")
         sys.exit(1)
-    _masked = r.get("masked_email", "your email")
     print(" ✅")
-    print(f"  📧 Code sent to {_masked}")
+    print(f"  📧 Code sent to your email")
     print()
 
     for attempt in range(3):
@@ -1670,8 +1669,18 @@ def _cmd_update() -> None:
     print("Checking for updates...")
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "--break-system-packages", "clawmetry"],
-            capture_output=True, text=True, timeout=120,
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "--break-system-packages",
+                "clawmetry",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode == 0:
             # Check new version
