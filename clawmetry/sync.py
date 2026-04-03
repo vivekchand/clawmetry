@@ -96,6 +96,8 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 STATE_FILE = CONFIG_DIR / "sync-state.json"
 LOG_FILE = CONFIG_DIR / "sync.log"
 
+_state_lock = threading.RLock()
+
 POLL_INTERVAL = 15  # seconds between sync cycles
 STREAM_INTERVAL = 2  # seconds between real-time stream pushes
 BATCH_SIZE = (
@@ -233,8 +235,19 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    with _state_lock:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def update_state(updater: callable):
+    """Atomically load state, apply updater callback, and save. Returns updater result."""
+    with _state_lock:
+        state = load_state()
+        result = updater(state)
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text(json.dumps(state, indent=2))
+        return result
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -955,7 +968,10 @@ def sync_sessions_recent(
     if os.path.isfile(index_path):
         try:
             current_mtime = os.path.getmtime(index_path)
-            if _sessions_json_cache["data"] is not None and _sessions_json_cache["mtime"] == current_mtime:
+            if (
+                _sessions_json_cache["data"] is not None
+                and _sessions_json_cache["mtime"] == current_mtime
+            ):
                 file_to_subagent_id = _sessions_json_cache["data"]
             else:
                 with open(index_path) as _fi:
@@ -964,8 +980,14 @@ def sync_sessions_recent(
                     if ":subagent:" in _k and isinstance(_meta, dict):
                         _sf = _meta.get("sessionFile", "")
                         if _sf:
-                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[-1]
-                _sessions_json_cache = {"ts": time.time(), "data": file_to_subagent_id.copy(), "mtime": current_mtime}
+                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[
+                                -1
+                            ]
+                _sessions_json_cache = {
+                    "ts": time.time(),
+                    "data": file_to_subagent_id.copy(),
+                    "mtime": current_mtime,
+                }
         except Exception:
             pass
 
@@ -2768,18 +2790,23 @@ def run_daemon() -> None:
             time.sleep(20)
             log.info("Background backfill starting — syncing older sessions...")
             try:
-                bf_state = load_state()
-                ev = sync_sessions(config, bf_state, paths)
-                bf_state["initial_backfill_done"] = True
-                bf_state["last_sync"] = datetime.now(timezone.utc).isoformat()
-                save_state(bf_state)
+
+                def _update_sessions(s):
+                    ev = sync_sessions(config, s, paths)
+                    s["initial_backfill_done"] = True
+                    s["last_sync"] = datetime.now(timezone.utc).isoformat()
+                    return ev
+
+                ev = update_state(_update_sessions)
                 log.info(f"Background backfill: {ev} older events synced")
             except Exception as e:
                 log.warning(f"Background backfill error: {e}")
             try:
-                bf_state = load_state()
-                lg = sync_logs(config, bf_state, paths)
-                save_state(bf_state)
+
+                def _update_logs(s):
+                    return sync_logs(config, s, paths)
+
+                lg = update_state(_update_logs)
                 log.info(f"Background backfill: {lg} log lines synced")
             except Exception as e:
                 log.warning(f"Background backfill log error: {e}")
@@ -2974,8 +3001,6 @@ if __name__ == "__main__":
             log.error(traceback.format_exc())
             log.info("Restarting in 15 seconds...")
             time.sleep(15)
-
-
 
 
 def run_daemon() -> None:
