@@ -943,9 +943,17 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
         if "budget" in data:
             b = data["budget"]
             if "daily_usd" in b:
-                config.budget.daily_usd = float(b["daily_usd"])
+                daily = float(b["daily_usd"])
+                if daily > 10000:
+                    return jsonify({"error": "daily_usd exceeds maximum of 10000"}), 400
+                config.budget.daily_usd = daily
             if "monthly_usd" in b:
-                config.budget.monthly_usd = float(b["monthly_usd"])
+                monthly = float(b["monthly_usd"])
+                if monthly > 100000:
+                    return jsonify(
+                        {"error": "monthly_usd exceeds maximum of 100000"}
+                    ), 400
+                config.budget.monthly_usd = monthly
             if "action" in b:
                 config.budget.action = b["action"]
 
@@ -1228,9 +1236,15 @@ def run_proxy(config: ProxyConfig = None, foreground: bool = True) -> None:
 
     try:
         from waitress import serve
-        serve(app, host=config.host, port=config.port,
-              threads=64, channel_timeout=300,
-              _quiet=not config.log_requests)
+
+        serve(
+            app,
+            host=config.host,
+            port=config.port,
+            threads=64,
+            channel_timeout=300,
+            _quiet=not config.log_requests,
+        )
     except ImportError:
         app.run(host=config.host, port=config.port, threaded=True)
     finally:
