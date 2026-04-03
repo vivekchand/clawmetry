@@ -42,10 +42,31 @@ class ClawMetryConfig:
     # Auth
     auth_token: Optional[str] = None
 
-    def from_globals(self) -> "ClawMetryConfig":
-        """Populate from dashboard.py module-level globals (migration bridge)."""
+    def from_globals(self, _dashboard_module=None) -> "ClawMetryConfig":
+        """
+        Populate from dashboard.py module-level globals (migration bridge).
+
+        Args:
+            _dashboard_module: Optional dashboard module to use instead of importing.
+                             If None, will attempt to import dashboard dynamically.
+
+        This method uses a lazy import pattern to avoid circular dependencies.
+        The dashboard module is only imported when this method is called, not at
+        module load time.
+        """
         try:
-            import dashboard as d
+            if _dashboard_module is not None:
+                d = _dashboard_module
+            else:
+                import importlib
+                import sys
+
+                for mod in list(sys.modules.keys()):
+                    if mod == "dashboard" or mod.startswith("dashboard."):
+                        d = sys.modules[mod]
+                        break
+                else:
+                    d = importlib.import_module("dashboard")
 
             self.workspace = getattr(d, "WORKSPACE", "") or ""
             self.sessions_dir = getattr(d, "SESSIONS_DIR", "") or ""
@@ -53,6 +74,6 @@ class ClawMetryConfig:
             self.memory_dir = getattr(d, "MEMORY_DIR", "") or ""
             self.metrics_file = getattr(d, "METRICS_FILE", "") or ""
             self.gateway_token = getattr(d, "_AUTH_TOKEN", "") or ""
-        except ImportError:
+        except (ImportError, AttributeError):
             pass
         return self
