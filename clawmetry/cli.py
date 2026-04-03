@@ -556,6 +556,7 @@ def _register_nemoclaw_sandbox_daemons() -> None:
     import shutil
     import os
     import platform
+    from xml.sax.saxutils import escape
 
     if platform.system() != "Darwin":
         return
@@ -607,8 +608,9 @@ def _register_nemoclaw_sandbox_daemons() -> None:
     docker_path = shutil.which("docker") or "/usr/local/bin/docker"
 
     for pod in pods:
-        label = f"com.clawmetry.sandbox.{pod}"
-        plist_path = launch_agents / f"{label}.plist"
+        label = f"com.clawmetry.sandbox.{escape(pod)}"
+        pod_xml = escape(pod)
+        plist_path = launch_agents / f"com.clawmetry.sandbox.{pod}.plist"
         sync_script = "/usr/local/lib/python3.11/dist-packages/clawmetry/sync.py"
         plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -624,7 +626,7 @@ def _register_nemoclaw_sandbox_daemons() -> None:
         <string>exec</string>
         <string>-n</string>
         <string>openshell</string>
-        <string>{pod}</string>
+        <string>{pod_xml}</string>
         <string>--</string>
         <string>python3</string>
         <string>{sync_script}</string>
@@ -632,8 +634,8 @@ def _register_nemoclaw_sandbox_daemons() -> None:
     <key>RunAtLoad</key>         <true/>
     <key>KeepAlive</key>         <true/>
     <key>ThrottleInterval</key>  <integer>30</integer>
-    <key>StandardOutPath</key>   <string>/tmp/clawmetry-{pod}.log</string>
-    <key>StandardErrorPath</key> <string>/tmp/clawmetry-{pod}.log</string>
+    <key>StandardOutPath</key>   <string>/tmp/clawmetry-{pod_xml}.log</string>
+    <key>StandardErrorPath</key> <string>/tmp/clawmetry-{pod_xml}.log</string>
 </dict>
 </plist>"""
         plist_path.write_text(plist)
@@ -1670,8 +1672,18 @@ def _cmd_update() -> None:
     print("Checking for updates...")
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "--break-system-packages", "clawmetry"],
-            capture_output=True, text=True, timeout=120,
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "--break-system-packages",
+                "clawmetry",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode == 0:
             # Check new version
