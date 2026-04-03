@@ -65,8 +65,8 @@ def init_providers(
                 logger.info(f"Loaded provider plugin: {ep.name!r}")
             except Exception as e:
                 logger.warning(f"Failed to load provider {ep.name!r}: {e}")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Error loading providers: %s", exc)
 
     provider_name = os.environ.get("CLAWMETRY_PROVIDER", "local")
     if provider_name not in _registry:

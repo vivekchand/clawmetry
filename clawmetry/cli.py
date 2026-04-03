@@ -9,8 +9,10 @@ from pathlib import Path
 if os.environ.get("CLAWMETRY_INTERCEPT") == "1":
     try:
         from clawmetry import interceptor as _interceptor  # noqa: F401
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+
+        logging.debug("Could not activate interceptor: %s", exc)
 
 
 def _get_openclaw_dir():
@@ -92,6 +94,7 @@ if _root not in sys.path:
 
 def _is_sync_running() -> bool:
     """Check if clawmetry.sync is running — no pgrep needed."""
+    import logging
     import os
 
     try:
@@ -102,8 +105,8 @@ def _is_sync_running() -> bool:
                 cmd = " ".join(p.info.get("cmdline") or [])
                 if "clawmetry.sync" in cmd or "clawmetry/sync.py" in cmd:
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Error checking process cmdline: %s", exc)
         return False
     except ImportError:
         pass
@@ -115,15 +118,16 @@ def _is_sync_running() -> bool:
                 cmdline = open(f"/proc/{pid_str}/cmdline").read().replace("\x00", " ")
                 if "clawmetry.sync" in cmdline or "clawmetry/sync.py" in cmdline:
                     return True
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as exc:
+                logging.debug("Error reading process cmdline: %s", exc)
+    except Exception as exc:
+        logging.debug("Error listing /proc: %s", exc)
     return False
 
 
 def _kill_sync_daemon() -> None:
     """Kill clawmetry.sync processes — no pkill needed."""
+    import logging
     import os
     import signal
 
@@ -135,8 +139,8 @@ def _kill_sync_daemon() -> None:
                 cmd = " ".join(p.info.get("cmdline") or [])
                 if "clawmetry.sync" in cmd or "clawmetry/sync.py" in cmd:
                     os.kill(p.pid, signal.SIGTERM)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Error killing process: %s", exc)
         return
     except ImportError:
         pass
@@ -148,14 +152,15 @@ def _kill_sync_daemon() -> None:
                 cmdline = open(f"/proc/{pid_str}/cmdline").read().replace("\x00", " ")
                 if "clawmetry.sync" in cmdline or "clawmetry/sync.py" in cmdline:
                     os.kill(int(pid_str), signal.SIGTERM)
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as exc:
+                logging.debug("Error killing process: %s", exc)
+    except Exception as exc:
+        logging.debug("Error listing processes: %s", exc)
 
 
 def _stop_existing_daemon() -> None:
     """Stop any running sync daemon, deregister old node, clear stale state."""
+    import logging
     import subprocess
     import platform
     import json
@@ -171,8 +176,8 @@ def _stop_existing_daemon() -> None:
             old_cfg = json.loads(CONFIG_FILE.read_text())
             old_node_id = old_cfg.get("node_id")
             old_api_key = old_cfg.get("api_key")
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Could not read old config: %s", exc)
 
     # Stop the daemon
     if system == "Darwin":
@@ -213,8 +218,8 @@ def _stop_existing_daemon() -> None:
                 old_api_key,
                 timeout=5,
             )
-        except Exception:
-            pass  # Best effort
+        except Exception as exc:
+            logging.debug("Could not send offline heartbeat: %s", exc)
 
     # Clear stale state so the new daemon does a fresh initial sync
     if STATE_FILE.exists():
@@ -251,6 +256,8 @@ def _get_api_key_interactive() -> str:
     INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
 
     def _api_call(path, body):
+        import logging
+
         url = INGEST_URL.rstrip("/") + path
         data = _json.dumps(body).encode()
         req = urllib.request.Request(
@@ -262,6 +269,7 @@ def _get_api_key_interactive() -> str:
         except urllib.error.HTTPError as e:
             return {"error": e.read().decode()[:200]}
         except Exception as e:
+            logging.debug("API call to %s failed: %s", path, e)
             return {"error": str(e)}
 
     print()
@@ -342,6 +350,8 @@ def _verify_key_ownership(api_key: str) -> None:
     INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
 
     def _api(path, body):
+        import logging
+
         url = INGEST_URL.rstrip("/") + path
         data = _json.dumps(body).encode()
         req = urllib.request.Request(
@@ -353,6 +363,7 @@ def _verify_key_ownership(api_key: str) -> None:
         except urllib.error.HTTPError as e:
             return {"error": e.read().decode()[:200]}
         except Exception as e:
+            logging.debug("API call to %s failed: %s", path, e)
             return {"error": str(e)}
 
     print()
@@ -419,7 +430,10 @@ def _cmd_connect(args) -> None:
         _saved_node_id = _cfg_pre.get("node_id", "")
         _saved_enc_key = _cfg_pre.get("encryption_key", "")
         _saved_api_key = _cfg_pre.get("api_key", "")
-    except Exception:
+    except Exception as exc:
+        import logging
+
+        logging.debug("Could not read pre-existing config: %s", exc)
         _saved_api_key = ""
 
     _stop_existing_daemon()
@@ -454,7 +468,10 @@ def _cmd_connect(args) -> None:
         node_id = result.get("node_id") or machine_hostname
         print("✅")
     except Exception as e:
+        import logging
+
         err = str(e)
+        logging.debug("validate_key failed: %s", e)
         # Allow saving config if network/server issues (ingest may not be live yet)
         if any(
             x in err
@@ -572,7 +589,10 @@ def _register_nemoclaw_sandbox_daemons() -> None:
         cluster = next(
             (n for n in r.stdout.splitlines() if "openshell-cluster" in n), None
         )
-    except Exception:
+    except Exception as exc:
+        import logging
+
+        logging.debug("Error finding NemoClaw cluster: %s", exc)
         return
     if not cluster:
         return
@@ -599,7 +619,10 @@ def _register_nemoclaw_sandbox_daemons() -> None:
         pods = [
             p for p in r.stdout.splitlines() if p and not p.startswith("openshell-")
         ]
-    except Exception:
+    except Exception as exc:
+        import logging
+
+        logging.debug("Error listing NemoClaw pods: %s", exc)
         return
 
     launch_agents = __import__("pathlib").Path.home() / "Library" / "LaunchAgents"
@@ -879,7 +902,10 @@ def _get_nemoclaw_sandboxes() -> list:
         return [
             p for p in r2.stdout.splitlines() if p and not p.startswith("openshell-")
         ]
-    except Exception:
+    except Exception as exc:
+        import logging
+
+        logging.debug("Error getting NemoClaw sandboxes: %s", exc)
         return []
 
 
@@ -916,8 +942,10 @@ def _uninstall_nemoclaw_sandbox(
             capture_output=True,
             timeout=30,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+
+        logging.debug("Error uninstalling from NemoClaw sandbox: %s", exc)
 
 
 def _cmd_uninstall() -> None:
@@ -1100,7 +1128,10 @@ def _cmd_uninstall() -> None:
             cluster = next(
                 (n for n in r.stdout.splitlines() if "openshell-cluster" in n), None
             )
-        except Exception:
+        except Exception as exc:
+            import logging
+
+            logging.debug("Error finding NemoClaw cluster during uninstall: %s", exc)
             cluster = None
         if cluster:
             for sb in _nemoclaw_sandboxes:
@@ -1148,6 +1179,9 @@ def _cmd_status(args) -> None:
             else:
                 print("  E2E:         ⚠️  disabled (no secret key in config)")
         except Exception as e:
+            import logging
+
+            logging.debug("Error reading config: %s", e)
             print(f"  Config error: {e}")
     else:
         print("  Cloud sync:  ○  Not connected  (run: clawmetry connect)")
@@ -1160,8 +1194,10 @@ def _cmd_status(args) -> None:
             st = json.loads(STATE_FILE.read_text())
             print(f"  Last sync:   {(st.get('last_sync') or '?')[:19]}")
             print(f"  Files seen:  {len(st.get('last_event_ids', {}))}")
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+
+            logging.debug("Error reading sync state: %s", exc)
 
     # Daemon status
     system = platform.system()
@@ -1226,7 +1262,10 @@ def _print_nemoclaw_nodes(args) -> None:
         cluster = next(
             (n for n in r.stdout.splitlines() if "openshell-cluster" in n), None
         )
-    except Exception:
+    except Exception as exc:
+        import logging
+
+        logging.debug("Error finding docker cluster: %s", exc)
         return
 
     if not cluster:
@@ -1255,7 +1294,10 @@ def _print_nemoclaw_nodes(args) -> None:
         pods = [
             p for p in r.stdout.splitlines() if p and not p.startswith("openshell-")
         ]
-    except Exception:
+    except Exception as exc:
+        import logging
+
+        logging.debug("Error listing pods: %s", exc)
         return
 
     if not pods:
@@ -1290,7 +1332,10 @@ def _print_nemoclaw_nodes(args) -> None:
                 timeout=10,
             )
             out = r.stdout.strip()
-        except Exception:
+        except Exception as exc:
+            import logging
+
+            logging.debug("Error reading sandbox config: %s", exc)
             out = ""
 
         print(f"\n  Sandbox:     {pod}")
@@ -1340,8 +1385,10 @@ def _print_nemoclaw_nodes(args) -> None:
                 print(
                     f"  Daemon:      {'✅  Running' if daemon_status == 'running' else '○  Not running'}"
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+
+                logging.debug("Error checking daemon status: %s", exc)
         else:
             print(
                 "  Cloud sync:  ○  Not connected  (run: clawmetry connect inside sandbox)"
@@ -1429,8 +1476,10 @@ def _cmd_onboard(args) -> None:
             import webbrowser
 
             webbrowser.open("https://app.clawmetry.com")
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+
+            logging.debug("Could not open browser: %s", exc)
     else:
         print(f"  {GREEN('✓')} ClawMetry installed (local mode)\n")
         print("  Start your dashboard:")
@@ -1575,8 +1624,10 @@ def _cmd_proxy(args) -> None:
                     print(
                         f"  Monthly:   ${b['monthly_spent']:.2f} / ${b['monthly_limit']:.2f}"
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+
+                logging.debug("Error displaying proxy status: %s", exc)
         else:
             print(f"  Proxy: {DIM('not running')}")
             print(f"  Start with: {CYAN('clawmetry proxy start')}")
@@ -1664,14 +1715,27 @@ def _cmd_update() -> None:
 
     try:
         from dashboard import __version__ as current
-    except Exception:
+    except Exception as exc:
+        import logging
+
+        logging.debug("Could not determine current version: %s", exc)
         current = "unknown"
     print(f"Current version: {current}")
     print("Checking for updates...")
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "--break-system-packages", "clawmetry"],
-            capture_output=True, text=True, timeout=120,
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "--break-system-packages",
+                "clawmetry",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode == 0:
             # Check new version
@@ -1686,7 +1750,10 @@ def _cmd_update() -> None:
                     text=True,
                     timeout=10,
                 ).stdout.strip()
-            except Exception:
+            except Exception as exc:
+                import logging
+
+                logging.debug("Could not determine latest version: %s", exc)
                 new_ver = "unknown"
             if new_ver == current:
                 print(f"Already on latest version ({current})")
@@ -1704,7 +1771,10 @@ def _cmd_update() -> None:
                             timeout=15,
                         )
                         print("Daemon restarted with new version")
-                except Exception:
+                except Exception as exc:
+                    import logging
+
+                    logging.debug("Could not restart daemon: %s", exc)
                     print("Tip: restart the daemon to use the new version")
         else:
             print(f"Update failed:\n{result.stderr}")
@@ -1713,6 +1783,9 @@ def _cmd_update() -> None:
         print("Update timed out. Try manually: pip install --upgrade clawmetry")
         sys.exit(1)
     except Exception as e:
+        import logging
+
+        logging.debug("Update error: %s", e)
         print(f"Update error: {e}")
         sys.exit(1)
 
