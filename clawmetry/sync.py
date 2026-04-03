@@ -36,18 +36,19 @@ def _pid_file() -> Path:
 
 
 def _acquire_pid_lock() -> bool:
-    """Write PID file. Return False if another instance is already running."""
+    """Write PID file atomically. Return False if another instance is already running."""
     pid_path = _pid_file()
     pid_path.parent.mkdir(parents=True, exist_ok=True)
-    if pid_path.exists():
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(str(pid_path), flags, 0o644)
         try:
-            existing_pid = int(pid_path.read_text().strip())
-            os.kill(existing_pid, 0)
-            return False
-        except (ProcessLookupError, ValueError):
-            pass
-    pid_path.write_text(str(os.getpid()))
-    return True
+            os.write(fd, str(os.getpid()).encode())
+        finally:
+            os.close(fd)
+        return True
+    except FileExistsError:
+        return False
 
 
 def _release_pid_lock() -> None:
@@ -955,7 +956,10 @@ def sync_sessions_recent(
     if os.path.isfile(index_path):
         try:
             current_mtime = os.path.getmtime(index_path)
-            if _sessions_json_cache["data"] is not None and _sessions_json_cache["mtime"] == current_mtime:
+            if (
+                _sessions_json_cache["data"] is not None
+                and _sessions_json_cache["mtime"] == current_mtime
+            ):
                 file_to_subagent_id = _sessions_json_cache["data"]
             else:
                 with open(index_path) as _fi:
@@ -964,8 +968,14 @@ def sync_sessions_recent(
                     if ":subagent:" in _k and isinstance(_meta, dict):
                         _sf = _meta.get("sessionFile", "")
                         if _sf:
-                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[-1]
-                _sessions_json_cache = {"ts": time.time(), "data": file_to_subagent_id.copy(), "mtime": current_mtime}
+                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[
+                                -1
+                            ]
+                _sessions_json_cache = {
+                    "ts": time.time(),
+                    "data": file_to_subagent_id.copy(),
+                    "mtime": current_mtime,
+                }
         except Exception:
             pass
 
@@ -2974,8 +2984,6 @@ if __name__ == "__main__":
             log.error(traceback.format_exc())
             log.info("Restarting in 15 seconds...")
             time.sleep(15)
-
-
 
 
 def run_daemon() -> None:
