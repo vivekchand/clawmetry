@@ -53,8 +53,8 @@ def _acquire_pid_lock() -> bool:
 def _release_pid_lock() -> None:
     try:
         _pid_file().unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Could not release PID lock: %s", exc)
 
 
 def _validate_log_offsets(state: dict, paths: dict) -> None:
@@ -135,8 +135,8 @@ if not log.handlers:
                 _stdout_stat.st_dev == _log_stat.st_dev
                 and _stdout_stat.st_ino == _log_stat.st_ino
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Could not check stdout log status: %s", exc)
     _sh = logging.StreamHandler(sys.stdout)
     _sh.setFormatter(_fmt)
     log.addHandler(_sh)
@@ -145,8 +145,8 @@ if not log.handlers:
             _fh = logging.FileHandler(str(LOG_FILE), encoding="utf-8")
             _fh.setFormatter(_fmt)
             log.addHandler(_fh)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Could not add file handler for %s: %s", LOG_FILE, exc)
     log.propagate = False
 
 
@@ -166,8 +166,8 @@ def _normalize_encryption_key(key_str: str) -> str:
         raw = base64.urlsafe_b64decode(key_str + "==")
         if len(raw) in (16, 24, 32):
             return key_str
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Could not decode key as base64: %s", exc)
     derived = _hl_norm.sha256(key_str.encode()).digest()
     return base64.urlsafe_b64encode(derived).decode().rstrip("=")
 
@@ -227,8 +227,8 @@ def load_state() -> dict:
     if STATE_FILE.exists():
         try:
             return json.loads(STATE_FILE.read_text())
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Could not load state file: %s", exc)
     return {"last_event_ids": {}, "last_log_offsets": {}, "last_sync": None}
 
 
@@ -288,8 +288,8 @@ def get_machine_id() -> str:
                 if "IOPlatformUUID" in line:
                     mid = line.split('"')[-2]
                     break
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Could not get macOS machine ID: %s", exc)
     # Linux: /etc/machine-id
     if not mid:
         # In Docker containers, /etc/machine-id is identical across clones
@@ -300,8 +300,8 @@ def get_machine_id() -> str:
 
                 st = os.stat("/proc/1")
                 mid = f"container-{st.st_ino}"
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Could not get container ID: %s", exc)
         if not mid:
             for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"]:
                 try:
@@ -309,8 +309,8 @@ def get_machine_id() -> str:
                         mid = f.read().strip()
                         if mid:
                             break
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("Could not read machine-id from %s: %s", path, exc)
     # Windows: WMIC
     if not mid and platform.system() == "Windows":
         try:
@@ -326,8 +326,8 @@ def get_machine_id() -> str:
             ]
             if lines:
                 mid = lines[0]
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Could not get Windows machine ID: %s", exc)
     # Fallback: MAC address (less stable but better than nothing)
     if not mid:
         import uuid as _uuid_mod
@@ -399,8 +399,8 @@ def _is_running_in_container() -> bool:
             for k in ("docker", "kubepods", "containerd", "lxc", "opencontainer")
         ):
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Could not detect container: %s", exc)
     return False
 
 
@@ -503,8 +503,8 @@ def _detect_nemoclaw() -> dict:
                     result["sandbox_name"] = sb.get("name", "")
                     result["sandbox_status"] = sb.get("status", "unknown")
                     break
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Error parsing nemoclaw status: %s", exc)
 
     return result
 
@@ -830,8 +830,8 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
                         file_to_subagent_id[_fn] = _k.split(":")[
                             -1
                         ]  # e.g. "317db68b-…"
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Error parsing subagent key: %s", exc)
 
     jsonl_files = glob.glob(os.path.join(sessions_dir, "*.jsonl"))
     # Sort newest-first so recent sessions sync before old ones
@@ -955,7 +955,10 @@ def sync_sessions_recent(
     if os.path.isfile(index_path):
         try:
             current_mtime = os.path.getmtime(index_path)
-            if _sessions_json_cache["data"] is not None and _sessions_json_cache["mtime"] == current_mtime:
+            if (
+                _sessions_json_cache["data"] is not None
+                and _sessions_json_cache["mtime"] == current_mtime
+            ):
                 file_to_subagent_id = _sessions_json_cache["data"]
             else:
                 with open(index_path) as _fi:
@@ -964,10 +967,16 @@ def sync_sessions_recent(
                     if ":subagent:" in _k and isinstance(_meta, dict):
                         _sf = _meta.get("sessionFile", "")
                         if _sf:
-                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[-1]
-                _sessions_json_cache = {"ts": time.time(), "data": file_to_subagent_id.copy(), "mtime": current_mtime}
-        except Exception:
-            pass
+                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[
+                                -1
+                            ]
+                _sessions_json_cache = {
+                    "ts": time.time(),
+                    "data": file_to_subagent_id.copy(),
+                    "mtime": current_mtime,
+                }
+        except Exception as exc:
+            log.debug("Error in sync_sessions_recent: %s", exc)
 
     jsonl_files = glob.glob(os.path.join(sessions_dir, "*.jsonl"))
     jsonl_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
@@ -1164,8 +1173,8 @@ def _detect_ollama_for_heartbeat():
                     m.get("name", "") for m in data.get("models", [])[:10]
                 ]
                 result["installed"] = True  # If running, definitely installed
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Error detecting ollama: %s", exc)
 
     return result
 
@@ -1188,6 +1197,7 @@ def send_heartbeat(config: dict) -> bool:
                 log.info(f"Heartbeat succeeded after {attempt + 1} attempts")
             return True
         except Exception as e:
+            log.debug("Heartbeat attempt %d failed: %s", attempt, e)
             last_err = e
             if attempt < 2:
                 time.sleep(2**attempt)  # 1s, 2s backoff
@@ -1393,8 +1403,8 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         if _m:
                             _default_model = _m
                             break
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Error detecting default model: %s", exc)
 
         # Fallback: use most common model from sessions that have one
         if not _default_model:
@@ -1546,8 +1556,8 @@ def _build_machine_info():
                     "status": "ok",
                 }
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Could not get CPU count: %s", exc)
         # Load average
         try:
             load = os.getloadavg()
@@ -1558,8 +1568,8 @@ def _build_machine_info():
                     "status": "ok",
                 }
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Could not get load average: %s", exc)
         # GPU
         try:
             gpu = (
@@ -1633,8 +1643,8 @@ def _build_runtime_info():
                         "status": st,
                     }
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Could not get disk usage: %s", exc)
         # Node.js
         try:
             nv = (
@@ -1643,8 +1653,8 @@ def _build_runtime_info():
                 .strip()
             )
             items.append({"label": "Node.js", "value": nv, "status": "ok"})
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Could not get Node.js version: %s", exc)
         return {"items": items}
     except Exception as e:
         log.warning(f"Runtime info error: {e}")
@@ -1672,8 +1682,8 @@ def _build_memory_files(workspace):
                 files.append(
                     {"name": name, "size": st.st_size, "modified": st.st_mtime}
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Could not stat memory file %s: %s", fpath, exc)
     mem_dir = os.path.join(workspace, "memory")
     if os.path.isdir(mem_dir):
         for f in sorted(os.listdir(mem_dir)):
@@ -1688,8 +1698,8 @@ def _build_memory_files(workspace):
                             "modified": st.st_mtime,
                         }
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("Could not stat memory file %s: %s", fpath, exc)
     return files
 
 
@@ -1801,8 +1811,8 @@ def _build_brain_data():
                                 d = int((t2 - t1).total_seconds() * 1000)
                                 if 0 < d < 300000:
                                     dur_ms = d
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                log.debug("Error parsing timestamp: %s", exc)
 
                         has_thinking = False
                         tools_used = []
@@ -1917,8 +1927,8 @@ def _build_tool_stats():
                 )
                 if _sf and _ch:
                     _session_channels[_sf] = _ch
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Error building tool stats: %s", exc)
 
         for fp in files:
             _file_channel = _session_channels.get(os.path.basename(fp), "")
@@ -2313,8 +2323,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 ep = int(ed[4].replace("%", ""))
                 ec = "green" if ep < 80 else ("yellow" if ep < 90 else "red")
                 system.append([f"Disk {ed[5]}", f"{ed[2]} / {ed[1]} ({ed[4]})", ec])
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Error parsing disk usage: %s", exc)
 
     try:
         if sys.platform == "darwin":
@@ -2472,8 +2482,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                         cron_enabled += 1
                     else:
                         cron_disabled += 1
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Error counting crons: %s", exc)
 
     # Memory files
     _mem_files = _build_memory_files(paths.get("workspace", ""))
@@ -2621,8 +2631,8 @@ def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
                     if proc:
                         try:
                             proc.kill()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            log.debug("Error killing tail process: %s", exc)
                     current_file = latest
                     if not current_file:
                         time.sleep(5)
@@ -2668,8 +2678,8 @@ def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
                 if proc:
                     try:
                         proc.kill()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("Error killing tail process on shutdown: %s", exc)
                     proc = None
                     current_file = None
 
@@ -2836,8 +2846,8 @@ def run_daemon() -> None:
                     fresh = _detect_docker_openclaw()
                     if fresh.get("sessions_dir"):
                         paths.update({k: v for k, v in fresh.items() if k in paths})
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("Error detecting docker openclaw: %s", exc)
 
             now = time.time()
             if now - last_heartbeat > heartbeat_interval:
@@ -2945,6 +2955,7 @@ def _build_gateway_data(paths: dict = None) -> dict:
             "port": 18789,
         }
     except Exception as e:
+        log.debug("Error building gateway data: %s", e)
         return {
             "stats": {
                 "today_messages": 0,
@@ -2974,8 +2985,6 @@ if __name__ == "__main__":
             log.error(traceback.format_exc())
             log.info("Restarting in 15 seconds...")
             time.sleep(15)
-
-
 
 
 def run_daemon() -> None:

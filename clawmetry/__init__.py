@@ -13,8 +13,10 @@ def _read_version():
                 m = _re.match(r'^__version__\s*=\s*["\'](.+?)["\']', line)
                 if m:
                     return m.group(1)
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+
+        logging.debug("Could not read version from dashboard.py: %s", exc)
     return "unknown"
 
 

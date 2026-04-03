@@ -159,8 +159,10 @@ class LocalDataProvider(ClawMetryDataProvider):
                         data=obj,
                     )
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+
+            logging.debug("Error getting events: %s", exc)
         return events[-limit:]
 
     # ── Logs ──────────────────────────────────────────────────────────────────
@@ -270,8 +272,10 @@ class LocalDataProvider(ClawMetryDataProvider):
                         return data
                     if isinstance(data, dict):
                         return data.get("jobs", [])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    import logging
+
+                    logging.debug("Error listing crons: %s", exc)
         return []
 
     # ── Health ────────────────────────────────────────────────────────────────
