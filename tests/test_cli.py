@@ -30,9 +30,35 @@ def test_print_nemoclaw_preset_hint_emits_command(monkeypatch, capsys):
     helper = "/tmp/add-nemoclaw-clawmetry-preset.sh"
     monkeypatch.setattr(cli, "_get_nemoclaw_preset_script", lambda: helper)
 
-    cli._print_nemoclaw_preset_hint(lambda text: text, lambda text: text, lambda text: text)
+    cli._print_nemoclaw_preset_hint(
+        lambda text: text, lambda text: text, lambda text: text
+    )
 
     out = capsys.readouterr().out
     assert "NemoClaw detected" in out
     assert "allow your NemoClaw sandboxes to reach ClawMetry Cloud" in out
     assert helper in out
+
+
+def test_verify_key_ownership_does_not_disclose_email(monkeypatch, capsys):
+    """Masked email must not be displayed to prevent information disclosure."""
+    import io
+
+    fake_tty = io.StringIO()
+    fake_tty.write("123456\n")
+    fake_tty.seek(0)
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "builtins.open",
+        lambda path, mode: fake_tty if path == "/dev/tty" else open(path, mode),
+    )
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout=None: io.BytesIO(b'{"masked_email": "j***@gmail.com"}'),
+    )
+
+    cli._verify_key_ownership("test_key")
+
+    out = capsys.readouterr().out
+    assert "j***@gmail.com" not in out, "masked email must not appear in output"
