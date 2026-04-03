@@ -219,8 +219,10 @@ def load_config() -> dict:
 
 def save_config(data: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, indent=2))
-    CONFIG_FILE.chmod(0o600)
+    tmp = CONFIG_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.chmod(0o600)
+    tmp.rename(CONFIG_FILE)
 
 
 def load_state() -> dict:
@@ -955,7 +957,10 @@ def sync_sessions_recent(
     if os.path.isfile(index_path):
         try:
             current_mtime = os.path.getmtime(index_path)
-            if _sessions_json_cache["data"] is not None and _sessions_json_cache["mtime"] == current_mtime:
+            if (
+                _sessions_json_cache["data"] is not None
+                and _sessions_json_cache["mtime"] == current_mtime
+            ):
                 file_to_subagent_id = _sessions_json_cache["data"]
             else:
                 with open(index_path) as _fi:
@@ -964,8 +969,14 @@ def sync_sessions_recent(
                     if ":subagent:" in _k and isinstance(_meta, dict):
                         _sf = _meta.get("sessionFile", "")
                         if _sf:
-                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[-1]
-                _sessions_json_cache = {"ts": time.time(), "data": file_to_subagent_id.copy(), "mtime": current_mtime}
+                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[
+                                -1
+                            ]
+                _sessions_json_cache = {
+                    "ts": time.time(),
+                    "data": file_to_subagent_id.copy(),
+                    "mtime": current_mtime,
+                }
         except Exception:
             pass
 
@@ -2974,8 +2985,6 @@ if __name__ == "__main__":
             log.error(traceback.format_exc())
             log.info("Restarting in 15 seconds...")
             time.sleep(15)
-
-
 
 
 def run_daemon() -> None:
