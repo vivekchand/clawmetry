@@ -3226,7 +3226,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
     <div class="nav-tab" onclick="switchTab('limits')" title="API rate limit consumption — rolling windows per provider">Limits</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <div class="nav-tab" onclick="switchTab('subagents')" title="Sub-agent tree — collapsible parent nodes">Agents</div>
+    <div class="nav-tab" id="agents-tab-btn" onclick="switchTab('subagents')" title="Sub-agent tree — collapsible parent nodes">Agents</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -9008,7 +9008,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
     <div class="nav-tab" onclick="switchTab('limits')" title="API rate limit consumption — rolling windows per provider">Limits</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <div class="nav-tab" onclick="switchTab('subagents')" title="Sub-agent tree — collapsible parent nodes">Agents</div>
+    <div class="nav-tab" id="agents-tab-btn2" onclick="switchTab('subagents')" title="Sub-agent tree — collapsible parent nodes">Agents</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -14459,10 +14459,13 @@ async function loadSubagents() {
         : '<span style="display:inline-block;min-width:16px;"></span>';
       var tokens = a.totalTokens >= 1000 ? (a.totalTokens / 1000).toFixed(1) + 'K' : a.totalTokens;
       var depthBadge = a.depth > 0 ? '<span style="font-size:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:4px;padding:1px 5px;color:var(--text-muted);margin-left:6px;">d' + a.depth + '</span>' : '';
-      var html = '<div style="display:flex;align-items:center;gap:6px;' + indent + 'padding-top:8px;padding-bottom:8px;padding-right:12px;border-bottom:1px solid var(--border-secondary);">';
+      var isStuck = typeof _stuckSessions !== 'undefined' && !!_stuckSessions[sid];
+      var stuckStyle = isStuck ? 'background:rgba(224,64,64,0.08);border-left:3px solid #e04040;' : '';
+      var html = '<div style="display:flex;align-items:center;gap:6px;' + indent + 'padding-top:8px;padding-bottom:8px;padding-right:12px;border-bottom:1px solid var(--border-secondary);' + stuckStyle + '">';
       html += toggleBtn;
       html += statusDot(a.status);
-      html += '<span style="font-weight:600;font-size:13px;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(a.displayName) + '">' + escHtml(a.displayName) + '</span>';
+      var stuckBadge = isStuck ? '<span style="margin-left:6px;background:#e04040;color:#fff;border-radius:4px;font-size:10px;font-weight:700;padding:1px 5px;flex-shrink:0;">STUCK</span>' : '';
+      html += '<span style="font-weight:600;font-size:13px;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(a.displayName) + '">' + escHtml(a.displayName) + '</span>' + stuckBadge;
       html += depthBadge;
       html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + escHtml(a.model || '') + '</span>';
       html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + tokens + ' tok</span>';
@@ -15510,10 +15513,29 @@ function processFlowEvent(line) {
   if (msg.includes('session.stuck') || (msg.includes('session') && msg.includes('stuck'))) {
     if (now - (flowThrottles['stuck']||0) < 5000) return;
     flowThrottles['stuck'] = now;
-    addFlowFeedItem('⚠️ Session stuck detected', '#e04040');
+    // Extract session key and stuck age from log line
+    var stuckSession = '';
+    var stuckAge = 0;
+    try {
+      var obj2 = JSON.parse(line);
+      stuckSession = obj2.sessionKey || obj2.session_key || obj2.session || '';
+      var ageMatch = line.match(/age[_=:]?\s*(\d+)/i);
+      if (ageMatch) stuckAge = parseInt(ageMatch[1]);
+    } catch(e2) {
+      var skMatch = line.match(/session[_\s]?key[=:\s]+([\w-]+)/i);
+      if (skMatch) stuckSession = skMatch[1];
+    }
+    addFlowFeedItem('⚠️ Session stuck detected' + (stuckSession ? ' (' + stuckSession.substring(0, 12) + ')' : ''), '#e04040');
     _diagPush({kind:'session.stuck', value:1, ts:now});
-    _showStuckBanner();
+    _showStuckBanner(stuckSession, stuckAge);
     return;
+  }
+  if (msg.includes('session state') && (msg.includes('new=idle') || msg.includes('new=done') || msg.includes('new=complete') || msg.includes('new=finished') || msg.includes('new=error'))) {
+    try {
+      var obj3 = JSON.parse(line);
+      var termKey = obj3.sessionKey || obj3.session_key || obj3.session || '';
+      if (termKey) _clearStuckBanner(termKey);
+    } catch(e3) {}
   }
   if (msg.includes('tool end') || msg.includes('tool_end')) {
     if (now - (flowThrottles['tool-end']||0) < 300) return;
@@ -15530,15 +15552,65 @@ function _diagPush(event) {
   if (_diagBuffer.length > 200) _diagBuffer = _diagBuffer.slice(-200);
 }
 
-function _showStuckBanner() {
+// Stuck session tracking: map of sessionKey -> {stuckAt, ageMs}
+var _stuckSessions = {};
+
+function _showStuckBanner(sessionKey, ageMs) {
+  var key = sessionKey || '__unknown__';
+  _stuckSessions[key] = { stuckAt: Date.now(), ageMs: ageMs || 0 };
+  _renderStuckBanner();
+}
+
+function _clearStuckBanner(sessionKey) {
+  if (!sessionKey) return;
+  delete _stuckSessions[sessionKey];
+  _renderStuckBanner();
+}
+
+function _renderStuckBanner() {
+  var keys = Object.keys(_stuckSessions);
+  // Update Agents tab badges
+  ['agents-tab-btn', 'agents-tab-btn2'].forEach(function(tabId) {
+    var tabEl = document.getElementById(tabId);
+    if (!tabEl) return;
+    var badge = tabEl.querySelector('.stuck-badge');
+    if (keys.length === 0) {
+      if (badge) badge.remove();
+    } else {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'stuck-badge';
+        badge.style.cssText = 'display:inline-block;margin-left:5px;background:#e04040;color:#fff;border-radius:10px;font-size:10px;font-weight:700;padding:1px 5px;vertical-align:middle;line-height:1.4;';
+        tabEl.appendChild(badge);
+      }
+      badge.textContent = keys.length;
+    }
+  });
+  // Remove banner if no stuck sessions
   var existing = document.getElementById('stuck-session-banner');
-  if (existing) return;
-  var banner = document.createElement('div');
-  banner.id = 'stuck-session-banner';
-  banner.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:9999;background:#e04040;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);display:flex;gap:12px;align-items:center;';
-  banner.innerHTML = '<span>⚠️ Session stuck detected — agent may be looping</span><button onclick="document.getElementById(\'stuck-session-banner\').remove()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:12px;">Dismiss</button>';
-  document.body.appendChild(banner);
-  setTimeout(function() { var b = document.getElementById('stuck-session-banner'); if (b) b.remove(); }, 30000);
+  if (keys.length === 0) {
+    if (existing) existing.remove();
+    return;
+  }
+  // Build banner content
+  var firstKey = keys[0];
+  var first = _stuckSessions[firstKey];
+  var sessionLabel = firstKey !== '__unknown__' ? firstKey.substring(0, 14) : 'unknown';
+  var ageStr = first.ageMs > 0 ? ' — stuck for ' + Math.round(first.ageMs / 1000) + 's' : '';
+  var extraCount = keys.length > 1 ? ' (+' + (keys.length - 1) + ' more)' : '';
+  var transcriptLink = ' <a href="#" onclick="event.preventDefault();switchTab(\'brain\')" style="color:#ffd;text-decoration:underline;font-weight:700;">View Brain</a>';
+  var bannerHtml = '<span>⚠️ Session stuck: <code style="font-family:monospace;font-size:11px;background:rgba(0,0,0,0.2);padding:1px 5px;border-radius:3px;">' + escHtml(sessionLabel) + '</code>' + ageStr + extraCount + transcriptLink + '</span>';
+  bannerHtml += '<button onclick="_stuckSessions={};_renderStuckBanner()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:12px;">Dismiss</button>';
+  if (!existing) {
+    var banner = document.createElement('div');
+    banner.id = 'stuck-session-banner';
+    banner.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:9999;background:#e04040;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);display:flex;gap:12px;align-items:center;max-width:600px;';
+    banner.innerHTML = bannerHtml;
+    document.body.appendChild(banner);
+    setTimeout(function() { if (_stuckSessions[firstKey]) { delete _stuckSessions[firstKey]; _renderStuckBanner(); } }, 60000);
+  } else {
+    existing.innerHTML = bannerHtml;
+  }
 }
 
 // === Overview Split-Screen: Clone flow SVG into overview pane ===
