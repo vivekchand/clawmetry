@@ -8531,6 +8531,17 @@ DASHBOARD_HTML = r"""
   .evt-item.type-result { border-left: 3px solid #ea580c; }
   .evt-item.type-thinking { border-left: 3px solid #6b7280; }
   .evt-item.type-user { border-left: 3px solid #7c3aed; }
+  .thinking-group { border-left: 3px solid #6b7280; background: var(--bg-secondary); border-radius: 0 6px 6px 0; margin-bottom: 4px; }
+  .thinking-group-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; transition: background 0.15s; }
+  .thinking-group-header:hover { background: var(--bg-hover); }
+  .thinking-group-header .evt-icon { font-size: 16px; flex-shrink: 0; }
+  .thinking-group-header .evt-summary { flex: 1; font-size: 13px; color: var(--text-secondary); }
+  .thinking-group-header .evt-summary strong { color: var(--text-primary); }
+  .thinking-group-badge { background: #374151; color: #9ca3af; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; flex-shrink: 0; }
+  .thinking-group-body { display: none; border-top: 1px solid var(--border-secondary); }
+  .thinking-group-body.open { display: block; }
+  .thinking-group-body .evt-item { border-left: none; border-top: 1px solid var(--border-secondary); border-radius: 0; margin: 0; }
+  .thinking-group-body .evt-item:first-child { border-top: none; }
   /* === Component Detail Modal === */
   .comp-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1100; justify-content: center; align-items: center; }
   .comp-modal-overlay.open { display: flex; }
@@ -17755,57 +17766,99 @@ function renderModalNarrative(el) {
 }
 
 var _expandedEvts = {};
+var _expandedGroups = {};
+
+function renderEvtItem(evt, idx) {
+  var icon = '📝', typeClass = '', summary = '', body = '';
+  var ts = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+  if (evt.type === 'agent') {
+    icon = '🤖'; typeClass = 'type-agent';
+    summary = '<strong>Agent</strong> - ' + escHtml((evt.text||'').substring(0, 120));
+    body = evt.text || '';
+  } else if (evt.type === 'thinking') {
+    icon = '💭'; typeClass = 'type-thinking';
+    var thinkChars = evt.thinking_chars || (evt.text||'').length;
+    var thinkBadge = thinkChars > 0 ? ' <span style="background:#374151;color:#9ca3af;font-size:10px;font-weight:600;padding:1px 5px;border-radius:8px;margin-left:4px;" title="~' + Math.round(thinkChars/4) + ' tokens">' + thinkChars + ' chars</span>' : '';
+    summary = '<strong>Thinking</strong>' + thinkBadge + ' - ' + escHtml((evt.text||'').substring(0, 100));
+    body = evt.text || '';
+  } else if (evt.type === 'user') {
+    icon = '👤'; typeClass = 'type-user';
+    summary = '<strong>User</strong> - ' + escHtml((evt.text||'').substring(0, 120));
+    body = evt.text || '';
+  } else if (evt.type === 'exec') {
+    icon = '⚡'; typeClass = 'type-exec';
+    summary = '<strong>EXEC</strong> - <code>' + escHtml(evt.command||'') + '</code>';
+    body = evt.command || '';
+  } else if (evt.type === 'read') {
+    icon = '📖'; typeClass = 'type-read';
+    summary = '<strong>READ</strong> - ' + escHtml(evt.file||'');
+    body = evt.file || '';
+  } else if (evt.type === 'tool') {
+    icon = '🔧'; typeClass = 'type-exec';
+    summary = '<strong>' + escHtml(evt.toolName||'tool') + '</strong> - ' + escHtml((evt.args||'').substring(0, 100));
+    body = evt.args || '';
+  } else if (evt.type === 'result') {
+    icon = '[check]'; typeClass = 'type-result';
+    summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
+    body = evt.text || '';
+  } else {
+    summary = '<strong>' + escHtml(evt.type) + '</strong>';
+    body = JSON.stringify(evt, null, 2);
+  }
+  var bodyId = 'evt-body-' + idx;
+  var h = '<div class="evt-item ' + typeClass + '">';
+  h += '<div class="evt-header" onclick="toggleEvtBody('' + bodyId + '',' + idx + ')">';
+  h += '<span class="evt-icon">' + icon + '</span>';
+  h += '<span class="evt-summary">' + summary + '</span>';
+  h += '<span class="evt-ts">' + escHtml(ts) + '</span>';
+  h += '</div>';
+  var bodyHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(body) : escHtml(body);
+  var isOpen = _expandedEvts[idx] ? ' open' : '';
+  h += '<div class="evt-body md-rendered' + isOpen + '" id="' + bodyId + '">' + bodyHtml + '</div>';
+  h += '</div>';
+  return h;
+}
 
 function renderModalFull(el) {
   var events = _modalEvents;
   var html = '';
-  events.forEach(function(evt, idx) {
-    var icon = '📝', typeClass = '', summary = '', body = '';
-    var ts = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
-    if (evt.type === 'agent') {
-      icon = '🤖'; typeClass = 'type-agent';
-      summary = '<strong>Agent</strong> - ' + escHtml((evt.text||'').substring(0, 120));
-      body = evt.text || '';
-    } else if (evt.type === 'thinking') {
-      icon = '💭'; typeClass = 'type-thinking';
-      summary = '<strong>Thinking</strong> - ' + escHtml((evt.text||'').substring(0, 120));
-      body = evt.text || '';
-    } else if (evt.type === 'user') {
-      icon = '👤'; typeClass = 'type-user';
-      summary = '<strong>User</strong> - ' + escHtml((evt.text||'').substring(0, 120));
-      body = evt.text || '';
-    } else if (evt.type === 'exec') {
-      icon = '⚡'; typeClass = 'type-exec';
-      summary = '<strong>EXEC</strong> - <code>' + escHtml(evt.command||'') + '</code>';
-      body = evt.command || '';
-    } else if (evt.type === 'read') {
-      icon = '📖'; typeClass = 'type-read';
-      summary = '<strong>READ</strong> - ' + escHtml(evt.file||'');
-      body = evt.file || '';
-    } else if (evt.type === 'tool') {
-      icon = '🔧'; typeClass = 'type-exec';
-      summary = '<strong>' + escHtml(evt.toolName||'tool') + '</strong> - ' + escHtml((evt.args||'').substring(0, 100));
-      body = evt.args || '';
-    } else if (evt.type === 'result') {
-      icon = '[check]'; typeClass = 'type-result';
-      summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
-      body = evt.text || '';
+  var i = 0;
+  while (i < events.length) {
+    var evt = events[i];
+    // Group consecutive thinking blocks
+    if (evt.type === 'thinking') {
+      var groupStart = i;
+      var groupEvts = [];
+      while (i < events.length && events[i].type === 'thinking') {
+        groupEvts.push({evt: events[i], idx: i});
+        i++;
+      }
+      if (groupEvts.length === 1) {
+        // Single thinking block — render normally
+        html += renderEvtItem(groupEvts[0].evt, groupEvts[0].idx);
+      } else {
+        // Multiple consecutive thinking blocks — group them
+        var groupId = 'think-group-' + groupStart;
+        var firstSnippet = escHtml((groupEvts[0].evt.text||'').substring(0, 80));
+        var isGroupOpen = _expandedGroups[groupId] ? ' open' : '';
+        html += '<div class="thinking-group">';
+        html += '<div class="thinking-group-header" onclick="toggleThinkGroup('' + groupId + '')">';
+        html += '<span class="evt-icon">💭</span>';
+        html += '<span class="evt-summary"><strong>Thinking</strong> - ' + firstSnippet + '&#8230;</span>';
+        html += '<span class="thinking-group-badge">' + groupEvts.length + ' blocks</span>';
+        html += '</div>';
+        html += '<div class="thinking-group-body' + isGroupOpen + '" id="' + groupId + '">';
+        groupEvts.forEach(function(item) {
+          html += renderEvtItem(item.evt, item.idx);
+        });
+        html += '</div>';
+        html += '</div>';
+      }
     } else {
-      summary = '<strong>' + escHtml(evt.type) + '</strong>';
-      body = JSON.stringify(evt, null, 2);
+      html += renderEvtItem(evt, i);
+      i++;
     }
-    var bodyId = 'evt-body-' + idx;
-    html += '<div class="evt-item ' + typeClass + '">';
-    html += '<div class="evt-header" onclick="toggleEvtBody(\'' + bodyId + '\',' + idx + ')">';
-    html += '<span class="evt-icon">' + icon + '</span>';
-    html += '<span class="evt-summary">' + summary + '</span>';
-    html += '<span class="evt-ts">' + escHtml(ts) + '</span>';
-    html += '</div>';
-    var bodyHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(body) : escHtml(body);
-    var isOpen = _expandedEvts[idx] ? ' open' : '';
-    html += '<div class="evt-body md-rendered' + isOpen + '" id="' + bodyId + '">' + bodyHtml + '</div>';
-    html += '</div>';
-  });
+  }
   el.innerHTML = html || '<div style="padding:20px;color:var(--text-muted);">No events yet</div>';
 }
 
@@ -17814,6 +17867,13 @@ function toggleEvtBody(bodyId, idx) {
   if (!b) return;
   b.classList.toggle('open');
   _expandedEvts[idx] = b.classList.contains('open');
+}
+
+function toggleThinkGroup(groupId) {
+  var b = document.getElementById(groupId);
+  if (!b) return;
+  b.classList.toggle('open');
+  _expandedGroups[groupId] = b.classList.contains('open');
 }
 
 // Initialize theme and zoom on page load
@@ -25288,6 +25348,7 @@ def api_transcript_events(session_id):
                                     {
                                         "type": "thinking",
                                         "text": block.get("thinking", "")[:2000],
+                                        "thinking_chars": len(block.get("thinking", "")),
                                         "timestamp": ts_val,
                                     }
                                 )
