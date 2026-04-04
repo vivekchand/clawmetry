@@ -13806,6 +13806,50 @@ async function loadUsage() {
   }
 }
 
+function renderProviderCostChart(providers) {
+  var el = document.getElementById('provider-cost-chart');
+  if (!el) return;
+  if (!providers || providers.length === 0) {
+    el.innerHTML = '<span style="color:var(--text-muted);">No provider cost data yet — start using models from multiple providers.</span>';
+    return;
+  }
+  var providerColors = {
+    'Anthropic': '#f59e0b',
+    'OpenAI': '#22c55e',
+    'Google/Gemini': '#0ea5e9',
+    'Qwen': '#8b5cf6',
+    'xAI': '#ef4444',
+    'OpenRouter': '#14b8a6',
+    'Other': '#94a3b8'
+  };
+  var totalCost = providers.reduce(function(acc, p) { return acc + (p.cost_usd || 0); }, 0) || 0.0001;
+  var html = '<div style="display:flex;flex-direction:column;gap:10px;">';
+  providers.forEach(function(p) {
+    var color = providerColors[p.provider] || '#94a3b8';
+    var pct = Math.round((p.cost_usd / totalCost) * 100);
+    var costStr = p.cost_usd >= 0.01 ? '$' + p.cost_usd.toFixed(2) : p.cost_usd > 0 ? '<$0.01' : '$0.00';
+    var tokStr = p.tokens >= 1000000 ? (p.tokens/1000000).toFixed(1) + 'M' : p.tokens >= 1000 ? (p.tokens/1000).toFixed(0) + 'K' : String(p.tokens || 0);
+    html += '<div style="display:flex;flex-direction:column;gap:4px;">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;">';
+    html += '<div style="display:flex;align-items:center;gap:8px;">';
+    html += '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + color + ';"></span>';
+    html += '<span style="font-weight:600;color:var(--text-primary);font-size:13px;">' + escHtml(p.provider) + '</span>';
+    html += '</div>';
+    html += '<div style="text-align:right;font-size:12px;">';
+    html += '<span style="font-weight:700;color:var(--text-primary);">' + costStr + '</span>';
+    html += '<span style="color:var(--text-muted);margin-left:8px;">' + tokStr + ' tok · ' + pct + '%</span>';
+    html += '</div></div>';
+    html += '<div style="background:rgba(255,255,255,0.08);border-radius:4px;height:8px;overflow:hidden;">';
+    html += '<div style="background:' + color + ';height:100%;width:' + Math.max(pct, 1) + '%;border-radius:4px;transition:width 0.4s ease;"></div>';
+    html += '</div></div>';
+  });
+  html += '</div>';
+  html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);">';
+  html += 'Total: $' + totalCost.toFixed(4) + ' across ' + providers.length + ' provider' + (providers.length !== 1 ? 's' : '');
+  html += '</div>';
+  el.innerHTML = html;
+}
+
 function renderTraceClusters(clusters, totalSessions) {
   var el = document.getElementById('trace-clusters-content');
   if (!el) return;
