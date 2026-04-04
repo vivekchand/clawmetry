@@ -2192,7 +2192,7 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
-  .nav-tabs { display: flex; gap: 4px; margin-left: auto; }
+  .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
   .brain-event:hover { background:rgba(255,255,255,0.02); }
@@ -2219,6 +2219,9 @@ DASHBOARD_HTML = r"""
   .brain-graph-container { width:100%; height:500px; background:var(--bg-secondary); border-radius:8px; border:1px solid var(--border); overflow:hidden; }
   #brain-graph-canvas { width:100%; height:500px; display:block; }
     .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
+    .nav-tab-more { }
+    .advanced-tabs-dropdown { position: absolute; top: 100%; right: 0; background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 4px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3); min-width: 140px; margin-top: 4px; display: flex; flex-direction: column; }
+    .advanced-tabs-dropdown .nav-tab { display: block; width: 100%; text-align: left; border-radius: 6px; margin: 2px 0; }
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
   .nav-tab:active { transform: scale(0.98); }
@@ -3073,6 +3076,26 @@ DASHBOARD_HTML = r"""
     .cron-job { flex-wrap: wrap; gap: 6px; }
   }
 </style>
+
+<script>
+window.toggleAdvancedTabs = function(e) {
+  e.stopPropagation();
+  var dd = e.target.closest('.nav-tabs').querySelector('.advanced-tabs-dropdown');
+  if (!dd) return;
+  var vis = dd.style.display === 'none' || !dd.style.display;
+  document.querySelectorAll('.advanced-tabs-dropdown').forEach(function(d){ d.style.display = 'none'; });
+  if (vis) dd.style.display = 'block';
+};
+window.hideAdvDropdown = function() {
+  document.querySelectorAll('.advanced-tabs-dropdown').forEach(function(d){ d.style.display = 'none'; });
+};
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.nav-tab-more') && !e.target.closest('.advanced-tabs-dropdown')) {
+    hideAdvDropdown();
+  }
+});
+</script>
+
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -3217,16 +3240,19 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
-    <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
-    <div class="nav-tab" onclick="switchTab('models')">Models</div>
-    <div class="nav-tab" onclick="switchTab('security')">Security</div>
-    <div class="nav-tab" onclick="switchTab('version-impact')" title="Before/after metrics for each OpenClaw upgrade">Upgrades</div>
-    <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
-    <div class="nav-tab" onclick="switchTab('limits')" title="API rate limit consumption — rolling windows per provider">Limits</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <div class="nav-tab" onclick="switchTab('subagents')" title="Sub-agent tree — collapsible parent nodes">Agents</div>
+    <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;</div>
+    <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
+      <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
+      <div class="nav-tab" onclick="switchTab('security');hideAdvDropdown()">Security</div>
+      <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
+      <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
+      <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
+      <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
+    </div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3634,8 +3660,8 @@ function clawmetryLogout(){
 <div class="page" id="page-crons">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
-    <button class="refresh-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;">+ New Job</button>
-    <button class="refresh-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
+    <button class="refresh-btn cron-action-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;display:none;">+ New Job</button>
+    <button class="refresh-btn cron-action-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
     <label class="modal-auto-refresh" style="margin-left:auto;">
       <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
     </label>
@@ -4734,7 +4760,7 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
-  if (name === 'overview') { if (_velocityPollTimer) clearInterval(_velocityPollTimer); _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
+  if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
@@ -7970,7 +7996,7 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
-  .nav-tabs { display: flex; gap: 4px; margin-left: auto; }
+  .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
   .brain-event:hover { background:rgba(255,255,255,0.02); }
@@ -7997,6 +8023,9 @@ DASHBOARD_HTML = r"""
   .brain-graph-container { width:100%; height:500px; background:var(--bg-secondary); border-radius:8px; border:1px solid var(--border); overflow:hidden; }
   #brain-graph-canvas { width:100%; height:500px; display:block; }
     .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
+    .nav-tab-more { }
+    .advanced-tabs-dropdown { position: absolute; top: 100%; right: 0; background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 4px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3); min-width: 140px; margin-top: 4px; display: flex; flex-direction: column; }
+    .advanced-tabs-dropdown .nav-tab { display: block; width: 100%; text-align: left; border-radius: 6px; margin: 2px 0; }
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
   .nav-tab:active { transform: scale(0.98); }
@@ -8862,6 +8891,24 @@ DASHBOARD_HTML = r"""
     .cron-job { flex-wrap: wrap; gap: 6px; }
   }
 </style>
+<script>
+window.toggleAdvancedTabs = function(e) {
+  e.stopPropagation();
+  var dd = e.target.closest('.nav-tabs').querySelector('.advanced-tabs-dropdown');
+  if (!dd) return;
+  var vis = dd.style.display === 'none' || !dd.style.display;
+  document.querySelectorAll('.advanced-tabs-dropdown').forEach(function(d){ d.style.display = 'none'; });
+  if (vis) dd.style.display = 'block';
+};
+window.hideAdvDropdown = function() {
+  document.querySelectorAll('.advanced-tabs-dropdown').forEach(function(d){ d.style.display = 'none'; });
+};
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.nav-tab-more') && !e.target.closest('.advanced-tabs-dropdown')) {
+    if (typeof hideAdvDropdown !== 'undefined') hideAdvDropdown();
+  }
+});
+</script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -9006,16 +9053,19 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
-    <div class="nav-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
-    <div class="nav-tab" onclick="switchTab('models')">Models</div>
-    <div class="nav-tab" onclick="switchTab('security')">Security</div>
-    <div class="nav-tab" onclick="switchTab('version-impact')" title="Before/after metrics for each OpenClaw upgrade">Upgrades</div>
-    <div class="nav-tab" onclick="switchTab('clusters')" title="Sessions grouped by tool call behavior">Clusters</div>
-    <div class="nav-tab" onclick="switchTab('limits')" title="API rate limit consumption — rolling windows per provider">Limits</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <div class="nav-tab" onclick="switchTab('subagents')" title="Sub-agent tree — collapsible parent nodes">Agents</div>
+    <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;</div>
+    <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
+      <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
+      <div class="nav-tab" onclick="switchTab('security');hideAdvDropdown()">Security</div>
+      <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
+      <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
+      <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
+      <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
+    </div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -9476,8 +9526,8 @@ function clawmetryLogout(){
 <div class="page" id="page-crons">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
-    <button class="refresh-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;">+ New Job</button>
-    <button class="refresh-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
+    <button class="refresh-btn cron-action-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;display:none;">+ New Job</button>
+    <button class="refresh-btn cron-action-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
     <label class="modal-auto-refresh" style="margin-left:auto;">
       <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
     </label>
@@ -10769,7 +10819,7 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
-  if (name === 'overview') { if (_velocityPollTimer) clearInterval(_velocityPollTimer); _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
+  if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
@@ -12467,6 +12517,7 @@ function drawSessionSparkline(canvas, points) {
 var _cronJobs = [];
 var _cronExpanded = {};
 var _cronAutoRefreshTimer = null;
+var _cronActionsAvailable = false;
 
 function toggleCronAutoRefresh() {
   var cb = document.getElementById('cron-auto-refresh');
@@ -12481,6 +12532,10 @@ function toggleCronAutoRefresh() {
 async function loadCrons() {
   var data = await fetch('/api/crons').then(r => r.json());
   _cronJobs = data.jobs || [];
+  // Show/hide cron action buttons based on gateway support
+  document.querySelectorAll('.cron-action-btn').forEach(function(btn) {
+    btn.style.display = _cronActionsAvailable ? '' : 'none';
+  });
   renderCrons();
   // Load cron health summary panel
   loadCronHealth();
@@ -12509,7 +12564,7 @@ async function loadCronHealth() {
 
     // Show/hide emergency stop button
     var killBtn = document.getElementById('cron-kill-all-btn');
-    if (killBtn) killBtn.style.display = hasIssues ? 'inline-flex' : 'none';
+    if (killBtn) killBtn.style.display = (_cronActionsAvailable && hasIssues) ? 'inline-flex' : 'none';
 
     if (jobs.length === 0) { panel.innerHTML = ''; return; }
 
@@ -12545,7 +12600,7 @@ async function loadCronHealth() {
         html += anomalyBadges;
         if (j.consecutiveFailures > 1) html += '<span style="font-size:11px;background:#ef444422;color:#ef4444;border-radius:4px;padding:1px 5px;">'+j.consecutiveFailures+' fails</span>';
         html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">'+projStr+'</span>';
-        html += '<button onclick="event.stopPropagation();cronPauseJob(\''+escHtml(j.id)+'\')" title="Pause this job" style="font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;">&#x23F8; Pause</button>';
+        if (_cronActionsAvailable) html += '<button onclick="event.stopPropagation();cronPauseJob(\''+escHtml(j.id)+'\')" title="Pause this job" style="font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;">&#x23F8; Pause</button>';
         html += '</div>';
       });
       html += '</div>';
@@ -12643,7 +12698,7 @@ function renderCrons() {
       var consecutiveFails = (j.state && j.state.consecutiveFailures) ? j.state.consecutiveFailures : '';
       html += '<span class="cron-error-actions">';
       html += '<span class="cron-info-icon" title="Error details" onclick="event.stopPropagation();showCronError(this,\'' + errMsg.replace(/'/g,'\\&#39;').replace(/"/g,'&quot;') + '\',\'' + escHtml(errTime) + '\',' + (consecutiveFails||'null') + ')">&#x2139;&#xFE0F;</span>';
-      html += '<button class="cron-fix-btn" onclick="event.stopPropagation();confirmCronFix(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F527; Fix</button>';
+      if (_cronActionsAvailable) html += '<button class="cron-fix-btn" onclick="event.stopPropagation();confirmCronFix(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F527; Fix</button>';
       html += '</span>';
     }
     html += '</div>';
@@ -12671,13 +12726,15 @@ function renderCrons() {
     }
     if (badges) html += '<div style="display:inline;">' + badges + '</div>';
 
-    // Action buttons
+    // Action buttons (hidden unless gateway supports cron invocation)
+    if (_cronActionsAvailable) {
     html += '<div class="cron-actions" onclick="event.stopPropagation()">';
     html += '<button class="cron-btn-run" onclick="cronRunNow(\'' + escHtml(j.id) + '\')">&#x25B6; Run Now</button>';
     html += '<button class="cron-btn-toggle" onclick="cronToggle(\'' + escHtml(j.id) + '\',' + !isEnabled + ')">' + (isEnabled ? '&#x23F8; Disable' : '&#x25B6; Enable') + '</button>';
     html += '<button class="cron-btn-edit" onclick="cronEdit(\'' + escHtml(j.id) + '\')">&#x270F; Edit</button>';
     html += '<button class="cron-btn-delete" onclick="cronConfirmDelete(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F5D1; Delete</button>';
     html += '</div>';
+    }
 
     // Expanded section
     if (expanded) {
@@ -18083,6 +18140,13 @@ async function bootDashboard() {
 
   var sub = document.getElementById('boot-sub');
   if (sub) sub.textContent = 'Dashboard ready';
+  // Auto-show Crons tab if cron jobs exist
+  try {
+    var cronData = await fetch('/api/crons').then(function(r){return r.json();});
+    if (cronData.jobs && cronData.jobs.length > 0) {
+      document.querySelectorAll('#crons-tab').forEach(function(t){ t.style.display = ''; });
+    }
+  } catch(e) {}
   setTimeout(finishBootOverlay, 180);
 }
 
