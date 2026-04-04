@@ -4965,7 +4965,7 @@ async function loadTokenVelocity() {
         return '<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.3);border-radius:6px;padding:3px 8px;font-size:11px;font-weight:400;">'
           + '<code style="font-size:10px;color:inherit;opacity:0.8;">' + s.id + '</code>'
           + '<span style="opacity:0.7;">' + info + '</span>'
-          + '<button onclick="killSession('' + s.id + '')" style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:1px 6px;font-size:10px;cursor:pointer;font-weight:600;">Kill</button>'
+          + '<button onclick="killSession(\'' + s.id + '\')" style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:1px 6px;font-size:10px;cursor:pointer;font-weight:600;">Kill</button>'
           + '</span>';
       }).join('');
     } else if (listEl) {
@@ -4997,9 +4997,9 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
-    loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
+    if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
-    loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
@@ -6433,6 +6433,8 @@ def _get_budget_config():
         "monthly_limit": 0,
         "auto_pause_enabled": False,
         "auto_pause_threshold_pct": 100,
+        "auto_pause_threshold_usd": 0,
+        "auto_pause_action": "pause",
         "warning_threshold_pct": 80,
         "telegram_bot_token": "",
         "telegram_chat_id": "",
@@ -10965,9 +10967,9 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
-    loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
+    if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
-    loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
@@ -12486,6 +12488,9 @@ async function loadCrons() {
 async function loadCronHealth() {
   var panel = document.getElementById('cron-health-panel');
   if (!panel) return;
+  // Clear the health table placeholder when loading completes
+  var ht = document.getElementById('cron-health-table');
+  if (ht) ht.innerHTML = '';
   try {
     var data = await fetch('/api/cron/health-summary').then(r => r.json());
     var jobs = data.jobs || [];
@@ -17807,7 +17812,7 @@ function renderEvtItem(evt, idx) {
   }
   var bodyId = 'evt-body-' + idx;
   var h = '<div class="evt-item ' + typeClass + '">';
-  h += '<div class="evt-header" onclick="toggleEvtBody('' + bodyId + '',' + idx + ')">';
+  h += '<div class="evt-header" onclick="toggleEvtBody(\'' + bodyId + '\',' + idx + ')">';
   h += '<span class="evt-icon">' + icon + '</span>';
   h += '<span class="evt-summary">' + summary + '</span>';
   h += '<span class="evt-ts">' + escHtml(ts) + '</span>';
@@ -17842,7 +17847,7 @@ function renderModalFull(el) {
         var firstSnippet = escHtml((groupEvts[0].evt.text||'').substring(0, 80));
         var isGroupOpen = _expandedGroups[groupId] ? ' open' : '';
         html += '<div class="thinking-group">';
-        html += '<div class="thinking-group-header" onclick="toggleThinkGroup('' + groupId + '')">';
+        html += '<div class="thinking-group-header" onclick="toggleThinkGroup(\'' + groupId + '\')">';
         html += '<span class="evt-icon">💭</span>';
         html += '<span class="evt-summary"><strong>Thinking</strong> - ' + firstSnippet + '&#8230;</span>';
         html += '<span class="thinking-group-badge">' + groupEvts.length + ' blocks</span>';
@@ -18148,7 +18153,7 @@ async function showSnapshot(ts) {
 
 // ── NemoClaw: duplicate stub removed; see loadNemoClaw() above ────────────────
 // (The live implementation lives earlier in this file at the // NemoClaw Governance Tab comment)
-if (false) { async function loadNemoClaw() {
+/* if (false) { async function loadNemoClaw() { // dead code stub
   try {
     var data = await fetch('/api/nemoclaw/status').then(function(r) { return r.json(); });
     if (!data.installed) {
@@ -18259,7 +18264,7 @@ function _ncEsc(s) {
     }).catch(function(){});
   } catch(e) {}
 })();
-}} // end if(false) stub
+} } // end if(false) stub */
 </script>
 </div> <!-- end zoom-wrapper -->
 
