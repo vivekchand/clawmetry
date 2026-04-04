@@ -3661,8 +3661,8 @@ function clawmetryLogout(){
 <div class="page" id="page-crons">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
-    <button class="refresh-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;">+ New Job</button>
-    <button class="refresh-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
+    <button class="refresh-btn cron-action-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;display:none;">+ New Job</button>
+    <button class="refresh-btn cron-action-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
     <label class="modal-auto-refresh" style="margin-left:auto;">
       <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
     </label>
@@ -9524,8 +9524,8 @@ function clawmetryLogout(){
 <div class="page" id="page-crons">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
-    <button class="refresh-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;">+ New Job</button>
-    <button class="refresh-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
+    <button class="refresh-btn cron-action-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;display:none;">+ New Job</button>
+    <button class="refresh-btn cron-action-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
     <label class="modal-auto-refresh" style="margin-left:auto;">
       <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
     </label>
@@ -12515,6 +12515,7 @@ function drawSessionSparkline(canvas, points) {
 var _cronJobs = [];
 var _cronExpanded = {};
 var _cronAutoRefreshTimer = null;
+var _cronActionsAvailable = false;
 
 function toggleCronAutoRefresh() {
   var cb = document.getElementById('cron-auto-refresh');
@@ -12529,6 +12530,10 @@ function toggleCronAutoRefresh() {
 async function loadCrons() {
   var data = await fetch('/api/crons').then(r => r.json());
   _cronJobs = data.jobs || [];
+  // Show/hide cron action buttons based on gateway support
+  document.querySelectorAll('.cron-action-btn').forEach(function(btn) {
+    btn.style.display = _cronActionsAvailable ? '' : 'none';
+  });
   renderCrons();
   // Load cron health summary panel
   loadCronHealth();
@@ -12557,7 +12562,7 @@ async function loadCronHealth() {
 
     // Show/hide emergency stop button
     var killBtn = document.getElementById('cron-kill-all-btn');
-    if (killBtn) killBtn.style.display = hasIssues ? 'inline-flex' : 'none';
+    if (killBtn) killBtn.style.display = (_cronActionsAvailable && hasIssues) ? 'inline-flex' : 'none';
 
     if (jobs.length === 0) { panel.innerHTML = ''; return; }
 
@@ -12593,7 +12598,7 @@ async function loadCronHealth() {
         html += anomalyBadges;
         if (j.consecutiveFailures > 1) html += '<span style="font-size:11px;background:#ef444422;color:#ef4444;border-radius:4px;padding:1px 5px;">'+j.consecutiveFailures+' fails</span>';
         html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">'+projStr+'</span>';
-        html += '<button onclick="event.stopPropagation();cronPauseJob(\''+escHtml(j.id)+'\')" title="Pause this job" style="font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;">&#x23F8; Pause</button>';
+        if (_cronActionsAvailable) html += '<button onclick="event.stopPropagation();cronPauseJob(\''+escHtml(j.id)+'\')" title="Pause this job" style="font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;">&#x23F8; Pause</button>';
         html += '</div>';
       });
       html += '</div>';
@@ -12691,7 +12696,7 @@ function renderCrons() {
       var consecutiveFails = (j.state && j.state.consecutiveFailures) ? j.state.consecutiveFailures : '';
       html += '<span class="cron-error-actions">';
       html += '<span class="cron-info-icon" title="Error details" onclick="event.stopPropagation();showCronError(this,\'' + errMsg.replace(/'/g,'\\&#39;').replace(/"/g,'&quot;') + '\',\'' + escHtml(errTime) + '\',' + (consecutiveFails||'null') + ')">&#x2139;&#xFE0F;</span>';
-      html += '<button class="cron-fix-btn" onclick="event.stopPropagation();confirmCronFix(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F527; Fix</button>';
+      if (_cronActionsAvailable) html += '<button class="cron-fix-btn" onclick="event.stopPropagation();confirmCronFix(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F527; Fix</button>';
       html += '</span>';
     }
     html += '</div>';
@@ -12719,13 +12724,15 @@ function renderCrons() {
     }
     if (badges) html += '<div style="display:inline;">' + badges + '</div>';
 
-    // Action buttons
+    // Action buttons (hidden unless gateway supports cron invocation)
+    if (_cronActionsAvailable) {
     html += '<div class="cron-actions" onclick="event.stopPropagation()">';
     html += '<button class="cron-btn-run" onclick="cronRunNow(\'' + escHtml(j.id) + '\')">&#x25B6; Run Now</button>';
     html += '<button class="cron-btn-toggle" onclick="cronToggle(\'' + escHtml(j.id) + '\',' + !isEnabled + ')">' + (isEnabled ? '&#x23F8; Disable' : '&#x25B6; Enable') + '</button>';
     html += '<button class="cron-btn-edit" onclick="cronEdit(\'' + escHtml(j.id) + '\')">&#x270F; Edit</button>';
     html += '<button class="cron-btn-delete" onclick="cronConfirmDelete(\'' + escHtml(j.id) + '\',\'' + escHtml(j.name||j.id).replace(/'/g,'\\&#39;') + '\')">&#x1F5D1; Delete</button>';
     html += '</div>';
+    }
 
     // Expanded section
     if (expanded) {
