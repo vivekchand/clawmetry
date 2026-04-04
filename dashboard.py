@@ -3609,7 +3609,12 @@ function clawmetryLogout(){
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
   </div>
-  <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
+  <!-- Cost Comparison Panel (GH#554) -->
+  <div class="section-title" id="cost-comparison-section" style="display:flex;align-items:center;">💱 Cost Comparison <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">what same workload costs elsewhere · 30 days</span></div>
+  <div class="card" id="cost-comparison-card" style="display:none;">
+    <div id="cost-comparison-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+  </div>
+    <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
   <div class="card">
     <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
   </div>
@@ -9442,7 +9447,12 @@ function clawmetryLogout(){
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
   </div>
-  <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
+  <!-- Cost Comparison Panel (GH#554) -->
+  <div class="section-title" id="cost-comparison-section" style="display:flex;align-items:center;">💱 Cost Comparison <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">what same workload costs elsewhere · 30 days</span></div>
+  <div class="card" id="cost-comparison-card" style="display:none;">
+    <div id="cost-comparison-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+  </div>
+    <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
   <div class="card">
     <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
   </div>
@@ -13804,6 +13814,8 @@ async function loadUsage() {
       var el = document.getElementById('trace-clusters-content');
       if (el) el.innerHTML = '<span style="color:var(--text-muted)">No cluster data available</span>';
     });
+    // Load cost comparison panel (GH#554)
+    loadCostComparison();
     // Load activity heatmap
     loadHeatmap();
   } catch(e) {
@@ -13852,6 +13864,79 @@ function renderProviderCostChart(providers) {
   html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);">';
   html += 'Total: $' + totalCost.toFixed(4) + ' across ' + providers.length + ' provider' + (providers.length !== 1 ? 's' : '');
   html += '</div>';
+  el.innerHTML = html;
+}
+
+// ===== Cost Comparison Panel (GH#554) =====
+async function loadCostComparison() {
+  var card = document.getElementById('cost-comparison-card');
+  var el = document.getElementById('cost-comparison-content');
+  if (!card || !el) return;
+  try {
+    var data = await fetch('/api/usage/cost-comparison').then(function(r){return r.json();});
+    if (!data || !data.alternatives || data.alternatives.length === 0) return;
+    card.style.display = 'block';
+    renderCostComparison(data);
+  } catch(e) {
+    // silently skip if unavailable
+  }
+}
+
+function renderCostComparison(data) {
+  var el = document.getElementById('cost-comparison-content');
+  if (!el) return;
+  var actual = data.actual || {};
+  var alts = data.alternatives || [];
+  var actualCost = actual.cost_usd || 0;
+  var actualModel = actual.model || 'current model';
+  var actualTokens = actual.tokens || 0;
+  if (actualTokens === 0) {
+    el.innerHTML = '<span style="color:var(--text-muted)">No token data for the last 30 days — usage will appear here once available.</span>';
+    return;
+  }
+  var providerColors = {
+    'Google': '#0ea5e9', 'OpenAI': '#22c55e', 'Anthropic': '#f59e0b',
+    'Alibaba': '#8b5cf6', 'Meta': '#ef4444', 'Other': '#94a3b8'
+  };
+  var tokStr = actualTokens >= 1000000 ? (actualTokens/1000000).toFixed(1)+'M' : actualTokens >= 1000 ? Math.round(actualTokens/1000)+'K' : String(Math.round(actualTokens));
+  var html = '<div style="margin-bottom:14px;padding:10px 14px;background:rgba(255,255,255,0.05);border-radius:8px;border:1px solid rgba(255,255,255,0.08)">';
+  html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Your actual spend (30 days)</div>';
+  html += '<div style="display:flex;align-items:baseline;gap:10px;">';
+  html += '<span style="font-size:22px;font-weight:700;color:var(--text-primary);">$' + (actualCost >= 0.01 ? actualCost.toFixed(2) : actualCost > 0 ? '<0.01' : '0.00') + '</span>';
+  html += '<span style="font-size:12px;color:var(--text-muted);">' + escHtml(actualModel) + ' &middot; ' + tokStr + ' tokens</span>';
+  html += '</div></div>';
+  html += '<div style="display:flex;flex-direction:column;gap:8px;">';
+  alts.forEach(function(alt) {
+    var color = providerColors[alt.provider] || '#94a3b8';
+    var altCost = alt.estimated_cost || 0;
+    var savingsPct = alt.savings_pct || 0;
+    var savingsUsd = alt.savings_usd || 0;
+    var costStr = altCost >= 0.01 ? '$' + altCost.toFixed(2) : altCost > 0 ? '<$0.01' : '$0.00';
+    var isCurrent = actualCost > 0 && Math.abs(altCost - actualCost) / (actualCost || 1) < 0.15;
+    var isCheaper = savingsPct > 5;
+    var isMoreExpensive = savingsPct < -5;
+    var rowStyle = isCurrent ? 'background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);' : 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);';
+    html += '<div style="' + rowStyle + 'border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:12px;">';
+    html += '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + ';flex-shrink:0;"></span>';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + escHtml(alt.display_name) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);">' + escHtml(alt.provider) + '</div>';
+    html += '</div>';
+    html += '<div style="text-align:right;flex-shrink:0;">';
+    html += '<div style="font-size:14px;font-weight:700;color:var(--text-primary);">' + costStr + '</div>';
+    if (isCurrent) {
+      html += '<div style="font-size:11px;color:#94a3b8;">≈ current</div>';
+    } else if (isCheaper) {
+      html += '<div style="font-size:11px;color:#22c55e;">save $' + Math.abs(savingsUsd).toFixed(2) + ' (' + Math.abs(savingsPct) + '%)</div>';
+    } else if (isMoreExpensive) {
+      html += '<div style="font-size:11px;color:#ef4444;">+$' + Math.abs(savingsUsd).toFixed(2) + ' (' + Math.abs(savingsPct) + '% more)</div>';
+    } else {
+      html += '<div style="font-size:11px;color:#94a3b8;">similar cost</div>';
+    }
+    html += '</div></div>';
+  });
+  html += '</div>';
+  html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.5;">Estimates based on 60/40 input/output split for ' + tokStr + ' tokens. Actual costs vary by prompt structure and API tier.</div>';
   el.innerHTML = html;
 }
 
@@ -24724,6 +24809,98 @@ def api_sessions_clusters():
             "generated_at": int(now_ts * 1000),
         }
     )
+
+
+@bp_usage.route("/api/usage/cost-comparison")
+def api_usage_cost_comparison():
+    """Return cost comparison: actual spend vs alternatives (GH#554)."""
+    try:
+        return jsonify(_build_cost_comparison())
+    except Exception as e:
+        return jsonify({"error": str(e), "alternatives": [], "actual": {}}), 500
+
+
+def _build_cost_comparison():
+    """Build cost comparison data: actual spend vs alternative models."""
+    # Alternative model pricing: (input $/1M, output $/1M, display name, provider)
+    ALTERNATIVES = [
+        ("gemini-2.0-flash",   0.10,  0.40,  "Gemini 2.0 Flash",     "Google"),
+        ("gemini-1.5-flash",   0.075, 0.30,  "Gemini 1.5 Flash",     "Google"),
+        ("gpt-4o-mini",        0.15,  0.60,  "GPT-4o Mini",          "OpenAI"),
+        ("claude-haiku-3.5",   0.80,  4.00,  "Claude Haiku 3.5",     "Anthropic"),
+        ("qwen-plus",          0.40,  1.20,  "Qwen Plus",            "Alibaba"),
+        ("claude-sonnet-3.5",  3.00, 15.00,  "Claude Sonnet 3.5",    "Anthropic"),
+        ("claude-opus-4",     15.00, 75.00,  "Claude Opus 4",        "Anthropic"),
+    ]
+    INPUT_RATIO = 0.60  # estimated 60% input, 40% output
+    OUTPUT_RATIO = 0.40
+
+    # Collect actual month tokens and cost from metrics store
+    from datetime import datetime as _dt
+    month_start = time.time() - 30 * 86400
+    actual_tokens = 0
+    actual_cost = 0.0
+    actual_model = "unknown"
+    model_token_map = {}  # model -> tokens
+
+    with _metrics_lock:
+        for entry in metrics_store.get("tokens", []):
+            if entry.get("timestamp", 0) >= month_start:
+                tok = float(entry.get("total", 0) or 0)
+                actual_tokens += tok
+                m = entry.get("model", "")
+                if m:
+                    model_token_map[m] = model_token_map.get(m, 0) + tok
+        for entry in metrics_store.get("cost", []):
+            if entry.get("timestamp", 0) >= month_start:
+                actual_cost += float(entry.get("usd", 0) or 0)
+
+    # If no cost data, estimate from tokens using current model pricing
+    if actual_tokens > 0 and actual_cost == 0.0:
+        usd_per_tok = _estimate_usd_per_token()
+        actual_cost = actual_tokens * usd_per_tok
+
+    # Determine dominant model
+    if model_token_map:
+        actual_model = max(model_token_map, key=lambda k: model_token_map[k])
+
+    # Compute alternative costs for same token volume
+    alternatives = []
+    for alt_id, in_price, out_price, display_name, provider in ALTERNATIVES:
+        if actual_tokens == 0:
+            alt_cost = 0.0
+        else:
+            alt_cost = (
+                actual_tokens * INPUT_RATIO * (in_price / 1_000_000)
+                + actual_tokens * OUTPUT_RATIO * (out_price / 1_000_000)
+            )
+        if actual_cost > 0:
+            savings_pct = round((actual_cost - alt_cost) / actual_cost * 100, 1)
+            savings_usd = round(actual_cost - alt_cost, 4)
+        else:
+            savings_pct = 0.0
+            savings_usd = 0.0
+        alternatives.append({
+            "model_id": alt_id,
+            "display_name": display_name,
+            "provider": provider,
+            "estimated_cost": round(alt_cost, 4),
+            "savings_usd": savings_usd,
+            "savings_pct": savings_pct,
+        })
+
+    # Sort by estimated cost ascending
+    alternatives.sort(key=lambda x: x["estimated_cost"])
+
+    return {
+        "actual": {
+            "model": actual_model,
+            "tokens": actual_tokens,
+            "cost_usd": round(actual_cost, 4),
+        },
+        "alternatives": alternatives,
+        "period": "30d",
+    }
 
 
 @bp_usage.route("/api/usage/export")
