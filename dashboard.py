@@ -2192,7 +2192,7 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
-  .nav-tabs { display: flex; gap: 4px; margin-left: auto; }
+  .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
   .brain-event:hover { background:rgba(255,255,255,0.02); }
@@ -2219,10 +2219,9 @@ DASHBOARD_HTML = r"""
   .brain-graph-container { width:100%; height:500px; background:var(--bg-secondary); border-radius:8px; border:1px solid var(--border); overflow:hidden; }
   #brain-graph-canvas { width:100%; height:500px; display:block; }
     .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
-    .nav-tab-more { position: relative; }
-    .advanced-tabs-dropdown { position: absolute; top: 100%; right: 0; background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 4px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3); min-width: 140px; margin-top: 4px; }
+    .nav-tab-more { }
+    .advanced-tabs-dropdown { position: absolute; top: 100%; right: 0; background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 4px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3); min-width: 140px; margin-top: 4px; display: flex; flex-direction: column; }
     .advanced-tabs-dropdown .nav-tab { display: block; width: 100%; text-align: left; border-radius: 6px; margin: 2px 0; }
-    .nav-tabs { position: relative; }
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
   .nav-tab:active { transform: scale(0.98); }
@@ -7997,7 +7996,7 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
-  .nav-tabs { display: flex; gap: 4px; margin-left: auto; }
+  .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
   .brain-event:hover { background:rgba(255,255,255,0.02); }
@@ -8024,6 +8023,9 @@ DASHBOARD_HTML = r"""
   .brain-graph-container { width:100%; height:500px; background:var(--bg-secondary); border-radius:8px; border:1px solid var(--border); overflow:hidden; }
   #brain-graph-canvas { width:100%; height:500px; display:block; }
     .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
+    .nav-tab-more { }
+    .advanced-tabs-dropdown { position: absolute; top: 100%; right: 0; background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 4px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3); min-width: 140px; margin-top: 4px; display: flex; flex-direction: column; }
+    .advanced-tabs-dropdown .nav-tab { display: block; width: 100%; text-align: left; border-radius: 6px; margin: 2px 0; }
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
   .nav-tab:active { transform: scale(0.98); }
