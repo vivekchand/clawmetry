@@ -639,9 +639,9 @@ def _get_budget_status():
                     if ts >= today_start:
                         daily_spent += usd
 
-    daily_limit = config["daily_limit"]
-    weekly_limit = config["weekly_limit"]
-    monthly_limit = config["monthly_limit"]
+    daily_limit = config.get("daily_limit", 0)
+    weekly_limit = config.get("weekly_limit", 0)
+    monthly_limit = config.get("monthly_limit", 0)
 
     return {
         "daily_spent": round(daily_spent, 4),
@@ -662,10 +662,10 @@ def _get_budget_status():
         "paused": _budget_paused,
         "paused_at": _budget_paused_at,
         "paused_reason": _budget_paused_reason,
-        "auto_pause_enabled": config["auto_pause_enabled"],
-        "auto_pause_threshold_usd": config["auto_pause_threshold_usd"],
-        "auto_pause_action": config["auto_pause_action"],
-        "warning_threshold_pct": config["warning_threshold_pct"],
+        "auto_pause_enabled": config.get("auto_pause_enabled", False),
+        "auto_pause_threshold_usd": config.get("auto_pause_threshold_usd", 0),
+        "auto_pause_action": config.get("auto_pause_action", "pause"),
+        "warning_threshold_pct": config.get("warning_threshold_pct", 80),
     }
 
 
@@ -677,12 +677,12 @@ def _budget_check():
     now = time.time()
     config = _get_budget_config()
     status = _get_budget_status()
-    warning_pct = config["warning_threshold_pct"]
-    pause_pct = config["auto_pause_threshold_pct"]
+    warning_pct = config.get("warning_threshold_pct", 80)
+    pause_pct = config.get("auto_pause_threshold_pct", 100)
 
     # Check each period
     for period in ["daily", "weekly", "monthly"]:
-        limit = config[f"{period}_limit"]
+        limit = config.get(f"{period}_limit", 0)
         if limit <= 0:
             continue
         spent = status[f"{period}_spent"]
@@ -715,7 +715,7 @@ def _budget_check():
             )
 
         # Auto-pause
-        if pct >= pause_pct and config["auto_pause_enabled"]:
+        if pct >= pause_pct and config.get("auto_pause_enabled", False):
             _budget_paused = True
             _budget_paused_at = time.time()
             _budget_paused_reason = (
