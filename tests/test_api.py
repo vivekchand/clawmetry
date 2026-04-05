@@ -710,6 +710,93 @@ class TestTokenVelocity:
             assert d["alert"] is True, "alert should be True for warning/critical"
 
 
+class TestAlertRulesApi:
+    """API tests for custom alert rule creation/validation."""
+
+    def test_create_session_cost_threshold_rule(self, api, base_url):
+        payload = {
+            "type": "session_cost_threshold",
+            "threshold": 5.0,
+            "channels": ["banner"],
+            "cooldown_min": 15,
+            "params": {"scope": "session", "target": "active"},
+        }
+        r = api.post(f"{base_url}/api/alerts/rules", json=payload, timeout=10)
+        assert r.status_code == 200, r.text
+        created = r.json()
+        assert created.get("ok") is True
+        rid = created.get("id")
+        assert rid
+        try:
+            rules = assert_ok(get(api, base_url, "/api/alerts/rules"))["rules"]
+            match = next((x for x in rules if x.get("id") == rid), None)
+            assert match is not None
+            assert match.get("type") == "session_cost_threshold"
+            assert isinstance(match.get("params"), dict)
+            assert match["params"].get("scope") == "session"
+            assert match["params"].get("target") == "active"
+        finally:
+            api.delete(f"{base_url}/api/alerts/rules/{rid}", timeout=10)
+
+    def test_create_token_velocity_spike_rule_window_1(self, api, base_url):
+        payload = {
+            "type": "token_velocity_spike",
+            "threshold": 3.0,
+            "channels": ["banner"],
+            "cooldown_min": 5,
+            "params": {
+                "scope": "fleet",
+                "window_min": 1,
+                "baseline_min": 60,
+                "min_tokens_1min": 500,
+            },
+        }
+        r = api.post(f"{base_url}/api/alerts/rules", json=payload, timeout=10)
+        assert r.status_code == 200, r.text
+        created = r.json()
+        rid = created.get("id")
+        assert rid
+        try:
+            rules = assert_ok(get(api, base_url, "/api/alerts/rules"))["rules"]
+            match = next((x for x in rules if x.get("id") == rid), None)
+            assert match is not None
+            params = match.get("params", {})
+            assert params.get("window_min") == 1
+            assert params.get("scope") == "fleet"
+        finally:
+            api.delete(f"{base_url}/api/alerts/rules/{rid}", timeout=10)
+
+    def test_reject_token_velocity_non_1_min_window(self, api, base_url):
+        payload = {
+            "type": "token_velocity_spike",
+            "threshold": 3.0,
+            "channels": ["banner"],
+            "params": {"scope": "fleet", "window_min": 2},
+        }
+        r = api.post(f"{base_url}/api/alerts/rules", json=payload, timeout=10)
+        assert r.status_code == 400
+
+    def test_reject_token_velocity_invalid_params(self, api, base_url):
+        payload = {
+            "type": "token_velocity_spike",
+            "threshold": 3.0,
+            "channels": ["banner"],
+            "params": {"scope": "invalid", "window_min": 1},
+        }
+        r = api.post(f"{base_url}/api/alerts/rules", json=payload, timeout=10)
+        assert r.status_code == 400
+
+    def test_reject_non_positive_threshold(self, api, base_url):
+        payload = {
+            "type": "session_cost_threshold",
+            "threshold": 0,
+            "channels": ["banner"],
+            "params": {"scope": "session", "target": "active"},
+        }
+        r = api.post(f"{base_url}/api/alerts/rules", json=payload, timeout=10)
+        assert r.status_code == 400
+
+
 class TestPluginTrend:
     """Tests for GH #201 — per-plugin cost attribution trend endpoints."""
 

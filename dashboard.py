@@ -460,6 +460,7 @@ def _budget_init_db():
             type TEXT NOT NULL,
             threshold REAL NOT NULL,
             channels TEXT NOT NULL,
+            params TEXT DEFAULT '{}',
             cooldown_min INTEGER DEFAULT 30,
             enabled INTEGER DEFAULT 1,
             created_at REAL NOT NULL,
@@ -481,6 +482,15 @@ def _budget_init_db():
         CREATE INDEX IF NOT EXISTS idx_alert_history_rule
             ON alert_history(rule_id, fired_at DESC);
     """)
+    # Backward-compatible migration for existing installs.
+    try:
+        cols = db.execute("PRAGMA table_info(alert_rules)").fetchall()
+        names = {str(c["name"]).lower() for c in cols}
+        if "params" not in names:
+            db.execute("ALTER TABLE alert_rules ADD COLUMN params TEXT DEFAULT '{}'")
+            db.commit()
+    except Exception:
+        pass
     db.close()
 
 
@@ -906,7 +916,23 @@ def _get_alert_rules():
                 "SELECT * FROM alert_rules ORDER BY created_at DESC"
             ).fetchall()
             db.close()
-        return [dict(r) for r in rows]
+        out = []
+        for row in rows:
+            item = dict(row)
+            raw_params = item.get("params", "{}")
+            params = {}
+            if isinstance(raw_params, dict):
+                params = dict(raw_params)
+            elif isinstance(raw_params, str) and raw_params.strip():
+                try:
+                    parsed = json.loads(raw_params)
+                    if isinstance(parsed, dict):
+                        params = parsed
+                except Exception:
+                    params = {}
+            item["params"] = params
+            out.append(item)
+        return out
     except Exception:
         return []
 
@@ -940,6 +966,274 @@ def _get_active_alerts():
         return [dict(r) for r in rows]
     except Exception:
         return []
+
+
+def _normalize_alert_rule_params(rtype, params):
+    """Validate/normalize rule params and return (ok, err, normalized)."""
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        return False, "params must be an object", {}
+
+    if rtype == "session_cost_threshold":
+        scope = str(params.get("scope", "session")).strip().lower()
+        if scope != "session":
+            return False, "session_cost_threshold scope must be 'session'", {}
+        target = str(params.get("target", "active")).strip().lower()
+        if target != "active":
+            return False, "session_cost_threshold target must be 'active'", {}
+        return True, "", {"scope": "session", "target": "active"}
+
+    if rtype == "token_velocity_spike":
+        scope = str(params.get("scope", "session")).strip().lower()
+        if scope not in ("session", "fleet"):
+            return False, "token_velocity_spike scope must be 'session' or 'fleet'", {}
+        try:
+            window_min = int(params.get("window_min", 1))
+        except Exception:
+            return False, "window_min must be an integer", {}
+        if window_min != 1:
+            return False, "window_min must be 1", {}
+        try:
+            baseline_min = int(params.get("baseline_min", 60))
+        except Exception:
+            return False, "baseline_min must be an integer", {}
+        if baseline_min < 1 or baseline_min > 240:
+            return False, "baseline_min must be between 1 and 240", {}
+        try:
+            min_tokens_1min = int(params.get("min_tokens_1min", 500))
+        except Exception:
+            return False, "min_tokens_1min must be an integer", {}
+        if min_tokens_1min < 0:
+            return False, "min_tokens_1min must be >= 0", {}
+        return True, "", {
+            "scope": scope,
+            "window_min": 1,
+            "baseline_min": baseline_min,
+            "min_tokens_1min": min_tokens_1min,
+        }
+
+    return True, "", {}
+
+
+def _extract_usage_tokens_cost(msg_obj, usd_per_token):
+    """Extract token and cost estimates from a message object."""
+    if not isinstance(msg_obj, dict):
+        return 0.0, 0.0
+    usage = msg_obj.get("usage", {})
+    if not isinstance(usage, dict):
+        usage = {}
+    tok = float(
+        usage.get("total_tokens")
+        or usage.get("totalTokens")
+        or usage.get("input_tokens", 0)
+        + usage.get("output_tokens", 0)
+        or usage.get("inputTokens", 0)
+        + usage.get("outputTokens", 0)
+        or 0
+    )
+    cost_obj = usage.get("cost", {})
+    cost = 0.0
+    if isinstance(cost_obj, dict):
+        cost = float(cost_obj.get("total", 0) or cost_obj.get("usd", 0) or 0)
+    elif isinstance(cost_obj, (int, float)):
+        cost = float(cost_obj)
+    elif isinstance(usage.get("cost_usd"), (int, float)):
+        cost = float(usage.get("cost_usd"))
+    if cost <= 0 and tok > 0:
+        cost = tok * usd_per_token
+    return tok, cost
+
+
+def _collect_active_session_alert_metrics(now=None, sessions_dir=None, baseline_min=60):
+    """Collect per-session cost + 1-min token buckets for active sessions."""
+    now = time.time() if now is None else float(now)
+    baseline_min = max(1, int(baseline_min or 60))
+    sessions_dir = sessions_dir or SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    out = {
+        "sessions": {},
+        "fleet": {"current_tokens_1min": 0.0, "baseline_tokens_1min": 0.0},
+    }
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return out
+
+    usd_per_token = _estimate_usd_per_token()
+    fleet_prior_buckets = [0.0] * baseline_min
+    scan_window_start = now - ((baseline_min + 1) * 60)
+    try:
+        candidates = sorted(
+            [
+                f
+                for f in os.listdir(sessions_dir)
+                if f.endswith(".jsonl") and "deleted" not in f
+            ],
+            key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+            reverse=True,
+        )[:20]
+    except Exception:
+        candidates = []
+
+    for fname in candidates:
+        sid = fname.replace(".jsonl", "")
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            if now - os.path.getmtime(fpath) > 300:
+                continue
+        except Exception:
+            continue
+        minute_buckets = [0.0] * (baseline_min + 1)  # [current, prior...]
+        session_cost = 0.0
+        try:
+            with open(fpath, "r", errors="replace") as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line.strip())
+                    except Exception:
+                        continue
+                    msg = (
+                        obj.get("message", {})
+                        if isinstance(obj.get("message"), dict)
+                        else obj
+                    )
+                    tok, cost = _extract_usage_tokens_cost(msg, usd_per_token)
+                    if cost > 0:
+                        session_cost += cost
+                    ts = _json_ts_to_epoch(
+                        obj.get("timestamp") or obj.get("time") or obj.get("created_at")
+                    )
+                    if tok <= 0 or not ts or ts < scan_window_start or ts > now:
+                        continue
+                    idx = int((now - ts) // 60)
+                    if 0 <= idx <= baseline_min:
+                        minute_buckets[idx] += tok
+        except Exception:
+            continue
+
+        current = float(minute_buckets[0])
+        prior = minute_buckets[1:]
+        baseline = float(sum(prior) / baseline_min) if baseline_min > 0 else 0.0
+        out["sessions"][sid] = {
+            "cost_usd": float(session_cost),
+            "current_tokens_1min": current,
+            "baseline_tokens_1min": baseline,
+        }
+        out["fleet"]["current_tokens_1min"] += current
+        for i, v in enumerate(prior):
+            fleet_prior_buckets[i] += v
+
+    out["fleet"]["baseline_tokens_1min"] = (
+        float(sum(fleet_prior_buckets) / baseline_min) if baseline_min > 0 else 0.0
+    )
+    return out
+
+
+def _evaluate_session_cost_threshold(rule, metrics):
+    """Return alert message for session cost threshold rule, else empty string."""
+    sessions = (metrics or {}).get("sessions", {})
+    if not sessions:
+        return ""
+    threshold = float(rule.get("threshold", 0) or 0)
+    if threshold <= 0:
+        return ""
+    top_sid = ""
+    top_cost = 0.0
+    for sid, row in sessions.items():
+        cost = float(row.get("cost_usd", 0) or 0)
+        if cost >= threshold and cost > top_cost:
+            top_cost = cost
+            top_sid = sid
+    if not top_sid:
+        return ""
+    return (
+        f"Session cost threshold exceeded: {top_sid[:12]}... "
+        f"${top_cost:.2f} >= ${threshold:.2f}"
+    )
+
+
+def _evaluate_token_velocity_spike(rule, metrics):
+    """Return alert message for 1-min velocity spike rule, else empty string."""
+    threshold_mult = float(rule.get("threshold", 0) or 0)
+    if threshold_mult <= 0:
+        return ""
+    params = rule.get("params", {})
+    if not isinstance(params, dict):
+        params = {}
+    scope = str(params.get("scope", "session")).strip().lower()
+    min_tokens = int(params.get("min_tokens_1min", 500) or 0)
+
+    if scope == "fleet":
+        fleet = (metrics or {}).get("fleet", {})
+        current = float(fleet.get("current_tokens_1min", 0) or 0)
+        baseline = float(fleet.get("baseline_tokens_1min", 0) or 0)
+        if baseline <= 0 or current < min_tokens:
+            return ""
+        ratio = current / baseline
+        if ratio >= threshold_mult:
+            return (
+                f"Token velocity spike (fleet): {int(current):,} tok/min vs "
+                f"{int(baseline):,} baseline ({ratio:.1f}x >= {threshold_mult:.1f}x)"
+            )
+        return ""
+
+    sessions = (metrics or {}).get("sessions", {})
+    best_sid = ""
+    best_ratio = 0.0
+    best_current = 0.0
+    best_baseline = 0.0
+    for sid, row in sessions.items():
+        current = float(row.get("current_tokens_1min", 0) or 0)
+        baseline = float(row.get("baseline_tokens_1min", 0) or 0)
+        if baseline <= 0 or current < min_tokens:
+            continue
+        ratio = current / baseline
+        if ratio >= threshold_mult and ratio > best_ratio:
+            best_sid = sid
+            best_ratio = ratio
+            best_current = current
+            best_baseline = baseline
+    if not best_sid:
+        return ""
+    return (
+        f"Token velocity spike (session {best_sid[:12]}...): {int(best_current):,} "
+        f"tok/min vs {int(best_baseline):,} baseline "
+        f"({best_ratio:.1f}x >= {threshold_mult:.1f}x)"
+    )
+
+
+def _emit_custom_rule_alert(rule_id, rule_type, message, channels, now, severity="warning"):
+    """Persist and dispatch custom rule alerts."""
+    try:
+        with _fleet_db_lock:
+            db = _fleet_db()
+            for ch in channels:
+                db.execute(
+                    "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (rule_id, rule_type, message, ch, now),
+                )
+            db.commit()
+            db.close()
+    except Exception:
+        pass
+    for ch in channels:
+        if ch == "telegram":
+            _send_telegram_alert(message)
+        elif ch == "webhook":
+            _dispatch_alert(
+                title=f"ClawMetry Alert [{rule_type}]",
+                message=message,
+                severity=severity,
+                alert_type=rule_type,
+            )
+
+
+def _is_rule_cooldown_elapsed(rule_id, cooldown_sec, now=None):
+    """Return True when the rule-specific cooldown has elapsed."""
+    now = time.time() if now is None else float(now)
+    last_fired = _budget_alert_cooldowns.get(rule_id, 0)
+    return (now - last_fired) >= max(0, float(cooldown_sec or 0))
 
 
 _velocity_cache = {"ts": 0, "result": None, "mtimes": {}}
@@ -1232,21 +1526,29 @@ def _budget_monitor_loop():
 
             # Custom alert rules
             rules = _get_alert_rules()
+            _rule_metrics_cache = {}
             for rule in rules:
                 if not rule.get("enabled"):
                     continue
                 rule_id = rule["id"]
                 rtype = rule["type"]
                 threshold = rule["threshold"]
-                channels = json.loads(rule.get("channels", '["banner"]'))
+                try:
+                    channels = rule.get("channels", '["banner"]')
+                    if isinstance(channels, str):
+                        channels = json.loads(channels)
+                    if not isinstance(channels, list) or not channels:
+                        channels = ["banner"]
+                except Exception:
+                    channels = ["banner"]
                 cooldown = rule.get("cooldown_min", 30) * 60
 
-                last_fired = _budget_alert_cooldowns.get(rule_id, 0)
-                if now - last_fired < cooldown:
+                if not _is_rule_cooldown_elapsed(rule_id, cooldown, now=now):
                     continue
 
                 fired = False
                 msg = ""
+                severity = "warning"
 
                 if rtype == "threshold":
                     if status["daily_spent"] >= threshold:
@@ -1273,32 +1575,36 @@ def _budget_monitor_loop():
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
+                elif rtype == "session_cost_threshold":
+                    key = "session_cost_threshold"
+                    if key not in _rule_metrics_cache:
+                        _rule_metrics_cache[key] = _collect_active_session_alert_metrics(
+                            now=now, baseline_min=60
+                        )
+                    msg = _evaluate_session_cost_threshold(rule, _rule_metrics_cache[key])
+                    fired = bool(msg)
+                elif rtype == "token_velocity_spike":
+                    params = rule.get("params", {}) if isinstance(rule.get("params"), dict) else {}
+                    baseline_min = int(params.get("baseline_min", 60) or 60)
+                    key = f"token_velocity_spike:{baseline_min}"
+                    if key not in _rule_metrics_cache:
+                        _rule_metrics_cache[key] = _collect_active_session_alert_metrics(
+                            now=now, baseline_min=baseline_min
+                        )
+                    msg = _evaluate_token_velocity_spike(rule, _rule_metrics_cache[key])
+                    fired = bool(msg)
+                    severity = "critical"
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
-                    try:
-                        with _fleet_db_lock:
-                            db = _fleet_db()
-                            for ch in channels:
-                                db.execute(
-                                    "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
-                                    "VALUES (?, ?, ?, ?, ?)",
-                                    (rule_id, rtype, msg, ch, now),
-                                )
-                            db.commit()
-                            db.close()
-                    except Exception:
-                        pass
-                    for ch in channels:
-                        if ch == "telegram":
-                            _send_telegram_alert(msg)
-                        elif ch == "webhook":
-                            webhook_url = rule.get("webhook_url", "")
-                            if webhook_url:
-                                _send_webhook_alert(
-                                    webhook_url,
-                                    {"type": rtype, "message": msg, "timestamp": now},
-                                )
+                    _emit_custom_rule_alert(
+                        rule_id=rule_id,
+                        rule_type=rtype,
+                        message=msg,
+                        channels=channels,
+                        now=now,
+                        severity=severity,
+                    )
 
         except Exception as e:
             print(f"Warning: Budget monitor error: {e}")
@@ -3204,8 +3510,9 @@ function clawmetryLogout(){
   <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiID8+PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiB2aWV3Qm94PSIwIDAgMTAyNCAxMDI0Ij48cGF0aCBmaWxsPSIjRTk0NjQ0IiBkPSJNNTI3LjIzIDQzNi4wNTRDNTE4LjQwOSA0MTguOTMzIDUzMC43ODYgNDA2LjcxIDU0Ny45ODggNDA1Ljc0NkM1NTUuMzQ2IDQwNi4zMSA1NjEuODA0IDQwOC4wOTUgNTY2LjkxNyA0MTMuOTQyQzU3MC4xNDQgNDE3LjYxIDU3MS43NjggNDIyLjQxOSA1NzEuNDI1IDQyNy4yOTJDNTcwLjYwOCA0MzguNjg1IDU2MS4wNjQgNDQzLjM0MiA1NTEuNjg1IDQ0Ni41OTZDNTg0LjYzIDQ1NS4zMjcgNjEwLjMyOCA0NzQuMTMgNjI3Ljk4OSA1MDMuNTgxQzYzNy41NDIgNTE5LjUxMSA2NDYuMjM5IDU0NC42MjIgNjQ4LjY5NCA1NjMuMDk3QzYzNi41ODYgNTc2LjYwNiA2MTUuMTY4IDU5Mi41NjEgNTk5LjcxNiA2MDEuODU0QzU4NS41MDcgNjExLjA3MiA1NjcuNjY2IDYxOS4zOTIgNTUxLjg0OSA2MjUuNTQzQzU0Ny4yNzMgNjI3LjMyMyA1MzIuNzU3IDYzMS4yNCA1MzAuNDUyIDYzMi43NjdDNTI5LjIxMSA2MzIuNDQ1IDUyNi45ODQgNjMyLjQ5MSA1MjYuMjExIDYzMy4xNzVDNTI0LjI1NyA2MzQuOTAxIDUzMC45MTIgNjMzLjIwOCA1MzEuMDk5IDYzMy4xNTlDNTUwLjcxMyA2MzMuNDM1IDU3Ni4wNTEgNjI1Ljk5NiA1OTQuMjgzIDYxOS4xMTJDNjE2Ljc1OCA2MDkuNTE4IDYzNC4wNDUgNTk4LjI5NSA2NTEuNTgzIDU4MS4zMDlDNjUxLjMzMSA2MDYuNDE4IDY0Ni42NjEgNjI5LjE4NyA2MjguMDI1IDY0Ny4zNzVDNjA0LjM1IDY3MC40ODIgNTYyLjYyOSA2ODMuNDUyIDUzMC40NDMgNjg4LjY2QzUyNi45NyA2ODkuMzUxIDUyNC43MjkgNjg5Ljc2OCA1MjEuMzc2IDY5MC45MkM1MzYuODM3IDY5NC4xNDcgNTUzLjY2MyA2OTMuODE1IDU2OS4yNjIgNjkxLjkwOUM1NjYuMTE0IDcwNi44MzUgNTY0LjAxMyA3MTUuMTA0IDU1Ny40MzkgNzI5LjMzNUM1NDguMTYgNzMwLjM4NCA1MzguODcxIDczMS4zMjkgNTI5LjU3MiA3MzIuMTcxTDUyOC43MTcgNzMzLjQyMUM1MzcuNTEzIDczNS45MTcgNTQzLjM1NiA3MzcuNzA0IDU1Mi41MTEgNzM4Ljc0NUM1NjkuOTg0IDc0MC44MjQgNTg3LjAwOCA3MzkuMzY4IDYwMy41NjQgNzMzLjM2OUM1NzUuNjYxIDc4OC4zNzkgNTEzLjk5NSA4MTEuMzIyIDQ1OS45NSA3NzcuODk4QzQ0My4wOTkgNzcwLjQ5MiA0MjguNTU5IDc0OS42MDggNDIwLjk0MyA3MzMuNTE3QzQ0My42OTIgNzQzLjI1MiA0NzYuMTU3IDc0MC4zMjggNDk5LjMyOSA3MzIuODNDNDg4Ljg4NiA3MzEuMDYyIDQ3NS43IDczMC4zNjEgNDY0Ljc3MiA3MjguOTE4QzQ0NS42MDEgNzI2LjM4NSA0MzIuMjczIDcyMi4wNTggNDE0LjIyOSA3MTYuMTEzQzQxMS45NTIgNzA5LjM2MSA0MDkuOTUyIDcwMS43MjYgNDA3Ljc3MSA2OTQuODM0QzQwNS4zMjYgNjg3LjEwOSA0MDIuMjk1IDY3OC40ODggNDAwLjM5MyA2NzAuNzI0QzQzNi44ODUgNjkzLjc4MiA0NjMuOTY5IDY5Ni40OTIgNTA1Ljc4NCA2OTAuODlDNDk3Ljg0MSA2ODkuMDIxIDQ4OS4zOTcgNjg4LjE5OSA0ODEuMjA3IDY4Ni40MTNDNDQyLjc4NyA2NzguMDMyIDM5Ni40MzkgNjYyLjIxIDM3OS42ODggNjIzLjI5OEMzNzQuNjk1IDYxMS43MDIgMzcxLjc5NyA1OTQuNjcxIDM3My4xNDQgNTgyLjA0OUM0MDIuOTExIDYwNi44ODYgNDI2Ljk5OSA2MjIuMzg2IDQ2Ni4xMjIgNjMwLjMzMUM0NzIuNjI5IDYzMS42NTMgNDg0LjgxMyA2MzMuNzMxIDQ5MS4yMDcgNjMzLjI5OUw0OTIuNzcyIDYzMi41NThDNDkwLjkxNCA2MzEuNiA0ODguMDY4IDYzMC40OTEgNDg2LjAzNSA2MjkuOTU4QzQzNi4wNTIgNjE2Ljg1OSA0MTkuMTk0IDU1NS4zNDUgNDQwLjI5NyA1MTIuMjIyQzQ1Mi41NDMgNDg3LjE5OCA0NjkuMTY1IDQ3NS4wMDQgNDk0LjgzNSA0NjYuMDg0QzQ5NS42MDMgNDY1Ljc3NiA0OTYuMTYgNDY1LjY0NSA0OTYuOTU4IDQ2NS40MzFDNTAxLjMyIDQ2NS4wMTUgNTA0LjM5IDQ2NC4wODEgNTA4LjUzNCA0NjIuOTRDNTA0LjgyOCA0NjMuMTQ3IDQ5OS4xNDggNDYzLjQ3NSA0OTUuNjM5IDQ2NC4yODNMNDk0LjkwNSA0NjQuNDVDNDg2Ljg1NiA0NjQuNDk1IDQ3OC43OTEgNDY3LjIzOCA0NzEuNDkzIDQ3MC4zNzhDNDMyLjkwNyA0ODYuOTggNDA4Ljg2NCA1MzMuMDU5IDQxOC43MzkgNTc0LjExNUM0MjEuMzYgNTg1LjAxNCA0MjUuNjEgNTk0LjA4IDQzMC4xNjUgNjA0LjMyMkM0MDkuMTQ3IDU5NC40ODMgMzkxLjQxNyA1NzkuNjM5IDM3NS40NDMgNTYzLjA5OUMzNzcuMTg0IDU0Mi4xMiAzOTEuMDEgNTA5LjA5NCA0MDMuMzUyIDQ5Mi4zNjJDNDE2Ljg1NiA0NzQuMDc1IDQzNS4yNTIgNDU5Ljk3NSA0NTYuNDIxIDQ1MS42ODdDNDYxLjc1IDQ0OS41NTUgNDY3LjM5OSA0NDcuNDg5IDQ3My4wODYgNDQ2LjYyMUM0NjguMTc5IDQ0NS4wMjMgNDYyLjM2NyA0NDQuMDQzIDQ1OC40MDUgNDQwLjc1M0M0NDUuNDI5IDQyOS45NzcgNDUwLjg1OSA0MTIuMTc0IDQ2NS45NzEgNDA3LjA1NUM0NjkuMTA0IDQwNS45OTMgNDcxLjI4NCA0MDUuOTgyIDQ3NC40NjMgNDA1LjgwN0M0OTAuNzgzIDQwNi43MTggNTAzLjE2NyA0MTkuMDY5IDQ5NS41NTcgNDM1LjU2OEM1MDIuOTkxIDQzNi4zMDQgNTE4LjkzOCA0MzUuOTYgNTI3LjIzIDQzNi4wNTRaIi8+PHBhdGggZmlsbD0iI0MxMEEwOSIgZD0iTTU0Ny45ODggNDA1Ljc0NkM1NTUuMzQ2IDQwNi4zMSA1NjEuODA0IDQwOC4wOTUgNTY2LjkxNyA0MTMuOTQyQzU3MC4xNDQgNDE3LjYxIDU3MS43NjggNDIyLjQxOSA1NzEuNDI1IDQyNy4yOTJDNTcwLjYwOCA0MzguNjg1IDU2MS4wNjQgNDQzLjM0MiA1NTEuNjg1IDQ0Ni41OTZDNTg0LjYzIDQ1NS4zMjcgNjEwLjMyOCA0NzQuMTMgNjI3Ljk4OSA1MDMuNTgxQzYzNy41NDIgNTE5LjUxMSA2NDYuMjM5IDU0NC42MjIgNjQ4LjY5NCA1NjMuMDk3QzYzNi41ODYgNTc2LjYwNiA2MTUuMTY4IDU5Mi41NjEgNTk5LjcxNiA2MDEuODU0QzU5OS45NzYgNTk4LjMzNSA2MDIuNTg5IDU4OC4zNCA2MDMuMzU2IDU4NC4xNTRDNjA2LjYxNSA1NjYuMjg0IDYwNi4xNzIgNTQ3LjkzNSA2MDIuMDUyIDUzMC4yNDNDNTkyLjk0NyA0OTIuMzEzIDU3MC4zMzcgNDY1LjY1OSA1MzcuNjkgNDQ1LjY4OUw1MzguNDYxIDQ0NC42NjdDNTQxLjEyNyA0NDUuNDU0IDU0NS4wODggNDQ2LjE5NiA1NDcuOTE1IDQ0Ni44QzU0OC4wODQgNDMzLjExNiA1NDguMTA5IDQxOS40MzEgNTQ3Ljk4OCA0MDUuNzQ2WiIvPjxwYXRoIGZpbGw9IiNDMTBBMDkiIGQ9Ik01OTQuMjgzIDYxOS4xMTJDNjE2Ljc1OCA2MDkuNTE4IDYzNC4wNDUgNTk4LjI5NSA2NTEuNTgzIDU4MS4zMDlDNjUxLjMzMSA2MDYuNDE4IDY0Ni42NjEgNjI5LjE4NyA2MjguMDI1IDY0Ny4zNzVDNjA0LjM1IDY3MC40ODIgNTYyLjYyOSA2ODMuNDUyIDUzMC40NDMgNjg4LjY2QzUzMi4zMTIgNjg1Ljc3NSA1NDIuNjI1IDY4MC42ODYgNTQ2LjM4OCA2NzguMDM0QzU3MC4xMjggNjYxLjMwOCA1ODIuMTcgNjQ0LjcxNiA1OTQuMjgzIDYxOS4xMTJaIi8+PHBhdGggZmlsbD0iI0MxMEEwOSIgZD0iTTU1Mi41MTEgNzM4Ljc0NUM1NjkuOTg0IDc0MC44MjQgNTg3LjAwOCA3MzkuMzY4IDYwMy41NjQgNzMzLjM2OUM1NzUuNjYxIDc4OC4zNzkgNTEzLjk5NSA4MTEuMzIyIDQ1OS45NSA3NzcuODk4QzQ2NC4wOSA3NzcuMTc4IDQ3Mi40NDEgNzc4LjQwOSA0NzYuOTMgNzc4LjQwM0M0OTguODY2IDc3OC4zNzIgNTIwLjMyMSA3NzIuODI0IDUzNi42NjIgNzU3LjUwNEM1NDIuOTE4IDc1MS42MzkgNTQ3LjQ0MSA3NDUuNjAzIDU1Mi41MTEgNzM4Ljc0NVoiLz48cGF0aCBmaWxsPSIjQzEwQTA5IiBkPSJNNDc0LjQ2MyA0MDUuODA3QzQ5MC43ODMgNDA2LjcxOCA1MDMuMTY3IDQxOS4wNjkgNDk1LjU1NyA0MzUuNTY4QzQ4OS4yNDIgNDQzLjQzOSA0ODMuODg3IDQ0NC42MDggNDc0LjM0MSA0NDYuMjE4QzQ3NC41NDQgNDMyLjc0OSA0NzQuNTg1IDQxOS4yNzggNDc0LjQ2MyA0MDUuODA3WiIvPjxwYXRoIGZpbGw9IiNGNEJDQkUiIGQ9Ik00OTIuNzcyIDYzMi41NThDNDk2LjAyMyA2MzEuODIxIDUwMS45OCA2MzUuMzYyIDQ5MS4yMDcgNjMzLjI5OUw0OTIuNzcyIDYzMi41NThaIi8+PHBhdGggZmlsbD0iI0Y0QkNCRSIgZD0iTTUyOC43MTcgNzMzLjQyMUM1MjIuOTY0IDczMy44MjggNTIzLjQ5MyA3MzAuODYyIDUyOS41NzIgNzMyLjE3MUw1MjguNzE3IDczMy40MjFaIi8+PHBhdGggZmlsbD0iI0NEMTMxNSIgZD0iTTUzNy42OSA0NDUuNjg5QzUzNy4zMDkgNDQ1LjM3OSA1MzYuMzY3IDQ0NC44NTUgNTM2LjI4NyA0NDQuMjc0QzUzNi43MjggNDQzLjg3MiA1MzcuOTY4IDQ0NC40ODUgNTM4LjQ2MSA0NDQuNjY3TDUzNy42OSA0NDUuNjg5WiIvPjxwYXRoIGZpbGw9IiNFOTQ2NDQiIGQ9Ik02ODIuMzcyIDI0Mi40NjVDNjg3LjQ3IDI0Mi4zMTMgNjkyLjM0MiAyNDIuMzYyIDY5Ny4zOTEgMjQzLjExQzc3MC4wNzQgMjUxLjYxMiA4MjIuNzc0IDMxMS4xMzMgODEzLjg4NCAzODUuMzEzQzgxMC44NjEgNDEyLjU3OSA3OTcuMDI5IDQzNy40OTQgNzc1LjQ4NSA0NTQuNDc5Qzc1OC4wNCA0NjguMDc3IDczNS43OTEgNDc1Ljk4OCA3MTMuNTY3IDQ3My4xNDRMNzEyLjk4IDQ3My4wNjNDNjg4LjA4MyA0NjkuOTMyIDY2Ni43NTcgNDUzLjcyNyA2NTAuMDEyIDQzNS45NDhDNjA4LjQwNyAzOTEuNzcyIDYwOC4xNDMgMzE2LjgyNSA2NTQuNDMgMjc1LjU2OUM2NTQuMDU3IDI4MS4yMDMgNjUzLjYwNyAyODYuODMyIDY1My4wOCAyOTIuNDU1QzY1Mi40MjYgMzE3Ljk4OSA2NTYuNzUgMzQxLjcwNSA2ODIuOTE3IDM1MS41OTRDNjgwLjMzOCAzNjMuMjE3IDY3OC4xMzggMzc5LjQyNCA2OTMuNTk5IDM4Mi45NzhDNzAwLjgwOSAzODMuNzcyIDcwMy4xMjQgMzgzLjM3NSA3MTAuNDk4IDM4Mi4zNDVDNjk3LjYgMzczLjg0NCA3MDIuMjY4IDM2NS4zNzYgNzA0LjUwMiAzNTIuOTgzQzcxMS4yMzkgMzE1LjYxMiA2OTYuMzc2IDI3OC40OTMgNjYyLjE0NSAyNjAuMTg3QzY1My43MDMgMjU1LjY3MiA2NDcuMDA0IDI1My43MzcgNjM3Ljg2MiAyNTEuMDU2QzY1My4wMzYgMjQ1Ljk4NSA2NjYuMjIzIDI0My4wMjEgNjgyLjM3MiAyNDIuNDY1WiIvPjxwYXRoIGZpbGw9IiNDMTBBMDkiIGQ9Ik02ODIuMzcyIDI0Mi40NjVDNjg3LjQ3IDI0Mi4zMTMgNjkyLjM0MiAyNDIuMzYyIDY5Ny4zOTEgMjQzLjExQzc3MC4wNzQgMjUxLjYxMiA4MjIuNzc0IDMxMS4xMzMgODEzLjg4NCAzODUuMzEzQzgxMC44NjEgNDEyLjU3OSA3OTcuMDI5IDQzNy40OTQgNzc1LjQ4NSA0NTQuNDc5Qzc1OC4wNCA0NjguMDc3IDczNS43OTEgNDc1Ljk4OCA3MTMuNTY3IDQ3My4xNDRMNzEyLjk4IDQ3My4wNjNDNzE2LjU3IDQ3MC42MzkgNzIwLjI3NCA0NjguMjg2IDcyMy44MTUgNDY1Ljc5QzgwMS4yNTUgNDExLjE5NCA3ODYuNzg1IDMwMi44NCA3MDkuMjk1IDI1Ni42NkM3MDEuODMzIDI1Mi4yMTMgNjk1LjEyMSAyNDguOTY1IDY4Ny4xMzggMjQ1LjI0MkM2ODUuMzAyIDI0NC43MzEgNjgzLjc0NCAyNDMuNzY0IDY4Mi4zNzIgMjQyLjQ2NVoiLz48cGF0aCBmaWxsPSIjQ0QxMzE1IiBkPSJNNjgyLjM3MiAyNDIuNDY1QzY4Ny40NyAyNDIuMzEzIDY5Mi4zNDIgMjQyLjM2MiA2OTcuMzkxIDI0My4xMUM2OTMuMDk3IDI0NS41NzIgNjkwLjQxMiAyNDMuNzY4IDY4Ny4xMzggMjQ1LjI0MkM2ODUuMzAyIDI0NC43MzEgNjgzLjc0NCAyNDMuNzY0IDY4Mi4zNzIgMjQyLjQ2NVoiLz48cGF0aCBmaWxsPSIjQzEwQTA5IiBkPSJNNjkzLjU5OSAzODIuOTc4QzY4OC4xODMgMzg0LjEyNSA2NzcuMTQ2IDM4Mi44MzIgNjcxLjcwNiAzODAuNjA3QzY2My40NDIgMzc3LjIyNyA2NTkuNTAxIDM3MC4wOTMgNjU2LjE3NSAzNjIuMzA3QzY0OC45NzMgMzQ1LjE4MSA2NDcuOTE1IDMyNS4zNjkgNjQ5LjAzNCAzMDcuMDFDNjQ5LjIzOSAzMDMuNjMzIDY0OS42NSAyOTMuNjY4IDY1My4wOCAyOTIuNDU1QzY1Mi40MjYgMzE3Ljk4OSA2NTYuNzUgMzQxLjcwNSA2ODIuOTE3IDM1MS41OTRDNjgwLjMzOCAzNjMuMjE3IDY3OC4xMzggMzc5LjQyNCA2OTMuNTk5IDM4Mi45NzhaIi8+PHBhdGggZmlsbD0iI0U5NDY0NCIgZD0iTTMwOS45MjMgNDcyLjVDMjcyLjY1NSA0NzkuNzY0IDIzNS43MTkgNDUxLjM2MiAyMjAuNDI0IDQxOS4wNUMyMDYuODM2IDM5MC4wMjkgMjA1LjQzNyAzNTYuNzc1IDIxNi41MzkgMzI2LjcxNkMyMjcuODc2IDI5NS4xMzkgMjUzLjA0OCAyNjguNzgxIDI4My4zODggMjU0LjcyN0MzMTUuNDIgMjM5Ljk4IDM1Mi4wMTYgMjM4LjYzNiAzODUuMDQ0IDI1MC45OTJDMzc1LjY4NyAyNTMuOTM3IDM2OC40MyAyNTYuNTE0IDM1OS45NTcgMjYxLjM5MkMzMjcuOTQzIDI3OS44MiAzMTMuOTQxIDMxMyAzMTguMjI5IDM0OC45ODZDMzE5LjcwNCAzNjEuMzYyIDMyNi45MzcgMzc0LjY4OSAzMTMuMDg5IDM4MS45MzZDMzE5LjgzMyAzODMuNTEyIDMyOC4yMTMgMzg1LjEyMiAzMzQuNDAzIDM4MS4yOUMzMzkuMjM0IDM3OC4yOTggMzQwLjM3OCAzNzUuMDA1IDM0Mi44ODUgMzcwLjUyNkMzNDMuOTgyIDM2MC4xOTIgMzQzLjUxNiAzNjMuNDU2IDM0Mi4yNDEgMzUzLjM0MkMzNDIuMTkxIDM1Mi45MjQgMzQxLjg0MiAzNTEuNDk2IDM0Mi4yNTcgMzUxLjM1NEMzNjMuNTc1IDM0NC4wODggMzcxLjAxOSAzMjAuNzczIDM3MS42IDMwMC4wODFDMzcxLjgxMSAyOTIuNTQ1IDM3MC40MzkgMjgzLjcxOSAzNjkuMjA4IDI3NS40MjlDMzg5LjIyNiAyOTIuNTAzIDQwMi4wODEgMzIwLjE3OCA0MDQuMjY3IDM0Ni4xMjRDNDA3LjA1MiAzNzkuMTY3IDM5Ni42MzggNDEwLjUyNCAzNzQuNjQ2IDQzNS4zNDNDMzU3LjIwNiA0NTUuMDIzIDMzNi4zMjMgNDY5LjI2NCAzMDkuOTIzIDQ3Mi41Wk0zMDUuNTc5IDI3NC4yMDFDMzA2LjQ4NCAyNzMuOTAxIDMwOC4yNTMgMjcyLjk1NCAzMDkuMDEyIDI3Mi4zNzFDMzExLjU3MSAyNzEuMTg0IDMxMi4wOTcgMjcxLjQ2NiAzMTQuMDEgMjY5LjQ1MUMzMTEuMTY2IDI3MC4xMTYgMzEwLjc2NyAyNzAuMSAzMDcuOSAyNzEuMTI5QzMwNi43NDUgMjcxLjQ2MyAzMDQuMDAyIDI3Mi41MzIgMzAyLjk0MyAyNzMuMDgzQzI0OC44NjkgMjk2LjkxNSAyMjEuNDY4IDM1MS42OTIgMjQ1LjQ1OCA0MDguNjUzQzI1MS42MzUgNDIzLjMxNyAyNjQuMDggNDQwLjgwNCAyNzguMTYgNDQ4LjkyMkMyNzMuOTY4IDQ0NC4xMTQgMjY3LjQyOSA0MzcuMjE3IDI2NC4zMSA0MzEuODIyQzIzMi44ODkgMzc3LjQ2NCAyNDkuOTIzIDMwNC44NDYgMzA1LjU3OSAyNzQuMjAxWiIvPjxwYXRoIGZpbGw9IiNDMTBBMDkiIGQ9Ik0zNjkuMjA4IDI3NS40MjlDMzg5LjIyNiAyOTIuNTAzIDQwMi4wODEgMzIwLjE3OCA0MDQuMjY3IDM0Ni4xMjRDNDA3LjA1MiAzNzkuMTY3IDM5Ni42MzggNDEwLjUyNCAzNzQuNjQ2IDQzNS4zNDNDMzU3LjIwNiA0NTUuMDIzIDMzNi4zMjMgNDY5LjI2NCAzMDkuOTIzIDQ3Mi41QzMxMS4xNTMgNDcwLjc2NSAzMTIuOTY5IDQ2OC43ODUgMzE0LjQwMSA0NjcuMjA2QzMzNS44MyA0NDMuNTg3IDM0Ny4xMjQgNDEyLjM1MiAzNDYuOTg4IDM4MC41NDNDMzQ2Ljk2MyAzNzQuNTc0IDM0Ny4zNzIgMzY4LjY1MyAzNDUuNzIzIDM2Mi42MzJDMzQ1LjY3IDM2Mi4yMDUgMzQzLjc0MyAzNDguMzg3IDM0Mi4yNDEgMzUzLjM0MkMzNDIuMTkxIDM1Mi45MjQgMzQxLjg0MiAzNTEuNDk2IDM0Mi4yNTcgMzUxLjM1NEMzNjMuNTc1IDM0NC4wODggMzcxLjAxOSAzMjAuNzczIDM3MS42IDMwMC4wODFDMzcxLjgxMSAyOTIuNTQ1IDM3MC40MzkgMjgzLjcxOSAzNjkuMjA4IDI3NS40MjlaIi8+PHBhdGggZmlsbD0iI0YyNTE1NiIgZD0iTTM0Mi4yNDEgMzUzLjM0MkMzNDMuNzQzIDM0OC4zODcgMzQ1LjY3IDM2Mi4yMDUgMzQ1LjcyMyAzNjIuNjMyQzM0NS41NjEgMzYyLjg4MiAzNDUuNCAzNjMuMTMyIDM0NS4yMzggMzYzLjM4MkMzNDQuOTY4IDM2My4xOTMgMzQ1LjA0OSAzNjEuNzMzIDM0NC44MTggMzYxLjFDMzQzLjg4OSAzNjQuMzI3IDM0NS42NDYgMzY3LjIyMSAzNDIuODg1IDM3MC41MjZDMzQzLjk4MiAzNjAuMTkyIDM0My41MTYgMzYzLjQ1NiAzNDIuMjQxIDM1My4zNDJaIi8+PHBhdGggZmlsbD0iI0ZERkFGRCIgZmlsbC1vcGFjaXR5PSIwLjQ2Mjc0NTEiIGQ9Ik0zMDIuOTQzIDI3My4wODNDMzA0LjAwMiAyNzIuNTMyIDMwNi43NDUgMjcxLjQ2MyAzMDcuOSAyNzEuMTI5QzMwOC4yIDI3MS45NTQgMzA4LjIwOSAyNzEuODQ2IDMwOS4wMTIgMjcyLjM3MUMzMDguMjUzIDI3Mi45NTQgMzA2LjQ4NCAyNzMuOTAxIDMwNS41NzkgMjc0LjIwMUMzMDQuMzM3IDI3My41MTQgMzA0LjI4IDI3My40NzIgMzAyLjk0MyAyNzMuMDgzWiIvPjxwYXRoIGZpbGw9IiNGREZBRkQiIGZpbGwtb3BhY2l0eT0iMC4wNDcwNTg4MjQiIGQ9Ik0zMTQuMDEgMjY5LjQ1MUMzMTIuMDk3IDI3MS40NjYgMzExLjU3MSAyNzEuMTg0IDMwOS4wMTIgMjcyLjM3MUMzMDguMjA5IDI3MS44NDYgMzA4LjIgMjcxLjk1NCAzMDcuOSAyNzEuMTI5QzMxMC43NjcgMjcwLjEgMzExLjE2NiAyNzAuMTE2IDMxNC4wMSAyNjkuNDUxWiIvPjxwYXRoIGZpbGw9IiNGNEJDQkUiIGQ9Ik0zMTQuMDEgMjY5LjQ1MUMzMTUuNTUzIDI2OC4xMzggMzE3LjkxOCAyNjguMDgxIDMxOS44NjcgMjY4LjIwOEMzMTguMjY3IDI2OC45NjMgMzE1LjQ0OSAyNzAuNjg5IDMxNC4wMSAyNjkuNDUxWiIvPjxwYXRoIGZpbGw9IiNDMTBBMDkiIGQ9Ik0zNDcuNjMxIDQ3Ni41ODVDMzUxLjczIDQ4MC4xOTIgMzYzLjUyMSA0OTIuNDY0IDM2Ni45NyA0OTYuNjAyQzM1MS4xOSA1MjAuNDM5IDMxNC4zODggNTMwLjU4NSAyODcuOTEzIDUyNC4wNzhDMjg1Ljc2NCA1MjMuNTUgMjg1LjYxIDUyMy4zMTIgMjg0LjUyOSA1MjEuNTMxQzI3OS4wODIgNTExLjE0MyAyNzAuNzg5IDQ5Mi45MDYgMjY1LjkyNyA0ODIuMDJDMjk3Ljg0NyA0OTIuNTU1IDMxOC4xNTQgNDkwLjYxNyAzNDcuNjMxIDQ3Ni41ODVaIi8+PHBhdGggZmlsbD0iI0MxMEEwOSIgZD0iTTY3Ni4zNzEgNDc2LjU5M0M2ODEuNjQxIDQ3OC43MDIgNjg2LjE3MSA0ODEuMzYzIDY5Mi4xMjIgNDgzLjQ3NkM3MTYuMzExIDQ5Mi4wNjMgNzMzLjU0NCA0ODguMzg2IDc1Ny4wOSA0ODIuNTE3Qzc1MS4zNjUgNDk1Ljk4MiA3NDQuODMzIDUwOS4wMjQgNzM4Ljk4MSA1MjIuNDIxQzczNi4xNzIgNTI1Ljc5OCA3MTcuOSA1MjYuMjE5IDcxMy4yNDggNTI1LjkxNkM2OTAuOCA1MjQuNDU3IDY3MS4xMDEgNTEzLjMzMiA2NTYuNDcyIDQ5Ni41MzVDNjU5LjcyNSA0OTIuNTQ5IDY3Mi4zNjcgNDgwLjMzNSA2NzYuMzcxIDQ3Ni41OTNaIi8+PHBhdGggZmlsbD0iI0MxMEEwOSIgZD0iTTU2OS4yNjIgNjkxLjkwOUM1OTQuMzYyIDY4Ny44MjEgNjAyLjQ4OCA2ODIuODMyIDYyMy42MjQgNjcxLjAzOUw2MDkuMjgzIDcxNi4wMTJDNTk5LjQ0NiA3MTkuNjQ2IDU5MC4zOTggNzIyLjg4IDU4MC4xMzQgNzI1LjE2OEM1NzIuNTA3IDcyNi44NjkgNTY1LjA3NyA3MjcuODgxIDU1Ny40MzkgNzI5LjMzNUM1NjQuMDEzIDcxNS4xMDQgNTY2LjExNCA3MDYuODM1IDU2OS4yNjIgNjkxLjkwOVoiLz48cGF0aCBmaWxsPSIjQzEwQTA5IiBkPSJNNjQ4Ljc3NSA1MTAuODM3QzY1Mi4wNSA1MTQuMDY1IDY1Ni45NzEgNTE4LjU5MSA2NjAuNTE1IDUyMS4zOTlDNjc2LjIxOSA1MzMuODQxIDcwMy4yNCA1NDIuODU1IDcyMy4yNzIgNTQwLjMxOUw3MDAuMjY1IDU1Ni40MTdDNjkxLjEwNiA1NjIuOTEyIDY3NS41NjIgNTczLjU5NCA2NjUuNTI0IDU3OC43NTlDNjY0LjM1MiA1NDkuNzA2IDY1OC41NTkgNTM2LjU1NiA2NDguNzc1IDUxMC44MzdaIi8+PHBhdGggZmlsbD0iI0MxMEEwOSIgZD0iTTMwOS4xMjMgNTQwLjYyM0MzMzcuNDc4IDUzOS43ODYgMzU0LjYxNSA1MjkuNjQ5IDM3NS4yNTYgNTExLjU3NkMzNjUuMzM4IDUzNC41MTYgMzU4LjkxNCA1NTMuNzM4IDM1OC4yNzEgNTc5LjEwNkMzMzkuNjY0IDU2OC4xMjYgMzIwLjYyMiA1NTQuOTQ4IDMwMy4wNjkgNTQyLjIwNEMzMDUuODkyIDU0MS4yMDQgMzA1LjY5NCA1NDIuMTM3IDMwOS4xMjMgNTQwLjYyM1oiLz48cGF0aCBmaWxsPSIjRkVGMEYxIiBmaWxsLW9wYWNpdHk9IjAuODcwNTg4MjQiIGQ9Ik00OTUuNjM5IDQ2NC4yODNDNDk5LjE0OCA0NjMuNDc1IDUwNC44MjggNDYzLjE0NyA1MDguNTM0IDQ2Mi45NEM1MDQuMzkgNDY0LjA4MSA1MDEuMzIgNDY1LjAxNSA0OTYuOTU4IDQ2NS40MzFDNDk2LjUxOCA0NjUuMDQ5IDQ5Ni4wNzkgNDY0LjY2NiA0OTUuNjM5IDQ2NC4yODNaIi8+PHBhdGggZmlsbD0iI0NEMTMxNSIgZmlsbC1vcGFjaXR5PSIwLjk4ODIzNTI5IiBkPSJNMzAzLjA2OSA1NDIuMjA0QzMwMi42ODkgNTQxLjk2IDMwMS40OTIgNTQxLjM4MyAzMDEuMzE0IDU0MC44MzNDMzAxLjE3NyA1NDAuNDE1IDMwMi4yNCA1NDAuNDU0IDMwMi40NjQgNTQwLjQ4M0MzMDQuNjY4IDU0MC43NzIgMzA2LjkwNCA1NDAuNjI4IDMwOS4xMjMgNTQwLjYyM0MzMDUuNjk0IDU0Mi4xMzcgMzA1Ljg5MiA1NDEuMjA0IDMwMy4wNjkgNTQyLjIwNFoiLz48cGF0aCBmaWxsPSIjRjRCQ0JFIiBmaWxsLW9wYWNpdHk9IjAuOTg4MjM1MjkiIGQ9Ik01MzEuMDk5IDYzMy4xNTlDNTMwLjkxMiA2MzMuMjA4IDUyNC4yNTcgNjM0LjkwMSA1MjYuMjExIDYzMy4xNzVDNTI2Ljk4NCA2MzIuNDkxIDUyOS4yMTEgNjMyLjQ0NSA1MzAuNDUyIDYzMi43NjdMNTMxLjA5OSA2MzMuMTU5WiIvPjxwYXRoIGZpbGw9IiNGREZBRkQiIGZpbGwtb3BhY2l0eT0iMC4xMTc2NDcwNiIgZD0iTTQ5NS42MzkgNDY0LjI4M0M0OTYuMDc5IDQ2NC42NjYgNDk2LjUxOCA0NjUuMDQ5IDQ5Ni45NTggNDY1LjQzMUM0OTYuMTYgNDY1LjY0NSA0OTUuNjAzIDQ2NS43NzYgNDk0LjgzNSA0NjYuMDg0TDQ5NC45MDUgNDY0LjQ1TDQ5NS42MzkgNDY0LjI4M1oiLz48L3N2Zz4=" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
-  <!-- Budget & Alerts hidden until mature -->
-  <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
+  <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;display:flex;align-items:center;gap:6px;">
+    <span aria-hidden="true">&#128176;</span><span style="font-size:12px;font-weight:600;">Alerts</span>
+  </div>
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="zoom-controls">
@@ -3298,11 +3605,43 @@ function clawmetryLogout(){
       </div>
       <div id="add-alert-form" style="display:none;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
         <div style="display:grid;gap:8px;">
-          <select id="alert-type" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <option value="threshold">Threshold (daily $ amount)</option>
-            <option value="spike">Spike (hourly rate multiplier)</option>
+          <label style="font-size:12px;color:var(--text-muted);display:block;">Rule type</label>
+          <select id="alert-type" onchange="updateAlertRuleFields()" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <option value="threshold">Daily spend threshold (USD)</option>
+            <option value="spike">Hourly cost spike (multiplier x)</option>
+            <option value="session_cost_threshold">Session cost threshold (USD)</option>
+            <option value="token_velocity_spike">Token velocity spike (x baseline, 1-min)</option>
           </select>
-          <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <label id="alert-threshold-label" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px;position:relative;"><span id="alert-threshold-label-text">Threshold (USD)</span>
+            <span style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--border-primary);color:var(--text-muted);font-size:10px;cursor:help;line-height:1;" onmouseenter="this.nextElementSibling.style.display='block'" onmouseleave="this.nextElementSibling.style.display='none'">?</span>
+            <span style="display:none;position:absolute;left:0;top:20px;z-index:5;min-width:260px;max-width:360px;padding:8px 10px;border-radius:8px;background:var(--bg-primary);border:1px solid var(--border-primary);color:var(--text-secondary);font-size:11px;line-height:1.4;box-shadow:0 10px 24px rgba(0,0,0,0.25);">
+              For token velocity rules: trigger when current 1-minute tokens are at least this many times the rolling baseline (example: 3.0x).
+            </span>
+          </label>
+          <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="e.g. 5.00 USD" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <div id="alert-scope-wrap" style="display:none;">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Scope</label>
+            <select id="alert-scope" style="width:100%;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+              <option value="session">Per session</option>
+              <option value="fleet">Fleet-wide (all active sessions)</option>
+            </select>
+          </div>
+          <div id="alert-baseline-wrap" style="display:none;">
+            <label style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px;margin-bottom:4px;position:relative;">Baseline window (minutes)
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--border-primary);color:var(--text-muted);font-size:10px;cursor:help;line-height:1;" onmouseenter="this.nextElementSibling.style.display='block'" onmouseleave="this.nextElementSibling.style.display='none'">?</span>
+              <span style="display:none;position:absolute;left:0;top:20px;z-index:5;min-width:260px;max-width:360px;padding:8px 10px;border-radius:8px;background:var(--bg-primary);border:1px solid var(--border-primary);color:var(--text-secondary);font-size:11px;line-height:1.4;box-shadow:0 10px 24px rgba(0,0,0,0.25);">
+                Rolling history used to compute baseline token rate. Example: 60 means compare against the average of the previous 60 one-minute buckets.
+              </span>
+            </label>
+            <input id="alert-baseline-min" type="number" value="60" min="1" max="240" style="width:100%;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          </div>
+          <div id="alert-min-tokens-wrap" style="display:none;">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Minimum tokens in 1 minute</label>
+            <input id="alert-min-tokens-1min" type="number" value="500" min="0" step="1" style="width:100%;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          </div>
+          <div id="alert-rule-help" style="font-size:11px;color:var(--text-muted);line-height:1.4;">
+            Triggers when daily spend reaches a USD threshold.
+          </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-ch-banner" checked> Banner</label>
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-ch-telegram"> Telegram</label>
@@ -4506,19 +4845,75 @@ async function resumeGateway() {
 
 function showAddAlertForm() {
   document.getElementById('add-alert-form').style.display = 'block';
+  updateAlertRuleFields();
+}
+
+function updateAlertRuleFields() {
+  var typeEl = document.getElementById('alert-type');
+  var thresholdLabelText = document.getElementById('alert-threshold-label-text');
+  var thresholdInput = document.getElementById('alert-threshold');
+  var helpEl = document.getElementById('alert-rule-help');
+  var scopeWrap = document.getElementById('alert-scope-wrap');
+  var baselineWrap = document.getElementById('alert-baseline-wrap');
+  var minTokWrap = document.getElementById('alert-min-tokens-wrap');
+  if (!typeEl || !thresholdInput) return;
+  var type = typeEl.value || 'threshold';
+
+  if (scopeWrap) scopeWrap.style.display = type === 'token_velocity_spike' ? 'block' : 'none';
+  if (baselineWrap) baselineWrap.style.display = type === 'token_velocity_spike' ? 'block' : 'none';
+  if (minTokWrap) minTokWrap.style.display = type === 'token_velocity_spike' ? 'block' : 'none';
+
+  if (type === 'threshold') {
+    if (thresholdLabelText) thresholdLabelText.textContent = 'Threshold (USD/day)';
+    thresholdInput.step = '0.01';
+    thresholdInput.placeholder = 'e.g. 5.00 USD/day';
+    if (helpEl) helpEl.textContent = 'Triggers when total daily spend reaches this USD amount.';
+  } else if (type === 'spike') {
+    if (thresholdLabelText) thresholdLabelText.textContent = 'Threshold (multiplier x)';
+    thresholdInput.step = '0.1';
+    thresholdInput.placeholder = 'e.g. 3.0x';
+    if (helpEl) helpEl.textContent = 'Triggers when hourly spend exceeds this many times the average hourly spend today.';
+  } else if (type === 'session_cost_threshold') {
+    if (thresholdLabelText) thresholdLabelText.textContent = 'Threshold (USD/session)';
+    thresholdInput.step = '0.01';
+    thresholdInput.placeholder = 'e.g. 5.00 USD/session';
+    if (helpEl) helpEl.textContent = 'Triggers when any active session exceeds this session cost.';
+  } else if (type === 'token_velocity_spike') {
+    if (thresholdLabelText) thresholdLabelText.textContent = 'Threshold (multiplier x baseline)';
+    thresholdInput.step = '0.1';
+    thresholdInput.placeholder = 'e.g. 3.0x baseline';
+    if (helpEl) helpEl.textContent = 'Compares current 1-minute tokens to rolling baseline; triggers when ratio and minimum token floor are exceeded.';
+  }
 }
 
 async function createAlertRule() {
   var channels = [];
   if(document.getElementById('alert-ch-banner').checked) channels.push('banner');
   if(document.getElementById('alert-ch-telegram').checked) channels.push('telegram');
+  var rtype = document.getElementById('alert-type').value;
   var data = {
-    type: document.getElementById('alert-type').value,
+    type: rtype,
     threshold: parseFloat(document.getElementById('alert-threshold').value) || 0,
     channels: channels,
     cooldown_min: parseInt(document.getElementById('alert-cooldown').value) || 30,
   };
-  await fetch('/api/alerts/rules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  if (rtype === 'session_cost_threshold') {
+    data.params = {scope: 'session', target: 'active'};
+  } else if (rtype === 'token_velocity_spike') {
+    data.params = {
+      scope: (document.getElementById('alert-scope') || {}).value || 'session',
+      window_min: 1,
+      baseline_min: parseInt((document.getElementById('alert-baseline-min') || {}).value || 60),
+      min_tokens_1min: parseInt((document.getElementById('alert-min-tokens-1min') || {}).value || 500),
+    };
+  }
+  var resp = await fetch('/api/alerts/rules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  if (!resp.ok) {
+    var err = '';
+    try { err = (await resp.json()).error || ''; } catch(e) {}
+    alert('Failed to create alert rule' + (err ? ': ' + err : ''));
+    return;
+  }
   document.getElementById('add-alert-form').style.display = 'none';
   loadAlertRules();
 }
@@ -4532,12 +4927,52 @@ async function loadAlertRules() {
       return;
     }
     var html = '';
+    function parseChannels(value) {
+      if (Array.isArray(value)) return value;
+      if (typeof value === 'string') {
+        try {
+          var parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) return parsed;
+        } catch(e) {}
+        return [value];
+      }
+      return [];
+    }
+    function parseParams(value) {
+      if (value && typeof value === 'object') return value;
+      if (typeof value === 'string') {
+        try {
+          var parsed = JSON.parse(value);
+          if (parsed && typeof parsed === 'object') return parsed;
+        } catch(e) {}
+      }
+      return {};
+    }
+    function ruleTypeLabel(t) {
+      if (t === 'threshold') return 'Daily spend threshold';
+      if (t === 'spike') return 'Hourly cost spike';
+      if (t === 'session_cost_threshold') return 'Session cost threshold';
+      if (t === 'token_velocity_spike') return 'Token velocity spike (1-min)';
+      return t;
+    }
+    function ruleThresholdLabel(t, thr) {
+      var n = Number(thr || 0);
+      if (t === 'threshold') return '$' + n.toFixed(2) + '/day';
+      if (t === 'spike') return n.toFixed(1) + 'x';
+      if (t === 'session_cost_threshold') return '$' + n.toFixed(2) + '/session';
+      if (t === 'token_velocity_spike') return n.toFixed(1) + 'x baseline';
+      return String(thr || '');
+    }
     rules.forEach(function(r) {
-      var channels = [];
-      try { channels = JSON.parse(r.channels); } catch(e) { channels = [r.channels]; }
+      var channels = parseChannels(r.channels);
+      var params = parseParams(r.params);
       html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;">';
-      html += '<span style="font-weight:600;">' + escHtml(r.type) + '</span>';
-      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : '$'+r.threshold) + '</span>';
+      html += '<span style="font-weight:600;">' + escHtml(ruleTypeLabel(r.type)) + '</span>';
+      html += '<span style="color:var(--text-accent);">' + escHtml(ruleThresholdLabel(r.type, r.threshold)) + '</span>';
+      if (r.type === 'token_velocity_spike') {
+        html += '<span style="color:var(--text-muted);font-size:11px;">scope: ' + escHtml((params.scope || 'session')) + '</span>';
+        html += '<span style="color:var(--text-muted);font-size:11px;">min: ' + Number(params.min_tokens_1min || 500) + ' tok/1min</span>';
+      }
       html += '<span style="color:var(--text-muted);font-size:11px;">' + channels.join(', ') + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + r.cooldown_min + 'min cooldown</span>';
       html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-error);font-size:16px;" data-rule-id="'+r.id+'" onclick="deleteAlertRule(this.dataset.ruleId)" title="Delete">&#x1f5d1;</span>';
@@ -6406,6 +6841,7 @@ def _budget_init_db():
             type TEXT NOT NULL,
             threshold REAL NOT NULL,
             channels TEXT NOT NULL,
+            params TEXT DEFAULT '{}',
             cooldown_min INTEGER DEFAULT 30,
             enabled INTEGER DEFAULT 1,
             created_at REAL NOT NULL,
@@ -6427,6 +6863,15 @@ def _budget_init_db():
         CREATE INDEX IF NOT EXISTS idx_alert_history_rule
             ON alert_history(rule_id, fired_at DESC);
     """)
+    # Backward-compatible migration for existing installs.
+    try:
+        cols = db.execute("PRAGMA table_info(alert_rules)").fetchall()
+        names = {str(c["name"]).lower() for c in cols}
+        if "params" not in names:
+            db.execute("ALTER TABLE alert_rules ADD COLUMN params TEXT DEFAULT '{}'")
+            db.commit()
+    except Exception:
+        pass
     db.close()
 
 
@@ -6818,7 +7263,23 @@ def _get_alert_rules():
                 "SELECT * FROM alert_rules ORDER BY created_at DESC"
             ).fetchall()
             db.close()
-        return [dict(r) for r in rows]
+        out = []
+        for row in rows:
+            item = dict(row)
+            raw_params = item.get("params", "{}")
+            params = {}
+            if isinstance(raw_params, dict):
+                params = dict(raw_params)
+            elif isinstance(raw_params, str) and raw_params.strip():
+                try:
+                    parsed = json.loads(raw_params)
+                    if isinstance(parsed, dict):
+                        params = parsed
+                except Exception:
+                    params = {}
+            item["params"] = params
+            out.append(item)
+        return out
     except Exception:
         return []
 
@@ -7059,21 +7520,29 @@ def _budget_monitor_loop():
 
             # Custom alert rules
             rules = _get_alert_rules()
+            _rule_metrics_cache = {}
             for rule in rules:
                 if not rule.get("enabled"):
                     continue
                 rule_id = rule["id"]
                 rtype = rule["type"]
                 threshold = rule["threshold"]
-                channels = json.loads(rule.get("channels", '["banner"]'))
+                try:
+                    channels = rule.get("channels", '["banner"]')
+                    if isinstance(channels, str):
+                        channels = json.loads(channels)
+                    if not isinstance(channels, list) or not channels:
+                        channels = ["banner"]
+                except Exception:
+                    channels = ["banner"]
                 cooldown = rule.get("cooldown_min", 30) * 60
 
-                last_fired = _budget_alert_cooldowns.get(rule_id, 0)
-                if now - last_fired < cooldown:
+                if not _is_rule_cooldown_elapsed(rule_id, cooldown, now=now):
                     continue
 
                 fired = False
                 msg = ""
+                severity = "warning"
 
                 if rtype == "threshold":
                     if status["daily_spent"] >= threshold:
@@ -7100,32 +7569,36 @@ def _budget_monitor_loop():
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
+                elif rtype == "session_cost_threshold":
+                    key = "session_cost_threshold"
+                    if key not in _rule_metrics_cache:
+                        _rule_metrics_cache[key] = _collect_active_session_alert_metrics(
+                            now=now, baseline_min=60
+                        )
+                    msg = _evaluate_session_cost_threshold(rule, _rule_metrics_cache[key])
+                    fired = bool(msg)
+                elif rtype == "token_velocity_spike":
+                    params = rule.get("params", {}) if isinstance(rule.get("params"), dict) else {}
+                    baseline_min = int(params.get("baseline_min", 60) or 60)
+                    key = f"token_velocity_spike:{baseline_min}"
+                    if key not in _rule_metrics_cache:
+                        _rule_metrics_cache[key] = _collect_active_session_alert_metrics(
+                            now=now, baseline_min=baseline_min
+                        )
+                    msg = _evaluate_token_velocity_spike(rule, _rule_metrics_cache[key])
+                    fired = bool(msg)
+                    severity = "critical"
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
-                    try:
-                        with _fleet_db_lock:
-                            db = _fleet_db()
-                            for ch in channels:
-                                db.execute(
-                                    "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
-                                    "VALUES (?, ?, ?, ?, ?)",
-                                    (rule_id, rtype, msg, ch, now),
-                                )
-                            db.commit()
-                            db.close()
-                    except Exception:
-                        pass
-                    for ch in channels:
-                        if ch == "telegram":
-                            _send_telegram_alert(msg)
-                        elif ch == "webhook":
-                            webhook_url = rule.get("webhook_url", "")
-                            if webhook_url:
-                                _send_webhook_alert(
-                                    webhook_url,
-                                    {"type": rtype, "message": msg, "timestamp": now},
-                                )
+                    _emit_custom_rule_alert(
+                        rule_id=rule_id,
+                        rule_type=rtype,
+                        message=msg,
+                        channels=channels,
+                        now=now,
+                        severity=severity,
+                    )
 
         except Exception as e:
             print(f"Warning: Budget monitor error: {e}")
@@ -8993,8 +9466,9 @@ function clawmetryLogout(){
   <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiID8+PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiB2aWV3Qm94PSIwIDAgMTAyNCAxMDI0Ij48cGF0aCBmaWxsPSIjRTk0NjQ0IiBkPSJNNTI3LjIzIDQzNi4wNTRDNTE4LjQwOSA0MTguOTMzIDUzMC43ODYgNDA2LjcxIDU0Ny45ODggNDA1Ljc0NkM1NTUuMzQ2IDQwNi4zMSA1NjEuODA0IDQwOC4wOTUgNTY2LjkxNyA0MTMuOTQyQzU3MC4xNDQgNDE3LjYxIDU3MS43NjggNDIyLjQxOSA1NzEuNDI1IDQyNy4yOTJDNTcwLjYwOCA0MzguNjg1IDU2MS4wNjQgNDQzLjM0MiA1NTEuNjg1IDQ0Ni41OTZDNTg0LjYzIDQ1NS4zMjcgNjEwLjMyOCA0NzQuMTMgNjI3Ljk4OSA1MDMuNTgxQzYzNy41NDIgNTE5LjUxMSA2NDYuMjM5IDU0NC42MjIgNjQ4LjY5NCA1NjMuMDk3QzYzNi41ODYgNTc2LjYwNiA2MTUuMTY4IDU5Mi41NjEgNTk5LjcxNiA2MDEuODU0QzU4NS41MDcgNjExLjA3MiA1NjcuNjY2IDYxOS4zOTIgNTUxLjg0OSA2MjUuNTQzQzU0Ny4yNzMgNjI3LjMyMyA1MzIuNzU3IDYzMS4yNCA1MzAuNDUyIDYzMi43NjdDNTI5LjIxMSA2MzIuNDQ1IDUyNi45ODQgNjMyLjQ5MSA1MjYuMjExIDYzMy4xNzVDNTI0LjI1NyA2MzQuOTAxIDUzMC45MTIgNjMzLjIwOCA1MzEuMDk5IDYzMy4xNTlDNTUwLjcxMyA2MzMuNDM1IDU3Ni4wNTEgNjI1Ljk5NiA1OTQuMjgzIDYxOS4xMTJDNjE2Ljc1OCA2MDkuNTE4IDYzNC4wNDUgNTk4LjI5NSA2NTEuNTgzIDU4MS4zMDlDNjUxLjMzMSA2MDYuNDE4IDY0Ni42NjEgNjI5LjE4NyA2MjguMDI1IDY0Ny4zNzVDNjA0LjM1IDY3MC40ODIgNTYyLjYyOSA2ODMuNDUyIDUzMC40NDMgNjg4LjY2QzUyNi45NyA2ODkuMzUxIDUyNC43MjkgNjg5Ljc2OCA1MjEuMzc2IDY5MC45MkM1MzYuODM3IDY5NC4xNDcgNTUzLjY2MyA2OTMuODE1IDU2OS4yNjIgNjkxLjkwOUM1NjYuMTE0IDcwNi44MzUgNTY0LjAxMyA3MTUuMTA0IDU1Ny40MzkgNzI5LjMzNUM1NDguMTYgNzMwLjM4NCA1MzguODcxIDczMS4zMjkgNTI5LjU3MiA3MzIuMTcxTDUyOC43MTcgNzMzLjQyMUM1MzcuNTEzIDczNS45MTcgNTQzLjM1NiA3MzcuNzA0IDU1Mi41MTEgNzM4Ljc0NUM1NjkuOTg0IDc0MC44MjQgNTg3LjAwOCA3MzkuMzY4IDYwMy41NjQgNzMzLjM2OUM1NzUuNjYxIDc4OC4zNzkgNTEzLjk5NSA4MTEuMzIyIDQ1OS45NSA3NzcuODk4QzQ0My4wOTkgNzcwLjQ5MiA0MjguNTU5IDc0OS42MDggNDIwLjk0MyA3MzMuNTE3QzQ0My42OTIgNzQzLjI1MiA0NzYuMTU3IDc0MC4zMjggNDk5LjMyOSA3MzIuODNDNDg4Ljg4NiA3MzEuMDYyIDQ3NS43IDczMC4zNjEgNDY0Ljc3MiA3MjguOTE4QzQ0NS42MDEgNzI2LjM4NSA0MzIuMjczIDcyMi4wNTggNDE0LjIyOSA3MTYuMTEzQzQxMS45NTIgNzA5LjM2MSA0MDkuOTUyIDcwMS43MjYgNDA3Ljc3MSA2OTQuODM0QzQwNS4zMjYgNjg3LjEwOSA0MDIuMjk1IDY3OC40ODggNDAwLjM5MyA2NzAuNzI0QzQzNi44ODUgNjkzLjc4MiA0NjMuOTY5IDY5Ni40OTIgNTA1Ljc4NCA2OTAuODlDNDk3Ljg0MSA2ODkuMDIxIDQ4OS4zOTcgNjg4LjE5OSA0ODEuMjA3IDY4Ni40MTNDNDQyLjc4NyA2NzguMDMyIDM5Ni40MzkgNjYyLjIxIDM3OS42ODggNjIzLjI5OEMzNzQuNjk1IDYxMS43MDIgMzcxLjc5NyA1OTQuNjcxIDM3My4xNDQgNTgyLjA0OUM0MDIuOTExIDYwNi44ODYgNDI2Ljk5OSA2MjIuMzg2IDQ2Ni4xMjIgNjMwLjMzMUM0NzIuNjI5IDYzMS42NTMgNDg0LjgxMyA2MzMuNzMxIDQ5MS4yMDcgNjMzLjI5OUw0OTIuNzcyIDYzMi41NThDNDkwLjkxNCA2MzEuNiA0ODguMDY4IDYzMC40OTEgNDg2LjAzNSA2MjkuOTU4QzQzNi4wNTIgNjE2Ljg1OSA0MTkuMTk0IDU1NS4zNDUgNDQwLjI5NyA1MTIuMjIyQzQ1Mi41NDMgNDg3LjE5OCA0NjkuMTY1IDQ3NS4wMDQgNDk0LjgzNSA0NjYuMDg0QzQ5NS42MDMgNDY1Ljc3NiA0OTYuMTYgNDY1LjY0NSA0OTYuOTU4IDQ2NS40MzFDNTAxLjMyIDQ2NS4wMTUgNTA0LjM5IDQ2NC4wODEgNTA4LjUzNCA0NjIuOTRDNTA0LjgyOCA0NjMuMTQ3IDQ5OS4xNDggNDYzLjQ3NSA0OTUuNjM5IDQ2NC4yODNMNDk0LjkwNSA0NjQuNDVDNDg2Ljg1NiA0NjQuNDk1IDQ3OC43OTEgNDY3LjIzOCA0NzEuNDkzIDQ3MC4zNzhDNDMyLjkwNyA0ODYuOTggNDA4Ljg2NCA1MzMuMDU5IDQxOC43MzkgNTc0LjExNUM0MjEuMzYgNTg1LjAxNCA0MjUuNjEgNTk0LjA4IDQzMC4xNjUgNjA0LjMyMkM0MDkuMTQ3IDU5NC40ODMgMzkxLjQxNyA1NzkuNjM5IDM3NS40NDMgNTYzLjA5OUMzNzcuMTg0IDU0Mi4xMiAzOTEuMDEgNTA5LjA5NCA0MDMuMzUyIDQ5Mi4zNjJDNDE2Ljg1NiA0NzQuMDc1IDQzNS4yNTIgNDU5Ljk3NSA0NTYuNDIxIDQ1MS42ODdDNDYxLjc1IDQ0OS41NTUgNDY3LjM5OSA0NDcuNDg5IDQ3My4wODYgNDQ2LjYyMUM0NjguMTc5IDQ0NS4wMjMgNDYyLjM2NyA0NDQuMDQzIDQ1OC40MDUgNDQwLjc1M0M0NDUuNDI5IDQyOS45NzcgNDUwLjg1OSA0MTIuMTc0IDQ2NS45NzEgNDA3LjA1NUM0NjkuMTA0IDQwNS45OTMgNDcxLjI4NCA0MDUuOTgyIDQ3NC40NjMgNDA1LjgwN0M0OTAuNzgzIDQwNi43MTggNTAzLjE2NyA0MTkuMDY5IDQ5NS41NTcgNDM1LjU2OEM1MDIuOTkxIDQzNi4zMDQgNTE4LjkzOCA0MzUuOTYgNTI3LjIzIDQzNi4wNTRaIi8+PHBhdGggZmlsbD0iI0MxMEEwOSIgZD0iTTU0Ny45ODggNDA1Ljc0NkM1NTUuMzQ2IDQwNi4zMSA1NjEuODA0IDQwOC4wOTUgNTY2LjkxNyA0MTMuOTQyQzU3MC4xNDQgNDE3LjYxIDU3MS43NjggNDIyLjQxOSA1NzEuNDI1IDQyNy4yOTJDNTcwLjYwOCA0MzguNjg1IDU2MS4wNjQgNDQzLjM0MiA1NTEuNjg1IDQ0Ni41OTZDNTg0LjYzIDQ1NS4zMjcgNjEwLjMyOCA0NzQuMTMgNjI3Ljk4OSA1MDMuNTgxQzYzNy41NDIgNTE5LjUxMSA2NDYuMjM5IDU0NC42MjIgNjQ4LjY5NCA1NjMuMDk3QzYzNi41ODYgNTc2LjYwNiA2MTUuMTY4IDU5Mi41NjEgNTk5LjcxNiA2MDEuODU0QzU5OS45NzYgNTk4LjMzNSA2MDIuNTg5IDU4OC4zNCA2MDMuMzU2IDU4NC4xNTRDNjA2LjYxNSA1NjYuMjg0IDYwNi4xNzIgNTQ3LjkzNSA2MDIuMDUyIDUzMC4yNDNDNTkyLjk0NyA0OTIuMzEzIDU3MC4zMzcgNDY1LjY1OSA1MzcuNjkgNDQ1LjY4OUw1MzguNDYxIDQ0NC42NjdDNTQxLjEyNyA0NDUuNDU0IDU0NS4wODggNDQ2LjE5NiA1NDcuOTE1IDQ0Ni44QzU0OC4wODQgNDMzLjExNiA1NDguMTA5IDQxOS40MzEgNTQ3Ljk4OCA0MDUuNzQ2WiIvPjxwYXRoIGZpbGw9IiNDMTBBMDkiIGQ9Ik01OTQuMjgzIDYxOS4xMTJDNjE2Ljc1OCA2MDkuNTE4IDYzNC4wNDUgNTk4LjI5NSA2NTEuNTgzIDU4MS4zMDlDNjUxLjMzMSA2MDYuNDE4IDY0Ni42NjEgNjI5LjE4NyA2MjguMDI1IDY0Ny4zNzVDNjA0LjM1IDY3MC40ODIgNTYyLjYyOSA2ODMuNDUyIDUzMC40NDMgNjg4LjY2QzUzMi4zMTIgNjg1Ljc3NSA1NDIuNjI1IDY4MC42ODYgNTQ2LjM4OCA2NzguMDM0QzU3MC4xMjggNjYxLjMwOCA1ODIuMTcgNjQ0LjcxNiA1OTQuMjgzIDYxOS4xMTJaIi8+PHBhdGggZmlsbD0iI0MxMEEwOSIgZD0iTTU1Mi41MTEgNzM4Ljc0NUM1NjkuOTg0IDc0MC44MjQgNTg3LjAwOCA3MzkuMzY4IDYwMy41NjQgNzMzLjM2OUM1NzUuNjYxIDc4OC4zNzkgNTEzLjk5NSA4MTEuMzIyIDQ1OS45NSA3NzcuODk4QzQ2NC4wOSA3NzcuMTc4IDQ3Mi40NDEgNzc4LjQwOSA0NzYuOTMgNzc4LjQwM0M0OTguODY2IDc3OC4zNzIgNTIwLjMyMSA3NzIuODI0IDUzNi42NjIgNzU3LjUwNEM1NDIuOTE4IDc1MS42MzkgNTQ3LjQ0MSA3NDUuNjAzIDU1Mi41MTEgNzM4Ljc0NVoiLz48cGF0aCBmaWxsPSIjQzEwQTA5IiBkPSJNNDc0LjQ2MyA0MDUuODA3QzQ5MC43ODMgNDA2LjcxOCA1MDMuMTY3IDQxOS4wNjkgNDk1LjU1NyA0MzUuNTY4QzQ4OS4yNDIgNDQzLjQzOSA0ODMuODg3IDQ0NC42MDggNDc0LjM0MSA0NDYuMjE4QzQ3NC41NDQgNDMyLjc0OSA0NzQuNTg1IDQxOS4yNzggNDc0LjQ2MyA0MDUuODA3WiIvPjxwYXRoIGZpbGw9IiNGNEJDQkUiIGQ9Ik00OTIuNzcyIDYzMi41NThDNDk2LjAyMyA2MzEuODIxIDUwMS45OCA2MzUuMzYyIDQ5MS4yMDcgNjMzLjI5OUw0OTIuNzcyIDYzMi41NThaIi8+PHBhdGggZmlsbD0iI0Y0QkNCRSIgZD0iTTUyOC43MTcgNzMzLjQyMUM1MjIuOTY0IDczMy44MjggNTIzLjQ5MyA3MzAuODYyIDUyOS41NzIgNzMyLjE3MUw1MjguNzE3IDczMy40MjFaIi8+PHBhdGggZmlsbD0iI0NEMTMxNSIgZD0iTTUzNy42OSA0NDUuNjg5QzUzNy4zMDkgNDQ1LjM3OSA1MzYuMzY3IDQ0NC44NTUgNTM2LjI4NyA0NDQuMjc0QzUzNi43MjggNDQzLjg3MiA1MzcuOTY4IDQ0NC40ODUgNTM4LjQ2MSA0NDQuNjY3TDUzNy42OSA0NDUuNjg5WiIvPjxwYXRoIGZpbGw9IiNFOTQ2NDQiIGQ9Ik02ODIuMzcyIDI0Mi40NjVDNjg3LjQ3IDI0Mi4zMTMgNjkyLjM0MiAyNDIuMzYyIDY5Ny4zOTEgMjQzLjExQzc3MC4wNzQgMjUxLjYxMiA4MjIuNzc0IDMxMS4xMzMgODEzLjg4NCAzODUuMzEzQzgxMC44NjEgNDEyLjU3OSA3OTcuMDI5IDQzNy40OTQgNzc1LjQ4NSA0NTQuNDc5Qzc1OC4wNCA0NjguMDc3IDczNS43OTEgNDc1Ljk4OCA3MTMuNTY3IDQ3My4xNDRMNzEyLjk4IDQ3My4wNjNDNjg4LjA4MyA0NjkuOTMyIDY2Ni43NTcgNDUzLjcyNyA2NTAuMDEyIDQzNS45NDhDNjA4LjQwNyAzOTEuNzcyIDYwOC4xNDMgMzE2LjgyNSA2NTQuNDMgMjc1LjU2OUM2NTQuMDU3IDI4MS4yMDMgNjUzLjYwNyAyODYuODMyIDY1My4wOCAyOTIuNDU1QzY1Mi40MjYgMzE3Ljk4OSA2NTYuNzUgMzQxLjcwNSA2ODIuOTE3IDM1MS41OTRDNjgwLjMzOCAzNjMuMjE3IDY3OC4xMzggMzc5LjQyNCA2OTMuNTk5IDM4Mi45NzhDNzAwLjgwOSAzODMuNzcyIDcwMy4xMjQgMzgzLjM3NSA3MTAuNDk4IDM4Mi4zNDVDNjk3LjYgMzczLjg0NCA3MDIuMjY4IDM2NS4zNzYgNzA0LjUwMiAzNTIuOTgzQzcxMS4yMzkgMzE1LjYxMiA2OTYuMzc2IDI3OC40OTMgNjYyLjE0NSAyNjAuMTg3QzY1My43MDMgMjU1LjY3MiA2NDcuMDA0IDI1My43MzcgNjM3Ljg2MiAyNTEuMDU2QzY1My4wMzYgMjQ1Ljk4NSA2NjYuMjIzIDI0My4wMjEgNjgyLjM3MiAyNDIuNDY1WiIvPjxwYXRoIGZpbGw9IiNDMTBBMDkiIGQ9Ik02ODIuMzcyIDI0Mi40NjVDNjg3LjQ3IDI0Mi4zMTMgNjkyLjM0MiAyNDIuMzYyIDY5Ny4zOTEgMjQzLjExQzc3MC4wNzQgMjUxLjYxMiA4MjIuNzc0IDMxMS4xMzMgODEzLjg4NCAzODUuMzEzQzgxMC44NjEgNDEyLjU3OSA3OTcuMDI5IDQzNy40OTQgNzc1LjQ4NSA0NTQuNDc5Qzc1OC4wNCA0NjguMDc3IDczNS43OTEgNDc1Ljk4OCA3MTMuNTY3IDQ3My4xNDRMNzEyLjk4IDQ3My4wNjNDNzE2LjU3IDQ3MC42MzkgNzIwLjI3NCA0NjguMjg2IDcyMy44MTUgNDY1Ljc5QzgwMS4yNTUgNDExLjE5NCA3ODYuNzg1IDMwMi44NCA3MDkuMjk1IDI1Ni42NkM3MDEuODMzIDI1Mi4yMTMgNjk1LjEyMSAyNDguOTY1IDY4Ny4xMzggMjQ1LjI0MkM2ODUuMzAyIDI0NC43MzEgNjgzLjc0NCAyNDMuNzY0IDY4Mi4zNzIgMjQyLjQ2NVoiLz48cGF0aCBmaWxsPSIjQ0QxMzE1IiBkPSJNNjgyLjM3MiAyNDIuNDY1QzY4Ny40NyAyNDIuMzEzIDY5Mi4zNDIgMjQyLjM2MiA2OTcuMzkxIDI0My4xMUM2OTMuMDk3IDI0NS41NzIgNjkwLjQxMiAyNDMuNzY4IDY4Ny4xMzggMjQ1LjI0MkM2ODUuMzAyIDI0NC43MzEgNjgzLjc0NCAyNDMuNzY0IDY4Mi4zNzIgMjQyLjQ2NVoiLz48cGF0aCBmaWxsPSIjQzEwQTA5IiBkPSJNNjkzLjU5OSAzODIuOTc4QzY4OC4xODMgMzg0LjEyNSA2NzcuMTQ2IDM4Mi44MzIgNjcxLjcwNiAzODAuNjA3QzY2My40NDIgMzc3LjIyNyA2NTkuNTAxIDM3MC4wOTMgNjU2LjE3NSAzNjIuMzA3QzY0OC45NzMgMzQ1LjE4MSA2NDcuOTE1IDMyNS4zNjkgNjQ5LjAzNCAzMDcuMDFDNjQ5LjIzOSAzMDMuNjMzIDY0OS42NSAyOTMuNjY4IDY1My4wOCAyOTIuNDU1QzY1Mi40MjYgMzE3Ljk4OSA2NTYuNzUgMzQxLjcwNSA2ODIuOTE3IDM1MS41OTRDNjgwLjMzOCAzNjMuMjE3IDY3OC4xMzggMzc5LjQyNCA2OTMuNTk5IDM4Mi45NzhaIi8+PHBhdGggZmlsbD0iI0U5NDY0NCIgZD0iTTMwOS45MjMgNDcyLjVDMjcyLjY1NSA0NzkuNzY0IDIzNS43MTkgNDUxLjM2MiAyMjAuNDI0IDQxOS4wNUMyMDYuODM2IDM5MC4wMjkgMjA1LjQzNyAzNTYuNzc1IDIxNi41MzkgMzI2LjcxNkMyMjcuODc2IDI5NS4xMzkgMjUzLjA0OCAyNjguNzgxIDI4My4zODggMjU0LjcyN0MzMTUuNDIgMjM5Ljk4IDM1Mi4wMTYgMjM4LjYzNiAzODUuMDQ0IDI1MC45OTJDMzc1LjY4NyAyNTMuOTM3IDM2OC40MyAyNTYuNTE0IDM1OS45NTcgMjYxLjM5MkMzMjcuOTQzIDI3OS44MiAzMTMuOTQxIDMxMyAzMTguMjI5IDM0OC45ODZDMzE5LjcwNCAzNjEuMzYyIDMyNi45MzcgMzc0LjY4OSAzMTMuMDg5IDM4MS45MzZDMzE5LjgzMyAzODMuNTEyIDMyOC4yMTMgMzg1LjEyMiAzMzQuNDAzIDM4MS4yOUMzMzkuMjM0IDM3OC4yOTggMzQwLjM3OCAzNzUuMDA1IDM0Mi44ODUgMzcwLjUyNkMzNDMuOTgyIDM2MC4xOTIgMzQzLjUxNiAzNjMuNDU2IDM0Mi4yNDEgMzUzLjM0MkMzNDIuMTkxIDM1Mi45MjQgMzQxLjg0MiAzNTEuNDk2IDM0Mi4yNTcgMzUxLjM1NEMzNjMuNTc1IDM0NC4wODggMzcxLjAxOSAzMjAuNzczIDM3MS42IDMwMC4wODFDMzcxLjgxMSAyOTIuNTQ1IDM3MC40MzkgMjgzLjcxOSAzNjkuMjA4IDI3NS40MjlDMzg5LjIyNiAyOTIuNTAzIDQwMi4wODEgMzIwLjE3OCA0MDQuMjY3IDM0Ni4xMjRDNDA3LjA1MiAzNzkuMTY3IDM5Ni42MzggNDEwLjUyNCAzNzQuNjQ2IDQzNS4zNDNDMzU3LjIwNiA0NTUuMDIzIDMzNi4zMjMgNDY5LjI2NCAzMDkuOTIzIDQ3Mi41Wk0zMDUuNTc5IDI3NC4yMDFDMzA2LjQ4NCAyNzMuOTAxIDMwOC4yNTMgMjcyLjk1NCAzMDkuMDEyIDI3Mi4zNzFDMzExLjU3MSAyNzEuMTg0IDMxMi4wOTcgMjcxLjQ2NiAzMTQuMDEgMjY5LjQ1MUMzMTEuMTY2IDI3MC4xMTYgMzEwLjc2NyAyNzAuMSAzMDcuOSAyNzEuMTI5QzMwNi43NDUgMjcxLjQ2MyAzMDQuMDAyIDI3Mi41MzIgMzAyLjk0MyAyNzMuMDgzQzI0OC44NjkgMjk2LjkxNSAyMjEuNDY4IDM1MS42OTIgMjQ1LjQ1OCA0MDguNjUzQzI1MS42MzUgNDIzLjMxNyAyNjQuMDggNDQwLjgwNCAyNzguMTYgNDQ4LjkyMkMyNzMuOTY4IDQ0NC4xMTQgMjY3LjQyOSA0MzcuMjE3IDI2NC4zMSA0MzEuODIyQzIzMi44ODkgMzc3LjQ2NCAyNDkuOTIzIDMwNC44NDYgMzA1LjU3OSAyNzQuMjAxWiIvPjxwYXRoIGZpbGw9IiNDMTBBMDkiIGQ9Ik0zNjkuMjA4IDI3NS40MjlDMzg5LjIyNiAyOTIuNTAzIDQwMi4wODEgMzIwLjE3OCA0MDQuMjY3IDM0Ni4xMjRDNDA3LjA1MiAzNzkuMTY3IDM5Ni42MzggNDEwLjUyNCAzNzQuNjQ2IDQzNS4zNDNDMzU3LjIwNiA0NTUuMDIzIDMzNi4zMjMgNDY5LjI2NCAzMDkuOTIzIDQ3Mi41QzMxMS4xNTMgNDcwLjc2NSAzMTIuOTY5IDQ2OC43ODUgMzE0LjQwMSA0NjcuMjA2QzMzNS44MyA0NDMuNTg3IDM0Ny4xMjQgNDEyLjM1MiAzNDYuOTg4IDM4MC41NDNDMzQ2Ljk2MyAzNzQuNTc0IDM0Ny4zNzIgMzY4LjY1MyAzNDUuNzIzIDM2Mi42MzJDMzQ1LjY3IDM2Mi4yMDUgMzQzLjc0MyAzNDguMzg3IDM0Mi4yNDEgMzUzLjM0MkMzNDIuMTkxIDM1Mi45MjQgMzQxLjg0MiAzNTEuNDk2IDM0Mi4yNTcgMzUxLjM1NEMzNjMuNTc1IDM0NC4wODggMzcxLjAxOSAzMjAuNzczIDM3MS42IDMwMC4wODFDMzcxLjgxMSAyOTIuNTQ1IDM3MC40MzkgMjgzLjcxOSAzNjkuMjA4IDI3NS40MjlaIi8+PHBhdGggZmlsbD0iI0YyNTE1NiIgZD0iTTM0Mi4yNDEgMzUzLjM0MkMzNDMuNzQzIDM0OC4zODcgMzQ1LjY3IDM2Mi4yMDUgMzQ1LjcyMyAzNjIuNjMyQzM0NS41NjEgMzYyLjg4MiAzNDUuNCAzNjMuMTMyIDM0NS4yMzggMzYzLjM4MkMzNDQuOTY4IDM2My4xOTMgMzQ1LjA0OSAzNjEuNzMzIDM0NC44MTggMzYxLjFDMzQzLjg4OSAzNjQuMzI3IDM0NS42NDYgMzY3LjIyMSAzNDIuODg1IDM3MC41MjZDMzQzLjk4MiAzNjAuMTkyIDM0My41MTYgMzYzLjQ1NiAzNDIuMjQxIDM1My4zNDJaIi8+PHBhdGggZmlsbD0iI0ZERkFGRCIgZmlsbC1vcGFjaXR5PSIwLjQ2Mjc0NTEiIGQ9Ik0zMDIuOTQzIDI3My4wODNDMzA0LjAwMiAyNzIuNTMyIDMwNi43NDUgMjcxLjQ2MyAzMDcuOSAyNzEuMTI5QzMwOC4yIDI3MS45NTQgMzA4LjIwOSAyNzEuODQ2IDMwOS4wMTIgMjcyLjM3MUMzMDguMjUzIDI3Mi45NTQgMzA2LjQ4NCAyNzMuOTAxIDMwNS41NzkgMjc0LjIwMUMzMDQuMzM3IDI3My41MTQgMzA0LjI4IDI3My40NzIgMzAyLjk0MyAyNzMuMDgzWiIvPjxwYXRoIGZpbGw9IiNGREZBRkQiIGZpbGwtb3BhY2l0eT0iMC4wNDcwNTg4MjQiIGQ9Ik0zMTQuMDEgMjY5LjQ1MUMzMTIuMDk3IDI3MS40NjYgMzExLjU3MSAyNzEuMTg0IDMwOS4wMTIgMjcyLjM3MUMzMDguMjA5IDI3MS44NDYgMzA4LjIgMjcxLjk1NCAzMDcuOSAyNzEuMTI5QzMxMC43NjcgMjcwLjEgMzExLjE2NiAyNzAuMTE2IDMxNC4wMSAyNjkuNDUxWiIvPjxwYXRoIGZpbGw9IiNGNEJDQkUiIGQ9Ik0zMTQuMDEgMjY5LjQ1MUMzMTUuNTUzIDI2OC4xMzggMzE3LjkxOCAyNjguMDgxIDMxOS44NjcgMjY4LjIwOEMzMTguMjY3IDI2OC45NjMgMzE1LjQ0OSAyNzAuNjg5IDMxNC4wMSAyNjkuNDUxWiIvPjxwYXRoIGZpbGw9IiNDMTBBMDkiIGQ9Ik0zNDcuNjMxIDQ3Ni41ODVDMzUxLjczIDQ4MC4xOTIgMzYzLjUyMSA0OTIuNDY0IDM2Ni45NyA0OTYuNjAyQzM1MS4xOSA1MjAuNDM5IDMxNC4zODggNTMwLjU4NSAyODcuOTEzIDUyNC4wNzhDMjg1Ljc2NCA1MjMuNTUgMjg1LjYxIDUyMy4zMTIgMjg0LjUyOSA1MjEuNTMxQzI3OS4wODIgNTExLjE0MyAyNzAuNzg5IDQ5Mi45MDYgMjY1LjkyNyA0ODIuMDJDMjk3Ljg0NyA0OTIuNTU1IDMxOC4xNTQgNDkwLjYxNyAzNDcuNjMxIDQ3Ni41ODVaIi8+PHBhdGggZmlsbD0iI0MxMEEwOSIgZD0iTTY3Ni4zNzEgNDc2LjU5M0M2ODEuNjQxIDQ3OC43MDIgNjg2LjE3MSA0ODEuMzYzIDY5Mi4xMjIgNDgzLjQ3NkM3MTYuMzExIDQ5Mi4wNjMgNzMzLjU0NCA0ODguMzg2IDc1Ny4wOSA0ODIuNTE3Qzc1MS4zNjUgNDk1Ljk4MiA3NDQuODMzIDUwOS4wMjQgNzM4Ljk4MSA1MjIuNDIxQzczNi4xNzIgNTI1Ljc5OCA3MTcuOSA1MjYuMjE5IDcxMy4yNDggNTI1LjkxNkM2OTAuOCA1MjQuNDU3IDY3MS4xMDEgNTEzLjMzMiA2NTYuNDcyIDQ5Ni41MzVDNjU5LjcyNSA0OTIuNTQ5IDY3Mi4zNjcgNDgwLjMzNSA2NzYuMzcxIDQ3Ni41OTNaIi8+PHBhdGggZmlsbD0iI0MxMEEwOSIgZD0iTTU2OS4yNjIgNjkxLjkwOUM1OTQuMzYyIDY4Ny44MjEgNjAyLjQ4OCA2ODIuODMyIDYyMy42MjQgNjcxLjAzOUw2MDkuMjgzIDcxNi4wMTJDNTk5LjQ0NiA3MTkuNjQ2IDU5MC4zOTggNzIyLjg4IDU4MC4xMzQgNzI1LjE2OEM1NzIuNTA3IDcyNi44NjkgNTY1LjA3NyA3MjcuODgxIDU1Ny40MzkgNzI5LjMzNUM1NjQuMDEzIDcxNS4xMDQgNTY2LjExNCA3MDYuODM1IDU2OS4yNjIgNjkxLjkwOVoiLz48cGF0aCBmaWxsPSIjQzEwQTA5IiBkPSJNNjQ4Ljc3NSA1MTAuODM3QzY1Mi4wNSA1MTQuMDY1IDY1Ni45NzEgNTE4LjU5MSA2NjAuNTE1IDUyMS4zOTlDNjc2LjIxOSA1MzMuODQxIDcwMy4yNCA1NDIuODU1IDcyMy4yNzIgNTQwLjMxOUw3MDAuMjY1IDU1Ni40MTdDNjkxLjEwNiA1NjIuOTEyIDY3NS41NjIgNTczLjU5NCA2NjUuNTI0IDU3OC43NTlDNjY0LjM1MiA1NDkuNzA2IDY1OC41NTkgNTM2LjU1NiA2NDguNzc1IDUxMC44MzdaIi8+PHBhdGggZmlsbD0iI0MxMEEwOSIgZD0iTTMwOS4xMjMgNTQwLjYyM0MzMzcuNDc4IDUzOS43ODYgMzU0LjYxNSA1MjkuNjQ5IDM3NS4yNTYgNTExLjU3NkMzNjUuMzM4IDUzNC41MTYgMzU4LjkxNCA1NTMuNzM4IDM1OC4yNzEgNTc5LjEwNkMzMzkuNjY0IDU2OC4xMjYgMzIwLjYyMiA1NTQuOTQ4IDMwMy4wNjkgNTQyLjIwNEMzMDUuODkyIDU0MS4yMDQgMzA1LjY5NCA1NDIuMTM3IDMwOS4xMjMgNTQwLjYyM1oiLz48cGF0aCBmaWxsPSIjRkVGMEYxIiBmaWxsLW9wYWNpdHk9IjAuODcwNTg4MjQiIGQ9Ik00OTUuNjM5IDQ2NC4yODNDNDk5LjE0OCA0NjMuNDc1IDUwNC44MjggNDYzLjE0NyA1MDguNTM0IDQ2Mi45NEM1MDQuMzkgNDY0LjA4MSA1MDEuMzIgNDY1LjAxNSA0OTYuOTU4IDQ2NS40MzFDNDk2LjUxOCA0NjUuMDQ5IDQ5Ni4wNzkgNDY0LjY2NiA0OTUuNjM5IDQ2NC4yODNaIi8+PHBhdGggZmlsbD0iI0NEMTMxNSIgZmlsbC1vcGFjaXR5PSIwLjk4ODIzNTI5IiBkPSJNMzAzLjA2OSA1NDIuMjA0QzMwMi42ODkgNTQxLjk2IDMwMS40OTIgNTQxLjM4MyAzMDEuMzE0IDU0MC44MzNDMzAxLjE3NyA1NDAuNDE1IDMwMi4yNCA1NDAuNDU0IDMwMi40NjQgNTQwLjQ4M0MzMDQuNjY4IDU0MC43NzIgMzA2LjkwNCA1NDAuNjI4IDMwOS4xMjMgNTQwLjYyM0MzMDUuNjk0IDU0Mi4xMzcgMzA1Ljg5MiA1NDEuMjA0IDMwMy4wNjkgNTQyLjIwNFoiLz48cGF0aCBmaWxsPSIjRjRCQ0JFIiBmaWxsLW9wYWNpdHk9IjAuOTg4MjM1MjkiIGQ9Ik01MzEuMDk5IDYzMy4xNTlDNTMwLjkxMiA2MzMuMjA4IDUyNC4yNTcgNjM0LjkwMSA1MjYuMjExIDYzMy4xNzVDNTI2Ljk4NCA2MzIuNDkxIDUyOS4yMTEgNjMyLjQ0NSA1MzAuNDUyIDYzMi43NjdMNTMxLjA5OSA2MzMuMTU5WiIvPjxwYXRoIGZpbGw9IiNGREZBRkQiIGZpbGwtb3BhY2l0eT0iMC4xMTc2NDcwNiIgZD0iTTQ5NS42MzkgNDY0LjI4M0M0OTYuMDc5IDQ2NC42NjYgNDk2LjUxOCA0NjUuMDQ5IDQ5Ni45NTggNDY1LjQzMUM0OTYuMTYgNDY1LjY0NSA0OTUuNjAzIDQ2NS43NzYgNDk0LjgzNSA0NjYuMDg0TDQ5NC45MDUgNDY0LjQ1TDQ5NS42MzkgNDY0LjI4M1oiLz48L3N2Zz4=" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
-  <!-- Budget & Alerts hidden until mature -->
-  <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
+  <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;display:flex;align-items:center;gap:6px;">
+    <span aria-hidden="true">&#128176;</span><span style="font-size:12px;font-weight:600;">Alerts</span>
+  </div>
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="zoom-controls">
@@ -9147,11 +9621,43 @@ function clawmetryLogout(){
       </div>
       <div id="add-alert-form" style="display:none;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
         <div style="display:grid;gap:8px;">
-          <select id="alert-type" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <option value="threshold">Threshold (daily $ amount)</option>
-            <option value="spike">Spike (hourly rate multiplier)</option>
+          <label style="font-size:12px;color:var(--text-muted);display:block;">Rule type</label>
+          <select id="alert-type" onchange="updateAlertRuleFields()" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <option value="threshold">Daily spend threshold (USD)</option>
+            <option value="spike">Hourly cost spike (multiplier x)</option>
+            <option value="session_cost_threshold">Session cost threshold (USD)</option>
+            <option value="token_velocity_spike">Token velocity spike (x baseline, 1-min)</option>
           </select>
-          <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <label id="alert-threshold-label" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px;position:relative;"><span id="alert-threshold-label-text">Threshold (USD)</span>
+            <span style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--border-primary);color:var(--text-muted);font-size:10px;cursor:help;line-height:1;" onmouseenter="this.nextElementSibling.style.display='block'" onmouseleave="this.nextElementSibling.style.display='none'">?</span>
+            <span style="display:none;position:absolute;left:0;top:20px;z-index:5;min-width:260px;max-width:360px;padding:8px 10px;border-radius:8px;background:var(--bg-primary);border:1px solid var(--border-primary);color:var(--text-secondary);font-size:11px;line-height:1.4;box-shadow:0 10px 24px rgba(0,0,0,0.25);">
+              For token velocity rules: trigger when current 1-minute tokens are at least this many times the rolling baseline (example: 3.0x).
+            </span>
+          </label>
+          <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="e.g. 5.00 USD" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <div id="alert-scope-wrap" style="display:none;">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Scope</label>
+            <select id="alert-scope" style="width:100%;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+              <option value="session">Per session</option>
+              <option value="fleet">Fleet-wide (all active sessions)</option>
+            </select>
+          </div>
+          <div id="alert-baseline-wrap" style="display:none;">
+            <label style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px;margin-bottom:4px;position:relative;">Baseline window (minutes)
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--border-primary);color:var(--text-muted);font-size:10px;cursor:help;line-height:1;" onmouseenter="this.nextElementSibling.style.display='block'" onmouseleave="this.nextElementSibling.style.display='none'">?</span>
+              <span style="display:none;position:absolute;left:0;top:20px;z-index:5;min-width:260px;max-width:360px;padding:8px 10px;border-radius:8px;background:var(--bg-primary);border:1px solid var(--border-primary);color:var(--text-secondary);font-size:11px;line-height:1.4;box-shadow:0 10px 24px rgba(0,0,0,0.25);">
+                Rolling history used to compute baseline token rate. Example: 60 means compare against the average of the previous 60 one-minute buckets.
+              </span>
+            </label>
+            <input id="alert-baseline-min" type="number" value="60" min="1" max="240" style="width:100%;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          </div>
+          <div id="alert-min-tokens-wrap" style="display:none;">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Minimum tokens in 1 minute</label>
+            <input id="alert-min-tokens-1min" type="number" value="500" min="0" step="1" style="width:100%;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          </div>
+          <div id="alert-rule-help" style="font-size:11px;color:var(--text-muted);line-height:1.4;">
+            Triggers when daily spend reaches a USD threshold.
+          </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-ch-banner" checked> Banner</label>
             <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-ch-telegram"> Telegram</label>
@@ -10328,19 +10834,75 @@ async function resumeGateway() {
 
 function showAddAlertForm() {
   document.getElementById('add-alert-form').style.display = 'block';
+  updateAlertRuleFields();
+}
+
+function updateAlertRuleFields() {
+  var typeEl = document.getElementById('alert-type');
+  var thresholdLabelText = document.getElementById('alert-threshold-label-text');
+  var thresholdInput = document.getElementById('alert-threshold');
+  var helpEl = document.getElementById('alert-rule-help');
+  var scopeWrap = document.getElementById('alert-scope-wrap');
+  var baselineWrap = document.getElementById('alert-baseline-wrap');
+  var minTokWrap = document.getElementById('alert-min-tokens-wrap');
+  if (!typeEl || !thresholdInput) return;
+  var type = typeEl.value || 'threshold';
+
+  if (scopeWrap) scopeWrap.style.display = type === 'token_velocity_spike' ? 'block' : 'none';
+  if (baselineWrap) baselineWrap.style.display = type === 'token_velocity_spike' ? 'block' : 'none';
+  if (minTokWrap) minTokWrap.style.display = type === 'token_velocity_spike' ? 'block' : 'none';
+
+  if (type === 'threshold') {
+    if (thresholdLabelText) thresholdLabelText.textContent = 'Threshold (USD/day)';
+    thresholdInput.step = '0.01';
+    thresholdInput.placeholder = 'e.g. 5.00 USD/day';
+    if (helpEl) helpEl.textContent = 'Triggers when total daily spend reaches this USD amount.';
+  } else if (type === 'spike') {
+    if (thresholdLabelText) thresholdLabelText.textContent = 'Threshold (multiplier x)';
+    thresholdInput.step = '0.1';
+    thresholdInput.placeholder = 'e.g. 3.0x';
+    if (helpEl) helpEl.textContent = 'Triggers when hourly spend exceeds this many times the average hourly spend today.';
+  } else if (type === 'session_cost_threshold') {
+    if (thresholdLabelText) thresholdLabelText.textContent = 'Threshold (USD/session)';
+    thresholdInput.step = '0.01';
+    thresholdInput.placeholder = 'e.g. 5.00 USD/session';
+    if (helpEl) helpEl.textContent = 'Triggers when any active session exceeds this session cost.';
+  } else if (type === 'token_velocity_spike') {
+    if (thresholdLabelText) thresholdLabelText.textContent = 'Threshold (multiplier x baseline)';
+    thresholdInput.step = '0.1';
+    thresholdInput.placeholder = 'e.g. 3.0x baseline';
+    if (helpEl) helpEl.textContent = 'Compares current 1-minute tokens to rolling baseline; triggers when ratio and minimum token floor are exceeded.';
+  }
 }
 
 async function createAlertRule() {
   var channels = [];
   if(document.getElementById('alert-ch-banner').checked) channels.push('banner');
   if(document.getElementById('alert-ch-telegram').checked) channels.push('telegram');
+  var rtype = document.getElementById('alert-type').value;
   var data = {
-    type: document.getElementById('alert-type').value,
+    type: rtype,
     threshold: parseFloat(document.getElementById('alert-threshold').value) || 0,
     channels: channels,
     cooldown_min: parseInt(document.getElementById('alert-cooldown').value) || 30,
   };
-  await fetch('/api/alerts/rules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  if (rtype === 'session_cost_threshold') {
+    data.params = {scope: 'session', target: 'active'};
+  } else if (rtype === 'token_velocity_spike') {
+    data.params = {
+      scope: (document.getElementById('alert-scope') || {}).value || 'session',
+      window_min: 1,
+      baseline_min: parseInt((document.getElementById('alert-baseline-min') || {}).value || 60),
+      min_tokens_1min: parseInt((document.getElementById('alert-min-tokens-1min') || {}).value || 500),
+    };
+  }
+  var resp = await fetch('/api/alerts/rules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  if (!resp.ok) {
+    var err = '';
+    try { err = (await resp.json()).error || ''; } catch(e) {}
+    alert('Failed to create alert rule' + (err ? ': ' + err : ''));
+    return;
+  }
   document.getElementById('add-alert-form').style.display = 'none';
   loadAlertRules();
 }
@@ -10354,12 +10916,52 @@ async function loadAlertRules() {
       return;
     }
     var html = '';
+    function parseChannels(value) {
+      if (Array.isArray(value)) return value;
+      if (typeof value === 'string') {
+        try {
+          var parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) return parsed;
+        } catch(e) {}
+        return [value];
+      }
+      return [];
+    }
+    function parseParams(value) {
+      if (value && typeof value === 'object') return value;
+      if (typeof value === 'string') {
+        try {
+          var parsed = JSON.parse(value);
+          if (parsed && typeof parsed === 'object') return parsed;
+        } catch(e) {}
+      }
+      return {};
+    }
+    function ruleTypeLabel(t) {
+      if (t === 'threshold') return 'Daily spend threshold';
+      if (t === 'spike') return 'Hourly cost spike';
+      if (t === 'session_cost_threshold') return 'Session cost threshold';
+      if (t === 'token_velocity_spike') return 'Token velocity spike (1-min)';
+      return t;
+    }
+    function ruleThresholdLabel(t, thr) {
+      var n = Number(thr || 0);
+      if (t === 'threshold') return '$' + n.toFixed(2) + '/day';
+      if (t === 'spike') return n.toFixed(1) + 'x';
+      if (t === 'session_cost_threshold') return '$' + n.toFixed(2) + '/session';
+      if (t === 'token_velocity_spike') return n.toFixed(1) + 'x baseline';
+      return String(thr || '');
+    }
     rules.forEach(function(r) {
-      var channels = [];
-      try { channels = JSON.parse(r.channels); } catch(e) { channels = [r.channels]; }
+      var channels = parseChannels(r.channels);
+      var params = parseParams(r.params);
       html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;">';
-      html += '<span style="font-weight:600;">' + escHtml(r.type) + '</span>';
-      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : '$'+r.threshold) + '</span>';
+      html += '<span style="font-weight:600;">' + escHtml(ruleTypeLabel(r.type)) + '</span>';
+      html += '<span style="color:var(--text-accent);">' + escHtml(ruleThresholdLabel(r.type, r.threshold)) + '</span>';
+      if (r.type === 'token_velocity_spike') {
+        html += '<span style="color:var(--text-muted);font-size:11px;">scope: ' + escHtml((params.scope || 'session')) + '</span>';
+        html += '<span style="color:var(--text-muted);font-size:11px;">min: ' + Number(params.min_tokens_1min || 500) + ' tok/1min</span>';
+      }
       html += '<span style="color:var(--text-muted);font-size:11px;">' + channels.join(', ') + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + r.cooldown_min + 'min cooldown</span>';
       html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-error);font-size:16px;" data-rule-id="'+r.id+'" onclick="deleteAlertRule(this.dataset.ruleId)" title="Delete">&#x1f5d1;</span>';
@@ -22683,10 +23285,20 @@ def api_alert_rules():
         channels = data.get("channels", ["banner"])
         cooldown = data.get("cooldown_min", 30)
         enabled = data.get("enabled", True)
-        if rtype not in ("threshold", "spike", "anomaly", "agent_down"):
+        if rtype not in (
+            "threshold",
+            "spike",
+            "anomaly",
+            "agent_down",
+            "session_cost_threshold",
+            "token_velocity_spike",
+        ):
             return jsonify({"error": "Invalid alert type"}), 400
         if not isinstance(threshold, (int, float)) or threshold <= 0:
             return jsonify({"error": "Threshold must be a positive number"}), 400
+        ok, err, params = _normalize_alert_rule_params(rtype, data.get("params"))
+        if not ok:
+            return jsonify({"error": err}), 400
         import uuid
 
         rule_id = str(uuid.uuid4())[:8]
@@ -22694,13 +23306,14 @@ def api_alert_rules():
         with _fleet_db_lock:
             db = _fleet_db()
             db.execute(
-                "INSERT INTO alert_rules (id, type, threshold, channels, cooldown_min, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO alert_rules (id, type, threshold, channels, params, cooldown_min, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     rule_id,
                     rtype,
                     threshold,
                     json.dumps(channels),
+                    json.dumps(params),
                     cooldown,
                     1 if enabled else 0,
                     now,
@@ -22727,6 +23340,16 @@ def api_alert_rule(rule_id):
     data = request.get_json(silent=True) or {}
     sets = []
     vals = []
+    existing = None
+    with _fleet_db_lock:
+        db = _fleet_db()
+        existing = db.execute(
+            "SELECT * FROM alert_rules WHERE id = ?", (rule_id,)
+        ).fetchone()
+        db.close()
+    if not existing:
+        return jsonify({"error": "Rule not found"}), 404
+    existing = dict(existing)
     for field in ["threshold", "cooldown_min", "enabled"]:
         if field in data:
             sets.append(f"{field} = ?")
@@ -22736,6 +23359,12 @@ def api_alert_rule(rule_id):
     if "channels" in data:
         sets.append("channels = ?")
         vals.append(json.dumps(data["channels"]))
+    if "params" in data:
+        ok, err, params = _normalize_alert_rule_params(existing.get("type", ""), data.get("params"))
+        if not ok:
+            return jsonify({"error": err}), 400
+        sets.append("params = ?")
+        vals.append(json.dumps(params))
     if not sets:
         return jsonify({"error": "No fields to update"}), 400
     sets.append("updated_at = ?")
