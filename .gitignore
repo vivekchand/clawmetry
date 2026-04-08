@@ -25,3 +25,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Database files
+*.db
+.clawmetry*.db

@@ -208,18 +208,55 @@ def decrypt_payload(blob: str, key_b64: str) -> dict:
     return json.loads(cipher.decrypt(nonce, ct, None))
 
 
+def _get_machine_key() -> bytes:
+    """Derive a key from machine-specific data for encrypting the encryption_key at rest."""
+    import hashlib
+    import getpass
+
+    machine_data = f"{getpass.getuser()}-{Path.home()}-{platform.node()}".encode()
+    return hashlib.sha256(machine_data).digest()
+
+
+def _encrypt_key_at_rest(key: str) -> str:
+    """Encrypt the encryption_key using a machine-derived key. Returns base64 string."""
+    try:
+        from cryptography.fernet import Fernet
+
+        f = Fernet(base64.urlsafe_b64encode(_get_machine_key()))
+        return f.encrypt(key.encode()).decode()
+    except ImportError:
+        return key
+
+
+def _decrypt_key_at_rest(encrypted_key: str) -> str:
+    """Decrypt the encryption_key that was encrypted with _encrypt_key_at_rest."""
+    try:
+        from cryptography.fernet import Fernet
+
+        f = Fernet(base64.urlsafe_b64encode(_get_machine_key()))
+        return f.decrypt(encrypted_key.encode()).decode()
+    except Exception:
+        return encrypted_key
+
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 
 def load_config() -> dict:
     if not CONFIG_FILE.exists():
         raise FileNotFoundError(f"No config at {CONFIG_FILE}. Run: clawmetry connect")
-    return json.loads(CONFIG_FILE.read_text())
+    data = json.loads(CONFIG_FILE.read_text())
+    if "encrypted_key" in data:
+        data["encryption_key"] = _decrypt_key_at_rest(data.pop("encrypted_key"))
+    return data
 
 
 def save_config(data: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, indent=2))
+    to_save = dict(data)
+    if "encryption_key" in to_save:
+        to_save["encrypted_key"] = _encrypt_key_at_rest(to_save.pop("encryption_key"))
+    CONFIG_FILE.write_text(json.dumps(to_save, indent=2))
     CONFIG_FILE.chmod(0o600)
 
 
@@ -955,7 +992,10 @@ def sync_sessions_recent(
     if os.path.isfile(index_path):
         try:
             current_mtime = os.path.getmtime(index_path)
-            if _sessions_json_cache["data"] is not None and _sessions_json_cache["mtime"] == current_mtime:
+            if (
+                _sessions_json_cache["data"] is not None
+                and _sessions_json_cache["mtime"] == current_mtime
+            ):
                 file_to_subagent_id = _sessions_json_cache["data"]
             else:
                 with open(index_path) as _fi:
@@ -964,8 +1004,14 @@ def sync_sessions_recent(
                     if ":subagent:" in _k and isinstance(_meta, dict):
                         _sf = _meta.get("sessionFile", "")
                         if _sf:
-                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[-1]
-                _sessions_json_cache = {"ts": time.time(), "data": file_to_subagent_id.copy(), "mtime": current_mtime}
+                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[
+                                -1
+                            ]
+                _sessions_json_cache = {
+                    "ts": time.time(),
+                    "data": file_to_subagent_id.copy(),
+                    "mtime": current_mtime,
+                }
         except Exception:
             pass
 
@@ -2974,8 +3020,6 @@ if __name__ == "__main__":
             log.error(traceback.format_exc())
             log.info("Restarting in 15 seconds...")
             time.sleep(15)
-
-
 
 
 def run_daemon() -> None:
