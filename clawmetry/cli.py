@@ -507,14 +507,14 @@ def _cmd_connect(args) -> None:
     # --key-only: just save config, don't start daemon (for host-side NemoClaw OTP flow)
     if getattr(args, "key_only", False):
         print(f"  API key:      {api_key}")
-        print(f"  Enc key:      {enc_key}")
+        print(f"  Enc key:      {enc_key[:6] + '…' + enc_key[-4:]}")
         print()
         return
 
     # Skip enc key reminder when --enc-key was passed (automated/sandbox use)
     if not _enc_key_arg:
         print("  Keep this secret key safe (like a password):")
-        print(f"  {enc_key}")
+        print(f"  {enc_key[:6] + '…' + enc_key[-4:]}")
         print()
 
     # --no-daemon: skip daemon start (managed by supervisord externally)
@@ -1670,8 +1670,18 @@ def _cmd_update() -> None:
     print("Checking for updates...")
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "--break-system-packages", "clawmetry"],
-            capture_output=True, text=True, timeout=120,
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "--break-system-packages",
+                "clawmetry",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode == 0:
             # Check new version
