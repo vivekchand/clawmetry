@@ -979,7 +979,9 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
         try:
             body = json.loads(body_bytes) if body_bytes else {}
         except json.JSONDecodeError:
-            body = {}
+            return _error_response(
+                400, "invalid_request", "Invalid JSON in request body", "unknown"
+            )
 
         model = body.get("model", "unknown")
         is_streaming = body.get("stream", False)
@@ -1228,9 +1230,15 @@ def run_proxy(config: ProxyConfig = None, foreground: bool = True) -> None:
 
     try:
         from waitress import serve
-        serve(app, host=config.host, port=config.port,
-              threads=64, channel_timeout=300,
-              _quiet=not config.log_requests)
+
+        serve(
+            app,
+            host=config.host,
+            port=config.port,
+            threads=64,
+            channel_timeout=300,
+            _quiet=not config.log_requests,
+        )
     except ImportError:
         app.run(host=config.host, port=config.port, threaded=True)
     finally:
