@@ -460,7 +460,7 @@ def calculate_cost(
     cache_read_cost = (cache_read_tokens / 1_000_000) * (input_price * 0.1)
     cache_create_cost = (cache_creation_tokens / 1_000_000) * (input_price * 1.25)
     input_cost = (max(0, regular_input) / 1_000_000) * input_price
-    output_cost = (output_tokens / 1_000_000) * output_price
+    output_cost = (max(0, output_tokens) / 1_000_000) * output_price
 
     return round(input_cost + cache_read_cost + cache_create_cost + output_cost, 6)
 
@@ -1228,9 +1228,15 @@ def run_proxy(config: ProxyConfig = None, foreground: bool = True) -> None:
 
     try:
         from waitress import serve
-        serve(app, host=config.host, port=config.port,
-              threads=64, channel_timeout=300,
-              _quiet=not config.log_requests)
+
+        serve(
+            app,
+            host=config.host,
+            port=config.port,
+            threads=64,
+            channel_timeout=300,
+            _quiet=not config.log_requests,
+        )
     except ImportError:
         app.run(host=config.host, port=config.port, threaded=True)
     finally:
