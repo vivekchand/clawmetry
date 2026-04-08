@@ -856,8 +856,8 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 choices = resp_data.get("choices", [])
                 if choices:
                     usage.stop_reason = choices[0].get("finish_reason", "")
-        except (json.JSONDecodeError, KeyError):
-            pass
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Failed to parse response JSON: {e}")
 
         return resp_body, resp_status, resp_headers, usage
 
@@ -1228,9 +1228,15 @@ def run_proxy(config: ProxyConfig = None, foreground: bool = True) -> None:
 
     try:
         from waitress import serve
-        serve(app, host=config.host, port=config.port,
-              threads=64, channel_timeout=300,
-              _quiet=not config.log_requests)
+
+        serve(
+            app,
+            host=config.host,
+            port=config.port,
+            threads=64,
+            channel_timeout=300,
+            _quiet=not config.log_requests,
+        )
     except ImportError:
         app.run(host=config.host, port=config.port, threaded=True)
     finally:
