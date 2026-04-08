@@ -133,12 +133,20 @@ class TestTabsLoad:
         assert overview.count() > 0, "#page-overview should be active"
 
     def test_crons_tab_loads(self, page: Page):
-        """Clicking Crons tab shows crons page (skipped when tab is hidden)."""
+        """Clicking Crons tab (inside More dropdown) shows crons page."""
         load_dashboard(page)
+        # Crons is inside the More dropdown and hidden until cron data exists
         crons_tab = page.locator("#crons-tab")
-        if crons_tab.count() == 0 or not crons_tab.is_visible():
+        if crons_tab.count() == 0:
+            pytest.skip("Crons tab not present")
+        # Check if crons tab is enabled (display != none via JS)
+        is_enabled = page.evaluate("document.querySelector('#crons-tab').style.display !== 'none'")
+        if not is_enabled:
             pytest.skip("Crons tab is hidden (no cron data available)")
-        click_tab(page, "Crons")
+        # Open the More dropdown first
+        click_tab(page, "More")
+        crons_tab.click()
+        page.wait_for_timeout(600)
         crons_page = page.locator("#page-crons")
         assert crons_page.count() > 0, "#page-crons element not found"
 
