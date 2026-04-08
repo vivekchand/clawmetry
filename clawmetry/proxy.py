@@ -982,6 +982,8 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
             body = {}
 
         model = body.get("model", "unknown")
+        if not isinstance(model, str):
+            return jsonify({"error": "model must be a string"}), 400
         is_streaming = body.get("stream", False)
 
         provider = detect_provider(path, req_headers, body)
@@ -1228,9 +1230,15 @@ def run_proxy(config: ProxyConfig = None, foreground: bool = True) -> None:
 
     try:
         from waitress import serve
-        serve(app, host=config.host, port=config.port,
-              threads=64, channel_timeout=300,
-              _quiet=not config.log_requests)
+
+        serve(
+            app,
+            host=config.host,
+            port=config.port,
+            threads=64,
+            channel_timeout=300,
+            _quiet=not config.log_requests,
+        )
     except ImportError:
         app.run(host=config.host, port=config.port, threaded=True)
     finally:
