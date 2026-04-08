@@ -3241,11 +3241,11 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;</div>
     <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
-      <div class="nav-tab" id="crons-tab" onclick="switchTab('crons');hideAdvDropdown()" style="display:none;">Crons</div>
       <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
       <div class="nav-tab" onclick="switchTab('security');hideAdvDropdown()">Security</div>
       <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
@@ -9054,11 +9054,11 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;</div>
     <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
-      <div class="nav-tab" id="crons-tab" onclick="switchTab('crons');hideAdvDropdown()" style="display:none;">Crons</div>
       <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
       <div class="nav-tab" onclick="switchTab('security');hideAdvDropdown()">Security</div>
       <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
