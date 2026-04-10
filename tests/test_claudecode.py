@@ -12,6 +12,7 @@ Run with:
     python dashboard_claudecode.py --port 8901 &
     CLAWMETRY_CC_URL=http://localhost:8901 pytest tests/test_claudecode.py -v
 """
+
 import os
 import sys
 import subprocess
@@ -46,8 +47,79 @@ def api():
     return requests.Session()
 
 
+@pytest.fixture(scope="session")
+def mock_claude_home(tmp_path_factory):
+    """Create a temporary CLAUDE_HOME with mock session data."""
+    import tempfile
+    import json
+
+    tmpdir = tmp_path_factory.mktemp("mock_claude_home")
+    projects_dir = tmpdir / "projects"
+    projects_dir.mkdir()
+
+    project_slug = "test-project"
+    project_dir = projects_dir / project_slug
+    project_dir.mkdir()
+
+    session_id = "test-session-001"
+    timestamp = "2026-04-03T10:00:00.000Z"
+    jsonl_content = (
+        json.dumps(
+            {
+                "type": "user",
+                "timestamp": timestamp,
+                "cwd": "/test/cwd",
+                "gitBranch": "main",
+                "version": "1.2.3",
+                "entrypoint": "main.py",
+                "message": {"role": "user", "content": "Hello, this is a test message"},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": timestamp,
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet-20241022",
+                    "content": [{"type": "text", "text": "Hello! How can I help you?"}],
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                },
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "user",
+                "timestamp": timestamp,
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool_1",
+                            "content": "result",
+                        }
+                    ],
+                },
+            }
+        )
+    )
+
+    jsonl_path = project_dir / f"{session_id}.jsonl"
+    jsonl_path.write_text(jsonl_content)
+
+    memory_dir = project_dir / "memory"
+    memory_dir.mkdir()
+    memory_file = memory_dir / "MEMORY.md"
+    memory_file.write_text("# Test Project Memory\n\nThis is mock memory content.")
+
+    return str(tmpdir)
+
+
 @pytest.fixture(scope="session", autouse=True)
-def server(base_url):
+def server(base_url, mock_claude_home):
     """Ensure the Claude Code dashboard server is running before tests."""
     if _is_server_running(base_url):
         yield base_url
@@ -59,10 +131,13 @@ def server(base_url):
         port = base_url.split(":")[-1].rstrip("/")
     except Exception:
         port = "8901"
+    env = os.environ.copy()
+    env["CLAWMETRY_CLAUDE_HOME"] = mock_claude_home
     proc = subprocess.Popen(
         [sys.executable, dashboard, "--port", port],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        env=env,
     )
 
     for _ in range(40):
@@ -85,6 +160,7 @@ def server(base_url):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def get(api, base_url, path):
     """Make a GET request and return the response."""
     return api.get(f"{base_url}{path}", timeout=10)
@@ -92,22 +168,20 @@ def get(api, base_url, path):
 
 def assert_ok(resp):
     assert resp.status_code == 200, (
-        f"Expected 200 for {resp.url}, got {resp.status_code}: "
-        f"{resp.text[:200]}"
+        f"Expected 200 for {resp.url}, got {resp.status_code}: {resp.text[:200]}"
     )
     return resp.json()
 
 
 def assert_keys(data, *keys):
     for k in keys:
-        assert k in data, (
-            f"Missing key '{k}' in response: {list(data.keys())}"
-        )
+        assert k in data, f"Missing key '{k}' in response: {list(data.keys())}"
 
 
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
+
 
 class TestHealth:
     def test_health_ok(self, api, base_url):
@@ -128,6 +202,7 @@ class TestHealth:
 # Sessions
 # ---------------------------------------------------------------------------
 
+
 class TestSessions:
     def test_sessions_ok(self, api, base_url):
         d = assert_ok(get(api, base_url, "/api/sessions"))
@@ -144,8 +219,14 @@ class TestSessions:
         sess = d["sessions"][0]
         assert_keys(
             sess,
-            "session_id", "source", "project", "tokens",
-            "cost_usd", "model", "start_ts", "messages",
+            "session_id",
+            "source",
+            "project",
+            "tokens",
+            "cost_usd",
+            "model",
+            "start_ts",
+            "messages",
         )
         assert sess["source"] == "claude_code"
 
@@ -154,9 +235,7 @@ class TestSessions:
         if not d["sessions"]:
             pytest.skip("No sessions")
         proj = d["sessions"][0]["project"]
-        d2 = assert_ok(
-            get(api, base_url, f"/api/sessions?project={proj}")
-        )
+        d2 = assert_ok(get(api, base_url, f"/api/sessions?project={proj}"))
         assert all(s["project"] == proj for s in d2["sessions"])
 
     def test_session_limit(self, api, base_url):
@@ -168,6 +247,7 @@ class TestSessions:
 # Session Detail
 # ---------------------------------------------------------------------------
 
+
 class TestSessionDetail:
     def test_session_detail_ok(self, api, base_url):
         d = assert_ok(get(api, base_url, "/api/sessions?limit=1"))
@@ -177,8 +257,12 @@ class TestSessionDetail:
         detail = assert_ok(get(api, base_url, f"/api/session/{sid}"))
         assert_keys(
             detail,
-            "name", "session_id", "messageCount", "model",
-            "totalTokens", "messages",
+            "name",
+            "session_id",
+            "messageCount",
+            "model",
+            "totalTokens",
+            "messages",
         )
 
     def test_session_detail_404(self, api, base_url):
@@ -189,9 +273,7 @@ class TestSessionDetail:
         """Verify tool_result events are NOT labelled as 'user'."""
         d = assert_ok(get(api, base_url, "/api/sessions?limit=5"))
         for sess in d["sessions"]:
-            detail = assert_ok(
-                get(api, base_url, f"/api/session/{sess['session_id']}")
-            )
+            detail = assert_ok(get(api, base_url, f"/api/session/{sess['session_id']}"))
             roles = {m["role"] for m in detail["messages"]}
             assert "user" not in roles, (
                 f"Session {sess['session_id']} has 'user' role — "
@@ -221,13 +303,18 @@ class TestSessionDetail:
 # Analytics
 # ---------------------------------------------------------------------------
 
+
 class TestAnalytics:
     def test_analytics_ok(self, api, base_url):
         d = assert_ok(get(api, base_url, "/api/analytics"))
         assert_keys(
             d,
-            "total_sessions", "total_tokens", "total_cost_usd",
-            "daily_tokens", "model_usage", "tool_stats",
+            "total_sessions",
+            "total_tokens",
+            "total_cost_usd",
+            "daily_tokens",
+            "model_usage",
+            "tool_stats",
         )
 
     def test_analytics_types(self, api, base_url):
@@ -247,6 +334,7 @@ class TestAnalytics:
 # Projects
 # ---------------------------------------------------------------------------
 
+
 class TestProjects:
     def test_projects_ok(self, api, base_url):
         d = assert_ok(get(api, base_url, "/api/projects"))
@@ -260,7 +348,11 @@ class TestProjects:
         proj = d["projects"][0]
         assert_keys(
             proj,
-            "slug", "name", "path", "sessions", "has_memory",
+            "slug",
+            "name",
+            "path",
+            "sessions",
+            "has_memory",
         )
 
     def test_memory_preview_present(self, api, base_url):
@@ -277,6 +369,7 @@ class TestProjects:
 # ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
+
 
 class TestUI:
     def test_index_loads(self, api, base_url):

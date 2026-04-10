@@ -1,6 +1,6 @@
 # Cloud Testing Guide
 
-Run the OpenClaw Dashboard on a remote server and access it from anywhere.
+Run ClawMetry on a remote server and access it from anywhere.
 
 ---
 

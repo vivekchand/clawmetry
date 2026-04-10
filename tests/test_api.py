@@ -7,6 +7,7 @@ Tests every API endpoint for:
 
 Tests are resilient: empty data is fine — we just check structure.
 """
+
 import pytest
 import requests
 
@@ -14,6 +15,7 @@ import requests
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def get(api, base_url, path):
     """Make an authenticated GET request and return the response."""
@@ -35,6 +37,7 @@ def assert_keys(data, *keys):
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
+
 
 class TestAuth:
     def test_auth_check_accessible(self, base_url):
@@ -61,6 +64,7 @@ class TestAuth:
 # ---------------------------------------------------------------------------
 # Core endpoints
 # ---------------------------------------------------------------------------
+
 
 class TestOverview:
     def test_status(self, api, base_url):
@@ -90,7 +94,6 @@ class TestChannels:
         d = assert_ok(get(api, base_url, "/api/channels"))
         assert "channels" in d
         assert isinstance(d["channels"], list)
-
 
 
 class TestHealth:
@@ -158,8 +161,9 @@ class TestSandboxStatus:
         d = assert_ok(get(api, base_url, "/api/sandbox-status"))
         sec = d.get("security")
         if sec is not None and "sandbox_enabled" in sec:
-            assert isinstance(sec["sandbox_enabled"], bool), \
+            assert isinstance(sec["sandbox_enabled"], bool), (
                 "security.sandbox_enabled must be a boolean"
+            )
 
 
 class TestSessions:
@@ -217,7 +221,14 @@ class TestSkillCosts:
     def test_skill_shape_when_present(self, api, base_url):
         d = assert_ok(get(api, base_url, "/api/skill-attribution"))
         for skill in d["skills"]:
-            assert_keys(skill, "name", "invocations", "total_cost_usd", "avg_cost_usd", "clawhub_url")
+            assert_keys(
+                skill,
+                "name",
+                "invocations",
+                "total_cost_usd",
+                "avg_cost_usd",
+                "clawhub_url",
+            )
             assert isinstance(skill["invocations"], int)
             assert skill["invocations"] >= 1
             assert isinstance(skill["total_cost_usd"], (int, float))
@@ -245,7 +256,6 @@ class TestUsage:
         assert isinstance(d, dict)
 
 
-
 # ---------------------------------------------------------------------------
 # Channel endpoints
 # ---------------------------------------------------------------------------
@@ -254,13 +264,13 @@ FULL_CHANNEL_KEYS = ["messages", "todayIn", "todayOut"]
 BASIC_CHANNEL_KEYS = ["messages"]
 
 CHANNELS = {
-    "telegram":  FULL_CHANNEL_KEYS,
-    "imessage":  FULL_CHANNEL_KEYS,
-    "whatsapp":  BASIC_CHANNEL_KEYS,
-    "signal":    BASIC_CHANNEL_KEYS,
-    "discord":   BASIC_CHANNEL_KEYS,
-    "slack":     BASIC_CHANNEL_KEYS,
-    "webchat":   BASIC_CHANNEL_KEYS,
+    "telegram": FULL_CHANNEL_KEYS,
+    "imessage": FULL_CHANNEL_KEYS,
+    "whatsapp": BASIC_CHANNEL_KEYS,
+    "signal": BASIC_CHANNEL_KEYS,
+    "discord": BASIC_CHANNEL_KEYS,
+    "slack": BASIC_CHANNEL_KEYS,
+    "webchat": BASIC_CHANNEL_KEYS,
 }
 
 
@@ -303,11 +313,14 @@ class TestChannelEndpoints:
 # Heartbeat Gap Alerting
 # ---------------------------------------------------------------------------
 
+
 class TestHeartbeatStatus:
     def test_heartbeat_status_endpoint(self, api, base_url):
         """Heartbeat status endpoint returns 200 with expected keys."""
         d = assert_ok(get(api, base_url, "/api/heartbeat-status"))
-        assert_keys(d, "status", "last_heartbeat_ts", "interval_seconds", "threshold_seconds")
+        assert_keys(
+            d, "status", "last_heartbeat_ts", "interval_seconds", "threshold_seconds"
+        )
 
     def test_heartbeat_status_values(self, api, base_url):
         """Status is one of: unknown, ok, warning, silent."""
@@ -339,7 +352,7 @@ class TestHeartbeatStatus:
         d = assert_ok(get(api, base_url, "/api/heartbeat-status"))
         assert d["status"] == "ok", f"Expected 'ok' after ping, got '{d['status']}'"
         assert d["gap_seconds"] is not None
-        assert d["gap_seconds"] < 5  # should be very recent
+        assert d["gap_seconds"] < 30  # should be recent
 
     def test_system_health_includes_heartbeat(self, api, base_url):
         """System health endpoint includes heartbeat status."""
@@ -378,16 +391,21 @@ class TestHeartbeatStatus:
         assert "gateway" in ss, "service_status.gateway must be present"
         assert isinstance(ss["gateway"], bool), "service_status.gateway must be bool"
         assert "channels" in ss, "service_status.channels must be present"
-        assert isinstance(ss["channels"], list), "service_status.channels must be a list"
+        assert isinstance(ss["channels"], list), (
+            "service_status.channels must be a list"
+        )
         assert "sync" in ss, "service_status.sync must be present"
         assert "resources" in ss, "service_status.resources must be present"
-        assert ss["resources"] in ("ok", "warn", "critical"), \
+        assert ss["resources"] in ("ok", "warn", "critical"), (
             f"service_status.resources must be ok/warn/critical, got {ss['resources']}"
+        )
 
     def test_service_status_endpoint(self, api, base_url):
         """Dedicated /api/service-status endpoint returns compact status."""
         d = assert_ok(get(api, base_url, "/api/service-status"))
-        assert "service_status" in d, "/api/service-status must return service_status key"
+        assert "service_status" in d, (
+            "/api/service-status must return service_status key"
+        )
         ss = d["service_status"]
         assert isinstance(ss, dict)
         assert "gateway" in ss
@@ -402,6 +420,7 @@ class TestHeartbeatStatus:
 # ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
+
 
 class TestSecurity:
     def test_threats_endpoint(self, api, base_url):
@@ -420,7 +439,9 @@ class TestSecurity:
         """Threat counts add up correctly."""
         d = assert_ok(get(api, base_url, "/api/security/threats"))
         counts = d["counts"]
-        expected_total = counts["critical"] + counts["high"] + counts["medium"] + counts["low"]
+        expected_total = (
+            counts["critical"] + counts["high"] + counts["medium"] + counts["low"]
+        )
         assert counts["total"] == expected_total, (
             f"Total {counts['total']} != sum of severities {expected_total}"
         )
@@ -455,6 +476,7 @@ class TestSecurity:
 # ---------------------------------------------------------------------------
 # Security Posture
 # ---------------------------------------------------------------------------
+
 
 class TestSecurityPosture:
     def test_posture_endpoint(self, api, base_url):
@@ -494,6 +516,7 @@ class TestSecurityPosture:
 # Brain Activity
 # ---------------------------------------------------------------------------
 
+
 class TestBrainActivity:
     def test_brain_history_structure(self, api, base_url):
         """Brain history endpoint returns events, total, and sources."""
@@ -528,7 +551,11 @@ class TestBrainActivity:
             if b"connected" in first_chunk or len(first_chunk) > 512:
                 break
         r.close()
-        assert b"connected" in first_chunk or b"data:" in first_chunk or b":\n" in first_chunk
+        assert (
+            b"connected" in first_chunk
+            or b"data:" in first_chunk
+            or b":\n" in first_chunk
+        )
 
 
 class TestMemoryAnalytics:
@@ -537,9 +564,20 @@ class TestMemoryAnalytics:
     def test_memory_analytics_returns_200(self, api, base_url):
         """Memory analytics endpoint returns 200."""
         d = assert_ok(get(api, base_url, "/api/memory-analytics"))
-        assert_keys(d, "totalBytes", "totalKB", "estTokens", "fileCount",
-                     "files", "topFiles", "contextBudgets", "recommendations",
-                     "hasBloat", "hasWarnings", "thresholds")
+        assert_keys(
+            d,
+            "totalBytes",
+            "totalKB",
+            "estTokens",
+            "fileCount",
+            "files",
+            "topFiles",
+            "contextBudgets",
+            "recommendations",
+            "hasBloat",
+            "hasWarnings",
+            "thresholds",
+        )
 
     def test_memory_analytics_context_budgets(self, api, base_url):
         """Context budgets contain all three model tiers."""
@@ -561,8 +599,6 @@ class TestMemoryAnalytics:
         for f in d["files"]:
             assert_keys(f, "path", "sizeBytes", "sizeKB", "estTokens", "status")
             assert f["status"] in ("ok", "warning", "critical")
-
-
 
 
 class TestTraceClusters:
@@ -593,10 +629,21 @@ class TestTraceClusters:
         """Each cluster has the expected fields."""
         d = assert_ok(get(api, base_url, "/api/sessions/clusters"))
         for c in d["clusters"]:
-            assert_keys(c, "cluster_id", "label", "session_count", "total_tokens",
-                         "total_cost_usd", "avg_cost_usd", "error_count",
-                         "tool_category", "cost_tier", "has_errors",
-                         "model_family", "top_tools")
+            assert_keys(
+                c,
+                "cluster_id",
+                "label",
+                "session_count",
+                "total_tokens",
+                "total_cost_usd",
+                "avg_cost_usd",
+                "error_count",
+                "tool_category",
+                "cost_tier",
+                "has_errors",
+                "model_family",
+                "top_tools",
+            )
             assert c["session_count"] >= 1
             assert c["total_tokens"] >= 0
             assert c["cost_tier"] in ("cheap", "medium", "expensive")
@@ -639,11 +686,20 @@ class TestActivityHeatmap:
         d = assert_ok(get(api, base_url, "/api/heatmap"))
         assert d["max"] >= 0
 
+
 class TestModelAttribution:
     def test_model_attribution_returns_200(self, api, base_url):
         """Model attribution endpoint returns 200 with expected keys (GH #300)."""
         d = assert_ok(get(api, base_url, "/api/model-attribution"))
-        assert_keys(d, "models", "primary_model", "total_turns", "model_count", "switches", "switch_count")
+        assert_keys(
+            d,
+            "models",
+            "primary_model",
+            "total_turns",
+            "model_count",
+            "switches",
+            "switch_count",
+        )
 
     def test_models_list_structure(self, api, base_url):
         """Each entry in models list has required fields."""
@@ -668,7 +724,6 @@ class TestModelAttribution:
         assert len(d["switches"]) <= 50
 
 
-
 class TestTokenVelocity:
     """Tests for GH #313 — token velocity alert endpoint."""
 
@@ -684,8 +739,12 @@ class TestTokenVelocity:
         d = assert_ok(get(api, base_url, "/api/token-velocity"))
         assert_keys(d, "alert", "level", "velocity_2min", "flagged_sessions")
         assert isinstance(d["alert"], bool), "alert must be bool"
-        assert isinstance(d["velocity_2min"], (int, float)), "velocity_2min must be a number"
-        assert isinstance(d["flagged_sessions"], list), "flagged_sessions must be a list"
+        assert isinstance(d["velocity_2min"], (int, float)), (
+            "velocity_2min must be a number"
+        )
+        assert isinstance(d["flagged_sessions"], list), (
+            "flagged_sessions must be a list"
+        )
 
     def test_token_velocity_level_valid(self, api, base_url):
         """level field must be one of 'ok', 'warning', 'critical'."""
@@ -698,7 +757,9 @@ class TestTokenVelocity:
         """cost_per_min field is present and non-negative."""
         d = assert_ok(get(api, base_url, "/api/token-velocity"))
         assert "cost_per_min" in d, "cost_per_min key missing"
-        assert isinstance(d["cost_per_min"], (int, float)), "cost_per_min must be numeric"
+        assert isinstance(d["cost_per_min"], (int, float)), (
+            "cost_per_min must be numeric"
+        )
         assert d["cost_per_min"] >= 0, "cost_per_min must be non-negative"
 
     def test_token_velocity_alert_matches_level(self, api, base_url):

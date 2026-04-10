@@ -638,9 +638,9 @@ def _get_budget_status():
                     if ts >= today_start:
                         daily_spent += usd
 
-    daily_limit = config["daily_limit"]
-    weekly_limit = config["weekly_limit"]
-    monthly_limit = config["monthly_limit"]
+    daily_limit = config.get("daily_limit", 0)
+    weekly_limit = config.get("weekly_limit", 0)
+    monthly_limit = config.get("monthly_limit", 0)
 
     return {
         "daily_spent": round(daily_spent, 4),
@@ -661,10 +661,10 @@ def _get_budget_status():
         "paused": _budget_paused,
         "paused_at": _budget_paused_at,
         "paused_reason": _budget_paused_reason,
-        "auto_pause_enabled": config["auto_pause_enabled"],
-        "auto_pause_threshold_usd": config["auto_pause_threshold_usd"],
-        "auto_pause_action": config["auto_pause_action"],
-        "warning_threshold_pct": config["warning_threshold_pct"],
+        "auto_pause_enabled": config.get("auto_pause_enabled", False),
+        "auto_pause_threshold_usd": config.get("auto_pause_threshold_usd", 0),
+        "auto_pause_action": config.get("auto_pause_action", "pause"),
+        "warning_threshold_pct": config.get("warning_threshold_pct", 80),
     }
 
 
@@ -676,12 +676,12 @@ def _budget_check():
     now = time.time()
     config = _get_budget_config()
     status = _get_budget_status()
-    warning_pct = config["warning_threshold_pct"]
-    pause_pct = config["auto_pause_threshold_pct"]
+    warning_pct = config.get("warning_threshold_pct", 80)
+    pause_pct = config.get("auto_pause_threshold_pct", 100)
 
     # Check each period
     for period in ["daily", "weekly", "monthly"]:
-        limit = config[f"{period}_limit"]
+        limit = config.get(f"{period}_limit", 0)
         if limit <= 0:
             continue
         spent = status[f"{period}_spent"]
@@ -714,7 +714,7 @@ def _budget_check():
             )
 
         # Auto-pause
-        if pct >= pause_pct and config["auto_pause_enabled"]:
+        if pct >= pause_pct and config.get("auto_pause_enabled", False):
             _budget_paused = True
             _budget_paused_at = time.time()
             _budget_paused_reason = (
@@ -3609,7 +3609,12 @@ function clawmetryLogout(){
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
   </div>
-  <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
+  <!-- Cost Comparison Panel (GH#554) -->
+  <div class="section-title" id="cost-comparison-section" style="display:flex;align-items:center;">💱 Cost Comparison <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">what same workload costs elsewhere · 30 days</span></div>
+  <div class="card" id="cost-comparison-card" style="display:none;">
+    <div id="cost-comparison-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+  </div>
+    <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
   <div class="card">
     <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
   </div>
@@ -4965,7 +4970,7 @@ async function loadTokenVelocity() {
         return '<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.3);border-radius:6px;padding:3px 8px;font-size:11px;font-weight:400;">'
           + '<code style="font-size:10px;color:inherit;opacity:0.8;">' + s.id + '</code>'
           + '<span style="opacity:0.7;">' + info + '</span>'
-          + '<button onclick="killSession('' + s.id + '')" style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:1px 6px;font-size:10px;cursor:pointer;font-weight:600;">Kill</button>'
+          + '<button onclick="killSession(\'' + s.id + '\')" style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:1px 6px;font-size:10px;cursor:pointer;font-weight:600;">Kill</button>'
           + '</span>';
       }).join('');
     } else if (listEl) {
@@ -4997,9 +5002,9 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
-    loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
+    if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
-    loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
@@ -6432,6 +6437,8 @@ def _get_budget_config():
         "monthly_limit": 0,
         "auto_pause_enabled": False,
         "auto_pause_threshold_pct": 100,
+        "auto_pause_threshold_usd": 0,
+        "auto_pause_action": "pause",
         "warning_threshold_pct": 80,
         "telegram_bot_token": "",
         "telegram_chat_id": "",
@@ -8622,6 +8629,17 @@ DASHBOARD_HTML = r"""
   .evt-item.type-result { border-left: 3px solid #ea580c; }
   .evt-item.type-thinking { border-left: 3px solid #6b7280; }
   .evt-item.type-user { border-left: 3px solid #7c3aed; }
+  .thinking-group { border-left: 3px solid #6b7280; background: var(--bg-secondary); border-radius: 0 6px 6px 0; margin-bottom: 4px; }
+  .thinking-group-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; transition: background 0.15s; }
+  .thinking-group-header:hover { background: var(--bg-hover); }
+  .thinking-group-header .evt-icon { font-size: 16px; flex-shrink: 0; }
+  .thinking-group-header .evt-summary { flex: 1; font-size: 13px; color: var(--text-secondary); }
+  .thinking-group-header .evt-summary strong { color: var(--text-primary); }
+  .thinking-group-badge { background: #374151; color: #9ca3af; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; flex-shrink: 0; }
+  .thinking-group-body { display: none; border-top: 1px solid var(--border-secondary); }
+  .thinking-group-body.open { display: block; }
+  .thinking-group-body .evt-item { border-left: none; border-top: 1px solid var(--border-secondary); border-radius: 0; margin: 0; }
+  .thinking-group-body .evt-item:first-child { border-top: none; }
   /* === Component Detail Modal === */
   .comp-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1100; justify-content: center; align-items: center; }
   .comp-modal-overlay.open { display: flex; }
@@ -9520,7 +9538,12 @@ function clawmetryLogout(){
     <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
     <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
   </div>
-  <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
+  <!-- Cost Comparison Panel (GH#554) -->
+  <div class="section-title" id="cost-comparison-section" style="display:flex;align-items:center;">💱 Cost Comparison <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">what same workload costs elsewhere · 30 days</span></div>
+  <div class="card" id="cost-comparison-card" style="display:none;">
+    <div id="cost-comparison-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
+  </div>
+    <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
   <div class="card">
     <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
   </div>
@@ -11045,9 +11068,9 @@ async function loadAll() {
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
-    loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
+    if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
-    loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
@@ -12566,6 +12589,9 @@ async function loadCrons() {
 async function loadCronHealth() {
   var panel = document.getElementById('cron-health-panel');
   if (!panel) return;
+  // Clear the health table placeholder when loading completes
+  var ht = document.getElementById('cron-health-table');
+  if (ht) ht.innerHTML = '';
   try {
     var data = await fetch('/api/cron/health-summary').then(r => r.json());
     var jobs = data.jobs || [];
@@ -13879,11 +13905,130 @@ async function loadUsage() {
       var el = document.getElementById('trace-clusters-content');
       if (el) el.innerHTML = '<span style="color:var(--text-muted)">No cluster data available</span>';
     });
+    // Load cost comparison panel (GH#554)
+    loadCostComparison();
     // Load activity heatmap
     loadHeatmap();
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
+}
+
+function renderProviderCostChart(providers) {
+  var el = document.getElementById('provider-cost-chart');
+  if (!el) return;
+  if (!providers || providers.length === 0) {
+    el.innerHTML = '<span style="color:var(--text-muted);">No provider cost data yet — start using models from multiple providers.</span>';
+    return;
+  }
+  var providerColors = {
+    'Anthropic': '#f59e0b',
+    'OpenAI': '#22c55e',
+    'Google/Gemini': '#0ea5e9',
+    'Qwen': '#8b5cf6',
+    'xAI': '#ef4444',
+    'OpenRouter': '#14b8a6',
+    'Other': '#94a3b8'
+  };
+  var totalCost = providers.reduce(function(acc, p) { return acc + (p.cost_usd || 0); }, 0) || 0.0001;
+  var html = '<div style="display:flex;flex-direction:column;gap:10px;">';
+  providers.forEach(function(p) {
+    var color = providerColors[p.provider] || '#94a3b8';
+    var pct = Math.round((p.cost_usd / totalCost) * 100);
+    var costStr = p.cost_usd >= 0.01 ? '$' + p.cost_usd.toFixed(2) : p.cost_usd > 0 ? '<$0.01' : '$0.00';
+    var tokStr = p.tokens >= 1000000 ? (p.tokens/1000000).toFixed(1) + 'M' : p.tokens >= 1000 ? (p.tokens/1000).toFixed(0) + 'K' : String(p.tokens || 0);
+    html += '<div style="display:flex;flex-direction:column;gap:4px;">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;">';
+    html += '<div style="display:flex;align-items:center;gap:8px;">';
+    html += '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + color + ';"></span>';
+    html += '<span style="font-weight:600;color:var(--text-primary);font-size:13px;">' + escHtml(p.provider) + '</span>';
+    html += '</div>';
+    html += '<div style="text-align:right;font-size:12px;">';
+    html += '<span style="font-weight:700;color:var(--text-primary);">' + costStr + '</span>';
+    html += '<span style="color:var(--text-muted);margin-left:8px;">' + tokStr + ' tok · ' + pct + '%</span>';
+    html += '</div></div>';
+    html += '<div style="background:rgba(255,255,255,0.08);border-radius:4px;height:8px;overflow:hidden;">';
+    html += '<div style="background:' + color + ';height:100%;width:' + Math.max(pct, 1) + '%;border-radius:4px;transition:width 0.4s ease;"></div>';
+    html += '</div></div>';
+  });
+  html += '</div>';
+  html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);">';
+  html += 'Total: $' + totalCost.toFixed(4) + ' across ' + providers.length + ' provider' + (providers.length !== 1 ? 's' : '');
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+// ===== Cost Comparison Panel (GH#554) =====
+async function loadCostComparison() {
+  var card = document.getElementById('cost-comparison-card');
+  var el = document.getElementById('cost-comparison-content');
+  if (!card || !el) return;
+  try {
+    var data = await fetch('/api/usage/cost-comparison').then(function(r){return r.json();});
+    if (!data || !data.alternatives || data.alternatives.length === 0) return;
+    card.style.display = 'block';
+    renderCostComparison(data);
+  } catch(e) {
+    // silently skip if unavailable
+  }
+}
+
+function renderCostComparison(data) {
+  var el = document.getElementById('cost-comparison-content');
+  if (!el) return;
+  var actual = data.actual || {};
+  var alts = data.alternatives || [];
+  var actualCost = actual.cost_usd || 0;
+  var actualModel = actual.model || 'current model';
+  var actualTokens = actual.tokens || 0;
+  if (actualTokens === 0) {
+    el.innerHTML = '<span style="color:var(--text-muted)">No token data for the last 30 days — usage will appear here once available.</span>';
+    return;
+  }
+  var providerColors = {
+    'Google': '#0ea5e9', 'OpenAI': '#22c55e', 'Anthropic': '#f59e0b',
+    'Alibaba': '#8b5cf6', 'Meta': '#ef4444', 'Other': '#94a3b8'
+  };
+  var tokStr = actualTokens >= 1000000 ? (actualTokens/1000000).toFixed(1)+'M' : actualTokens >= 1000 ? Math.round(actualTokens/1000)+'K' : String(Math.round(actualTokens));
+  var html = '<div style="margin-bottom:14px;padding:10px 14px;background:rgba(255,255,255,0.05);border-radius:8px;border:1px solid rgba(255,255,255,0.08)">';
+  html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Your actual spend (30 days)</div>';
+  html += '<div style="display:flex;align-items:baseline;gap:10px;">';
+  html += '<span style="font-size:22px;font-weight:700;color:var(--text-primary);">$' + (actualCost >= 0.01 ? actualCost.toFixed(2) : actualCost > 0 ? '<0.01' : '0.00') + '</span>';
+  html += '<span style="font-size:12px;color:var(--text-muted);">' + escHtml(actualModel) + ' &middot; ' + tokStr + ' tokens</span>';
+  html += '</div></div>';
+  html += '<div style="display:flex;flex-direction:column;gap:8px;">';
+  alts.forEach(function(alt) {
+    var color = providerColors[alt.provider] || '#94a3b8';
+    var altCost = alt.estimated_cost || 0;
+    var savingsPct = alt.savings_pct || 0;
+    var savingsUsd = alt.savings_usd || 0;
+    var costStr = altCost >= 0.01 ? '$' + altCost.toFixed(2) : altCost > 0 ? '<$0.01' : '$0.00';
+    var isCurrent = actualCost > 0 && Math.abs(altCost - actualCost) / (actualCost || 1) < 0.15;
+    var isCheaper = savingsPct > 5;
+    var isMoreExpensive = savingsPct < -5;
+    var rowStyle = isCurrent ? 'background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);' : 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);';
+    html += '<div style="' + rowStyle + 'border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:12px;">';
+    html += '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + ';flex-shrink:0;"></span>';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + escHtml(alt.display_name) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);">' + escHtml(alt.provider) + '</div>';
+    html += '</div>';
+    html += '<div style="text-align:right;flex-shrink:0;">';
+    html += '<div style="font-size:14px;font-weight:700;color:var(--text-primary);">' + costStr + '</div>';
+    if (isCurrent) {
+      html += '<div style="font-size:11px;color:#94a3b8;">≈ current</div>';
+    } else if (isCheaper) {
+      html += '<div style="font-size:11px;color:#22c55e;">save $' + Math.abs(savingsUsd).toFixed(2) + ' (' + Math.abs(savingsPct) + '%)</div>';
+    } else if (isMoreExpensive) {
+      html += '<div style="font-size:11px;color:#ef4444;">+$' + Math.abs(savingsUsd).toFixed(2) + ' (' + Math.abs(savingsPct) + '% more)</div>';
+    } else {
+      html += '<div style="font-size:11px;color:#94a3b8;">similar cost</div>';
+    }
+    html += '</div></div>';
+  });
+  html += '</div>';
+  html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.5;">Estimates based on 60/40 input/output split for ' + tokStr + ' tokens. Actual costs vary by prompt structure and API tier.</div>';
+  el.innerHTML = html;
 }
 
 function renderTraceClusters(clusters, totalSessions) {
@@ -17846,57 +17991,99 @@ function renderModalNarrative(el) {
 }
 
 var _expandedEvts = {};
+var _expandedGroups = {};
+
+function renderEvtItem(evt, idx) {
+  var icon = '📝', typeClass = '', summary = '', body = '';
+  var ts = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+  if (evt.type === 'agent') {
+    icon = '🤖'; typeClass = 'type-agent';
+    summary = '<strong>Agent</strong> - ' + escHtml((evt.text||'').substring(0, 120));
+    body = evt.text || '';
+  } else if (evt.type === 'thinking') {
+    icon = '💭'; typeClass = 'type-thinking';
+    var thinkChars = evt.thinking_chars || (evt.text||'').length;
+    var thinkBadge = thinkChars > 0 ? ' <span style="background:#374151;color:#9ca3af;font-size:10px;font-weight:600;padding:1px 5px;border-radius:8px;margin-left:4px;" title="~' + Math.round(thinkChars/4) + ' tokens">' + thinkChars + ' chars</span>' : '';
+    summary = '<strong>Thinking</strong>' + thinkBadge + ' - ' + escHtml((evt.text||'').substring(0, 100));
+    body = evt.text || '';
+  } else if (evt.type === 'user') {
+    icon = '👤'; typeClass = 'type-user';
+    summary = '<strong>User</strong> - ' + escHtml((evt.text||'').substring(0, 120));
+    body = evt.text || '';
+  } else if (evt.type === 'exec') {
+    icon = '⚡'; typeClass = 'type-exec';
+    summary = '<strong>EXEC</strong> - <code>' + escHtml(evt.command||'') + '</code>';
+    body = evt.command || '';
+  } else if (evt.type === 'read') {
+    icon = '📖'; typeClass = 'type-read';
+    summary = '<strong>READ</strong> - ' + escHtml(evt.file||'');
+    body = evt.file || '';
+  } else if (evt.type === 'tool') {
+    icon = '🔧'; typeClass = 'type-exec';
+    summary = '<strong>' + escHtml(evt.toolName||'tool') + '</strong> - ' + escHtml((evt.args||'').substring(0, 100));
+    body = evt.args || '';
+  } else if (evt.type === 'result') {
+    icon = '[check]'; typeClass = 'type-result';
+    summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
+    body = evt.text || '';
+  } else {
+    summary = '<strong>' + escHtml(evt.type) + '</strong>';
+    body = JSON.stringify(evt, null, 2);
+  }
+  var bodyId = 'evt-body-' + idx;
+  var h = '<div class="evt-item ' + typeClass + '">';
+  h += '<div class="evt-header" onclick="toggleEvtBody(\'' + bodyId + '\',' + idx + ')">';
+  h += '<span class="evt-icon">' + icon + '</span>';
+  h += '<span class="evt-summary">' + summary + '</span>';
+  h += '<span class="evt-ts">' + escHtml(ts) + '</span>';
+  h += '</div>';
+  var bodyHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(body) : escHtml(body);
+  var isOpen = _expandedEvts[idx] ? ' open' : '';
+  h += '<div class="evt-body md-rendered' + isOpen + '" id="' + bodyId + '">' + bodyHtml + '</div>';
+  h += '</div>';
+  return h;
+}
 
 function renderModalFull(el) {
   var events = _modalEvents;
   var html = '';
-  events.forEach(function(evt, idx) {
-    var icon = '📝', typeClass = '', summary = '', body = '';
-    var ts = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
-    if (evt.type === 'agent') {
-      icon = '🤖'; typeClass = 'type-agent';
-      summary = '<strong>Agent</strong> - ' + escHtml((evt.text||'').substring(0, 120));
-      body = evt.text || '';
-    } else if (evt.type === 'thinking') {
-      icon = '💭'; typeClass = 'type-thinking';
-      summary = '<strong>Thinking</strong> - ' + escHtml((evt.text||'').substring(0, 120));
-      body = evt.text || '';
-    } else if (evt.type === 'user') {
-      icon = '👤'; typeClass = 'type-user';
-      summary = '<strong>User</strong> - ' + escHtml((evt.text||'').substring(0, 120));
-      body = evt.text || '';
-    } else if (evt.type === 'exec') {
-      icon = '⚡'; typeClass = 'type-exec';
-      summary = '<strong>EXEC</strong> - <code>' + escHtml(evt.command||'') + '</code>';
-      body = evt.command || '';
-    } else if (evt.type === 'read') {
-      icon = '📖'; typeClass = 'type-read';
-      summary = '<strong>READ</strong> - ' + escHtml(evt.file||'');
-      body = evt.file || '';
-    } else if (evt.type === 'tool') {
-      icon = '🔧'; typeClass = 'type-exec';
-      summary = '<strong>' + escHtml(evt.toolName||'tool') + '</strong> - ' + escHtml((evt.args||'').substring(0, 100));
-      body = evt.args || '';
-    } else if (evt.type === 'result') {
-      icon = '[check]'; typeClass = 'type-result';
-      summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
-      body = evt.text || '';
+  var i = 0;
+  while (i < events.length) {
+    var evt = events[i];
+    // Group consecutive thinking blocks
+    if (evt.type === 'thinking') {
+      var groupStart = i;
+      var groupEvts = [];
+      while (i < events.length && events[i].type === 'thinking') {
+        groupEvts.push({evt: events[i], idx: i});
+        i++;
+      }
+      if (groupEvts.length === 1) {
+        // Single thinking block — render normally
+        html += renderEvtItem(groupEvts[0].evt, groupEvts[0].idx);
+      } else {
+        // Multiple consecutive thinking blocks — group them
+        var groupId = 'think-group-' + groupStart;
+        var firstSnippet = escHtml((groupEvts[0].evt.text||'').substring(0, 80));
+        var isGroupOpen = _expandedGroups[groupId] ? ' open' : '';
+        html += '<div class="thinking-group">';
+        html += '<div class="thinking-group-header" onclick="toggleThinkGroup(\'' + groupId + '\')">';
+        html += '<span class="evt-icon">💭</span>';
+        html += '<span class="evt-summary"><strong>Thinking</strong> - ' + firstSnippet + '&#8230;</span>';
+        html += '<span class="thinking-group-badge">' + groupEvts.length + ' blocks</span>';
+        html += '</div>';
+        html += '<div class="thinking-group-body' + isGroupOpen + '" id="' + groupId + '">';
+        groupEvts.forEach(function(item) {
+          html += renderEvtItem(item.evt, item.idx);
+        });
+        html += '</div>';
+        html += '</div>';
+      }
     } else {
-      summary = '<strong>' + escHtml(evt.type) + '</strong>';
-      body = JSON.stringify(evt, null, 2);
+      html += renderEvtItem(evt, i);
+      i++;
     }
-    var bodyId = 'evt-body-' + idx;
-    html += '<div class="evt-item ' + typeClass + '">';
-    html += '<div class="evt-header" onclick="toggleEvtBody(\'' + bodyId + '\',' + idx + ')">';
-    html += '<span class="evt-icon">' + icon + '</span>';
-    html += '<span class="evt-summary">' + summary + '</span>';
-    html += '<span class="evt-ts">' + escHtml(ts) + '</span>';
-    html += '</div>';
-    var bodyHtml = (typeof marked !== 'undefined' && marked.parse) ? marked.parse(body) : escHtml(body);
-    var isOpen = _expandedEvts[idx] ? ' open' : '';
-    html += '<div class="evt-body md-rendered' + isOpen + '" id="' + bodyId + '">' + bodyHtml + '</div>';
-    html += '</div>';
-  });
+  }
   el.innerHTML = html || '<div style="padding:20px;color:var(--text-muted);">No events yet</div>';
 }
 
@@ -17905,6 +18092,13 @@ function toggleEvtBody(bodyId, idx) {
   if (!b) return;
   b.classList.toggle('open');
   _expandedEvts[idx] = b.classList.contains('open');
+}
+
+function toggleThinkGroup(groupId) {
+  var b = document.getElementById(groupId);
+  if (!b) return;
+  b.classList.toggle('open');
+  _expandedGroups[groupId] = b.classList.contains('open');
 }
 
 // Initialize theme and zoom on page load
@@ -18179,7 +18373,7 @@ async function showSnapshot(ts) {
 
 // ── NemoClaw: duplicate stub removed; see loadNemoClaw() above ────────────────
 // (The live implementation lives earlier in this file at the // NemoClaw Governance Tab comment)
-if (false) { async function loadNemoClaw() {
+/* if (false) { async function loadNemoClaw() { // dead code stub
   try {
     var data = await fetch('/api/nemoclaw/status').then(function(r) { return r.json(); });
     if (!data.installed) {
@@ -18290,7 +18484,7 @@ function _ncEsc(s) {
     }).catch(function(){});
   } catch(e) {}
 })();
-}} // end if(false) stub
+} } // end if(false) stub */
 </script>
 </div> <!-- end zoom-wrapper -->
 
@@ -24779,6 +24973,98 @@ def api_sessions_clusters():
     )
 
 
+@bp_usage.route("/api/usage/cost-comparison")
+def api_usage_cost_comparison():
+    """Return cost comparison: actual spend vs alternatives (GH#554)."""
+    try:
+        return jsonify(_build_cost_comparison())
+    except Exception as e:
+        return jsonify({"error": str(e), "alternatives": [], "actual": {}}), 500
+
+
+def _build_cost_comparison():
+    """Build cost comparison data: actual spend vs alternative models."""
+    # Alternative model pricing: (input $/1M, output $/1M, display name, provider)
+    ALTERNATIVES = [
+        ("gemini-2.0-flash",   0.10,  0.40,  "Gemini 2.0 Flash",     "Google"),
+        ("gemini-1.5-flash",   0.075, 0.30,  "Gemini 1.5 Flash",     "Google"),
+        ("gpt-4o-mini",        0.15,  0.60,  "GPT-4o Mini",          "OpenAI"),
+        ("claude-haiku-3.5",   0.80,  4.00,  "Claude Haiku 3.5",     "Anthropic"),
+        ("qwen-plus",          0.40,  1.20,  "Qwen Plus",            "Alibaba"),
+        ("claude-sonnet-3.5",  3.00, 15.00,  "Claude Sonnet 3.5",    "Anthropic"),
+        ("claude-opus-4",     15.00, 75.00,  "Claude Opus 4",        "Anthropic"),
+    ]
+    INPUT_RATIO = 0.60  # estimated 60% input, 40% output
+    OUTPUT_RATIO = 0.40
+
+    # Collect actual month tokens and cost from metrics store
+    from datetime import datetime as _dt
+    month_start = time.time() - 30 * 86400
+    actual_tokens = 0
+    actual_cost = 0.0
+    actual_model = "unknown"
+    model_token_map = {}  # model -> tokens
+
+    with _metrics_lock:
+        for entry in metrics_store.get("tokens", []):
+            if entry.get("timestamp", 0) >= month_start:
+                tok = float(entry.get("total", 0) or 0)
+                actual_tokens += tok
+                m = entry.get("model", "")
+                if m:
+                    model_token_map[m] = model_token_map.get(m, 0) + tok
+        for entry in metrics_store.get("cost", []):
+            if entry.get("timestamp", 0) >= month_start:
+                actual_cost += float(entry.get("usd", 0) or 0)
+
+    # If no cost data, estimate from tokens using current model pricing
+    if actual_tokens > 0 and actual_cost == 0.0:
+        usd_per_tok = _estimate_usd_per_token()
+        actual_cost = actual_tokens * usd_per_tok
+
+    # Determine dominant model
+    if model_token_map:
+        actual_model = max(model_token_map, key=lambda k: model_token_map[k])
+
+    # Compute alternative costs for same token volume
+    alternatives = []
+    for alt_id, in_price, out_price, display_name, provider in ALTERNATIVES:
+        if actual_tokens == 0:
+            alt_cost = 0.0
+        else:
+            alt_cost = (
+                actual_tokens * INPUT_RATIO * (in_price / 1_000_000)
+                + actual_tokens * OUTPUT_RATIO * (out_price / 1_000_000)
+            )
+        if actual_cost > 0:
+            savings_pct = round((actual_cost - alt_cost) / actual_cost * 100, 1)
+            savings_usd = round(actual_cost - alt_cost, 4)
+        else:
+            savings_pct = 0.0
+            savings_usd = 0.0
+        alternatives.append({
+            "model_id": alt_id,
+            "display_name": display_name,
+            "provider": provider,
+            "estimated_cost": round(alt_cost, 4),
+            "savings_usd": savings_usd,
+            "savings_pct": savings_pct,
+        })
+
+    # Sort by estimated cost ascending
+    alternatives.sort(key=lambda x: x["estimated_cost"])
+
+    return {
+        "actual": {
+            "model": actual_model,
+            "tokens": actual_tokens,
+            "cost_usd": round(actual_cost, 4),
+        },
+        "alternatives": alternatives,
+        "period": "30d",
+    }
+
+
 @bp_usage.route("/api/usage/export")
 def api_usage_export():
     """Export usage data as CSV."""
@@ -25521,6 +25807,7 @@ def api_transcript_events(session_id):
                                     {
                                         "type": "thinking",
                                         "text": block.get("thinking", "")[:2000],
+                                        "thinking_chars": len(block.get("thinking", "")),
                                         "timestamp": ts_val,
                                     }
                                 )
