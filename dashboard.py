@@ -11512,13 +11512,40 @@ function renderBrainStream(events) {
     var shortSrc = srcParts[srcParts.length - 1] || fullSrc;
     if (shortSrc.length > 12) shortSrc = shortSrc.slice(0, 8) + '\u2026';
     var roleIcon = fullSrc.indexOf('subagent') >= 0 ? '\uD83E\uDD16' : '\uD83E\uDDE0';
-    html += '<div class="brain-event" onclick="this.classList.toggle(\'expanded\')">';
+    
+    // Temperature zone badge
+    var tempBadge = '';
+    if (ev.tempZone) {
+      var tz = ev.tempZone;
+      tempBadge = '<span style="display:inline-flex;align-items:center;gap:3px;background:' + tz.color + '22;color:' + tz.color + ';padding:1px 6px;border-radius:8px;font-size:9px;font-weight:600;margin-left:4px;cursor:help;" title="Temp: ' + (ev.decoding?.temperature || '?') + '">' + tz.icon + ' ' + tz.label + '</span>';
+    }
+    
+    // Decoding config panel for expanded view
+    var decodingPanel = '';
+    if (ev.decoding) {
+      var dc = ev.decoding;
+      var dcParts = [];
+      if (dc.temperature !== undefined) dcParts.push('T=' + dc.temperature);
+      if (dc.top_p !== undefined) dcParts.push('p=' + dc.top_p);
+      if (dc.top_k !== undefined) dcParts.push('k=' + dc.top_k);
+      if (dc.frequency_penalty !== undefined && dc.frequency_penalty !== 0) dcParts.push('freq=' + dc.frequency_penalty);
+      if (dc.presence_penalty !== undefined && dc.presence_penalty !== 0) dcParts.push('pres=' + dc.presence_penalty);
+      if (dcParts.length > 0) {
+        decodingPanel = '<div class="brain-decoding-panel" style="display:none;margin-top:6px;padding:6px 10px;background:var(--bg-secondary);border-radius:6px;font-size:10px;color:var(--text-muted);">' +
+          '<span style="font-weight:600;">Decoding:</span> ' + dcParts.join(' | ') +
+          '</div>';
+      }
+    }
+    
+    html += '<div class="brain-event" onclick="this.classList.toggle(\'expanded\');var dp=this.querySelector(\'.brain-decoding-panel\');if(dp)dp.style.display=this.classList.contains(\'expanded\')?\'\':\'none\';">';
     html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
     html += '<span class="brain-type" style="background:rgba(100,100,100,0.15);color:' + color + ';padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;min-width:70px;text-align:center;display:inline-block;white-space:nowrap;">' + icon + ' ' + escHtml(evType) + '</span>';
     html += '<span class="brain-source" style="color:' + color + ';flex-shrink:0;" title="' + escHtml(fullSrc) + '">' + roleIcon + ' ' + escHtml(shortSrc) + '</span>';
+    html += tempBadge;
     html += '</div>';
     html += '<span class="brain-detail">' + renderBrainDetail(ev.detail || '') + '</span>';
+    html += decodingPanel;
     html += '</div>';
   });
   el.innerHTML = html;
@@ -19982,9 +20009,37 @@ def api_main_activity():
 @bp_sessions.route("/api/sessions")
 def api_sessions():
     gw_data = _gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
-    if gw_data and "sessions" in gw_data:
-        return jsonify({"sessions": _augment_sessions_with_burn(gw_data["sessions"])})
-    return jsonify({"sessions": _augment_sessions_with_burn(_get_sessions())})
+    sessions = gw_data.get("sessions") if gw_data and "sessions" in gw_data else _get_sessions()
+    
+    # Get current decoding config
+    _decoding_config = {
+        "temperature": float(os.environ.get("OPENCLAW_TEMPERATURE", 0.7)),
+        "top_p": float(os.environ.get("OPENCLAW_TOP_P", 1.0)),
+        "top_k": int(os.environ.get("OPENCLAW_TOP_K", 40)) if os.environ.get("OPENCLAW_TOP_K") else None,
+        "frequency_penalty": float(os.environ.get("OPENCLAW_FREQUENCY_PENALTY", 0.0)),
+        "presence_penalty": float(os.environ.get("OPENCLAW_PRESENCE_PENALTY", 0.0)),
+    }
+    
+    def _get_temp_zone(temp):
+        if temp is None:
+            return None
+        try:
+            t = float(temp)
+            if t < 0.3:
+                return {"label": "Deterministic", "color": "#22c55e", "icon": "🎯"}
+            elif t < 0.7:
+                return {"label": "Balanced", "color": "#3b82f6", "icon": "⚖️"}
+            else:
+                return {"label": "Creative", "color": "#f59e0b", "icon": "✨"}
+        except (ValueError, TypeError):
+            return None
+    
+    # Add decoding config to each session
+    for s in sessions:
+        s["decoding"] = _decoding_config
+        s["tempZone"] = _get_temp_zone(_decoding_config.get("temperature"))
+    
+    return jsonify({"sessions": _augment_sessions_with_burn(sessions), "decoding": _decoding_config})
 
 
 @bp_sessions.route("/api/subagents")
@@ -21053,6 +21108,30 @@ def api_brain_history():
     # Return unified event stream - v2 no truncation
     events = []
 
+    # Get decoding config from environment
+    _decoding_config = {
+        "temperature": float(os.environ.get("OPENCLAW_TEMPERATURE", 0.7)),
+        "top_p": float(os.environ.get("OPENCLAW_TOP_P", 1.0)),
+        "top_k": int(os.environ.get("OPENCLAW_TOP_K", 40)) if os.environ.get("OPENCLAW_TOP_K") else None,
+        "frequency_penalty": float(os.environ.get("OPENCLAW_FREQUENCY_PENALTY", 0.0)),
+        "presence_penalty": float(os.environ.get("OPENCLAW_PRESENCE_PENALTY", 0.0)),
+    }
+
+    def _get_temperature_zone(temp):
+        """Return temperature zone badge based on temperature value."""
+        if temp is None:
+            return None
+        try:
+            t = float(temp)
+            if t < 0.3:
+                return {"label": "Deterministic", "color": "#22c55e", "icon": "🎯"}
+            elif t < 0.7:
+                return {"label": "Balanced", "color": "#3b82f6", "icon": "⚖️"}
+            else:
+                return {"label": "Creative", "color": "#f59e0b", "icon": "✨"}
+        except (ValueError, TypeError):
+            return None
+
     # Build sessionId to displayName map
     session_dir = SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
     index_path = os.path.join(session_dir, "sessions.json")
@@ -21362,6 +21441,8 @@ def api_brain_history():
                                         "type": "THINK",
                                         "detail": thinking_text[:300],
                                         "color": color,
+                                        "decoding": _decoding_config,
+                                        "tempZone": _get_temperature_zone(_decoding_config.get("temperature")),
                                     }
                                 )
                             continue
@@ -21378,6 +21459,8 @@ def api_brain_history():
                                         "type": "AGENT",
                                         "detail": text[:300],
                                         "color": color,
+                                        "decoding": _decoding_config,
+                                        "tempZone": _get_temperature_zone(_decoding_config.get("temperature")),
                                     }
                                 )
                             continue
@@ -21567,6 +21650,30 @@ def api_brain_stream():
         vals = list(inp.values())
         return (str(vals[0]) if vals else "")[:300]
 
+    # Get decoding config from environment for current session
+    _decoding_config = {
+        "temperature": float(os.environ.get("OPENCLAW_TEMPERATURE", 0.7)),
+        "top_p": float(os.environ.get("OPENCLAW_TOP_P", 1.0)),
+        "top_k": int(os.environ.get("OPENCLAW_TOP_K", 40)) if os.environ.get("OPENCLAW_TOP_K") else None,
+        "frequency_penalty": float(os.environ.get("OPENCLAW_FREQUENCY_PENALTY", 0.0)),
+        "presence_penalty": float(os.environ.get("OPENCLAW_PRESENCE_PENALTY", 0.0)),
+    }
+
+    def _get_temperature_zone(temp):
+        """Return temperature zone badge based on temperature value."""
+        if temp is None:
+            return None
+        try:
+            t = float(temp)
+            if t < 0.3:
+                return {"label": "Deterministic", "color": "#22c55e", "icon": "🎯"}
+            elif t < 0.7:
+                return {"label": "Balanced", "color": "#3b82f6", "icon": "⚖️"}
+            else:
+                return {"label": "Creative", "color": "#f59e0b", "icon": "✨"}
+        except (ValueError, TypeError):
+            return None
+
     def _parse_jsonl_event(obj, source_id, source_label, color):
         """Parse a JSONL line into a brain event dict, or return None."""
         ts = obj.get("timestamp") or obj.get("time")
@@ -21594,6 +21701,8 @@ def api_brain_stream():
                             "type": "THINK",
                             "detail": thinking_text[:300],
                             "color": color,
+                            "decoding": _decoding_config,
+                            "tempZone": _get_temperature_zone(_decoding_config.get("temperature")),
                         }
                 if btype == "text":
                     text = block.get("text", "")
@@ -21605,6 +21714,8 @@ def api_brain_stream():
                             "type": "AGENT",
                             "detail": text[:300],
                             "color": color,
+                            "decoding": _decoding_config,
+                            "tempZone": _get_temperature_zone(_decoding_config.get("temperature")),
                         }
                 if btype == "tool_use":
                     tool_name = block.get("name", "")
@@ -29897,6 +30008,11 @@ def api_diagnostics():
         "OPENCLAW_REASONING": "reasoning",
         "OPENCLAW_THINKING": "thinking",
         "OPENCLAW_MAX_TOKENS": "max_tokens",
+        "OPENCLAW_TEMPERATURE": "temperature",
+        "OPENCLAW_TOP_P": "top_p",
+        "OPENCLAW_TOP_K": "top_k",
+        "OPENCLAW_FREQUENCY_PENALTY": "frequency_penalty",
+        "OPENCLAW_PRESENCE_PENALTY": "presence_penalty",
     }
     for env_key, flag_name in flag_map.items():
         val = os.environ.get(env_key, "").strip()
