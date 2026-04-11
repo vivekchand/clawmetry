@@ -2192,6 +2192,9 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
+  .alerts-bell { position: relative; display:flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:10px; border:1px solid var(--border-primary); background:var(--bg-secondary); color:var(--text-secondary); cursor:pointer; }
+  .alerts-bell:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .alerts-badge { position:absolute; top:-5px; right:-5px; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:#ef4444; color:#fff; font-size:10px; font-weight:700; display:none; align-items:center; justify-content:center; border:2px solid var(--bg-primary); }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
@@ -3231,6 +3234,10 @@ function clawmetryLogout(){
   <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
+  <div class="theme-toggle alerts-bell" id="alerts-bell" onclick="switchTab('alerts')" title="Alerts">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0 1 18 14.158V11a6.002 6.002 0 0 0-4-5.659V4a2 2 0 1 0-4 0v1.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5"/><path d="M9 17a3 3 0 0 0 6 0"/></svg>
+    <span class="alerts-badge" id="alerts-badge">0</span>
+  </div>
   <div class="zoom-controls">
     <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
@@ -3243,6 +3250,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('alerts')">Alerts</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
@@ -4149,6 +4157,46 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-brain -->
 
+<!-- ALERTS -->
+<div class="page" id="page-alerts">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🔔 Alerts Center</span>
+      <button class="refresh-btn" onclick="loadAlertsCenter()">↻ Refresh</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px;">
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Active alerts</div>
+        <div id="alerts-active-count" style="font-size:26px;font-weight:800;color:#f59e0b;">0</div>
+      </div>
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Critical alerts</div>
+        <div id="alerts-critical-count" style="font-size:26px;font-weight:800;color:#ef4444;">0</div>
+      </div>
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Config ideas</div>
+        <div style="font-size:13px;color:var(--text-primary);font-weight:600;">Budgets, anomalies, heartbeat gaps</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Active notifications</div>
+      <div id="alerts-center-list" style="display:grid;gap:10px;">
+        <div style="color:var(--text-muted);padding:16px;text-align:center;">Loading alerts...</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Possible alert configs</div>
+      <div style="display:grid;gap:8px;font-size:13px;color:var(--text-secondary);">
+        <div>• Budget thresholds and daily spend caps</div>
+        <div>• Runaway loop detection and tool-call bursts</div>
+        <div>• Cost spike and anomaly detection</div>
+        <div>• Heartbeat gap / agent silence alerts</div>
+        <div>• Upgrade impact and regression monitoring</div>
+      </div>
+    </div>
+  </div>
+</div><!-- end page-alerts -->
+
 <!-- SECURITY -->
 <div class="page" id="page-security">
   <div style="padding:12px 0 8px 0;">
@@ -4765,6 +4813,7 @@ function switchTab(name) {
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
+  if (name === 'alerts') loadAlertsCenter();
   if (name === 'transcripts') loadTranscripts();
   if (name === 'version-impact') loadVersionImpact();
   if (name === 'clusters') loadClusters();
@@ -4781,6 +4830,87 @@ function switchTab(name) {
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
 }
+
+async function collectActiveAlerts() {
+  var alerts = [];
+  function isVisible(el) {
+    return !!(el && el.style.display !== 'none' && el.offsetParent !== null);
+  }
+  var alertBanner = document.getElementById('alert-banner');
+  if (isVisible(alertBanner)) {
+    var msg = document.getElementById('alert-banner-msg');
+    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system'});
+  }
+  var anomalyBanner = document.getElementById('anomaly-engine-banner');
+  if (isVisible(anomalyBanner)) {
+    var amsg = document.getElementById('anomaly-banner-msg');
+    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly'});
+  }
+  var upgradeBanner = document.getElementById('upgrade-banner');
+  if (isVisible(upgradeBanner)) {
+    var umsg = document.getElementById('upgrade-banner-msg');
+    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade'});
+  }
+  var heartbeatBanner = document.getElementById('heartbeat-banner');
+  if (isVisible(heartbeatBanner)) {
+    var hmsg = document.getElementById('heartbeat-banner-msg');
+    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat'});
+  }
+  try {
+    var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
+    var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
+    active.forEach(function(a) {
+      var label = a.metric || 'anomaly';
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api'});
+    });
+  } catch(e) {}
+  var seen = {};
+  return alerts.filter(function(a) {
+    var key = a.title + '|' + a.message;
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+async function updateAlertsBell() {
+  var alerts = await collectActiveAlerts();
+  var badge = document.getElementById('alerts-badge');
+  if (!badge) return;
+  if (!alerts.length) {
+    badge.style.display = 'none';
+    return;
+  }
+  badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
+  badge.style.display = 'flex';
+}
+
+async function loadAlertsCenter() {
+  var listEl = document.getElementById('alerts-center-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);padding:16px;text-align:center;">Loading alerts...</div>';
+  var alerts = await collectActiveAlerts();
+  var activeEl = document.getElementById('alerts-active-count');
+  var criticalEl = document.getElementById('alerts-critical-count');
+  if (activeEl) activeEl.textContent = alerts.length;
+  if (criticalEl) criticalEl.textContent = alerts.filter(function(a){ return a.severity === 'critical'; }).length;
+  if (!alerts.length) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now. Good time to tune alert rules before the next surprise.</div>';
+    return;
+  }
+  listEl.innerHTML = alerts.map(function(a) {
+    var color = a.severity === 'critical' ? '#ef4444' : (a.severity === 'high' ? '#f59e0b' : '#3b82f6');
+    return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:4px solid ' + color + ';border-radius:10px;padding:12px 14px;">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
+      + '<div><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div></div>'
+      + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
+      + '</div></div>';
+  }).join('');
+}
+
+setInterval(updateAlertsBell, 30000);
+setTimeout(updateAlertsBell, 2000);
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
@@ -7997,6 +8127,9 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
+  .alerts-bell { position: relative; display:flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:10px; border:1px solid var(--border-primary); background:var(--bg-secondary); color:var(--text-secondary); cursor:pointer; }
+  .alerts-bell:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .alerts-badge { position:absolute; top:-5px; right:-5px; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:#ef4444; color:#fff; font-size:10px; font-weight:700; display:none; align-items:center; justify-content:center; border:2px solid var(--bg-primary); }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
@@ -9045,6 +9178,10 @@ function clawmetryLogout(){
   <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
+  <div class="theme-toggle alerts-bell" id="alerts-bell" onclick="switchTab('alerts')" title="Alerts">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0 1 18 14.158V11a6.002 6.002 0 0 0-4-5.659V4a2 2 0 1 0-4 0v1.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5"/><path d="M9 17a3 3 0 0 0 6 0"/></svg>
+    <span class="alerts-badge" id="alerts-badge">0</span>
+  </div>
   <div class="zoom-controls">
     <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
@@ -9057,6 +9194,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('alerts')">Alerts</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
@@ -10032,6 +10170,46 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-brain -->
 
+<!-- ALERTS -->
+<div class="page" id="page-alerts">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🔔 Alerts Center</span>
+      <button class="refresh-btn" onclick="loadAlertsCenter()">↻ Refresh</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px;">
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Active alerts</div>
+        <div id="alerts-active-count" style="font-size:26px;font-weight:800;color:#f59e0b;">0</div>
+      </div>
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Critical alerts</div>
+        <div id="alerts-critical-count" style="font-size:26px;font-weight:800;color:#ef4444;">0</div>
+      </div>
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Config ideas</div>
+        <div style="font-size:13px;color:var(--text-primary);font-weight:600;">Budgets, anomalies, heartbeat gaps</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Active notifications</div>
+      <div id="alerts-center-list" style="display:grid;gap:10px;">
+        <div style="color:var(--text-muted);padding:16px;text-align:center;">Loading alerts...</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Possible alert configs</div>
+      <div style="display:grid;gap:8px;font-size:13px;color:var(--text-secondary);">
+        <div>• Budget thresholds and daily spend caps</div>
+        <div>• Runaway loop detection and tool-call bursts</div>
+        <div>• Cost spike and anomaly detection</div>
+        <div>• Heartbeat gap / agent silence alerts</div>
+        <div>• Upgrade impact and regression monitoring</div>
+      </div>
+    </div>
+  </div>
+</div><!-- end page-alerts -->
+
 <!-- SECURITY -->
 <div class="page" id="page-security">
   <div style="padding:12px 0 8px 0;">
@@ -10825,6 +11003,7 @@ function switchTab(name) {
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
+  if (name === 'alerts') loadAlertsCenter();
   if (name === 'transcripts') loadTranscripts();
   if (name === 'version-impact') loadVersionImpact();
   if (name === 'clusters') loadClusters();
@@ -10841,6 +11020,87 @@ function switchTab(name) {
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
 }
+
+async function collectActiveAlerts() {
+  var alerts = [];
+  function isVisible(el) {
+    return !!(el && el.style.display !== 'none' && el.offsetParent !== null);
+  }
+  var alertBanner = document.getElementById('alert-banner');
+  if (isVisible(alertBanner)) {
+    var msg = document.getElementById('alert-banner-msg');
+    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system'});
+  }
+  var anomalyBanner = document.getElementById('anomaly-engine-banner');
+  if (isVisible(anomalyBanner)) {
+    var amsg = document.getElementById('anomaly-banner-msg');
+    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly'});
+  }
+  var upgradeBanner = document.getElementById('upgrade-banner');
+  if (isVisible(upgradeBanner)) {
+    var umsg = document.getElementById('upgrade-banner-msg');
+    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade'});
+  }
+  var heartbeatBanner = document.getElementById('heartbeat-banner');
+  if (isVisible(heartbeatBanner)) {
+    var hmsg = document.getElementById('heartbeat-banner-msg');
+    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat'});
+  }
+  try {
+    var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
+    var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
+    active.forEach(function(a) {
+      var label = a.metric || 'anomaly';
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api'});
+    });
+  } catch(e) {}
+  var seen = {};
+  return alerts.filter(function(a) {
+    var key = a.title + '|' + a.message;
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+async function updateAlertsBell() {
+  var alerts = await collectActiveAlerts();
+  var badge = document.getElementById('alerts-badge');
+  if (!badge) return;
+  if (!alerts.length) {
+    badge.style.display = 'none';
+    return;
+  }
+  badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
+  badge.style.display = 'flex';
+}
+
+async function loadAlertsCenter() {
+  var listEl = document.getElementById('alerts-center-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);padding:16px;text-align:center;">Loading alerts...</div>';
+  var alerts = await collectActiveAlerts();
+  var activeEl = document.getElementById('alerts-active-count');
+  var criticalEl = document.getElementById('alerts-critical-count');
+  if (activeEl) activeEl.textContent = alerts.length;
+  if (criticalEl) criticalEl.textContent = alerts.filter(function(a){ return a.severity === 'critical'; }).length;
+  if (!alerts.length) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now. Good time to tune alert rules before the next surprise.</div>';
+    return;
+  }
+  listEl.innerHTML = alerts.map(function(a) {
+    var color = a.severity === 'critical' ? '#ef4444' : (a.severity === 'high' ? '#f59e0b' : '#3b82f6');
+    return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:4px solid ' + color + ';border-radius:10px;padding:12px 14px;">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
+      + '<div><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div></div>'
+      + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
+      + '</div></div>';
+  }).join('');
+}
+
+setInterval(updateAlertsBell, 30000);
+setTimeout(updateAlertsBell, 2000);
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
@@ -14241,6 +14501,87 @@ function displayTrendAnalysis(trend, usageData) {
   
   card.style.display = 'block';
 }
+
+async function collectActiveAlerts() {
+  var alerts = [];
+  function isVisible(el) {
+    return !!(el && el.style.display !== 'none' && el.offsetParent !== null);
+  }
+  var alertBanner = document.getElementById('alert-banner');
+  if (isVisible(alertBanner)) {
+    var msg = document.getElementById('alert-banner-msg');
+    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system'});
+  }
+  var anomalyBanner = document.getElementById('anomaly-engine-banner');
+  if (isVisible(anomalyBanner)) {
+    var amsg = document.getElementById('anomaly-banner-msg');
+    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly'});
+  }
+  var upgradeBanner = document.getElementById('upgrade-banner');
+  if (isVisible(upgradeBanner)) {
+    var umsg = document.getElementById('upgrade-banner-msg');
+    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade'});
+  }
+  var heartbeatBanner = document.getElementById('heartbeat-banner');
+  if (isVisible(heartbeatBanner)) {
+    var hmsg = document.getElementById('heartbeat-banner-msg');
+    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat'});
+  }
+  try {
+    var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
+    var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
+    active.forEach(function(a) {
+      var label = a.metric || 'anomaly';
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api'});
+    });
+  } catch(e) {}
+  var seen = {};
+  return alerts.filter(function(a) {
+    var key = a.title + '|' + a.message;
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+async function updateAlertsBell() {
+  var alerts = await collectActiveAlerts();
+  var badge = document.getElementById('alerts-badge');
+  if (!badge) return;
+  if (!alerts.length) {
+    badge.style.display = 'none';
+    return;
+  }
+  badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
+  badge.style.display = 'flex';
+}
+
+async function loadAlertsCenter() {
+  var listEl = document.getElementById('alerts-center-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);padding:16px;text-align:center;">Loading alerts...</div>';
+  var alerts = await collectActiveAlerts();
+  var activeEl = document.getElementById('alerts-active-count');
+  var criticalEl = document.getElementById('alerts-critical-count');
+  if (activeEl) activeEl.textContent = alerts.length;
+  if (criticalEl) criticalEl.textContent = alerts.filter(function(a){ return a.severity === 'critical'; }).length;
+  if (!alerts.length) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now. Good time to tune alert rules before the next surprise.</div>';
+    return;
+  }
+  listEl.innerHTML = alerts.map(function(a) {
+    var color = a.severity === 'critical' ? '#ef4444' : (a.severity === 'high' ? '#f59e0b' : '#3b82f6');
+    return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:4px solid ' + color + ';border-radius:10px;padding:12px 14px;">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
+      + '<div><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div></div>'
+      + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
+      + '</div></div>';
+  }).join('');
+}
+
+setInterval(updateAlertsBell, 30000);
+setTimeout(updateAlertsBell, 2000);
 
 function exportUsageData() {
   // Trigger CSV download
