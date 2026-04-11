@@ -2176,7 +2176,7 @@ DASHBOARD_HTML = r"""
   * { box-sizing: border-box; margin: 0; padding: 0; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
   body { font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif; background: radial-gradient(1200px 600px at 70% -20%, rgba(15,111,255,0.06), transparent 55%), var(--bg-primary); color: var(--text-primary); min-height: 100vh; font-size: 14px; font-weight: 500; line-height: 1.5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 
-  .nav { background: color-mix(in srgb, var(--bg-secondary) 90%, transparent); border-bottom: 1px solid var(--border-primary); padding: 8px 16px; display: flex; align-items: center; gap: 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; box-shadow: 0 1px 2px rgba(16,24,40,0.06); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
+  .nav { background: color-mix(in srgb, var(--bg-secondary) 90%, transparent); border-bottom: 1px solid var(--border-primary); padding: 8px 16px; display: flex; align-items: center; gap: 12px; overflow: visible; box-shadow: 0 1px 2px rgba(16,24,40,0.06); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
   .nav h1 { font-size: 18px; font-weight: 700; color: var(--text-primary); white-space: nowrap; letter-spacing: -0.3px; }
   .nav h1 span { color: var(--text-accent); }
   .version-badge { font-size: 11px; color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 2px 8px; white-space: nowrap; cursor: default; transition: all 0.2s; user-select: none; }
@@ -2219,7 +2219,7 @@ DASHBOARD_HTML = r"""
   .brain-graph-container { width:100%; height:500px; background:var(--bg-secondary); border-radius:8px; border:1px solid var(--border); overflow:hidden; }
   #brain-graph-canvas { width:100%; height:500px; display:block; }
     .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
-    .nav-tab-more { }
+    .nav-tab-more { position: relative; }
     .advanced-tabs-dropdown { position: absolute; top: 100%; right: 0; background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 4px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3); min-width: 140px; margin-top: 4px; display: flex; flex-direction: column; }
     .advanced-tabs-dropdown .nav-tab { display: block; width: 100%; text-align: left; border-radius: 6px; margin: 2px 0; }
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
@@ -3080,7 +3080,7 @@ DASHBOARD_HTML = r"""
 <script>
 window.toggleAdvancedTabs = function(e) {
   e.stopPropagation();
-  var dd = e.target.closest('.nav-tabs').querySelector('.advanced-tabs-dropdown');
+  var dd = e.target.closest('.nav-tab-more').querySelector('.advanced-tabs-dropdown');
   if (!dd) return;
   var vis = dd.style.display === 'none' || !dd.style.display;
   document.querySelectorAll('.advanced-tabs-dropdown').forEach(function(d){ d.style.display = 'none'; });
@@ -3243,15 +3243,16 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;</div>
-    <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
-      <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
-      <div class="nav-tab" onclick="switchTab('security');hideAdvDropdown()">Security</div>
-      <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
-      <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
-      <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
-      <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
+    <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
+      <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
+        <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
+        <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
+        <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
+        <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
+        <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
+      </div>
     </div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
@@ -7980,7 +7981,7 @@ DASHBOARD_HTML = r"""
   * { box-sizing: border-box; margin: 0; padding: 0; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
   body { font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif; background: radial-gradient(1200px 600px at 70% -20%, rgba(15,111,255,0.06), transparent 55%), var(--bg-primary); color: var(--text-primary); min-height: 100vh; font-size: 14px; font-weight: 500; line-height: 1.5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 
-  .nav { background: color-mix(in srgb, var(--bg-secondary) 90%, transparent); border-bottom: 1px solid var(--border-primary); padding: 8px 16px; display: flex; align-items: center; gap: 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; box-shadow: 0 1px 2px rgba(16,24,40,0.06); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
+  .nav { background: color-mix(in srgb, var(--bg-secondary) 90%, transparent); border-bottom: 1px solid var(--border-primary); padding: 8px 16px; display: flex; align-items: center; gap: 12px; overflow: visible; box-shadow: 0 1px 2px rgba(16,24,40,0.06); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
   .nav h1 { font-size: 18px; font-weight: 700; color: var(--text-primary); white-space: nowrap; letter-spacing: -0.3px; }
   .nav h1 span { color: var(--text-accent); }
   .version-badge { font-size: 11px; color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 2px 8px; white-space: nowrap; cursor: default; transition: all 0.2s; user-select: none; }
@@ -8023,7 +8024,7 @@ DASHBOARD_HTML = r"""
   .brain-graph-container { width:100%; height:500px; background:var(--bg-secondary); border-radius:8px; border:1px solid var(--border); overflow:hidden; }
   #brain-graph-canvas { width:100%; height:500px; display:block; }
     .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
-    .nav-tab-more { }
+    .nav-tab-more { position: relative; }
     .advanced-tabs-dropdown { position: absolute; top: 100%; right: 0; background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 4px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3); min-width: 140px; margin-top: 4px; display: flex; flex-direction: column; }
     .advanced-tabs-dropdown .nav-tab { display: block; width: 100%; text-align: left; border-radius: 6px; margin: 2px 0; }
   .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
@@ -8894,7 +8895,7 @@ DASHBOARD_HTML = r"""
 <script>
 window.toggleAdvancedTabs = function(e) {
   e.stopPropagation();
-  var dd = e.target.closest('.nav-tabs').querySelector('.advanced-tabs-dropdown');
+  var dd = e.target.closest('.nav-tab-more').querySelector('.advanced-tabs-dropdown');
   if (!dd) return;
   var vis = dd.style.display === 'none' || !dd.style.display;
   document.querySelectorAll('.advanced-tabs-dropdown').forEach(function(d){ d.style.display = 'none'; });
@@ -9056,15 +9057,16 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;</div>
-    <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
-      <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
-      <div class="nav-tab" onclick="switchTab('security');hideAdvDropdown()">Security</div>
-      <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
-      <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
-      <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
-      <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
+    <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
+      <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
+        <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
+        <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
+        <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
+        <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
+        <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
+      </div>
     </div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
@@ -10560,7 +10562,7 @@ function _getOrCreateAnomalyBanner() {
   var el = document.createElement('div');
   el.id = 'anomaly-engine-banner';
   el.style.cssText = 'display:none;padding:10px 16px;background:#451a03;border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:600;align-items:center;gap:10px;';
-  el.innerHTML = '<span style="font-size:18px;">&#128680;</span><span id="anomaly-banner-msg" style="flex:1;"></span><a href="#" onclick="showView(\'usage\');checkAnomalies();return false;" style="color:#fbbf24;text-decoration:underline;font-size:12px;margin-right:8px;">View Details</a><button onclick="document.getElementById(\'anomaly-engine-banner\').style.display=\'none\';" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">Dismiss</button>';
+  el.innerHTML = '<span style="font-size:18px;">&#128680;</span><span id="anomaly-banner-msg" style="flex:1;"></span><a href="#" onclick="switchTab(\'usage\');loadAnomalyPanel();checkAnomalies();return false;" style="color:#fbbf24;text-decoration:underline;font-size:12px;margin-right:8px;">View Details</a><button onclick="document.getElementById(\'anomaly-engine-banner\').style.display=\'none\';" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;">Dismiss</button>';
   // Insert after alert-banner
   var alertBanner = document.getElementById('alert-banner');
   if (alertBanner && alertBanner.parentNode) {
@@ -14254,16 +14256,17 @@ async function loadModelAttribution() {
     var totalTurns = data.total_turns || 0;
     var primaryModel = data.primary_model || '--';
 
-    // Stat cards
-    document.getElementById('model-primary').textContent = primaryModel.replace('anthropic/', '').replace('openai/', '');
+    // Stat cards — update all instances (duplicate IDs across dashboard variants)
+    var cleanModel = primaryModel.replace('anthropic/', '').replace('openai/', '');
+    document.querySelectorAll('#model-primary').forEach(function(el) { el.textContent = cleanModel; });
     var primaryPct = totalTurns > 0 && models.length > 0 ? ((models[0].turns / totalTurns) * 100).toFixed(1) : '0';
-    document.getElementById('model-primary-pct').textContent = primaryPct + '% of turns';
-    document.getElementById('model-count').textContent = models.length;
-    document.getElementById('model-total-turns').textContent = totalTurns.toLocaleString();
+    document.querySelectorAll('#model-primary-pct').forEach(function(el) { el.textContent = primaryPct + '% of turns'; });
+    document.querySelectorAll('#model-count').forEach(function(el) { el.textContent = models.length; });
+    document.querySelectorAll('#model-total-turns').forEach(function(el) { el.textContent = totalTurns.toLocaleString(); });
     var fallbackCount = models.filter(function(m) { return m.model !== primaryModel; }).reduce(function(s, m) { return s + m.turns; }, 0);
     var fallbackRate = totalTurns > 0 ? ((fallbackCount / totalTurns) * 100).toFixed(1) : '0';
-    document.getElementById('model-fallback-rate').textContent = fallbackRate + '%';
-    document.getElementById('model-fallback-detail').textContent = fallbackCount + ' turns on non-primary models';
+    document.querySelectorAll('#model-fallback-rate').forEach(function(el) { el.textContent = fallbackRate + '%'; });
+    document.querySelectorAll('#model-fallback-detail').forEach(function(el) { el.textContent = fallbackCount + ' turns on non-primary models'; });
 
     // Model mix bar chart
     var chartHtml = '';
