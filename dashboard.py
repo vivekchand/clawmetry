@@ -3501,6 +3501,20 @@ function clawmetryLogout(){
       </div>
     </div>
 
+    <!-- 🔄 Quick Actions (GH#294) -->
+    <div id="sh-quick-actions-wrap" style="margin-top:8px;">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">⚡ Quick Actions</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        <button onclick="openRestartGatewayModal()" style="display:flex;align-items:center;gap:6px;background:var(--bg-secondary);border:1px solid #ef4444;border-radius:6px;padding:6px 12px;font-size:12px;color:#ef4444;cursor:pointer;font-weight:500;transition:all 0.2s;"
+          onmouseover="this.style.background='rgba(239,68,68,0.1)';"
+          onmouseout="this.style.background='var(--bg-secondary)';"
+          title="Restart OpenClaw gateway process (requires confirmation)">
+          <span>🔄</span> Restart Gateway
+        </button>
+      </div>
+    </div>
+  </div>
+
     <!-- DIVIDER -->
     <div class="overview-divider"></div>
 
@@ -4337,6 +4351,27 @@ function clawmetryLogout(){
   <div id="subagents-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
 </div><!-- end page-subagents -->
 
+<!-- Restart Gateway Modal -->
+<div id="restart-gateway-modal" style="display:none;position:fixed;inset:0;z-index:1300;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
+  <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:420px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <span style="font-size:24px;">🔄</span>
+      <h3 style="font-size:18px;font-weight:700;color:var(--text-primary);margin:0;">Restart OpenClaw Gateway?</h3>
+    </div>
+    <div style="font-size:14px;color:var(--text-secondary);line-height:1.6;margin-bottom:20px;">
+      This will restart the OpenClaw gateway process using <code style="background:var(--bg-secondary);padding:2px 6px;border-radius:4px;">openclaw gateway restart</code>.
+      <br><br>
+      <strong style="color:#ef4444;">⚠️ Warning:</strong> All active sessions will be interrupted. The dashboard may briefly disconnect during the restart.
+    </div>
+    <div style="display:flex;gap:12px;justify-content:flex-end;">
+      <button onclick="document.getElementById('restart-gateway-modal').style.display='none'" style="background:var(--button-bg);border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:8px;padding:10px 20px;font-size:14px;cursor:pointer;font-weight:500;">Cancel</button>
+      <button onclick="executeGatewayRestart()" style="background:#ef4444;border:none;color:#fff;border-radius:8px;padding:10px 20px;font-size:14px;cursor:pointer;font-weight:600;">Restart Gateway</button>
+    </div>
+    <!-- Result banner -->
+    <div id="restart-gateway-result" style="display:none;margin-top:16px;padding:12px 16px;border-radius:8px;font-size:13px;font-weight:500;"></div>
+  </div>
+</div>
+
 
 <script>
 
@@ -4429,6 +4464,52 @@ async function loadQAHistory() {
     el.textContent = 'Could not load action history.';
   }
 }
+
+// ═══ RESTART GATEWAY ═══════════════════════════════════════════════════════
+function openRestartGatewayModal() {
+  document.getElementById('restart-gateway-modal').style.display = 'flex';
+  document.getElementById('restart-gateway-result').style.display = 'none';
+}
+
+async function executeGatewayRestart() {
+  var resultBanner = document.getElementById('restart-gateway-result');
+  resultBanner.style.display = 'block';
+  resultBanner.style.background = 'rgba(96,165,250,0.1)';
+  resultBanner.style.border = '1px solid rgba(96,165,250,0.3)';
+  resultBanner.style.color = '#60a5fa';
+  resultBanner.textContent = '⏳ Restarting gateway...';
+
+  try {
+    var resp = await fetch('/api/gateway/restart', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'}
+    });
+    var data = await resp.json();
+
+    if (data.ok) {
+      resultBanner.style.background = 'rgba(34,197,94,0.1)';
+      resultBanner.style.border = '1px solid rgba(34,197,94,0.3)';
+      resultBanner.style.color = '#22c55e';
+      resultBanner.textContent = '✓ ' + (data.message || 'Gateway restart initiated successfully');
+      // Auto-close modal after 3 seconds
+      setTimeout(function() {
+        document.getElementById('restart-gateway-modal').style.display = 'none';
+      }, 3000);
+    } else {
+      resultBanner.style.background = 'rgba(239,68,68,0.1)';
+      resultBanner.style.border = '1px solid rgba(239,68,68,0.3)';
+      resultBanner.style.color = '#ef4444';
+      resultBanner.textContent = '✗ ' + (data.error || 'Failed to restart gateway');
+    }
+  } catch(e) {
+    resultBanner.style.background = 'rgba(239,68,68,0.1)';
+    resultBanner.style.border = '1px solid rgba(239,68,68,0.3)';
+    resultBanner.style.color = '#ef4444';
+    resultBanner.textContent = '✗ Error: ' + e.message;
+  }
+}
+// ═══ END RESTART GATEWAY ════════════════════════════════════════════════════
+
 // ═══ END QUICK ACTIONS ═══════════════════════════════════════════════════════
 
 // === Budget & Alert Functions ===
@@ -9318,6 +9399,20 @@ function clawmetryLogout(){
         </div>
       </div>
     </div>
+
+    <!-- 🔄 Quick Actions (GH#294) -->
+    <div id="sh-quick-actions-wrap" style="margin-top:8px;">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">⚡ Quick Actions</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        <button onclick="openRestartGatewayModal()" style="display:flex;align-items:center;gap:6px;background:var(--bg-secondary);border:1px solid #ef4444;border-radius:6px;padding:6px 12px;font-size:12px;color:#ef4444;cursor:pointer;font-weight:500;transition:all 0.2s;"
+          onmouseover="this.style.background='rgba(239,68,68,0.1)';"
+          onmouseout="this.style.background='var(--bg-secondary)';"
+          title="Restart OpenClaw gateway process (requires confirmation)">
+          <span>🔄</span> Restart Gateway
+        </button>
+      </div>
+    </div>
+  </div>
 
     <!-- DIVIDER -->
     <div class="overview-divider"></div>
@@ -19501,6 +19596,45 @@ def _auto_discover_gateway(token):
     except Exception:
         pass
     return None
+
+
+@bp_gateway.route("/api/gateway/restart", methods=["POST"])
+def api_gateway_restart():
+    """Restart the OpenClaw gateway process."""
+    import subprocess
+    import threading
+    import time
+
+    # Verify we can run openclaw command
+    try:
+        result = subprocess.run(
+            ["which", "openclaw"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode != 0:
+            return jsonify({"ok": False, "error": "openclaw command not found in PATH"}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Failed to verify openclaw: {str(e)}"}), 500
+
+    def _restart_gateway():
+        """Run the restart command in background after a short delay to allow response to be sent."""
+        time.sleep(1)  # Give time for HTTP response
+        try:
+            subprocess.run(
+                ["openclaw", "gateway", "restart"],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+        except Exception:
+            pass
+
+    # Start restart in background thread
+    threading.Thread(target=_restart_gateway, daemon=True).start()
+
+    return jsonify({"ok": True, "message": "Gateway restart initiated. Dashboard may briefly disconnect."})
 
 
 @bp_auth.route("/api/auth/check")
