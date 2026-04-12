@@ -1123,7 +1123,11 @@ def _cmd_status(args) -> None:
     import platform
     from clawmetry.sync import CONFIG_FILE, STATE_FILE, LOG_FILE
 
-    print("ClawMetry Status\n" + "─" * 40)
+    # Build status data dict for JSON output
+    status_data = {
+        "cloud_sync": {"connected": False},
+        "daemon": {"running": False},
+    }
 
     # Config
     if CONFIG_FILE.exists():
@@ -1136,23 +1140,45 @@ def _cmd_status(args) -> None:
             masked_api = (
                 api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
             )
-            print("  Cloud sync:  ✅  Connected")
-            print(f"  API key:     {masked_api}")
-            print(f"  Node ID:     {cfg.get('node_id', '?')}")
-            print(f"  Connected:   {cfg.get('connected_at', '?')[:19]}")
-            if enc_key:
-                if getattr(args, "show_key", False):
-                    print(f"  Secret key:     {enc_key}")
-                else:
-                    masked_enc = enc_key[:6] + "…" + enc_key[-4:]
-                    print(f"  Secret key:     {masked_enc}  (--show-key to reveal)")
-                print("  E2E:         🔒 enabled")
+
+            status_data["cloud_sync"] = {
+                "connected": True,
+                "api_key": masked_api,
+                "api_key_full": api_key if getattr(args, "show_key", False) else None,
+                "node_id": cfg.get("node_id"),
+                "connected_at": cfg.get("connected_at"),
+                "e2e_enabled": bool(enc_key),
+            }
+            if enc_key and getattr(args, "show_key", False):
+                status_data["cloud_sync"]["secret_key"] = enc_key
+
+            if getattr(args, "as_json", False):
+                pass  # Skip human-readable output
             else:
-                print("  E2E:         ⚠️  disabled (no secret key in config)")
+                print("ClawMetry Status\n" + "─" * 40)
+                print("  Cloud sync:  ✅  Connected")
+                print(f"  API key:     {masked_api}")
+                print(f"  Node ID:     {cfg.get('node_id', '?')}")
+                print(f"  Connected:   {cfg.get('connected_at', '?')[:19]}")
+                if enc_key:
+                    if getattr(args, "show_key", False):
+                        print(f"  Secret key:     {enc_key}")
+                    else:
+                        masked_enc = enc_key[:6] + "…" + enc_key[-4:]
+                        print(f"  Secret key:     {masked_enc}  (--show-key to reveal)")
+                    print("  E2E:         🔒 enabled")
+                else:
+                    print("  E2E:         ⚠️  disabled (no secret key in config)")
         except Exception as e:
-            print(f"  Config error: {e}")
+            if getattr(args, "as_json", False):
+                status_data["cloud_sync"]["error"] = str(e)
+            else:
+                print("ClawMetry Status\n" + "─" * 40)
+                print(f"  Config error: {e}")
     else:
-        print("  Cloud sync:  ○  Not connected  (run: clawmetry connect)")
+        if not getattr(args, "as_json", False):
+            print("ClawMetry Status\n" + "─" * 40)
+            print("  Cloud sync:  ○  Not connected  (run: clawmetry connect)")
 
     # Sync state
     if STATE_FILE.exists():
@@ -1160,24 +1186,29 @@ def _cmd_status(args) -> None:
             import json
 
             st = json.loads(STATE_FILE.read_text())
-            print(f"  Last sync:   {(st.get('last_sync') or '?')[:19]}")
-            print(f"  Files seen:  {len(st.get('last_event_ids', {}))}")
+            status_data["sync"] = {
+                "last_sync": st.get("last_sync"),
+                "files_seen": len(st.get("last_event_ids", {})),
+            }
+            if not getattr(args, "as_json", False):
+                print(f"  Last sync:   {(st.get('last_sync') or '?')[:19]}")
+                print(f"  Files seen:  {len(st.get('last_event_ids', {}))}")
         except Exception:
             pass
 
     # Daemon status
     system = platform.system()
-    print()
+    daemon_running = False
+    daemon_backend = None
+
     if system == "Darwin":
         import subprocess
 
         r = subprocess.run(
             ["launchctl", "list", "com.clawmetry.sync"], capture_output=True, text=True
         )
-        if r.returncode == 0:
-            print("  Daemon:      ✅  Running (launchd)")
-        else:
-            print("  Daemon:      ○  Not running")
+        daemon_running = r.returncode == 0
+        daemon_backend = "launchd"
     elif system == "Linux":
         import subprocess
         import shutil
@@ -1188,34 +1219,75 @@ def _cmd_status(args) -> None:
                 capture_output=True,
                 text=True,
             )
-            running = r.stdout.strip() == "active"
-            print(
-                f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}"
-            )
+            daemon_running = r.stdout.strip() == "active"
+            daemon_backend = "systemd"
         else:
-            running = _is_sync_running()
-            print(
-                f"  Daemon:      {'✅  Running (subprocess)' if running else '○  Not running'}"
-            )
+            daemon_running = _is_sync_running()
+            daemon_backend = "subprocess"
 
+    status_data["daemon"] = {
+        "running": daemon_running,
+        "backend": daemon_backend,
+    }
+
+    if not getattr(args, "as_json", False):
+        print()
+        if daemon_running:
+            print(f"  Daemon:      ✅  Running ({daemon_backend})")
+        else:
+            print("  Daemon:      ○  Not running")
+
+    # Log file
     if LOG_FILE.exists():
-        print(f"  Log:         {LOG_FILE}")
-        # Last 3 lines
-        lines = LOG_FILE.read_text(errors="replace").splitlines()[-3:]
-        for ln in lines:
-            print(f"    {ln}")
+        status_data["log_file"] = str(LOG_FILE)
+        if not getattr(args, "as_json", False):
+            print(f"  Log:         {LOG_FILE}")
+            # Last 3 lines
+            lines = LOG_FILE.read_text(errors="replace").splitlines()[-3:]
+            for ln in lines:
+                print(f"    {ln}")
 
-    # NemoClaw sandbox nodes (if docker + kubectl available)
-    _print_nemoclaw_nodes(args)
+    # NemoClaw sandbox nodes
+    nemoclaw_nodes = _get_nemoclaw_nodes_json()
+    if nemoclaw_nodes:
+        status_data["nemoclaw_sandboxes"] = nemoclaw_nodes
+
+    # JSON output
+    if getattr(args, "as_json", False):
+        import json
+        print(json.dumps(status_data, indent=2))
+        return
+
+    # Human-readable NemoClaw nodes
+    if nemoclaw_nodes:
+        print()
+        print("NemoClaw Sandboxes\n" + "─" * 40)
+        for node in nemoclaw_nodes:
+            print(f"\n  Sandbox:     {node.get('name', 'unknown')}")
+            if node.get('connected'):
+                print("  Cloud sync:  ✅  Connected")
+                print(f"  API key:     {node.get('api_key', '?')}")
+                print(f"  Node ID:     {node.get('node_id', '?')}")
+                if node.get('e2e_enabled'):
+                    print("  E2E:         🔒 enabled")
+                daemon = node.get('daemon', {})
+                if daemon.get('running'):
+                    print("  Daemon:      ✅  Running")
+                else:
+                    print("  Daemon:      ○  Not running")
+            else:
+                print("  Cloud sync:  ○  Not connected")
 
 
-def _print_nemoclaw_nodes(args) -> None:
-    """Show status of ClawMetry on all NemoClaw sandboxes."""
+def _get_nemoclaw_nodes_json() -> list:
+    """Return NemoClaw sandbox nodes status as JSON-serializable list."""
     import subprocess
     import shutil
 
+    nodes = []
+
     if not shutil.which("docker"):
-        return
+        return nodes
 
     # Find cluster container
     try:
@@ -1229,10 +1301,10 @@ def _print_nemoclaw_nodes(args) -> None:
             (n for n in r.stdout.splitlines() if "openshell-cluster" in n), None
         )
     except Exception:
-        return
+        return nodes
 
     if not cluster:
-        return
+        return nodes
 
     # Get sandbox pod names
     try:
@@ -1258,14 +1330,10 @@ def _print_nemoclaw_nodes(args) -> None:
             p for p in r.stdout.splitlines() if p and not p.startswith("openshell-")
         ]
     except Exception:
-        return
+        return nodes
 
-    if not pods:
-        return
-
-    print()
-    print("NemoClaw Sandboxes\n" + "─" * 40)
     for pod in pods:
+        node = {"name": pod, "connected": False}
         try:
             r = subprocess.run(
                 [
@@ -1295,7 +1363,6 @@ def _print_nemoclaw_nodes(args) -> None:
         except Exception:
             out = ""
 
-        print(f"\n  Sandbox:     {pod}")
         if out and out != "NOT_CONNECTED" and "|" in out:
             parts = out.split("|", 2)
             api_key = parts[0] if len(parts) > 0 else ""
@@ -1304,16 +1371,11 @@ def _print_nemoclaw_nodes(args) -> None:
             masked_api = (
                 api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
             )
-            print("  Cloud sync:  ✅  Connected")
-            print(f"  API key:     {masked_api}")
-            print(f"  Node ID:     {node_id}")
-            if enc_key:
-                if getattr(args, "show_key", False):
-                    print(f"  Secret key:  {enc_key}")
-                else:
-                    masked_enc = enc_key[:6] + "…" + enc_key[-4:]
-                    print(f"  Secret key:  {masked_enc}  (--show-key to reveal)")
-                print("  E2E:         🔒 enabled")
+            node["connected"] = True
+            node["api_key"] = masked_api
+            node["node_id"] = node_id
+            node["e2e_enabled"] = bool(enc_key)
+
             # Check daemon
             try:
                 rd = subprocess.run(
@@ -1339,15 +1401,41 @@ def _print_nemoclaw_nodes(args) -> None:
                     timeout=5,
                 )
                 daemon_status = rd.stdout.strip()
-                print(
-                    f"  Daemon:      {'✅  Running' if daemon_status == 'running' else '○  Not running'}"
-                )
+                node["daemon"] = {"running": daemon_status == "running"}
             except Exception:
-                pass
+                node["daemon"] = {"running": False}
         else:
-            print(
-                "  Cloud sync:  ○  Not connected  (run: clawmetry connect inside sandbox)"
-            )
+            node["daemon"] = {"running": False}
+
+        nodes.append(node)
+
+    return nodes
+
+
+def _print_nemoclaw_nodes(args) -> None:
+    """Show status of ClawMetry on all NemoClaw sandboxes."""
+    nodes = _get_nemoclaw_nodes_json()
+
+    if not nodes:
+        return
+
+    print()
+    print("NemoClaw Sandboxes\n" + "─" * 40)
+    for node in nodes:
+        print(f"\n  Sandbox:     {node.get('name', 'unknown')}")
+        if node.get('connected'):
+            print("  Cloud sync:  ✅  Connected")
+            print(f"  API key:     {node.get('api_key', '?')}")
+            print(f"  Node ID:     {node.get('node_id', '?')}")
+            if node.get('e2e_enabled'):
+                print("  E2E:         🔒 enabled")
+            daemon = node.get('daemon', {})
+            if daemon.get('running'):
+                print("  Daemon:      ✅  Running")
+            else:
+                print("  Daemon:      ○  Not running")
+        else:
+            print("  Cloud sync:  ○  Not connected")
 
 
 def _cmd_onboard(args) -> None:
@@ -1828,6 +1916,7 @@ def main() -> None:
     # status
     p_status = sub.add_parser("status", help="Show local + cloud sync status")
     p_status.add_argument("--show-key", action="store_true", help="Reveal secret key")
+    p_status.add_argument("--json", action="store_true", dest="as_json", help="Output as JSON for programmatic parsing")
 
     # proxy
     p_proxy = sub.add_parser(
