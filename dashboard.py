@@ -23188,6 +23188,9 @@ def _get_model_pricing():
         "claude-haiku": (0.25, 1.25),  # Claude 3 Haiku
         "gpt-4": (10.0, 30.0),  # GPT-4 Turbo
         "gpt-3.5": (1.0, 2.0),  # GPT-3.5 Turbo
+        "gemini-2.5-flash": (0.15, 0.60),  # Gemini 2.5 Flash
+        "gemini-2.0-flash": (0.10, 0.40),  # Gemini 2.0 Flash
+        "gemini-1.5-flash": (0.075, 0.30),  # Gemini 1.5 Flash
         "default": (15.0, 45.0),  # Conservative estimate
     }
 
@@ -24891,6 +24894,7 @@ def _build_cost_comparison():
     """Build cost comparison data: actual spend vs alternative models."""
     # Alternative model pricing: (input $/1M, output $/1M, display name, provider)
     ALTERNATIVES = [
+        ("gemini-2.5-flash",   0.15,  0.60,  "Gemini 2.5 Flash",     "Google"),
         ("gemini-2.0-flash",   0.10,  0.40,  "Gemini 2.0 Flash",     "Google"),
         ("gemini-1.5-flash",   0.075, 0.30,  "Gemini 1.5 Flash",     "Google"),
         ("gpt-4o-mini",        0.15,  0.60,  "GPT-4o Mini",          "OpenAI"),
