@@ -3275,6 +3275,13 @@ function clawmetryLogout(){
   <button onclick="dismissUpgradeBanner()" style="background:transparent;color:#93c5fd;border:1px solid #3b82f680;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
 </div>
 
+<!-- OAuth Deprecation Banner -->
+<div id="oauth-banner" style="display:none;padding:10px 16px;background:var(--bg-warning);border-bottom:2px solid var(--text-warning);color:var(--text-warning);font-size:13px;font-weight:500;align-items:center;gap:10px;">
+  <span style="font-size:16px;">&#9888;&#65039;</span>
+  <span style="flex:1;">Anthropic OAuth is deprecated. Please migrate to API key authentication.</span>
+  <button onclick="dismissOauthBanner()" style="background:transparent;color:var(--text-warning);border:1px solid var(--text-warning);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
+</div>
+
 <!-- Budget Settings Modal -->
 <div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
   <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
@@ -14610,6 +14617,23 @@ async function checkUpgradeBanner() {
 }
 setTimeout(checkUpgradeBanner, 3000);
 
+// ── OAuth Deprecation Banner ─────────────────────────────────────────
+function dismissOauthBanner() {
+  document.getElementById('oauth-banner').style.display = 'none';
+  try { localStorage.setItem('cm_oauth_banner_dismissed', Date.now().toString()); } catch(e){}
+}
+async function checkOauthBanner() {
+  try {
+    var dismissed = localStorage.getItem('cm_oauth_banner_dismissed');
+    if (dismissed) return;
+    var data = await fetch('/api/auth-status').then(r => r.json());
+    if (data.is_oauth) {
+      document.getElementById('oauth-banner').style.display = 'flex';
+    }
+  } catch(e){}
+}
+setTimeout(checkOauthBanner, 1000);
+
 // ── Sub-Agent Tree ────────────────────────────────────────────────────────
 var _subagentsTimer = null;
 var _subagentsExpanded = {};
@@ -19745,13 +19769,18 @@ def api_channels():
                 continue
 
     # Filter to channels that actually have data directories (proof of real usage)
-    # Some channels (like imessage) use system paths, not openclaw dirs -- skip dir check for those
+    # Some channels (like imessage) use system paths, not openclaw dirs -- skip dir check for those.
+    # whatsapp, signal, discord use the sessions store rather than a named subdirectory, so they
+    # are also exempt from the directory check and instead verified via sessions.json activity.
     DIR_EXEMPT_CHANNELS = {
         "imessage",
         "irc",
         "googlechat",
         "slack",
         "webchat",
+        "whatsapp",
+        "signal",
+        "discord",
         "bluebubbles",
         "matrix",
         "mattermost",
@@ -19767,12 +19796,36 @@ def api_channels():
         "zalouser",
     }
     if configured:
+        # Build set of channels seen in sessions.json (evidence of real activity)
+        sessions_active_channels: set = set()
+        for _sd in [
+            os.path.expanduser("~/.openclaw/agents/main/sessions"),
+            os.path.expanduser("~/.clawdbot/agents/main/sessions"),
+        ]:
+            _sf = os.path.join(_sd, "sessions.json")
+            try:
+                with open(_sf) as _f:
+                    _sess = json.load(_f)
+                for _key in _sess:
+                    _parts = _key.split(":")
+                    if len(_parts) > 2:
+                        sessions_active_channels.add(_parts[2])
+            except Exception:
+                pass
+
         active_channels = []
         oc_dir = os.path.expanduser("~/.openclaw")
         cb_dir = os.path.expanduser("~/.clawdbot")
         for ch in configured:
             if ch in DIR_EXEMPT_CHANNELS:
-                active_channels.append(ch)
+                # For session-based channels, require evidence of actual sessions
+                if ch in ("whatsapp", "signal", "discord"):
+                    if ch in sessions_active_channels or any(
+                        os.path.isdir(os.path.join(d, ch)) for d in [oc_dir, cb_dir]
+                    ):
+                        active_channels.append(ch)
+                else:
+                    active_channels.append(ch)
             elif any(os.path.isdir(os.path.join(d, ch)) for d in [oc_dir, cb_dir]):
                 active_channels.append(ch)
         if active_channels:

@@ -1121,63 +1121,53 @@ def _cmd_uninstall() -> None:
 def _cmd_status(args) -> None:
     """clawmetry status — show local + cloud sync status."""
     import platform
+    import json
     from clawmetry.sync import CONFIG_FILE, STATE_FILE, LOG_FILE
 
-    print("ClawMetry Status\n" + "─" * 40)
+    # Build status data dict for JSON output
+    status_data = {
+        "cloud_sync": {"connected": False},
+        "daemon": {"running": False, "platform": platform.system()},
+        "sync_state": {},
+    }
 
     # Config
     if CONFIG_FILE.exists():
         try:
-            import json
-
             cfg = json.loads(CONFIG_FILE.read_text())
             api_key = cfg.get("api_key", "")
             enc_key = cfg.get("encryption_key", "")
-            masked_api = (
+            status_data["cloud_sync"]["connected"] = True
+            status_data["cloud_sync"]["api_key_masked"] = (
                 api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
             )
-            print("  Cloud sync:  ✅  Connected")
-            print(f"  API key:     {masked_api}")
-            print(f"  Node ID:     {cfg.get('node_id', '?')}")
-            print(f"  Connected:   {cfg.get('connected_at', '?')[:19]}")
-            if enc_key:
-                if getattr(args, "show_key", False):
-                    print(f"  Secret key:     {enc_key}")
-                else:
-                    masked_enc = enc_key[:6] + "…" + enc_key[-4:]
-                    print(f"  Secret key:     {masked_enc}  (--show-key to reveal)")
-                print("  E2E:         🔒 enabled")
-            else:
-                print("  E2E:         ⚠️  disabled (no secret key in config)")
+            status_data["cloud_sync"]["node_id"] = cfg.get("node_id", "?")
+            status_data["cloud_sync"]["connected_at"] = cfg.get("connected_at", "?")
+            status_data["cloud_sync"]["e2e_enabled"] = bool(enc_key)
+            if enc_key and getattr(args, "show_key", False):
+                status_data["cloud_sync"]["secret_key"] = enc_key
         except Exception as e:
-            print(f"  Config error: {e}")
-    else:
-        print("  Cloud sync:  ○  Not connected  (run: clawmetry connect)")
+            status_data["cloud_sync"]["error"] = str(e)
 
     # Sync state
     if STATE_FILE.exists():
         try:
-            import json
-
             st = json.loads(STATE_FILE.read_text())
-            print(f"  Last sync:   {(st.get('last_sync') or '?')[:19]}")
-            print(f"  Files seen:  {len(st.get('last_event_ids', {}))}")
+            status_data["sync_state"]["last_sync"] = st.get("last_sync") or "?"
+            status_data["sync_state"]["files_seen"] = len(st.get("last_event_ids", {}))
         except Exception:
             pass
 
     # Daemon status
     system = platform.system()
-    print()
     if system == "Darwin":
         import subprocess
 
         r = subprocess.run(
             ["launchctl", "list", "com.clawmetry.sync"], capture_output=True, text=True
         )
-        if r.returncode == 0:
-            print("  Daemon:      ✅  Running (launchd)")
-        else:
-            print("  Daemon:      ○  Not running")
+        status_data["daemon"]["running"] = r.returncode == 0
+        status_data["daemon"]["method"] = "launchd"
     elif system == "Linux":
         import subprocess
         import shutil
@@ -1188,19 +1178,60 @@ def _cmd_status(args) -> None:
                 capture_output=True,
                 text=True,
             )
-            running = r.stdout.strip() == "active"
-            print(
-                f"  Daemon:      {'✅  Running (systemd)' if running else '○  Not running'}"
-            )
+            status_data["daemon"]["running"] = r.stdout.strip() == "active"
+            status_data["daemon"]["method"] = "systemd"
         else:
-            running = _is_sync_running()
-            print(
-                f"  Daemon:      {'✅  Running (subprocess)' if running else '○  Not running'}"
-            )
+            status_data["daemon"]["running"] = _is_sync_running()
+            status_data["daemon"]["method"] = "subprocess"
 
     if LOG_FILE.exists():
-        print(f"  Log:         {LOG_FILE}")
-        # Last 3 lines
+        status_data["log_file"] = str(LOG_FILE)
+
+    # Output JSON if requested
+    if getattr(args, "json", False):
+        print(json.dumps(status_data, indent=2))
+        return
+
+    # Human-readable output
+    print("ClawMetry Status\n" + "─" * 40)
+
+    if status_data["cloud_sync"]["connected"]:
+        print("  Cloud sync:  ✅  Connected")
+        print(f"  API key:     {status_data['cloud_sync']['api_key_masked']}")
+        print(f"  Node ID:     {status_data['cloud_sync']['node_id']}")
+        print(f"  Connected:   {status_data['cloud_sync']['connected_at'][:19] if len(status_data['cloud_sync']['connected_at']) > 19 else status_data['cloud_sync']['connected_at']}")
+        if status_data["cloud_sync"].get("e2e_enabled"):
+            if getattr(args, "show_key", False) and "secret_key" in status_data["cloud_sync"]:
+                print(f"  Secret key:     {status_data['cloud_sync']['secret_key']}")
+            else:
+                masked_enc = enc_key[:6] + "…" + enc_key[-4:]
+                print(f"  Secret key:     {masked_enc}  (--show-key to reveal)")
+            print("  E2E:         🔒 enabled")
+        else:
+            print("  E2E:         ⚠️  disabled (no secret key in config)")
+    else:
+        if "error" in status_data["cloud_sync"]:
+            print(f"  Config error: {status_data['cloud_sync']['error']}")
+        else:
+            print("  Cloud sync:  ○  Not connected  (run: clawmetry connect)")
+
+    if status_data["sync_state"]:
+        last_sync = status_data["sync_state"].get("last_sync", "?")
+        if isinstance(last_sync, str) and len(last_sync) > 19:
+            last_sync = last_sync[:19]
+        print(f"  Last sync:   {last_sync}")
+        print(f"  Files seen:  {status_data['sync_state'].get('files_seen', 0)}")
+
+    print()
+    if status_data["daemon"]["running"]:
+        method = status_data["daemon"].get("method", "")
+        method_str = f" ({method})" if method else ""
+        print(f"  Daemon:      ✅  Running{method_str}")
+    else:
+        print("  Daemon:      ○  Not running")
+
+    if "log_file" in status_data:
+        print(f"  Log:         {status_data['log_file']}")
         lines = LOG_FILE.read_text(errors="replace").splitlines()[-3:]
         for ln in lines:
             print(f"    {ln}")
@@ -1828,6 +1859,7 @@ def main() -> None:
     # status
     p_status = sub.add_parser("status", help="Show local + cloud sync status")
     p_status.add_argument("--show-key", action="store_true", help="Reveal secret key")
+    p_status.add_argument("--json", action="store_true", help="Output JSON instead of human-readable text")
 
     # proxy
     p_proxy = sub.add_parser(
