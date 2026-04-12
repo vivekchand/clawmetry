@@ -4179,13 +4179,19 @@ function clawmetryLogout(){
       </div>
     </div>
     <div class="card" style="padding:14px;">
-      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Possible alert configs</div>
-      <div style="display:grid;gap:8px;font-size:13px;color:var(--text-secondary);">
-        <div>• Budget thresholds and daily spend caps</div>
-        <div>• Runaway loop detection and tool-call bursts</div>
-        <div>• Cost spike and anomaly detection</div>
-        <div>• Heartbeat gap / agent silence alerts</div>
-        <div>• Upgrade impact and regression monitoring</div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Alert rules</div>
+      <div style="font-size:13px;color:var(--text-secondary);line-height:1.6;">
+        You cannot create custom alert rules from this screen yet. Right now, ClawMetry only shows built-in alerts automatically.
+      </div>
+      <div style="margin-top:12px;padding:10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.18);border-radius:8px;font-size:12px;color:var(--text-secondary);line-height:1.6;">
+        <div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;">Current behavior</div>
+        <div>• Usage spike alerts are automatic</div>
+        <div>• Heartbeat / silence alerts are automatic</div>
+        <div>• Upgrade impact alerts are automatic</div>
+        <div>• Budget-related protection is configured elsewhere</div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--text-muted);line-height:1.6;">
+        The next improvement here should be a real <strong>Create alert rule</strong> flow with simple options like: alert me if daily spend exceeds $X, if usage spikes above baseline, or if the agent goes silent.
       </div>
     </div>
   </div>
@@ -10215,13 +10221,19 @@ function clawmetryLogout(){
       </div>
     </div>
     <div class="card" style="padding:14px;">
-      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Possible alert configs</div>
-      <div style="display:grid;gap:8px;font-size:13px;color:var(--text-secondary);">
-        <div>• Budget thresholds and daily spend caps</div>
-        <div>• Runaway loop detection and tool-call bursts</div>
-        <div>• Cost spike and anomaly detection</div>
-        <div>• Heartbeat gap / agent silence alerts</div>
-        <div>• Upgrade impact and regression monitoring</div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Alert rules</div>
+      <div style="font-size:13px;color:var(--text-secondary);line-height:1.6;">
+        You cannot create custom alert rules from this screen yet. Right now, ClawMetry only shows built-in alerts automatically.
+      </div>
+      <div style="margin-top:12px;padding:10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.18);border-radius:8px;font-size:12px;color:var(--text-secondary);line-height:1.6;">
+        <div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;">Current behavior</div>
+        <div>• Usage spike alerts are automatic</div>
+        <div>• Heartbeat / silence alerts are automatic</div>
+        <div>• Upgrade impact alerts are automatic</div>
+        <div>• Budget-related protection is configured elsewhere</div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--text-muted);line-height:1.6;">
+        The next improvement here should be a real <strong>Create alert rule</strong> flow with simple options like: alert me if daily spend exceeds $X, if usage spikes above baseline, or if the agent goes silent.
       </div>
     </div>
   </div>
