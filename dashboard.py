@@ -20506,53 +20506,45 @@ def api_subagents():
                 files.append((mtime, path))
             files.sort(reverse=True)
 
-            child_key_re = _re.compile(r'"childSessionKey"\s*:\s*"([^"]+)"')
-
             for _, path in files[:limit]:
+                updated_at = int(os.path.getmtime(path) * 1000)
                 try:
-                    text = open(path, 'r', errors='ignore').read()
+                    with open(path, 'r', errors='ignore') as f:
+                        for raw_line in f:
+                            if 'childSessionKey' not in raw_line or 'toolName":"sessions_spawn"' not in raw_line:
+                                continue
+                            try:
+                                obj = json.loads(raw_line)
+                            except Exception:
+                                continue
+                            msg = obj.get('message') or {}
+                            if msg.get('role') != 'toolResult' or msg.get('toolName') != 'sessions_spawn':
+                                continue
+                            content = msg.get('content') or []
+                            if not isinstance(content, list):
+                                continue
+                            for block in content:
+                                if not isinstance(block, dict) or block.get('type') != 'text':
+                                    continue
+                                text = block.get('text', '') or ''
+                                if 'childSessionKey' not in text:
+                                    continue
+                                try:
+                                    payload = json.loads(text)
+                                except Exception:
+                                    continue
+                                child_key = payload.get('childSessionKey')
+                                if not child_key:
+                                    continue
+                                entry = found.setdefault(child_key, {"sessionId": child_key})
+                                entry.setdefault("displayName", payload.get('label') or child_key.split(':')[-1])
+                                entry.setdefault("parent", payload.get('parentKey'))
+                                entry.setdefault("depth", 1)
+                                entry.setdefault("model", payload.get('model') or 'unknown')
+                                entry.setdefault("totalTokens", 0)
+                                entry["updatedAt"] = max(entry.get("updatedAt", 0), updated_at)
                 except OSError:
                     continue
-
-                updated_at = int(os.path.getmtime(path) * 1000)
-
-                for child_key in child_key_re.findall(text):
-                    entry = found.setdefault(child_key, {"sessionId": child_key})
-                    entry.setdefault("displayName", child_key.split(':')[-1])
-                    entry.setdefault("parent", None)
-                    entry.setdefault("depth", 1)
-                    entry.setdefault("model", "unknown")
-                    entry.setdefault("totalTokens", 0)
-                    entry["updatedAt"] = max(entry.get("updatedAt", 0), updated_at)
-
-                blocks = text.split('<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>')
-                for block in blocks[1:]:
-                    if 'source: subagent' not in block.lower():
-                        continue
-                    child_key = None
-                    child_sid = None
-                    task_label = None
-                    for raw_line in block.splitlines():
-                        line = raw_line.strip()
-                        if line.startswith('session_key:'):
-                            child_key = line.split(':', 1)[1].strip()
-                        elif line.startswith('session_id:'):
-                            child_sid = line.split(':', 1)[1].strip()
-                        elif line.startswith('task:'):
-                            task_label = line.split(':', 1)[1].strip()
-                    target_key = child_key or child_sid
-                    if not target_key:
-                        continue
-                    entry = found.setdefault(target_key, {"sessionId": target_key})
-                    if child_sid:
-                        entry["rawSessionId"] = child_sid
-                    if task_label and (entry.get("displayName") in (None, "") or entry.get("displayName") == target_key.split(':')[-1]):
-                        entry["displayName"] = task_label
-                    entry.setdefault("parent", None)
-                    entry.setdefault("depth", 1)
-                    entry.setdefault("model", "unknown")
-                    entry.setdefault("totalTokens", 0)
-                    entry["updatedAt"] = max(entry.get("updatedAt", 0), updated_at)
         except Exception:
             return {}
         return found
@@ -20565,7 +20557,10 @@ def api_subagents():
             row["sessionId"] = sid
         else:
             for k, v in meta.items():
-                if row.get(k) in (None, "", 0, False):
+                if k == "displayName":
+                    if row.get(k) in (None, "", sid.split(':')[-1]):
+                        row[k] = v
+                elif row.get(k) in (None, "", 0, False):
                     row[k] = v
         merged[sid] = row
 
