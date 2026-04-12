@@ -3511,6 +3511,18 @@ function clawmetryLogout(){
         <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
         <!-- 🔍 Diagnostics Panel (GH#28) -->
+        <!-- Anthropic OAuth migration banner (GH#556) -->
+        <div id="anthropic-oauth-banner" style="display:none;background:rgba(245,158,11,0.12);border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:12px;">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+            <div>
+              <div style="font-size:12px;font-weight:600;color:#f59e0b;margin-bottom:4px;">&#9888; Anthropic billing change &mdash; action required</div>
+              <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">Your Claude OAuth token no longer covers OpenClaw usage (effective April 4, 2026). Switch to an Anthropic API key to avoid unexpected charges.</div>
+              <div style="margin-top:6px;font-family:\'JetBrains Mono\',monospace;font-size:11px;background:var(--bg-primary);border-radius:4px;padding:4px 8px;color:#94a3b8;display:inline-block;">openclaw onboard --anthropic-api-key &quot;sk-ant-...&quot;</div>
+              <div style="margin-top:6px;"><a href="https://docs.openclaw.ai/providers/anthropic" target="_blank" style="font-size:11px;color:#60a5fa;">View migration guide</a></div>
+            </div>
+            <button onclick="localStorage.setItem(\'clawmetry_anthropic_oauth_dismissed\',\'1\');document.getElementById(\'anthropic-oauth-banner\').style.display=\'none\';" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;padding:0;flex-shrink:0;">&times;</button>
+          </div>
+        </div>
         <div id="sh-diagnostics-wrap">
           <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
             <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;">🔍 Configuration Diagnostics</div>
@@ -13395,6 +13407,33 @@ function startHealthStream() {
     } catch(ex) {}
   };
   healthStream.onerror = function() { setTimeout(startHealthStream, 30000); };
+}
+
+// ===== Diagnostics Panel (GH#556) =====
+async function loadDiagnostics() {
+  try {
+    var d = await fetch('/api/diagnostics').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});
+    var el = document.getElementById('sh-diagnostics');
+    if (!el) return true;
+    var lines = [];
+    if (d.gateway_url)   lines.push('<span style="color:#94a3b8;">gateway   </span> ' + d.gateway_url);
+    if (d.workspace_path) lines.push('<span style="color:#94a3b8;">workspace </span> ' + d.workspace_path);
+    if (d.gateway_port)   lines.push('<span style="color:#94a3b8;">port      </span> ' + d.gateway_port);
+    if (d.auth_token_status) lines.push('<span style="color:#94a3b8;">auth      </span> ' + d.auth_token_status);
+    if (d.warnings && d.warnings.length) d.warnings.forEach(function(w){lines.push('<span style="color:#f59e0b;">⚠ ' + w + '</span>');});
+    el.innerHTML = lines.join('<br>') || '<span style="color:var(--text-muted);">No issues detected</span>';
+    // Show Anthropic OAuth migration banner if on legacy token
+    var banner = document.getElementById('anthropic-oauth-banner');
+    if (banner && d.anthropic_auth_type === 'oauth') {
+      var dismissed = localStorage.getItem('clawmetry_anthropic_oauth_dismissed');
+      if (!dismissed) banner.style.display = 'block';
+    }
+    return true;
+  } catch(e) {
+    var el = document.getElementById('sh-diagnostics');
+    if (el) el.innerHTML = '<span style="color:var(--text-muted);">Loading diagnostics...</span>';
+    return false;
+  }
 }
 
 // ===== System Health Panel =====
@@ -29957,6 +29996,41 @@ def api_diagnostics():
     token = GATEWAY_TOKEN or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
     auth_token_status = "present" if token else "missing"
 
+    # Detect Anthropic auth type: API key (sk-ant-...) vs OAuth/subscription token
+    anthropic_auth_type = "unknown"
+    try:
+        api_key_env = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if api_key_env.startswith("sk-ant-"):
+            anthropic_auth_type = "api_key"
+        else:
+            import json as _json_diag
+            for cfg_path in [
+                os.path.join(_oc_dir, "clawdbot.json"),
+                os.path.expanduser("~/.clawdbot/clawdbot.json"),
+            ]:
+                if os.path.exists(cfg_path):
+                    try:
+                        with open(cfg_path) as _f:
+                            _cfg = _json_diag.load(_f)
+                        for _prov in (_cfg.get("providers") or []):
+                            _tok = _prov.get("token", "") or ""
+                            if _tok.startswith("sk-ant-"):
+                                anthropic_auth_type = "api_key"
+                                break
+                            elif _tok and len(_tok) > 20:
+                                anthropic_auth_type = "oauth"
+                        if anthropic_auth_type == "unknown":
+                            _top = _cfg.get("token", "")
+                            if _top and not _top.startswith("sk-ant-") and len(_top) > 20:
+                                anthropic_auth_type = "oauth"
+                    except Exception:
+                        pass
+                    break
+            if api_key_env and anthropic_auth_type == "unknown":
+                anthropic_auth_type = "api_key"
+    except Exception:
+        pass
+
     # OpenClaw runtime flags from environment
     openclaw_flags = {}
     flag_map = {
@@ -29982,6 +30056,7 @@ def api_diagnostics():
             "gateway_port": gw_port,
             "workspace_path": ws,
             "auth_token_status": auth_token_status,
+            "anthropic_auth_type": anthropic_auth_type,
             "openclaw_flags": openclaw_flags,
             "warnings": warnings_list,
             "auto_detected": auto_detected,
