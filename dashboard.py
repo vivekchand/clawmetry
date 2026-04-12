@@ -20460,17 +20460,33 @@ def api_subagents():
     """Return sub-agent list with depth/parent fields for the tree view."""
     now_ms = time.time() * 1000
     gw_data = _gw_invoke("sessions_list", {"limit": 100, "messageLimit": 0})
-    if gw_data and "sessions" in gw_data:
-        all_sessions = gw_data["sessions"]
-    else:
-        all_sessions = _get_sessions()
+    live_sessions = gw_data["sessions"] if (gw_data and "sessions" in gw_data) else _get_sessions()
+
+    merged = {}
+    for s in live_sessions:
+        sid = s.get("sessionId") or s.get("key", "")
+        if sid:
+            merged[sid] = dict(s)
+
+    sessions_dir = _get_sessions_dir()
+    index_path = os.path.join(sessions_dir, "sessions.json")
+    try:
+        with open(index_path) as f:
+            historical = json.load(f)
+        if isinstance(historical, dict):
+            for sid, meta in historical.items():
+                if not isinstance(meta, dict):
+                    continue
+                if sid not in merged:
+                    row = dict(meta)
+                    row["sessionId"] = sid
+                    merged[sid] = row
+    except Exception:
+        pass
 
     subagents = []
     counts = {"total": 0, "active": 0, "idle": 0, "stale": 0}
-    for s in all_sessions:
-        sid = s.get("sessionId") or s.get("key", "")
-        if not sid:
-            continue
+    for sid, s in merged.items():
         age_ms = now_ms - (s.get("updatedAt") or s.get("lastActiveMs", 0) or 0)
         if age_ms < 120000:
             status = "active"
@@ -20480,7 +20496,7 @@ def api_subagents():
             status = "stale"
         depth = int(s.get("depth", 0) or 0)
         parent = s.get("spawnedBy") or s.get("parentKey") or None
-        is_subagent = depth > 0 or "subagent" in sid.lower() or bool(parent)
+        is_subagent = depth > 0 or ":subagent:" in sid.lower() or bool(parent)
         if not is_subagent:
             continue
         tokens = int(s.get("totalTokens") or 0)
@@ -20508,7 +20524,7 @@ def api_subagents():
             "updatedAt": s.get("updatedAt") or s.get("lastActiveMs", 0),
         })
 
-    subagents.sort(key=lambda x: (0 if x["status"] == "active" else 1 if x["status"] == "idle" else 2, x["depth"]))
+    subagents.sort(key=lambda x: (x.get("parent") is None, 0 if x["status"] == "active" else 1 if x["status"] == "idle" else 2, x["depth"]))
     return jsonify({"subagents": subagents, "counts": counts})
 
 
