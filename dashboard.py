@@ -4853,9 +4853,28 @@ async function collectActiveAlerts() {
   try {
     var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
     var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
+    var grouped = {};
     active.forEach(function(a) {
+      var bucket = (a.metric === 'token_spike' || a.metric === 'cost_spike') ? 'usage_spike' : a.metric;
+      if (!grouped[bucket]) grouped[bucket] = [];
+      grouped[bucket].push(a);
+    });
+    Object.keys(grouped).forEach(function(bucket) {
+      var items = grouped[bucket];
+      if (bucket === 'usage_spike') {
+        var cost = items.find(function(x){ return x.metric === 'cost_spike'; });
+        var token = items.find(function(x){ return x.metric === 'token_spike'; });
+        var ratio = Math.max(Number((cost && cost.ratio) || 0), Number((token && token.ratio) || 0));
+        var baselineCost = cost && cost.baseline ? '$' + Number(cost.baseline).toFixed(2) + '/day' : null;
+        var baselineTokens = token && token.baseline ? Math.round(Number(token.baseline)).toLocaleString() + ' tokens/day' : null;
+        var baselineBits = [baselineCost, baselineTokens].filter(Boolean);
+        alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'Token usage and cost are related, so we grouped them into one alert to reduce noise.', baselineText: baselineBits.length ? ('Baseline: ' + baselineBits.join(' • ')) : 'Baseline: rolling 7-day average', steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow','Use the baseline shown here to decide whether the spike is truly unusual']});
+        return;
+      }
+      var a = items[0];
       var label = a.metric || 'anomaly';
-      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'We detected an unusual spike compared to your normal baseline.', steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow']});
+      var baseTxt = a.baseline ? ('Baseline: ' + Number(a.baseline).toFixed(2)) : 'Baseline: rolling 7-day average';
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'We detected an unusual spike compared to your normal baseline.', baselineText: baseTxt, steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow']});
     });
   } catch(e) {}
   var seen = {};
@@ -4899,6 +4918,7 @@ async function loadAlertsCenter() {
       + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
       + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div>'
       + (a.explainer ? '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;line-height:1.5;">' + escHtml(a.explainer) + '</div>' : '')
+      + (a.baselineText ? '<div style="margin-top:8px;font-size:12px;color:#93c5fd;"><strong>Baseline:</strong> ' + escHtml(a.baselineText.replace(/^Baseline:\s*/, '')) + '</div>' : '')
       + (a.steps && a.steps.length ? '<div style="margin-top:10px;padding:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border-primary);border-radius:8px;"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">How to fix</div><ol style="margin:0 0 0 18px;padding:0;color:var(--text-secondary);font-size:12px;line-height:1.6;">' + a.steps.map(function(step){ return '<li>' + escHtml(step) + '</li>'; }).join('') + '</ol></div>' : '')
       + (a.actionTab ? '<div style="margin-top:10px;"><button onclick="switchTab(\'' + escHtml(a.actionTab) + '\')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600;">' + escHtml(a.actionLabel || 'View details') + '</button></div>' : '') + '</div>'
       + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
@@ -11041,9 +11061,28 @@ async function collectActiveAlerts() {
   try {
     var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
     var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
+    var grouped = {};
     active.forEach(function(a) {
+      var bucket = (a.metric === 'token_spike' || a.metric === 'cost_spike') ? 'usage_spike' : a.metric;
+      if (!grouped[bucket]) grouped[bucket] = [];
+      grouped[bucket].push(a);
+    });
+    Object.keys(grouped).forEach(function(bucket) {
+      var items = grouped[bucket];
+      if (bucket === 'usage_spike') {
+        var cost = items.find(function(x){ return x.metric === 'cost_spike'; });
+        var token = items.find(function(x){ return x.metric === 'token_spike'; });
+        var ratio = Math.max(Number((cost && cost.ratio) || 0), Number((token && token.ratio) || 0));
+        var baselineCost = cost && cost.baseline ? '$' + Number(cost.baseline).toFixed(2) + '/day' : null;
+        var baselineTokens = token && token.baseline ? Math.round(Number(token.baseline)).toLocaleString() + ' tokens/day' : null;
+        var baselineBits = [baselineCost, baselineTokens].filter(Boolean);
+        alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'Token usage and cost are related, so we grouped them into one alert to reduce noise.', baselineText: baselineBits.length ? ('Baseline: ' + baselineBits.join(' • ')) : 'Baseline: rolling 7-day average', steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow','Use the baseline shown here to decide whether the spike is truly unusual']});
+        return;
+      }
+      var a = items[0];
       var label = a.metric || 'anomaly';
-      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'We detected an unusual spike compared to your normal baseline.', steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow']});
+      var baseTxt = a.baseline ? ('Baseline: ' + Number(a.baseline).toFixed(2)) : 'Baseline: rolling 7-day average';
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'We detected an unusual spike compared to your normal baseline.', baselineText: baseTxt, steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow']});
     });
   } catch(e) {}
   var seen = {};
@@ -11087,6 +11126,7 @@ async function loadAlertsCenter() {
       + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
       + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div>'
       + (a.explainer ? '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;line-height:1.5;">' + escHtml(a.explainer) + '</div>' : '')
+      + (a.baselineText ? '<div style="margin-top:8px;font-size:12px;color:#93c5fd;"><strong>Baseline:</strong> ' + escHtml(a.baselineText.replace(/^Baseline:\s*/, '')) + '</div>' : '')
       + (a.steps && a.steps.length ? '<div style="margin-top:10px;padding:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border-primary);border-radius:8px;"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">How to fix</div><ol style="margin:0 0 0 18px;padding:0;color:var(--text-secondary);font-size:12px;line-height:1.6;">' + a.steps.map(function(step){ return '<li>' + escHtml(step) + '</li>'; }).join('') + '</ol></div>' : '')
       + (a.actionTab ? '<div style="margin-top:10px;"><button onclick="switchTab(\'' + escHtml(a.actionTab) + '\')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600;">' + escHtml(a.actionLabel || 'View details') + '</button></div>' : '') + '</div>'
       + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
@@ -14525,9 +14565,28 @@ async function collectActiveAlerts() {
   try {
     var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
     var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
+    var grouped = {};
     active.forEach(function(a) {
+      var bucket = (a.metric === 'token_spike' || a.metric === 'cost_spike') ? 'usage_spike' : a.metric;
+      if (!grouped[bucket]) grouped[bucket] = [];
+      grouped[bucket].push(a);
+    });
+    Object.keys(grouped).forEach(function(bucket) {
+      var items = grouped[bucket];
+      if (bucket === 'usage_spike') {
+        var cost = items.find(function(x){ return x.metric === 'cost_spike'; });
+        var token = items.find(function(x){ return x.metric === 'token_spike'; });
+        var ratio = Math.max(Number((cost && cost.ratio) || 0), Number((token && token.ratio) || 0));
+        var baselineCost = cost && cost.baseline ? '$' + Number(cost.baseline).toFixed(2) + '/day' : null;
+        var baselineTokens = token && token.baseline ? Math.round(Number(token.baseline)).toLocaleString() + ' tokens/day' : null;
+        var baselineBits = [baselineCost, baselineTokens].filter(Boolean);
+        alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'Token usage and cost are related, so we grouped them into one alert to reduce noise.', baselineText: baselineBits.length ? ('Baseline: ' + baselineBits.join(' • ')) : 'Baseline: rolling 7-day average', steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow','Use the baseline shown here to decide whether the spike is truly unusual']});
+        return;
+      }
+      var a = items[0];
       var label = a.metric || 'anomaly';
-      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'We detected an unusual spike compared to your normal baseline.', steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow']});
+      var baseTxt = a.baseline ? ('Baseline: ' + Number(a.baseline).toFixed(2)) : 'Baseline: rolling 7-day average';
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'We detected an unusual spike compared to your normal baseline.', baselineText: baseTxt, steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow']});
     });
   } catch(e) {}
   var seen = {};
@@ -14571,6 +14630,7 @@ async function loadAlertsCenter() {
       + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
       + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div>'
       + (a.explainer ? '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;line-height:1.5;">' + escHtml(a.explainer) + '</div>' : '')
+      + (a.baselineText ? '<div style="margin-top:8px;font-size:12px;color:#93c5fd;"><strong>Baseline:</strong> ' + escHtml(a.baselineText.replace(/^Baseline:\s*/, '')) + '</div>' : '')
       + (a.steps && a.steps.length ? '<div style="margin-top:10px;padding:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border-primary);border-radius:8px;"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">How to fix</div><ol style="margin:0 0 0 18px;padding:0;color:var(--text-secondary);font-size:12px;line-height:1.6;">' + a.steps.map(function(step){ return '<li>' + escHtml(step) + '</li>'; }).join('') + '</ol></div>' : '')
       + (a.actionTab ? '<div style="margin-top:10px;"><button onclick="switchTab(\'' + escHtml(a.actionTab) + '\')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600;">' + escHtml(a.actionLabel || 'View details') + '</button></div>' : '') + '</div>'
       + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
