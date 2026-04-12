@@ -4919,7 +4919,7 @@ async function loadAlertsCenter() {
   if (activeEl) activeEl.textContent = alerts.length;
   if (criticalEl) criticalEl.textContent = alerts.filter(function(a){ return a.severity === 'critical'; }).length;
   if (!alerts.length) {
-    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now. Good time to tune alert rules before the next surprise.</div>';
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now.</div>';
     return;
   }
   listEl.innerHTML = alerts.map(function(a) {
@@ -11139,7 +11139,7 @@ async function loadAlertsCenter() {
   if (activeEl) activeEl.textContent = alerts.length;
   if (criticalEl) criticalEl.textContent = alerts.filter(function(a){ return a.severity === 'critical'; }).length;
   if (!alerts.length) {
-    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now. Good time to tune alert rules before the next surprise.</div>';
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now.</div>';
     return;
   }
   listEl.innerHTML = alerts.map(function(a) {
@@ -14649,7 +14649,7 @@ async function loadAlertsCenter() {
   if (activeEl) activeEl.textContent = alerts.length;
   if (criticalEl) criticalEl.textContent = alerts.filter(function(a){ return a.severity === 'critical'; }).length;
   if (!alerts.length) {
-    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now. Good time to tune alert rules before the next surprise.</div>';
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now.</div>';
     return;
   }
   listEl.innerHTML = alerts.map(function(a) {
