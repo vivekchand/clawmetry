@@ -3250,8 +3250,6 @@ function clawmetryLogout(){
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
       <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
         <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
-        <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
-        <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
         <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
         <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
       </div>
@@ -9209,8 +9207,6 @@ function clawmetryLogout(){
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
       <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
         <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
-        <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
-        <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
         <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
         <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
       </div>
