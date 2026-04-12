@@ -4726,7 +4726,7 @@ async function checkActiveAlerts() {
     // Show most recent alert
     var latest = alerts[0];
     document.getElementById('alert-banner-msg').textContent = latest.message;
-    banner.style.display = 'flex';
+    banner.style.display = 'none';
     // Show resume button if gateway is paused
     var status = await fetch('/api/budget/status').then(function(r){return r.json();});
     document.getElementById('alert-resume-btn').style.display = status.paused ? '' : 'none';
@@ -5284,7 +5284,7 @@ async function loadMiniWidgets(overview, usage) {
     if (banner && bannerMsg) {
       if (dailyLimit > 0 && dailySpent > dailyLimit) {
         bannerMsg.textContent = 'Daily hard cap exceeded: ' + fmtCost(dailySpent) + ' / ' + fmtCost(dailyLimit);
-        banner.style.display = 'flex';
+        banner.style.display = 'none';
       } else {
         banner.style.display = 'none';
       }
@@ -10697,7 +10697,7 @@ async function checkActiveAlerts() {
     // Show most recent alert
     var latest = alerts[0];
     document.getElementById('alert-banner-msg').textContent = latest.message;
-    banner.style.display = 'flex';
+    banner.style.display = 'none';
     // Show resume button if gateway is paused
     var status = await fetch('/api/budget/status').then(function(r){return r.json();});
     document.getElementById('alert-resume-btn').style.display = status.paused ? '' : 'none';
@@ -10766,7 +10766,8 @@ async function checkAnomalies() {
     banner.style.background = isCritical ? '#7f1d1d' : '#451a03';
     banner.style.color = isCritical ? '#fca5a5' : '#fbbf24';
     banner.style.borderColor = isCritical ? '#ef4444' : '#f59e0b';
-    banner.style.display = 'flex';
+    banner.style.display = 'none';
+    updateAlertsBell();
   } catch(e) {}
 }
 
@@ -10894,7 +10895,7 @@ async function checkHeartbeatStatus() {
       banner.style.background = data.status === 'silent' ? '#7f1d1d' : '#451a03';
       banner.style.color = data.status === 'silent' ? '#fca5a5' : '#fbbf24';
       banner.style.borderColor = data.status === 'silent' ? '#ef4444' : '#f59e0b';
-      banner.style.display = 'flex';
+      banner.style.display = 'none';
     } else {
       banner.style.display = 'none';
     }
@@ -10926,7 +10927,7 @@ async function refreshPausedBanner() {
     }
     var reason = status.paused_reason || 'Auto-pause active';
     document.getElementById('paused-banner-msg').textContent = 'PAUSED: ' + reason;
-    banner.style.display = 'flex';
+    banner.style.display = 'none';
   } catch(e) {}
 }
 setInterval(refreshPausedBanner, 15000);
@@ -14934,7 +14935,7 @@ async function checkUpgradeBanner() {
     if (arrows.length > 0) msg += ' &mdash; ' + arrows.join(', ');
     var banner = document.getElementById('upgrade-banner');
     document.getElementById('upgrade-banner-msg').innerHTML = msg;
-    banner.style.display = 'flex';
+    banner.style.display = 'none';
   } catch(e){}
 }
 setTimeout(checkUpgradeBanner, 3000);
