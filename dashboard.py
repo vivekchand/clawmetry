@@ -3230,6 +3230,12 @@ function clawmetryLogout(){
   <!-- Budget & Alerts hidden until mature -->
   <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
 
+  <!-- Alerts Bell -->
+  <div class="theme-toggle" id="alerts-bell" onclick="openAlertsPanel()" title="Alerts Center" style="cursor:pointer;position:relative;">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+    <span id="alerts-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;font-size:10px;font-weight:600;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;"></span>
+  </div>
+
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="zoom-controls">
     <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
@@ -3244,6 +3250,7 @@ function clawmetryLogout(){
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" id="alerts-tab" onclick="switchTab('alerts')">Alerts</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
       <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
@@ -4220,6 +4227,100 @@ function clawmetryLogout(){
     </div>
   </div>
 </div><!-- end page-security -->
+<!-- ALERTS CENTER PAGE -->
+<div class="page" id="page-alerts">
+  <div class="refresh-bar">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <h2 style="margin:0;font-size:18px;font-weight:700;color:var(--text-primary);">Alerts Center</h2>
+      <span id="alerts-active-count" style="background:#ef4444;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:600;">0 active</span>
+    </div>
+    <button class="refresh-btn" onclick="loadAlertsCenter()">&#x21bb; Refresh</button>
+  </div>
+
+  <!-- Alerts Filter Tabs -->
+  <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border-primary);padding-bottom:8px;">
+    <button class="alert-filter-btn active" onclick="filterAlerts('active')" id="filter-active" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;color:var(--text-primary);">Active</button>
+    <button class="alert-filter-btn" onclick="filterAlerts('history')" id="filter-history" style="background:transparent;border:1px solid transparent;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;color:var(--text-secondary);">History</button>
+    <button class="alert-filter-btn" onclick="filterAlerts('config')" id="filter-config" style="background:transparent;border:1px solid transparent;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;color:var(--text-secondary);">Configuration</button>
+  </div>
+
+  <!-- Active Alerts Section -->
+  <div id="alerts-active-section" class="alerts-section">
+    <div class="card" id="alerts-active-list">
+      <div style="padding:24px;text-align:center;color:var(--text-muted);">
+        <div style="font-size:32px;margin-bottom:8px;">&#x1F389;</div>
+        <div style="font-size:14px;">No active alerts. All systems nominal.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alert History Section -->
+  <div id="alerts-history-section" class="alerts-section" style="display:none;">
+    <div class="card">
+      <table class="usage-table" id="alerts-history-table" style="width:100%;">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;width:120px;">Time</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Alert</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;width:100px;">Severity</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;width:80px;">Status</th>
+        </tr></thead>
+        <tbody><tr><td colspan="4" style="color:var(--text-muted);padding:16px;text-align:center;">Loading alert history...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Alert Configuration Section -->
+  <div id="alerts-config-section" class="alerts-section" style="display:none;">
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;">
+      <div class="card">
+        <div class="card-title"><span class="icon">&#x26A0;</span> Token Velocity</div>
+        <div style="margin:12px 0;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Tokens per 2 min threshold</label>
+          <input id="alert-velocity-tokens" type="number" value="10000" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="margin:12px 0;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Consecutive tools threshold</label>
+          <input id="alert-velocity-tools" type="number" value="20" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+          <input id="alert-velocity-enabled" type="checkbox" checked style="cursor:pointer;">
+          <label for="alert-velocity-enabled" style="font-size:13px;color:var(--text-secondary);cursor:pointer;">Enabled</label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span class="icon">&#x1F4B8;</span> Budget Alerts</div>
+        <div style="margin:12px 0;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Daily limit (USD)</label>
+          <input id="alert-budget-daily" type="number" value="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="margin:12px 0;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Warning threshold (%)</label>
+          <input id="alert-budget-warn" type="number" value="80" min="1" max="100" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+          <input id="alert-budget-enabled" type="checkbox" style="cursor:pointer;">
+          <label for="alert-budget-enabled" style="font-size:13px;color:var(--text-secondary);cursor:pointer;">Auto-pause gateway on breach</label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span class="icon">&#x1F4E1;</span> Webhook Notifications</div>
+        <div style="margin:12px 0;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Webhook URL</label>
+          <input id="alert-webhook-url" type="text" placeholder="https://hooks.slack.com/..." style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="margin-top:12px;font-size:12px;color:var(--text-muted);">
+          Send alerts to Slack, Discord, or custom webhook
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:16px;text-align:right;">
+      <button onclick="saveAlertConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:600;cursor:pointer;">Save Configuration</button>
+    </div>
+  </div>
+</div><!-- end page-alerts -->
+
 
 <!-- MODEL ATTRIBUTION -->
 <div class="page" id="page-models">
@@ -4780,6 +4881,7 @@ function switchTab(name) {
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
+  if (name === 'alerts') { loadAlertsCenter(); }
 }
 
 function exportUsageData() {
@@ -9044,6 +9146,12 @@ function clawmetryLogout(){
   <!-- Budget & Alerts hidden until mature -->
   <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
 
+  <!-- Alerts Bell -->
+  <div class="theme-toggle" id="alerts-bell" onclick="openAlertsPanel()" title="Alerts Center" style="cursor:pointer;position:relative;">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+    <span id="alerts-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;font-size:10px;font-weight:600;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;"></span>
+  </div>
+
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="zoom-controls">
     <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
@@ -9058,6 +9166,7 @@ function clawmetryLogout(){
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" id="alerts-tab" onclick="switchTab('alerts')">Alerts</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
       <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
@@ -10103,6 +10212,99 @@ function clawmetryLogout(){
     </div>
   </div>
 </div><!-- end page-security -->
+<!-- ALERTS CENTER PAGE (theme 2) -->
+<div class="page" id="page-alerts">
+  <div class="refresh-bar">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <h2 style="margin:0;font-size:18px;font-weight:700;color:var(--text-primary);">Alerts Center</h2>
+      <span id="alerts-active-count" style="background:#ef4444;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;font-weight:600;">0 active</span>
+    </div>
+    <button class="refresh-btn" onclick="loadAlertsCenter()">&#x21bb; Refresh</button>
+  </div>
+
+  <!-- Alerts Filter Tabs -->
+  <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border-primary);padding-bottom:8px;">
+    <button class="alert-filter-btn active" onclick="filterAlerts('active')" id="filter-active" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;color:var(--text-primary);">Active</button>
+    <button class="alert-filter-btn" onclick="filterAlerts('history')" id="filter-history" style="background:transparent;border:1px solid transparent;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;color:var(--text-secondary);">History</button>
+    <button class="alert-filter-btn" onclick="filterAlerts('config')" id="filter-config" style="background:transparent;border:1px solid transparent;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;color:var(--text-secondary);">Configuration</button>
+  </div>
+
+  <!-- Active Alerts Section -->
+  <div id="alerts-active-section" class="alerts-section">
+    <div class="card" id="alerts-active-list">
+      <div style="padding:24px;text-align:center;color:var(--text-muted);">
+        <div style="font-size:32px;margin-bottom:8px;">&#x1F389;</div>
+        <div style="font-size:14px;">No active alerts. All systems nominal.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alert History Section -->
+  <div id="alerts-history-section" class="alerts-section" style="display:none;">
+    <div class="card">
+      <table class="usage-table" id="alerts-history-table" style="width:100%;">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;width:120px;">Time</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Alert</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;width:100px;">Severity</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;width:80px;">Status</th>
+        </tr></thead>
+        <tbody><tr><td colspan="4" style="color:var(--text-muted);padding:16px;text-align:center;">Loading alert history...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Alert Configuration Section -->
+  <div id="alerts-config-section" class="alerts-section" style="display:none;">
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;">
+      <div class="card">
+        <div class="card-title"><span class="icon">&#x26A0;</span> Token Velocity</div>
+        <div style="margin:12px 0;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Tokens per 2 min threshold</label>
+          <input id="alert-velocity-tokens" type="number" value="10000" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="margin:12px 0;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Consecutive tools threshold</label>
+          <input id="alert-velocity-tools" type="number" value="20" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+          <input id="alert-velocity-enabled" type="checkbox" checked style="cursor:pointer;">
+          <label for="alert-velocity-enabled" style="font-size:13px;color:var(--text-secondary);cursor:pointer;">Enabled</label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span class="icon">&#x1F4B8;</span> Budget Alerts</div>
+        <div style="margin:12px 0;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Daily limit (USD)</label>
+          <input id="alert-budget-daily" type="number" value="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="margin:12px 0;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Warning threshold (%)</label>
+          <input id="alert-budget-warn" type="number" value="80" min="1" max="100" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+          <input id="alert-budget-enabled" type="checkbox" style="cursor:pointer;">
+          <label for="alert-budget-enabled" style="font-size:13px;color:var(--text-secondary);cursor:pointer;">Auto-pause gateway on breach</label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span class="icon">&#x1F4E1;</span> Webhook Notifications</div>
+        <div style="margin:12px 0;">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Webhook URL</label>
+          <input id="alert-webhook-url" type="text" placeholder="https://hooks.slack.com/..." style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+        </div>
+        <div style="margin-top:12px;font-size:12px;color:var(--text-muted);">
+          Send alerts to Slack, Discord, or custom webhook
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:16px;text-align:right;">
+      <button onclick="saveAlertConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:600;cursor:pointer;">Save Configuration</button>
+    </div>
+  </div>
+</div><!-- end page-alerts -->
 
 <!-- MODEL ATTRIBUTION (theme 2) -->
 <div class="page" id="page-models">
@@ -10766,6 +10968,172 @@ async function refreshPausedBanner() {
 setInterval(refreshPausedBanner, 15000);
 setTimeout(refreshPausedBanner, 1500);
 
+// === Alerts Center Functions ===
+var _alertsFilter = 'active';
+var _alertsData = { active: [], history: [] };
+
+function openAlertsPanel() {
+  switchTab('alerts');
+}
+
+function filterAlerts(filter) {
+  _alertsFilter = filter;
+  document.querySelectorAll('.alert-filter-btn').forEach(function(btn) {
+    btn.classList.remove('active');
+    btn.style.background = 'transparent';
+    btn.style.borderColor = 'transparent';
+    btn.style.color = 'var(--text-secondary)';
+  });
+  document.getElementById('filter-' + filter).classList.add('active');
+  document.getElementById('filter-' + filter).style.background = 'var(--bg-secondary)';
+  document.getElementById('filter-' + filter).style.borderColor = 'var(--border-primary)';
+  document.getElementById('filter-' + filter).style.color = 'var(--text-primary)';
+  
+  document.querySelectorAll('.alerts-section').forEach(function(el) { el.style.display = 'none'; });
+  document.getElementById('alerts-' + filter + '-section').style.display = 'block';
+  
+  if (filter === 'history') loadAlertsHistory();
+  if (filter === 'config') loadAlertsConfig();
+}
+
+async function loadAlertsCenter() {
+  await updateAlertsBadge();
+  if (_alertsFilter === 'active') loadAlertsActive();
+  else if (_alertsFilter === 'history') loadAlertsHistory();
+}
+
+async function updateAlertsBadge() {
+  try {
+    var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
+    var count = (data.alerts || []).length;
+    var badge = document.getElementById('alerts-badge');
+    if (badge) {
+      if (count > 0) {
+        badge.textContent = count;
+        badge.style.display = 'flex';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+    var countEl = document.getElementById('alerts-active-count');
+    if (countEl) countEl.textContent = count + ' active';
+  } catch(e) {}
+}
+
+async function loadAlertsActive() {
+  var container = document.getElementById('alerts-active-list');
+  if (!container) return;
+  
+  try {
+    var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
+    var alerts = data.alerts || [];
+    _alertsData.active = alerts;
+    
+    if (alerts.length === 0) {
+      container.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);"><div style="font-size:32px;margin-bottom:8px;">&#x1F389;</div><div style="font-size:14px;">No active alerts. All systems nominal.</div></div>';
+      return;
+    }
+    
+    var html = '';
+    alerts.forEach(function(a) {
+      var severityClass = a.severity || 'warning';
+      var color = severityClass === 'critical' ? '#ef4444' : (severityClass === 'high' ? '#f59e0b' : '#3b82f6');
+      var icon = severityClass === 'critical' ? '&#x26A0;' : (severityClass === 'high' ? '&#x26A0;' : '&#x2139;');
+      html += '<div style="padding:12px 16px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:flex-start;gap:12px;">';
+      html += '<span style="font-size:18px;color:' + color + ';">' + icon + '</span>';
+      html += '<div style="flex:1;">';
+      html += '<div style="font-weight:600;font-size:13px;color:var(--text-primary);margin-bottom:4px;">' + escHtml(a.title || a.type) + '</div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary);">' + escHtml(a.message) + '</div>';
+      html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + new Date(a.created_at * 1000).toLocaleString() + '</div>';
+      html += '</div>';
+      html += '<button onclick="ackAlert(\'' + a.id + '\')" style="background:transparent;border:1px solid var(--border-primary);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--text-secondary);cursor:pointer;">Ack</button>';
+      html += '</div>';
+    });
+    container.innerHTML = html;
+  } catch(e) {
+    container.innerHTML = '<div style="padding:16px;color:var(--text-error);">Failed to load alerts</div>';
+  }
+}
+
+async function loadAlertsHistory() {
+  var tbody = document.querySelector('#alerts-history-table tbody');
+  if (!tbody) return;
+  
+  try {
+    var data = await fetch('/api/alerts/history?limit=50').then(function(r){return r.json();});
+    var alerts = data.alerts || [];
+    _alertsData.history = alerts;
+    
+    if (alerts.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-muted);padding:16px;text-align:center;">No alert history</td></tr>';
+      return;
+    }
+    
+    var html = '';
+    alerts.forEach(function(a) {
+      var ts = new Date(a.fired_at * 1000).toLocaleString();
+      var severityColor = a.severity === 'critical' ? '#ef4444' : (a.severity === 'high' ? '#f59e0b' : '#3b82f6');
+      var ack = a.acknowledged ? '<span style="color:var(--text-success);">&#10003; Ack</span>' : '<span style="color:var(--text-warning);">&#x25cf; Active</span>';
+      html += '<tr><td style="padding:8px;font-size:12px;color:var(--text-muted);">' + ts + '</td>';
+      html += '<td style="padding:8px;font-size:12px;color:var(--text-primary);"><div style="font-weight:500;">' + escHtml(a.type) + '</div><div style="color:var(--text-secondary);font-size:11px;">' + escHtml(a.message.substring(0, 60)) + '</div></td>';
+      html += '<td style="padding:8px;font-size:12px;"><span style="color:' + severityColor + ';">' + (a.severity || 'info') + '</span></td>';
+      html += '<td style="padding:8px;font-size:12px;">' + ack + '</td></tr>';
+    });
+    tbody.innerHTML = html;
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-error);padding:16px;text-align:center;">Failed to load history</td></tr>';
+  }
+}
+
+async function loadAlertsConfig() {
+  try {
+    var cfg = await fetch('/api/budget/config').then(function(r){return r.json();});
+    document.getElementById('alert-budget-daily').value = cfg.daily_limit || 0;
+    document.getElementById('alert-budget-warn').value = cfg.warning_threshold_pct || 80;
+    document.getElementById('alert-budget-enabled').checked = cfg.auto_pause_enabled || false;
+    
+    var velocityCfg = await fetch('/api/config').then(function(r){return r.json();});
+    if (velocityCfg.velocity_tokens_per_2min) document.getElementById('alert-velocity-tokens').value = velocityCfg.velocity_tokens_per_2min;
+    if (velocityCfg.velocity_consecutive_tools) document.getElementById('alert-velocity-tools').value = velocityCfg.velocity_consecutive_tools;
+    
+    var webhookCfg = await fetch('/api/alert-channels').then(function(r){return r.json();});
+    document.getElementById('alert-webhook-url').value = webhookCfg.webhook_url || '';
+  } catch(e) {}
+}
+
+async function ackAlert(id) {
+  try {
+    await fetch('/api/alerts/history/' + id + '/ack', {method:'POST'});
+    loadAlertsActive();
+    updateAlertsBadge();
+    checkActiveAlerts();
+  } catch(e) {}
+}
+
+async function saveAlertConfig() {
+  var data = {
+    daily_limit: parseFloat(document.getElementById('alert-budget-daily').value) || 0,
+    warning_threshold_pct: parseInt(document.getElementById('alert-budget-warn').value) || 80,
+    auto_pause_enabled: document.getElementById('alert-budget-enabled').checked,
+    velocity_tokens_per_2min: parseInt(document.getElementById('alert-velocity-tokens').value) || 10000,
+    velocity_consecutive_tools: parseInt(document.getElementById('alert-velocity-tools').value) || 20,
+    velocity_enabled: document.getElementById('alert-velocity-enabled').checked,
+    webhook_url: document.getElementById('alert-webhook-url').value.trim(),
+  };
+  
+  try {
+    await fetch('/api/budget/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    await fetch('/api/alert-channels', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({webhook_url: data.webhook_url})});
+    alert('Configuration saved');
+  } catch(e) {
+    alert('Failed to save configuration');
+  }
+}
+
+// Update alerts badge on load and periodically
+setTimeout(updateAlertsBadge, 3000);
+setInterval(updateAlertsBadge, 30000);
+
 // === Telegram Config Functions ===
 async function loadTelegramConfig() {
   try {
@@ -10840,6 +11208,7 @@ function switchTab(name) {
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
+  if (name === 'alerts') { loadAlertsCenter(); }
 }
 
 function exportUsageData() {
