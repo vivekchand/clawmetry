@@ -4833,29 +4833,29 @@ async function collectActiveAlerts() {
   var alertBanner = document.getElementById('alert-banner');
   if (isVisible(alertBanner)) {
     var msg = document.getElementById('alert-banner-msg');
-    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system'});
+    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system', actionTab:'overview', actionLabel:'Open overview'});
   }
   var anomalyBanner = document.getElementById('anomaly-engine-banner');
   if (isVisible(anomalyBanner)) {
     var amsg = document.getElementById('anomaly-banner-msg');
-    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly'});
+    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly', actionTab:'usage', actionLabel:'View details'});
   }
   var upgradeBanner = document.getElementById('upgrade-banner');
   if (isVisible(upgradeBanner)) {
     var umsg = document.getElementById('upgrade-banner-msg');
-    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade'});
+    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade', actionTab:'version-impact', actionLabel:'View details'});
   }
   var heartbeatBanner = document.getElementById('heartbeat-banner');
   if (isVisible(heartbeatBanner)) {
     var hmsg = document.getElementById('heartbeat-banner-msg');
-    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat'});
+    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat', actionTab:'overview', actionLabel:'Open overview'});
   }
   try {
     var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
     var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
     active.forEach(function(a) {
       var label = a.metric || 'anomaly';
-      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api'});
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'View details'});
     });
   } catch(e) {}
   var seen = {};
@@ -4896,10 +4896,11 @@ async function loadAlertsCenter() {
     var color = a.severity === 'critical' ? '#ef4444' : (a.severity === 'high' ? '#f59e0b' : '#3b82f6');
     return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:4px solid ' + color + ';border-radius:10px;padding:12px 14px;">'
       + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
-      + '<div><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
-      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div></div>'
+      + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div>'
+      + (a.actionTab ? '<div style="margin-top:10px;"><button onclick="switchTab(\'' + escHtml(a.actionTab) + '\')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600;">' + escHtml(a.actionLabel || 'View details') + '</button></div>' : '') + '</div>'
       + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
-      + '</div></div>';
+      + '</div></div>'; 
   }).join('');
 }
 
@@ -11018,29 +11019,29 @@ async function collectActiveAlerts() {
   var alertBanner = document.getElementById('alert-banner');
   if (isVisible(alertBanner)) {
     var msg = document.getElementById('alert-banner-msg');
-    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system'});
+    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system', actionTab:'overview', actionLabel:'Open overview'});
   }
   var anomalyBanner = document.getElementById('anomaly-engine-banner');
   if (isVisible(anomalyBanner)) {
     var amsg = document.getElementById('anomaly-banner-msg');
-    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly'});
+    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly', actionTab:'usage', actionLabel:'View details'});
   }
   var upgradeBanner = document.getElementById('upgrade-banner');
   if (isVisible(upgradeBanner)) {
     var umsg = document.getElementById('upgrade-banner-msg');
-    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade'});
+    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade', actionTab:'version-impact', actionLabel:'View details'});
   }
   var heartbeatBanner = document.getElementById('heartbeat-banner');
   if (isVisible(heartbeatBanner)) {
     var hmsg = document.getElementById('heartbeat-banner-msg');
-    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat'});
+    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat', actionTab:'overview', actionLabel:'Open overview'});
   }
   try {
     var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
     var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
     active.forEach(function(a) {
       var label = a.metric || 'anomaly';
-      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api'});
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'View details'});
     });
   } catch(e) {}
   var seen = {};
@@ -11081,10 +11082,11 @@ async function loadAlertsCenter() {
     var color = a.severity === 'critical' ? '#ef4444' : (a.severity === 'high' ? '#f59e0b' : '#3b82f6');
     return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:4px solid ' + color + ';border-radius:10px;padding:12px 14px;">'
       + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
-      + '<div><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
-      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div></div>'
+      + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div>'
+      + (a.actionTab ? '<div style="margin-top:10px;"><button onclick="switchTab(\'' + escHtml(a.actionTab) + '\')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600;">' + escHtml(a.actionLabel || 'View details') + '</button></div>' : '') + '</div>'
       + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
-      + '</div></div>';
+      + '</div></div>'; 
   }).join('');
 }
 
@@ -14499,29 +14501,29 @@ async function collectActiveAlerts() {
   var alertBanner = document.getElementById('alert-banner');
   if (isVisible(alertBanner)) {
     var msg = document.getElementById('alert-banner-msg');
-    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system'});
+    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system', actionTab:'overview', actionLabel:'Open overview'});
   }
   var anomalyBanner = document.getElementById('anomaly-engine-banner');
   if (isVisible(anomalyBanner)) {
     var amsg = document.getElementById('anomaly-banner-msg');
-    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly'});
+    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly', actionTab:'usage', actionLabel:'View details'});
   }
   var upgradeBanner = document.getElementById('upgrade-banner');
   if (isVisible(upgradeBanner)) {
     var umsg = document.getElementById('upgrade-banner-msg');
-    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade'});
+    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade', actionTab:'version-impact', actionLabel:'View details'});
   }
   var heartbeatBanner = document.getElementById('heartbeat-banner');
   if (isVisible(heartbeatBanner)) {
     var hmsg = document.getElementById('heartbeat-banner-msg');
-    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat'});
+    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat', actionTab:'overview', actionLabel:'Open overview'});
   }
   try {
     var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
     var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
     active.forEach(function(a) {
       var label = a.metric || 'anomaly';
-      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api'});
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'View details'});
     });
   } catch(e) {}
   var seen = {};
@@ -14562,10 +14564,11 @@ async function loadAlertsCenter() {
     var color = a.severity === 'critical' ? '#ef4444' : (a.severity === 'high' ? '#f59e0b' : '#3b82f6');
     return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:4px solid ' + color + ';border-radius:10px;padding:12px 14px;">'
       + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
-      + '<div><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
-      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div></div>'
+      + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div>'
+      + (a.actionTab ? '<div style="margin-top:10px;"><button onclick="switchTab(\'' + escHtml(a.actionTab) + '\')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600;">' + escHtml(a.actionLabel || 'View details') + '</button></div>' : '') + '</div>'
       + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
-      + '</div></div>';
+      + '</div></div>'; 
   }).join('');
 }
 
