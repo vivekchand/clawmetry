@@ -3533,23 +3533,9 @@ function clawmetryLogout(){
     <!-- DIVIDER -->
     <div class="overview-divider"></div>
 
-    <!-- RIGHT: Active Tasks + Brain stacked -->
+    <!-- RIGHT: Brain / Main Activity -->
     <div class="overview-tasks-pane">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
-          <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
-        </div>
-        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
-      </div>
-      <div class="tasks-panel-scroll" id="overview-tasks-list">
-        <div style="text-align:center;padding:32px;color:var(--text-muted);">
-          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
-          <div style="font-size:13px;">Loading tasks...</div>
-        </div>
-      </div>
-      <!-- 🧠 Brain Panel: Main Agent Activity (below Active Tasks) -->
-      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;margin-top:14px;display:flex;flex-direction:column;overflow:hidden;">
+      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;display:flex;flex-direction:column;overflow:hidden;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
           <div style="display:flex;align-items:center;gap:6px;">
             <span id="main-activity-dot" style="width:8px;height:8px;border-radius:50%;background:#888;display:inline-block;"></span>
@@ -9535,23 +9521,9 @@ function clawmetryLogout(){
     <!-- DIVIDER -->
     <div class="overview-divider"></div>
 
-    <!-- RIGHT: Active Tasks + Brain stacked -->
+    <!-- RIGHT: Brain / Main Activity -->
     <div class="overview-tasks-pane">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
-          <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
-        </div>
-        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
-      </div>
-      <div class="tasks-panel-scroll" id="overview-tasks-list">
-        <div style="text-align:center;padding:32px;color:var(--text-muted);">
-          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
-          <div style="font-size:13px;">Loading tasks...</div>
-        </div>
-      </div>
-      <!-- 🧠 Brain Panel: Main Agent Activity (below Active Tasks) -->
-      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;margin-top:14px;display:flex;flex-direction:column;overflow:hidden;">
+      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;display:flex;flex-direction:column;overflow:hidden;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
           <div style="display:flex;align-items:center;gap:6px;">
             <span id="main-activity-dot" style="width:8px;height:8px;border-radius:50%;background:#888;display:inline-block;"></span>
