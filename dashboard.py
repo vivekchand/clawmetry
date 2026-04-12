@@ -4868,7 +4868,12 @@ async function collectActiveAlerts() {
         var baselineCost = cost && cost.baseline ? '$' + Number(cost.baseline).toFixed(2) + '/day' : null;
         var baselineTokens = token && token.baseline ? Math.round(Number(token.baseline)).toLocaleString() + ' tokens/day' : null;
         var baselineBits = [baselineCost, baselineTokens].filter(Boolean);
-        alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Open spike analysis', explainer:'One day of usage is much higher than your recent normal.', summaryItems:[cost ? ('Cost that day: $' + Number(cost.value || 0).toFixed(2)) : null, token ? ('Tokens that day: ' + Math.round(Number(token.value || 0)).toLocaleString()) : null, baselineBits.length ? ('Typical baseline: ' + baselineBits.join(' • ')) : null].filter(Boolean), steps:['Open Tokens to compare the spike day with the days around it','Look at Top Sessions by Cost to find the expensive session','Check Cost by Plugin / Skill to see what created the spend','If unexpected, stop the noisy workflow or tighten budget limits']});
+        var latestTs = Math.max(Number((cost && cost.detected_at) || 0), Number((token && token.detected_at) || 0));
+        var ageHours = latestTs ? ((Date.now()/1000 - latestTs) / 3600) : 999;
+        if (ageHours <= 24) {
+          var whenText = latestTs ? new Date(latestTs * 1000).toLocaleString() : 'recently';
+          alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Open spike analysis', explainer:'Usage spiked within the last 24 hours, so this still needs attention.', summaryItems:[latestTs ? ('Detected: ' + whenText) : null, cost ? ('Cost at that time: $' + Number(cost.value || 0).toFixed(2)) : null, token ? ('Tokens at that time: ' + Math.round(Number(token.value || 0)).toLocaleString()) : null, baselineBits.length ? ('Typical baseline: ' + baselineBits.join(' • ')) : null].filter(Boolean), steps:['Open Tokens to compare the spike with the surrounding activity','Look at Top Sessions by Cost to find the expensive session','Check Cost by Plugin / Skill to see what created the spend','If unexpected, stop the noisy workflow or tighten budget limits']});
+        }
         return;
       }
       var a = items[0];
@@ -11077,7 +11082,12 @@ async function collectActiveAlerts() {
         var baselineCost = cost && cost.baseline ? '$' + Number(cost.baseline).toFixed(2) + '/day' : null;
         var baselineTokens = token && token.baseline ? Math.round(Number(token.baseline)).toLocaleString() + ' tokens/day' : null;
         var baselineBits = [baselineCost, baselineTokens].filter(Boolean);
-        alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Open spike analysis', explainer:'One day of usage is much higher than your recent normal.', summaryItems:[cost ? ('Cost that day: $' + Number(cost.value || 0).toFixed(2)) : null, token ? ('Tokens that day: ' + Math.round(Number(token.value || 0)).toLocaleString()) : null, baselineBits.length ? ('Typical baseline: ' + baselineBits.join(' • ')) : null].filter(Boolean), steps:['Open Tokens to compare the spike day with the days around it','Look at Top Sessions by Cost to find the expensive session','Check Cost by Plugin / Skill to see what created the spend','If unexpected, stop the noisy workflow or tighten budget limits']});
+        var latestTs = Math.max(Number((cost && cost.detected_at) || 0), Number((token && token.detected_at) || 0));
+        var ageHours = latestTs ? ((Date.now()/1000 - latestTs) / 3600) : 999;
+        if (ageHours <= 24) {
+          var whenText = latestTs ? new Date(latestTs * 1000).toLocaleString() : 'recently';
+          alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Open spike analysis', explainer:'Usage spiked within the last 24 hours, so this still needs attention.', summaryItems:[latestTs ? ('Detected: ' + whenText) : null, cost ? ('Cost at that time: $' + Number(cost.value || 0).toFixed(2)) : null, token ? ('Tokens at that time: ' + Math.round(Number(token.value || 0)).toLocaleString()) : null, baselineBits.length ? ('Typical baseline: ' + baselineBits.join(' • ')) : null].filter(Boolean), steps:['Open Tokens to compare the spike with the surrounding activity','Look at Top Sessions by Cost to find the expensive session','Check Cost by Plugin / Skill to see what created the spend','If unexpected, stop the noisy workflow or tighten budget limits']});
+        }
         return;
       }
       var a = items[0];
@@ -14582,7 +14592,12 @@ async function collectActiveAlerts() {
         var baselineCost = cost && cost.baseline ? '$' + Number(cost.baseline).toFixed(2) + '/day' : null;
         var baselineTokens = token && token.baseline ? Math.round(Number(token.baseline)).toLocaleString() + ' tokens/day' : null;
         var baselineBits = [baselineCost, baselineTokens].filter(Boolean);
-        alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Open spike analysis', explainer:'One day of usage is much higher than your recent normal.', summaryItems:[cost ? ('Cost that day: $' + Number(cost.value || 0).toFixed(2)) : null, token ? ('Tokens that day: ' + Math.round(Number(token.value || 0)).toLocaleString()) : null, baselineBits.length ? ('Typical baseline: ' + baselineBits.join(' • ')) : null].filter(Boolean), steps:['Open Tokens to compare the spike day with the days around it','Look at Top Sessions by Cost to find the expensive session','Check Cost by Plugin / Skill to see what created the spend','If unexpected, stop the noisy workflow or tighten budget limits']});
+        var latestTs = Math.max(Number((cost && cost.detected_at) || 0), Number((token && token.detected_at) || 0));
+        var ageHours = latestTs ? ((Date.now()/1000 - latestTs) / 3600) : 999;
+        if (ageHours <= 24) {
+          var whenText = latestTs ? new Date(latestTs * 1000).toLocaleString() : 'recently';
+          alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Open spike analysis', explainer:'Usage spiked within the last 24 hours, so this still needs attention.', summaryItems:[latestTs ? ('Detected: ' + whenText) : null, cost ? ('Cost at that time: $' + Number(cost.value || 0).toFixed(2)) : null, token ? ('Tokens at that time: ' + Math.round(Number(token.value || 0)).toLocaleString()) : null, baselineBits.length ? ('Typical baseline: ' + baselineBits.join(' • ')) : null].filter(Boolean), steps:['Open Tokens to compare the spike with the surrounding activity','Look at Top Sessions by Cost to find the expensive session','Check Cost by Plugin / Skill to see what created the spend','If unexpected, stop the noisy workflow or tighten budget limits']});
+        }
         return;
       }
       var a = items[0];
