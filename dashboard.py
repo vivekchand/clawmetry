@@ -20466,7 +20466,9 @@ def api_subagents():
     for s in live_sessions:
         sid = s.get("sessionId") or s.get("key", "")
         if sid:
-            merged[sid] = dict(s)
+            row = dict(s)
+            row["sessionId"] = sid
+            merged[sid] = row
 
     sessions_dir = _get_sessions_dir()
     index_path = os.path.join(sessions_dir, "sessions.json")
@@ -20477,12 +20479,95 @@ def api_subagents():
             for sid, meta in historical.items():
                 if not isinstance(meta, dict):
                     continue
-                if sid not in merged:
+                row = merged.get(sid, {})
+                if not row:
                     row = dict(meta)
                     row["sessionId"] = sid
-                    merged[sid] = row
+                else:
+                    for k, v in meta.items():
+                        if row.get(k) in (None, "", 0, False):
+                            row[k] = v
+                merged[sid] = row
     except Exception:
         pass
+
+    def _parse_spawned_subagents_from_transcripts(limit=12):
+        found = {}
+        try:
+            files = []
+            for fname in os.listdir(sessions_dir):
+                if not fname.endswith('.jsonl') or '.checkpoint.' in fname:
+                    continue
+                path = os.path.join(sessions_dir, fname)
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                files.append((mtime, path))
+            files.sort(reverse=True)
+
+            child_key_re = _re.compile(r'"childSessionKey"\s*:\s*"([^"]+)"')
+
+            for _, path in files[:limit]:
+                try:
+                    text = open(path, 'r', errors='ignore').read()
+                except OSError:
+                    continue
+
+                updated_at = int(os.path.getmtime(path) * 1000)
+
+                for child_key in child_key_re.findall(text):
+                    entry = found.setdefault(child_key, {"sessionId": child_key})
+                    entry.setdefault("displayName", child_key.split(':')[-1])
+                    entry.setdefault("parent", None)
+                    entry.setdefault("depth", 1)
+                    entry.setdefault("model", "unknown")
+                    entry.setdefault("totalTokens", 0)
+                    entry["updatedAt"] = max(entry.get("updatedAt", 0), updated_at)
+
+                blocks = text.split('<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>')
+                for block in blocks[1:]:
+                    if 'source: subagent' not in block.lower():
+                        continue
+                    child_key = None
+                    child_sid = None
+                    task_label = None
+                    for raw_line in block.splitlines():
+                        line = raw_line.strip()
+                        if line.startswith('session_key:'):
+                            child_key = line.split(':', 1)[1].strip()
+                        elif line.startswith('session_id:'):
+                            child_sid = line.split(':', 1)[1].strip()
+                        elif line.startswith('task:'):
+                            task_label = line.split(':', 1)[1].strip()
+                    target_key = child_key or child_sid
+                    if not target_key:
+                        continue
+                    entry = found.setdefault(target_key, {"sessionId": target_key})
+                    if child_sid:
+                        entry["rawSessionId"] = child_sid
+                    if task_label and (entry.get("displayName") in (None, "") or entry.get("displayName") == target_key.split(':')[-1]):
+                        entry["displayName"] = task_label
+                    entry.setdefault("parent", None)
+                    entry.setdefault("depth", 1)
+                    entry.setdefault("model", "unknown")
+                    entry.setdefault("totalTokens", 0)
+                    entry["updatedAt"] = max(entry.get("updatedAt", 0), updated_at)
+        except Exception:
+            return {}
+        return found
+
+    transcript_subagents = _parse_spawned_subagents_from_transcripts()
+    for sid, meta in transcript_subagents.items():
+        row = merged.get(sid, {})
+        if not row:
+            row = dict(meta)
+            row["sessionId"] = sid
+        else:
+            for k, v in meta.items():
+                if row.get(k) in (None, "", 0, False):
+                    row[k] = v
+        merged[sid] = row
 
     subagents = []
     counts = {"total": 0, "active": 0, "idle": 0, "stale": 0}
@@ -20495,8 +20580,10 @@ def api_subagents():
         else:
             status = "stale"
         depth = int(s.get("depth", 0) or 0)
-        parent = s.get("spawnedBy") or s.get("parentKey") or None
-        is_subagent = depth > 0 or ":subagent:" in sid.lower() or bool(parent)
+        parent = s.get("spawnedBy") or s.get("parentKey") or s.get("parent") or None
+        sid_l = sid.lower()
+        raw_sid_l = str(s.get("rawSessionId") or "").lower()
+        is_subagent = depth > 0 or ":subagent:" in sid_l or ":subagent:" in raw_sid_l or bool(parent)
         if not is_subagent:
             continue
         tokens = int(s.get("totalTokens") or 0)
@@ -20524,7 +20611,7 @@ def api_subagents():
             "updatedAt": s.get("updatedAt") or s.get("lastActiveMs", 0),
         })
 
-    subagents.sort(key=lambda x: (x.get("parent") is None, 0 if x["status"] == "active" else 1 if x["status"] == "idle" else 2, x["depth"]))
+    subagents.sort(key=lambda x: (x.get("parent") is None, 0 if x["status"] == "active" else 1 if x["status"] == "idle" else 2, x["depth"], -(x.get("updatedAt") or 0)))
     return jsonify({"subagents": subagents, "counts": counts})
 
 
