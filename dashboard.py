@@ -16939,15 +16939,18 @@ function loadBrainData(isRefresh) {
     html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px 14px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + ((s.avg_response_ms||0) >= 1000 ? ((s.avg_response_ms/1000).toFixed(1)+'s') : ((s.avg_response_ms||0)+'ms')) + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">Avg Response</div></div>';
     html += '</div>';
 
-    // Thinking & Cache stats row
+    // Thinking, Cache & Temperature stats row
     var thinkCount = s.thinking_calls || 0;
     var cacheHits = s.cache_hits || 0;
     var cacheRate = s.today_calls > 0 ? Math.round(cacheHits / s.today_calls * 100) : 0;
+    var avgTemp = s.avg_temperature || 0;
+    var tempColor = avgTemp < 0.5 ? '#3b82f6' : avgTemp > 0.9 ? '#f59e0b' : '#8b5cf6';
     html += '<div style="display:flex;gap:8px;margin-bottom:12px;justify-content:center;flex-wrap:wrap;">';
     html += '<span style="background:' + (thinkCount > 0 ? '#7c3aed22' : 'var(--bg-secondary)') + ';color:' + (thinkCount > 0 ? '#7c3aed' : 'var(--text-muted)') + ';padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;">🧠 Thinking: ' + thinkCount + '/' + (s.today_calls||0) + '</span>';
     html += '<span style="background:' + (cacheRate > 50 ? '#22c55e22' : 'var(--bg-secondary)') + ';color:' + (cacheRate > 50 ? '#22c55e' : 'var(--text-muted)') + ';padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;">💾 Cache hit: ' + cacheRate + '%</span>';
     var cacheW = tok.cache_write||0;
     html += '<span style="background:var(--bg-secondary);color:var(--text-muted);padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;">✍️ Cache write: ' + (cacheW>=1e6?(cacheW/1e6).toFixed(1)+'M':cacheW>=1e3?(cacheW/1e3).toFixed(1)+'K':cacheW) + '</span>';
+    html += '<span style="background:' + tempColor + '22;color:' + tempColor + ';padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;" title="Average temperature across all calls">🌡️ Avg temp: ' + avgTemp + '</span>';
     html += '</div>';
 
     // Token breakdown bar
@@ -16984,6 +16987,12 @@ function loadBrainData(isRefresh) {
         html += '<span style="color:var(--text-muted);min-width:35px;">' + dur + '</span>';
         if (c.thinking) html += '<span style="background:#7c3aed22;color:#7c3aed;padding:1px 5px;border-radius:4px;font-size:10px;" title="Thinking enabled">🧠</span>';
         if (c.cache_read > 0) html += '<span style="background:#22c55e22;color:#22c55e;padding:1px 5px;border-radius:4px;font-size:10px;" title="Cache hit: ' + c.cache_read + ' tokens">💾' + (c.cache_read>=1000?(c.cache_read/1000).toFixed(0)+'K':c.cache_read) + '</span>';
+        // Temperature zone badge
+        if (c.temperature_zone) {
+          var zoneColors = {deterministic: ['#3b82f622', '#3b82f6'], balanced: ['#8b5cf622', '#8b5cf6'], creative: ['#f59e0b22', '#f59e0b']};
+          var zc = zoneColors[c.temperature_zone] || zoneColors.balanced;
+          html += '<span style="background:' + zc[0] + ';color:' + zc[1] + ';padding:1px 5px;border-radius:4px;font-size:10px;" title="Temperature: ' + c.temperature + '">' + c.temperature_zone + '</span>';
+        }
         // Tool badges
         if (c.tools_used && c.tools_used.length > 0) {
           html += '<span style="display:flex;gap:3px;flex-wrap:wrap;">';
@@ -28213,6 +28222,26 @@ def api_component_brain():
                                 has_thinking = True
                                 break
 
+                        # Extract decoding config (temperature, top_p, top_k, etc.)
+                        decoding_config = msg.get("decoding", {}) or msg.get("config", {}) or {}
+                        # Fallback: check message-level params if nested decoding not present
+                        if not decoding_config:
+                            decoding_config = {
+                                "temperature": msg.get("temperature"),
+                                "top_p": msg.get("top_p"),
+                                "top_k": msg.get("top_k"),
+                                "frequency_penalty": msg.get("frequency_penalty"),
+                                "presence_penalty": msg.get("presence_penalty"),
+                                "seed": msg.get("seed"),
+                            }
+                        temp = decoding_config.get("temperature") if isinstance(decoding_config, dict) else None
+                        if temp is None:
+                            temp = msg.get("temperature")
+                        temp = float(temp) if temp is not None else 1.0  # Default to 1.0 if not specified
+
+                        # Determine temperature zone
+                        zone = "deterministic" if temp < 0.5 else "creative" if temp > 0.9 else "balanced"
+
                         # Extract tools used
                         tools = []
                         for c in msg.get("content") or []:
@@ -28259,6 +28288,16 @@ def api_component_brain():
                                 "duration_ms": duration_ms,
                                 "session": session_label,
                                 "stop_reason": msg.get("stopReason", ""),
+                                "temperature": round(temp, 2),
+                                "temperature_zone": zone,
+                                "decoding_config": {
+                                    "temperature": decoding_config.get("temperature") if isinstance(decoding_config, dict) else None,
+                                    "top_p": decoding_config.get("top_p") if isinstance(decoding_config, dict) else msg.get("top_p"),
+                                    "top_k": decoding_config.get("top_k") if isinstance(decoding_config, dict) else msg.get("top_k"),
+                                    "frequency_penalty": decoding_config.get("frequency_penalty") if isinstance(decoding_config, dict) else msg.get("frequency_penalty"),
+                                    "presence_penalty": decoding_config.get("presence_penalty") if isinstance(decoding_config, dict) else msg.get("presence_penalty"),
+                                    "seed": decoding_config.get("seed") if isinstance(decoding_config, dict) else msg.get("seed"),
+                                },
                             }
                         )
 
@@ -28279,6 +28318,14 @@ def api_component_brain():
     thinking_count = sum(1 for c in calls if c.get("thinking"))
     cache_hit_count = sum(1 for c in calls if c.get("cache_read", 0) > 0)
     total_cache_write = sum(c.get("cache_write", 0) for c in calls)
+    
+    # Temperature stats
+    temps = [c.get("temperature") for c in calls if c.get("temperature") is not None]
+    avg_temp = round(sum(temps) / len(temps), 2) if temps else 0
+    zone_counts = {"deterministic": 0, "balanced": 0, "creative": 0}
+    for c in calls:
+        zone = c.get("temperature_zone", "balanced")
+        zone_counts[zone] = zone_counts.get(zone, 0) + 1
 
     result = {
         "stats": {
@@ -28294,6 +28341,8 @@ def api_component_brain():
             "avg_response_ms": avg_ms,
             "thinking_calls": thinking_count,
             "cache_hits": cache_hit_count,
+            "avg_temperature": avg_temp,
+            "temperature_zones": zone_counts,
         },
         "calls": calls[offset : offset + limit],
         "total": total,
