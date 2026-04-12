@@ -3160,6 +3160,109 @@ function clawmetryLogout(){
   localStorage.removeItem('clawmetry-token');
   location.reload();
 }
+
+// ── Diagnostics Panel (GH#28 + GH#556) ─────────────────────────────────
+var _diagnosticsData = null;
+
+async function loadDiagnostics() {
+  try {
+    var resp = await fetch('/api/diagnostics');
+    var data = await resp.json();
+    _diagnosticsData = data;
+    
+    var el = document.getElementById('sh-diagnostics');
+    if (!el) return;
+    
+    // Build diagnostics display
+    var html = '<div style="line-height:1.9;">';
+    html += '<div><span style="color:#888">Gateway:</span> <span style="color:#2dd4bf">' + escHtml(data.gateway_url || 'unknown') + '</span></div>';
+    html += '<div><span style="color:#888">Workspace:</span> <span style="color:#2dd4bf">' + escHtml(data.workspace_path || 'unknown') + '</span></div>';
+    html += '<div><span style="color:#888">Auth Token:</span> <span style="color:' + (data.auth_token_status === 'present' ? '#4ade80' : '#f87171') + '">' + (data.auth_token_status === 'present' ? '✓ present' : '✗ missing') + '</span></div>';
+    
+    if (data.openclaw_flags && Object.keys(data.openclaw_flags).length > 0) {
+      html += '<div style="margin-top:8px;"><span style="color:#888">OpenClaw Flags:</span></div>';
+      for (var key in data.openclaw_flags) {
+        html += '<div style="padding-left:12px;"><span style="color:#a78bfa">' + escHtml(key) + ':</span> ' + escHtml(String(data.openclaw_flags[key])) + '</div>';
+      }
+    }
+    
+    if (data.warnings && data.warnings.length > 0) {
+      html += '<div style="margin-top:8px;"><span style="color:#f87171">⚠ Warnings:</span></div>';
+      data.warnings.forEach(function(w) {
+        html += '<div style="padding-left:12px;color:#fca5a5;font-size:11px;">' + escHtml(w) + '</div>';
+      });
+    }
+    
+    html += '</div>';
+    
+    el.innerHTML = html;
+    
+    // Show OAuth migration banner if detected (GH#556)
+    updateOAuthMigrationBanner(data.anthropic_auth);
+    
+  } catch (e) {
+    console.warn('Failed to load diagnostics', e);
+    var el = document.getElementById('sh-diagnostics');
+    if (el) el.innerHTML = '<div style="color:#f87171;">Failed to load diagnostics</div>';
+  }
+}
+
+function updateOAuthMigrationBanner(authInfo) {
+  var banner = document.getElementById('oauth-migration-banner');
+  if (!banner) return;
+  
+  // Check if user has dismissed the banner
+  var dismissed = localStorage.getItem('oauth-migration-dismissed');
+  if (dismissed === 'true') {
+    banner.style.display = 'none';
+    return;
+  }
+  
+  if (authInfo && authInfo.is_legacy_oauth) {
+    banner.style.display = 'block';
+    var cmdEl = document.getElementById('oauth-migration-cmd');
+    if (cmdEl && authInfo.migration_command) {
+      cmdEl.textContent = authInfo.migration_command;
+    }
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+function dismissOAuthMigrationBanner() {
+  var banner = document.getElementById('oauth-migration-banner');
+  if (banner) banner.style.display = 'none';
+  localStorage.setItem('oauth-migration-dismissed', 'true');
+}
+
+function copyOAuthMigrationCommand() {
+  var cmdEl = document.getElementById('oauth-migration-cmd');
+  if (!cmdEl) return;
+  
+  var cmd = cmdEl.textContent || 'openclaw auth set anthropic --api-key YOUR_API_KEY';
+  navigator.clipboard.writeText(cmd).then(function() {
+    var btn = document.getElementById('oauth-migration-copy-btn');
+    if (btn) {
+      var originalText = btn.textContent;
+      btn.textContent = '✓ Copied!';
+      setTimeout(function() { btn.textContent = originalText; }, 2000);
+    }
+  });
+}
+
+function copyDiagnostics() {
+  if (!_diagnosticsData) return;
+  var text = JSON.stringify(_diagnosticsData, null, 2);
+  navigator.clipboard.writeText(text).then(function() {
+    var btn = document.getElementById('sh-diagnostics-copy');
+    if (btn) {
+      var originalText = btn.textContent;
+      btn.textContent = '✓ Copied!';
+      setTimeout(function() { btn.textContent = originalText; }, 2000);
+    }
+  });
+}
+
 // Inject auth header into all fetch calls
 (function(){
   var _origFetch=window.fetch;
@@ -3510,6 +3613,25 @@ function clawmetryLogout(){
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
         <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
+
+        <!-- OAuth Migration Banner (GH#556) -->
+        <div id="oauth-migration-banner" style="display:none;margin-bottom:12px;padding:12px 16px;background:linear-gradient(135deg,rgba(245,158,11,0.15) 0%,rgba(245,158,11,0.05) 100%);border:1px solid rgba(245,158,11,0.5);border-radius:8px;">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <span style="font-size:20px;">⚠️</span>
+            <div style="flex:1;min-width:200px;">
+              <div style="font-size:13px;font-weight:700;color:#f59e0b;margin-bottom:4px;">Deprecated OAuth Token Detected</div>
+              <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">
+                Your Anthropic authentication is using a legacy OAuth token. These tokens will stop working soon. 
+                Migrate to an API key to avoid service interruption.
+              </div>
+              <div style="margin-top:8px;padding:8px 12px;background:rgba(0,0,0,0.3);border-radius:6px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#2dd4bf;" id="oauth-migration-cmd">openclaw auth set anthropic --api-key YOUR_API_KEY</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <button id="oauth-migration-copy-btn" onclick="copyOAuthMigrationCommand()" style="background:#2dd4bf;color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">📋 Copy Command</button>
+              <button onclick="dismissOAuthMigrationBanner()" style="background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);border-radius:6px;padding:6px 14px;font-size:11px;cursor:pointer;white-space:nowrap;">Dismiss</button>
+            </div>
+          </div>
+        </div>
         <!-- 🔍 Diagnostics Panel (GH#28) -->
         <div id="sh-diagnostics-wrap">
           <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
@@ -12190,16 +12312,37 @@ function openDetailView(type) {
 }
 
 function showSessionsModal() {
-  fetch('/api/sessions').then(r=>r.json()).then(function(d) {
+  // Fetch both sessions and cost breakdown data
+  Promise.all([
+    fetch('/api/sessions').then(r=>r.json()),
+    fetch('/api/sessions/cost-breakdown').then(r=>r.json())
+  ]).then(function([d, costData]) {
     var sessions = d.sessions || d || [];
     if (!Array.isArray(sessions)) sessions = [];
+    
+    // Build cost lookup map by session_id
+    var costMap = {};
+    (costData.sessions || []).forEach(function(c) {
+      if (c.session_id) {
+        costMap[c.session_id] = c;
+      }
+    });
+    
+    // Get alert threshold
+    var alertThreshold = costData.alert_threshold || 0.50;
+    
     var html = '<div style="max-height:60vh;overflow-y:auto;">';
     if (!sessions.length) {
       html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">No active sessions</div>';
     } else {
       html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
       html += '<tr style="border-bottom:1px solid var(--border-primary);color:var(--text-muted);text-transform:uppercase;font-size:10px;letter-spacing:0.5px;">';
-      html += '<th style="padding:8px;text-align:left;">Session</th><th style="padding:8px;text-align:left;">Kind</th><th style="padding:8px;text-align:right;">Tokens</th><th style="padding:8px;text-align:right;">Age</th></tr>';
+      html += '<th style="padding:8px;text-align:left;">Session</th>';
+      html += '<th style="padding:8px;text-align:left;">Kind</th>';
+      html += '<th style="padding:8px;text-align:right;">Tokens</th>';
+      html += '<th style="padding:8px;text-align:right;">Cost</th>';
+      html += '<th style="padding:8px;text-align:center;" title="Input/Output/Cache">I/O/C</th>';
+      html += '<th style="padding:8px;text-align:right;">Age</th></tr>';
       sessions.forEach(function(s) {
         var age = s.lastActivityAge || s.age || '';
         var tokens = s.totalTokens || s.tokens || 0;
@@ -12207,17 +12350,72 @@ function showSessionsModal() {
         var kind = s.kind || (s.sessionKey && s.sessionKey.includes('subagent') ? 'isolated' : 'main');
         var label = s.label || s.sessionKey || s.name || '--';
         var kindColor = kind === 'main' ? 'var(--text-success)' : kind === 'isolated' ? '#a78bfa' : 'var(--text-muted)';
+        
+        // Get cost and token breakdown data
+        var sid = s.sessionId || s.sessionKey || s.id || '';
+        var costInfo = costMap[sid] || {cost_usd: 0, input_tokens: 0, output_tokens: 0, cache_tokens: 0, is_expensive: false};
+        var costUsd = costInfo.cost_usd || 0;
+        var costDisplay = costUsd > 0 ? '$' + costUsd.toFixed(3) : '-';
+        var costColor = costInfo.is_expensive ? '#ef4444' : 'var(--text-success)';
+        
+        // Token breakdown
+        var inTok = costInfo.input_tokens || 0;
+        var outTok = costInfo.output_tokens || 0;
+        var cacheTok = costInfo.cache_tokens || 0;
+        var tokDisplay = (inTok > 0 || outTok > 0 || cacheTok > 0) 
+          ? '<span style="font-size:10px;">' + (inTok > 999 ? (inTok/1e3).toFixed(0)+'K' : inTok) + '/' + (outTok > 999 ? (outTok/1e3).toFixed(0)+'K' : outTok) + '/' + (cacheTok > 999 ? (cacheTok/1e3).toFixed(0)+'K' : cacheTok) + '</span>'
+          : '-';
+        
         html += '<tr style="border-bottom:1px solid var(--border-primary);">';
         html += '<td style="padding:8px;color:var(--text-primary);font-weight:600;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(label) + '</td>';
         html += '<td style="padding:8px;"><span style="color:'+kindColor+';font-size:10px;font-weight:600;text-transform:uppercase;">'+escHtml(kind)+'</span></td>';
         html += '<td style="padding:8px;text-align:right;color:var(--text-primary);font-family:monospace;">'+tokens+'</td>';
+        html += '<td style="padding:8px;text-align:right;color:'+costColor+';font-family:monospace;font-weight:600;">'+costDisplay+'</td>';
+        html += '<td style="padding:8px;text-align:center;color:var(--text-muted);font-family:monospace;">'+tokDisplay+'</td>';
         html += '<td style="padding:8px;text-align:right;color:var(--text-muted);">'+escHtml(age)+'</td>';
         html += '</tr>';
       });
       html += '</table>';
+      
+      // Add threshold info
+      html += '<div style="margin-top:12px;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;font-size:11px;color:var(--text-muted);">';
+      html += '<span style="color:#ef4444;">●</span> Sessions costing ≥$' + alertThreshold.toFixed(2) + ' are highlighted';
+      html += '</div>';
     }
     html += '</div>';
     showGenericModal('💬 Active Sessions (' + sessions.length + ')', html);
+  }).catch(function(e) {
+    // Fallback to original behavior on error
+    console.error('Error loading cost breakdown:', e);
+    fetch('/api/sessions').then(r=>r.json()).then(function(d) {
+      var sessions = d.sessions || d || [];
+      if (!Array.isArray(sessions)) sessions = [];
+      var html = '<div style="max-height:60vh;overflow-y:auto;">';
+      if (!sessions.length) {
+        html += '<div style="text-align:center;padding:32px;color:var(--text-muted);">No active sessions</div>';
+      } else {
+        html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+        html += '<tr style="border-bottom:1px solid var(--border-primary);color:var(--text-muted);text-transform:uppercase;font-size:10px;letter-spacing:0.5px;">';
+        html += '<th style="padding:8px;text-align:left;">Session</th><th style="padding:8px;text-align:left;">Kind</th><th style="padding:8px;text-align:right;">Tokens</th><th style="padding:8px;text-align:right;">Age</th></tr>';
+        sessions.forEach(function(s) {
+          var age = s.lastActivityAge || s.age || '';
+          var tokens = s.totalTokens || s.tokens || 0;
+          tokens = tokens > 1e6 ? (tokens/1e6).toFixed(1)+'M' : (tokens > 1e3 ? (tokens/1e3).toFixed(0)+'K' : tokens);
+          var kind = s.kind || (s.sessionKey && s.sessionKey.includes('subagent') ? 'isolated' : 'main');
+          var label = s.label || s.sessionKey || s.name || '--';
+          var kindColor = kind === 'main' ? 'var(--text-success)' : kind === 'isolated' ? '#a78bfa' : 'var(--text-muted)';
+          html += '<tr style="border-bottom:1px solid var(--border-primary);">';
+          html += '<td style="padding:8px;color:var(--text-primary);font-weight:600;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(label) + '</td>';
+          html += '<td style="padding:8px;"><span style="color:'+kindColor+';font-size:10px;font-weight:600;text-transform:uppercase;">'+escHtml(kind)+'</span></td>';
+          html += '<td style="padding:8px;text-align:right;color:var(--text-primary);font-family:monospace;">'+tokens+'</td>';
+          html += '<td style="padding:8px;text-align:right;color:var(--text-muted);">'+escHtml(age)+'</td>';
+          html += '</tr>';
+        });
+        html += '</table>';
+      }
+      html += '</div>';
+      showGenericModal('💬 Active Sessions (' + sessions.length + ')', html);
+    });
   });
 }
 
@@ -17048,6 +17246,47 @@ function loadCostOptimizerData(isRefresh) {
       html += '</div>';
     }
 
+    // ══ SECTION 1.5: Session Cost Breakdown Chart ════════════════════════
+    if (data.sessionCostChart && data.sessionCostChart.length > 0) {
+      html += '<div class="co-section">';
+      html += '<h3>📊 Top Expensive Sessions</h3>';
+      html += '<div style="background:var(--bg-secondary);border-radius:8px;padding:12px;">';
+      
+      // Find max cost for scaling
+      var maxCost = 0;
+      data.sessionCostChart.forEach(function(s) { maxCost = Math.max(maxCost, s.cost_usd); });
+      
+      // Render horizontal bar chart
+      data.sessionCostChart.forEach(function(s) {
+        var barWidth = maxCost > 0 ? (s.cost_usd / maxCost * 100) : 0;
+        var isExpensive = s.is_expensive;
+        var barColor = isExpensive ? '#ef4444' : '#4ade80';
+        var sessionLabel = s.session_id.length > 20 ? s.session_id.substring(0, 17) + '...' : s.session_id;
+        
+        html += '<div style="margin-bottom:8px;">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-secondary);margin-bottom:2px;">';
+        html += '<span title="' + escHtml(s.session_id) + '">' + escHtml(sessionLabel) + '</span>';
+        html += '<span style="font-family:monospace;">$' + s.cost_usd.toFixed(3) + '</span>';
+        html += '</div>';
+        html += '<div style="background:var(--bg-tertiary);border-radius:4px;height:18px;overflow:hidden;">';
+        html += '<div style="background:' + barColor + ';width:' + barWidth + '%;height:100%;border-radius:4px;transition:width 0.3s ease;"></div>';
+        html += '</div>';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;font-size:9px;color:var(--text-muted);margin-top:1px;">';
+        html += '<span>' + (s.input_tokens + s.output_tokens).toLocaleString() + ' tokens</span>';
+        html += '<span>I:' + s.input_tokens.toLocaleString() + ' O:' + s.output_tokens.toLocaleString() + ' C:' + s.cache_tokens.toLocaleString() + '</span>';
+        html += '</div>';
+        html += '</div>';
+      });
+      
+      // Alert threshold info
+      html += '<div style="margin-top:10px;padding:6px 8px;background:var(--bg-tertiary);border-radius:4px;font-size:10px;color:var(--text-muted);text-align:center;">';
+      html += '<span style="color:#ef4444;">●</span> = exceeds $' + (data.sessionAlertThreshold || 0.50).toFixed(2) + ' threshold';
+      html += '</div>';
+      
+      html += '</div>';
+      html += '</div>';
+    }
+
     // ══ SECTION 2: Hardware ═══════════════════════════════════════
     var sys = (data.system) || {};
     html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:6px;">🖥️ Your Hardware</div>';
@@ -20301,17 +20540,33 @@ def api_export_otlp():
 
 @bp_sessions.route("/api/sessions/cost-breakdown")
 def api_sessions_cost_breakdown():
-    """Per-session cost breakdown: top sessions by total cost, sorted descending."""
+    """Per-session cost breakdown: top sessions by total cost, sorted descending.
+    
+    Returns sessions with detailed token breakdown (input/output/cache) and cost.
+    Also returns configurable alert threshold for expensive sessions.
+    """
     analytics = _compute_transcript_analytics()
     sessions = analytics.get("sessions", [])
     usd_per_token = _estimate_usd_per_token()
+    
+    # Get alert threshold from config (default $0.50)
+    alert_threshold = _get_session_cost_alert_threshold()
+    
     result = []
     for s in sessions:
         cost = s.get("cost_usd", 0.0) or 0.0
         tokens = s.get("tokens", 0) or 0
+        
+        # Get detailed token breakdown from session data
+        token_breakdown = _get_session_token_breakdown(s.get("session_id", ""))
+        
         # Estimate cost from tokens if cost is zero
         if cost == 0.0 and tokens > 0:
             cost = tokens * usd_per_token
+        
+        # Check if this session exceeds the expensive threshold
+        is_expensive = cost >= alert_threshold
+        
         result.append(
             {
                 "session_id": s.get("session_id", ""),
@@ -20320,14 +20575,85 @@ def api_sessions_cost_breakdown():
                 "model": s.get("model", "unknown"),
                 "day": s.get("day", ""),
                 "start_ts": s.get("start_ts", 0),
+                "input_tokens": token_breakdown.get("input", 0),
+                "output_tokens": token_breakdown.get("output", 0),
+                "cache_tokens": token_breakdown.get("cache", 0),
+                "is_expensive": is_expensive,
             }
         )
     result.sort(key=lambda x: x["cost_usd"], reverse=True)
     top10 = result[:10]
     total_cost = sum(r["cost_usd"] for r in result)
     return jsonify(
-        {"sessions": result, "top10": top10, "total_cost_usd": round(total_cost, 4)}
+        {
+            "sessions": result, 
+            "top10": top10, 
+            "total_cost_usd": round(total_cost, 4),
+            "alert_threshold": alert_threshold,
+        }
     )
+
+
+def _get_session_cost_alert_threshold():
+    """Get the configured alert threshold for expensive sessions (default $0.50)."""
+    try:
+        cfg = _get_budget_config()
+        threshold = cfg.get("session_cost_alert_threshold", 0.50)
+        return float(threshold)
+    except Exception:
+        return 0.50
+
+
+def _get_session_token_breakdown(session_id):
+    """Extract input/output/cache token breakdown from session transcript file.
+    
+    Returns dict with: input, output, cache (total cache read+write)
+    """
+    if not session_id:
+        return {"input": 0, "output": 0, "cache": 0}
+    
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.join(sessions_dir, f"{session_id}.jsonl")
+    if not os.path.exists(fpath):
+        return {"input": 0, "output": 0, "cache": 0}
+    
+    total_input = 0
+    total_output = 0
+    total_cache = 0
+    
+    try:
+        with open(fpath, "r", errors="replace") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                except Exception:
+                    continue
+                
+                # Extract usage from message or direct fields
+                message = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
+                usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
+                if not usage:
+                    usage = obj.get("usage") if isinstance(obj.get("usage"), dict) else {}
+                
+                if usage:
+                    in_toks = usage.get("input", usage.get("input_tokens", 0)) or 0
+                    out_toks = usage.get("output", usage.get("output_tokens", 0)) or 0
+                    cache_read = usage.get("cacheRead", usage.get("cache_read_tokens", 0)) or 0
+                    cache_write = usage.get("cacheWrite", usage.get("cache_write_tokens", 0)) or 0
+                    
+                    total_input += int(in_toks)
+                    total_output += int(out_toks)
+                    total_cache += int(cache_read) + int(cache_write)
+    except Exception:
+        pass
+    
+    return {
+        "input": total_input,
+        "output": total_output,
+        "cache": total_cache,
+    }
 
 
 @bp_sessions.route("/api/sessions/<session_id>/stop", methods=["POST"])
@@ -22657,6 +22983,7 @@ def api_budget_config():
             "warning_threshold_pct",
             "telegram_bot_token",
             "telegram_chat_id",
+            "session_cost_alert_threshold",
         ]
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
@@ -29976,6 +30303,9 @@ def api_diagnostics():
     except Exception:
         warnings_list = []
 
+    # Detect Anthropic OAuth vs API key (GH#556)
+    anthropic_auth = _detect_anthropic_auth_type()
+
     return jsonify(
         {
             "gateway_url": gw_url,
@@ -29985,8 +30315,71 @@ def api_diagnostics():
             "openclaw_flags": openclaw_flags,
             "warnings": warnings_list,
             "auto_detected": auto_detected,
+            "anthropic_auth": anthropic_auth,
         }
     )
+
+
+def _detect_anthropic_auth_type():
+    """Detect if Anthropic is using OAuth token (legacy) or API key.
+    
+    Returns dict with:
+        - type: "oauth" | "api_key" | "unknown"
+        - is_legacy_oauth: bool
+        - migration_command: str
+    """
+    import re
+    
+    result = {
+        "type": "unknown",
+        "is_legacy_oauth": False,
+        "migration_command": "openclaw auth set anthropic --api-key YOUR_API_KEY",
+    }
+    
+    # Check environment variable first
+    env_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if env_key:
+        # OAuth tokens are typically longer (100+ chars) and start with specific patterns
+        # API keys are typically shorter (40 chars) and start with "sk-"
+        if env_key.startswith("sk-") and len(env_key) < 60:
+            result["type"] = "api_key"
+        elif len(env_key) > 80 or re.match(r'^(sk-ant-|oauth-)', env_key):
+            result["type"] = "oauth"
+            result["is_legacy_oauth"] = True
+        else:
+            result["type"] = "unknown"
+    
+    # Check openclaw.json config
+    try:
+        cfg = _load_openclaw_config_cached()
+        auth = cfg.get("auth", {}) if isinstance(cfg, dict) else {}
+        profiles = auth.get("profiles", {}) if isinstance(auth, dict) else {}
+        
+        # Look for anthropic profile
+        for profile_name, profile_cfg in profiles.items() if isinstance(profiles, dict) else []:
+            if not isinstance(profile_cfg, dict):
+                continue
+            provider = str(profile_cfg.get("provider", "")).lower()
+            if provider == "anthropic":
+                mode = profile_cfg.get("mode", "")
+                if mode == "token":
+                    # Check if it's OAuth token (legacy) or API key
+                    creds = profile_cfg.get("credentials", {})
+                    token = creds.get("token", "")
+                    if token.startswith("sk-") and len(token) < 60:
+                        result["type"] = "api_key"
+                        result["is_legacy_oauth"] = False
+                    elif token or len(token) > 80:
+                        result["type"] = "oauth"
+                        result["is_legacy_oauth"] = True
+                elif mode == "api_key":
+                    result["type"] = "api_key"
+                    result["is_legacy_oauth"] = False
+                break
+    except Exception:
+        pass
+    
+    return result
 
 
 @bp_health.route("/api/service-status")
@@ -30476,6 +30869,39 @@ def api_cost_optimizer():
 
         today = costs.get("today", 0) or 0
         projected = costs.get("projected", 0) or (today * 30)
+        
+        # Get session cost breakdown for chart
+        session_chart_data = []
+        alert_threshold = _get_session_cost_alert_threshold()
+        try:
+            analytics = _compute_transcript_analytics()
+            sessions = analytics.get("sessions", [])
+            usd_per_token = _estimate_usd_per_token()
+            
+            for s in sessions[:10]:  # Top 10
+                cost = s.get("cost_usd", 0.0) or 0.0
+                tokens = s.get("tokens", 0) or 0
+                if cost == 0.0 and tokens > 0:
+                    cost = tokens * usd_per_token
+                
+                # Get token breakdown
+                token_breakdown = _get_session_token_breakdown(s.get("session_id", ""))
+                
+                session_chart_data.append({
+                    "session_id": s.get("session_id", ""),
+                    "cost_usd": round(cost, 6),
+                    "tokens": tokens,
+                    "model": s.get("model", "unknown"),
+                    "input_tokens": token_breakdown.get("input", 0),
+                    "output_tokens": token_breakdown.get("output", 0),
+                    "cache_tokens": token_breakdown.get("cache", 0),
+                    "is_expensive": cost >= alert_threshold,
+                })
+            
+            # Sort by cost descending
+            session_chart_data.sort(key=lambda x: x["cost_usd"], reverse=True)
+        except Exception:
+            pass
 
         return jsonify(
             {
@@ -30488,6 +30914,8 @@ def api_cost_optimizer():
                 "expensiveOps": expensive_ops,
                 "ollamaInstalled": ollama_installed,
                 "llmfitAvailable": bool(llmfit_raw),
+                "sessionCostChart": session_chart_data[:10],
+                "sessionAlertThreshold": alert_threshold,
             }
         )
     except Exception as e:
