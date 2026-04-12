@@ -12305,7 +12305,11 @@ async function viewFile(path) {
   try {
     var data = await fetch('/api/file?path=' + encodeURIComponent(path)).then(r => r.json());
     if (data.error) { content.textContent = 'Error: ' + data.error; return; }
-    content.textContent = data.content;
+    if (data.isBinary) {
+      content.textContent = '[Binary file - cannot display]';
+    } else {
+      content.textContent = data.content;
+    }
   } catch(e) {
     content.textContent = 'Failed to load: ' + e.message;
   }
@@ -13257,9 +13261,10 @@ async function loadMemory() {
         var d = await fetch('/api/file?path=' + encodeURIComponent(p)).then(function(r) { return r.json(); });
         if (d.error) { viewer.querySelector('pre').textContent = 'Error: ' + d.error; return; }
         var content = d.content || '';
+        var sizeInfo = d.isBinary ? 'binary file' : content.length + ' chars';
         viewer.innerHTML = '<div style="padding:8px 16px;border-bottom:1px solid var(--border-primary);display:flex;align-items:center;gap:8px;background:var(--bg-secondary);position:sticky;top:0;z-index:1">' +
           '<span style="font-size:12px">📝</span><span style="font-size:12px;font-weight:600;color:var(--text-primary)">' + escHtml(p) + '</span>' +
-          '<span style="margin-left:auto;font-size:10px;color:var(--text-muted)">' + content.length + ' chars</span></div>' +
+          '<span style="margin-left:auto;font-size:10px;color:var(--text-muted)">' + sizeInfo + '</span></div>' +
           '<pre style="margin:0;padding:16px;font-family:monospace;font-size:12px;line-height:1.6;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word">' + escHtml(content) + '</pre>';
       } catch(e) { viewer.querySelector('pre').textContent = 'Failed: ' + e.message; }
     };
@@ -22112,9 +22117,16 @@ def api_view_file():
     if not os.path.exists(full):
         return jsonify({"error": "File not found"}), 404
     try:
-        with open(full, "r") as f:
+        # Check if file is binary by reading first 8KB
+        with open(full, "rb") as f:
+            raw = f.read(8192)
+            # Check for null bytes or high ratio of non-text bytes
+            if b'\x00' in raw:
+                return jsonify({"path": path, "content": "[Binary file - cannot display]", "isBinary": True})
+        # Read file with explicit UTF-8 encoding and error handling
+        with open(full, "r", encoding="utf-8", errors="replace") as f:
             content = f.read(100_000)
-        return jsonify({"path": path, "content": content})
+        return jsonify({"path": path, "content": content, "isBinary": False})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
