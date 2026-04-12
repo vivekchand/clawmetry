@@ -165,4 +165,7 @@ class TursoDataProvider(ClawMetryDataProvider):
             rows = self._query("SELECT 1 AS ok")
             return {"provider": "turso", "ok": bool(rows), "url": self.turso_url}
         except Exception as e:
+            import logging
+
+            logging.debug("Turso health check failed: %s", e)
             return {"provider": "turso", "ok": False, "error": str(e)}
