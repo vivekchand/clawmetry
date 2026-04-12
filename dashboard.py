@@ -2192,6 +2192,7 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
+  .alerts-tab-badge { display:none; margin-left:6px; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:#ef4444; color:#fff; font-size:10px; font-weight:700; align-items:center; justify-content:center; vertical-align:middle; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
@@ -3243,13 +3244,12 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('alerts')">Alerts <span class="alerts-tab-badge" id="alerts-tab-badge">0</span></div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
       <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
         <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
-        <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
-        <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
         <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
         <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
       </div>
@@ -3531,23 +3531,9 @@ function clawmetryLogout(){
     <!-- DIVIDER -->
     <div class="overview-divider"></div>
 
-    <!-- RIGHT: Active Tasks + Brain stacked -->
+    <!-- RIGHT: Brain / Main Activity -->
     <div class="overview-tasks-pane">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
-          <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
-        </div>
-        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
-      </div>
-      <div class="tasks-panel-scroll" id="overview-tasks-list">
-        <div style="text-align:center;padding:32px;color:var(--text-muted);">
-          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
-          <div style="font-size:13px;">Loading tasks...</div>
-        </div>
-      </div>
-      <!-- 🧠 Brain Panel: Main Agent Activity (below Active Tasks) -->
-      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;margin-top:14px;display:flex;flex-direction:column;overflow:hidden;">
+      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;display:flex;flex-direction:column;overflow:hidden;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
           <div style="display:flex;align-items:center;gap:6px;">
             <span id="main-activity-dot" style="width:8px;height:8px;border-radius:50%;background:#888;display:inline-block;"></span>
@@ -4149,6 +4135,52 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-brain -->
 
+<!-- ALERTS -->
+<div class="page" id="page-alerts">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🔔 Alerts Center</span>
+      <button class="refresh-btn" onclick="loadAlertsCenter()">↻ Refresh</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px;">
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Active alerts</div>
+        <div id="alerts-active-count" style="font-size:26px;font-weight:800;color:#f59e0b;">0</div>
+      </div>
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Critical alerts</div>
+        <div id="alerts-critical-count" style="font-size:26px;font-weight:800;color:#ef4444;">0</div>
+      </div>
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Config ideas</div>
+        <div style="font-size:13px;color:var(--text-primary);font-weight:600;">Budgets, anomalies, heartbeat gaps</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Active notifications</div>
+      <div id="alerts-center-list" style="display:grid;gap:10px;">
+        <div style="color:var(--text-muted);padding:16px;text-align:center;">Loading alerts...</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Alert rules</div>
+      <div style="font-size:13px;color:var(--text-secondary);line-height:1.6;">
+        You cannot create custom alert rules from this screen yet. Right now, ClawMetry only shows built-in alerts automatically.
+      </div>
+      <div style="margin-top:12px;padding:10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.18);border-radius:8px;font-size:12px;color:var(--text-secondary);line-height:1.6;">
+        <div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;">Current behavior</div>
+        <div>• Usage spike alerts are automatic</div>
+        <div>• Heartbeat / silence alerts are automatic</div>
+        <div>• Upgrade impact alerts are automatic</div>
+        <div>• Budget-related protection is configured elsewhere</div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--text-muted);line-height:1.6;">
+        The next improvement here should be a real <strong>Create alert rule</strong> flow with simple options like: alert me if daily spend exceeds $X, if usage spikes above baseline, or if the agent goes silent.
+      </div>
+    </div>
+  </div>
+</div><!-- end page-alerts -->
+
 <!-- SECURITY -->
 <div class="page" id="page-security">
   <div style="padding:12px 0 8px 0;">
@@ -4684,7 +4716,7 @@ async function checkActiveAlerts() {
     // Show most recent alert
     var latest = alerts[0];
     document.getElementById('alert-banner-msg').textContent = latest.message;
-    banner.style.display = 'flex';
+    banner.style.display = 'none';
     // Show resume button if gateway is paused
     var status = await fetch('/api/budget/status').then(function(r){return r.json();});
     document.getElementById('alert-resume-btn').style.display = status.paused ? '' : 'none';
@@ -4765,6 +4797,7 @@ function switchTab(name) {
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
+  if (name === 'alerts') loadAlertsCenter();
   if (name === 'transcripts') loadTranscripts();
   if (name === 'version-impact') loadVersionImpact();
   if (name === 'clusters') loadClusters();
@@ -4781,6 +4814,116 @@ function switchTab(name) {
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
 }
+
+async function collectActiveAlerts() {
+  var alerts = [];
+  function isVisible(el) {
+    return !!(el && el.style.display !== 'none' && el.offsetParent !== null);
+  }
+  var alertBanner = document.getElementById('alert-banner');
+  if (isVisible(alertBanner)) {
+    var msg = document.getElementById('alert-banner-msg');
+    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system', actionTab:'overview', actionLabel:'Investigate', explainer:'The agent may be repeatedly calling tools or spending too fast.', steps:['Open Overview to find the active session','Pause or stop the noisy task if it is still running','Review the recent tool calls and model activity','Set a stricter budget threshold to prevent repeats']});
+  }
+  var anomalyBanner = document.getElementById('anomaly-engine-banner');
+  if (isVisible(anomalyBanner)) {
+    var amsg = document.getElementById('anomaly-banner-msg');
+    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly', actionTab:'usage', actionLabel:'Investigate', explainer:'Something changed sharply compared to normal usage.', steps:['Open Tokens to review the spike','Check whether the activity was expected','Tighten limits or stop the source if needed']});
+  }
+  var upgradeBanner = document.getElementById('upgrade-banner');
+  if (isVisible(upgradeBanner)) {
+    var umsg = document.getElementById('upgrade-banner-msg');
+    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade', actionTab:'version-impact', actionLabel:'Review impact', explainer:'A version change may have changed cost, behavior, or performance.', steps:['Open Upgrades to compare before and after metrics','Check cost, duration, and error-rate changes','If the new version looks worse, consider rollback or config review']});
+  }
+  var heartbeatBanner = document.getElementById('heartbeat-banner');
+  if (isVisible(heartbeatBanner)) {
+    var hmsg = document.getElementById('heartbeat-banner-msg');
+    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat', actionTab:'overview', actionLabel:'Check status', explainer:'The agent may have gone quiet longer than expected.', steps:['Open Overview and confirm the agent is still active','Check recent sessions and logs for failures','If needed, restart the affected process or reconnect the gateway']});
+  }
+  try {
+    var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
+    var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
+    var grouped = {};
+    active.forEach(function(a) {
+      var bucket = (a.metric === 'token_spike' || a.metric === 'cost_spike') ? 'usage_spike' : a.metric;
+      if (!grouped[bucket]) grouped[bucket] = [];
+      grouped[bucket].push(a);
+    });
+    Object.keys(grouped).forEach(function(bucket) {
+      var items = grouped[bucket];
+      if (bucket === 'usage_spike') {
+        var cost = items.find(function(x){ return x.metric === 'cost_spike'; });
+        var token = items.find(function(x){ return x.metric === 'token_spike'; });
+        var ratio = Math.max(Number((cost && cost.ratio) || 0), Number((token && token.ratio) || 0));
+        var baselineCost = cost && cost.baseline ? '$' + Number(cost.baseline).toFixed(2) + '/day' : null;
+        var baselineTokens = token && token.baseline ? Math.round(Number(token.baseline)).toLocaleString() + ' tokens/day' : null;
+        var baselineBits = [baselineCost, baselineTokens].filter(Boolean);
+        var latestTs = Math.max(Number((cost && cost.detected_at) || 0), Number((token && token.detected_at) || 0));
+        var ageHours = latestTs ? ((Date.now()/1000 - latestTs) / 3600) : 999;
+        if (ageHours <= 24) {
+          var whenText = latestTs ? new Date(latestTs * 1000).toLocaleString() : 'recently';
+          alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Open spike analysis', explainer:'Usage spiked within the last 24 hours, so this still needs attention.', summaryItems:[latestTs ? ('Detected: ' + whenText) : null, cost ? ('Cost at that time: $' + Number(cost.value || 0).toFixed(2)) : null, token ? ('Tokens at that time: ' + Math.round(Number(token.value || 0)).toLocaleString()) : null, baselineBits.length ? ('Typical baseline: ' + baselineBits.join(' • ')) : null].filter(Boolean), steps:['Open Tokens to compare the spike with the surrounding activity','Look at Top Sessions by Cost to find the expensive session','Check Cost by Plugin / Skill to see what created the spend','If unexpected, stop the noisy workflow or tighten budget limits']});
+        }
+        return;
+      }
+      var a = items[0];
+      var label = a.metric || 'anomaly';
+      var baseTxt = a.baseline ? ('Baseline: ' + Number(a.baseline).toFixed(2)) : 'Baseline: rolling 7-day average';
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'We detected an unusual spike compared to your normal baseline.', baselineText: baseTxt, steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow']});
+    });
+  } catch(e) {}
+  var seen = {};
+  return alerts.filter(function(a) {
+    var key = a.title + '|' + a.message;
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+async function updateAlertsBell() {
+  var alerts = await collectActiveAlerts();
+  document.querySelectorAll('#alerts-tab-badge').forEach(function(badge) {
+    if (!alerts.length) {
+      badge.style.display = 'none';
+      return;
+    }
+    badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
+    badge.style.display = 'inline-flex';
+  });
+}
+
+async function loadAlertsCenter() {
+  var listEl = document.getElementById('alerts-center-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);padding:16px;text-align:center;">Loading alerts...</div>';
+  var alerts = await collectActiveAlerts();
+  var activeEl = document.getElementById('alerts-active-count');
+  var criticalEl = document.getElementById('alerts-critical-count');
+  if (activeEl) activeEl.textContent = alerts.length;
+  if (criticalEl) criticalEl.textContent = alerts.filter(function(a){ return a.severity === 'critical'; }).length;
+  if (!alerts.length) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now.</div>';
+    return;
+  }
+  listEl.innerHTML = alerts.map(function(a) {
+    var color = a.severity === 'critical' ? '#ef4444' : (a.severity === 'high' ? '#f59e0b' : '#3b82f6');
+    return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:4px solid ' + color + ';border-radius:10px;padding:12px 14px;">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
+      + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div>'
+      + (a.explainer ? '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;line-height:1.5;">' + escHtml(a.explainer) + '</div>' : '')
+      + (a.summaryItems && a.summaryItems.length ? '<div style="margin-top:10px;padding:10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.18);border-radius:8px;"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">What triggered this alert</div><ul style="margin:0 0 0 18px;padding:0;color:var(--text-secondary);font-size:12px;line-height:1.6;">' + a.summaryItems.map(function(item){ return '<li>' + escHtml(item) + '</li>'; }).join('') + '</ul></div>' : '')
+      + (a.baselineText ? '<div style="margin-top:8px;font-size:12px;color:#93c5fd;"><strong>Baseline:</strong> ' + escHtml(a.baselineText.replace(/^Baseline:\s*/, '')) + '</div>' : '')
+      + (a.steps && a.steps.length ? '<div style="margin-top:10px;padding:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border-primary);border-radius:8px;"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">How to fix</div><ol style="margin:0 0 0 18px;padding:0;color:var(--text-secondary);font-size:12px;line-height:1.6;">' + a.steps.map(function(step){ return '<li>' + escHtml(step) + '</li>'; }).join('') + '</ol></div>' : '')
+      + (a.actionTab ? '<div style="margin-top:10px;"><button onclick="switchTab(\'' + escHtml(a.actionTab) + '\')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600;">' + escHtml(a.actionLabel || 'View details') + '</button></div>' : '') + '</div>'
+      + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
+      + '</div></div>'; 
+  }).join('');
+}
+
+setInterval(updateAlertsBell, 30000);
+setTimeout(updateAlertsBell, 2000);
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
@@ -5160,7 +5303,7 @@ async function loadMiniWidgets(overview, usage) {
     if (banner && bannerMsg) {
       if (dailyLimit > 0 && dailySpent > dailyLimit) {
         bannerMsg.textContent = 'Daily hard cap exceeded: ' + fmtCost(dailySpent) + ' / ' + fmtCost(dailyLimit);
-        banner.style.display = 'flex';
+        banner.style.display = 'none';
       } else {
         banner.style.display = 'none';
       }
@@ -7997,6 +8140,7 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
+  .alerts-tab-badge { display:none; margin-left:6px; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:#ef4444; color:#fff; font-size:10px; font-weight:700; align-items:center; justify-content:center; vertical-align:middle; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
@@ -9057,13 +9201,12 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('alerts')">Alerts <span class="alerts-tab-badge" id="alerts-tab-badge">0</span></div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
       <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
         <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
-        <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
-        <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
         <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
         <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
       </div>
@@ -9374,23 +9517,9 @@ function clawmetryLogout(){
     <!-- DIVIDER -->
     <div class="overview-divider"></div>
 
-    <!-- RIGHT: Active Tasks + Brain stacked -->
+    <!-- RIGHT: Brain / Main Activity -->
     <div class="overview-tasks-pane">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
-          <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
-        </div>
-        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
-      </div>
-      <div class="tasks-panel-scroll" id="overview-tasks-list">
-        <div style="text-align:center;padding:32px;color:var(--text-muted);">
-          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
-          <div style="font-size:13px;">Loading tasks...</div>
-        </div>
-      </div>
-      <!-- 🧠 Brain Panel: Main Agent Activity (below Active Tasks) -->
-      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;margin-top:14px;display:flex;flex-direction:column;overflow:hidden;">
+      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;display:flex;flex-direction:column;overflow:hidden;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
           <div style="display:flex;align-items:center;gap:6px;">
             <span id="main-activity-dot" style="width:8px;height:8px;border-radius:50%;background:#888;display:inline-block;"></span>
@@ -10032,6 +10161,52 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-brain -->
 
+<!-- ALERTS -->
+<div class="page" id="page-alerts">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🔔 Alerts Center</span>
+      <button class="refresh-btn" onclick="loadAlertsCenter()">↻ Refresh</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px;">
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Active alerts</div>
+        <div id="alerts-active-count" style="font-size:26px;font-weight:800;color:#f59e0b;">0</div>
+      </div>
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Critical alerts</div>
+        <div id="alerts-critical-count" style="font-size:26px;font-weight:800;color:#ef4444;">0</div>
+      </div>
+      <div class="card" style="padding:14px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Config ideas</div>
+        <div style="font-size:13px;color:var(--text-primary);font-weight:600;">Budgets, anomalies, heartbeat gaps</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Active notifications</div>
+      <div id="alerts-center-list" style="display:grid;gap:10px;">
+        <div style="color:var(--text-muted);padding:16px;text-align:center;">Loading alerts...</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Alert rules</div>
+      <div style="font-size:13px;color:var(--text-secondary);line-height:1.6;">
+        You cannot create custom alert rules from this screen yet. Right now, ClawMetry only shows built-in alerts automatically.
+      </div>
+      <div style="margin-top:12px;padding:10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.18);border-radius:8px;font-size:12px;color:var(--text-secondary);line-height:1.6;">
+        <div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;">Current behavior</div>
+        <div>• Usage spike alerts are automatic</div>
+        <div>• Heartbeat / silence alerts are automatic</div>
+        <div>• Upgrade impact alerts are automatic</div>
+        <div>• Budget-related protection is configured elsewhere</div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--text-muted);line-height:1.6;">
+        The next improvement here should be a real <strong>Create alert rule</strong> flow with simple options like: alert me if daily spend exceeds $X, if usage spikes above baseline, or if the agent goes silent.
+      </div>
+    </div>
+  </div>
+</div><!-- end page-alerts -->
+
 <!-- SECURITY -->
 <div class="page" id="page-security">
   <div style="padding:12px 0 8px 0;">
@@ -10531,7 +10706,7 @@ async function checkActiveAlerts() {
     // Show most recent alert
     var latest = alerts[0];
     document.getElementById('alert-banner-msg').textContent = latest.message;
-    banner.style.display = 'flex';
+    banner.style.display = 'none';
     // Show resume button if gateway is paused
     var status = await fetch('/api/budget/status').then(function(r){return r.json();});
     document.getElementById('alert-resume-btn').style.display = status.paused ? '' : 'none';
@@ -10600,7 +10775,8 @@ async function checkAnomalies() {
     banner.style.background = isCritical ? '#7f1d1d' : '#451a03';
     banner.style.color = isCritical ? '#fca5a5' : '#fbbf24';
     banner.style.borderColor = isCritical ? '#ef4444' : '#f59e0b';
-    banner.style.display = 'flex';
+    banner.style.display = 'none';
+    updateAlertsBell();
   } catch(e) {}
 }
 
@@ -10728,7 +10904,7 @@ async function checkHeartbeatStatus() {
       banner.style.background = data.status === 'silent' ? '#7f1d1d' : '#451a03';
       banner.style.color = data.status === 'silent' ? '#fca5a5' : '#fbbf24';
       banner.style.borderColor = data.status === 'silent' ? '#ef4444' : '#f59e0b';
-      banner.style.display = 'flex';
+      banner.style.display = 'none';
     } else {
       banner.style.display = 'none';
     }
@@ -10760,7 +10936,7 @@ async function refreshPausedBanner() {
     }
     var reason = status.paused_reason || 'Auto-pause active';
     document.getElementById('paused-banner-msg').textContent = 'PAUSED: ' + reason;
-    banner.style.display = 'flex';
+    banner.style.display = 'none';
   } catch(e) {}
 }
 setInterval(refreshPausedBanner, 15000);
@@ -10825,6 +11001,7 @@ function switchTab(name) {
   if (name === 'usage') loadUsage();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
+  if (name === 'alerts') loadAlertsCenter();
   if (name === 'transcripts') loadTranscripts();
   if (name === 'version-impact') loadVersionImpact();
   if (name === 'clusters') loadClusters();
@@ -10841,6 +11018,116 @@ function switchTab(name) {
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
 }
+
+async function collectActiveAlerts() {
+  var alerts = [];
+  function isVisible(el) {
+    return !!(el && el.style.display !== 'none' && el.offsetParent !== null);
+  }
+  var alertBanner = document.getElementById('alert-banner');
+  if (isVisible(alertBanner)) {
+    var msg = document.getElementById('alert-banner-msg');
+    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system', actionTab:'overview', actionLabel:'Investigate', explainer:'The agent may be repeatedly calling tools or spending too fast.', steps:['Open Overview to find the active session','Pause or stop the noisy task if it is still running','Review the recent tool calls and model activity','Set a stricter budget threshold to prevent repeats']});
+  }
+  var anomalyBanner = document.getElementById('anomaly-engine-banner');
+  if (isVisible(anomalyBanner)) {
+    var amsg = document.getElementById('anomaly-banner-msg');
+    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly', actionTab:'usage', actionLabel:'Investigate', explainer:'Something changed sharply compared to normal usage.', steps:['Open Tokens to review the spike','Check whether the activity was expected','Tighten limits or stop the source if needed']});
+  }
+  var upgradeBanner = document.getElementById('upgrade-banner');
+  if (isVisible(upgradeBanner)) {
+    var umsg = document.getElementById('upgrade-banner-msg');
+    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade', actionTab:'version-impact', actionLabel:'Review impact', explainer:'A version change may have changed cost, behavior, or performance.', steps:['Open Upgrades to compare before and after metrics','Check cost, duration, and error-rate changes','If the new version looks worse, consider rollback or config review']});
+  }
+  var heartbeatBanner = document.getElementById('heartbeat-banner');
+  if (isVisible(heartbeatBanner)) {
+    var hmsg = document.getElementById('heartbeat-banner-msg');
+    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat', actionTab:'overview', actionLabel:'Check status', explainer:'The agent may have gone quiet longer than expected.', steps:['Open Overview and confirm the agent is still active','Check recent sessions and logs for failures','If needed, restart the affected process or reconnect the gateway']});
+  }
+  try {
+    var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
+    var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
+    var grouped = {};
+    active.forEach(function(a) {
+      var bucket = (a.metric === 'token_spike' || a.metric === 'cost_spike') ? 'usage_spike' : a.metric;
+      if (!grouped[bucket]) grouped[bucket] = [];
+      grouped[bucket].push(a);
+    });
+    Object.keys(grouped).forEach(function(bucket) {
+      var items = grouped[bucket];
+      if (bucket === 'usage_spike') {
+        var cost = items.find(function(x){ return x.metric === 'cost_spike'; });
+        var token = items.find(function(x){ return x.metric === 'token_spike'; });
+        var ratio = Math.max(Number((cost && cost.ratio) || 0), Number((token && token.ratio) || 0));
+        var baselineCost = cost && cost.baseline ? '$' + Number(cost.baseline).toFixed(2) + '/day' : null;
+        var baselineTokens = token && token.baseline ? Math.round(Number(token.baseline)).toLocaleString() + ' tokens/day' : null;
+        var baselineBits = [baselineCost, baselineTokens].filter(Boolean);
+        var latestTs = Math.max(Number((cost && cost.detected_at) || 0), Number((token && token.detected_at) || 0));
+        var ageHours = latestTs ? ((Date.now()/1000 - latestTs) / 3600) : 999;
+        if (ageHours <= 24) {
+          var whenText = latestTs ? new Date(latestTs * 1000).toLocaleString() : 'recently';
+          alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Open spike analysis', explainer:'Usage spiked within the last 24 hours, so this still needs attention.', summaryItems:[latestTs ? ('Detected: ' + whenText) : null, cost ? ('Cost at that time: $' + Number(cost.value || 0).toFixed(2)) : null, token ? ('Tokens at that time: ' + Math.round(Number(token.value || 0)).toLocaleString()) : null, baselineBits.length ? ('Typical baseline: ' + baselineBits.join(' • ')) : null].filter(Boolean), steps:['Open Tokens to compare the spike with the surrounding activity','Look at Top Sessions by Cost to find the expensive session','Check Cost by Plugin / Skill to see what created the spend','If unexpected, stop the noisy workflow or tighten budget limits']});
+        }
+        return;
+      }
+      var a = items[0];
+      var label = a.metric || 'anomaly';
+      var baseTxt = a.baseline ? ('Baseline: ' + Number(a.baseline).toFixed(2)) : 'Baseline: rolling 7-day average';
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'We detected an unusual spike compared to your normal baseline.', baselineText: baseTxt, steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow']});
+    });
+  } catch(e) {}
+  var seen = {};
+  return alerts.filter(function(a) {
+    var key = a.title + '|' + a.message;
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+async function updateAlertsBell() {
+  var alerts = await collectActiveAlerts();
+  document.querySelectorAll('#alerts-tab-badge').forEach(function(badge) {
+    if (!alerts.length) {
+      badge.style.display = 'none';
+      return;
+    }
+    badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
+    badge.style.display = 'inline-flex';
+  });
+}
+
+async function loadAlertsCenter() {
+  var listEl = document.getElementById('alerts-center-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);padding:16px;text-align:center;">Loading alerts...</div>';
+  var alerts = await collectActiveAlerts();
+  var activeEl = document.getElementById('alerts-active-count');
+  var criticalEl = document.getElementById('alerts-critical-count');
+  if (activeEl) activeEl.textContent = alerts.length;
+  if (criticalEl) criticalEl.textContent = alerts.filter(function(a){ return a.severity === 'critical'; }).length;
+  if (!alerts.length) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now.</div>';
+    return;
+  }
+  listEl.innerHTML = alerts.map(function(a) {
+    var color = a.severity === 'critical' ? '#ef4444' : (a.severity === 'high' ? '#f59e0b' : '#3b82f6');
+    return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:4px solid ' + color + ';border-radius:10px;padding:12px 14px;">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
+      + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div>'
+      + (a.explainer ? '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;line-height:1.5;">' + escHtml(a.explainer) + '</div>' : '')
+      + (a.summaryItems && a.summaryItems.length ? '<div style="margin-top:10px;padding:10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.18);border-radius:8px;"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">What triggered this alert</div><ul style="margin:0 0 0 18px;padding:0;color:var(--text-secondary);font-size:12px;line-height:1.6;">' + a.summaryItems.map(function(item){ return '<li>' + escHtml(item) + '</li>'; }).join('') + '</ul></div>' : '')
+      + (a.baselineText ? '<div style="margin-top:8px;font-size:12px;color:#93c5fd;"><strong>Baseline:</strong> ' + escHtml(a.baselineText.replace(/^Baseline:\s*/, '')) + '</div>' : '')
+      + (a.steps && a.steps.length ? '<div style="margin-top:10px;padding:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border-primary);border-radius:8px;"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">How to fix</div><ol style="margin:0 0 0 18px;padding:0;color:var(--text-secondary);font-size:12px;line-height:1.6;">' + a.steps.map(function(step){ return '<li>' + escHtml(step) + '</li>'; }).join('') + '</ol></div>' : '')
+      + (a.actionTab ? '<div style="margin-top:10px;"><button onclick="switchTab(\'' + escHtml(a.actionTab) + '\')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600;">' + escHtml(a.actionLabel || 'View details') + '</button></div>' : '') + '</div>'
+      + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
+      + '</div></div>'; 
+  }).join('');
+}
+
+setInterval(updateAlertsBell, 30000);
+setTimeout(updateAlertsBell, 2000);
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
@@ -14242,6 +14529,116 @@ function displayTrendAnalysis(trend, usageData) {
   card.style.display = 'block';
 }
 
+async function collectActiveAlerts() {
+  var alerts = [];
+  function isVisible(el) {
+    return !!(el && el.style.display !== 'none' && el.offsetParent !== null);
+  }
+  var alertBanner = document.getElementById('alert-banner');
+  if (isVisible(alertBanner)) {
+    var msg = document.getElementById('alert-banner-msg');
+    alerts.push({severity:'critical', title:'Runaway loop or gateway alert', message: msg ? msg.textContent.trim() : 'Critical alert active', source:'system', actionTab:'overview', actionLabel:'Investigate', explainer:'The agent may be repeatedly calling tools or spending too fast.', steps:['Open Overview to find the active session','Pause or stop the noisy task if it is still running','Review the recent tool calls and model activity','Set a stricter budget threshold to prevent repeats']});
+  }
+  var anomalyBanner = document.getElementById('anomaly-engine-banner');
+  if (isVisible(anomalyBanner)) {
+    var amsg = document.getElementById('anomaly-banner-msg');
+    alerts.push({severity:'high', title:'Anomaly detected', message: amsg ? amsg.textContent.trim() : 'Anomaly detected', source:'anomaly', actionTab:'usage', actionLabel:'Investigate', explainer:'Something changed sharply compared to normal usage.', steps:['Open Tokens to review the spike','Check whether the activity was expected','Tighten limits or stop the source if needed']});
+  }
+  var upgradeBanner = document.getElementById('upgrade-banner');
+  if (isVisible(upgradeBanner)) {
+    var umsg = document.getElementById('upgrade-banner-msg');
+    alerts.push({severity:'medium', title:'Upgrade impact', message: umsg ? umsg.textContent.trim() : 'Upgrade change detected', source:'upgrade', actionTab:'version-impact', actionLabel:'Review impact', explainer:'A version change may have changed cost, behavior, or performance.', steps:['Open Upgrades to compare before and after metrics','Check cost, duration, and error-rate changes','If the new version looks worse, consider rollback or config review']});
+  }
+  var heartbeatBanner = document.getElementById('heartbeat-banner');
+  if (isVisible(heartbeatBanner)) {
+    var hmsg = document.getElementById('heartbeat-banner-msg');
+    alerts.push({severity:'medium', title:'Heartbeat gap', message: hmsg ? hmsg.textContent.trim() : 'Heartbeat gap detected', source:'heartbeat', actionTab:'overview', actionLabel:'Check status', explainer:'The agent may have gone quiet longer than expected.', steps:['Open Overview and confirm the agent is still active','Check recent sessions and logs for failures','If needed, restart the affected process or reconnect the gateway']});
+  }
+  try {
+    var data = await fetch('/api/anomalies').then(function(r){ return r.json(); });
+    var active = (data.anomalies || []).filter(function(a){ return !a.acknowledged; });
+    var grouped = {};
+    active.forEach(function(a) {
+      var bucket = (a.metric === 'token_spike' || a.metric === 'cost_spike') ? 'usage_spike' : a.metric;
+      if (!grouped[bucket]) grouped[bucket] = [];
+      grouped[bucket].push(a);
+    });
+    Object.keys(grouped).forEach(function(bucket) {
+      var items = grouped[bucket];
+      if (bucket === 'usage_spike') {
+        var cost = items.find(function(x){ return x.metric === 'cost_spike'; });
+        var token = items.find(function(x){ return x.metric === 'token_spike'; });
+        var ratio = Math.max(Number((cost && cost.ratio) || 0), Number((token && token.ratio) || 0));
+        var baselineCost = cost && cost.baseline ? '$' + Number(cost.baseline).toFixed(2) + '/day' : null;
+        var baselineTokens = token && token.baseline ? Math.round(Number(token.baseline)).toLocaleString() + ' tokens/day' : null;
+        var baselineBits = [baselineCost, baselineTokens].filter(Boolean);
+        var latestTs = Math.max(Number((cost && cost.detected_at) || 0), Number((token && token.detected_at) || 0));
+        var ageHours = latestTs ? ((Date.now()/1000 - latestTs) / 3600) : 999;
+        if (ageHours <= 24) {
+          var whenText = latestTs ? new Date(latestTs * 1000).toLocaleString() : 'recently';
+          alerts.push({severity:((cost && cost.severity) || (token && token.severity) || 'medium'), title:'Usage spike detected', message: ratio ? (ratio.toFixed(1) + 'x above baseline') : 'Usage is above normal baseline', source:'anomaly-api', actionTab:'usage', actionLabel:'Open spike analysis', explainer:'Usage spiked within the last 24 hours, so this still needs attention.', summaryItems:[latestTs ? ('Detected: ' + whenText) : null, cost ? ('Cost at that time: $' + Number(cost.value || 0).toFixed(2)) : null, token ? ('Tokens at that time: ' + Math.round(Number(token.value || 0)).toLocaleString()) : null, baselineBits.length ? ('Typical baseline: ' + baselineBits.join(' • ')) : null].filter(Boolean), steps:['Open Tokens to compare the spike with the surrounding activity','Look at Top Sessions by Cost to find the expensive session','Check Cost by Plugin / Skill to see what created the spend','If unexpected, stop the noisy workflow or tighten budget limits']});
+        }
+        return;
+      }
+      var a = items[0];
+      var label = a.metric || 'anomaly';
+      var baseTxt = a.baseline ? ('Baseline: ' + Number(a.baseline).toFixed(2)) : 'Baseline: rolling 7-day average';
+      alerts.push({severity:(a.severity || 'medium'), title:'Anomaly: ' + label.replace(/_/g,' '), message:(a.details || ((Number(a.ratio||0)).toFixed(1) + 'x baseline')), source:'anomaly-api', actionTab:'usage', actionLabel:'Investigate', explainer:'We detected an unusual spike compared to your normal baseline.', baselineText: baseTxt, steps:['Open Tokens to see when the spike happened','Check which model or workflow caused the jump','If this was expected, no action is needed','If not expected, lower budget limits or pause the noisy workflow']});
+    });
+  } catch(e) {}
+  var seen = {};
+  return alerts.filter(function(a) {
+    var key = a.title + '|' + a.message;
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
+async function updateAlertsBell() {
+  var alerts = await collectActiveAlerts();
+  document.querySelectorAll('#alerts-tab-badge').forEach(function(badge) {
+    if (!alerts.length) {
+      badge.style.display = 'none';
+      return;
+    }
+    badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
+    badge.style.display = 'inline-flex';
+  });
+}
+
+async function loadAlertsCenter() {
+  var listEl = document.getElementById('alerts-center-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);padding:16px;text-align:center;">Loading alerts...</div>';
+  var alerts = await collectActiveAlerts();
+  var activeEl = document.getElementById('alerts-active-count');
+  var criticalEl = document.getElementById('alerts-critical-count');
+  if (activeEl) activeEl.textContent = alerts.length;
+  if (criticalEl) criticalEl.textContent = alerts.filter(function(a){ return a.severity === 'critical'; }).length;
+  if (!alerts.length) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:18px;text-align:center;">No active alerts right now.</div>';
+    return;
+  }
+  listEl.innerHTML = alerts.map(function(a) {
+    var color = a.severity === 'critical' ? '#ef4444' : (a.severity === 'high' ? '#f59e0b' : '#3b82f6');
+    return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:4px solid ' + color + ';border-radius:10px;padding:12px 14px;">'
+      + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">'
+      + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(a.title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">' + escHtml(a.message || '') + '</div>'
+      + (a.explainer ? '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;line-height:1.5;">' + escHtml(a.explainer) + '</div>' : '')
+      + (a.summaryItems && a.summaryItems.length ? '<div style="margin-top:10px;padding:10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.18);border-radius:8px;"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">What triggered this alert</div><ul style="margin:0 0 0 18px;padding:0;color:var(--text-secondary);font-size:12px;line-height:1.6;">' + a.summaryItems.map(function(item){ return '<li>' + escHtml(item) + '</li>'; }).join('') + '</ul></div>' : '')
+      + (a.baselineText ? '<div style="margin-top:8px;font-size:12px;color:#93c5fd;"><strong>Baseline:</strong> ' + escHtml(a.baselineText.replace(/^Baseline:\s*/, '')) + '</div>' : '')
+      + (a.steps && a.steps.length ? '<div style="margin-top:10px;padding:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border-primary);border-radius:8px;"><div style="font-size:11px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">How to fix</div><ol style="margin:0 0 0 18px;padding:0;color:var(--text-secondary);font-size:12px;line-height:1.6;">' + a.steps.map(function(step){ return '<li>' + escHtml(step) + '</li>'; }).join('') + '</ol></div>' : '')
+      + (a.actionTab ? '<div style="margin-top:10px;"><button onclick="switchTab(\'' + escHtml(a.actionTab) + '\')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600;">' + escHtml(a.actionLabel || 'View details') + '</button></div>' : '') + '</div>'
+      + '<div style="font-size:10px;color:' + color + ';font-weight:700;text-transform:uppercase;">' + escHtml(a.severity) + '</div>'
+      + '</div></div>'; 
+  }).join('');
+}
+
+setInterval(updateAlertsBell, 30000);
+setTimeout(updateAlertsBell, 2000);
+
 function exportUsageData() {
   // Trigger CSV download
   window.open('/api/usage/export', '_blank');
@@ -14605,7 +15002,7 @@ async function checkUpgradeBanner() {
     if (arrows.length > 0) msg += ' &mdash; ' + arrows.join(', ');
     var banner = document.getElementById('upgrade-banner');
     document.getElementById('upgrade-banner-msg').innerHTML = msg;
-    banner.style.display = 'flex';
+    banner.style.display = 'none';
   } catch(e){}
 }
 setTimeout(checkUpgradeBanner, 3000);
@@ -20059,17 +20456,113 @@ def api_subagents():
     """Return sub-agent list with depth/parent fields for the tree view."""
     now_ms = time.time() * 1000
     gw_data = _gw_invoke("sessions_list", {"limit": 100, "messageLimit": 0})
-    if gw_data and "sessions" in gw_data:
-        all_sessions = gw_data["sessions"]
-    else:
-        all_sessions = _get_sessions()
+    live_sessions = gw_data["sessions"] if (gw_data and "sessions" in gw_data) else _get_sessions()
+
+    merged = {}
+    for s in live_sessions:
+        sid = s.get("sessionId") or s.get("key", "")
+        if sid:
+            row = dict(s)
+            row["sessionId"] = sid
+            merged[sid] = row
+
+    sessions_dir = _get_sessions_dir()
+    index_path = os.path.join(sessions_dir, "sessions.json")
+    try:
+        with open(index_path) as f:
+            historical = json.load(f)
+        if isinstance(historical, dict):
+            for sid, meta in historical.items():
+                if not isinstance(meta, dict):
+                    continue
+                row = merged.get(sid, {})
+                if not row:
+                    row = dict(meta)
+                    row["sessionId"] = sid
+                else:
+                    for k, v in meta.items():
+                        if row.get(k) in (None, "", 0, False):
+                            row[k] = v
+                merged[sid] = row
+    except Exception:
+        pass
+
+    def _parse_spawned_subagents_from_transcripts(limit=12):
+        found = {}
+        try:
+            files = []
+            for fname in os.listdir(sessions_dir):
+                if not fname.endswith('.jsonl') or '.checkpoint.' in fname:
+                    continue
+                path = os.path.join(sessions_dir, fname)
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                files.append((mtime, path))
+            files.sort(reverse=True)
+
+            for _, path in files[:limit]:
+                updated_at = int(os.path.getmtime(path) * 1000)
+                try:
+                    with open(path, 'r', errors='ignore') as f:
+                        for raw_line in f:
+                            if 'childSessionKey' not in raw_line or 'toolName":"sessions_spawn"' not in raw_line:
+                                continue
+                            try:
+                                obj = json.loads(raw_line)
+                            except Exception:
+                                continue
+                            msg = obj.get('message') or {}
+                            if msg.get('role') != 'toolResult' or msg.get('toolName') != 'sessions_spawn':
+                                continue
+                            content = msg.get('content') or []
+                            if not isinstance(content, list):
+                                continue
+                            for block in content:
+                                if not isinstance(block, dict) or block.get('type') != 'text':
+                                    continue
+                                text = block.get('text', '') or ''
+                                if 'childSessionKey' not in text:
+                                    continue
+                                try:
+                                    payload = json.loads(text)
+                                except Exception:
+                                    continue
+                                child_key = payload.get('childSessionKey')
+                                if not child_key:
+                                    continue
+                                entry = found.setdefault(child_key, {"sessionId": child_key})
+                                entry.setdefault("displayName", payload.get('label') or child_key.split(':')[-1])
+                                entry.setdefault("parent", payload.get('parentKey'))
+                                entry.setdefault("depth", 1)
+                                entry.setdefault("model", payload.get('model') or 'unknown')
+                                entry.setdefault("totalTokens", 0)
+                                entry["updatedAt"] = max(entry.get("updatedAt", 0), updated_at)
+                except OSError:
+                    continue
+        except Exception:
+            return {}
+        return found
+
+    transcript_subagents = _parse_spawned_subagents_from_transcripts()
+    for sid, meta in transcript_subagents.items():
+        row = merged.get(sid, {})
+        if not row:
+            row = dict(meta)
+            row["sessionId"] = sid
+        else:
+            for k, v in meta.items():
+                if k == "displayName":
+                    if row.get(k) in (None, "", sid.split(':')[-1]):
+                        row[k] = v
+                elif row.get(k) in (None, "", 0, False):
+                    row[k] = v
+        merged[sid] = row
 
     subagents = []
     counts = {"total": 0, "active": 0, "idle": 0, "stale": 0}
-    for s in all_sessions:
-        sid = s.get("sessionId") or s.get("key", "")
-        if not sid:
-            continue
+    for sid, s in merged.items():
         age_ms = now_ms - (s.get("updatedAt") or s.get("lastActiveMs", 0) or 0)
         if age_ms < 120000:
             status = "active"
@@ -20078,8 +20571,10 @@ def api_subagents():
         else:
             status = "stale"
         depth = int(s.get("depth", 0) or 0)
-        parent = s.get("spawnedBy") or s.get("parentKey") or None
-        is_subagent = depth > 0 or "subagent" in sid.lower() or bool(parent)
+        parent = s.get("spawnedBy") or s.get("parentKey") or s.get("parent") or None
+        sid_l = sid.lower()
+        raw_sid_l = str(s.get("rawSessionId") or "").lower()
+        is_subagent = depth > 0 or ":subagent:" in sid_l or ":subagent:" in raw_sid_l or bool(parent)
         if not is_subagent:
             continue
         tokens = int(s.get("totalTokens") or 0)
@@ -20107,7 +20602,7 @@ def api_subagents():
             "updatedAt": s.get("updatedAt") or s.get("lastActiveMs", 0),
         })
 
-    subagents.sort(key=lambda x: (0 if x["status"] == "active" else 1 if x["status"] == "idle" else 2, x["depth"]))
+    subagents.sort(key=lambda x: (x.get("parent") is None, 0 if x["status"] == "active" else 1 if x["status"] == "idle" else 2, x["depth"], -(x.get("updatedAt") or 0)))
     return jsonify({"subagents": subagents, "counts": counts})
 
 
