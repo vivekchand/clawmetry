@@ -2192,9 +2192,7 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
-  .alerts-bell { position: relative; display:flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:10px; border:1px solid var(--border-primary); background:var(--bg-secondary); color:var(--text-secondary); cursor:pointer; }
-  .alerts-bell:hover { background: var(--bg-hover); color: var(--text-primary); }
-  .alerts-badge { position:absolute; top:-5px; right:-5px; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:#ef4444; color:#fff; font-size:10px; font-weight:700; display:none; align-items:center; justify-content:center; border:2px solid var(--bg-primary); }
+  .alerts-tab-badge { display:none; margin-left:6px; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:#ef4444; color:#fff; font-size:10px; font-weight:700; align-items:center; justify-content:center; vertical-align:middle; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
@@ -3234,10 +3232,6 @@ function clawmetryLogout(){
   <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
-  <div class="theme-toggle alerts-bell" id="alerts-bell" onclick="switchTab('alerts')" title="Alerts">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0 1 18 14.158V11a6.002 6.002 0 0 0-4-5.659V4a2 2 0 1 0-4 0v1.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5"/><path d="M9 17a3 3 0 0 0 6 0"/></svg>
-    <span class="alerts-badge" id="alerts-badge">0</span>
-  </div>
   <div class="zoom-controls">
     <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
@@ -3250,7 +3244,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
-    <div class="nav-tab" onclick="switchTab('alerts')">Alerts</div>
+    <div class="nav-tab" onclick="switchTab('alerts')">Alerts <span class="alerts-tab-badge" id="alerts-tab-badge">0</span></div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
@@ -4875,14 +4869,14 @@ async function collectActiveAlerts() {
 
 async function updateAlertsBell() {
   var alerts = await collectActiveAlerts();
-  var badge = document.getElementById('alerts-badge');
-  if (!badge) return;
-  if (!alerts.length) {
-    badge.style.display = 'none';
-    return;
-  }
-  badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
-  badge.style.display = 'flex';
+  document.querySelectorAll('#alerts-tab-badge').forEach(function(badge) {
+    if (!alerts.length) {
+      badge.style.display = 'none';
+      return;
+    }
+    badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
+    badge.style.display = 'inline-flex';
+  });
 }
 
 async function loadAlertsCenter() {
@@ -8127,9 +8121,7 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
-  .alerts-bell { position: relative; display:flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:10px; border:1px solid var(--border-primary); background:var(--bg-secondary); color:var(--text-secondary); cursor:pointer; }
-  .alerts-bell:hover { background: var(--bg-hover); color: var(--text-primary); }
-  .alerts-badge { position:absolute; top:-5px; right:-5px; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:#ef4444; color:#fff; font-size:10px; font-weight:700; display:none; align-items:center; justify-content:center; border:2px solid var(--bg-primary); }
+  .alerts-tab-badge { display:none; margin-left:6px; min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:#ef4444; color:#fff; font-size:10px; font-weight:700; align-items:center; justify-content:center; vertical-align:middle; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
@@ -9178,10 +9170,6 @@ function clawmetryLogout(){
   <!-- <div class="theme-toggle" onclick="openBudgetModal()" title="Budget & Alerts" style="cursor:pointer;">&#128176;</div> -->
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
-  <div class="theme-toggle alerts-bell" id="alerts-bell" onclick="switchTab('alerts')" title="Alerts">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0 1 18 14.158V11a6.002 6.002 0 0 0-4-5.659V4a2 2 0 1 0-4 0v1.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5"/><path d="M9 17a3 3 0 0 0 6 0"/></svg>
-    <span class="alerts-badge" id="alerts-badge">0</span>
-  </div>
   <div class="zoom-controls">
     <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
@@ -9194,7 +9182,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
-    <div class="nav-tab" onclick="switchTab('alerts')">Alerts</div>
+    <div class="nav-tab" onclick="switchTab('alerts')">Alerts <span class="alerts-tab-badge" id="alerts-tab-badge">0</span></div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
@@ -11065,14 +11053,14 @@ async function collectActiveAlerts() {
 
 async function updateAlertsBell() {
   var alerts = await collectActiveAlerts();
-  var badge = document.getElementById('alerts-badge');
-  if (!badge) return;
-  if (!alerts.length) {
-    badge.style.display = 'none';
-    return;
-  }
-  badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
-  badge.style.display = 'flex';
+  document.querySelectorAll('#alerts-tab-badge').forEach(function(badge) {
+    if (!alerts.length) {
+      badge.style.display = 'none';
+      return;
+    }
+    badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
+    badge.style.display = 'inline-flex';
+  });
 }
 
 async function loadAlertsCenter() {
@@ -14546,14 +14534,14 @@ async function collectActiveAlerts() {
 
 async function updateAlertsBell() {
   var alerts = await collectActiveAlerts();
-  var badge = document.getElementById('alerts-badge');
-  if (!badge) return;
-  if (!alerts.length) {
-    badge.style.display = 'none';
-    return;
-  }
-  badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
-  badge.style.display = 'flex';
+  document.querySelectorAll('#alerts-tab-badge').forEach(function(badge) {
+    if (!alerts.length) {
+      badge.style.display = 'none';
+      return;
+    }
+    badge.textContent = alerts.length > 99 ? '99+' : String(alerts.length);
+    badge.style.display = 'inline-flex';
+  });
 }
 
 async function loadAlertsCenter() {
