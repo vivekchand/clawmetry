@@ -234,7 +234,9 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    tmp_path = STATE_FILE.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(state, indent=2))
+    tmp_path.rename(STATE_FILE)
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
