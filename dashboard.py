@@ -25239,6 +25239,11 @@ def api_session_timeline():
     current_level = None
     model_entered_ms = 0
     level_entered_ms = 0
+    # Track the max event timestamp seen — we need it to close out the final
+    # journey segment. Previously we used the last annotation's ts_ms, which
+    # equals model_entered_ms for sessions with exactly one model_change and
+    # gave duration_ms = 0 (surfaced during E2E).
+    last_event_ms = 0
     model_turns: dict = {}  # model -> (turns, tokens)
     model_journey: list = []
     thinking_journey: list = []
@@ -25256,6 +25261,8 @@ def api_session_timeline():
                 t = ev.get('type', '')
                 ts = ev.get('timestamp', '')
                 ts_ms = _parse_ts(ts)
+                if ts_ms and ts_ms > last_event_ms:
+                    last_event_ms = ts_ms
 
                 # Session header (first line) has type='session'
                 if t == 'session' and not started_at:
@@ -25330,8 +25337,10 @@ def api_session_timeline():
     except Exception as e:
         return jsonify({'error': 'parse error: ' + str(e)}), 500
 
-    # Close out final journey segments using the last-seen timestamp
-    last_ts_ms = annotations[-1]['ts_ms'] if annotations else started_at_ms
+    # Close out final journey segments using the session's last event timestamp
+    # (not the last annotation's ts_ms — that's the same as the enter time for
+    # single-segment journeys and gives duration_ms = 0).
+    last_ts_ms = last_event_ms or (annotations[-1]['ts_ms'] if annotations else started_at_ms)
     if current_model and model_entered_ms:
         tr, tk = model_turns.get(current_model, (0, 0))
         model_journey.append({
