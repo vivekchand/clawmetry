@@ -20544,24 +20544,88 @@ def api_cron_create():
 def api_cron_runs(job_id):
     """Return run history for a specific cron job.
 
-    Tries gateway RPC first; falls back to parsing JSONL session transcripts
-    for cron candidate sessions attributed to this job.
+    Resolution order:
+      1. ~/.openclaw/cron/runs/<jobId>.jsonl — canonical on-disk run log,
+         richest data (status, durationMs, nextRunAtMs, usage, deliveryStatus,
+         error). Written per-run by OpenClaw.
+      2. Gateway RPC (for nodes where disk isn't accessible, e.g. remote).
+      3. Transcript-derived heuristic (last-resort fallback).
+
     Returns enriched list with p50/p95 duration stats.
     """
-    # Try gateway API first
+    # 1. Disk log — has everything
+    disk_runs = _cron_runs_from_disk(job_id)
+    if disk_runs:
+        return jsonify(_enrich_cron_runs(job_id, disk_runs))
+
+    # 2. Try gateway API
     result = _gw_invoke("cron", {"action": "runs", "jobId": job_id, "limit": 50})
     if result is not None:
         runs = result.get("runs", result) if isinstance(result, dict) else result
         if isinstance(runs, list) and runs:
             return jsonify(_enrich_cron_runs(job_id, runs))
 
-    # Fallback: derive runs from transcript analytics
+    # 3. Fallback: derive runs from transcript analytics
     runs = _cron_runs_from_transcripts(job_id)
     return jsonify(_enrich_cron_runs(job_id, runs))
 
 
+def _cron_runs_from_disk(job_id):
+    """Read cron run log from ~/.openclaw/cron/runs/<jobId>.jsonl.
+
+    Each line is one run with fields:
+      {ts, jobId, action:"finished", status, summary, error, delivered,
+       deliveryStatus, sessionId, sessionKey, runAtMs, durationMs,
+       nextRunAtMs, model, provider,
+       usage:{input_tokens, output_tokens, total_tokens}}
+
+    Returns a list of normalised run records (most recent first).
+    """
+    cron_runs_dir = os.path.expanduser("~/.openclaw/cron/runs")
+    fpath = os.path.join(cron_runs_dir, f"{job_id}.jsonl")
+    if not os.path.isfile(fpath):
+        return []
+    runs: list = []
+    try:
+        with open(fpath, "r", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    r = json.loads(raw)
+                except Exception:
+                    continue
+                if r.get("action") and r.get("action") != "finished":
+                    # Skip non-terminal events if any appear here
+                    continue
+                usage = r.get("usage") or {}
+                runs.append({
+                    "jobId": r.get("jobId", job_id),
+                    "sessionId": r.get("sessionId", ""),
+                    "sessionKey": r.get("sessionKey", ""),
+                    "status": r.get("status", ""),
+                    "summary": r.get("summary", "") or "",
+                    "error": r.get("error", "") or "",
+                    "delivered": bool(r.get("delivered", False)),
+                    "deliveryStatus": r.get("deliveryStatus", ""),
+                    "runAtMs": int(r.get("runAtMs") or r.get("ts") or 0),
+                    "durationMs": int(r.get("durationMs") or 0),
+                    "nextRunAtMs": int(r.get("nextRunAtMs") or 0),
+                    "model": r.get("model", ""),
+                    "provider": r.get("provider", ""),
+                    "inputTokens": int(usage.get("input_tokens") or 0),
+                    "outputTokens": int(usage.get("output_tokens") or 0),
+                    "totalTokens": int(usage.get("total_tokens") or 0),
+                })
+    except Exception:
+        return []
+    runs.sort(key=lambda r: r.get("runAtMs", 0), reverse=True)
+    return runs
+
+
 def _enrich_cron_runs(job_id, runs):
-    """Add p50/p95 duration and cost stats to a list of cron run records."""
+    """Add p50/p95 duration, cost, token and delivery stats to cron run records."""
     if not runs:
         return {"jobId": job_id, "runs": [], "stats": {}}
 
@@ -20571,9 +20635,14 @@ def _enrich_cron_runs(job_id, runs):
         for r in runs
         if (r.get("costUsd") or r.get("cost_usd"))
     ]
+    tokens = [int(r.get("totalTokens") or 0) for r in runs if r.get("totalTokens")]
     ok_count = sum(1 for r in runs if r.get("status") in ("ok", "success", "completed"))
     err_count = sum(
         1 for r in runs if r.get("status") in ("error", "failed", "failure")
+    )
+    delivered_count = sum(1 for r in runs if r.get("delivered"))
+    next_run_at_ms = max(
+        (int(r.get("nextRunAtMs") or 0) for r in runs), default=0
     )
 
     def _pct(lst, p):
@@ -20587,11 +20656,16 @@ def _enrich_cron_runs(job_id, runs):
         "successCount": ok_count,
         "errorCount": err_count,
         "successRate": round(ok_count / len(runs) * 100, 1) if runs else 0,
+        "failureRate": round(err_count / len(runs) * 100, 1) if runs else 0,
+        "deliveredCount": delivered_count,
         "avgDurationMs": int(sum(durations) / len(durations)) if durations else 0,
         "p50DurationMs": _pct(durations, 50),
         "p95DurationMs": _pct(durations, 95),
         "avgCostUsd": round(sum(costs) / len(costs), 6) if costs else 0.0,
         "totalCostUsd": round(sum(costs), 6),
+        "totalTokens": sum(tokens),
+        "avgTokens": int(sum(tokens) / len(tokens)) if tokens else 0,
+        "nextRunAtMs": next_run_at_ms,
     }
     return {"jobId": job_id, "runs": runs[:50], "stats": stats}
 
