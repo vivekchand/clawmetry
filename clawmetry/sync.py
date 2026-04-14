@@ -1211,11 +1211,26 @@ def _get_version() -> str:
 # ── Daemon loop ────────────────────────────────────────────────────────────────
 
 
+# Heartbeat interval: re-emit an unchanged cron_state after this many seconds
+# so the server's "last seen" TTL doesn't expire the job. See issue #599.
+CRON_STATE_HEARTBEAT_SEC = 300  # 5 minutes
+
+
 def sync_crons(config: dict, state: dict, paths: dict) -> int:
-    """Sync cron job definitions to cloud."""
+    """Sync cron job definitions to cloud.
+
+    Dedup strategy (issue #599): emit a cron_state event per job only when the
+    per-job state hash differs from the last emission, OR when the heartbeat
+    interval (CRON_STATE_HEARTBEAT_SEC) has elapsed since the last emission
+    for that job. Dedup tracking is persisted in the sync state dict so it
+    survives daemon restarts.
+    """
     api_key = config["api_key"]
     node_id = config["node_id"]
     last_hash = state.get("cron_hash", "")
+    # Per-job dedup tracking: job_id -> [sha1_hash, last_emit_unix_ts]
+    # Stored as list (not tuple) because JSON round-trip turns tuples into lists.
+    job_dedup: dict = state.setdefault("cron_state_dedup", {})
 
     # Find cron jobs.json
     Path.home()
@@ -1232,12 +1247,13 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
 
         raw = open(cron_file, "rb").read()
         h = hashlib.md5(raw).hexdigest()
-        if h == last_hash:
-            return 0
+        file_unchanged = h == last_hash
         data = json.loads(raw)
         jobs = data.get("jobs", []) if isinstance(data, dict) else data
 
+        now_ts = time.time()
         events = []
+        emitted_job_ids: list = []
         for j in jobs:
             sched = j.get("schedule", {})
             kind = sched.get("kind", "")
@@ -1252,34 +1268,59 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
                     else ""
                 )
             )
-            state = j.get("state", {})
+            job_state = j.get("state", {})
+            job_id = j.get("id", "")
+            event_data = {
+                "job_id": job_id,
+                "name": j.get("name", ""),
+                "enabled": j.get("enabled", True),
+                "expr": expr,
+                "schedule": sched,
+                "task": (j.get("task") or "")[:200],
+                "state": {
+                    "lastStatus": job_state.get("lastStatus"),
+                    "lastRunAtMs": job_state.get("lastRunAtMs"),
+                    "nextRunAtMs": job_state.get("nextRunAtMs"),
+                    "lastDurationMs": job_state.get("lastDurationMs"),
+                    "lastError": job_state.get("lastError"),
+                    "consecutiveFailures": job_state.get("consecutiveFailures"),
+                },
+            }
+
+            # Dedup: sha1 over the full event payload with sorted keys so the
+            # hash is stable across poll iterations when nothing changed.
+            job_hash = hashlib.sha1(
+                json.dumps(event_data, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+            prev = job_dedup.get(job_id) or [None, 0.0]
+            prev_hash = prev[0] if len(prev) >= 1 else None
+            prev_ts = prev[1] if len(prev) >= 2 else 0.0
+            changed = job_hash != prev_hash
+            stale = (now_ts - float(prev_ts or 0.0)) >= CRON_STATE_HEARTBEAT_SEC
+            if not changed and not stale:
+                continue
+
             events.append(
                 {
                     "type": "cron_state",
                     "session_id": "",
-                    "data": {
-                        "job_id": j.get("id", ""),
-                        "name": j.get("name", ""),
-                        "enabled": j.get("enabled", True),
-                        "expr": expr,
-                        "schedule": sched,
-                        "task": (j.get("task") or "")[:200],
-                        "state": {
-                            "lastStatus": state.get("lastStatus"),
-                            "lastRunAtMs": state.get("lastRunAtMs"),
-                            "nextRunAtMs": state.get("nextRunAtMs"),
-                            "lastDurationMs": state.get("lastDurationMs"),
-                            "lastError": state.get("lastError"),
-                            "consecutiveFailures": state.get("consecutiveFailures"),
-                        },
-                    },
+                    "data": event_data,
                 }
             )
+            emitted_job_ids.append((job_id, job_hash))
 
         if events:
             _post("/api/ingest", {"events": events, "node_id": node_id}, api_key)
+            # Only record new hashes/timestamps after the POST succeeds so a
+            # transient ingest failure re-emits next cycle.
+            for job_id, job_hash in emitted_job_ids:
+                job_dedup[job_id] = [job_hash, now_ts]
             state["cron_hash"] = h
             return len(events)
+        elif not file_unchanged:
+            # File mtime/content changed but every job was deduped — still
+            # record the new file hash so we don't re-parse it next tick.
+            state["cron_hash"] = h
     except Exception as e:
         log.warning(f"Cron sync error: {e}")
     return 0
