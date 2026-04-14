@@ -19889,7 +19889,22 @@ def api_overview():
     except Exception:
         infra["storage"] = "Disk"
 
-    model_name = main.get("model") or "unknown"
+    # Primary model = model that consumed the most tokens across sessions.
+    # "First session's model" is misleading for multi-model users: a tiny
+    # recent glm-5:cloud check-in could eclipse 143M tokens of Opus from
+    # earlier on the same node. Mirror of clawmetry-cloud#313.
+    _mt: dict = {}
+    for _s in sessions:
+        _m = (_s.get("model") or "").strip()
+        if not _m or _m == "—":
+            continue
+        _t = int(_s.get("totalTokens", 0) or 0)
+        if _t > 0:
+            _mt[_m] = _mt.get(_m, 0) + _t
+    if _mt:
+        model_name = max(_mt.items(), key=lambda kv: kv[1])[0]
+    else:
+        model_name = main.get("model") or "unknown"
     return jsonify(
         {
             "model": model_name,
