@@ -1363,12 +1363,19 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 continue
             try:
                 sid = fpath.stem  # UUID filename = session_id
-                model = ""
                 started_at = ""
                 updated_at = ""
                 total_tokens = 0
                 total_cost = 0.0
                 label = ""
+                # Aggregate model usage across the session — a single session
+                # can span several models (model_change mid-conversation, or
+                # an orchestrator that routes to different backends). Previously
+                # we stored "last model seen," which was arbitrary for multi-
+                # model sessions. Now we keep the per-model token count and
+                # pick the dominant one as the primary.
+                model_tokens: dict = {}
+                last_seen_model = ""
 
                 # Scan session file for metadata, tokens, cost, model
                 # Read head for start info, scan all for usage, tail for end
@@ -1388,23 +1395,33 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                             updated_at = ts
                         etype = ev.get("type", "")
                         if etype == "model_change" and ev.get("modelId"):
-                            model = ev["modelId"]
+                            last_seen_model = ev["modelId"]
                         elif etype == "session" and ev.get("label"):
                             label = ev["label"]
                         elif etype == "message":
                             msg = ev.get("message", {})
+                            msg_model = msg.get("model", "") or last_seen_model
                             usage = msg.get("usage", {})
                             if usage:
-                                total_tokens += int(usage.get("totalTokens", 0))
+                                tks = int(usage.get("totalTokens", 0))
+                                total_tokens += tks
+                                if msg_model and tks:
+                                    model_tokens[msg_model] = model_tokens.get(msg_model, 0) + tks
                                 cost_obj = usage.get("cost", {})
                                 if isinstance(cost_obj, dict):
                                     total_cost += float(cost_obj.get("total", 0))
                                 elif isinstance(cost_obj, (int, float)):
                                     total_cost += float(cost_obj)
-                            # Use last model seen in messages
-                            msg_model = msg.get("model", "")
                             if msg_model:
-                                model = msg_model
+                                last_seen_model = msg_model
+
+                # Primary = model that consumed the most tokens in this session,
+                # with last_seen_model as a tiebreaker for sessions that had a
+                # model_change but no message-level usage yet.
+                if model_tokens:
+                    model = max(model_tokens.items(), key=lambda kv: kv[1])[0]
+                else:
+                    model = last_seen_model
 
                 if model:
                     model_counts[model] = model_counts.get(model, 0) + 1
