@@ -20054,6 +20054,112 @@ def api_sessions():
     return jsonify({"sessions": _augment_sessions_with_burn(_get_sessions())})
 
 
+@bp_sessions.route("/api/compactions")
+def api_compactions():
+    """Return OpenClaw session-compaction events.
+
+    OpenClaw compacts long sessions: when context fills up, it summarises
+    earlier messages into a markdown `summary` and drops the originals.
+    The compaction summary is often the single best "what did my agent do"
+    artifact for a long session — we weren't surfacing any of it.
+
+    Params:
+      session_id (optional): filter to one session; returns full summary text.
+      summary_chars (optional, default=500 when no session_id): truncate
+        `summary` to this many chars to keep list responses compact.
+    """
+    wanted_sid = request.args.get("session_id", "").strip()
+    try:
+        summary_chars = max(100, min(int(request.args.get("summary_chars", "500")), 50000))
+    except ValueError:
+        summary_chars = 500
+    full_summary = bool(wanted_sid)
+
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    if not os.path.isdir(sessions_dir):
+        return jsonify({
+            "compactions": [],
+            "total_compactions": 0,
+            "total_tokens_compacted": 0,
+            "note": "sessions dir not found",
+        })
+
+    try:
+        all_files = [
+            f
+            for f in os.listdir(sessions_dir)
+            if f.endswith(".jsonl") and ".deleted." not in f and ".reset." not in f
+        ]
+    except OSError:
+        all_files = []
+
+    if wanted_sid:
+        files = [f for f in all_files if f.startswith(wanted_sid)]
+    else:
+        files = sorted(
+            all_files,
+            key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+            reverse=True,
+        )[:100]
+
+    compactions: list = []
+    total_tokens = 0
+    for fname in files:
+        fpath = os.path.join(sessions_dir, fname)
+        sid = fname[:-len(".jsonl")] if fname.endswith(".jsonl") else fname
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw or '"compaction"' not in raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    if ev.get("type") != "compaction":
+                        continue
+                    ts = ev.get("timestamp", "")
+                    ts_ms = 0
+                    if isinstance(ts, str) and ts:
+                        try:
+                            from datetime import datetime as _dt
+                            ts_ms = int(
+                                _dt.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                                * 1000
+                            )
+                        except Exception:
+                            ts_ms = 0
+                    summary = ev.get("summary", "") or ""
+                    tokens_before = int(ev.get("tokensBefore", 0) or 0)
+                    total_tokens += tokens_before
+                    entry = {
+                        "session_id": sid,
+                        "timestamp": ts,
+                        "ts_ms": ts_ms,
+                        "tokens_before": tokens_before,
+                        "first_kept_entry_id": ev.get("firstKeptEntryId", "") or "",
+                        "from_hook": bool(ev.get("fromHook", False)),
+                    }
+                    if full_summary or len(summary) <= summary_chars:
+                        entry["summary"] = summary
+                    else:
+                        entry["summary"] = summary[:summary_chars]
+                        entry["summary_truncated"] = True
+                    compactions.append(entry)
+        except Exception:
+            continue
+
+    compactions.sort(key=lambda c: c.get("ts_ms", 0), reverse=True)
+    return jsonify({
+        "compactions": compactions,
+        "total_compactions": len(compactions),
+        "total_tokens_compacted": total_tokens,
+    })
+
+
 @bp_sessions.route("/api/subagents")
 def api_subagents():
     """Return sub-agent list with depth/parent fields for the tree view."""
