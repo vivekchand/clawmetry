@@ -1307,20 +1307,57 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
         if not sessions_dir:
             return 0
 
-        session_rows = []
-        # Sort by mtime ascending so the newest files are processed last and
-        # win any display-name/model ties. Session filenames are UUIDs, so a
-        # lexical sort + [-100:] slice previously gave a non-deterministic
-        # sample of files and silently dropped the rest — users with more
-        # than ~100 session files saw arbitrary history gaps in the cloud
-        # dashboard. mtime-skip below keeps subsequent syncs cheap.
+        # Sort by mtime descending so the newest files are processed and
+        # uploaded first — the user sees today's sessions in the cloud
+        # dashboard within seconds, and older history backfills over the
+        # rest of the cycle. Previously a lexical sort + [-100:] slice
+        # gave a non-deterministic sample of files and silently dropped
+        # the rest. mtime-skip below keeps subsequent syncs cheap.
         jsonl_files = []
         for fpath in sessions_dir.glob("*.jsonl"):
             try:
                 jsonl_files.append((fpath, fpath.stat().st_mtime))
             except OSError:
                 continue
-        jsonl_files.sort(key=lambda pair: pair[1])
+        jsonl_files.sort(key=lambda pair: pair[1], reverse=True)
+
+        # Resolve a default model up front from sessions.json (the
+        # canonical source). If absent we fall back to a running mode of
+        # models actually seen during the parse — the count is updated
+        # as batches flush, so later batches benefit from a stronger
+        # signal at the cost of slightly less consistent fallback.
+        _default_model = ""
+        _idx_path = sessions_dir / "sessions.json"
+        if _idx_path.exists():
+            try:
+                with open(_idx_path) as _fi:
+                    _idx = json.load(_fi)
+                for _k, _meta in _idx.items():
+                    if isinstance(_meta, dict) and "subagent" not in _k:
+                        _m = (_meta.get("model") or "").strip()
+                        if _m:
+                            _default_model = _m
+                            break
+            except Exception:
+                pass
+        model_counts: dict = {}
+
+        def _flush(rows):
+            if not rows:
+                return 0
+            fallback = _default_model
+            if not fallback and model_counts:
+                fallback = max(model_counts.items(), key=lambda kv: kv[1])[0]
+            if fallback:
+                for s in rows:
+                    if not s.get("model"):
+                        s["model"] = fallback
+            _post("/ingest/sessions", {"node_id": node_id, "sessions": rows}, api_key)
+            return len(rows)
+
+        batch: list = []
+        total_uploaded = 0
+        BATCH_SIZE = 50
         for fpath, current_mtime in jsonl_files:
             if last_mtimes.get(fpath.name) == current_mtime:
                 continue
@@ -1369,7 +1406,9 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                             if msg_model:
                                 model = msg_model
 
-                session_rows.append(
+                if model:
+                    model_counts[model] = model_counts.get(model, 0) + 1
+                batch.append(
                     {
                         "session_id": sid,
                         "display_name": label or sid[:8],
@@ -1382,45 +1421,14 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                     }
                 )
                 last_mtimes[fpath.name] = current_mtime
+                if len(batch) >= BATCH_SIZE:
+                    total_uploaded += _flush(batch)
+                    batch = []
             except Exception as e:
                 log.debug(f"Session parse error ({fpath.name}): {e}")
 
-        if not session_rows:
-            return 0
-
-        # Also try reading default model from sessions.json index
-        _default_model = ""
-        _idx_path = sessions_dir / "sessions.json"
-        if _idx_path.exists():
-            try:
-                with open(_idx_path) as _fi:
-                    _idx = json.load(_fi)
-                for _k, _meta in _idx.items():
-                    if isinstance(_meta, dict) and "subagent" not in _k:
-                        _m = (_meta.get("model") or "").strip()
-                        if _m:
-                            _default_model = _m
-                            break
-            except Exception:
-                pass
-
-        # Fallback: use most common model from sessions that have one
-        if not _default_model:
-            _models = [s["model"] for s in session_rows if s.get("model")]
-            if _models:
-                _default_model = max(set(_models), key=_models.count)
-
-        # Fill empty model fields with the default
-        if _default_model:
-            for s in session_rows:
-                if not s.get("model"):
-                    s["model"] = _default_model
-
-        # Batch in groups of 50
-        for i in range(0, len(session_rows), 50):
-            batch = session_rows[i : i + 50]
-            _post("/ingest/sessions", {"node_id": node_id, "sessions": batch}, api_key)
-        return len(session_rows)
+        total_uploaded += _flush(batch)
+        return total_uploaded
     except Exception as e:
         log.warning(f"Session metadata sync failed: {e}")
         return 0
