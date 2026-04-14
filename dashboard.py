@@ -18787,6 +18787,21 @@ _ws_client = None
 _ws_lock = threading.Lock()
 _ws_connected = False
 
+# Scopes we request from the OpenClaw gateway during the WebSocket `connect`
+# handshake. `operator.read` is required by cron.list / sessions.list and
+# other read RPCs — omitting it caused gateway.log to flood with
+# "missing scope: operator.read" errors (issue #598).
+# `operator.admin` is retained for compatibility with tools that still
+# gate on it. Scopes are listed read-first so the gateway's scope-persist
+# logic records the minimum set we actually need.
+_GW_OPERATOR_SCOPES = ["operator.read", "operator.admin"]
+# Legacy scope list used as a fallback for device-pair tokens that were
+# issued before operator.read was requested — those tokens don't grant
+# operator.read, so a strict gateway will reject the handshake. We retry
+# with the legacy list so the connection at least comes up; the user will
+# still see scope errors on reads until they re-pair.
+_GW_OPERATOR_SCOPES_LEGACY = ["operator.admin"]
+
 
 def _gw_ws_connect(url=None, token=None):
     """Connect to the OpenClaw gateway via WebSocket JSON-RPC."""
@@ -18807,46 +18822,65 @@ def _gw_ws_connect(url=None, token=None):
     if not ws_url or not tok:
         return False
 
-    try:
-        ws = websocket.create_connection(f"{ws_url}/", timeout=5)
-        # Read challenge event
-        ws.recv()
-        # Send connect
-        connect_msg = {
-            "type": "req",
-            "id": "clawmetry-connect",
-            "method": "connect",
-            "params": {
-                "minProtocol": 3,
-                "maxProtocol": 3,
-                "client": {
-                    "id": "cli",
-                    "version": __version__,
-                    "platform": _CURRENT_PLATFORM,
-                    "mode": "cli",
-                    "instanceId": f"clawmetry-{_uuid.uuid4().hex[:8]}",
+    def _attempt(scopes):
+        """Open a WS connection and send the connect handshake with the
+        given scopes. Returns the live websocket on success, None otherwise.
+        """
+        try:
+            ws = websocket.create_connection(f"{ws_url}/", timeout=5)
+            # Read challenge event
+            ws.recv()
+            connect_msg = {
+                "type": "req",
+                "id": "clawmetry-connect",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 3,
+                    "maxProtocol": 3,
+                    "client": {
+                        "id": "cli",
+                        "version": __version__,
+                        "platform": _CURRENT_PLATFORM,
+                        "mode": "cli",
+                        "instanceId": f"clawmetry-{_uuid.uuid4().hex[:8]}",
+                    },
+                    "role": "operator",
+                    "scopes": list(scopes),
+                    "auth": {"token": tok},
                 },
-                "role": "operator",
-                "scopes": ["operator.admin"],
-                "auth": {"token": tok},
-            },
-        }
-        ws.send(json.dumps(connect_msg))
-        # Wait for connect response
-        for _ in range(5):
-            r = json.loads(ws.recv())
-            if r.get("type") == "res" and r.get("id") == "clawmetry-connect":
-                if r.get("ok"):
-                    _ws_client = ws
-                    _ws_connected = True
-                    return True
-                else:
-                    ws.close()
-                    return False
-        ws.close()
-    except Exception:
-        pass
-    return False
+            }
+            ws.send(json.dumps(connect_msg))
+            for _ in range(5):
+                r = json.loads(ws.recv())
+                if r.get("type") == "res" and r.get("id") == "clawmetry-connect":
+                    if r.get("ok"):
+                        return ws
+                    # Not ok — close and let the caller retry with a
+                    # smaller scope set if appropriate.
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                    return None
+            try:
+                ws.close()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return None
+
+    # Prefer the full scope set (includes operator.read). If a legacy
+    # device-pair token rejects operator.read, fall back to the legacy
+    # set so the connection still comes up.
+    ws = _attempt(_GW_OPERATOR_SCOPES)
+    if ws is None:
+        ws = _attempt(_GW_OPERATOR_SCOPES_LEGACY)
+    if ws is None:
+        return False
+    _ws_client = ws
+    _ws_connected = True
+    return True
 
 
 def _gw_ws_rpc(method, params=None):
@@ -19353,34 +19387,47 @@ def api_gw_config():
             try:
                 import websocket
 
-                ws = websocket.create_connection(f"{ws_url}/", timeout=5)
-                ws.recv()  # challenge
-                connect_msg = {
-                    "type": "req",
-                    "id": "validate",
-                    "method": "connect",
-                    "params": {
-                        "minProtocol": 3,
-                        "maxProtocol": 3,
-                        "client": {
-                            "id": "cli",
-                            "version": __version__,
-                            "platform": _CURRENT_PLATFORM,
-                            "mode": "cli",
-                            "instanceId": "clawmetry-validate",
-                        },
-                        "role": "operator",
-                        "scopes": ["operator.admin"],
-                        "auth": {"token": token},
-                    },
-                }
-                ws.send(json.dumps(connect_msg))
-                for _ in range(5):
-                    r = json.loads(ws.recv())
-                    if r.get("type") == "res" and r.get("id") == "validate":
-                        valid = r.get("ok", False)
-                        break
-                ws.close()
+                def _validate_with_scopes(scopes):
+                    ws = websocket.create_connection(f"{ws_url}/", timeout=5)
+                    try:
+                        ws.recv()  # challenge
+                        connect_msg = {
+                            "type": "req",
+                            "id": "validate",
+                            "method": "connect",
+                            "params": {
+                                "minProtocol": 3,
+                                "maxProtocol": 3,
+                                "client": {
+                                    "id": "cli",
+                                    "version": __version__,
+                                    "platform": _CURRENT_PLATFORM,
+                                    "mode": "cli",
+                                    "instanceId": "clawmetry-validate",
+                                },
+                                "role": "operator",
+                                "scopes": list(scopes),
+                                "auth": {"token": token},
+                            },
+                        }
+                        ws.send(json.dumps(connect_msg))
+                        for _ in range(5):
+                            r = json.loads(ws.recv())
+                            if r.get("type") == "res" and r.get("id") == "validate":
+                                return r.get("ok", False)
+                    finally:
+                        try:
+                            ws.close()
+                        except Exception:
+                            pass
+                    return False
+
+                # Ask for the full scope set (includes operator.read, see
+                # issue #598); fall back to legacy scopes if an older
+                # device-pair token rejects the read scope.
+                valid = _validate_with_scopes(_GW_OPERATOR_SCOPES) or _validate_with_scopes(
+                    _GW_OPERATOR_SCOPES_LEGACY
+                )
             except Exception:
                 pass
 
@@ -19506,39 +19553,49 @@ def _auto_discover_gateway(token):
         try:
             import websocket
 
-            ws = websocket.create_connection(f"{ws_url}/", timeout=2)
-            ws.recv()  # challenge
-            connect_msg = {
-                "type": "req",
-                "id": "discover",
-                "method": "connect",
-                "params": {
-                    "minProtocol": 3,
-                    "maxProtocol": 3,
-                    "client": {
-                        "id": "cli",
-                        "version": __version__,
-                        "platform": _CURRENT_PLATFORM,
-                        "mode": "cli",
-                        "instanceId": "clawmetry-discover",
-                    },
-                    "role": "operator",
-                    "scopes": ["operator.admin"],
-                    "auth": {"token": token},
-                },
-            }
-            ws.send(json.dumps(connect_msg))
-            for _ in range(5):
-                r = json.loads(ws.recv())
-                if r.get("type") == "res" and r.get("id") == "discover":
-                    ws.close()
-                    if r.get("ok"):
-                        return url
-                    break
-            try:
-                ws.close()
-            except Exception:
-                pass
+            def _discover_with_scopes(scopes):
+                ws = websocket.create_connection(f"{ws_url}/", timeout=2)
+                try:
+                    ws.recv()  # challenge
+                    connect_msg = {
+                        "type": "req",
+                        "id": "discover",
+                        "method": "connect",
+                        "params": {
+                            "minProtocol": 3,
+                            "maxProtocol": 3,
+                            "client": {
+                                "id": "cli",
+                                "version": __version__,
+                                "platform": _CURRENT_PLATFORM,
+                                "mode": "cli",
+                                "instanceId": "clawmetry-discover",
+                            },
+                            "role": "operator",
+                            "scopes": list(scopes),
+                            "auth": {"token": token},
+                        },
+                    }
+                    ws.send(json.dumps(connect_msg))
+                    for _ in range(5):
+                        r = json.loads(ws.recv())
+                        if r.get("type") == "res" and r.get("id") == "discover":
+                            return bool(r.get("ok"))
+                finally:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                return False
+
+            # Request the full scope set (includes operator.read — see
+            # issue #598). Older device-pair tokens don't grant it, so
+            # retry once with the legacy scope list to still discover
+            # the gateway when running against a stale pairing.
+            if _discover_with_scopes(_GW_OPERATOR_SCOPES) or _discover_with_scopes(
+                _GW_OPERATOR_SCOPES_LEGACY
+            ):
+                return url
         except Exception:
             pass
         # HTTP fallback
