@@ -20160,6 +20160,86 @@ def api_compactions():
     })
 
 
+@bp_sessions.route("/api/prompt-errors")
+def api_prompt_errors():
+    """Surface OpenClaw `openclaw:prompt-error` custom events."""
+    try:
+        limit = max(1, min(int(request.args.get("limit", "50")), 500))
+    except ValueError:
+        limit = 50
+    try:
+        since_ms = int(request.args.get("since", "0") or 0)
+    except ValueError:
+        since_ms = 0
+
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    if not os.path.isdir(sessions_dir):
+        return jsonify({"errors": [], "total": 0, "note": "sessions dir not found"})
+
+    errors: list = []
+    try:
+        files = sorted(
+            (
+                f
+                for f in os.listdir(sessions_dir)
+                if f.endswith(".jsonl") and ".deleted." not in f and ".reset." not in f
+            ),
+            key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+            reverse=True,
+        )[:100]
+    except OSError:
+        files = []
+
+    for fname in files:
+        fpath = os.path.join(sessions_dir, fname)
+        sid = fname[:-len(".jsonl")] if fname.endswith(".jsonl") else fname
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw or '"openclaw:prompt-error"' not in raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    if ev.get("type") != "custom":
+                        continue
+                    if ev.get("customType") != "openclaw:prompt-error":
+                        continue
+                    ts = ev.get("timestamp", "")
+                    ts_ms = 0
+                    if isinstance(ts, str) and ts:
+                        try:
+                            from datetime import datetime as _dt
+                            ts_ms = int(
+                                _dt.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                                * 1000
+                            )
+                        except Exception:
+                            ts_ms = 0
+                    if since_ms and ts_ms and ts_ms < since_ms:
+                        continue
+                    data = ev.get("data", {}) or {}
+                    errors.append({
+                        "timestamp": ts,
+                        "ts_ms": ts_ms,
+                        "session_id": sid,
+                        "run_id": data.get("runId", ""),
+                        "provider": data.get("provider", ""),
+                        "model": data.get("model", ""),
+                        "api": data.get("api", ""),
+                        "error": data.get("error", ""),
+                    })
+        except Exception:
+            continue
+
+    errors.sort(key=lambda e: e.get("ts_ms", 0), reverse=True)
+    return jsonify({"errors": errors[:limit], "total": len(errors)})
+
+
 @bp_sessions.route("/api/subagents")
 def api_subagents():
     """Return sub-agent list with depth/parent fields for the tree view."""
