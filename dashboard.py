@@ -25175,6 +25175,192 @@ def api_model_attribution():
     })
 
 
+@bp_usage.route('/api/session-timeline')
+def api_session_timeline():
+    """Per-session annotations timeline: model changes + thinking-level changes.
+
+    Powers the "model journey" + thinking-depth overlay on session detail.
+    Query: ?session_id=<sid>
+
+    Response:
+      {
+        "session_id": "...",
+        "started_at": "2026-04-04T19:07:43.297Z",
+        "started_at_ms": ...,
+        "annotations": [
+          {"type": "model_change", "timestamp": "...", "ts_ms": ...,
+           "from_model": "prev", "to_model": "next", "provider": "anthropic"},
+          {"type": "thinking_level_change", "timestamp": "...", "ts_ms": ...,
+           "from_level": "low", "to_level": "medium"},
+          ...
+        ],
+        "model_journey": [
+          {"model": "...", "provider": "...", "entered_ms": ..., "exited_ms": ..., "duration_ms": ..., "turns": N, "tokens": N},
+          ...
+        ],
+        "thinking_journey": [
+          {"level": "medium", "entered_ms": ..., "exited_ms": ..., "duration_ms": ...},
+          ...
+        ]
+      }
+    """
+    sid = (request.args.get('session_id', '') or '').strip()
+    if not sid:
+        return jsonify({'error': 'session_id required'}), 400
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    if not os.path.isdir(sessions_dir):
+        return jsonify({'error': 'sessions dir not found'}), 404
+
+    # Find file; accept exact match or prefix (checkpoint files extend the UUID)
+    matches = [
+        f for f in os.listdir(sessions_dir)
+        if f.startswith(sid) and f.endswith('.jsonl')
+        and '.deleted.' not in f and '.reset.' not in f
+    ]
+    if not matches:
+        return jsonify({'error': 'session not found'}), 404
+    fname = sorted(matches)[0]
+    fpath = os.path.join(sessions_dir, fname)
+
+    def _parse_ts(ts):
+        if not ts or not isinstance(ts, str):
+            return 0
+        try:
+            from datetime import datetime as _dt
+            return int(_dt.fromisoformat(ts.replace('Z', '+00:00')).timestamp() * 1000)
+        except Exception:
+            return 0
+
+    annotations: list = []
+    started_at = ''
+    started_at_ms = 0
+    current_model = None
+    current_provider = ''
+    current_level = None
+    model_entered_ms = 0
+    level_entered_ms = 0
+    model_turns: dict = {}  # model -> (turns, tokens)
+    model_journey: list = []
+    thinking_journey: list = []
+
+    try:
+        with open(fpath, 'r', errors='replace') as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except Exception:
+                    continue
+                t = ev.get('type', '')
+                ts = ev.get('timestamp', '')
+                ts_ms = _parse_ts(ts)
+
+                # Session header (first line) has type='session'
+                if t == 'session' and not started_at:
+                    started_at = ts
+                    started_at_ms = ts_ms
+
+                elif t == 'model_change':
+                    new_model = ev.get('modelId') or ev.get('model') or ''
+                    new_provider = ev.get('provider') or _provider_from_model(new_model)
+                    if new_model:
+                        annotations.append({
+                            'type': 'model_change',
+                            'timestamp': ts,
+                            'ts_ms': ts_ms,
+                            'from_model': current_model or '',
+                            'to_model': new_model,
+                            'provider': new_provider,
+                        })
+                        if current_model and current_model != new_model:
+                            tr, tk = model_turns.get(current_model, (0, 0))
+                            model_journey.append({
+                                'model': current_model,
+                                'provider': current_provider,
+                                'entered_ms': model_entered_ms,
+                                'exited_ms': ts_ms,
+                                'duration_ms': max(0, ts_ms - model_entered_ms),
+                                'turns': tr,
+                                'tokens': tk,
+                            })
+                        current_model = new_model
+                        current_provider = new_provider
+                        model_entered_ms = ts_ms
+
+                elif t == 'thinking_level_change':
+                    new_level = ev.get('thinkingLevel') or ev.get('level') or ''
+                    if new_level != current_level:
+                        annotations.append({
+                            'type': 'thinking_level_change',
+                            'timestamp': ts,
+                            'ts_ms': ts_ms,
+                            'from_level': current_level or '',
+                            'to_level': new_level,
+                        })
+                        if current_level is not None:
+                            thinking_journey.append({
+                                'level': current_level,
+                                'entered_ms': level_entered_ms,
+                                'exited_ms': ts_ms,
+                                'duration_ms': max(0, ts_ms - level_entered_ms),
+                            })
+                        current_level = new_level
+                        level_entered_ms = ts_ms
+
+                elif t == 'custom' and ev.get('customType') == 'model-snapshot':
+                    d = ev.get('data', {}) or {}
+                    m = d.get('modelId') or d.get('model') or ''
+                    if m and current_model is None:
+                        current_model = m
+                        current_provider = d.get('provider') or _provider_from_model(m)
+                        model_entered_ms = ts_ms
+
+                # Assistant turn counting per current model
+                msg = ev.get('message', {}) or {}
+                if isinstance(msg, dict) and msg.get('role') == 'assistant':
+                    m = msg.get('model') or current_model or ''
+                    if m:
+                        tr, tk = model_turns.get(m, (0, 0))
+                        u = msg.get('usage', {}) or {}
+                        tk += int(u.get('totalTokens', 0) or 0)
+                        tr += 1
+                        model_turns[m] = (tr, tk)
+    except Exception as e:
+        return jsonify({'error': 'parse error: ' + str(e)}), 500
+
+    # Close out final journey segments using the last-seen timestamp
+    last_ts_ms = annotations[-1]['ts_ms'] if annotations else started_at_ms
+    if current_model and model_entered_ms:
+        tr, tk = model_turns.get(current_model, (0, 0))
+        model_journey.append({
+            'model': current_model,
+            'provider': current_provider,
+            'entered_ms': model_entered_ms,
+            'exited_ms': last_ts_ms,
+            'duration_ms': max(0, last_ts_ms - model_entered_ms),
+            'turns': tr,
+            'tokens': tk,
+        })
+    if current_level is not None and level_entered_ms:
+        thinking_journey.append({
+            'level': current_level,
+            'entered_ms': level_entered_ms,
+            'exited_ms': last_ts_ms,
+            'duration_ms': max(0, last_ts_ms - level_entered_ms),
+        })
+
+    return jsonify({
+        'session_id': sid,
+        'started_at': started_at,
+        'started_at_ms': started_at_ms,
+        'annotations': annotations,
+        'model_journey': model_journey,
+        'thinking_journey': thinking_journey,
+    })
+
+
 @bp_usage.route('/api/skill-attribution')
 def api_skill_attribution():
     """Per-skill cost attribution with ClawHub integration hooks (GH #308).
