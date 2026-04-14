@@ -1308,13 +1308,21 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
             return 0
 
         session_rows = []
-        for fpath in sorted(sessions_dir.glob("*.jsonl"))[-100:]:
-            # Skip files that haven't changed since last sync
+        # Sort by mtime ascending so the newest files are processed last and
+        # win any display-name/model ties. Session filenames are UUIDs, so a
+        # lexical sort + [-100:] slice previously gave a non-deterministic
+        # sample of files and silently dropped the rest — users with more
+        # than ~100 session files saw arbitrary history gaps in the cloud
+        # dashboard. mtime-skip below keeps subsequent syncs cheap.
+        jsonl_files = []
+        for fpath in sessions_dir.glob("*.jsonl"):
             try:
-                current_mtime = fpath.stat().st_mtime
-                if last_mtimes.get(fpath.name) == current_mtime:
-                    continue
+                jsonl_files.append((fpath, fpath.stat().st_mtime))
             except OSError:
+                continue
+        jsonl_files.sort(key=lambda pair: pair[1])
+        for fpath, current_mtime in jsonl_files:
+            if last_mtimes.get(fpath.name) == current_mtime:
                 continue
             try:
                 sid = fpath.stem  # UUID filename = session_id
