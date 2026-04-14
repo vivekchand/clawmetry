@@ -19,6 +19,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
+COPY README.md .
 COPY dashboard.py .
 COPY setup.py .
 COPY clawmetry/ ./clawmetry/
