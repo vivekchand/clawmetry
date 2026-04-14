@@ -2192,7 +2192,12 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
-  .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
+  .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; align-items: center; }
+  .alerts-bell { position: relative; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; background: transparent; border: 1px solid transparent; cursor: pointer; color: var(--text-tertiary); transition: all 0.2s ease; margin-right: 2px; flex-shrink: 0; }
+  .alerts-bell:hover { background: var(--bg-hover); color: var(--text-secondary); border-color: var(--border-primary); }
+  .alerts-bell.has-alerts { color: #f59e0b; }
+  .alerts-bell svg { width: 16px; height: 16px; }
+  .alerts-bell-badge { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; border-radius: 8px; background: #ef4444; color: #fff; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 3px; line-height: 1; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
   .brain-event:hover { background:rgba(255,255,255,0.02); }
@@ -3236,6 +3241,10 @@ function clawmetryLogout(){
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
     <button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl/Cmd + +)">+</button>
   </div>
+  <div class="alerts-bell" id="alerts-bell-btn" onclick="switchTab('alerts')" title="Alerts Center">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    <span class="alerts-bell-badge" id="alerts-badge" style="display:none;"></span>
+  </div>
   <div class="nav-tabs">
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
@@ -3244,6 +3253,7 @@ function clawmetryLogout(){
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" id="alerts-tab" onclick="switchTab('alerts')">Alerts</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
       <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
@@ -3259,10 +3269,11 @@ function clawmetryLogout(){
   </div>
 </div>
 
-<!-- Alert Banner -->
-<div id="alert-banner" style="display:none;padding:10px 16px;background:var(--bg-error);border-bottom:2px solid var(--text-error);color:var(--text-error);font-size:13px;font-weight:600;display:none;align-items:center;gap:10px;">
+<!-- Alert Banner (critical/gateway-paused alerts only) -->
+<div id="alert-banner" style="display:none;padding:10px 16px;background:var(--bg-error);border-bottom:2px solid var(--text-error);color:var(--text-error);font-size:13px;font-weight:600;align-items:center;gap:10px;">
   <span style="font-size:18px;">&#9888;&#65039;</span>
   <span id="alert-banner-msg" style="flex:1;"></span>
+  <button onclick="switchTab('alerts')" style="background:transparent;color:var(--text-error);border:1px solid var(--text-error);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">View Alerts</button>
   <button onclick="ackAllAlerts()" style="background:var(--text-error);color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
   <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
 </div>
@@ -4279,6 +4290,110 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-models -->
 
+<!-- ALERTS CENTER -->
+<div class="page" id="page-alerts">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;">&#128276;</span>
+        <span style="font-size:16px;font-weight:700;color:var(--text-primary);">Alerts Center</span>
+        <span id="alerts-active-count-badge" style="display:none;font-size:11px;font-weight:700;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:12px;padding:2px 10px;"></span>
+      </div>
+      <button class="refresh-btn" onclick="loadAlerts()">&#8635; Refresh</button>
+    </div>
+
+    <!-- Active Alerts -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border-secondary);">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);letter-spacing:0.5px;text-transform:uppercase;">Active Alerts</span>
+        <button onclick="ackAllAlerts().then(loadAlerts)" style="font-size:11px;color:var(--text-muted);background:transparent;border:1px solid var(--border-secondary);border-radius:6px;padding:3px 10px;cursor:pointer;">Dismiss All</button>
+      </div>
+      <div id="alerts-active-list" style="padding:8px 0;">
+        <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Alert History -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border-secondary);">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);letter-spacing:0.5px;text-transform:uppercase;">Alert History</span>
+        <span style="font-size:11px;color:var(--text-muted);">Last 50 alerts</span>
+      </div>
+      <div id="alerts-history-list" style="max-height:320px;overflow-y:auto;">
+        <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Alert Configuration -->
+    <div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--border-secondary);">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);letter-spacing:0.5px;text-transform:uppercase;">Alert Rules</span>
+      </div>
+      <div style="padding:14px 16px;">
+        <div id="alerts-rules-list" style="margin-bottom:14px;">
+          <div style="color:var(--text-muted);font-size:13px;">Loading...</div>
+        </div>
+        <div id="add-alert-form" style="display:none;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:8px;padding:14px;margin-bottom:12px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div>
+              <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Alert Type</label>
+              <select id="alert-type-input" style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+                <option value="cost_threshold">Cost Threshold</option>
+                <option value="token_spike">Token Spike</option>
+                <option value="agent_error_rate">Agent Error Rate</option>
+                <option value="agent_down">Agent Down</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Threshold</label>
+              <input id="alert-threshold-input" type="number" step="0.01" min="0" placeholder="e.g. 10.00" style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Channels (comma-separated)</label>
+              <input id="alert-channels-input" type="text" value="banner" placeholder="banner,webhook" style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Cooldown (minutes)</label>
+              <input id="alert-cooldown-input" type="number" min="1" value="30" style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="createAlertRule()" style="padding:7px 16px;background:var(--bg-accent);color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Create Rule</button>
+            <button onclick="document.getElementById('add-alert-form').style.display='none'" style="padding:7px 16px;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);border-radius:6px;font-size:13px;cursor:pointer;">Cancel</button>
+          </div>
+        </div>
+        <button onclick="showAddAlertForm()" style="font-size:12px;color:var(--text-accent);background:transparent;border:1px solid var(--border-secondary);border-radius:6px;padding:6px 14px;cursor:pointer;font-weight:600;">+ Add Alert Rule</button>
+      </div>
+
+      <!-- Webhook Configuration -->
+      <div style="padding:0 16px 14px;">
+        <div style="border-top:1px solid var(--border-secondary);padding-top:14px;margin-top:4px;">
+          <div style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;text-transform:uppercase;margin-bottom:10px;">Notification Channels</div>
+          <div style="display:grid;gap:8px;">
+            <div>
+              <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Webhook URL</label>
+              <input id="alerts-webhook-url" type="url" placeholder="https://..." style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;box-sizing:border-box;">
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Slack Webhook URL</label>
+              <input id="alerts-slack-url" type="url" placeholder="https://hooks.slack.com/..." style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;box-sizing:border-box;">
+            </div>
+            <div>
+              <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Discord Webhook URL</label>
+              <input id="alerts-discord-url" type="url" placeholder="https://discord.com/api/webhooks/..." style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;box-sizing:border-box;">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px;">
+            <button onclick="saveWebhookConfig()" style="padding:7px 16px;background:var(--bg-accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+            <button onclick="testWebhookConfig()" style="padding:7px 16px;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);border-radius:6px;font-size:12px;cursor:pointer;">Test</button>
+          </div>
+          <div id="alerts-webhook-status" style="margin-top:8px;font-size:12px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- end page-alerts -->
+
 <!-- NEMOCLAW GOVERNANCE -->
 <div class="page" id="page-nemoclaw">
   <div style="padding:12px 0 8px 0;">
@@ -4672,22 +4787,41 @@ async function loadAlertHistory() {
   }
 }
 
+function updateAlertBadge(count) {
+  var badge = document.getElementById('alerts-badge');
+  var bell = document.getElementById('alerts-bell-btn');
+  var countBadge = document.getElementById('alerts-active-count-badge');
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count > 99 ? '99+' : count;
+    badge.style.display = 'flex';
+    if (bell) bell.classList.add('has-alerts');
+    if (countBadge) { countBadge.textContent = count + ' active'; countBadge.style.display = ''; }
+  } else {
+    badge.style.display = 'none';
+    if (bell) bell.classList.remove('has-alerts');
+    if (countBadge) countBadge.style.display = 'none';
+  }
+}
+
 async function checkActiveAlerts() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
     var alerts = data.alerts || [];
+    updateAlertBadge(alerts.length);
     var banner = document.getElementById('alert-banner');
-    if(alerts.length === 0) {
-      banner.style.display = 'none';
-      return;
-    }
-    // Show most recent alert
-    var latest = alerts[0];
-    document.getElementById('alert-banner-msg').textContent = latest.message;
-    banner.style.display = 'flex';
-    // Show resume button if gateway is paused
+    var resumeBtn = document.getElementById('alert-resume-btn');
+    // Only show banner when gateway is paused (critical)
     var status = await fetch('/api/budget/status').then(function(r){return r.json();});
-    document.getElementById('alert-resume-btn').style.display = status.paused ? '' : 'none';
+    if (status.paused) {
+      var latest = alerts[0] || {message: 'Gateway paused \u2014 budget limit reached'};
+      document.getElementById('alert-banner-msg').textContent = latest.message;
+      banner.style.display = 'flex';
+      if (resumeBtn) resumeBtn.style.display = '';
+    } else {
+      banner.style.display = 'none';
+      if (resumeBtn) resumeBtn.style.display = 'none';
+    }
   } catch(e) {}
 }
 
@@ -4699,7 +4833,78 @@ async function ackAllAlerts() {
       await fetch('/api/alerts/history/'+alerts[i].id+'/ack', {method:'POST'});
     }
     document.getElementById('alert-banner').style.display = 'none';
+    updateAlertBadge(0);
   } catch(e) {}
+}
+
+async function acknowledgeAlert(id) {
+  try {
+    await fetch('/api/alerts/history/'+id+'/ack', {method:'POST'});
+    await loadAlerts();
+  } catch(e) {}
+}
+
+async function loadAlerts() {
+  try {
+    // Active alerts
+    var activeData = await fetch('/api/alerts/active').then(function(r){return r.json();});
+    var active = activeData.alerts || [];
+    updateAlertBadge(active.length);
+    var activeList = document.getElementById('alerts-active-list');
+    if (activeList) {
+      if (active.length === 0) {
+        activeList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">No active alerts \u2713</div>';
+      } else {
+        var html = '';
+        active.forEach(function(a) {
+          var ts = new Date(a.fired_at * 1000).toLocaleString();
+          var typeColor = (a.type || '').indexOf('error') !== -1 ? '#ef4444' : '#f59e0b';
+          html += '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border-secondary);">';
+          html += '<span style="font-size:16px;flex-shrink:0;">&#9888;&#65039;</span>';
+          html += '<div style="flex:1;min-width:0;">';
+          html += '<div style="font-size:12px;font-weight:700;color:' + typeColor + ';margin-bottom:2px;">' + escHtml(a.type || 'alert') + '</div>';
+          html += '<div style="font-size:13px;color:var(--text-primary);margin-bottom:4px;">' + escHtml(a.message) + '</div>';
+          html += '<div style="font-size:11px;color:var(--text-muted);">' + ts + '</div>';
+          html += '</div>';
+          html += '<button onclick="acknowledgeAlert(' + a.id + ')" style="flex-shrink:0;padding:4px 10px;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);border-radius:6px;font-size:11px;cursor:pointer;">Dismiss</button>';
+          html += '</div>';
+        });
+        activeList.innerHTML = html;
+      }
+    }
+    // Alert history
+    var histData = await fetch('/api/alerts/history?limit=50').then(function(r){return r.json();});
+    var hist = histData.alerts || [];
+    var histList = document.getElementById('alerts-history-list');
+    if (histList) {
+      if (hist.length === 0) {
+        histList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">No alerts fired yet</div>';
+      } else {
+        var html2 = '';
+        hist.forEach(function(a) {
+          var ts = new Date(a.fired_at * 1000).toLocaleString();
+          var ackIcon = a.acknowledged
+            ? '<span style="color:var(--text-success);font-size:11px;">\u2713 ack</span>'
+            : '<span style="color:#f59e0b;font-size:11px;">\u25cf new</span>';
+          html2 += '<div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+          html2 += '<span style="min-width:40px;">' + ackIcon + '</span>';
+          html2 += '<span style="color:var(--text-muted);min-width:130px;flex-shrink:0;">' + ts + '</span>';
+          html2 += '<span style="font-weight:600;min-width:80px;flex-shrink:0;">' + escHtml(a.type || '') + '</span>';
+          html2 += '<span style="color:var(--text-secondary);flex:1;">' + escHtml(a.message) + '</span>';
+          if (!a.acknowledged) {
+            html2 += '<button onclick="acknowledgeAlert(' + a.id + ')" style="padding:2px 8px;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);border-radius:4px;font-size:10px;cursor:pointer;">Dismiss</button>';
+          }
+          html2 += '</div>';
+        });
+        histList.innerHTML = html2;
+      }
+    }
+    // Alert rules + webhook config (reuse existing functions)
+    if (typeof loadAlertRules === 'function') loadAlertRules();
+    if (typeof loadWebhookConfig === 'function') {
+      loadWebhookConfig().then && loadWebhookConfig() || loadWebhookConfig();
+    }
+  } catch(e) { console.error('loadAlerts:', e); }
 }
 
 // Check alerts every 30s
@@ -4780,6 +4985,7 @@ function switchTab(name) {
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
+  if (name === 'alerts') loadAlerts();
 }
 
 function exportUsageData() {
@@ -7997,7 +8203,12 @@ DASHBOARD_HTML = r"""
   .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
   .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
-  .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
+  .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; align-items: center; }
+  .alerts-bell { position: relative; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; background: transparent; border: 1px solid transparent; cursor: pointer; color: var(--text-tertiary); transition: all 0.2s ease; margin-right: 2px; flex-shrink: 0; }
+  .alerts-bell:hover { background: var(--bg-hover); color: var(--text-secondary); border-color: var(--border-primary); }
+  .alerts-bell.has-alerts { color: #f59e0b; }
+  .alerts-bell svg { width: 16px; height: 16px; }
+  .alerts-bell-badge { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; border-radius: 8px; background: #ef4444; color: #fff; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 3px; line-height: 1; }
   /* Brain tab */
   .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
   .brain-event:hover { background:rgba(255,255,255,0.02); }
@@ -9050,6 +9261,10 @@ function clawmetryLogout(){
     <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
     <button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl/Cmd + +)">+</button>
   </div>
+  <div class="alerts-bell" id="alerts-bell-btn" onclick="switchTab('alerts')" title="Alerts Center">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    <span class="alerts-bell-badge" id="alerts-badge" style="display:none;"></span>
+  </div>
   <div class="nav-tabs">
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
@@ -9058,6 +9273,7 @@ function clawmetryLogout(){
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" id="alerts-tab" onclick="switchTab('alerts')">Alerts</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
       <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
@@ -9112,10 +9328,11 @@ function clawmetryLogout(){
 </div>
 
 
-<!-- Alert Banner -->
-<div id="alert-banner" style="display:none;padding:10px 16px;background:var(--bg-error);border-bottom:2px solid var(--text-error);color:var(--text-error);font-size:13px;font-weight:600;display:none;align-items:center;gap:10px;">
+<!-- Alert Banner (critical/gateway-paused alerts only) -->
+<div id="alert-banner" style="display:none;padding:10px 16px;background:var(--bg-error);border-bottom:2px solid var(--text-error);color:var(--text-error);font-size:13px;font-weight:600;align-items:center;gap:10px;">
   <span style="font-size:18px;">&#9888;&#65039;</span>
   <span id="alert-banner-msg" style="flex:1;"></span>
+  <button onclick="switchTab('alerts')" style="background:transparent;color:var(--text-error);border:1px solid var(--text-error);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">View Alerts</button>
   <button onclick="ackAllAlerts()" style="background:var(--text-error);color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
   <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
 </div>
@@ -10162,6 +10379,68 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-models (theme 2) -->
 
+<!-- ALERTS CENTER (theme 2 — same page id, shared with theme 1) -->
+<div class="page" id="page-alerts">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;">&#128276;</span>
+        <span style="font-size:16px;font-weight:700;color:var(--text-primary);">Alerts Center</span>
+        <span id="alerts-active-count-badge" style="display:none;font-size:11px;font-weight:700;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:12px;padding:2px 10px;"></span>
+      </div>
+      <button class="refresh-btn" onclick="loadAlerts()">&#8635; Refresh</button>
+    </div>
+    <div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border-secondary);">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);letter-spacing:0.5px;text-transform:uppercase;">Active Alerts</span>
+        <button onclick="ackAllAlerts().then(loadAlerts)" style="font-size:11px;color:var(--text-muted);background:transparent;border:1px solid var(--border-secondary);border-radius:6px;padding:3px 10px;cursor:pointer;">Dismiss All</button>
+      </div>
+      <div id="alerts-active-list" style="padding:8px 0;">
+        <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">Loading...</div>
+      </div>
+    </div>
+    <div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border-secondary);">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);letter-spacing:0.5px;text-transform:uppercase;">Alert History</span>
+        <span style="font-size:11px;color:var(--text-muted);">Last 50 alerts</span>
+      </div>
+      <div id="alerts-history-list" style="max-height:320px;overflow-y:auto;">
+        <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">Loading...</div>
+      </div>
+    </div>
+    <div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--border-secondary);">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);letter-spacing:0.5px;text-transform:uppercase;">Alert Rules</span>
+      </div>
+      <div style="padding:14px 16px;">
+        <div id="alerts-rules-list" style="margin-bottom:14px;"><div style="color:var(--text-muted);font-size:13px;">Loading...</div></div>
+        <div id="add-alert-form" style="display:none;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:8px;padding:14px;margin-bottom:12px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Alert Type</label><select id="alert-type-input" style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:13px;"><option value="cost_threshold">Cost Threshold</option><option value="token_spike">Token Spike</option><option value="agent_error_rate">Agent Error Rate</option><option value="agent_down">Agent Down</option></select></div>
+            <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Threshold</label><input id="alert-threshold-input" type="number" step="0.01" min="0" placeholder="e.g. 10.00" style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:13px;"></div>
+            <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Channels</label><input id="alert-channels-input" type="text" value="banner" placeholder="banner,webhook" style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:13px;"></div>
+            <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Cooldown (min)</label><input id="alert-cooldown-input" type="number" min="1" value="30" style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:13px;"></div>
+          </div>
+          <div style="display:flex;gap:8px;"><button onclick="createAlertRule()" style="padding:7px 16px;background:var(--bg-accent);color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Create Rule</button><button onclick="document.getElementById(\'add-alert-form\').style.display=\'none\'" style="padding:7px 16px;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);border-radius:6px;font-size:13px;cursor:pointer;">Cancel</button></div>
+        </div>
+        <button onclick="showAddAlertForm()" style="font-size:12px;color:var(--text-accent);background:transparent;border:1px solid var(--border-secondary);border-radius:6px;padding:6px 14px;cursor:pointer;font-weight:600;">+ Add Alert Rule</button>
+      </div>
+      <div style="padding:0 16px 14px;">
+        <div style="border-top:1px solid var(--border-secondary);padding-top:14px;margin-top:4px;">
+          <div style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;text-transform:uppercase;margin-bottom:10px;">Notification Channels</div>
+          <div style="display:grid;gap:8px;">
+            <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Webhook URL</label><input id="alerts-webhook-url" type="url" placeholder="https://..." style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;box-sizing:border-box;"></div>
+            <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Slack Webhook URL</label><input id="alerts-slack-url" type="url" placeholder="https://hooks.slack.com/..." style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;box-sizing:border-box;"></div>
+            <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Discord Webhook URL</label><input id="alerts-discord-url" type="url" placeholder="https://discord.com/api/webhooks/..." style="width:100%;padding:7px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;box-sizing:border-box;"></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px;"><button onclick="saveWebhookConfig()" style="padding:7px 16px;background:var(--bg-accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Save</button><button onclick="testWebhookConfig()" style="padding:7px 16px;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);border-radius:6px;font-size:12px;cursor:pointer;">Test</button></div>
+          <div id="alerts-webhook-status" style="margin-top:8px;font-size:12px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- end page-alerts (theme 2) -->
+
 <!-- NEMOCLAW GOVERNANCE -->
 <div class="page" id="page-nemoclaw">
   <div style="padding:12px 0 8px 0;">
@@ -10519,22 +10798,41 @@ async function loadAlertHistory() {
   }
 }
 
+function updateAlertBadge(count) {
+  var badge = document.getElementById('alerts-badge');
+  var bell = document.getElementById('alerts-bell-btn');
+  var countBadge = document.getElementById('alerts-active-count-badge');
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count > 99 ? '99+' : count;
+    badge.style.display = 'flex';
+    if (bell) bell.classList.add('has-alerts');
+    if (countBadge) { countBadge.textContent = count + ' active'; countBadge.style.display = ''; }
+  } else {
+    badge.style.display = 'none';
+    if (bell) bell.classList.remove('has-alerts');
+    if (countBadge) countBadge.style.display = 'none';
+  }
+}
+
 async function checkActiveAlerts() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
     var alerts = data.alerts || [];
+    updateAlertBadge(alerts.length);
     var banner = document.getElementById('alert-banner');
-    if(alerts.length === 0) {
-      banner.style.display = 'none';
-      return;
-    }
-    // Show most recent alert
-    var latest = alerts[0];
-    document.getElementById('alert-banner-msg').textContent = latest.message;
-    banner.style.display = 'flex';
-    // Show resume button if gateway is paused
+    var resumeBtn = document.getElementById('alert-resume-btn');
+    // Only show banner when gateway is paused (critical)
     var status = await fetch('/api/budget/status').then(function(r){return r.json();});
-    document.getElementById('alert-resume-btn').style.display = status.paused ? '' : 'none';
+    if (status.paused) {
+      var latest = alerts[0] || {message: 'Gateway paused \u2014 budget limit reached'};
+      document.getElementById('alert-banner-msg').textContent = latest.message;
+      banner.style.display = 'flex';
+      if (resumeBtn) resumeBtn.style.display = '';
+    } else {
+      banner.style.display = 'none';
+      if (resumeBtn) resumeBtn.style.display = 'none';
+    }
   } catch(e) {}
 }
 
@@ -10546,7 +10844,78 @@ async function ackAllAlerts() {
       await fetch('/api/alerts/history/'+alerts[i].id+'/ack', {method:'POST'});
     }
     document.getElementById('alert-banner').style.display = 'none';
+    updateAlertBadge(0);
   } catch(e) {}
+}
+
+async function acknowledgeAlert(id) {
+  try {
+    await fetch('/api/alerts/history/'+id+'/ack', {method:'POST'});
+    await loadAlerts();
+  } catch(e) {}
+}
+
+async function loadAlerts() {
+  try {
+    // Active alerts
+    var activeData = await fetch('/api/alerts/active').then(function(r){return r.json();});
+    var active = activeData.alerts || [];
+    updateAlertBadge(active.length);
+    var activeList = document.getElementById('alerts-active-list');
+    if (activeList) {
+      if (active.length === 0) {
+        activeList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">No active alerts \u2713</div>';
+      } else {
+        var html = '';
+        active.forEach(function(a) {
+          var ts = new Date(a.fired_at * 1000).toLocaleString();
+          var typeColor = (a.type || '').indexOf('error') !== -1 ? '#ef4444' : '#f59e0b';
+          html += '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border-secondary);">';
+          html += '<span style="font-size:16px;flex-shrink:0;">&#9888;&#65039;</span>';
+          html += '<div style="flex:1;min-width:0;">';
+          html += '<div style="font-size:12px;font-weight:700;color:' + typeColor + ';margin-bottom:2px;">' + escHtml(a.type || 'alert') + '</div>';
+          html += '<div style="font-size:13px;color:var(--text-primary);margin-bottom:4px;">' + escHtml(a.message) + '</div>';
+          html += '<div style="font-size:11px;color:var(--text-muted);">' + ts + '</div>';
+          html += '</div>';
+          html += '<button onclick="acknowledgeAlert(' + a.id + ')" style="flex-shrink:0;padding:4px 10px;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);border-radius:6px;font-size:11px;cursor:pointer;">Dismiss</button>';
+          html += '</div>';
+        });
+        activeList.innerHTML = html;
+      }
+    }
+    // Alert history
+    var histData = await fetch('/api/alerts/history?limit=50').then(function(r){return r.json();});
+    var hist = histData.alerts || [];
+    var histList = document.getElementById('alerts-history-list');
+    if (histList) {
+      if (hist.length === 0) {
+        histList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">No alerts fired yet</div>';
+      } else {
+        var html2 = '';
+        hist.forEach(function(a) {
+          var ts = new Date(a.fired_at * 1000).toLocaleString();
+          var ackIcon = a.acknowledged
+            ? '<span style="color:var(--text-success);font-size:11px;">\u2713 ack</span>'
+            : '<span style="color:#f59e0b;font-size:11px;">\u25cf new</span>';
+          html2 += '<div style="display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
+          html2 += '<span style="min-width:40px;">' + ackIcon + '</span>';
+          html2 += '<span style="color:var(--text-muted);min-width:130px;flex-shrink:0;">' + ts + '</span>';
+          html2 += '<span style="font-weight:600;min-width:80px;flex-shrink:0;">' + escHtml(a.type || '') + '</span>';
+          html2 += '<span style="color:var(--text-secondary);flex:1;">' + escHtml(a.message) + '</span>';
+          if (!a.acknowledged) {
+            html2 += '<button onclick="acknowledgeAlert(' + a.id + ')" style="padding:2px 8px;background:transparent;color:var(--text-muted);border:1px solid var(--border-secondary);border-radius:4px;font-size:10px;cursor:pointer;">Dismiss</button>';
+          }
+          html2 += '</div>';
+        });
+        histList.innerHTML = html2;
+      }
+    }
+    // Alert rules + webhook config (reuse existing functions)
+    if (typeof loadAlertRules === 'function') loadAlertRules();
+    if (typeof loadWebhookConfig === 'function') {
+      loadWebhookConfig().then && loadWebhookConfig() || loadWebhookConfig();
+    }
+  } catch(e) { console.error('loadAlerts:', e); }
 }
 
 // Check alerts every 30s
@@ -10840,6 +11209,7 @@ function switchTab(name) {
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
+  if (name === 'alerts') loadAlerts();
 }
 
 function exportUsageData() {
