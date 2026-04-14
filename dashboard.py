@@ -31593,32 +31593,56 @@ def _get_sessions():
     return _get_sessions_from_files()
 
 
+def _scan_session_aggregates(file_path):
+    """Walk a session JSONL once and return (recent_model, total_tokens).
+
+    Replaces the "file size as totalTokens" heuristic with an actual sum of
+    `message.usage.totalTokens`. `recent_model` = the LAST model actually used
+    in the session (from model_change / model-snapshot / message.model in
+    file order), which is what the MODEL badge on Overview / Flow / Brain
+    should display — those are live-activity surfaces that should reflect
+    "what's running right now," not a historical aggregate.
+    """
+    total_tokens = 0
+    last_seen_model = ""
+    try:
+        with open(file_path, "r", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except Exception:
+                    continue
+                t = obj.get("type", "")
+                if t == "model_change":
+                    m = obj.get("modelId") or obj.get("model") or ""
+                    if m:
+                        last_seen_model = m
+                elif t == "custom" and obj.get("customType") == "model-snapshot":
+                    d = obj.get("data", {}) or {}
+                    m = d.get("modelId") or d.get("model") or ""
+                    if m:
+                        last_seen_model = m
+                elif t == "message":
+                    msg = obj.get("message", {}) or {}
+                    if not isinstance(msg, dict):
+                        continue
+                    usage = msg.get("usage", {}) or {}
+                    if isinstance(usage, dict):
+                        total_tokens += int(usage.get("totalTokens", 0) or 0)
+                    msg_model = msg.get("model") or ""
+                    if msg_model:
+                        last_seen_model = msg_model
+    except Exception:
+        pass
+    return (last_seen_model or "unknown", total_tokens)
+
+
 def _get_sessions_from_files():
     """Read active sessions from the session directory (file-based fallback)."""
     now = time.time()
-
-    def _read_session_model_fast(file_path):
-        """Best-effort model extraction from the tail of a session file."""
-        try:
-            lines = []
-            with open(file_path, "r") as f:
-                lines = list(deque(f, maxlen=400))
-                for line in reversed(lines):
-                    try:
-                        obj = json.loads(line.strip())
-                    except Exception:
-                        continue
-                    if obj.get("type") != "message":
-                        continue
-                    msg = obj.get("message", {})
-                    if not isinstance(msg, dict):
-                        continue
-                    model = msg.get("model")
-                    if model:
-                        return model
-        except Exception:
-            pass
-        return "unknown"
 
     sessions = []
     try:
@@ -31638,19 +31662,23 @@ def _get_sessions_from_files():
             fpath = os.path.join(base, fname)
             try:
                 mtime = os.path.getmtime(fpath)
-                size = os.path.getsize(fpath)
                 with open(fpath) as f:
                     first = json.loads(f.readline())
                 sid = fname.replace(".jsonl", "")
+                # Single walk gets the session's most recent model + the real
+                # token count. Previous code used file size as totalTokens,
+                # which gave a bogus number proportional to JSONL bytes not
+                # actual usage.
+                model, total_tokens = _scan_session_aggregates(fpath)
                 sessions.append(
                     {
                         "sessionId": sid,
                         "key": sid[:12] + "...",
                         "displayName": sid[:20],
                         "updatedAt": int(mtime * 1000),
-                        "model": _read_session_model_fast(fpath),
+                        "model": model,
                         "channel": "unknown",
-                        "totalTokens": size,
+                        "totalTokens": total_tokens,
                         "contextTokens": 200000,
                     }
                 )
