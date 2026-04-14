@@ -20160,6 +20160,168 @@ def api_compactions():
     })
 
 
+@bp_sessions.route("/api/session-tools")
+def api_session_tools():
+    """Return the tool_call / tool_result timeline for a single session."""
+    sid = (request.args.get("session_id", "") or "").strip()
+    if not sid:
+        return jsonify({"error": "session_id required"}), 400
+    try:
+        args_chars = max(0, min(int(request.args.get("args_chars", "400")), 10000))
+    except ValueError:
+        args_chars = 400
+    try:
+        result_chars = max(0, min(int(request.args.get("result_chars", "400")), 10000))
+    except ValueError:
+        result_chars = 400
+    include_unpaired = str(request.args.get("include_unpaired", "")).lower() in (
+        "1", "true", "yes"
+    )
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    if not os.path.isdir(sessions_dir):
+        return jsonify({"error": "sessions dir not found"}), 404
+    matches = [
+        f for f in os.listdir(sessions_dir)
+        if f.startswith(sid) and f.endswith(".jsonl")
+        and ".deleted." not in f and ".reset." not in f
+    ]
+    if not matches:
+        return jsonify({"error": "session not found"}), 404
+    fpath = os.path.join(sessions_dir, sorted(matches)[0])
+
+    def _parse_ts(ts):
+        if not ts or not isinstance(ts, str):
+            return 0
+        try:
+            from datetime import datetime as _dt
+            return int(_dt.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000)
+        except Exception:
+            return 0
+
+    def _truncate(val, limit):
+        if limit <= 0 or val is None:
+            return val
+        if isinstance(val, str):
+            return val if len(val) <= limit else val[:limit] + "…"
+        try:
+            s = json.dumps(val, separators=(",", ":"))
+        except Exception:
+            s = str(val)
+        return s if len(s) <= limit else s[:limit] + "…"
+
+    calls: dict = {}
+    result_by_id: dict = {}
+    turn_index = 0
+    try:
+        with open(fpath, "r", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except Exception:
+                    continue
+                if ev.get("type") != "message":
+                    continue
+                msg = ev.get("message", {}) or {}
+                role = msg.get("role", "")
+                ev_ts_ms = _parse_ts(ev.get("timestamp", ""))
+                if role == "assistant":
+                    turn_index += 1
+                    content = msg.get("content") or []
+                    if not isinstance(content, list):
+                        continue
+                    usage = msg.get("usage", {}) or {}
+                    cost_obj = usage.get("cost", {}) or {}
+                    msg_cost = float(cost_obj.get("total", 0) or 0) if isinstance(cost_obj, dict) else 0.0
+                    msg_model = msg.get("model", "")
+                    msg_provider = msg.get("provider", "")
+                    for blk in content:
+                        if not isinstance(blk, dict) or blk.get("type") != "toolCall":
+                            continue
+                        tcid = blk.get("id", "")
+                        if not tcid:
+                            continue
+                        calls[tcid] = {
+                            "tool_call_id": tcid,
+                            "tool_name": blk.get("name", ""),
+                            "arguments": _truncate(blk.get("arguments"), args_chars),
+                            "start_ms": ev_ts_ms,
+                            "turn_index": turn_index,
+                            "model": msg_model,
+                            "provider": msg_provider,
+                            "message_cost_usd": msg_cost,
+                        }
+                elif role == "toolResult":
+                    tcid = msg.get("toolCallId", "")
+                    if not tcid:
+                        continue
+                    details = msg.get("details")
+                    result_by_id[tcid] = {
+                        "end_ms": ev_ts_ms,
+                        "is_error": bool(msg.get("isError", False)),
+                        "result_size": len(json.dumps(details)) if details is not None else 0,
+                        "result_preview": _truncate(details, result_chars),
+                    }
+    except Exception as e:
+        return jsonify({"error": "parse error: " + str(e)}), 500
+
+    tools: list = []
+    tool_counts: dict = {}
+    for tcid, call in calls.items():
+        res = result_by_id.get(tcid)
+        if not res and not include_unpaired:
+            continue
+        rec = dict(call)
+        if res:
+            rec["end_ms"] = res["end_ms"]
+            rec["duration_ms"] = max(0, res["end_ms"] - call["start_ms"]) if res["end_ms"] and call["start_ms"] else 0
+            rec["is_error"] = res["is_error"]
+            rec["result_size"] = res["result_size"]
+            rec["result_preview"] = res["result_preview"]
+            rec["paired"] = True
+        else:
+            rec["end_ms"] = 0
+            rec["duration_ms"] = 0
+            rec["is_error"] = False
+            rec["result_size"] = 0
+            rec["result_preview"] = None
+            rec["paired"] = False
+        tools.append(rec)
+        tn = rec["tool_name"] or "unknown"
+        agg = tool_counts.setdefault(tn, {"calls": 0, "errors": 0, "total_duration_ms": 0, "total_cost_usd": 0.0})
+        agg["calls"] += 1
+        if rec["is_error"]:
+            agg["errors"] += 1
+        agg["total_duration_ms"] += rec["duration_ms"]
+        agg["total_cost_usd"] += float(rec.get("message_cost_usd") or 0.0)
+
+    tools.sort(key=lambda r: r.get("start_ms", 0))
+    by_tool = [
+        {"tool_name": k, **v, "error_rate_pct": round(v["errors"] / v["calls"] * 100, 1) if v["calls"] else 0}
+        for k, v in sorted(tool_counts.items(), key=lambda kv: -kv[1]["calls"])
+    ]
+    first_start = min((r["start_ms"] for r in tools if r.get("start_ms")), default=0)
+    last_end = max((r.get("end_ms", 0) for r in tools), default=0)
+    return jsonify({
+        "session_id": sid,
+        "tools": tools,
+        "by_tool": by_tool,
+        "stats": {
+            "total_calls": len(tools),
+            "paired_calls": sum(1 for r in tools if r.get("paired")),
+            "error_calls": sum(1 for r in tools if r.get("is_error")),
+            "distinct_tools": len(tool_counts),
+            "first_start_ms": first_start,
+            "last_end_ms": last_end,
+            "span_ms": max(0, last_end - first_start) if first_start and last_end else 0,
+        },
+    })
+
+
 @bp_sessions.route("/api/subagents")
 def api_subagents():
     """Return sub-agent list with depth/parent fields for the tree view."""
