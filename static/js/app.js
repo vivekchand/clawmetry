@@ -968,13 +968,22 @@ async function loadActiveTasks() {
     // Fetch active sub-agents
     var saData = await fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; });
 
-    // Show anything that's still within the 10-min idle window so the user
-    // always sees recently-spawned subagents even when they've paused for a
-    // beat between turns. `stale` (>10 min) stays hidden to keep the panel
-    // focused on live work.
-    var agents = (saData.subagents || []).filter(function(a) {
-      return a.status === 'active' || a.status === 'idle';
-    });
+    // Priority: live > recent failure > recent stale-but-completed.
+    // - active / idle: always show (subagent still alive)
+    // - failed (last 24h): show so user sees "agent tried X but OpenClaw
+    //   rejected with Y" instead of a silently empty panel
+    // - stale (last 24h): show only when no active/idle/failed exists,
+    //   so the panel can report "Recent spawns (last 24h)" on a quiet
+    //   dashboard
+    var DAY_AGO = Date.now() - 86400_000;
+    var all = (saData.subagents || []);
+    var live = all.filter(function(a) { return a.status === 'active' || a.status === 'idle'; });
+    var failed = all.filter(function(a) { return a.status === 'failed' && (a.updatedAt || 0) > DAY_AGO; });
+    var stale = all.filter(function(a) { return a.status === 'stale' && (a.updatedAt || 0) > DAY_AGO; });
+    var agents = live.concat(failed);
+    // Only fall back to stale when nothing live/failed — keep the panel
+    // concise when there's real work to show.
+    if (!agents.length) agents = stale.slice(0, 6);
 
     if (agents.length === 0) {
       grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
@@ -987,21 +996,48 @@ async function loadActiveTasks() {
 
     var html = '';
     var badge = document.getElementById('overview-tasks-count-badge');
-    if (badge) badge.textContent = agents.length + ' active';
+    if (badge) {
+      var liveCount = agents.filter(function(a) { return a.status === 'active' || a.status === 'idle'; }).length;
+      badge.textContent = liveCount > 0 ? (liveCount + ' active') : (agents.length + ' recent');
+    }
 
-    // Render active sub-agents
+    // Per-status visual style
+    var STATUS_STYLE = {
+      active: {cls: 'running',  dot: '#22c55e', label: 'active'},
+      idle:   {cls: 'running',  dot: '#f59e0b', label: 'idle'},
+      stale:  {cls: '',         dot: '#6b7280', label: 'completed'},
+      failed: {cls: '',         dot: '#ef4444', label: 'failed'},
+    };
+
+    // Render sub-agents
     agents.forEach(function(agent) {
       var taskName = cleanTaskName(agent.displayName);
       var badge2 = detectProjectBadge(agent.displayName);
       var mins = Math.max(1, Math.floor((agent.runtimeMs || 0) / 60000));
+      var st = STATUS_STYLE[agent.status] || STATUS_STYLE.active;
 
-      html += '<div class="task-card running" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
-      html += '<div class="task-card-pulse active"></div>';
+      html += '<div class="task-card ' + st.cls + '" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
+      if (agent.status === 'active' || agent.status === 'idle') {
+        html += '<div class="task-card-pulse active"></div>';
+      }
       html += '<div class="task-card-header">';
-      html += '<div class="task-card-name">' + escHtml(taskName) + '</div>';
-      html += '<span class="task-card-badge running" style="font-size:10px;">🤖 ' + mins + ' min</span>';
+      html += '<div class="task-card-name"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + st.dot + ';margin-right:6px;vertical-align:middle;"></span>' + escHtml(taskName) + '</div>';
+      html += '<span class="task-card-badge ' + st.cls + '" style="font-size:10px;">' +
+              (agent.status === 'failed' ? '⚠️ ' + st.label :
+               agent.status === 'stale'  ? '🤖 ' + st.label :
+               '🤖 ' + mins + ' min') +
+              '</span>';
       html += '</div>';
-      html += '<div style="display:flex;align-items:center;gap:8px;">';
+      // Task summary line (shown for all statuses if present)
+      if (agent.task) {
+        var taskPreview = agent.task.length > 90 ? agent.task.substring(0, 87) + '…' : agent.task;
+        html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;line-height:1.4;">' + escHtml(taskPreview) + '</div>';
+      }
+      // Error line for failed spawns
+      if (agent.status === 'failed' && agent.error) {
+        html += '<div style="font-size:11px;color:#ef4444;margin-top:4px;line-height:1.4;">⚠️ ' + escHtml(agent.error) + '</div>';
+      }
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">';
       if (badge2) {
         html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:' + badge2.color + '22;color:' + badge2.color + ';border:1px solid ' + badge2.color + '44;">' + badge2.label + '</span>';
       }

@@ -523,18 +523,126 @@ def api_task_runs():
     })
 
 
+def _scan_spawn_events_from_jsonl(sessions_dir):
+    """Walk every session JSONL and pair SPAWN toolCall/toolResult rows.
+
+    OpenClaw's subagent lifecycle is:
+      1. Parent session's assistant turn emits a `toolCall` with name
+         `subagents` (action=spawn) or legacy `sessions_spawn`. The
+         `arguments` dict carries `name`/`label`, `task`, `channel`.
+      2. OpenClaw fires back a `toolResult` with the SAME `toolCallId`.
+         On success: `details = {childSessionKey, runId, mode, note,
+         modelApplied, ...}`. On failure: `details = {status:"error",
+         error:"..."}`.
+
+    This gives us the FULL subagent history regardless of whether the
+    gateway registry still knows about them (registry rolls over at 30
+    min; JSONL persists until TTL cleanup). Returns a list of subagent
+    dicts ready to merge into /api/subagents response.
+    """
+    import glob as _glob
+    subs = []
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return subs
+
+    for fpath in _glob.glob(os.path.join(sessions_dir, "*.jsonl")):
+        if ".deleted." in fpath:
+            continue
+        parent_sid = os.path.basename(fpath).replace(".jsonl", "").split(".")[0]
+        calls = {}    # toolCallId → {name, args, ts}
+        results = {}  # toolCallId → {details, isError, ts}
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    if ev.get("type") != "message":
+                        continue
+                    msg = ev.get("message") or {}
+                    role = msg.get("role", "")
+                    ts = ev.get("timestamp", "")
+                    if role == "assistant":
+                        for blk in msg.get("content") or []:
+                            if not isinstance(blk, dict):
+                                continue
+                            if blk.get("type") != "toolCall":
+                                continue
+                            nm = (blk.get("name") or "").lower()
+                            if "subagent" not in nm and "spawn" not in nm:
+                                continue
+                            args = blk.get("arguments") or {}
+                            # Only record spawn-like actions (skip list/kill/steer)
+                            action = (args.get("action") or "spawn").lower()
+                            if action not in ("spawn", "create"):
+                                continue
+                            calls[blk.get("id", "")] = {
+                                "name": blk.get("name"),
+                                "args": args,
+                                "ts": ts,
+                            }
+                    elif role == "toolResult":
+                        nm = (msg.get("toolName") or "").lower()
+                        if "subagent" not in nm and "spawn" not in nm:
+                            continue
+                        tcid = msg.get("toolCallId", "")
+                        if not tcid:
+                            continue
+                        results[tcid] = {
+                            "details": msg.get("details"),
+                            "isError": bool(msg.get("isError")),
+                            "ts": ts,
+                        }
+        except Exception:
+            continue
+
+        # Pair calls with their results
+        for tcid, call in calls.items():
+            res = results.get(tcid, {})
+            det = res.get("details") if isinstance(res.get("details"), dict) else {}
+            error_msg = None
+            child_key = None
+            if det:
+                if det.get("status") == "error":
+                    error_msg = det.get("error")
+                child_key = det.get("childSessionKey") or det.get("key")
+            args = call.get("args") or {}
+            name = args.get("name") or args.get("label") or "subagent"
+            subs.append({
+                "parentSessionId": parent_sid,
+                "parentKey": f"agent:main:session:{parent_sid}",
+                "childKey": child_key,
+                "name": name,
+                "task": (args.get("task") or "")[:500],
+                "callTs": call.get("ts"),
+                "resultTs": res.get("ts"),
+                "error": error_msg,
+                "runId": det.get("runId") if det else None,
+                "mode": det.get("mode") if det else None,
+                "modelApplied": det.get("modelApplied") if det else None,
+            })
+    return subs
+
+
 @bp_sessions.route("/api/subagents")
 def api_subagents():
     """Return sub-agent list with depth/parent fields for the tree view.
 
-    Two data sources merged:
+    Data sources merged (in priority order):
 
-    1. OpenClaw's canonical `subagents` tool via `action=list` — the
-       authoritative registry with explicit `active[]` / `recent[]`
-       arrays. Always preferred when gateway RPC is reachable.
-    2. Fallback / supplement: scan all sessions via `sessions_list` +
-       filter by subagent key pattern (`agent:main:subagent:…`). Catches
-       subagents that outlived the `recent (last 30m)` window.
+    1. OpenClaw's canonical `subagents action=list` registry — live +
+       last-30-min recent, with status explicitly.
+    2. `sessions_list` gateway RPC filtered by key substring — catches
+       subagents still in the session roster but outside the 30-min
+       registry window.
+    3. JSONL spawn event scan — pairs `toolCall` / `toolResult` for
+       subagents-spawn across every session file on disk. Captures both
+       succeeded spawns (via `details.childSessionKey`) and attempted
+       spawns that errored (visible so the user knows the agent tried).
     """
     import dashboard as _d
     now_ms = time.time() * 1000
@@ -582,15 +690,59 @@ def api_subagents():
             "_from_registry": True,
         })
 
+    # Source 3: JSONL spawn event scan — merge into all_sessions where the
+    # child isn't already covered by sources 1/2. Errored spawns also get
+    # included (with status="failed") so the user sees "agent tried to
+    # spawn X but it failed with Y" instead of a silently empty panel.
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    try:
+        spawn_events = _scan_spawn_events_from_jsonl(sessions_dir)
+    except Exception:
+        spawn_events = []
+    for sp in spawn_events:
+        k = sp.get("childKey") or f"spawn:attempt:{sp.get('parentSessionId')}:{sp.get('callTs')}"
+        if k in seen_keys:
+            continue
+        seen_keys.add(k)
+        # Parse timestamp to epoch ms
+        try:
+            from datetime import datetime as _dt
+            ts_ms = int(_dt.fromisoformat(
+                (sp.get("resultTs") or sp.get("callTs") or "").replace("Z", "+00:00")
+            ).timestamp() * 1000)
+        except Exception:
+            ts_ms = int(now_ms)
+        status = "failed" if sp.get("error") else ""  # let main filter classify active/idle/stale
+        all_sessions.insert(0, {
+            "key": k,
+            "sessionId": (sp.get("childKey") or "").split(":")[-1] or "",
+            "displayName": sp.get("name"),
+            "task": sp.get("task"),
+            "error": sp.get("error"),
+            "runId": sp.get("runId"),
+            "model": sp.get("modelApplied") or "",
+            "updatedAt": ts_ms,
+            "startedAt": ts_ms,
+            "depth": 1,
+            "spawnedBy": sp.get("parentKey"),
+            "_status_override": status,  # if set, bypass age-based classification
+            "_from_spawn_scan": True,
+        })
+
     subagents = []
-    counts = {"total": 0, "active": 0, "idle": 0, "stale": 0}
+    counts = {"total": 0, "active": 0, "idle": 0, "stale": 0, "failed": 0}
     for s in all_sessions:
         sid = s.get("sessionId") or ""
         key = s.get("key") or ""
         if not sid and not key:
             continue
         age_ms = now_ms - (s.get("updatedAt") or s.get("lastActiveMs", 0) or 0)
-        if age_ms < 120000:
+        override = s.get("_status_override")
+        if override:
+            status = override   # "failed" (errored spawn attempt)
+        elif age_ms < 120000:
             status = "active"
         elif age_ms < 600000:
             status = "idle"
@@ -636,9 +788,12 @@ def api_subagents():
             "runtimeMs": elapsed_ms,    # numeric ms — used by Active Tasks card
             "startedAt": started,
             "updatedAt": s.get("updatedAt") or s.get("lastActiveMs", 0),
+            "task": s.get("task") or "",       # from JSONL spawn scan
+            "error": s.get("error") or "",     # only set for failed spawns
         })
 
-    subagents.sort(key=lambda x: (0 if x["status"] == "active" else 1 if x["status"] == "idle" else 2, x["depth"]))
+    _status_rank = {"active": 0, "idle": 1, "stale": 2, "failed": 3}
+    subagents.sort(key=lambda x: (_status_rank.get(x["status"], 9), x["depth"]))
     return jsonify({"subagents": subagents, "counts": counts})
 
 
