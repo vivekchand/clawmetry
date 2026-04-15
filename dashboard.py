@@ -139,6 +139,90 @@ def _get_log_dirs():
     return ["/tmp/openclaw", "/tmp/moltbot"]
 
 
+def _detect_host_hardware():
+    """Return real CPU / cores / RAM / backend for the current host.
+
+    Used by the Cost Optimizer panel as a fallback when llmfit isn't
+    installed or doesn't return a `system` block. Replaces the previous
+    "Apple M2 Pro / 12 cores / 32 GB" hardcoded fallback that misrepresented
+    Linux x86 boxes.
+    """
+    cpu = "Unknown CPU"
+    cores = os.cpu_count() or 0
+    ram_gb = 0
+    backend = "CPU"
+    try:
+        import subprocess as _sp
+        if sys.platform == "darwin":
+            try:
+                cpu = _sp.run(
+                    ["sysctl", "-n", "machdep.cpu.brand_string"],
+                    capture_output=True, text=True, timeout=2,
+                ).stdout.strip() or cpu
+            except Exception:
+                pass
+            try:
+                memb = _sp.run(
+                    ["sysctl", "-n", "hw.memsize"],
+                    capture_output=True, text=True, timeout=2,
+                ).stdout.strip()
+                if memb.isdigit():
+                    ram_gb = round(int(memb) / (1024 ** 3))
+            except Exception:
+                pass
+            if any(s in cpu for s in ("M1", "M2", "M3", "M4", "Apple")):
+                backend = "Apple Metal (unified)"
+        elif sys.platform.startswith("linux"):
+            try:
+                with open("/proc/cpuinfo") as _f:
+                    for line in _f:
+                        if line.lower().startswith("model name"):
+                            cpu = line.split(":", 1)[1].strip()
+                            break
+            except Exception:
+                pass
+            try:
+                with open("/proc/meminfo") as _f:
+                    for line in _f:
+                        if line.startswith("MemTotal:"):
+                            kb = int(line.split()[1])
+                            ram_gb = round(kb / (1024 ** 2))
+                            break
+            except Exception:
+                pass
+            try:
+                if _sp.run(["which", "nvidia-smi"], capture_output=True, timeout=1).returncode == 0:
+                    backend = "NVIDIA CUDA"
+            except Exception:
+                pass
+        elif sys.platform == "win32":
+            try:
+                cpu_out = _sp.run(
+                    ["wmic", "cpu", "get", "name", "/value"],
+                    capture_output=True, text=True, timeout=3,
+                ).stdout
+                for line in cpu_out.splitlines():
+                    if line.startswith("Name="):
+                        cpu = line.split("=", 1)[1].strip()
+                        break
+            except Exception:
+                pass
+            try:
+                mem = _sp.run(
+                    ["wmic", "computersystem", "get", "TotalPhysicalMemory", "/value"],
+                    capture_output=True, text=True, timeout=3,
+                ).stdout
+                for line in mem.splitlines():
+                    if line.startswith("TotalPhysicalMemory="):
+                        ram_gb = round(int(line.split("=", 1)[1].strip()) / (1024 ** 3))
+                        break
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return {"cpu": cpu, "cores": cores, "ram_gb": ram_gb, "backend": backend}
+
+
 _CURRENT_PLATFORM = _platform.system().lower()
 # ── End cross-platform helpers ──────────────────────────────────────────
 
@@ -5955,6 +6039,90 @@ def _get_log_dirs():
             os.path.join(_tempfile.gettempdir(), "moltbot"),
         ]
     return ["/tmp/openclaw", "/tmp/moltbot"]
+
+
+def _detect_host_hardware():
+    """Return real CPU / cores / RAM / backend for the current host.
+
+    Used by the Cost Optimizer panel as a fallback when llmfit isn't
+    installed or doesn't return a `system` block. Replaces the previous
+    "Apple M2 Pro / 12 cores / 32 GB" hardcoded fallback that misrepresented
+    Linux x86 boxes.
+    """
+    cpu = "Unknown CPU"
+    cores = os.cpu_count() or 0
+    ram_gb = 0
+    backend = "CPU"
+    try:
+        import subprocess as _sp
+        if sys.platform == "darwin":
+            try:
+                cpu = _sp.run(
+                    ["sysctl", "-n", "machdep.cpu.brand_string"],
+                    capture_output=True, text=True, timeout=2,
+                ).stdout.strip() or cpu
+            except Exception:
+                pass
+            try:
+                memb = _sp.run(
+                    ["sysctl", "-n", "hw.memsize"],
+                    capture_output=True, text=True, timeout=2,
+                ).stdout.strip()
+                if memb.isdigit():
+                    ram_gb = round(int(memb) / (1024 ** 3))
+            except Exception:
+                pass
+            if any(s in cpu for s in ("M1", "M2", "M3", "M4", "Apple")):
+                backend = "Apple Metal (unified)"
+        elif sys.platform.startswith("linux"):
+            try:
+                with open("/proc/cpuinfo") as _f:
+                    for line in _f:
+                        if line.lower().startswith("model name"):
+                            cpu = line.split(":", 1)[1].strip()
+                            break
+            except Exception:
+                pass
+            try:
+                with open("/proc/meminfo") as _f:
+                    for line in _f:
+                        if line.startswith("MemTotal:"):
+                            kb = int(line.split()[1])
+                            ram_gb = round(kb / (1024 ** 2))
+                            break
+            except Exception:
+                pass
+            try:
+                if _sp.run(["which", "nvidia-smi"], capture_output=True, timeout=1).returncode == 0:
+                    backend = "NVIDIA CUDA"
+            except Exception:
+                pass
+        elif sys.platform == "win32":
+            try:
+                cpu_out = _sp.run(
+                    ["wmic", "cpu", "get", "name", "/value"],
+                    capture_output=True, text=True, timeout=3,
+                ).stdout
+                for line in cpu_out.splitlines():
+                    if line.startswith("Name="):
+                        cpu = line.split("=", 1)[1].strip()
+                        break
+            except Exception:
+                pass
+            try:
+                mem = _sp.run(
+                    ["wmic", "computersystem", "get", "TotalPhysicalMemory", "/value"],
+                    capture_output=True, text=True, timeout=3,
+                ).stdout
+                for line in mem.splitlines():
+                    if line.startswith("TotalPhysicalMemory="):
+                        ram_gb = round(int(line.split("=", 1)[1].strip()) / (1024 ** 3))
+                        break
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return {"cpu": cpu, "cores": cores, "ram_gb": ram_gb, "backend": backend}
 
 
 _CURRENT_PLATFORM = _platform.system().lower()
@@ -30834,23 +31002,24 @@ def api_cost_optimizer():
             except Exception:
                 pass
 
+        # When llmfit doesn't return a `system` block, fall back to actual
+        # detection (sysctl on macOS, /proc on Linux, wmic on Windows) instead
+        # of the previous hardcoded "Apple M2 Pro / 12 cores / 32 GB" values
+        # which misrepresented every non-Mac box.
         sys_info = llmfit_raw.get("system", {})
-        cpu = sys_info.get("cpu_name", "Apple M2 Pro")
-        is_apple = (
-            "apple" in cpu.lower()
-            or "M2" in cpu
-            or "M1" in cpu
-            or "M3" in cpu
-            or "M4" in cpu
-        )
+        host = _detect_host_hardware()
+        cpu = sys_info.get("cpu_name") or host["cpu"]
+        is_apple = any(s in cpu for s in ("Apple", "M1", "M2", "M3", "M4"))
 
         system_out = {
-            "cpu": cpu or "Apple M2 Pro",
-            "cores": sys_info.get("cpu_cores", 12),
-            "ram_gb": sys_info.get("total_ram_gb", 32),
-            "backend": "Apple Metal (unified)"
-            if is_apple
-            else sys_info.get("backend", "CPU"),
+            "cpu": cpu,
+            "cores": sys_info.get("cpu_cores") or host["cores"],
+            "ram_gb": sys_info.get("total_ram_gb") or host["ram_gb"],
+            "backend": (
+                "Apple Metal (unified)"
+                if is_apple
+                else (sys_info.get("backend") or host["backend"])
+            ),
         }
 
         # Map llmfit models to localModels format
@@ -30975,14 +31144,11 @@ def api_cost_optimizer():
             }
         )
     except Exception as e:
+        # Hard fallback path: even llmfit + everything else broke. Use real
+        # host detection so we never lie about the user's machine.
         return jsonify(
             {
-                "system": {
-                    "cpu": "Apple M2 Pro",
-                    "cores": 12,
-                    "ram_gb": 32,
-                    "backend": "Apple Metal (unified)",
-                },
+                "system": _detect_host_hardware(),
                 "localModels": [],
                 "taskRecommendations": [],
                 "todayCost": 0,
