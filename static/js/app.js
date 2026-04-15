@@ -4372,8 +4372,9 @@ async function loadSubagents() {
       }
     });
     function statusDot(status) {
-      var colors = { active: '#16a34a', idle: '#d97706', stale: '#6b7280' };
-      var glow = status === 'active' ? 'box-shadow:0 0 6px rgba(22,163,74,0.6);' : '';
+      var colors = { active: '#16a34a', idle: '#d97706', stale: '#6b7280', failed: '#ef4444' };
+      var glow = status === 'active' ? 'box-shadow:0 0 6px rgba(22,163,74,0.6);'
+               : status === 'failed' ? 'box-shadow:0 0 6px rgba(239,68,68,0.5);' : '';
       return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (colors[status] || '#6b7280') + ';' + glow + 'flex-shrink:0;margin-right:4px;"></span>';
     }
     function renderAgent(a, depth) {
@@ -4386,11 +4387,21 @@ async function loadSubagents() {
         : '<span style="display:inline-block;min-width:16px;"></span>';
       var tokens = a.totalTokens >= 1000 ? (a.totalTokens / 1000).toFixed(1) + 'K' : a.totalTokens;
       var depthBadge = a.depth > 0 ? '<span style="font-size:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:4px;padding:1px 5px;color:var(--text-muted);margin-left:6px;">d' + a.depth + '</span>' : '';
-      var html = '<div style="display:flex;align-items:center;gap:6px;' + indent + 'padding-top:8px;padding-bottom:8px;padding-right:12px;border-bottom:1px solid var(--border-secondary);">';
+      // Click row → subagent detail modal (same call used by Active Tasks cards).
+      // Stop-propagation on the toggle button already handles tree expansion.
+      var name = (a.displayName || '').replace(/"/g,'&quot;').replace(/'/g,"\\'");
+      var sidEsc = (a.sessionId || '').replace(/'/g,"\\'");
+      var keyEsc = (a.key || a.sessionId || '').replace(/'/g,"\\'");
+      var clickAttr = ' onclick="openTaskModal(\'' + sidEsc + '\',\'' + name + '\',\'' + keyEsc + '\')"';
+      var cursor = 'cursor:pointer;';
+      var html = '<div' + clickAttr + ' style="display:flex;align-items:center;gap:6px;' + indent + 'padding-top:8px;padding-bottom:8px;padding-right:12px;border-bottom:1px solid var(--border-secondary);' + cursor + 'transition:background 0.1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
       html += toggleBtn;
       html += statusDot(a.status);
       html += '<span style="font-weight:600;font-size:13px;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(a.displayName) + '">' + escHtml(a.displayName) + '</span>';
       html += depthBadge;
+      if (a.status === 'failed') {
+        html += '<span style="font-size:10px;background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:4px;padding:1px 6px;margin-left:6px;font-weight:700;">FAILED</span>';
+      }
       html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + escHtml(a.model || '') + '</span>';
       html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + tokens + ' tok</span>';
       html += '<span style="font-size:11px;color:var(--text-faint);white-space:nowrap;margin-left:8px;">' + escHtml(a.runtime || '') + '</span>';
@@ -4405,6 +4416,7 @@ async function loadSubagents() {
     if (counts.active) summaryHtml += '<span style="color:#16a34a;"><strong>' + counts.active + '</strong> active</span>';
     if (counts.idle) summaryHtml += '<span style="color:#d97706;"><strong>' + counts.idle + '</strong> idle</span>';
     if (counts.stale) summaryHtml += '<span style="color:var(--text-muted);"><strong>' + counts.stale + '</strong> stale</span>';
+    if (counts.failed) summaryHtml += '<span style="color:#ef4444;"><strong>' + counts.failed + '</strong> failed</span>';
     summaryHtml += '</div>';
     var treeHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">' + summaryHtml;
     roots.forEach(function(a) { treeHtml += renderAgent(a, 0); });
