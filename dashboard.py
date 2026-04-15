@@ -14128,7 +14128,11 @@ def _run_server(args):
         try:
             from waitress import serve
 
-            serve(app, host=args.host, port=args.port, threads=8)
+            # threads=32: each SSE stream (health, logs, flow) holds a thread
+            # for its lifetime. Older 8-thread default got exhausted after 2-3
+            # tab reloads, leaving new requests stuck pending. 32 gives ~10 tabs
+            # of headroom before queuing.
+            serve(app, host=args.host, port=args.port, threads=32, channel_timeout=120)
         except ImportError:
             # Waitress not installed -- fall back to Flask dev server.
             # On Windows with redirected stdout (e.g. Start-Process),

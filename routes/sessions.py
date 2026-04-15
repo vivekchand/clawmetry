@@ -541,16 +541,34 @@ def _scan_spawn_events_from_jsonl(sessions_dir):
     dicts ready to merge into /api/subagents response.
     """
     import glob as _glob
+    import re as _re
     subs = []
     if not sessions_dir or not os.path.isdir(sessions_dir):
         return subs
 
+    _completion_re = _re.compile(
+        r"<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>\s*(.*?)\s*<<<END_UNTRUSTED_CHILD_RESULT>>>",
+        _re.DOTALL,
+    )
+    _stats_re = _re.compile(
+        r"Stats:\s*runtime\s+([\w.]+)\s*[•·]?\s*tokens\s+(\d+)\s*\(in\s*(\d+)\s*/\s*out\s*(\d+)\)",
+        _re.IGNORECASE,
+    )
+    _session_key_re = _re.compile(r"session_key:\s*(agent:main:subagent:[\w-]+)")
+    _task_name_re = _re.compile(r"^task:\s*(.+)$", _re.MULTILINE)
+    _status_re = _re.compile(r"^status:\s*(.+)$", _re.MULTILINE)
+
     for fpath in _glob.glob(os.path.join(sessions_dir, "*.jsonl")):
         if ".deleted." in fpath:
             continue
+        # Skip checkpoints - their content is duplicated into the main file
+        # and they'd cause double-counting.
+        if ".checkpoint." in fpath:
+            continue
         parent_sid = os.path.basename(fpath).replace(".jsonl", "").split(".")[0]
-        calls = {}    # toolCallId → {name, args, ts}
-        results = {}  # toolCallId → {details, isError, ts}
+        calls = {}       # toolCallId → {name, args, ts}
+        results = {}     # toolCallId → {details, isError, ts, content_text}
+        completions = {} # childSessionKey → {task, status, result, stats, ts}
         try:
             with open(fpath, "r", errors="replace") as fh:
                 for raw in fh:
@@ -576,7 +594,6 @@ def _scan_spawn_events_from_jsonl(sessions_dir):
                             if "subagent" not in nm and "spawn" not in nm:
                                 continue
                             args = blk.get("arguments") or {}
-                            # Only record spawn-like actions (skip list/kill/steer)
                             action = (args.get("action") or "spawn").lower()
                             if action not in ("spawn", "create"):
                                 continue
@@ -592,15 +609,55 @@ def _scan_spawn_events_from_jsonl(sessions_dir):
                         tcid = msg.get("toolCallId", "")
                         if not tcid:
                             continue
+                        content_text = ""
+                        content = msg.get("content")
+                        if isinstance(content, list) and content:
+                            first = content[0]
+                            if isinstance(first, dict):
+                                content_text = first.get("text") or ""
                         results[tcid] = {
                             "details": msg.get("details"),
                             "isError": bool(msg.get("isError")),
                             "ts": ts,
+                            "content_text": content_text[:2000],
                         }
+                    elif role == "user":
+                        # OpenClaw injects subagent completion events as
+                        # synthetic user messages bracketed by
+                        # <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>. Parse them
+                        # so we can show the child's output even after its
+                        # transcript is GC'd.
+                        for blk in msg.get("content") or []:
+                            if not isinstance(blk, dict):
+                                continue
+                            if blk.get("type") != "text":
+                                continue
+                            txt = blk.get("text") or ""
+                            if "Internal task completion event" not in txt:
+                                continue
+                            if "source: subagent" not in txt:
+                                continue
+                            sk_m = _session_key_re.search(txt)
+                            if not sk_m:
+                                continue
+                            child_key = sk_m.group(1)
+                            res_m = _completion_re.search(txt)
+                            stats_m = _stats_re.search(txt)
+                            task_m = _task_name_re.search(txt)
+                            status_m = _status_re.search(txt)
+                            completions[child_key] = {
+                                "task_label": task_m.group(1).strip() if task_m else "",
+                                "status": status_m.group(1).strip() if status_m else "",
+                                "result": (res_m.group(1).strip() if res_m else "")[:8000],
+                                "runtime": stats_m.group(1) if stats_m else "",
+                                "tokens_total": int(stats_m.group(2)) if stats_m else 0,
+                                "tokens_in": int(stats_m.group(3)) if stats_m else 0,
+                                "tokens_out": int(stats_m.group(4)) if stats_m else 0,
+                                "ts": ts,
+                            }
         except Exception:
             continue
 
-        # Pair calls with their results
         for tcid, call in calls.items():
             res = results.get(tcid, {})
             det = res.get("details") if isinstance(res.get("details"), dict) else {}
@@ -610,8 +667,15 @@ def _scan_spawn_events_from_jsonl(sessions_dir):
                 if det.get("status") == "error":
                     error_msg = det.get("error")
                 child_key = det.get("childSessionKey") or det.get("key")
+            # Some OpenClaw error shapes return empty `details` but set
+            # `isError=true` with the message in content[0].text. Fall back
+            # to that so the dashboard can surface validation errors.
+            if res.get("isError") and not error_msg:
+                ct = res.get("content_text") or ""
+                error_msg = ct.split("\n")[0][:400] if ct else "Unknown OpenClaw error"
             args = call.get("args") or {}
             name = args.get("name") or args.get("label") or "subagent"
+            completion = completions.get(child_key, {}) if child_key else {}
             subs.append({
                 "parentSessionId": parent_sid,
                 "parentKey": f"agent:main:session:{parent_sid}",
@@ -624,6 +688,18 @@ def _scan_spawn_events_from_jsonl(sessions_dir):
                 "runId": det.get("runId") if det else None,
                 "mode": det.get("mode") if det else None,
                 "modelApplied": det.get("modelApplied") if det else None,
+                # Spawn acknowledgment text (e.g. "accepted" note) — useful when
+                # the spawn succeeded but no completion event is present yet.
+                "spawnAck": res.get("content_text") or "",
+                # Completion payload — populated if OpenClaw emitted a
+                # completion event for this child in the parent transcript.
+                "completionStatus": completion.get("status") or "",
+                "completionResult": completion.get("result") or "",
+                "completionTs": completion.get("ts") or "",
+                "runtimeFormatted": completion.get("runtime") or "",
+                "tokensIn": completion.get("tokens_in") or 0,
+                "tokensOut": completion.get("tokens_out") or 0,
+                "tokensTotal": completion.get("tokens_total") or 0,
             })
     return subs
 
@@ -701,6 +777,14 @@ def api_subagents():
         spawn_events = _scan_spawn_events_from_jsonl(sessions_dir)
     except Exception:
         spawn_events = []
+    # Build a lookup by childKey so we can enrich entries from sources 1/2
+    # with the spawn metadata + completion logs, even when they were already
+    # present in the registry / session roster.
+    spawn_by_key = {}
+    for sp in spawn_events:
+        ck = sp.get("childKey")
+        if ck:
+            spawn_by_key[ck] = sp
     for sp in spawn_events:
         k = sp.get("childKey") or f"spawn:attempt:{sp.get('parentSessionId')}:{sp.get('callTs')}"
         if k in seen_keys:
@@ -730,8 +814,15 @@ def api_subagents():
             "startedAt": ts_ms,
             "depth": 1,
             "spawnedBy": sp.get("parentKey"),
-            "_status_override": status,  # if set, bypass age-based classification
+            "_status_override": status,
             "_from_spawn_scan": True,
+            "spawnAck": sp.get("spawnAck") or "",
+            "completionResult": sp.get("completionResult") or "",
+            "completionStatus": sp.get("completionStatus") or "",
+            "completionTs": sp.get("completionTs") or "",
+            "runtimeFormatted": sp.get("runtimeFormatted") or "",
+            "tokensIn": sp.get("tokensIn") or 0,
+            "tokensOut": sp.get("tokensOut") or 0,
         })
 
     subagents = []
@@ -778,6 +869,12 @@ def api_subagents():
             runtime = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
         counts["total"] += 1
         counts[status] += 1
+        # Enrich from the spawn scan by childKey — this gives us the task
+        # description and completion output even for subagents that only
+        # showed up via the gateway registry / session roster.
+        sp_match = spawn_by_key.get(key, {}) if key else {}
+        task_text = s.get("task") or sp_match.get("task") or ""
+        error_text = s.get("error") or sp_match.get("error") or ""
         subagents.append({
             "sessionId": sid,
             "key": key,                 # used by Active Tasks openTaskModal
@@ -791,8 +888,22 @@ def api_subagents():
             "runtimeMs": elapsed_ms,    # numeric ms — used by Active Tasks card
             "startedAt": started,
             "updatedAt": s.get("updatedAt") or s.get("lastActiveMs", 0),
-            "task": s.get("task") or "",       # from JSONL spawn scan
-            "error": s.get("error") or "",     # only set for failed spawns
+            "task": task_text,
+            "error": error_text,
+            # Completion payload reconstructed from parent JSONL. Populated
+            # for subagents whose parent emitted an Internal task completion
+            # event (OpenClaw's auto-announce). Modal uses these fields to
+            # render the child's output when its own transcript is GC'd.
+            # Prefer the session-level fields (propagated for spawn-only
+            # entries without a childKey) over the childKey-indexed lookup.
+            "completionResult": s.get("completionResult") or sp_match.get("completionResult") or "",
+            "completionStatus": s.get("completionStatus") or sp_match.get("completionStatus") or "",
+            "completionTs":     s.get("completionTs")     or sp_match.get("completionTs") or "",
+            "runtimeFormatted": s.get("runtimeFormatted") or sp_match.get("runtimeFormatted") or "",
+            "tokensIn":  s.get("tokensIn")  or sp_match.get("tokensIn")  or 0,
+            "tokensOut": s.get("tokensOut") or sp_match.get("tokensOut") or 0,
+            "spawnAck":  s.get("spawnAck")  or sp_match.get("spawnAck")  or "",
+            "runId":     s.get("runId") or sp_match.get("runId") or "",
         })
 
     _status_rank = {"active": 0, "idle": 1, "stale": 2, "failed": 3}

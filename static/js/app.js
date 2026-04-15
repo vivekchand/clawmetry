@@ -3133,10 +3133,7 @@ function startHealthStream() {
 // ===== System Health Panel =====
 async function loadSystemHealth() {
   try {
-    var d = await fetch('/api/system-health').then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    });
+    var d = await fetchJsonWithTimeout('/api/system-health', 4000);
     var services = Array.isArray(d.services) ? d.services : [];
     var channels = Array.isArray(d.channels) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];
@@ -5705,7 +5702,7 @@ function _ovRenderCard(agent, idx) {
 
 async function loadOverviewTasks() {
   try {
-    var data = await fetch('/api/subagents').then(function(r){return r.json();});
+    var data = await fetchJsonWithTimeout('/api/subagents', 4000);
     var el = document.getElementById('overview-tasks-list');
     var countBadge = document.getElementById('overview-tasks-count-badge');
     if (!el) return true;
@@ -7834,10 +7831,21 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
     }
     var meta = [];
     if (startedAt) meta.push(['Started', startedAt]);
-    if (match.runtime) meta.push(['Runtime', match.runtime]);
-    if (match.model) meta.push(['Model', match.model]);
+    // Prefer the child's actual runtime (from OpenClaw completion event) over
+    // our "time since spawn" calculation — only the former is the real work
+    // duration of the child. runtimeFormatted is e.g. "1s", runtime is e.g.
+    // "72h 49m" which is misleading for a 1-second run.
+    var rtDisplay = match.runtimeFormatted || match.runtime || '';
+    if (rtDisplay) meta.push(['Runtime', rtDisplay]);
+    if (match.model && match.model !== 'unknown') meta.push(['Model', match.model]);
     if (match.parent) meta.push(['Parent', match.parent]);
     if (match.runId) meta.push(['Run ID', match.runId]);
+    if (match.completionStatus) meta.push(['Outcome', match.completionStatus]);
+    var tokenSummary = '';
+    if (match.tokensIn || match.tokensOut) {
+      tokenSummary = 'in ' + (match.tokensIn || 0) + ' / out ' + (match.tokensOut || 0);
+      meta.push(['Tokens', tokenSummary]);
+    }
     if (meta.length) {
       html += '<div style="display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-size:12px;">';
       meta.forEach(function(row) {
@@ -7846,9 +7854,77 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
       });
       html += '</div>';
     }
-    if (match.status === 'stale' && !match.error) {
-      html += '<div style="font-size:12px;color:var(--text-muted);padding:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;">'
-           +  '📄 Child session transcript expired (OpenClaw TTL). The metadata above is reconstructed from the parent session JSONL.</div>';
+
+    // --- Activity / Log section ---
+    // Users came here expecting "sub agent logs". Render whatever we have:
+    //   - completionResult: the child's actual output (OpenClaw auto-announce)
+    //   - spawnAck:         the spawn handshake JSON from OpenClaw
+    //   - error:            validation / runtime failure message
+    // This is the most useful thing we can show without a live child JSONL.
+    var logParts = [];
+    if (match.completionResult && match.completionResult !== '(no output)') {
+      logParts.push({
+        label: 'Subagent output',
+        icon: '📤',
+        color: '#22c55e',
+        text: match.completionResult,
+      });
+    } else if (match.completionStatus) {
+      // Completion event exists but child returned nothing
+      logParts.push({
+        label: 'Subagent output',
+        icon: '📤',
+        color: '#6b7280',
+        text: '(Subagent completed with no output — OpenClaw reported "' + match.completionStatus + '")',
+      });
+    }
+    // For failed spawns, spawnAck is the same text as match.error, which is
+    // already surfaced in the error card below — don't duplicate.
+    if (match.spawnAck && !match.error) {
+      logParts.push({
+        label: 'Spawn handshake',
+        icon: '🤝',
+        color: '#3b82f6',
+        text: match.spawnAck,
+      });
+    }
+    if (logParts.length) {
+      html += '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Activity</div>';
+      logParts.forEach(function(part) {
+        html += '<div style="border:1px solid var(--border-primary);border-radius:8px;margin-bottom:10px;overflow:hidden;">'
+             +  '<div style="padding:6px 10px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:11px;color:' + part.color + ';font-weight:600;">'
+             +  part.icon + ' ' + escHtml(part.label) + '</div>'
+             +  '<pre style="margin:0;padding:10px 12px;font-size:12px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;max-height:260px;overflow:auto;">'
+             +  escHtml(part.text) + '</pre></div>';
+      });
+      html += '</div>';
+    }
+
+    if (match.error) {
+      html += '<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:12px;">'
+           +  '<div style="font-size:11px;color:#ef4444;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">⚠️ OpenClaw error</div>'
+           +  '<div style="font-size:13px;color:#fca5a5;line-height:1.5;font-family:monospace;white-space:pre-wrap;">' + escHtml(match.error) + '</div></div>';
+    }
+
+    // Explain the data source so users understand why the Activity panel
+    // doesn't look like a typical live transcript.
+    var hasChildKey = (match.key || '').indexOf('agent:main:subagent:') === 0;
+    var explainer = '';
+    if (match.error || match.status === 'failed') {
+      explainer = '❌ This spawn attempt failed — OpenClaw rejected the call before a child session could be created. '
+                + 'The SPAWN entry you see in the Brain tab is the assistant\'s toolCall in the <em>parent</em> session, '
+                + 'not a child session. There\'s no child transcript to show.';
+    } else if (match.status === 'stale' && hasChildKey) {
+      explainer = '📄 The child session has stopped writing to its own JSONL (OpenClaw stops tracking subagents '
+                + 'after completion / TTL). The metadata and output above were reconstructed from the <em>parent</em> '
+                + 'session\'s spawn records + completion event, which persist as long as the parent does.';
+    } else if (match.status === 'stale') {
+      explainer = '📄 This spawn attempt is older than the active window. The metadata above comes from the '
+                + 'parent session\'s JSONL record of the spawn call.';
+    }
+    if (explainer) {
+      html += '<div style="font-size:12px;color:var(--text-muted);padding:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;line-height:1.5;">'
+           +  explainer + '</div>';
     }
     html += '</div>';
     el.innerHTML = html;
@@ -8056,11 +8132,40 @@ function finishBootOverlay() {
   }
 }
 
+// Safety net: no matter what happens below, dismiss the boot overlay after
+// this cap so users never see "Initializing ClawMetry" forever. Any step that
+// finishes later will still update its own slice of the UI when it returns.
+var BOOT_HARD_TIMEOUT_MS = 8000;
+var _bootFinished = false;
+function _safeFinishBoot() {
+  if (_bootFinished) return;
+  _bootFinished = true;
+  finishBootOverlay();
+}
+
+function _withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise(function(_, reject) {
+      setTimeout(function() { reject(new Error((label || 'step') + ' timeout')); }, ms);
+    })
+  ]);
+}
+
 async function bootDashboard() {
+  // Hard floor: dismiss overlay after BOOT_HARD_TIMEOUT_MS no matter what.
+  // The dashboard stays usable with partial data; individual panels show
+  // their own empty / loading states while slower requests land.
+  setTimeout(_safeFinishBoot, BOOT_HARD_TIMEOUT_MS);
+
   // Check auth first -- if not valid, show login and abort boot
   try {
     var stored = localStorage.getItem('clawmetry-token');
-    var authRes = await fetch('/api/auth/check' + (stored ? '?token=' + encodeURIComponent(stored) : ''));
+    var authRes = await _withTimeout(
+      fetch('/api/auth/check' + (stored ? '?token=' + encodeURIComponent(stored) : '')),
+      3000,
+      'auth'
+    );
     var authData = await authRes.json();
     if (authData.needsSetup) {
       document.getElementById('login-overlay').style.display = 'none';
@@ -8068,37 +8173,58 @@ async function bootDashboard() {
       gwo.dataset.mandatory = 'true';
       document.getElementById('gw-setup-close').style.display = 'none';
       gwo.style.display = 'flex';
-      finishBootOverlay();
+      _safeFinishBoot();
       return;
     }
     if (authData.authRequired && !authData.valid) {
       document.getElementById('login-overlay').style.display = 'flex';
-      finishBootOverlay();
+      _safeFinishBoot();
       return;
     }
-  } catch(e) {}
+  } catch(e) { /* auth check hung -- boot anyway, safety timeout will fire */ }
 
   setBootStep('overview', 'loading', 'Loading overview + model context');
-  var okOverview = await loadAll();
-  setBootStep('overview', okOverview ? 'done' : 'fail', okOverview ? 'Overview ready' : 'Overview delayed');
-
   setBootStep('tasks', 'loading', 'Loading active tasks');
-  var okTasks = await loadOverviewTasks();
-  setBootStep('tasks', okTasks ? 'done' : 'fail', okTasks ? 'Tasks ready' : 'Tasks delayed');
-
   setBootStep('health', 'loading', 'Loading system health');
-  var okHealth = await loadSystemHealth();
-  loadSandboxStatus();
-  setBootStep('health', okHealth ? 'done' : 'fail', okHealth ? 'System health ready' : 'System health delayed');
 
+  // Kick off all three primary steps in parallel. If any hangs we surface
+  // "delayed" but the overall boot still completes.
+  var results = await Promise.allSettled([
+    _withTimeout(Promise.resolve().then(loadAll), 5000, 'overview'),
+    _withTimeout(Promise.resolve().then(loadOverviewTasks), 5000, 'tasks'),
+    _withTimeout(Promise.resolve().then(loadSystemHealth), 5000, 'health'),
+  ]);
+  var okOverview = results[0].status === 'fulfilled' && results[0].value !== false;
+  var okTasks    = results[1].status === 'fulfilled' && results[1].value !== false;
+  var okHealth   = results[2].status === 'fulfilled' && results[2].value !== false;
+  setBootStep('overview', okOverview ? 'done' : 'fail', okOverview ? 'Overview ready' : 'Overview delayed');
+  setBootStep('tasks',    okTasks    ? 'done' : 'fail', okTasks    ? 'Tasks ready'    : 'Tasks delayed');
+  setBootStep('health',   okHealth   ? 'done' : 'fail', okHealth   ? 'System health ready' : 'System health delayed');
+  try { loadSandboxStatus(); } catch (e) {}
+
+  // Connect live streams last so they don't eat the waitress thread pool
+  // while the initial fetches are still in flight.
   setBootStep('streams', 'loading', 'Connecting live streams');
   try { startLogStream(); } catch (e) {}
   try { startHealthStream(); } catch (e) {}
   setBootStep('streams', 'done', 'Live streams connected');
 
-  // Pre-fetch crons and memory so they're ready when tabs are clicked
-  try { await loadCrons(); } catch (e) { console.warn('Crons prefetch failed:', e); }
-  try { await loadMemory(); } catch (e) { console.warn('Memory prefetch failed:', e); }
+  // Prefetches and periodic refreshes are background work -- never let them
+  // block the overlay.
+  (async function backgroundPrefetch() {
+    try { await _withTimeout(loadCrons(), 5000, 'crons'); } catch (e) {}
+    try { await _withTimeout(loadMemory(), 5000, 'memory'); } catch (e) {}
+    try {
+      var cronData = await _withTimeout(
+        fetch('/api/crons').then(function(r){return r.json();}),
+        3000,
+        'crons-tab-check'
+      );
+      if (cronData && cronData.jobs && cronData.jobs.length > 0) {
+        document.querySelectorAll('#crons-tab').forEach(function(t){ t.style.display = ''; });
+      }
+    } catch(e) {}
+  })();
 
   startSystemHealthRefresh();
   startOverviewRefresh();
@@ -8107,14 +8233,7 @@ async function bootDashboard() {
 
   var sub = document.getElementById('boot-sub');
   if (sub) sub.textContent = 'Dashboard ready';
-  // Auto-show Crons tab if cron jobs exist
-  try {
-    var cronData = await fetch('/api/crons').then(function(r){return r.json();});
-    if (cronData.jobs && cronData.jobs.length > 0) {
-      document.querySelectorAll('#crons-tab').forEach(function(t){ t.style.display = ''; });
-    }
-  } catch(e) {}
-  setTimeout(finishBootOverlay, 180);
+  setTimeout(_safeFinishBoot, 180);
 }
 
 document.addEventListener('DOMContentLoaded', function() {
