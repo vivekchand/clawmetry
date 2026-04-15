@@ -18,11 +18,29 @@ See `ARCHITECTURE.md` for the full deep dive. TL;DR:
 ### Core
 | File | Lines | Purpose |
 |------|-------|---------|
-| `dashboard.py` | ~31,000 | Flask app, blueprint registration, embedded HTML/CSS/JS, shared helpers |
-| `routes/sessions.py` | ~1,500 | `bp_sessions` — sessions list, transcripts, compactions, tool timeline, cost split, subagents, exports |
-| `routes/__init__.py` | — | Package marker |
+| `dashboard.py` | ~25,400 | Flask app, blueprint registration, embedded HTML/CSS/JS, shared helpers |
 | `dashboard_claudecode.py` | ~1,350 | Claude Code session dashboard variant (standalone or Blueprint) |
 | `history.py` | ~555 | Optional time-series collector (SQLite, polls gateway every 60s) |
+
+### Route modules (`routes/`)
+All HTTP endpoints live here, organised by feature. Each module owns one or more Flask Blueprints; handlers do late `import dashboard as _d` to reach shared helpers still in `dashboard.py`.
+
+| File | Lines | Blueprints / Purpose |
+|------|-------|----------------------|
+| `routes/sessions.py` | ~1,190 | `bp_sessions` — sessions list, transcripts, compactions, tool timeline, cost split, subagents, exports |
+| `routes/channels.py` | ~1,500 | `bp_channels` — 21 chat-channel adapters (Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat, …) |
+| `routes/components.py` | ~1,040 | `bp_components` — Flow-panel detail endpoints (tool / runtime / machine / gateway / brain) |
+| `routes/usage.py` | ~1,070 | `bp_usage` — token/cost analytics, anomaly detection, model + skill attribution |
+| `routes/health.py` | ~920 | `bp_health` — system-health, reliability, diagnostics, rate-limits, sandbox-status, health-stream (SSE) |
+| `routes/brain.py` | ~800 | `bp_brain` — `/api/brain-history` + `/api/brain-stream` (SSE) |
+| `routes/infra.py` | ~785 | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
+| `routes/overview.py` | ~585 | `bp_overview` — main dashboard endpoint, channels list, timeline, cloud-CTA OTP |
+| `routes/crons.py` | ~530 | `bp_crons` — cron CRUD + run log + health summary |
+| `routes/meta.py` | ~520 | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_clusters` — auth, gateway proxy, OTLP ingestion, version meta |
+| `routes/alerts.py` | ~400 | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
+| `routes/fleet_history.py` | ~310 | `bp_fleet` + `bp_history` — multi-node fleet + SQLite time-series |
+| `routes/nemoclaw.py` | ~290 | `bp_nemoclaw` — NeMo Guardrails governance + approval queue |
+| `routes/__init__.py` | — | Package marker |
 
 ### Package (`clawmetry/`)
 | File | Lines | Purpose |
