@@ -18,6 +18,13 @@ MIT License
 import os
 import sys
 
+# When run as `python dashboard.py`, this module is registered as `__main__`,
+# not `dashboard`. Route blueprints in routes/ do `import dashboard as _d` at
+# call time — without this alias, that import re-executes all 33k lines as a
+# second `dashboard` module on first request, causing 10s+ timeouts on Windows
+# CI (issue surfaced by the bp_sessions refactor).
+sys.modules.setdefault("dashboard", sys.modules[__name__])
+
 # Force UTF-8 output on Windows (emoji in BANNER would crash with cp1252)
 if sys.platform == "win32":
     import io
