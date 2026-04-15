@@ -1,8 +1,18 @@
 <div class="page" id="page-crons">
   <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
     <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
-    <button class="refresh-btn cron-action-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;display:none;">+ New Job</button>
-    <button class="refresh-btn cron-action-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
+    <button class="refresh-btn cron-action-btn" onclick="cronCreateNew()" style="
+      background:#6366f1;
+      color:#fff;
+      border-color:#6366f1;
+      display:none;
+      ">+ New Job</button>
+    <button class="refresh-btn cron-action-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="
+      background:#dc2626;
+      color:#fff;
+      border-color:#dc2626;
+      display:none;
+      ">&#x1F6D1; Emergency Stop All</button>
     <label class="modal-auto-refresh" style="margin-left:auto;">
       <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
     </label>
@@ -11,7 +21,17 @@
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
   <div class="card" id="crons-list">Loading...</div>
   <!-- Cron Health Monitor (GH #302) -->
-  <div id="cron-health-anomaly-banner" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;color:#ef4444;font-size:13px;font-weight:600;">&#x26A0;&#xFE0F; Anomalies detected in cron jobs — review health table below</div>
+  <div id="cron-health-anomaly-banner" style="
+    display:none;
+    margin-top:14px;
+    padding:10px 14px;
+    background:rgba(239,68,68,0.1);
+    border:1px solid rgba(239,68,68,0.4);
+    border-radius:8px;
+    color:#ef4444;
+    font-size:13px;
+    font-weight:600;
+    ">&#x26A0;&#xFE0F; Anomalies detected in cron jobs — review health table below</div>
   <div style="margin-top:16px;">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
       <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x1F4CA; Cron Health Monitor</span>
@@ -24,42 +44,147 @@
 </div>
 
 <!-- Cron Edit/Create Modal -->
-<div id="cron-edit-modal" style="display:none;position:fixed;inset:0;z-index:1500;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;backdrop-filter:blur(4px);">
-  <div style="background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:12px;padding:24px;width:480px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,0.4);max-height:80vh;overflow-y:auto;margin:auto;">
+<div id="cron-edit-modal" style="
+  display:none;
+  position:fixed;
+  inset:0;
+  z-index:1500;
+  background:rgba(0,0,0,0.5);
+  align-items:center;
+  justify-content:center;
+  backdrop-filter:blur(4px);
+  ">
+  <div style="
+    background:var(--bg-tertiary);
+    border:1px solid var(--border-primary);
+    border-radius:12px;
+    padding:24px;
+    width:480px;
+    max-width:90vw;
+    box-shadow:0 8px 30px rgba(0,0,0,0.4);
+    max-height:80vh;
+    overflow-y:auto;
+    margin:auto;
+    ">
     <h3 id="cron-modal-title" style="margin:0 0 16px;color:var(--text-primary);font-size:16px;">Edit Cron Job</h3>
     <input type="hidden" id="cron-edit-id">
     <input type="hidden" id="cron-edit-mode" value="edit">
     <div style="margin-bottom:12px;">
       <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Name</label>
-      <input id="cron-edit-name" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="my-health-check">
+      <input id="cron-edit-name" style="
+        width:100%;
+        padding:8px 12px;
+        background:var(--bg-secondary);
+        border:1px solid var(--border-secondary);
+        border-radius:8px;
+        color:var(--text-primary);
+        font-size:13px;
+        box-sizing:border-box;
+        " placeholder="my-health-check">
     </div>
     <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Schedule (cron expression or interval like "every 30min")</label>
-      <input id="cron-edit-schedule" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;font-family:'SF Mono','Fira Code',monospace;box-sizing:border-box;" placeholder="*/30 * * * *  or  every 30min">
+      <label style="
+        display:block;
+        font-size:12px;
+        color:var(--text-muted);
+        margin-bottom:4px;
+        ">Schedule (cron expression or interval like "every 30min")</label>
+      <input id="cron-edit-schedule" style="
+        width:100%;
+        padding:8px 12px;
+        background:var(--bg-secondary);
+        border:1px solid var(--border-secondary);
+        border-radius:8px;
+        color:var(--text-primary);
+        font-size:13px;
+        font-family:'SF Mono','Fira Code',monospace;
+        box-sizing:border-box;
+        " placeholder="*/30 * * * *  or  every 30min">
     </div>
     <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Timezone (for cron expressions)</label>
-      <input id="cron-edit-tz" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. Europe/Amsterdam">
+      <label style="
+        display:block;
+        font-size:12px;
+        color:var(--text-muted);
+        margin-bottom:4px;
+        ">Timezone (for cron expressions)</label>
+      <input id="cron-edit-tz" style="
+        width:100%;
+        padding:8px 12px;
+        background:var(--bg-secondary);
+        border:1px solid var(--border-secondary);
+        border-radius:8px;
+        color:var(--text-primary);
+        font-size:13px;
+        box-sizing:border-box;
+        " placeholder="e.g. Europe/Amsterdam">
     </div>
     <div id="cron-edit-prompt-section" style="margin-bottom:12px;">
       <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Prompt / Message</label>
-      <textarea id="cron-edit-prompt" rows="3" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;" placeholder="What should the agent do when this cron fires?"></textarea>
+      <textarea id="cron-edit-prompt" rows="3" style="
+        width:100%;
+        padding:8px 12px;
+        background:var(--bg-secondary);
+        border:1px solid var(--border-secondary);
+        border-radius:8px;
+        color:var(--text-primary);
+        font-size:13px;
+        box-sizing:border-box;
+        resize:vertical;
+        font-family:inherit;
+        " placeholder="What should the agent do when this cron fires?"></textarea>
     </div>
     <div id="cron-edit-channel-section" style="margin-bottom:12px;">
       <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Channel (optional)</label>
-      <input id="cron-edit-channel" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. discord, telegram">
+      <input id="cron-edit-channel" style="
+        width:100%;
+        padding:8px 12px;
+        background:var(--bg-secondary);
+        border:1px solid var(--border-secondary);
+        border-radius:8px;
+        color:var(--text-primary);
+        font-size:13px;
+        box-sizing:border-box;
+        " placeholder="e.g. discord, telegram">
     </div>
     <div id="cron-edit-model-section" style="margin-bottom:12px;">
       <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Model (optional)</label>
-      <input id="cron-edit-model" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. anthropic/claude-sonnet-4-20250514">
+      <input id="cron-edit-model" style="
+        width:100%;
+        padding:8px 12px;
+        background:var(--bg-secondary);
+        border:1px solid var(--border-secondary);
+        border-radius:8px;
+        color:var(--text-primary);
+        font-size:13px;
+        box-sizing:border-box;
+        " placeholder="e.g. anthropic/claude-sonnet-4-20250514">
     </div>
     <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px;">
       <input type="checkbox" id="cron-edit-enabled" style="accent-color:#6366f1;" checked>
       <label for="cron-edit-enabled" style="font-size:13px;color:var(--text-primary);">Enabled</label>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;">
-      <button onclick="closeCronEditModal()" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:var(--button-bg);color:var(--text-secondary);">Cancel</button>
-      <button onclick="saveCronEdit()" id="cron-save-btn" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:#6366f1;color:#fff;">Save</button>
+      <button onclick="closeCronEditModal()" style="
+        padding:8px 20px;
+        border-radius:8px;
+        border:none;
+        font-size:13px;
+        font-weight:600;
+        cursor:pointer;
+        background:var(--button-bg);
+        color:var(--text-secondary);
+        ">Cancel</button>
+      <button onclick="saveCronEdit()" id="cron-save-btn" style="
+        padding:8px 20px;
+        border-radius:8px;
+        border:none;
+        font-size:13px;
+        font-weight:600;
+        cursor:pointer;
+        background:#6366f1;
+        color:#fff;
+        ">Save</button>
     </div>
   </div>
 </div>

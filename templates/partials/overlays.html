@@ -1,11 +1,56 @@
 <!-- Login overlay -->
-<div id="login-overlay" style="display:none;position:fixed;inset:0;z-index:99999;background:var(--bg-primary,#0f172a);align-items:center;justify-content:center;flex-direction:column;">
-  <div style="background:var(--card-bg,#1e293b);border-radius:16px;padding:40px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);text-align:center;">
-    <img src="/static/img/logo.svg" style="width:64px;height:64px;margin-bottom:16px;display:block;margin-left:auto;margin-right:auto;" alt="ClawMetry">
+<div id="login-overlay" style="
+  display:none;
+  position:fixed;
+  inset:0;
+  z-index:99999;
+  background:var(--bg-primary,#0f172a);
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  ">
+  <div style="
+    background:var(--card-bg,#1e293b);
+    border-radius:16px;
+    padding:40px;
+    max-width:400px;
+    width:90%;
+    box-shadow:0 8px 32px rgba(0,0,0,0.4);
+    text-align:center;
+    ">
+    <img src="/static/img/logo.svg" style="
+      width:64px;
+      height:64px;
+      margin-bottom:16px;
+      display:block;
+      margin-left:auto;
+      margin-right:auto;
+      " alt="ClawMetry">
     <h2 style="color:#e2e8f0;margin:0 0 8px;">ClawMetry</h2>
     <p style="color:#94a3b8;margin:0 0 24px;font-size:14px;">Enter your OpenClaw Gateway Token</p>
-    <input id="login-token" type="password" placeholder="Gateway token..." style="width:100%;box-sizing:border-box;padding:12px 16px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:15px;margin-bottom:16px;outline:none;" onkeydown="if(event.key==='Enter')clawmetryLogin()">
-    <button onclick="clawmetryLogin()" style="width:100%;padding:12px;border-radius:8px;border:none;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer;">Login</button>
+    <input id="login-token" type="password" placeholder="Gateway token..." style="
+      width:100%;
+      box-sizing:border-box;
+      padding:12px 16px;
+      border-radius:8px;
+      border:1px solid #334155;
+      background:#0f172a;
+      color:#e2e8f0;
+      font-size:15px;
+      margin-bottom:16px;
+      outline:none;
+      " onkeydown="if(event.key==='Enter')clawmetryLogin()">
+    <button onclick="clawmetryLogin()" style="
+      width:100%;
+      padding:12px;
+      border-radius:8px;
+      border:none;
+      background:#3b82f6;
+      color:#fff;
+      font-size:15px;
+      font-weight:600;
+      cursor:pointer;
+      ">Login</button>
     <p id="login-error" style="color:#f87171;margin:12px 0 0;font-size:13px;display:none;">Invalid token</p>
   </div>
 </div>

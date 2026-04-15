@@ -7,7 +7,14 @@
   </div>
 
   <!-- Token Velocity Alert Banner (GH #313) -->
-  <div id="velocity-alert-banner" style="display:none;margin-bottom:8px;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;">
+  <div id="velocity-alert-banner" style="
+    display:none;
+    margin-bottom:8px;
+    border-radius:8px;
+    padding:10px 16px;
+    font-size:13px;
+    font-weight:600;
+    ">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
       <span id="velocity-alert-msg"></span>
       <span style="font-size:11px;font-weight:400;color:inherit;opacity:0.8;">auto-refreshes every 30s</span>
@@ -77,45 +84,161 @@
         <div class="scanline-overlay"></div>
         <div class="flow-container" id="overview-flow-container">
           <!-- Flow SVG cloned here by JS -->
-          <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:13px;">Loading flow...</div>
+          <div style="
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            height:100%;
+            color:var(--text-muted);
+            font-size:13px;
+            ">Loading flow...</div>
         </div>
       </div>
 
       <!-- System Health Panel (below flow SVG) -->
-      <div id="system-health-panel" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-top:none;padding:16px;box-shadow:var(--card-shadow);">
+      <div id="system-health-panel" style="
+        background:var(--bg-secondary);
+        border:1px solid var(--border-primary);
+        border-top:none;
+        padding:16px;
+        box-shadow:var(--card-shadow);
+        ">
         <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
+        <div style="
+          font-size:11px;
+          text-transform:uppercase;
+          letter-spacing:1.5px;
+          color:var(--text-muted);
+          font-weight:600;
+          margin-bottom:6px;
+          ">Services</div>
         <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
-        <div id="sh-channels-wrap"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Channels</div>
+        <div id="sh-channels-wrap">
+          <div style="
+            font-size:11px;
+            text-transform:uppercase;
+            letter-spacing:1.5px;
+            color:var(--text-muted);
+            font-weight:600;
+            margin-bottom:6px;
+            ">Channels</div>
         <div id="sh-channels" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div></div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
+        <div style="
+          font-size:11px;
+          text-transform:uppercase;
+          letter-spacing:1.5px;
+          color:var(--text-muted);
+          font-weight:600;
+          margin-bottom:6px;
+          ">Disk Usage</div>
         <div id="sh-disks" style="margin-bottom:14px;"></div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Cron Jobs</div>
+        <div style="
+          font-size:11px;
+          text-transform:uppercase;
+          letter-spacing:1.5px;
+          color:var(--text-muted);
+          font-weight:600;
+          margin-bottom:6px;
+          ">Cron Jobs</div>
         <div id="sh-crons" style="margin-bottom:14px;"></div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
+        <div style="
+          font-size:11px;
+          text-transform:uppercase;
+          letter-spacing:1.5px;
+          color:var(--text-muted);
+          font-weight:600;
+          margin-bottom:6px;
+          ">Sub-Agents (24h)</div>
         <div id="sh-subagents" style="margin-bottom:14px;"></div>
         <div id="delegation-chains-panel" style="margin-bottom:14px;"></div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Heartbeat</div>
+        <div style="
+          font-size:11px;
+          text-transform:uppercase;
+          letter-spacing:1.5px;
+          color:var(--text-muted);
+          font-weight:600;
+          margin-bottom:6px;
+          ">Heartbeat</div>
         <div id="sh-heartbeat" style="margin-bottom:14px;"></div>
-        <div id="sh-sandbox-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔒 Sandbox</div>
+        <div id="sh-sandbox-wrap" style="display:none;">
+          <div style="
+            font-size:11px;
+            text-transform:uppercase;
+            letter-spacing:1.5px;
+            color:var(--text-muted);
+            font-weight:600;
+            margin-bottom:6px;
+            ">🔒 Sandbox</div>
         <div id="sh-sandbox" style="margin-bottom:14px;"></div></div>
-        <div id="sh-inference-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🤖 Inference Provider</div>
+        <div id="sh-inference-wrap" style="display:none;">
+          <div style="
+            font-size:11px;
+            text-transform:uppercase;
+            letter-spacing:1.5px;
+            color:var(--text-muted);
+            font-weight:600;
+            margin-bottom:6px;
+            ">🤖 Inference Provider</div>
         <div id="sh-inference" style="margin-bottom:14px;"></div></div>
-        <div id="sh-security-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🛡️ Security Posture</div>
+        <div id="sh-security-wrap" style="display:none;">
+          <div style="
+            font-size:11px;
+            text-transform:uppercase;
+            letter-spacing:1.5px;
+            color:var(--text-muted);
+            font-weight:600;
+            margin-bottom:6px;
+            ">🛡️ Security Posture</div>
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
-        <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
+        <div id="sh-reliability-wrap" style="display:none;">
+          <div style="
+            font-size:11px;
+            text-transform:uppercase;
+            letter-spacing:1.5px;
+            color:var(--text-muted);
+            font-weight:600;
+            margin-bottom:6px;
+            ">📊 Agent Reliability</div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
         <!-- 🔍 Diagnostics Panel (GH#28) -->
         <div id="sh-diagnostics-wrap">
-          <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
-            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;">🔍 Configuration Diagnostics</div>
+          <div style="
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            cursor:pointer;
+            padding:4px 0;
+            " onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
+            <div style="
+              font-size:11px;
+              text-transform:uppercase;
+              letter-spacing:1.5px;
+              color:var(--text-muted);
+              font-weight:600;
+              ">🔍 Configuration Diagnostics</div>
             <div style="display:flex;align-items:center;gap:8px;">
-              <button id="sh-diagnostics-copy" onclick="event.stopPropagation();copyDiagnostics();" style="font-size:10px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:4px;color:var(--text-muted);cursor:pointer;">📋 Copy</button>
+              <button id="sh-diagnostics-copy" onclick="event.stopPropagation();copyDiagnostics();" style="
+                font-size:10px;
+                padding:2px 8px;
+                background:var(--bg-secondary);
+                border:1px solid var(--border-secondary);
+                border-radius:4px;
+                color:var(--text-muted);
+                cursor:pointer;
+                ">📋 Copy</button>
               <span class="diag-chevron" style="font-size:10px;color:var(--text-muted);">▼</span>
             </div>
           </div>
           <div id="sh-diagnostics-body" style="margin-bottom:14px;">
-            <div id="sh-diagnostics" style="font-family:\'JetBrains Mono\',monospace;font-size:12px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:10px 12px;line-height:1.9;">
+            <div id="sh-diagnostics" style="
+              font-family:\'JetBrains Mono\',monospace;
+              font-size:12px;
+              background:var(--bg-primary);
+              border:1px solid var(--border-secondary);
+              border-radius:6px;
+              padding:10px 12px;
+              line-height:1.9;
+              ">
               <div style="color:var(--text-muted);">Loading diagnostics...</div>
             </div>
           </div>
@@ -142,18 +265,49 @@
         </div>
       </div>
       <!-- 🧠 Brain Panel: Main Agent Activity (below Active Tasks) -->
-      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;margin-top:14px;display:flex;flex-direction:column;overflow:hidden;">
+      <div id="main-activity-panel" style="
+        background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);
+        border:1px solid var(--border-primary);
+        border-radius:12px;
+        padding:10px 14px 8px;
+        min-height:80px;
+        margin-top:14px;
+        display:flex;
+        flex-direction:column;
+        overflow:hidden;
+        ">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
           <div style="display:flex;align-items:center;gap:6px;">
-            <span id="main-activity-dot" style="width:8px;height:8px;border-radius:50%;background:#888;display:inline-block;"></span>
-            <span style="font-size:13px;font-weight:700;color:var(--text-primary);">🧠 <span id="main-activity-model">Claude Opus</span></span>
+            <span id="main-activity-dot" style="
+              width:8px;
+              height:8px;
+              border-radius:50%;
+              background:#888;
+              display:inline-block;
+              "></span>
+            <span style="
+              font-size:13px;
+              font-weight:700;
+              color:var(--text-primary);
+              ">🧠 <span id="main-activity-model">Claude Opus</span></span>
             <span id="main-activity-status" style="font-size:10px;color:var(--text-muted);">
               <span id="main-activity-label">...</span>
             </span>
           </div>
         </div>
-        <div id="main-activity-list" style="overflow-y:auto;flex:1;font-size:11px;font-family:'JetBrains Mono','Fira Code',monospace;line-height:1.6;">
-          <div style="text-align:center;padding:8px;color:var(--text-muted);font-size:11px;">Waiting for activity...</div>
+        <div id="main-activity-list" style="
+          overflow-y:auto;
+          flex:1;
+          font-size:11px;
+          font-family:'JetBrains Mono','Fira Code',monospace;
+          line-height:1.6;
+          ">
+          <div style="
+            text-align:center;
+            padding:8px;
+            color:var(--text-muted);
+            font-size:11px;
+            ">Waiting for activity...</div>
         </div>
       </div>
     </div>
@@ -167,7 +321,10 @@
     <span id="subagents-preview"></span>
     <span id="tools-active">--</span>
     <span id="tools-recent">--</span>
-    <div id="tools-sparklines"><div class="tool-spark"><span>--</span></div><div class="tool-spark"><span>--</span></div><div class="tool-spark"><span>--</span></div></div>
+    <div id="tools-sparklines">
+      <div class="tool-spark"><span>--</span></div>
+      <div class="tool-spark"><span>--</span></div>
+      <div class="tool-spark"><span>--</span></div></div>
     <div id="active-tasks-grid"></div>
     <div id="activity-stream"></div>
   </div>

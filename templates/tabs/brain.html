@@ -2,11 +2,25 @@
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
-      <div style="display:flex;align-items:center;gap:8px;"><span id="brain-live-indicator"></span><button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button></div>
+      <div style="
+        display:flex;
+        align-items:center;
+        gap:8px;
+        "><span id="brain-live-indicator"></span><button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button></div>
     </div>
     <!-- Activity density chart -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Activity density -- last 60 min (30s buckets)</div>
+    <div style="
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:10px 14px;
+      margin-bottom:12px;
+      ">
+      <div style="
+        font-size:11px;
+        color:var(--text-muted);
+        margin-bottom:6px;
+        ">Activity density -- last 60 min (30s buckets)</div>
       <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
     </div>
     <div class="brain-view-toggle">
@@ -14,15 +28,38 @@
     </div>
     <!-- Source filter chips -->
     <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
-      <button class="brain-chip active" data-source="all" onclick="setBrainFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
+      <button class="brain-chip active" data-source="all" onclick="setBrainFilter('all',this)" style="
+        padding:3px 10px;
+        border-radius:12px;
+        border:1px solid #a855f7;
+        background:rgba(168,85,247,0.2);
+        color:#a855f7;
+        font-size:11px;
+        cursor:pointer;
+        font-weight:600;
+        ">All</button>
     </div>
     <!-- Type filter chips (separate container to prevent duplication) -->
     <div id="brain-type-chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px;"></div>
     <!-- Event stream -->
-    <div id="brain-feed" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+    <div id="brain-feed" style="
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:10px 14px;
+      ">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
         <span style="font-size:11px;color:var(--text-muted);">Live event stream (newest first)</span>
-        <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">↑ new events</span>
+        <span id="brain-new-pill" style="
+          display:none;
+          background:#a855f7;
+          color:#fff;
+          border-radius:10px;
+          padding:1px 8px;
+          font-size:10px;
+          font-weight:700;
+          cursor:pointer;
+          " onclick="scrollBrainToTop()">↑ new events</span>
       </div>
       <div id="brain-stream" style="max-height:calc(100vh - 320px);overflow-y:auto;">
         <div style="color:var(--text-muted);padding:20px">Loading...</div>

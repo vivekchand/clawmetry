@@ -1,11 +1,41 @@
 <!-- Budget Settings Modal -->
-<div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
-  <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
+<div id="budget-modal" style="
+  display:none;
+  position:fixed;
+  inset:0;
+  z-index:1200;
+  background:rgba(0,0,0,0.5);
+  align-items:center;
+  justify-content:center;
+  ">
+  <div style="
+    background:var(--bg-primary);
+    border:1px solid var(--border-primary);
+    border-radius:16px;
+    width:90%;
+    max-width:560px;
+    padding:24px;
+    box-shadow:0 25px 50px rgba(0,0,0,0.25);
+    ">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
       <h3 style="font-size:18px;font-weight:700;color:var(--text-primary);">&#128176; Budget & Alerts</h3>
-      <button onclick="document.getElementById('budget-modal').style.display='none'" style="background:var(--button-bg);border:1px solid var(--border-primary);border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:var(--text-tertiary);">&times;</button>
+      <button onclick="document.getElementById('budget-modal').style.display='none'" style="
+        background:var(--button-bg);
+        border:1px solid var(--border-primary);
+        border-radius:8px;
+        width:32px;
+        height:32px;
+        cursor:pointer;
+        font-size:18px;
+        color:var(--text-tertiary);
+        ">&times;</button>
     </div>
-    <div id="budget-modal-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-primary);margin-bottom:16px;">
+    <div id="budget-modal-tabs" style="
+      display:flex;
+      gap:0;
+      border-bottom:1px solid var(--border-primary);
+      margin-bottom:16px;
+      ">
       <div class="modal-tab active" onclick="switchBudgetTab('limits',this)">Budget Limits</div>
       <div class="modal-tab" onclick="switchBudgetTab('alerts',this)">Alert Rules</div>
       <div class="modal-tab" onclick="switchBudgetTab('telegram',this)">Telegram</div>
@@ -15,28 +45,94 @@
     <div id="budget-tab-limits">
       <div style="display:grid;gap:12px;">
         <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Daily Limit (USD, 0 = no limit)</label>
-          <input id="budget-daily" type="number" step="0.01" min="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+          <label style="
+            font-size:12px;
+            color:var(--text-muted);
+            display:block;
+            margin-bottom:4px;
+            ">Daily Limit (USD, 0 = no limit)</label>
+          <input id="budget-daily" type="number" step="0.01" min="0" style="
+            width:100%;
+            padding:8px 12px;
+            border:1px solid var(--border-primary);
+            border-radius:8px;
+            background:var(--bg-secondary);
+            color:var(--text-primary);
+            font-size:14px;
+            ">
         </div>
         <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Weekly Limit (USD)</label>
-          <input id="budget-weekly" type="number" step="0.01" min="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+          <label style="
+            font-size:12px;
+            color:var(--text-muted);
+            display:block;
+            margin-bottom:4px;
+            ">Weekly Limit (USD)</label>
+          <input id="budget-weekly" type="number" step="0.01" min="0" style="
+            width:100%;
+            padding:8px 12px;
+            border:1px solid var(--border-primary);
+            border-radius:8px;
+            background:var(--bg-secondary);
+            color:var(--text-primary);
+            font-size:14px;
+            ">
         </div>
         <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Monthly Limit (USD)</label>
-          <input id="budget-monthly" type="number" step="0.01" min="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+          <label style="
+            font-size:12px;
+            color:var(--text-muted);
+            display:block;
+            margin-bottom:4px;
+            ">Monthly Limit (USD)</label>
+          <input id="budget-monthly" type="number" step="0.01" min="0" style="
+            width:100%;
+            padding:8px 12px;
+            border:1px solid var(--border-primary);
+            border-radius:8px;
+            background:var(--bg-secondary);
+            color:var(--text-primary);
+            font-size:14px;
+            ">
         </div>
         <div>
           <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Warning at (%)</label>
-          <input id="budget-warn-pct" type="number" step="1" min="1" max="100" value="80" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+          <input id="budget-warn-pct" type="number" step="1" min="1" max="100" value="80" style="
+            width:100%;
+            padding:8px 12px;
+            border:1px solid var(--border-primary);
+            border-radius:8px;
+            background:var(--bg-secondary);
+            color:var(--text-primary);
+            font-size:14px;
+            ">
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <input id="budget-autopause" type="checkbox" style="cursor:pointer;">
-          <label for="budget-autopause" style="font-size:13px;color:var(--text-secondary);cursor:pointer;">Auto-pause gateway when budget exceeded</label>
+          <label for="budget-autopause" style="
+            font-size:13px;
+            color:var(--text-secondary);
+            cursor:pointer;
+            ">Auto-pause gateway when budget exceeded</label>
         </div>
-        <button onclick="saveBudgetConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:10px;font-size:14px;font-weight:600;cursor:pointer;">Save Budget Settings</button>
+        <button onclick="saveBudgetConfig()" style="
+          background:var(--bg-accent);
+          color:#fff;
+          border:none;
+          border-radius:8px;
+          padding:10px;
+          font-size:14px;
+          font-weight:600;
+          cursor:pointer;
+          ">Save Budget Settings</button>
       </div>
-      <div id="budget-status-display" style="margin-top:16px;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;">
+      <div id="budget-status-display" style="
+        margin-top:16px;
+        padding:12px;
+        background:var(--bg-secondary);
+        border:1px solid var(--border-primary);
+        border-radius:8px;
+        ">
         <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Current Spending</div>
         <div id="budget-status-content" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
       </div>
@@ -44,23 +140,83 @@
     <!-- Alert Rules Tab -->
     <div id="budget-tab-alerts" style="display:none;">
       <div style="margin-bottom:12px;">
-        <button onclick="showAddAlertForm()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;">+ Add Alert Rule</button>
+        <button onclick="showAddAlertForm()" style="
+          background:var(--bg-accent);
+          color:#fff;
+          border:none;
+          border-radius:8px;
+          padding:8px 16px;
+          font-size:13px;
+          font-weight:600;
+          cursor:pointer;
+          ">+ Add Alert Rule</button>
       </div>
-      <div id="add-alert-form" style="display:none;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
+      <div id="add-alert-form" style="
+        display:none;
+        padding:12px;
+        background:var(--bg-secondary);
+        border:1px solid var(--border-primary);
+        border-radius:8px;
+        margin-bottom:12px;
+        ">
         <div style="display:grid;gap:8px;">
-          <select id="alert-type" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <select id="alert-type" style="
+            padding:8px;
+            border:1px solid var(--border-primary);
+            border-radius:6px;
+            background:var(--bg-tertiary);
+            color:var(--text-primary);
+            ">
             <option value="threshold">Threshold (daily $ amount)</option>
             <option value="spike">Spike (hourly rate multiplier)</option>
           </select>
-          <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="
+            padding:8px;
+            border:1px solid var(--border-primary);
+            border-radius:6px;
+            background:var(--bg-tertiary);
+            color:var(--text-primary);
+            ">
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-ch-banner" checked> Banner</label>
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-ch-telegram"> Telegram</label>
+            <label style="
+              font-size:12px;
+              display:flex;
+              align-items:center;
+              gap:4px;
+              "><input type="checkbox" id="alert-ch-banner" checked> Banner</label>
+            <label style="
+              font-size:12px;
+              display:flex;
+              align-items:center;
+              gap:4px;
+              "><input type="checkbox" id="alert-ch-telegram"> Telegram</label>
           </div>
-          <input id="alert-cooldown" type="number" value="30" min="1" placeholder="Cooldown (min)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <input id="alert-cooldown" type="number" value="30" min="1" placeholder="Cooldown (min)" style="
+            padding:8px;
+            border:1px solid var(--border-primary);
+            border-radius:6px;
+            background:var(--bg-tertiary);
+            color:var(--text-primary);
+            ">
           <div style="display:flex;gap:8px;">
-            <button onclick="createAlertRule()" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:13px;cursor:pointer;">Create</button>
-            <button onclick="document.getElementById('add-alert-form').style.display='none'" style="background:var(--button-bg);color:var(--text-secondary);border:none;border-radius:6px;padding:6px 16px;font-size:13px;cursor:pointer;">Cancel</button>
+            <button onclick="createAlertRule()" style="
+              background:#16a34a;
+              color:#fff;
+              border:none;
+              border-radius:6px;
+              padding:6px 16px;
+              font-size:13px;
+              cursor:pointer;
+              ">Create</button>
+            <button onclick="document.getElementById('add-alert-form').style.display='none'" style="
+              background:var(--button-bg);
+              color:var(--text-secondary);
+              border:none;
+              border-radius:6px;
+              padding:6px 16px;
+              font-size:13px;
+              cursor:pointer;
+              ">Cancel</button>
           </div>
         </div>
       </div>
@@ -74,22 +230,61 @@
         </div>
         <div>
           <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Bot Token</label>
-          <input id="tg-bot-token" type="password" placeholder="123456:ABC-DEF..." style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+          <input id="tg-bot-token" type="password" placeholder="123456:ABC-DEF..." style="
+            width:100%;
+            padding:8px 12px;
+            border:1px solid var(--border-primary);
+            border-radius:8px;
+            background:var(--bg-secondary);
+            color:var(--text-primary);
+            font-size:14px;
+            ">
         </div>
         <div>
           <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Chat ID</label>
-          <input id="tg-chat-id" type="text" placeholder="-100123456789" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
+          <input id="tg-chat-id" type="text" placeholder="-100123456789" style="
+            width:100%;
+            padding:8px 12px;
+            border:1px solid var(--border-primary);
+            border-radius:8px;
+            background:var(--bg-secondary);
+            color:var(--text-primary);
+            font-size:14px;
+            ">
         </div>
         <div style="display:flex;gap:8px;">
-          <button onclick="saveTelegramConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;">Save</button>
-          <button onclick="testTelegram()" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;">Send Test</button>
+          <button onclick="saveTelegramConfig()" style="
+            background:var(--bg-accent);
+            color:#fff;
+            border:none;
+            border-radius:8px;
+            padding:10px 16px;
+            font-size:14px;
+            font-weight:600;
+            cursor:pointer;
+            ">Save</button>
+          <button onclick="testTelegram()" style="
+            background:#16a34a;
+            color:#fff;
+            border:none;
+            border-radius:8px;
+            padding:10px 16px;
+            font-size:14px;
+            font-weight:600;
+            cursor:pointer;
+            ">Send Test</button>
         </div>
         <div id="tg-status" style="font-size:12px;color:var(--text-muted);"></div>
       </div>
     </div>
     <!-- History Tab -->
     <div id="budget-tab-history" style="display:none;">
-      <div id="alert-history-list" style="font-size:13px;color:var(--text-secondary);max-height:400px;overflow-y:auto;">Loading...</div>
+      <div id="alert-history-list" style="
+        font-size:13px;
+        color:var(--text-secondary);
+        max-height:400px;
+        overflow-y:auto;
+        ">Loading...</div>
     </div>
   </div>
 </div>

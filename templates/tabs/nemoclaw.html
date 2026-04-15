@@ -5,8 +5,23 @@
       <div style="display:flex;align-items:center;gap:10px;">
         <span id="nc-status-dot" style="font-size:18px;">🟢</span>
         <span style="font-size:14px;font-weight:700;color:#76b900;">NemoClaw</span>
-        <span id="nc-sandbox-name" style="font-size:12px;background:rgba(118,185,0,0.15);color:#76b900;border:1px solid rgba(118,185,0,0.3);border-radius:12px;padding:2px 10px;font-weight:600;"></span>
-        <span id="nc-blueprint-ver" style="font-size:12px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:12px;padding:2px 10px;"></span>
+        <span id="nc-sandbox-name" style="
+          font-size:12px;
+          background:rgba(118,185,0,0.15);
+          color:#76b900;
+          border:1px solid rgba(118,185,0,0.3);
+          border-radius:12px;
+          padding:2px 10px;
+          font-weight:600;
+          "></span>
+        <span id="nc-blueprint-ver" style="
+          font-size:12px;
+          background:var(--bg-secondary);
+          color:var(--text-muted);
+          border:1px solid var(--border);
+          border-radius:12px;
+          padding:2px 10px;
+          "></span>
       </div>
       <button class="refresh-btn" onclick="loadNemoClaw()">&#8635; Refresh</button>
     </div>
@@ -16,7 +31,11 @@
       <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
         <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">SANDBOX</div>
         <table style="width:100%;border-collapse:collapse;font-size:12px;">
-          <tr><td style="color:var(--text-muted);padding:3px 0;width:45%;">Status</td><td id="nc-sandbox-status" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="
+            color:var(--text-muted);
+            padding:3px 0;
+            width:45%;
+            ">Status</td><td id="nc-sandbox-status" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
           <tr><td style="color:var(--text-muted);padding:3px 0;">Blueprint</td><td id="nc-blueprint-ver2" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
           <tr><td style="color:var(--text-muted);padding:3px 0;">Last action</td><td id="nc-last-action" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
           <tr><td style="color:var(--text-muted);padding:3px 0;">Run ID</td><td id="nc-run-id" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
@@ -26,7 +45,11 @@
       <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
         <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">INFERENCE</div>
         <table style="width:100%;border-collapse:collapse;font-size:12px;">
-          <tr><td style="color:var(--text-muted);padding:3px 0;width:45%;">Provider</td><td id="nc-provider" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
+          <tr><td style="
+            color:var(--text-muted);
+            padding:3px 0;
+            width:45%;
+            ">Provider</td><td id="nc-provider" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
           <tr><td style="color:var(--text-muted);padding:3px 0;">Model</td><td id="nc-model" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
           <tr><td style="color:var(--text-muted);padding:3px 0;">Endpoint</td><td id="nc-endpoint" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
           <tr><td style="color:var(--text-muted);padding:3px 0;">Onboarded</td><td id="nc-onboarded" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
@@ -34,35 +57,91 @@
       </div>
     </div>
     <!-- Active Policy -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
+    <div style="
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:14px;
+      margin-bottom:12px;
+      ">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
         <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">ACTIVE POLICY</span>
-        <span id="nc-policy-hash" style="font-size:11px;color:var(--text-muted);font-family:\'JetBrains Mono\',monospace;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:4px;padding:1px 6px;"></span>
+        <span id="nc-policy-hash" style="
+          font-size:11px;
+          color:var(--text-muted);
+          font-family:\'JetBrains Mono\',monospace;
+          background:var(--bg-primary);
+          border:1px solid var(--border-secondary);
+          border-radius:4px;
+          padding:1px 6px;
+          "></span>
         <span id="nc-drift-badge" style="font-size:11px;font-weight:600;"></span>
       </div>
       <!-- Drift alert -->
-      <div id="nc-drift-alert" style="display:none;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:10px;margin-bottom:10px;">
+      <div id="nc-drift-alert" style="
+        display:none;
+        background:rgba(239,68,68,0.1);
+        border:1px solid rgba(239,68,68,0.3);
+        border-radius:6px;
+        padding:10px;
+        margin-bottom:10px;
+        ">
         <div style="font-size:12px;font-weight:700;color:#ef4444;">&#9888;&#65039; Policy drift detected</div>
-        <div id="nc-drift-detail" style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:\'JetBrains Mono\',monospace;"></div>
+        <div id="nc-drift-detail" style="
+          font-size:11px;
+          color:var(--text-muted);
+          margin-top:4px;
+          font-family:\'JetBrains Mono\',monospace;
+          "></div>
       </div>
       <!-- Network policies table -->
-      <div id="nc-policy-table" style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;line-height:1.8;">
+      <div id="nc-policy-table" style="
+        font-family:\'JetBrains Mono\',\'SF Mono\',monospace;
+        font-size:12px;
+        line-height:1.8;
+        ">
         <div style="color:var(--text-muted);padding:8px 0;">Loading policy...</div>
       </div>
     </div>
     <!-- Applied Presets -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
-      <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">APPLIED PRESETS</div>
+    <div style="
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:14px;
+      margin-bottom:12px;
+      ">
+      <div style="
+        font-size:11px;
+        font-weight:700;
+        color:#76b900;
+        letter-spacing:1px;
+        margin-bottom:10px;
+        ">APPLIED PRESETS</div>
       <div id="nc-presets" style="display:flex;flex-wrap:wrap;gap:6px;">
         <span style="color:var(--text-muted);font-size:12px;">None detected</span>
       </div>
     </div>
     <!-- Egress Approvals Panel -->
-    <div style="background:var(--bg-secondary);border:1px solid rgba(118,185,0,0.35);border-radius:8px;padding:14px;" id="nc-approvals-panel">
+    <div style="
+      background:var(--bg-secondary);
+      border:1px solid rgba(118,185,0,0.35);
+      border-radius:8px;
+      padding:14px;
+      " id="nc-approvals-panel">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="display:flex;align-items:center;gap:8px;">
           <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">PENDING EGRESS APPROVALS</span>
-          <span id="nc-approvals-count" style="display:none;font-size:11px;font-weight:700;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:10px;padding:1px 8px;"></span>
+          <span id="nc-approvals-count" style="
+            display:none;
+            font-size:11px;
+            font-weight:700;
+            background:rgba(239,68,68,0.15);
+            color:#ef4444;
+            border:1px solid rgba(239,68,68,0.3);
+            border-radius:10px;
+            padding:1px 8px;
+            "></span>
         </div>
         <button class="refresh-btn" onclick="loadNemoClawApprovals()" style="font-size:11px;">&#8635; Refresh</button>
       </div>

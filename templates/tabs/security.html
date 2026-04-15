@@ -8,50 +8,158 @@
       </div>
     </div>
     <!-- Security Posture Score -->
-    <div id="security-posture-panel" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:14px;">
+    <div id="security-posture-panel" style="
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:16px;
+      margin-bottom:14px;
+      ">
       <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;">
-        <div id="posture-score-badge" style="width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fff;background:#64748b;flex-shrink:0;">?</div>
+        <div id="posture-score-badge" style="
+          width:64px;
+          height:64px;
+          border-radius:50%;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          font-size:28px;
+          font-weight:800;
+          color:#fff;
+          background:#64748b;
+          flex-shrink:0;
+          ">?</div>
         <div style="flex:1;">
           <div style="font-size:13px;font-weight:700;color:var(--text-primary);">Security Posture</div>
-          <div id="posture-score-label" style="font-size:11px;color:var(--text-muted);margin-top:2px;">Scanning configuration...</div>
+          <div id="posture-score-label" style="
+            font-size:11px;
+            color:var(--text-muted);
+            margin-top:2px;
+            ">Scanning configuration...</div>
           <div style="margin-top:6px;background:var(--bg-primary);border-radius:4px;height:6px;overflow:hidden;">
-            <div id="posture-score-bar" style="height:100%;width:0%;background:#64748b;border-radius:4px;transition:width 0.5s ease;"></div>
+            <div id="posture-score-bar" style="
+              height:100%;
+              width:0%;
+              background:#64748b;
+              border-radius:4px;
+              transition:width 0.5s ease;
+              "></div>
           </div>
         </div>
         <div style="display:flex;gap:12px;flex-shrink:0;">
-          <div style="text-align:center;"><div id="posture-passed" style="font-size:18px;font-weight:700;color:#22c55e;">-</div><div style="font-size:10px;color:var(--text-muted);">Passed</div></div>
-          <div style="text-align:center;"><div id="posture-warnings" style="font-size:18px;font-weight:700;color:#f59e0b;">-</div><div style="font-size:10px;color:var(--text-muted);">Warnings</div></div>
-          <div style="text-align:center;"><div id="posture-failed" style="font-size:18px;font-weight:700;color:#ef4444;">-</div><div style="font-size:10px;color:var(--text-muted);">Failed</div></div>
+          <div style="text-align:center;">
+            <div id="posture-passed" style="font-size:18px;font-weight:700;color:#22c55e;">-</div>
+            <div style="font-size:10px;color:var(--text-muted);">Passed</div></div>
+          <div style="text-align:center;">
+            <div id="posture-warnings" style="font-size:18px;font-weight:700;color:#f59e0b;">-</div>
+            <div style="font-size:10px;color:var(--text-muted);">Warnings</div></div>
+          <div style="text-align:center;">
+            <div id="posture-failed" style="font-size:18px;font-weight:700;color:#ef4444;">-</div>
+            <div style="font-size:10px;color:var(--text-muted);">Failed</div></div>
         </div>
       </div>
       <div id="posture-checks-list" style="display:grid;gap:6px;"></div>
     </div>
     <!-- Threat Detection -->
-    <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Threat Detection &amp; Anomaly Alerts</div>
+    <div style="
+      font-size:13px;
+      font-weight:700;
+      color:var(--text-primary);
+      margin-bottom:10px;
+      ">Threat Detection &amp; Anomaly Alerts</div>
     <div id="security-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+      <div style="
+        background:var(--bg-secondary);
+        border:1px solid var(--border);
+        border-radius:8px;
+        padding:12px;
+        text-align:center;
+        ">
         <div style="font-size:24px;font-weight:700;color:#ef4444;" id="sec-critical-count">0</div>
         <div style="font-size:11px;color:var(--text-muted);">Critical</div>
       </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+      <div style="
+        background:var(--bg-secondary);
+        border:1px solid var(--border);
+        border-radius:8px;
+        padding:12px;
+        text-align:center;
+        ">
         <div style="font-size:24px;font-weight:700;color:#f59e0b;" id="sec-high-count">0</div>
         <div style="font-size:11px;color:var(--text-muted);">High</div>
       </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+      <div style="
+        background:var(--bg-secondary);
+        border:1px solid var(--border);
+        border-radius:8px;
+        padding:12px;
+        text-align:center;
+        ">
         <div style="font-size:24px;font-weight:700;color:#3b82f6;" id="sec-medium-count">0</div>
         <div style="font-size:11px;color:var(--text-muted);">Medium</div>
       </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+      <div style="
+        background:var(--bg-secondary);
+        border:1px solid var(--border);
+        border-radius:8px;
+        padding:12px;
+        text-align:center;
+        ">
         <div style="font-size:24px;font-weight:700;color:#22c55e;" id="sec-clean-count">0</div>
         <div style="font-size:11px;color:var(--text-muted);">Clean Sessions</div>
       </div>
     </div>
     <div id="security-filter-pills" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
-      <button class="brain-chip active" data-severity="all" onclick="setSecurityFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
-      <button class="brain-chip" data-severity="critical" onclick="setSecurityFilter('critical',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #ef4444;background:transparent;color:#ef4444;font-size:11px;cursor:pointer;font-weight:600;">Critical</button>
-      <button class="brain-chip" data-severity="high" onclick="setSecurityFilter('high',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #f59e0b;background:transparent;color:#f59e0b;font-size:11px;cursor:pointer;font-weight:600;">High</button>
-      <button class="brain-chip" data-severity="medium" onclick="setSecurityFilter('medium',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #3b82f6;background:transparent;color:#3b82f6;font-size:11px;cursor:pointer;font-weight:600;">Medium</button>
-      <button class="brain-chip" data-severity="low" onclick="setSecurityFilter('low',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #64748b;background:transparent;color:#64748b;font-size:11px;cursor:pointer;font-weight:600;">Low</button>
+      <button class="brain-chip active" data-severity="all" onclick="setSecurityFilter('all',this)" style="
+        padding:3px 10px;
+        border-radius:12px;
+        border:1px solid #a855f7;
+        background:rgba(168,85,247,0.2);
+        color:#a855f7;
+        font-size:11px;
+        cursor:pointer;
+        font-weight:600;
+        ">All</button>
+      <button class="brain-chip" data-severity="critical" onclick="setSecurityFilter('critical',this)" style="
+        padding:3px 10px;
+        border-radius:12px;
+        border:1px solid #ef4444;
+        background:transparent;
+        color:#ef4444;
+        font-size:11px;
+        cursor:pointer;
+        font-weight:600;
+        ">Critical</button>
+      <button class="brain-chip" data-severity="high" onclick="setSecurityFilter('high',this)" style="
+        padding:3px 10px;
+        border-radius:12px;
+        border:1px solid #f59e0b;
+        background:transparent;
+        color:#f59e0b;
+        font-size:11px;
+        cursor:pointer;
+        font-weight:600;
+        ">High</button>
+      <button class="brain-chip" data-severity="medium" onclick="setSecurityFilter('medium',this)" style="
+        padding:3px 10px;
+        border-radius:12px;
+        border:1px solid #3b82f6;
+        background:transparent;
+        color:#3b82f6;
+        font-size:11px;
+        cursor:pointer;
+        font-weight:600;
+        ">Medium</button>
+      <button class="brain-chip" data-severity="low" onclick="setSecurityFilter('low',this)" style="
+        padding:3px 10px;
+        border-radius:12px;
+        border:1px solid #64748b;
+        background:transparent;
+        color:#64748b;
+        font-size:11px;
+        cursor:pointer;
+        font-weight:600;
+        ">Low</button>
     </div>
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -62,8 +170,20 @@
         <div style="color:var(--text-muted);padding:20px">Scanning...</div>
       </div>
     </div>
-    <div style="margin-top:14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
-      <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:8px;cursor:pointer;" onclick="toggleSecCatalog()">&#128203; Signature Catalog <span id="sec-catalog-arrow" style="font-size:10px;">&#9654;</span></div>
+    <div style="
+      margin-top:14px;
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:10px 14px;
+      ">
+      <div style="
+        font-size:12px;
+        font-weight:700;
+        color:var(--text-primary);
+        margin-bottom:8px;
+        cursor:pointer;
+        " onclick="toggleSecCatalog()">&#128203; Signature Catalog <span id="sec-catalog-arrow" style="font-size:10px;">&#9654;</span></div>
       <div id="sec-catalog" style="display:none;"></div>
     </div>
   </div>

@@ -7,19 +7,91 @@
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>
     <!-- Session Replay Controls -->
-    <div id="replay-controls" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:10px;padding:12px 14px;margin-bottom:10px;">
+    <div id="replay-controls" style="
+      display:none;
+      background:var(--bg-secondary);
+      border:1px solid var(--border-secondary);
+      border-radius:10px;
+      padding:12px 14px;
+      margin-bottom:10px;
+      ">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
-        <button id="replay-prev" onclick="replayPrev()" style="padding:5px 12px;border-radius:6px;border:none;background:var(--button-bg);color:var(--text-primary);cursor:pointer;font-size:14px;">&#9664;</button>
-        <span id="replay-pos" style="font-size:13px;color:var(--text-muted);min-width:60px;text-align:center;">0/0</span>
-        <button id="replay-next" onclick="replayNext()" style="padding:5px 12px;border-radius:6px;border:none;background:var(--button-bg);color:var(--text-primary);cursor:pointer;font-size:14px;">&#9654;</button>
-        <input type="range" id="replay-scrubber" min="0" max="0" value="0" oninput="replayJumpTo(parseInt(this.value))" style="flex:1;min-width:120px;accent-color:#6366f1;">
+        <button id="replay-prev" onclick="replayPrev()" style="
+          padding:5px 12px;
+          border-radius:6px;
+          border:none;
+          background:var(--button-bg);
+          color:var(--text-primary);
+          cursor:pointer;
+          font-size:14px;
+          ">&#9664;</button>
+        <span id="replay-pos" style="
+          font-size:13px;
+          color:var(--text-muted);
+          min-width:60px;
+          text-align:center;
+          ">0/0</span>
+        <button id="replay-next" onclick="replayNext()" style="
+          padding:5px 12px;
+          border-radius:6px;
+          border:none;
+          background:var(--button-bg);
+          color:var(--text-primary);
+          cursor:pointer;
+          font-size:14px;
+          ">&#9654;</button>
+        <input type="range" id="replay-scrubber" min="0" max="0" value="0" oninput="replayJumpTo(parseInt(this.value))" style="
+          flex:1;
+          min-width:120px;
+          accent-color:#6366f1;
+          ">
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button class="replay-filter active-filter" data-type="all" onclick="replayFilter('all')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:#6366f1;color:#fff;font-size:12px;cursor:pointer;">All</button>
-        <button class="replay-filter" data-type="tool_use" onclick="replayFilter('tool_use')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#128295; Tools</button>
-        <button class="replay-filter" data-type="thinking" onclick="replayFilter('thinking')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#129504; Thinking</button>
-        <button class="replay-filter" data-type="assistant" onclick="replayFilter('assistant')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#129776; AI</button>
-        <button class="replay-filter" data-type="user" onclick="replayFilter('user')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#128100; User</button>
+        <button class="replay-filter active-filter" data-type="all" onclick="replayFilter('all')" style="
+          padding:4px 10px;
+          border-radius:20px;
+          border:1px solid var(--border-secondary);
+          background:#6366f1;
+          color:#fff;
+          font-size:12px;
+          cursor:pointer;
+          ">All</button>
+        <button class="replay-filter" data-type="tool_use" onclick="replayFilter('tool_use')" style="
+          padding:4px 10px;
+          border-radius:20px;
+          border:1px solid var(--border-secondary);
+          background:var(--button-bg);
+          color:var(--text-secondary);
+          font-size:12px;
+          cursor:pointer;
+          ">&#128295; Tools</button>
+        <button class="replay-filter" data-type="thinking" onclick="replayFilter('thinking')" style="
+          padding:4px 10px;
+          border-radius:20px;
+          border:1px solid var(--border-secondary);
+          background:var(--button-bg);
+          color:var(--text-secondary);
+          font-size:12px;
+          cursor:pointer;
+          ">&#129504; Thinking</button>
+        <button class="replay-filter" data-type="assistant" onclick="replayFilter('assistant')" style="
+          padding:4px 10px;
+          border-radius:20px;
+          border:1px solid var(--border-secondary);
+          background:var(--button-bg);
+          color:var(--text-secondary);
+          font-size:12px;
+          cursor:pointer;
+          ">&#129776; AI</button>
+        <button class="replay-filter" data-type="user" onclick="replayFilter('user')" style="
+          padding:4px 10px;
+          border-radius:20px;
+          border:1px solid var(--border-secondary);
+          background:var(--button-bg);
+          color:var(--text-secondary);
+          font-size:12px;
+          cursor:pointer;
+          ">&#128100; User</button>
       </div>
     </div>
     <div class="chat-messages" id="transcript-messages"></div>

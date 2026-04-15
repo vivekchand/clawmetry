@@ -1,17 +1,72 @@
 <!-- ClawMetry Cloud CTA Modal -->
-<div id="cloud-modal-overlay" onclick="if(event.target===this)closeCloudModal()" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
-  <div style="background:#0f1623;border:1px solid rgba(229,68,58,0.2);border-radius:16px;width:90%;max-width:440px;padding:32px;box-shadow:0 25px 60px rgba(0,0,0,0.5);position:relative;margin:auto;">
-    <button onclick="closeCloudModal()" style="position:absolute;top:16px;right:16px;background:rgba(255,255,255,0.05);border:none;border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:#888;">&times;</button>
+<div id="cloud-modal-overlay" onclick="if(event.target===this)closeCloudModal()" style="
+  display:none;
+  position:fixed;
+  inset:0;
+  z-index:2000;
+  background:rgba(0,0,0,0.6);
+  backdrop-filter:blur(4px);
+  align-items:center;
+  justify-content:center;
+  ">
+  <div style="
+    background:#0f1623;
+    border:1px solid rgba(229,68,58,0.2);
+    border-radius:16px;
+    width:90%;
+    max-width:440px;
+    padding:32px;
+    box-shadow:0 25px 60px rgba(0,0,0,0.5);
+    position:relative;
+    margin:auto;
+    ">
+    <button onclick="closeCloudModal()" style="
+      position:absolute;
+      top:16px;
+      right:16px;
+      background:rgba(255,255,255,0.05);
+      border:none;
+      border-radius:8px;
+      width:32px;
+      height:32px;
+      cursor:pointer;
+      font-size:18px;
+      color:#888;
+      ">&times;</button>
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
       <img src="/static/img/logo.svg" width="28" height="28" style="border-radius:6px;">
       <span style="font-size:18px;font-weight:700;color:#fff;">ClawMetry Cloud</span>
     </div>
-    <p style="color:#94a3b8;font-size:14px;margin:0 0 24px;line-height:1.5;">Monitor your agents from anywhere. Encrypted, real-time, accessible from any browser or as a Mac app.</p>
+    <p style="
+      color:#94a3b8;
+      font-size:14px;
+      margin:0 0 24px;
+      line-height:1.5;
+      ">Monitor your agents from anywhere. Encrypted, real-time, accessible from any browser or as a Mac app.</p>
     <div id="cloud-step-email">
       <label style="font-size:12px;font-weight:600;color:#94a3b8;display:block;margin-bottom:6px;">YOUR EMAIL</label>
       <div style="display:flex;gap:8px;">
-        <input id="cloud-email-input" type="email" placeholder="you@example.com" style="flex:1;padding:10px 14px;background:#1a2235;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-size:14px;outline:none;" onkeydown="if(event.key==='Enter')cloudSendOtp()">
-        <button onclick="cloudSendOtp()" style="padding:10px 18px;background:#E5443A;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;">Get Started</button>
+        <input id="cloud-email-input" type="email" placeholder="you@example.com" style="
+          flex:1;
+          padding:10px 14px;
+          background:#1a2235;
+          border:1px solid rgba(255,255,255,0.1);
+          border-radius:8px;
+          color:#fff;
+          font-size:14px;
+          outline:none;
+          " onkeydown="if(event.key==='Enter')cloudSendOtp()">
+        <button onclick="cloudSendOtp()" style="
+          padding:10px 18px;
+          background:#E5443A;
+          color:#fff;
+          border:none;
+          border-radius:8px;
+          font-size:14px;
+          font-weight:600;
+          cursor:pointer;
+          white-space:nowrap;
+          ">Get Started</button>
       </div>
       <p id="cloud-email-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
       <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.06);text-align:center;">
@@ -21,11 +76,37 @@
     <div id="cloud-step-otp" style="display:none;">
       <p style="color:#94a3b8;font-size:13px;margin:0 0 16px;">Check your email for a 6-digit code</p>
       <div style="display:flex;gap:8px;">
-        <input id="cloud-otp-input" type="text" maxlength="6" placeholder="_ _ _ _ _ _" style="flex:1;padding:10px 14px;background:#1a2235;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-size:18px;letter-spacing:6px;text-align:center;outline:none;" onkeydown="if(event.key==='Enter')cloudVerifyOtp()">
-        <button onclick="cloudVerifyOtp()" style="padding:10px 18px;background:#E5443A;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">Verify</button>
+        <input id="cloud-otp-input" type="text" maxlength="6" placeholder="_ _ _ _ _ _" style="
+          flex:1;
+          padding:10px 14px;
+          background:#1a2235;
+          border:1px solid rgba(255,255,255,0.1);
+          border-radius:8px;
+          color:#fff;
+          font-size:18px;
+          letter-spacing:6px;
+          text-align:center;
+          outline:none;
+          " onkeydown="if(event.key==='Enter')cloudVerifyOtp()">
+        <button onclick="cloudVerifyOtp()" style="
+          padding:10px 18px;
+          background:#E5443A;
+          color:#fff;
+          border:none;
+          border-radius:8px;
+          font-size:14px;
+          font-weight:600;
+          cursor:pointer;
+          ">Verify</button>
       </div>
       <p id="cloud-otp-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
-      <p style="color:#64748b;font-size:12px;margin:10px 0 0;text-align:center;cursor:pointer;" onclick="cloudResendOtp()">Resend code</p>
+      <p style="
+        color:#64748b;
+        font-size:12px;
+        margin:10px 0 0;
+        text-align:center;
+        cursor:pointer;
+        " onclick="cloudResendOtp()">Resend code</p>
     </div>
     <div id="cloud-step-done" style="display:none;text-align:center;padding:16px 0;">
       <div style="font-size:36px;margin-bottom:12px;">&#10003;</div>

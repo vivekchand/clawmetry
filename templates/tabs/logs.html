@@ -3,24 +3,57 @@
     <button class="refresh-btn" onclick="loadLogs()">&#8635; Refresh</button>
     <label style="font-size:12px;color:var(--text-secondary);">Lines:
       <input id="log-lines" type="number" value="200" min="10" max="2000" step="10"
-        style="width:60px;margin-left:4px;padding:3px 6px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">
+        style="
+          width:60px;
+          margin-left:4px;
+          padding:3px 6px;
+          border:1px solid var(--border-primary);
+          border-radius:6px;
+          background:var(--bg-secondary);
+          color:var(--text-primary);
+          font-size:12px;
+          ">
     </label>
     <input id="log-filter" type="text" placeholder="Filter logs…" oninput="filterLogLines()"
-      style="padding:5px 10px;border-radius:7px;border:1px solid var(--border-primary);background:var(--bg-secondary);color:var(--text-primary);font-size:12px;width:180px;">
+      style="
+        padding:5px 10px;
+        border-radius:7px;
+        border:1px solid var(--border-primary);
+        background:var(--bg-secondary);
+        color:var(--text-primary);
+        font-size:12px;
+        width:180px;
+        ">
     <div style="display:flex;gap:4px;flex-wrap:wrap;">
       <button class="time-btn active" id="log-filter-all"   onclick="setLogLevel('all',this)">All</button>
       <button class="time-btn"        id="log-filter-info"  onclick="setLogLevel('info',this)">Info</button>
       <button class="time-btn"        id="log-filter-warn"  onclick="setLogLevel('warn',this)">Warn</button>
       <button class="time-btn"        id="log-filter-error" onclick="setLogLevel('error',this)">Error</button>
     </div>
-    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;margin-left:auto;">
+    <label style="
+      display:flex;
+      align-items:center;
+      gap:6px;
+      font-size:12px;
+      color:var(--text-secondary);
+      cursor:pointer;
+      margin-left:auto;
+      ">
       <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
     </label>
     <span id="log-stream-status" style="font-size:11px;color:var(--text-muted);">&#9679; Connecting…</span>
   </div>
   <div class="card" style="padding:0;overflow:hidden;margin-top:8px;">
     <div id="logs-full"
-      style="font-family:monospace;font-size:12px;padding:12px 16px;max-height:calc(100vh - 180px);overflow-y:auto;background:var(--bg-secondary);border-radius:8px;">
+      style="
+        font-family:monospace;
+        font-size:12px;
+        padding:12px 16px;
+        max-height:calc(100vh - 180px);
+        overflow-y:auto;
+        background:var(--bg-secondary);
+        border-radius:8px;
+        ">
       <div style="color:var(--text-muted);text-align:center;padding:24px;">Loading logs…</div>
     </div>
   </div>

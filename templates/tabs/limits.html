@@ -1,9 +1,19 @@
 <div class="page" id="page-limits">
   <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#9889; API Rate Limit Monitor</h2>
+    <h2 style="
+      font-size:16px;
+      font-weight:700;
+      color:var(--text-primary);
+      margin:0;
+      flex:1;
+      ">&#9889; API Rate Limit Monitor</h2>
     <button class="refresh-btn" onclick="loadRateLimits()">&#8635; Refresh</button>
   </div>
-  <p style="font-size:12px;color:var(--text-muted);margin:0 0 14px 0;">Rolling 1-minute window utilisation per provider. Red = &ge;90%, amber = &ge;70%. Data sourced from OTLP metrics.</p>
+  <p style="
+    font-size:12px;
+    color:var(--text-muted);
+    margin:0 0 14px 0;
+    ">Rolling 1-minute window utilisation per provider. Red = &ge;90%, amber = &ge;70%. Data sourced from OTLP metrics.</p>
   <div id="rate-limits-content">
     <div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">Loading rate limit data...</div>
   </div>

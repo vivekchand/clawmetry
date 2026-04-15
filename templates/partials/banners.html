@@ -1,36 +1,150 @@
 <!-- Alert Banner -->
-<div id="alert-banner" style="display:none;padding:10px 16px;background:var(--bg-error);border-bottom:2px solid var(--text-error);color:var(--text-error);font-size:13px;font-weight:600;display:none;align-items:center;gap:10px;">
+<div id="alert-banner" style="
+  display:none;
+  padding:10px 16px;
+  background:var(--bg-error);
+  border-bottom:2px solid var(--text-error);
+  color:var(--text-error);
+  font-size:13px;
+  font-weight:600;
+  display:none;
+  align-items:center;
+  gap:10px;
+  ">
   <span style="font-size:18px;">&#9888;&#65039;</span>
   <span id="alert-banner-msg" style="flex:1;"></span>
-  <button onclick="ackAllAlerts()" style="background:var(--text-error);color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
-  <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
+  <button onclick="ackAllAlerts()" style="
+    background:var(--text-error);
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    ">Dismiss</button>
+  <button id="alert-resume-btn" onclick="resumeGateway()" style="
+    display:none;
+    background:#16a34a;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    ">Resume Gateway</button>
 </div>
 
 <!-- Auto-Pause Banner -->
-<div id="paused-banner" style="display:none;padding:10px 16px;background:#7f1d1d;border-bottom:2px solid #ef4444;color:#fecaca;font-size:13px;font-weight:700;align-items:center;gap:10px;">
+<div id="paused-banner" style="
+  display:none;
+  padding:10px 16px;
+  background:#7f1d1d;
+  border-bottom:2px solid #ef4444;
+  color:#fecaca;
+  font-size:13px;
+  font-weight:700;
+  align-items:center;
+  gap:10px;
+  ">
   <span style="font-size:18px;">⏸</span>
   <span id="paused-banner-msg" style="flex:1;"></span>
-  <button onclick="dismissPausedBanner()" style="background:#991b1b;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+  <button onclick="dismissPausedBanner()" style="
+    background:#991b1b;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    ">Dismiss</button>
 </div>
 
 <!-- Upgrade Impact Banner -->
-<div id="upgrade-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg,#1e3a5f 0%,#1a1a2e 100%);border-bottom:2px solid #3b82f6;color:#93c5fd;font-size:13px;font-weight:500;align-items:center;gap:10px;">
+<div id="upgrade-banner" style="
+  display:none;
+  padding:10px 16px;
+  background:linear-gradient(90deg,#1e3a5f 0%,#1a1a2e 100%);
+  border-bottom:2px solid #3b82f6;
+  color:#93c5fd;
+  font-size:13px;
+  font-weight:500;
+  align-items:center;
+  gap:10px;
+  ">
   <span style="font-size:16px;">&#128640;</span>
   <span id="upgrade-banner-msg" style="flex:1;"></span>
-  <button onclick="switchTab('version-impact')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">View Details</button>
-  <button onclick="dismissUpgradeBanner()" style="background:transparent;color:#93c5fd;border:1px solid #3b82f680;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
+  <button onclick="switchTab('version-impact')" style="
+    background:#3b82f6;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    ">View Details</button>
+  <button onclick="dismissUpgradeBanner()" style="
+    background:transparent;
+    color:#93c5fd;
+    border:1px solid #3b82f680;
+    border-radius:6px;
+    padding:4px 10px;
+    font-size:11px;
+    cursor:pointer;
+    ">Dismiss</button>
 </div>
 
 <!-- Heartbeat Gap Banner -->
-<div id="heartbeat-banner" style="display:none;padding:10px 16px;border-bottom:2px solid #f59e0b;font-size:13px;font-weight:600;align-items:center;gap:10px;background:#451a03;color:#fbbf24;">
+<div id="heartbeat-banner" style="
+  display:none;
+  padding:10px 16px;
+  border-bottom:2px solid #f59e0b;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:10px;
+  background:#451a03;
+  color:#fbbf24;
+  ">
   <span style="font-size:18px;">&#x1F494;</span>
   <span id="heartbeat-banner-msg" style="flex:1;"></span>
-  <button onclick="document.getElementById('heartbeat-banner').style.display='none'" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+  <button onclick="document.getElementById('heartbeat-banner').style.display='none'" style="
+    background:#92400e;
+    color:#fef3c7;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    ">Dismiss</button>
 </div>
 
 <!-- Budget Cap Banner -->
-<div id="budget-cap-banner" style="display:none;padding:10px 16px;border-bottom:2px solid #f59e0b;font-size:13px;font-weight:600;align-items:center;gap:10px;background:#3f2a06;color:#fbbf24;">
+<div id="budget-cap-banner" style="
+  display:none;
+  padding:10px 16px;
+  border-bottom:2px solid #f59e0b;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:10px;
+  background:#3f2a06;
+  color:#fbbf24;
+  ">
   <span style="font-size:18px;">&#9888;&#65039;</span>
   <span id="budget-cap-banner-msg" style="flex:1;"></span>
-  <button onclick="document.getElementById('budget-cap-banner').style.display='none'" style="background:#92400e;color:#fef3c7;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
+  <button onclick="document.getElementById('budget-cap-banner').style.display='none'" style="
+    background:#92400e;
+    color:#fef3c7;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    ">Dismiss</button>
 </div>

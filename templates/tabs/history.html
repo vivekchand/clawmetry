@@ -10,9 +10,23 @@
       <button class="time-btn" onclick="showCustomRange()">Custom</button>
     </div>
     <div id="custom-range-picker" style="display:none;gap:8px;align-items:center;">
-      <input type="datetime-local" id="history-from" style="padding:4px 8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">
+      <input type="datetime-local" id="history-from" style="
+        padding:4px 8px;
+        border:1px solid var(--border-primary);
+        border-radius:6px;
+        background:var(--bg-secondary);
+        color:var(--text-primary);
+        font-size:12px;
+        ">
       <span style="color:var(--text-muted);">to</span>
-      <input type="datetime-local" id="history-to" style="padding:4px 8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">
+      <input type="datetime-local" id="history-to" style="
+        padding:4px 8px;
+        border:1px solid var(--border-primary);
+        border-radius:6px;
+        background:var(--bg-secondary);
+        color:var(--text-primary);
+        font-size:12px;
+        ">
       <button class="time-btn" onclick="applyCustomRange()">Apply</button>
     </div>
     <div id="history-status" style="font-size:12px;color:var(--text-muted);margin-left:auto;"></div>
@@ -38,18 +52,60 @@
     </div>
     <div class="card" style="padding:16px;">
       <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:0 0 12px 0;">Cron Runs</h3>
-      <div id="history-cron-table" style="max-height:300px;overflow-y:auto;font-size:13px;color:var(--text-secondary);">Loading...</div>
+      <div id="history-cron-table" style="
+        max-height:300px;
+        overflow-y:auto;
+        font-size:13px;
+        color:var(--text-secondary);
+        ">Loading...</div>
     </div>
   </div>
 
   <!-- Snapshot drilldown modal -->
-  <div id="snapshot-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
-    <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:800px;max-height:80vh;padding:24px;overflow-y:auto;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
+  <div id="snapshot-modal" style="
+    display:none;
+    position:fixed;
+    inset:0;
+    z-index:1200;
+    background:rgba(0,0,0,0.5);
+    align-items:center;
+    justify-content:center;
+    ">
+    <div style="
+      background:var(--bg-primary);
+      border:1px solid var(--border-primary);
+      border-radius:16px;
+      width:90%;
+      max-width:800px;
+      max-height:80vh;
+      padding:24px;
+      overflow-y:auto;
+      box-shadow:0 25px 50px rgba(0,0,0,0.25);
+      ">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <h3 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;" id="snapshot-title">Snapshot</h3>
-        <button onclick="document.getElementById('snapshot-modal').style.display='none'" style="background:var(--button-bg);border:1px solid var(--border-primary);border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:var(--text-tertiary);">&times;</button>
+        <button onclick="document.getElementById('snapshot-modal').style.display='none'" style="
+          background:var(--button-bg);
+          border:1px solid var(--border-primary);
+          border-radius:8px;
+          width:32px;
+          height:32px;
+          cursor:pointer;
+          font-size:18px;
+          color:var(--text-tertiary);
+          ">&times;</button>
       </div>
-      <pre id="snapshot-content" style="font-size:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:16px;overflow-x:auto;white-space:pre-wrap;color:var(--text-secondary);max-height:60vh;"></pre>
+      <pre id="snapshot-content" style="
+        font-size:12px;
+        background:var(--bg-secondary);
+        border:1px solid var(--border-primary);
+        border-radius:8px;
+        padding:16px;
+        overflow-x:auto;
+        white-space:pre-wrap;
+        color:var(--text-secondary);
+        max-height:60vh;
+        "></pre>
     </div>
   </div>
 </div>
