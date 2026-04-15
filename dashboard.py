@@ -28684,6 +28684,24 @@ def api_component_brain():
                             if isinstance(cost_data, dict)
                             else 0.0
                         )
+                        # Fallback: if OpenClaw recorded $0 for this turn but
+                        # tokens are non-zero (model not in OpenClaw's pricing
+                        # table, e.g. @oi/beta or local providers), estimate
+                        # from clawmetry's per-provider pricing so the panel
+                        # doesn't lie that the call was free.
+                        if call_cost == 0 and (tokens_in + tokens_out) > 0:
+                            try:
+                                from clawmetry.providers_pricing import estimate_cost_usd
+                                provider = (msg.get("provider")
+                                            or _provider_from_model(model)
+                                            or "anthropic")
+                                est = estimate_cost_usd(
+                                    provider, tokens_in, tokens_out, model
+                                )
+                                if est > 0:
+                                    call_cost = est
+                            except Exception:
+                                pass
 
                         total_input += usage.get("input", 0)
                         total_output += tokens_out
