@@ -537,8 +537,9 @@ def api_subagents():
     subagents = []
     counts = {"total": 0, "active": 0, "idle": 0, "stale": 0}
     for s in all_sessions:
-        sid = s.get("sessionId") or s.get("key", "")
-        if not sid:
+        sid = s.get("sessionId") or ""
+        key = s.get("key") or ""
+        if not sid and not key:
             continue
         age_ms = now_ms - (s.get("updatedAt") or s.get("lastActiveMs", 0) or 0)
         if age_ms < 120000:
@@ -549,14 +550,23 @@ def api_subagents():
             status = "stale"
         depth = int(s.get("depth", 0) or 0)
         parent = s.get("spawnedBy") or s.get("parentKey") or None
-        is_subagent = depth > 0 or "subagent" in sid.lower() or bool(parent)
+        # OpenClaw keys subagents as `agent:main:subagent:<uuid>` — check the
+        # KEY (not the sessionId UUID) for the substring. Previously we
+        # checked sessionId, which is always a bare UUID → `subagent` match
+        # never fired → subagents never appeared in Active Tasks.
+        is_subagent = (
+            depth > 0
+            or "subagent" in key.lower()
+            or bool(parent)
+        )
         if not is_subagent:
             continue
         tokens = int(s.get("totalTokens") or 0)
         model = s.get("model") or s.get("modelRef") or "unknown"
         display = s.get("displayName") or s.get("label") or sid[:20]
         started = s.get("startedAt") or s.get("updatedAt") or now_ms
-        elapsed_s = max(0, int((now_ms - started) / 1000))
+        elapsed_ms = max(0, int(now_ms - started))
+        elapsed_s = elapsed_ms // 1000
         if elapsed_s < 60:
             runtime = f"{elapsed_s}s"
         elif elapsed_s < 3600:
@@ -567,13 +577,16 @@ def api_subagents():
         counts[status] += 1
         subagents.append({
             "sessionId": sid,
+            "key": key,                 # used by Active Tasks openTaskModal
             "displayName": display,
             "model": model,
             "status": status,
             "depth": depth,
             "parent": parent,
             "totalTokens": tokens,
-            "runtime": runtime,
+            "runtime": runtime,         # formatted string (legacy)
+            "runtimeMs": elapsed_ms,    # numeric ms — used by Active Tasks card
+            "startedAt": started,
             "updatedAt": s.get("updatedAt") or s.get("lastActiveMs", 0),
         })
 

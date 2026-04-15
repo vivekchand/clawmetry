@@ -968,8 +968,12 @@ async function loadActiveTasks() {
     // Fetch active sub-agents
     var saData = await fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; });
 
+    // Show anything that's still within the 10-min idle window so the user
+    // always sees recently-spawned subagents even when they've paused for a
+    // beat between turns. `stale` (>10 min) stays hidden to keep the panel
+    // focused on live work.
     var agents = (saData.subagents || []).filter(function(a) {
-      return a.status === 'active';
+      return a.status === 'active' || a.status === 'idle';
     });
 
     if (agents.length === 0) {
