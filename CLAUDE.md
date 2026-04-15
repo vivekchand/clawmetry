@@ -5,7 +5,9 @@ ClawMetry is an open-source, real-time observability dashboard for [OpenClaw](ht
 
 ## Architecture
 See `ARCHITECTURE.md` for the full deep dive. TL;DR:
-- **Single Python file** (`dashboard.py`, ~33,700 lines) — Flask app with embedded HTML/CSS/JS
+- **Flask app** with embedded HTML/CSS/JS frontend (no build step, no npm)
+- **Per-feature route modules** under `routes/` — `routes/sessions.py`, `routes/usage.py`, etc. — each owns one Blueprint and the endpoints registered on it. New endpoints land in their feature's module so parallel PRs don't stomp on each other.
+- **Shared helpers** stay in `dashboard.py` for now and are accessed from route modules via late `import dashboard as _d`. (Helpers will migrate to `helpers/` over time.)
 - **Zero config** — auto-detects OpenClaw workspace, gateway, sessions, logs
 - **Read-only** — reads OpenClaw's filesystem + connects to gateway WebSocket
 - **No database** — optional `history.py` adds SQLite time-series
@@ -16,7 +18,9 @@ See `ARCHITECTURE.md` for the full deep dive. TL;DR:
 ### Core
 | File | Lines | Purpose |
 |------|-------|---------|
-| `dashboard.py` | ~33,700 | The entire dashboard — Flask server + embedded HTML/CSS/JS frontend |
+| `dashboard.py` | ~31,000 | Flask app, blueprint registration, embedded HTML/CSS/JS, shared helpers |
+| `routes/sessions.py` | ~1,500 | `bp_sessions` — sessions list, transcripts, compactions, tool timeline, cost split, subagents, exports |
+| `routes/__init__.py` | — | Package marker |
 | `dashboard_claudecode.py` | ~1,350 | Claude Code session dashboard variant (standalone or Blueprint) |
 | `history.py` | ~555 | Optional time-series collector (SQLite, polls gateway every 60s) |
 
@@ -133,9 +137,9 @@ DEBUG=1                                # Enable debug logging
 ```
 
 ## Conventions
-- **Single file** — don't split `dashboard.py` into modules. The single-file design is intentional for portability and auditability.
+- **Per-feature route modules** — new endpoints live in `routes/<feature>.py`, registered on a feature Blueprint that `dashboard.py` imports and registers. This replaces the old "single file" rule, which became counterproductive at ~33K lines (illegible to humans, constant PR conflicts on a single anchor point). Helpers and shared state stay in `dashboard.py` for now and are accessed from route modules via late `import dashboard as _d` to avoid circular imports.
+- **Embedded frontend** — HTML/CSS/JS still lives inside Python template strings in `dashboard.py`. No build step, no npm, no webpack.
 - **Minimal dependencies** — Flask + waitress + cryptography. Don't add heavy libraries.
-- **Embedded frontend** — HTML/CSS/JS lives inside Python template strings in `dashboard.py`. No build step, no npm, no webpack.
 - **Read-only by default** — ClawMetry observes, it doesn't modify agent behavior (except cron management via gateway RPC).
 - **Auto-detect everything** — users should never need to configure anything manually.
 - **Never crash on bad input** — graceful fallbacks for missing data, log warnings but continue.
