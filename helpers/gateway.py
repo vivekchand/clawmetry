@@ -57,7 +57,11 @@ def _gw_ws_connect(url=None, token=None):
         return False
 
     try:
+        # timeout=5 applies to the initial TCP/WS handshake; we also set
+        # ws.settimeout(5) below so per-message recv() can't hang forever if
+        # the gateway accepts the connection but never responds.
         ws = websocket.create_connection(f"{ws_url}/", timeout=5)
+        ws.settimeout(5)
         # Read challenge event
         ws.recv()
         # Send connect
@@ -110,6 +114,14 @@ def _gw_ws_rpc(method, params=None):
         try:
             mid = f"cm-{_d._uuid.uuid4().hex[:8]}"
             msg = {"type": "req", "id": mid, "method": method, "params": params or {}}
+            # Per-message timeout so a stalled gateway can't pin the waitress
+            # request thread indefinitely. 5s is plenty for gateway RPCs
+            # (typical round-trip <50ms); if something blocks longer we fail
+            # fast and the caller renders an empty state.
+            try:
+                _ws_client.settimeout(5)
+            except Exception:
+                pass
             _ws_client.send(json.dumps(msg))
             # Read responses, skipping events
             for _ in range(30):
@@ -120,7 +132,8 @@ def _gw_ws_rpc(method, params=None):
                     else:
                         return None
         except Exception:
-            # Connection lost, reset
+            # Connection lost or recv timed out — reset so the next call
+            # reconnects fresh instead of reusing a wedged socket.
             _ws_connected = False
             try:
                 _ws_client.close()

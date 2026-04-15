@@ -230,9 +230,12 @@ def api_overview():
 
     # System info
     system = []
+    # 2s timeout on every subprocess: on slow/NFS-backed volumes df/free/uptime
+    # can hang the request thread indefinitely, and /api/overview is on the
+    # dashboard's hot path (fires every refresh). Better to show "--" than hang.
     try:
         disk = (
-            subprocess.run(["df", "-h", "/"], capture_output=True, text=True)
+            subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=2)
             .stdout.strip()
             .split("\n")[-1]
             .split()
@@ -247,7 +250,7 @@ def api_overview():
 
     try:
         mem = (
-            subprocess.run(["free", "-h"], capture_output=True, text=True)
+            subprocess.run(["free", "-h"], capture_output=True, text=True, timeout=2)
             .stdout.strip()
             .split("\n")[1]
             .split()
@@ -264,15 +267,20 @@ def api_overview():
 
     try:
         uptime = subprocess.run(
-            ["uptime", "-p"], capture_output=True, text=True
+            ["uptime", "-p"], capture_output=True, text=True, timeout=2
         ).stdout.strip()
         system.append(["Uptime", uptime.replace("up ", ""), ""])
     except Exception:
         system.append(["Uptime", "--", ""])
 
     if sys.platform != "win32":
-        gw = subprocess.run(["pgrep", "-f", "moltbot"], capture_output=True, text=True)
-        gw_running = gw.returncode == 0
+        try:
+            gw = subprocess.run(
+                ["pgrep", "-f", "moltbot"], capture_output=True, text=True, timeout=2
+            )
+            gw_running = gw.returncode == 0
+        except Exception:
+            gw_running = False
     else:
         gw_running = False
     system.append(
@@ -300,7 +308,7 @@ def api_overview():
 
     try:
         disk_info = (
-            subprocess.run(["df", "-h", "/"], capture_output=True, text=True)
+            subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=2)
             .stdout.strip()
             .split("\n")[-1]
             .split()

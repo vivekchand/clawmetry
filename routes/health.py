@@ -362,7 +362,7 @@ def api_health():
             gw_proc = None
             if sys.platform != "win32":
                 gw_proc = subprocess.run(
-                    ["pgrep", "-f", "moltbot"], capture_output=True, text=True
+                    ["pgrep", "-f", "moltbot"], capture_output=True, text=True, timeout=2
                 )
             if gw_proc and gw_proc.returncode == 0:
                 checks.append(
@@ -442,7 +442,7 @@ def api_health():
         rss_mb = (
             resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
         )  # KB -> MB on Linux
-        mem = subprocess.run(["free", "-m"], capture_output=True, text=True)
+        mem = subprocess.run(["free", "-m"], capture_output=True, text=True, timeout=2)
         mem_parts = mem.stdout.strip().split("\n")[1].split()
         used_mb = int(mem_parts[2])
         total_mb = int(mem_parts[1])
@@ -487,7 +487,7 @@ def api_health():
     # 4. Uptime
     try:
         uptime = (
-            subprocess.run(["uptime", "-p"], capture_output=True, text=True)
+            subprocess.run(["uptime", "-p"], capture_output=True, text=True, timeout=2)
             .stdout.strip()
             .replace("up ", "")
         )
