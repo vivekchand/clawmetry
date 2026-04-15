@@ -7772,16 +7772,82 @@ async function loadModalTranscript() {
   try {
     var r = await fetch('/api/transcript-events/' + encodeURIComponent(_modalSessionId));
     var data = await r.json();
-    if (data.error) {
-      document.getElementById('modal-content').innerHTML = '<div style="padding:20px;color:var(--text-error);">Error: ' + escHtml(data.error) + '</div>';
+    if (data.error || !(data.events && data.events.length)) {
+      // Child transcript unavailable — render a "spawn info" fallback from
+      // the /api/subagents metadata we already fetched. Gives the user
+      // context (task, error, spawn time, parent) instead of a dead modal.
+      _renderModalSpawnInfo(_modalSessionId, data.error || 'No events yet');
       return;
     }
     _modalEvents = data.events || [];
-    document.getElementById('modal-event-count').textContent = '📊 ' + _modalEvents.length + ' events';
-    document.getElementById('modal-msg-count').textContent = '💬 ' + (data.messageCount || 0) + ' messages';
+    var ec = document.getElementById('modal-event-count');
+    if (ec) ec.textContent = '📊 ' + _modalEvents.length + ' events';
+    var mc = document.getElementById('modal-msg-count');
+    if (mc) mc.textContent = '💬 ' + (data.messageCount || 0) + ' messages';
     renderModalContent();
   } catch(e) {
-    document.getElementById('modal-content').innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load transcript</div>';
+    _renderModalSpawnInfo(_modalSessionId, 'Failed to load transcript');
+  }
+}
+
+// Fallback view when child transcript is gone (OpenClaw TTL) or empty.
+// Reads /api/subagents (the list already surfaces task / error / model /
+// runtime) and finds the matching entry by sessionId or key. Renders a
+// card-style summary with the spawn metadata + any error OpenClaw
+// returned. Works for failed spawns AND stale successful ones.
+async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
+  var el = document.getElementById('modal-content');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Loading subagent info...</div>';
+  try {
+    var saData = await fetch('/api/subagents').then(function(r){return r.json();}).catch(function(){return {subagents:[]};});
+    var entries = saData.subagents || [];
+    var match = entries.find(function(a) {
+      return a.sessionId === sessionIdOrKey || a.key === sessionIdOrKey;
+    });
+    if (!match) {
+      el.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + escHtml(reason) + '</div>';
+      return;
+    }
+    var startedAt = match.startedAt ? new Date(match.startedAt).toLocaleString() : '';
+    var statusColor = { active:'#22c55e', idle:'#f59e0b', stale:'#6b7280', failed:'#ef4444' }[match.status] || '#6b7280';
+    var html = '<div style="padding:20px;display:flex;flex-direction:column;gap:16px;">';
+    html += '<div style="display:flex;align-items:center;gap:10px;">'
+         +  '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:' + statusColor + ';"></span>'
+         +  '<strong style="font-size:15px;color:var(--text-primary);">' + escHtml(match.displayName || 'subagent') + '</strong>'
+         +  '<span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' + escHtml(match.status) + '</span>'
+         +  '</div>';
+    if (match.task) {
+      html += '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Task</div>'
+           +  '<div style="font-size:13px;color:var(--text-primary);line-height:1.5;white-space:pre-wrap;">' + escHtml(match.task) + '</div></div>';
+    }
+    if (match.error) {
+      html += '<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:12px;">'
+           +  '<div style="font-size:11px;color:#ef4444;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">⚠️ OpenClaw error</div>'
+           +  '<div style="font-size:13px;color:#fca5a5;line-height:1.5;font-family:monospace;">' + escHtml(match.error) + '</div></div>';
+    }
+    var meta = [];
+    if (startedAt) meta.push(['Started', startedAt]);
+    if (match.runtime) meta.push(['Runtime', match.runtime]);
+    if (match.model) meta.push(['Model', match.model]);
+    if (match.parent) meta.push(['Parent', match.parent]);
+    if (match.runId) meta.push(['Run ID', match.runId]);
+    if (meta.length) {
+      html += '<div style="display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-size:12px;">';
+      meta.forEach(function(row) {
+        html += '<div style="color:var(--text-muted);">' + escHtml(row[0]) + '</div>'
+             +  '<div style="color:var(--text-primary);font-family:monospace;overflow-wrap:anywhere;">' + escHtml(row[1]) + '</div>';
+      });
+      html += '</div>';
+    }
+    if (match.status === 'stale' && !match.error) {
+      html += '<div style="font-size:12px;color:var(--text-muted);padding:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;">'
+           +  '📄 Child session transcript expired (OpenClaw TTL). The metadata above is reconstructed from the parent session JSONL.</div>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + escHtml(reason) + '</div>';
   }
 }
 
