@@ -20472,6 +20472,72 @@ def api_cost_split():
     return jsonify({"sessions": top, "totals": totals})
 
 
+@bp_sessions.route("/api/task-runs")
+def api_task_runs():
+    """Read ~/.openclaw/tasks/runs.sqlite — the canonical subagent/task registry."""
+    import sqlite3
+    p = os.path.expanduser("~/.openclaw/tasks/runs.sqlite")
+    if not os.path.isfile(p):
+        return jsonify({"tasks": [], "counts": {}, "note": "runs.sqlite not found"})
+    try:
+        limit = max(1, min(int(request.args.get("limit", "500")), 5000))
+    except ValueError:
+        limit = 500
+    status_filter = (request.args.get("status", "") or "").strip()
+    parent_filter = (request.args.get("parent_task_id", "") or "").strip()
+    where = []
+    args = []
+    if status_filter:
+        where.append("status = ?")
+        args.append(status_filter)
+    if parent_filter:
+        where.append("parent_task_id = ?")
+        args.append(parent_filter)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    tasks: list = []
+    counts: dict = {}
+    try:
+        conn = sqlite3.connect(p)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            f"""SELECT task_id, parent_task_id, child_session_key, requester_session_key,
+                       agent_id, run_id, label, task, status, delivery_status,
+                       task_kind, parent_flow_id,
+                       created_at, started_at, ended_at, last_event_at,
+                       error, progress_summary, terminal_summary, terminal_outcome
+                FROM task_runs {where_sql}
+                ORDER BY COALESCE(started_at, created_at, 0) DESC
+                LIMIT ?""",
+            args + [limit],
+        )
+        for r in cur.fetchall():
+            d = dict(r)
+            started = d.get("started_at") or 0
+            ended = d.get("ended_at") or 0
+            d["duration_ms"] = max(0, ended - started) if started and ended else 0
+            tasks.append(d)
+            st = d.get("status") or "unknown"
+            counts[st] = counts.get(st, 0) + 1
+        conn.close()
+    except Exception as e:
+        return jsonify({"tasks": [], "counts": {}, "error": str(e)}), 500
+    total = len(tasks)
+    failed = counts.get("failed", 0)
+    err_rate = round(failed / total * 100, 1) if total else 0
+    return jsonify({
+        "tasks": tasks,
+        "counts": counts,
+        "stats": {
+            "total": total,
+            "succeeded": counts.get("succeeded", 0),
+            "failed": failed,
+            "running": counts.get("running", 0),
+            "error_rate_pct": err_rate,
+        },
+    })
+
+
 @bp_sessions.route("/api/subagents")
 def api_subagents():
     """Return sub-agent list with depth/parent fields for the tree view."""
