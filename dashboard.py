@@ -76,6 +76,7 @@ from routes.overview import bp_overview
 from routes.components import bp_components
 from routes.fleet_history import bp_fleet, bp_history
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
+from routes.meta import bp_auth, bp_gateway, bp_otel, bp_version, bp_version_impact, bp_clusters
 
 # History / time-series module
 try:
@@ -19227,7 +19228,7 @@ def _gw_invoke_docker(tool, args=None, token=None):
 # ── Flask Blueprints (Phase 4) ────────────────────────────────────────────────
 from flask import Blueprint as _Blueprint
 # bp_alerts moved to routes/alerts.py
-bp_auth = _Blueprint('auth', __name__)
+# bp_auth moved to routes/meta.py
 # bp_brain moved to routes/brain.py
 # bp_budget moved to routes/alerts.py
 # bp_channels moved to routes/channels.py
@@ -19235,19 +19236,19 @@ bp_auth = _Blueprint('auth', __name__)
 # bp_config moved to routes/infra.py
 # bp_crons moved to routes/crons.py
 # bp_fleet moved to routes/fleet_history.py
-bp_gateway = _Blueprint('gateway', __name__)
+# bp_gateway moved to routes/meta.py
 # bp_health moved to routes/health.py
 # bp_history moved to routes/fleet_history.py
 # bp_logs moved to routes/infra.py
 # bp_memory moved to routes/infra.py
-bp_otel = _Blueprint('otel', __name__)
+# bp_otel moved to routes/meta.py
 # bp_overview moved to routes/overview.py
 # bp_sessions moved to routes/sessions.py
 # bp_security moved to routes/infra.py
 # bp_usage moved to routes/usage.py
-bp_version = _Blueprint('version', __name__)
-bp_version_impact = _Blueprint('version_impact', __name__)
-bp_clusters = _Blueprint('clusters', __name__)
+# bp_version moved to routes/meta.py
+# bp_version_impact moved to routes/meta.py
+# bp_clusters moved to routes/meta.py
 bp_nemoclaw = _Blueprint('nemoclaw', __name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -19452,237 +19453,18 @@ def api_nemoclaw_acknowledge_drift():
 
 
 # ── Version check & self-update routes ────────────────────────────────────────
+# State for /api/version PyPI lookup cache, used by routes/meta.py.
 _pypi_cache = {"ts": 0, "version": None}
 
 
-@bp_version.route("/api/version")
-def api_version():
-    """Return current and latest version info."""
-    import time as _time
-    import json as _json
-
-    current = __version__
-    latest = current
-    update_available = False
-    now = _time.time()
-    # Cache PyPI check for 1 hour
-    if _pypi_cache["version"] and (now - _pypi_cache["ts"]) < 3600:
-        latest = _pypi_cache["version"]
-    else:
-        try:
-            import urllib.request as _ur
-
-            req = _ur.Request(
-                "https://pypi.org/pypi/clawmetry/json",
-                headers={"User-Agent": "clawmetry/" + current},
-            )
-            with _ur.urlopen(req, timeout=10) as resp:
-                data = _json.loads(resp.read().decode())
-                latest = data.get("info", {}).get("version", current)
-                _pypi_cache["version"] = latest
-                _pypi_cache["ts"] = now
-        except Exception:
-            pass
-    if latest != current:
-        # Compare version tuples
-        try:
-            cur_parts = [int(x) for x in current.split(".")]
-            lat_parts = [int(x) for x in latest.split(".")]
-            update_available = lat_parts > cur_parts
-        except Exception:
-            update_available = latest != current
-    return {"current": current, "latest": latest, "update_available": update_available}
-
-
-@bp_version.route("/api/update", methods=["POST"])
-def api_update():
-    """Self-update clawmetry via pip, then schedule process restart."""
-    import subprocess as _sp
-    import threading as _thr
-
-    old_version = __version__
-    try:
-        _sp.check_call(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "clawmetry"],
-            timeout=120,
-            stdout=_sp.DEVNULL,
-            stderr=_sp.STDOUT,
-        )
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}, 500
-    # Re-read new version from pip metadata
-    new_version = old_version
-    try:
-        out = _sp.check_output(
-            [sys.executable, "-m", "pip", "show", "clawmetry"],
-            timeout=10,
-        ).decode()
-        for line in out.splitlines():
-            if line.startswith("Version:"):
-                new_version = line.split(":", 1)[1].strip()
-                break
-    except Exception:
-        pass
-
-    # Schedule restart after response is sent
-    def _restart():
-        import os as _os
-
-        _os._exit(0)
-
-    _thr.Timer(2.0, _restart).start()
-    return {"ok": True, "old_version": old_version, "new_version": new_version}
+# (bp_version handlers moved to routes/meta.py: /api/version, /api/update)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-@bp_gateway.route("/api/gw/config", methods=["GET", "POST"])
-def api_gw_config():
-    """Get or set gateway configuration."""
-    global GATEWAY_URL, GATEWAY_TOKEN, _ws_client, _ws_connected
-    if request.method == "POST":
-        data = request.get_json(silent=True) or {}
-        token = data.get("token", "").strip()
-        if not token:
-            return jsonify({"error": "Token is required"}), 400
-        # Auto-discover gateway port by scanning common ports
-        gw_url = data.get("url", "").strip()
-        if not gw_url:
-            gw_url = _auto_discover_gateway(token)
-        if not gw_url:
-            return jsonify(
-                {"error": "Could not find OpenClaw gateway. Please provide URL."}
-            ), 404
-        # Validate the connection
-        valid = False
-
-        # Docker mode: skip HTTP/WS, validate via docker exec
-        if gw_url.startswith("docker://"):
-            result = _gw_invoke_docker("session_status", {}, token)
-            if result:
-                valid = True
-
-        # WebSocket validation (non-docker)
-        if not valid and not gw_url.startswith("docker://"):
-            ws_url = gw_url.replace("http://", "ws://").replace("https://", "wss://")
-            try:
-                import websocket
-
-                ws = websocket.create_connection(f"{ws_url}/", timeout=5)
-                ws.recv()  # challenge
-                connect_msg = {
-                    "type": "req",
-                    "id": "validate",
-                    "method": "connect",
-                    "params": {
-                        "minProtocol": 3,
-                        "maxProtocol": 3,
-                        "client": {
-                            "id": "cli",
-                            "version": __version__,
-                            "platform": _CURRENT_PLATFORM,
-                            "mode": "cli",
-                            "instanceId": "clawmetry-validate",
-                        },
-                        "role": "operator",
-                        "scopes": ["operator.admin"],
-                        "auth": {"token": token},
-                    },
-                }
-                ws.send(json.dumps(connect_msg))
-                for _ in range(5):
-                    r = json.loads(ws.recv())
-                    if r.get("type") == "res" and r.get("id") == "validate":
-                        valid = r.get("ok", False)
-                        break
-                ws.close()
-            except Exception:
-                pass
-
-        # HTTP fallback validation (non-docker)
-        if not valid and not gw_url.startswith("docker://"):
-            try:
-                payload = json.dumps({"tool": "session_status", "args": {}}).encode()
-                req = _urllib_req.Request(
-                    f"{gw_url.rstrip('/')}/tools/invoke",
-                    data=payload,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json",
-                    },
-                    method="POST",
-                )
-                with _urllib_req.urlopen(req, timeout=5) as resp:
-                    result = json.loads(resp.read())
-                    valid = result.get("ok", False)
-            except Exception:
-                pass
-
-        # Docker exec fallback (last resort)
-        if not valid:
-            result = _gw_invoke_docker("session_status", {}, token)
-            if result:
-                valid = True
-                gw_url = "docker://localhost:18789"
-
-        if not valid:
-            return jsonify({"error": "Invalid token or gateway not responding"}), 401
-        # Save config
-        GATEWAY_URL = gw_url
-        GATEWAY_TOKEN = token
-        # Reset WS connection to use new credentials
-        _ws_connected = False
-        _ws_client = None
-        cfg = {"url": gw_url, "token": token}
-        try:
-            with open(_GW_CONFIG_FILE, "w") as f:
-                json.dump(cfg, f)
-            os.chmod(_GW_CONFIG_FILE, 0o600)
-        except Exception:
-            pass
-        return jsonify({"ok": True, "url": gw_url})
-    else:
-        cfg = _load_gw_config()
-        return jsonify(
-            {
-                "configured": bool(cfg.get("url") and cfg.get("token")),
-                "url": cfg.get("url", ""),
-                "hasToken": bool(cfg.get("token")),
-            }
-        )
-
-
-@bp_gateway.route("/api/gw/invoke", methods=["POST"])
-def api_gw_invoke():
-    """Proxy a tool invocation to the OpenClaw gateway."""
-    data = request.get_json(silent=True) or {}
-    tool = data.get("tool")
-    args = data.get("args", {})
-    if not tool:
-        return jsonify({"error": "tool is required"}), 400
-    if _budget_paused and tool in ("sessions_spawn", "session_start", "session.create"):
-        return jsonify(
-            {"error": "Auto-pause active: refusing new session starts", "paused": True}
-        ), 429
-    result = _gw_invoke(tool, args)
-    if result is None:
-        return jsonify({"error": "Gateway not configured or unreachable"}), 503
-    return jsonify(result)
-
-
-@bp_gateway.route("/api/gw/rpc", methods=["POST"])
-def api_gw_rpc():
-    """Proxy a JSON-RPC method call to the OpenClaw gateway via WebSocket."""
-    data = request.get_json(silent=True) or {}
-    method = data.get("method", "")
-    params = data.get("params", {})
-    if not method:
-        return jsonify({"error": "method is required"}), 400
-    result = _gw_ws_rpc(method, params)
-    if result is None:
-        return jsonify({"error": "Gateway not connected or method failed"}), 503
-    return jsonify(result)
+# (bp_gateway handlers moved to routes/meta.py: /api/gw/config,
+#  /api/gw/invoke, /api/gw/rpc)
 
 
 def _auto_discover_gateway(token):
@@ -19786,21 +19568,7 @@ def _auto_discover_gateway(token):
     return None
 
 
-@bp_auth.route("/api/auth/check")
-def api_auth_check():
-    """Check if auth is required and validate token."""
-    if not GATEWAY_TOKEN:
-        return jsonify({"authRequired": True, "valid": False, "needsSetup": True})
-    token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
-    if not token:
-        token = request.args.get("token", "").strip()
-    if token == GATEWAY_TOKEN:
-        try:
-            _ext_emit("auth.check", {"ok": True})
-        except Exception:
-            pass
-        return jsonify({"authRequired": True, "valid": True})
-    return jsonify({"authRequired": True, "valid": False})
+# (bp_auth handlers moved to routes/meta.py: /api/auth/check, /auth, /)
 
 
 @app.before_request
@@ -19831,37 +19599,6 @@ def _check_auth():
     if token == GATEWAY_TOKEN:
         return
     return jsonify({"error": "Unauthorized", "authRequired": True}), 401
-
-
-@bp_auth.route("/auth")
-def auth_token():
-    """Accept ?token=XXX, store in localStorage via JS, redirect to /.
-    Works for both OSS gateway tokens and cloud cm_ keys.
-    URL: /auth?token=YOUR_TOKEN
-    """
-    token = request.args.get("token", "").strip()
-    if not token:
-        return (
-            '<html><body style="background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;padding:40px;">'
-            "<h2>Missing token</h2><p>Usage: <code>/auth?token=YOUR_TOKEN</code></p></body></html>",
-            400,
-        )
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"></head>
-<body style="background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;padding:40px;min-height:100vh;">
-<p>Authenticating...</p>
-<script>
-  localStorage.setItem('clawmetry-token', '{token}');
-  localStorage.setItem('clawmetry-gw-token', '{token}');
-  window.location.href = '/';
-</script>
-</body></html>"""
-
-
-@bp_auth.route("/")
-def index():
-    resp = make_response(render_template_string(DASHBOARD_HTML, version=__version__))
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    return resp
 
 
 # (moved to routes/overview.py)
@@ -20031,72 +19768,8 @@ def _infer_provider_from_model(model_name):
 #  /api/file, /api/memory-analytics)
 
 
-# ── OTLP Receiver Endpoints ─────────────────────────────────────────────
-
-
-@bp_otel.route("/v1/metrics", methods=["POST"])
-def otlp_metrics():
-    """OTLP/HTTP receiver for metrics (protobuf)."""
-    if _budget_paused:
-        return jsonify(
-            {"error": "Budget limit exceeded - intake paused", "paused": True}
-        ), 429
-    if not _HAS_OTEL_PROTO:
-        return jsonify(
-            {
-                "error": "opentelemetry-proto not installed",
-                "message": "Install OTLP support: pip install clawmetry[otel]  "
-                "or: pip install opentelemetry-proto protobuf",
-            }
-        ), 501
-
-    try:
-        pb_data = request.get_data()
-        _process_otlp_metrics(pb_data)
-        return "{}", 200, {"Content-Type": "application/json"}
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-
-@bp_otel.route("/v1/traces", methods=["POST"])
-def otlp_traces():
-    """OTLP/HTTP receiver for traces (protobuf)."""
-    if _budget_paused:
-        return jsonify(
-            {"error": "Budget limit exceeded - intake paused", "paused": True}
-        ), 429
-    if not _HAS_OTEL_PROTO:
-        return jsonify(
-            {
-                "error": "opentelemetry-proto not installed",
-                "message": "Install OTLP support: pip install clawmetry[otel]  "
-                "or: pip install opentelemetry-proto protobuf",
-            }
-        ), 501
-
-    try:
-        pb_data = request.get_data()
-        _process_otlp_traces(pb_data)
-        return "{}", 200, {"Content-Type": "application/json"}
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-
-@bp_otel.route("/api/otel-status")
-def api_otel_status():
-    """Return OTLP receiver status."""
-    counts = {}
-    with _metrics_lock:
-        for k in metrics_store:
-            counts[k] = len(metrics_store[k])
-    return jsonify(
-        {
-            "available": _HAS_OTEL_PROTO,
-            "hasData": _has_otel_data(),
-            "lastReceived": _otel_last_received,
-            "counts": counts,
-        }
-    )
+# (bp_otel handlers moved to routes/meta.py: /v1/metrics, /v1/traces,
+#  /api/otel-status)
 
 
 # ── Multi-Node Fleet API Routes ──────────────────────────────────────────
@@ -23279,91 +22952,7 @@ def _compute_diff(before, after):
     return diff
 
 
-@bp_version_impact.route("/api/version-impact")
-def api_version_impact():
-    """Return version transition list with before/after metric comparisons."""
-    current_version = _get_openclaw_version()
-    _record_version_if_changed(current_version)
-
-    db = _version_impact_db()
-    try:
-        rows = db.execute(
-            "SELECT version, detected_at FROM version_events ORDER BY detected_at ASC"
-        ).fetchall()
-    finally:
-        db.close()
-
-    if not rows:
-        return jsonify(
-            {
-                "current_version": current_version or "unknown",
-                "transitions": [],
-                "version_detected": bool(current_version),
-                "note": "No version history yet. Version tracking starts from first load."
-                if not current_version
-                else "First version recorded. Comparisons will appear after next version upgrade.",
-            }
-        )
-
-    sessions_dir = SESSIONS_DIR or os.path.expanduser(
-        "~/.openclaw/agents/main/sessions"
-    )
-    transitions = []
-    now_ts = time.time()
-
-    for i in range(len(rows)):
-        row = rows[i]
-        version = row["version"]
-        start_ts = row["detected_at"]
-        end_ts = rows[i + 1]["detected_at"] if i + 1 < len(rows) else now_ts
-
-        if i > 0:
-            prev_row = rows[i - 1]
-            prev_version = prev_row["version"]
-            prev_start = prev_row["detected_at"]
-            prev_end = start_ts
-
-            before_stats = _compute_session_stats_in_range(
-                sessions_dir, prev_start, prev_end
-            )
-            after_stats = _compute_session_stats_in_range(
-                sessions_dir, start_ts, end_ts
-            )
-
-            before_summary = _stats_to_summary(before_stats)
-            after_summary = _stats_to_summary(after_stats)
-            diff = _compute_diff(before_summary, after_summary)
-
-            transitions.append(
-                {
-                    "from_version": prev_version,
-                    "to_version": version,
-                    "upgraded_at": datetime.fromtimestamp(
-                        start_ts, tz=timezone.utc
-                    ).isoformat(),
-                    "before": before_summary,
-                    "after": after_summary,
-                    "diff": diff,
-                }
-            )
-
-    return jsonify(
-        {
-            "current_version": current_version
-            or (rows[-1]["version"] if rows else "unknown"),
-            "version_detected": bool(current_version),
-            "version_history": [
-                {
-                    "version": r["version"],
-                    "detected_at": datetime.fromtimestamp(
-                        r["detected_at"], tz=timezone.utc
-                    ).isoformat(),
-                }
-                for r in rows
-            ],
-            "transitions": transitions,
-        }
-    )
+# (bp_version_impact handler moved to routes/meta.py: /api/version-impact)
 
 
 # ── Trace Clustering (GH #406) ───────────────────────────────────────────────
@@ -23593,23 +23182,7 @@ def _build_clusters(sessions_dir, limit=200):
     return result
 
 
-@bp_clusters.route("/api/clusters")
-def api_clusters():
-    """Return session clusters grouped by tool call pattern, cost, and error types."""
-    sessions_dir = SESSIONS_DIR or os.path.expanduser(
-        "~/.openclaw/agents/main/sessions"
-    )
-    try:
-        clusters = _build_clusters(sessions_dir)
-        return jsonify(
-            {
-                "clusters": clusters,
-                "total_clusters": len(clusters),
-                "sessions_dir": sessions_dir,
-            }
-        )
-    except Exception as e:
-        return jsonify({"error": str(e), "clusters": []}), 500
+# (bp_clusters handler moved to routes/meta.py: /api/clusters)
 
 
 def _build_context_inspector_data():
