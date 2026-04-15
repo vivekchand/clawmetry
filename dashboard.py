@@ -20322,6 +20322,156 @@ def api_session_tools():
     })
 
 
+@bp_sessions.route("/api/cost-split")
+def api_cost_split():
+    """Per-token-type token + cost breakdown per session.
+
+    OpenClaw messages carry granular usage with input/output/cacheRead/
+    cacheWrite tokens AND costs. ClawMetry was summing only totalTokens,
+    hiding the cache-hit ratio (typically 40-70% of volume at ~10% cost).
+    """
+    wanted_sid = (request.args.get("session_id", "") or "").strip()
+    try:
+        limit = max(1, min(int(request.args.get("limit", "30")), 500))
+    except ValueError:
+        limit = 30
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    if not os.path.isdir(sessions_dir):
+        return jsonify({"sessions": [], "totals": {}, "note": "sessions dir not found"})
+    try:
+        all_files = [
+            f
+            for f in os.listdir(sessions_dir)
+            if f.endswith(".jsonl") and ".deleted." not in f and ".reset." not in f
+        ]
+    except OSError:
+        all_files = []
+    if wanted_sid:
+        files = [f for f in all_files if f.startswith(wanted_sid)]
+    else:
+        files = sorted(
+            all_files,
+            key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+            reverse=True,
+        )[:100]
+
+    def _compute_for_file(fpath):
+        sid = os.path.basename(fpath)
+        if sid.endswith(".jsonl"):
+            sid = sid[: -len(".jsonl")]
+        tokens = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+        costs = {"input": 0.0, "output": 0.0, "cacheRead": 0.0, "cacheWrite": 0.0, "total": 0.0}
+        model_tokens: dict = {}
+        last_seen_model = ""
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    t = ev.get("type", "")
+                    if t == "model_change":
+                        m = ev.get("modelId") or ev.get("model") or ""
+                        if m:
+                            last_seen_model = m
+                        continue
+                    if t != "message":
+                        continue
+                    msg = ev.get("message", {}) or {}
+                    if not isinstance(msg, dict):
+                        continue
+                    usage = msg.get("usage", {}) or {}
+                    if not isinstance(usage, dict) or not usage:
+                        continue
+                    msg_model = msg.get("model") or last_seen_model
+                    if msg_model:
+                        last_seen_model = msg_model
+                    for k in ("input", "output", "cacheRead", "cacheWrite"):
+                        tokens[k] += int(usage.get(k, 0) or 0)
+                    cost_obj = usage.get("cost", {}) or {}
+                    if isinstance(cost_obj, dict):
+                        for k in ("input", "output", "cacheRead", "cacheWrite", "total"):
+                            costs[k] += float(cost_obj.get(k, 0) or 0)
+                    mt = int(usage.get("totalTokens", 0) or 0)
+                    if mt and msg_model:
+                        model_tokens[msg_model] = model_tokens.get(msg_model, 0) + mt
+        except Exception:
+            return None
+        total_tokens = sum(tokens.values())
+        if total_tokens == 0 and costs["total"] == 0:
+            return None
+        primary_model = (
+            max(model_tokens.items(), key=lambda kv: kv[1])[0]
+            if model_tokens
+            else last_seen_model
+        )
+        input_plus_cache = tokens["input"] + tokens["cacheRead"]
+        cache_hit_ratio_pct = (
+            round(tokens["cacheRead"] / input_plus_cache * 100, 1)
+            if input_plus_cache
+            else 0.0
+        )
+        est_fresh_input_cost = costs["cacheRead"] * 10.0
+        savings = max(0.0, est_fresh_input_cost - costs["cacheRead"])
+        est_savings_pct = (
+            round(savings / (costs["input"] + est_fresh_input_cost) * 100, 1)
+            if (costs["input"] + est_fresh_input_cost)
+            else 0.0
+        )
+        return {
+            "session_id": sid,
+            "primary_model": primary_model,
+            "input_tokens": tokens["input"],
+            "output_tokens": tokens["output"],
+            "cache_read_tokens": tokens["cacheRead"],
+            "cache_write_tokens": tokens["cacheWrite"],
+            "total_tokens": total_tokens,
+            "input_cost_usd": round(costs["input"], 6),
+            "output_cost_usd": round(costs["output"], 6),
+            "cache_read_cost_usd": round(costs["cacheRead"], 6),
+            "cache_write_cost_usd": round(costs["cacheWrite"], 6),
+            "total_cost_usd": round(costs["total"], 6),
+            "cache_hit_ratio_pct": cache_hit_ratio_pct,
+            "est_cache_savings_pct": est_savings_pct,
+        }
+
+    rows = []
+    for fname in files:
+        r = _compute_for_file(os.path.join(sessions_dir, fname))
+        if r:
+            rows.append(r)
+    rows.sort(key=lambda r: r.get("total_cost_usd", 0), reverse=True)
+    if wanted_sid and rows:
+        return jsonify({"sessions": rows, "totals": {}})
+    top = rows[:limit]
+    totals = {
+        "input_tokens": sum(r["input_tokens"] for r in rows),
+        "output_tokens": sum(r["output_tokens"] for r in rows),
+        "cache_read_tokens": sum(r["cache_read_tokens"] for r in rows),
+        "cache_write_tokens": sum(r["cache_write_tokens"] for r in rows),
+        "total_tokens": sum(r["total_tokens"] for r in rows),
+        "input_cost_usd": round(sum(r["input_cost_usd"] for r in rows), 4),
+        "output_cost_usd": round(sum(r["output_cost_usd"] for r in rows), 4),
+        "cache_read_cost_usd": round(sum(r["cache_read_cost_usd"] for r in rows), 4),
+        "cache_write_cost_usd": round(sum(r["cache_write_cost_usd"] for r in rows), 4),
+        "total_cost_usd": round(sum(r["total_cost_usd"] for r in rows), 4),
+        "session_count": len(rows),
+    }
+    tot_in_cache = totals["input_tokens"] + totals["cache_read_tokens"]
+    totals["cache_hit_ratio_pct"] = (
+        round(totals["cache_read_tokens"] / tot_in_cache * 100, 1)
+        if tot_in_cache
+        else 0.0
+    )
+    return jsonify({"sessions": top, "totals": totals})
+
+
 @bp_sessions.route("/api/subagents")
 def api_subagents():
     """Return sub-agent list with depth/parent fields for the tree view."""
