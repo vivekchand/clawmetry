@@ -883,9 +883,14 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
                 )
                 total += len(batch)
 
-            last_ids[fname] = (
-                len(all_lines) if total < MAX_EVENTS_PER_CYCLE else line_cursor
-            )
+            # line_cursor tracks our furthest position in the file (inclusive
+            # of lines we skipped as blank/malformed), so it is always the
+            # correct "next start offset". The previous `len(all_lines)` ref
+            # was stale from a pre-islice implementation that read the whole
+            # file — it raised NameError on every call, spamming warnings
+            # and preventing the cursor from advancing past the last BATCH_SIZE
+            # flush.
+            last_ids[fname] = line_cursor
 
         except Exception as e:
             log.warning(f"Session sync error ({fname}): {e}")
