@@ -1442,6 +1442,17 @@ def api_channel_msteams():
     return jsonify(data)
 
 
+@bp_channels.route("/api/channel/tui")
+def api_channel_tui():
+    """TUI channel: surfaces messages tagged `messageChannel=tui` in the
+    OpenClaw gateway log. The TUI is the OpenClaw terminal interface —
+    same Flow-node behaviour as Telegram/Signal/etc but its messages live
+    in gateway.log rather than a dedicated adapter directory.
+    """
+    import dashboard as _d
+    return _d._generic_channel_data("tui")
+
+
 @bp_channels.route("/api/channel/matrix")
 def api_channel_matrix():
     import dashboard as _d
