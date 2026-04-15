@@ -1,0 +1,176 @@
+<div class="page active" id="page-overview">
+  <div class="refresh-bar" style="margin-bottom:6px;">
+    <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
+    <span class="pulse"></span>
+    <span class="live-badge">LIVE</span>
+    <span class="refresh-time" id="refresh-time" style="font-size:11px;">Loading...</span>
+  </div>
+
+  <!-- Token Velocity Alert Banner (GH #313) -->
+  <div id="velocity-alert-banner" style="display:none;margin-bottom:8px;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <span id="velocity-alert-msg"></span>
+      <span style="font-size:11px;font-weight:400;color:inherit;opacity:0.8;">auto-refreshes every 30s</span>
+    </div>
+    <div id="velocity-flagged-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;"></div>
+  </div>
+
+  <!-- Stats Bar (top) -->
+  <div class="stats-footer">
+    <div class="stats-footer-item">
+      <span class="stats-footer-icon">💰</span>
+      <div>
+        <div class="stats-footer-label">Spending <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
+        <div class="stats-footer-value" id="cost-today">$0.00</div>
+        <div class="stats-footer-sub" id="cost-billing-badge" style="margin-top:2px;display:none;"></div>
+      </div>
+      <div style="margin-left:auto;text-align:right;">
+        <div class="stats-footer-sub">wk: <span id="cost-week">--</span></div>
+        <div class="stats-footer-sub">mo: <span id="cost-month">--</span></div>
+      </div>
+      <span id="cost-trend" style="display:none;">Estimated from usage -- may be $0 billed with OAuth auth</span>
+      <div style="margin-left:14px;min-width:160px;">
+        <div class="stats-footer-sub">Burn: <span id="budget-burn-rate">--</span></div>
+        <div class="stats-footer-sub">Proj/mo: <span id="budget-projected-month">--</span></div>
+      </div>
+    </div>
+    <div class="stats-footer-item">
+      <span class="stats-footer-icon">🤖</span>
+      <div>
+        <div class="stats-footer-label">Model</div>
+        <div class="stats-footer-value" id="model-primary">--</div>
+      </div>
+      <div id="model-breakdown" style="display:none;">Loading...</div>
+    </div>
+    <div class="stats-footer-item">
+      <span class="stats-footer-icon">📊</span>
+      <div>
+        <div class="stats-footer-label">Tokens</div>
+        <div class="stats-footer-value" id="token-rate">--</div>
+      </div>
+      <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">--</span></span>
+    </div>
+    <div class="stats-footer-item">
+      <span class="stats-footer-icon">💬</span>
+      <div>
+        <div class="stats-footer-label">Sessions</div>
+        <div class="stats-footer-value" id="hot-sessions-count">--</div>
+      </div>
+      <div id="hot-sessions-list" style="display:none;">Loading...</div>
+    </div>
+    <div class="stats-footer-item" id="reliability-card-lt">
+      <span class="stats-footer-icon" id="reliability-icon-lt">🔄</span>
+      <div>
+        <div class="stats-footer-label">Reliability</div>
+        <div class="stats-footer-value" id="reliability-direction-lt">--</div>
+      </div>
+      <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail-lt"></span>
+    </div>
+  </div>
+
+  <!-- Split Screen: Flow Left | Tasks Right -->
+  <div class="overview-split">
+    <!-- LEFT: Flow + System Health stacked -->
+    <div style="display:flex;flex-direction:column;">
+      <div class="overview-flow-pane" style="border-radius:8px 0 0 0;flex:3;min-height:0;">
+        <div class="grid-overlay"></div>
+        <div class="scanline-overlay"></div>
+        <div class="flow-container" id="overview-flow-container">
+          <!-- Flow SVG cloned here by JS -->
+          <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:13px;">Loading flow...</div>
+        </div>
+      </div>
+
+      <!-- System Health Panel (below flow SVG) -->
+      <div id="system-health-panel" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-top:none;padding:16px;box-shadow:var(--card-shadow);">
+        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
+        <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
+        <div id="sh-channels-wrap"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Channels</div>
+        <div id="sh-channels" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
+        <div id="sh-disks" style="margin-bottom:14px;"></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Cron Jobs</div>
+        <div id="sh-crons" style="margin-bottom:14px;"></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
+        <div id="sh-subagents" style="margin-bottom:14px;"></div>
+        <div id="delegation-chains-panel" style="margin-bottom:14px;"></div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Heartbeat</div>
+        <div id="sh-heartbeat" style="margin-bottom:14px;"></div>
+        <div id="sh-sandbox-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔒 Sandbox</div>
+        <div id="sh-sandbox" style="margin-bottom:14px;"></div></div>
+        <div id="sh-inference-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🤖 Inference Provider</div>
+        <div id="sh-inference" style="margin-bottom:14px;"></div></div>
+        <div id="sh-security-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🛡️ Security Posture</div>
+        <div id="sh-security" style="margin-bottom:14px;"></div></div>
+        <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
+        <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
+        <!-- 🔍 Diagnostics Panel (GH#28) -->
+        <div id="sh-diagnostics-wrap">
+          <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;">🔍 Configuration Diagnostics</div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button id="sh-diagnostics-copy" onclick="event.stopPropagation();copyDiagnostics();" style="font-size:10px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:4px;color:var(--text-muted);cursor:pointer;">📋 Copy</button>
+              <span class="diag-chevron" style="font-size:10px;color:var(--text-muted);">▼</span>
+            </div>
+          </div>
+          <div id="sh-diagnostics-body" style="margin-bottom:14px;">
+            <div id="sh-diagnostics" style="font-family:\'JetBrains Mono\',monospace;font-size:12px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:10px 12px;line-height:1.9;">
+              <div style="color:var(--text-muted);">Loading diagnostics...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DIVIDER -->
+    <div class="overview-divider"></div>
+
+    <!-- RIGHT: Active Tasks + Brain stacked -->
+    <div class="overview-tasks-pane">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
+          <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
+        </div>
+        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
+      </div>
+      <div class="tasks-panel-scroll" id="overview-tasks-list">
+        <div style="text-align:center;padding:32px;color:var(--text-muted);">
+          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
+          <div style="font-size:13px;">Loading tasks...</div>
+        </div>
+      </div>
+      <!-- 🧠 Brain Panel: Main Agent Activity (below Active Tasks) -->
+      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;margin-top:14px;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span id="main-activity-dot" style="width:8px;height:8px;border-radius:50%;background:#888;display:inline-block;"></span>
+            <span style="font-size:13px;font-weight:700;color:var(--text-primary);">🧠 <span id="main-activity-model">Claude Opus</span></span>
+            <span id="main-activity-status" style="font-size:10px;color:var(--text-muted);">
+              <span id="main-activity-label">...</span>
+            </span>
+          </div>
+        </div>
+        <div id="main-activity-list" style="overflow-y:auto;flex:1;font-size:11px;font-family:'JetBrains Mono','Fira Code',monospace;line-height:1.6;">
+          <div style="text-align:center;padding:8px;color:var(--text-muted);font-size:11px;">Waiting for activity...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden elements referenced by existing JS -->
+  <div style="display:none;">
+    <span id="tokens-peak">--</span>
+    <span id="subagents-count">--</span>
+    <span id="subagents-status">--</span>
+    <span id="subagents-preview"></span>
+    <span id="tools-active">--</span>
+    <span id="tools-recent">--</span>
+    <div id="tools-sparklines"><div class="tool-spark"><span>--</span></div><div class="tool-spark"><span>--</span></div><div class="tool-spark"><span>--</span></div></div>
+    <div id="active-tasks-grid"></div>
+    <div id="activity-stream"></div>
+  </div>
+
+  <!-- old system health removed, now inside tasks pane -->
+</div>
