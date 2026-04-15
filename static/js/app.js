@@ -7730,8 +7730,9 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function openTaskModal(sessionId, taskName, sessionKey) {
-  _modalSessionId = sessionId;
-  document.getElementById('modal-title').textContent = taskName || sessionId;
+  _modalSessionId = sessionId || '';
+  window._modalSessionKey = sessionKey || '';  // used by the fallback renderer
+  document.getElementById('modal-title').textContent = taskName || sessionId || sessionKey;
   document.getElementById('modal-session-key').textContent = sessionKey || sessionId;
   document.getElementById('task-modal-overlay').classList.add('open');
   document.getElementById('modal-content').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);">Loading transcript...</div>';
@@ -7768,26 +7769,31 @@ function switchModalTab(tab) {
 }
 
 async function loadModalTranscript() {
-  if (!_modalSessionId) return;
-  try {
-    var r = await fetch('/api/transcript-events/' + encodeURIComponent(_modalSessionId));
-    var data = await r.json();
-    if (data.error || !(data.events && data.events.length)) {
-      // Child transcript unavailable — render a "spawn info" fallback from
-      // the /api/subagents metadata we already fetched. Gives the user
-      // context (task, error, spawn time, parent) instead of a dead modal.
-      _renderModalSpawnInfo(_modalSessionId, data.error || 'No events yet');
-      return;
-    }
-    _modalEvents = data.events || [];
-    var ec = document.getElementById('modal-event-count');
-    if (ec) ec.textContent = '📊 ' + _modalEvents.length + ' events';
-    var mc = document.getElementById('modal-msg-count');
-    if (mc) mc.textContent = '💬 ' + (data.messageCount || 0) + ' messages';
-    renderModalContent();
-  } catch(e) {
-    _renderModalSpawnInfo(_modalSessionId, 'Failed to load transcript');
+  // Failed-spawn subagents have sessionId="" (no child was created), so
+  // don't bail on empty here — fall straight into the fallback which
+  // looks up metadata by key.
+  if (!_modalSessionId && !window._modalSessionKey) return;
+
+  // Only hit the transcript endpoint when we actually have a sessionId.
+  if (_modalSessionId) {
+    try {
+      var r = await fetch('/api/transcript-events/' + encodeURIComponent(_modalSessionId));
+      var data = await r.json();
+      if (!data.error && data.events && data.events.length) {
+        _modalEvents = data.events;
+        var ec = document.getElementById('modal-event-count');
+        if (ec) ec.textContent = '📊 ' + _modalEvents.length + ' events';
+        var mc = document.getElementById('modal-msg-count');
+        if (mc) mc.textContent = '💬 ' + (data.messageCount || 0) + ' messages';
+        renderModalContent();
+        return;
+      }
+      // data.error or zero events → fall through to the fallback renderer.
+    } catch(e) { /* network error — fall through */ }
   }
+  // No transcript (empty sessionId, 404, or zero events). Render the
+  // spawn metadata we already have from /api/subagents.
+  _renderModalSpawnInfo(_modalSessionId || window._modalSessionKey || '', 'No transcript available');
 }
 
 // Fallback view when child transcript is gone (OpenClaw TTL) or empty.
@@ -7853,6 +7859,12 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
 
 function renderModalContent() {
   var el = document.getElementById('modal-content');
+  // When there's no transcript (failed/GC'd subagent), the fallback
+  // renderer took over — don't overwrite it when the user switches tabs.
+  if (!_modalEvents || !_modalEvents.length) {
+    _renderModalSpawnInfo(_modalSessionId || window._modalSessionKey || '', 'No transcript available');
+    return;
+  }
   if (_modalTab === 'summary') renderModalSummary(el);
   else if (_modalTab === 'narrative') renderModalNarrative(el);
   else renderModalFull(el);
