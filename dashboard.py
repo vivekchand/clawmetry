@@ -77,6 +77,7 @@ from routes.components import bp_components
 from routes.fleet_history import bp_fleet, bp_history
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
 from routes.meta import bp_auth, bp_gateway, bp_otel, bp_version, bp_version_impact, bp_clusters
+from routes.nemoclaw import bp_nemoclaw
 
 # History / time-series module
 try:
@@ -19249,7 +19250,7 @@ from flask import Blueprint as _Blueprint
 # bp_version moved to routes/meta.py
 # bp_version_impact moved to routes/meta.py
 # bp_clusters moved to routes/meta.py
-bp_nemoclaw = _Blueprint('nemoclaw', __name__)
+# bp_nemoclaw moved to routes/nemoclaw.py
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── NemoClaw Governance ───────────────────────────────────────────────────────
@@ -19353,103 +19354,8 @@ def _parse_network_policies(yaml_text):
         policies.append({"name": current_name, "hosts": current_hosts})
     return policies
 
-# ── NemoClaw Governance API ───────────────────────────────────────────────────
-
-@bp_nemoclaw.route('/api/nemoclaw/governance')
-def api_nemoclaw_governance():
-    """Return NemoClaw governance status: policy, sandbox state, drift detection."""
-    global _nemoclaw_policy_hash, _nemoclaw_drift_info
-    info = _detect_nemoclaw()
-    if info is None:
-        return jsonify({'installed': False})
-
-    result = {
-        'installed': True,
-        'sandboxes': [],
-        'policy': None,
-        'network_policies': [],
-        'presets': info.get('presets', []),
-        'drift': None,
-        'config': {},
-    }
-
-    # Config summary (sanitise - remove tokens/keys)
-    cfg = info.get('config', {})
-    if cfg:
-        safe_cfg = {k: v for k, v in cfg.items() if 'token' not in k.lower() and 'key' not in k.lower() and 'secret' not in k.lower()}
-        result['config'] = safe_cfg
-
-    # Sandbox state
-    state = info.get('state', {})
-    if isinstance(state, dict):
-        sandboxes_raw = state.get('sandboxes') or state.get('shells') or {}
-        if isinstance(sandboxes_raw, dict):
-            for name, sb in sandboxes_raw.items():
-                if isinstance(sb, dict):
-                    result['sandboxes'].append({
-                        'name': name,
-                        'status': sb.get('status', 'unknown'),
-                        'pid': sb.get('pid'),
-                        'created': sb.get('created') or sb.get('createdAt'),
-                        'preset': sb.get('preset') or sb.get('policy_preset'),
-                    })
-        elif isinstance(sandboxes_raw, list):
-            for sb in sandboxes_raw:
-                if isinstance(sb, dict):
-                    result['sandboxes'].append({
-                        'name': sb.get('name', 'unknown'),
-                        'status': sb.get('status', 'unknown'),
-                        'pid': sb.get('pid'),
-                        'created': sb.get('created') or sb.get('createdAt'),
-                        'preset': sb.get('preset') or sb.get('policy_preset'),
-                    })
-
-    # Parse sandbox list from CLI output if state didn't give sandboxes
-    if not result['sandboxes'] and info.get('sandbox_list_raw'):
-        for line in info['sandbox_list_raw'].splitlines():
-            line = line.strip()
-            if not line or line.startswith('#') or line.lower().startswith('name'):
-                continue
-            parts = line.split()
-            if parts:
-                status = parts[1] if len(parts) > 1 else 'unknown'
-                result['sandboxes'].append({'name': parts[0], 'status': status, 'pid': None, 'created': None, 'preset': None})
-
-    # Policy summary
-    policy_yaml = info.get('policy_yaml')
-    policy_hash = info.get('policy_hash')
-    if policy_yaml:
-        result['network_policies'] = _parse_network_policies(policy_yaml)
-        result['policy'] = {
-            'hash': policy_hash,
-            'lines': len(policy_yaml.splitlines()),
-            'size_bytes': len(policy_yaml.encode()),
-        }
-
-    # Drift detection: compare policy hash vs last seen
-    if policy_hash:
-        if _nemoclaw_policy_hash is None:
-            _nemoclaw_policy_hash = policy_hash
-        elif _nemoclaw_policy_hash != policy_hash:
-            _nemoclaw_drift_info = {
-                'detected_at': datetime.utcnow().isoformat() + 'Z',
-                'previous_hash': _nemoclaw_policy_hash,
-                'current_hash': policy_hash,
-            }
-            _nemoclaw_policy_hash = policy_hash
-
-        if _nemoclaw_drift_info:
-            result['drift'] = _nemoclaw_drift_info
-
-    return jsonify(result)
-
-
-@bp_nemoclaw.route('/api/nemoclaw/governance/acknowledge-drift', methods=['POST'])
-def api_nemoclaw_acknowledge_drift():
-    """Clear the drift alert (user acknowledged the policy change)."""
-    global _nemoclaw_drift_info
-    _nemoclaw_drift_info = {}
-    return jsonify({'ok': True})
+# (bp_nemoclaw handlers moved to routes/nemoclaw.py: /api/nemoclaw/governance,
+#  /api/nemoclaw/governance/acknowledge-drift)
 
 
 # ── Version check & self-update routes ────────────────────────────────────────
@@ -22567,168 +22473,9 @@ def _infer_provider(entry):
 #  /api/cost-optimization, /api/automation-analysis)
 
 
-# ── NemoClaw Governance Routes ───────────────────────────────────────────────
-
-@bp_nemoclaw.route('/api/nemoclaw/status')
-def api_nemoclaw_status():
-    """Detect NemoClaw installation and return full status."""
-    global _nemoclaw_policy_hash, _nemoclaw_drift_info
-    data = _detect_nemoclaw()
-    if not data:
-        return jsonify({"installed": False})
-    # Policy drift detection
-    current_hash = data.get("policy_hash")
-    if current_hash:
-        if _nemoclaw_policy_hash is None:
-            _nemoclaw_policy_hash = current_hash
-        elif _nemoclaw_policy_hash != current_hash:
-            _nemoclaw_drift_info = {
-                "old_hash": _nemoclaw_policy_hash,
-                "new_hash": current_hash,
-                "detected_at": datetime.now(timezone.utc).isoformat(),
-            }
-            _nemoclaw_policy_hash = current_hash
-            data["policy_drifted"] = True
-            data["drift_info"] = _nemoclaw_drift_info
-        else:
-            data["policy_drifted"] = False
-    # Parse network policies for structured display
-    if data.get("policy_yaml"):
-        data["network_policies"] = _parse_network_policies(data["policy_yaml"])
-    return jsonify(data)
-
-
-@bp_nemoclaw.route('/api/nemoclaw/policy')
-def api_nemoclaw_policy():
-    """Return full policy YAML + hash + drift status."""
-    global _nemoclaw_policy_hash, _nemoclaw_drift_info
-    data = _detect_nemoclaw()
-    if not data:
-        return jsonify({"installed": False, "policy_yaml": None})
-    result = {
-        "installed": True,
-        "policy_yaml": data.get("policy_yaml"),
-        "policy_hash": data.get("policy_hash"),
-        "policy_drifted": False,
-        "drift_info": None,
-    }
-    current_hash = data.get("policy_hash")
-    if current_hash:
-        if _nemoclaw_policy_hash and _nemoclaw_policy_hash != current_hash:
-            result["policy_drifted"] = True
-            result["drift_info"] = _nemoclaw_drift_info
-        elif _nemoclaw_policy_hash is None:
-            _nemoclaw_policy_hash = current_hash
-    if data.get("policy_yaml"):
-        result["network_policies"] = _parse_network_policies(data["policy_yaml"])
-    return jsonify(result)
-
-
-@bp_nemoclaw.route('/api/nemoclaw/approve', methods=['POST'])
-def api_nemoclaw_approve():
-    """Approve a pending NemoClaw egress chunk."""
-    data = request.get_json() or {}
-    sandbox = data.get('sandbox')
-    chunk_id = data.get('chunk_id')
-    if not sandbox or not chunk_id:
-        return jsonify({'error': 'missing sandbox or chunk_id'}), 400
-    import subprocess as _sp
-    r = _sp.run(
-        ['openshell', 'draft', 'approve', sandbox, chunk_id],
-        capture_output=True, text=True, timeout=10
-    )
-    return jsonify({'ok': r.returncode == 0, 'output': r.stdout or r.stderr})
-
-
-@bp_nemoclaw.route('/api/nemoclaw/reject', methods=['POST'])
-def api_nemoclaw_reject():
-    """Reject a pending NemoClaw egress chunk."""
-    data = request.get_json() or {}
-    sandbox = data.get('sandbox')
-    chunk_id = data.get('chunk_id')
-    reason = data.get('reason', '')
-    if not sandbox or not chunk_id:
-        return jsonify({'error': 'missing sandbox or chunk_id'}), 400
-    import subprocess as _sp
-    cmd = ['openshell', 'draft', 'reject', sandbox, chunk_id]
-    if reason:
-        cmd += ['--reason', reason]
-    r = _sp.run(cmd, capture_output=True, text=True, timeout=10)
-    return jsonify({'ok': r.returncode == 0, 'output': r.stdout or r.stderr})
-
-
-@bp_nemoclaw.route('/api/nemoclaw/pending-approvals')
-def api_nemoclaw_pending_approvals():
-    """Return pending egress approval requests from openshell."""
-    import shutil as _shutil
-    if not _shutil.which('openshell'):
-        return jsonify({'installed': False, 'approvals': []})
-    try:
-        # Get sandbox names
-        import subprocess as _sp
-        r = _sp.run(['nemoclaw', 'list'], capture_output=True, text=True, timeout=5)
-        approvals = []
-        sandboxes = []
-        for line in r.stdout.splitlines():
-            line = line.strip()
-            if not line or line.startswith('#') or line.lower().startswith('name') or line.startswith('-'):
-                continue
-            parts = line.split()
-            if parts:
-                sandboxes.append(parts[0])
-        for sandbox in sandboxes:
-            # Try JSON output first
-            r2 = _sp.run(
-                ['openshell', 'draft', 'get', sandbox, '--status', 'pending', '--json'],
-                capture_output=True, text=True, timeout=5
-            )
-            if r2.returncode == 0 and r2.stdout.strip():
-                try:
-                    import json as _j
-                    chunks = _j.loads(r2.stdout)
-                    if not isinstance(chunks, list):
-                        chunks = [chunks] if isinstance(chunks, dict) else []
-                    for chunk in chunks:
-                        endpoints = chunk.get('proposed_rule', {}).get('endpoints', [{}])
-                        first_ep = endpoints[0] if endpoints else {}
-                        approvals.append({
-                            'sandbox': sandbox,
-                            'chunk_id': chunk.get('id'),
-                            'rule_name': chunk.get('rule_name'),
-                            'host': first_ep.get('host'),
-                            'port': first_ep.get('port'),
-                            'protocol': first_ep.get('protocol'),
-                            'status': 'pending',
-                            'ts': chunk.get('created_at'),
-                        })
-                    continue
-                except (ValueError, KeyError):
-                    pass
-            # Fallback: plain text
-            r3 = _sp.run(
-                ['openshell', 'draft', 'get', sandbox, '--status', 'pending'],
-                capture_output=True, text=True, timeout=5
-            )
-            if r3.returncode == 0:
-                for line in r3.stdout.splitlines():
-                    line = line.strip()
-                    if not line or line.startswith('#') or line.lower().startswith('id'):
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        approvals.append({
-                            'sandbox': sandbox,
-                            'chunk_id': parts[0],
-                            'rule_name': parts[1] if len(parts) > 1 else None,
-                            'host': parts[2] if len(parts) > 2 else None,
-                            'port': parts[3] if len(parts) > 3 else None,
-                            'protocol': None,
-                            'status': 'pending',
-                            'ts': None,
-                        })
-        return jsonify({'installed': True, 'approvals': approvals})
-    except Exception as e:
-        return jsonify({'installed': True, 'approvals': [], 'error': str(e)})
+# (bp_nemoclaw handlers moved to routes/nemoclaw.py: /api/nemoclaw/status,
+#  /api/nemoclaw/policy, /api/nemoclaw/approve, /api/nemoclaw/reject,
+#  /api/nemoclaw/pending-approvals)
 
 
 # ── Context Inspector (GH #9) ─────────────────────────────────────────
