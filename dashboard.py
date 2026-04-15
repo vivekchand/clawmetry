@@ -67,6 +67,15 @@ from flask import (
 # truth for module-level helpers — see routes/sessions.py for the pattern.
 from routes.sessions import bp_sessions
 from routes.brain import bp_brain
+
+# Module-level helpers extracted to helpers/*.py (Phase 6 modularisation).
+# Re-exported here so existing `_d.<name>` references in routes/*.py keep
+# working without code changes. Over time, route modules will import from
+# helpers/ directly and these re-exports will be retired.
+from helpers.pricing import (  # noqa: F401 — re-export for routes/
+    _provider_from_model,
+    _infer_provider_from_model,
+)
 from routes.usage import bp_usage
 from routes.crons import bp_crons
 from routes.health import bp_health
@@ -19646,22 +19655,7 @@ def _find_log_file(ds):
     return None
 
 
-def _infer_provider_from_model(model_name):
-    """Best-effort provider inference for display only."""
-    m = (model_name or "").lower()
-    if not m:
-        return "unknown"
-    if "claude" in m:
-        return "anthropic"
-    if "grok" in m or "x-ai" in m or m.startswith("xai"):
-        return "xai"
-    if "gpt" in m or "o1" in m or "o3" in m or "o4" in m:
-        return "openai"
-    if "gemini" in m:
-        return "google"
-    if "llama" in m or "mistral" in m or "qwen" in m or "deepseek" in m:
-        return "local/other"
-    return "unknown"
+# _infer_provider_from_model moved to helpers/pricing.py (re-exported above)
 
 
 # (4 route handlers moved to routes/overview.py: /api/timeline,
@@ -19877,19 +19871,7 @@ def _load_openclaw_config_cached():
     return _openclaw_cfg_cache
 
 
-def _provider_from_model(model_name):
-    m = str(model_name or "").lower()
-    if m.startswith("openai/") or "gpt" in m or "codex" in m or m.startswith("o1"):
-        return "openai"
-    if m.startswith("anthropic/") or "claude" in m:
-        return "anthropic"
-    if m.startswith("google/") or "gemini" in m:
-        return "google"
-    if m.startswith("openrouter/"):
-        return "openrouter"
-    if m.startswith("xai/") or "grok" in m:
-        return "xai"
-    return "unknown"
+# _provider_from_model moved to helpers/pricing.py (re-exported above)
 
 
 def _provider_has_api_key(provider):
