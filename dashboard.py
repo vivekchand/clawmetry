@@ -82,6 +82,11 @@ from helpers.logs import (  # noqa: F401 — re-export for routes/
     _get_log_dirs,
     _find_log_file,
 )
+from helpers.streams import (  # noqa: F401 — re-export for routes/
+    SSE_MAX_SECONDS,
+    _acquire_stream_slot,
+    _release_stream_slot,
+)
 from routes.usage import bp_usage
 from routes.crons import bp_crons
 from routes.health import bp_health
@@ -240,14 +245,9 @@ USER_NAME = None
 GATEWAY_URL = None  # e.g. http://localhost:18789
 GATEWAY_TOKEN = None  # Bearer token for /tools/invoke
 CET = timezone(timedelta(hours=1))
-SSE_MAX_SECONDS = 300
-MAX_LOG_STREAM_CLIENTS = 10
-MAX_HEALTH_STREAM_CLIENTS = 10
-MAX_BRAIN_STREAM_CLIENTS = 5
-_stream_clients_lock = threading.Lock()
-_active_log_stream_clients = 0
-_active_health_stream_clients = 0
-_active_brain_stream_clients = 0
+# SSE_MAX_SECONDS moved to helpers/streams.py (re-exported above)
+# Stream-slot caps + state moved to helpers/streams.py (re-exported above)
+# _active_brain_stream_clients moved to helpers/streams.py
 EXTRA_SERVICES = []  # List of {'name': str, 'port': int} from --monitor-service flags
 
 # ── Multi-Node Fleet Configuration ─────────────────────────────────────
@@ -6111,15 +6111,10 @@ USER_NAME = None
 GATEWAY_URL = None  # e.g. http://localhost:18789
 GATEWAY_TOKEN = None  # Bearer token for /tools/invoke
 CET = timezone(timedelta(hours=1))
-SSE_MAX_SECONDS = 300
-MAX_LOG_STREAM_CLIENTS = 10
-MAX_HEALTH_STREAM_CLIENTS = 10
-MAX_BRAIN_STREAM_CLIENTS = 5
-_stream_clients_lock = threading.Lock()
-_active_log_stream_clients = 0
-_active_health_stream_clients = 0
+# SSE_MAX_SECONDS moved to helpers/streams.py (re-exported above)
+# Stream-slot caps + state moved to helpers/streams.py (re-exported above)
 EXTRA_SERVICES = []  # List of {'name': str, 'port': int} from --monitor-service flags
-_active_brain_stream_clients = 0
+# _active_brain_stream_clients moved to helpers/streams.py
 
 # ── Multi-Node Fleet Configuration ─────────────────────────────────────
 FLEET_API_KEY = os.environ.get("CLAWMETRY_FLEET_KEY", "")
@@ -18878,43 +18873,7 @@ _updateCloudStatus();
 # ── API Routes ──────────────────────────────────────────────────────────
 
 
-def _acquire_stream_slot(kind):
-    """Bound concurrent SSE clients per stream type."""
-    global \
-        _active_log_stream_clients, \
-        _active_health_stream_clients, \
-        _active_brain_stream_clients
-    with _stream_clients_lock:
-        if kind == "log":
-            if _active_log_stream_clients >= MAX_LOG_STREAM_CLIENTS:
-                return False
-            _active_log_stream_clients += 1
-            return True
-        if kind == "health":
-            if _active_health_stream_clients >= MAX_HEALTH_STREAM_CLIENTS:
-                return False
-            _active_health_stream_clients += 1
-            return True
-        if kind == "brain":
-            if _active_brain_stream_clients >= MAX_BRAIN_STREAM_CLIENTS:
-                return False
-            _active_brain_stream_clients += 1
-            return True
-    return False
-
-
-def _release_stream_slot(kind):
-    global \
-        _active_log_stream_clients, \
-        _active_health_stream_clients, \
-        _active_brain_stream_clients
-    with _stream_clients_lock:
-        if kind == "log":
-            _active_log_stream_clients = max(0, _active_log_stream_clients - 1)
-        elif kind == "health":
-            _active_health_stream_clients = max(0, _active_health_stream_clients - 1)
-        elif kind == "brain":
-            _active_brain_stream_clients = max(0, _active_brain_stream_clients - 1)
+# _acquire_stream_slot / _release_stream_slot moved to helpers/streams.py (re-exported above)
 
 
 # ── Gateway API proxy (WebSocket JSON-RPC + HTTP fallback) ──────────────
