@@ -5677,6 +5677,7 @@ var _modalEvents = [];
 
 /* === Component Modal === */
 var COMP_MAP = {
+  'node-tui':         {type:'channel', name:'TUI',            icon:'⌨️', chKey:'tui'},
   'node-telegram':    {type:'channel', name:'Telegram',       icon:'📱', chKey:'telegram'},
   'node-signal':      {type:'channel', name:'Signal',         icon:'🔒', chKey:'signal'},
   'node-whatsapp':    {type:'channel', name:'WhatsApp',       icon:'📲', chKey:'whatsapp'},
@@ -5894,7 +5895,7 @@ function openCompModal(nodeId) {
   }
 
   // Generic channel handler for all other channel types
-  var GENERIC_CHANNELS = ['node-googlechat',
+  var GENERIC_CHANNELS = ['node-tui','node-googlechat',
     'node-msteams','node-matrix','node-mattermost','node-line',
     'node-nostr','node-twitch','node-feishu','node-zalo'];
   if (GENERIC_CHANNELS.indexOf(nodeId) !== -1 && c.chKey) {
