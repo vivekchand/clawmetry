@@ -4619,7 +4619,13 @@ async function loadMainActivity() {
     var el = document.getElementById('main-activity-list');
     var dot = document.getElementById('main-activity-dot');
     var label = document.getElementById('main-activity-label');
-    var events = (data && data.events) ? data.events : [];
+    var events = (data && data.events) ? data.events.slice() : [];
+    // /api/brain-history pins CONTEXT events to the top of the array (Brain
+    // tab feature) — for the compact Overview panel we want pure timestamp
+    // desc so the most recent conversation sits at the top.
+    events.sort(function(a, b) {
+      return (b.time || '').localeCompare(a.time || '');
+    });
 
     if (!events.length) {
       el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">No recent activity</div>';
