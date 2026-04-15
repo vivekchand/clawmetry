@@ -4000,6 +4000,10 @@ function clawmetryLogout(){
       </g>
 
       <!-- Channel Nodes -->
+      <g class="flow-node flow-node-channel" id="node-tui" style="display:none;">
+        <rect x="20" y="100" width="110" height="40" rx="10" ry="10" fill="#1f2937" stroke="#374151" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⌨️ TUI</text>
+      </g>
       <g class="flow-node flow-node-channel" id="node-telegram">
         <rect x="20" y="100" width="110" height="40" rx="10" ry="10" fill="#2196F3" stroke="#1565C0" stroke-width="2" filter="url(#dropShadow)"/>
         <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📱 TG</text>
@@ -9975,6 +9979,10 @@ function clawmetryLogout(){
       </g>
 
       <!-- Channel Nodes -->
+      <g class="flow-node flow-node-channel" id="node-tui" style="display:none;">
+        <rect x="20" y="100" width="110" height="40" rx="10" ry="10" fill="#1f2937" stroke="#374151" stroke-width="2" filter="url(#dropShadow)"/>
+        <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⌨️ TUI</text>
+      </g>
       <g class="flow-node flow-node-channel" id="node-telegram">
         <rect x="20" y="100" width="110" height="40" rx="10" ry="10" fill="#2196F3" stroke="#1565C0" stroke-width="2" filter="url(#dropShadow)"/>
         <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📱 TG</text>
@@ -15286,6 +15294,7 @@ function hideUnconfiguredChannels(svgRoot) {
   // Slot assignments: tg=slot1, sig=slot2(middle), wa=slot3
   // Extra channels share slot2 paths and get dynamically repositioned
   var channelMap = {
+    'tui':         { node: 'node-tui',         paths: ['path-human-tg',  'path-tg-gw'] },
     'telegram':    { node: 'node-telegram',    paths: ['path-human-tg',  'path-tg-gw'] },
     'signal':      { node: 'node-signal',      paths: ['path-human-sig', 'path-sig-gw'] },
     'whatsapp':    { node: 'node-whatsapp',    paths: ['path-human-wa',  'path-wa-gw'] },
@@ -15306,7 +15315,7 @@ function hideUnconfiguredChannels(svgRoot) {
     'zalo':        { node: 'node-zalo',        paths: ['path-human-sig', 'path-sig-gw'] }
   };
   // Priority order for slot assignment (up to 3 visible at a time)
-  var SLOT_ORDER = ['telegram', 'whatsapp', 'imessage', 'signal', 'discord', 'slack',
+  var SLOT_ORDER = ['tui', 'telegram', 'whatsapp', 'imessage', 'signal', 'discord', 'slack',
                     'irc', 'webchat', 'googlechat', 'bluebubbles', 'msteams', 'matrix',
                     'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo'];
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
@@ -15956,6 +15965,7 @@ function initOverviewFlow() {
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
     var active = d.channels || ['telegram', 'signal', 'whatsapp'];
     var channelMap = {
+      'tui':         { node: 'ov-node-tui',         paths: ['ov-path-human-tg',  'ov-path-tg-gw'] },
       'telegram':    { node: 'ov-node-telegram',    paths: ['ov-path-human-tg',  'ov-path-tg-gw'] },
       'signal':      { node: 'ov-node-signal',      paths: ['ov-path-human-sig', 'ov-path-sig-gw'] },
       'whatsapp':    { node: 'ov-node-whatsapp',    paths: ['ov-path-human-wa',  'ov-path-wa-gw'] },
@@ -15975,7 +15985,7 @@ function initOverviewFlow() {
       'feishu':      { node: 'ov-node-feishu',      paths: ['ov-path-human-sig', 'ov-path-sig-gw'] },
       'zalo':        { node: 'ov-node-zalo',        paths: ['ov-path-human-sig', 'ov-path-sig-gw'] }
     };
-    var OV_SLOT_ORDER = ['telegram', 'whatsapp', 'imessage', 'signal', 'discord', 'slack',
+    var OV_SLOT_ORDER = ['tui', 'telegram', 'whatsapp', 'imessage', 'signal', 'discord', 'slack',
                          'irc', 'webchat', 'googlechat', 'bluebubbles', 'msteams', 'matrix',
                          'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo'];
     var visibleChannels = OV_SLOT_ORDER.filter(function(ch) { return active.indexOf(ch) !== -1; }).slice(0, 3);
@@ -19834,8 +19844,19 @@ def index():
 
 @bp_overview.route("/api/channels")
 def api_channels():
-    """Return list of configured channel names (telegram, signal, whatsapp, discord, webchat, imessage, etc.)."""
+    """Return active input channels for the Flow diagram.
+
+    Includes:
+    - `tui` (always — the CLI is always available)
+    - configured delivery channels from openclaw.json / gateway.yaml
+    - `webchat` if recent activity in gateway.log (control UI counts as input)
+
+    Previously fell back to a hardcoded ['telegram', 'signal', 'whatsapp']
+    list when nothing was detected — which displayed fake channels for users
+    who hadn't configured any. Removed.
+    """
     KNOWN_CHANNELS = (
+        "tui",
         "telegram",
         "signal",
         "whatsapp",
@@ -19962,9 +19983,32 @@ def api_channels():
         if active_channels:
             configured = active_channels
 
-    # Fallback: show all if nothing found
-    if not configured:
-        configured = ["telegram", "signal", "whatsapp"]
+    # TUI is always available (it's the CLI) — pin it to the front so the
+    # Flow diagram reflects that the user can always reach the agent that way.
+    if "tui" not in configured:
+        configured.insert(0, "tui")
+
+    # Surface webchat if the OpenClaw control-UI has recent activity. Looking
+    # for "webchat connected" in the rolling gateway.log catches the case
+    # where the user is using the OpenClaw control UI but hasn't configured
+    # webchat as a formal channel.
+    try:
+        gw_log_paths = [
+            os.path.expanduser("~/.openclaw/logs/gateway.log"),
+            os.path.expanduser("~/.openclaw-dev/logs/gateway.log"),
+        ]
+        gw_log = next((p for p in gw_log_paths if os.path.isfile(p)), None)
+        if gw_log:
+            today = datetime.now().strftime("%Y-%m-%d")
+            with open(gw_log) as _wf:
+                for line in _wf:
+                    if today in line and "webchat connected" in line:
+                        if "webchat" not in configured:
+                            configured.append("webchat")
+                        break
+    except Exception:
+        pass
+
     return jsonify({"channels": configured})
 
 
