@@ -22402,6 +22402,21 @@ def api_brain_stream():
                         "detail": extract_detail(tool_name, inp),
                         "color": color,
                     }
+        # Handle custom events (e.g., openclaw:prompt-error)
+        if obj.get("type") == "custom":
+            ct = obj.get("customType", "")
+            if ct == "openclaw:prompt-error":
+                data = obj.get("data", {})
+                error_msg = data.get("error") or data.get("message") or "Prompt error"
+                return {
+                    "time": ts,
+                    "source": source_id,
+                    "sourceLabel": source_label,
+                    "type": "ERROR",
+                    "detail": f"[prompt-error] {error_msg}"[:300],
+                    "color": "#ef4444",  # Red for errors
+                }
+
         if role == "user":
             text = ""
             if isinstance(content_obj, str):
@@ -22579,9 +22594,21 @@ def api_brain_stream():
                                 pass
                     last_jsonl_scan = now
 
-                # Emit events
+                # Emit events and fire alerts for errors
                 for ev in events:
                     yield f"data: {json.dumps(ev)}\n\n"
+                    # Fire alert for prompt-error events
+                    if ev.get("type") == "ERROR" and "prompt-error" in ev.get("detail", ""):
+                        try:
+                            _fire_alert(
+                                rule_id="prompt-error-detector",
+                                alert_type="prompt_error",
+                                message=f"Prompt error in {ev.get('source', 'unknown')}: {ev.get('detail', '')[15:]}"[:200],  # Trim '[prompt-error] '
+                                channels=["banner"],
+                                severity="error",
+                            )
+                        except Exception:
+                            pass  # Don't break stream on alert failure
 
                 # Heartbeat every cycle to keep connection alive
                 if not events:
