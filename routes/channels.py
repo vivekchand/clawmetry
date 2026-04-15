@@ -1444,13 +1444,123 @@ def api_channel_msteams():
 
 @bp_channels.route("/api/channel/tui")
 def api_channel_tui():
-    """TUI channel: surfaces messages tagged `messageChannel=tui` in the
-    OpenClaw gateway log. The TUI is the OpenClaw terminal interface —
-    same Flow-node behaviour as Telegram/Signal/etc but its messages live
-    in gateway.log rather than a dedicated adapter directory.
+    """TUI channel: scans session JSONLs for user messages whose `Sender
+    (untrusted metadata)` JSON label is `openclaw-tui`, and the
+    immediately-following assistant reply as the outbound.
+
+    Unlike Telegram/Signal/etc which have dedicated channel adapters and
+    log to `gateway.log`, the OpenClaw TUI writes directly into the active
+    session JSONL — so we reconstruct the conversation from there.
     """
     import dashboard as _d
-    return _d._generic_channel_data("tui")
+    import re as _re
+
+    limit = request.args.get("limit", 50, type=int)
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    if not os.path.isdir(sessions_dir):
+        return jsonify({"messages": [], "todayIn": 0, "todayOut": 0,
+                        "status": "no sessions dir"})
+
+    # Only scan the most-recent 3 sessions (by mtime) — good enough to
+    # capture the active conversation without loading hours of history.
+    files = sorted(
+        [f for f in glob.glob(os.path.join(sessions_dir, "*.jsonl"))
+         if ".deleted." not in f and os.path.getsize(f) > 0],
+        key=os.path.getmtime, reverse=True,
+    )[:3]
+
+    def _strip_sender_block(text):
+        """Remove the `Sender (untrusted metadata)` JSON preamble from a
+        user message so the rendered bubble shows the real content."""
+        if not isinstance(text, str):
+            return text
+        m = _re.search(r"```json\s*\{[^`]*?\}\s*```\s*", text, _re.DOTALL)
+        return (text[m.end():] if m else text).strip()
+
+    messages = []
+    today_in = 0
+    today_out = 0
+    for fpath in files:
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                prev_was_tui_in = False
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    if ev.get("type") != "message":
+                        continue
+                    msg = ev.get("message") or {}
+                    role = msg.get("role", "")
+                    content = msg.get("content") or []
+                    ts = ev.get("timestamp", "") or ev.get("time", "")
+
+                    # Inbound — user message tagged openclaw-tui
+                    if role == "user" and isinstance(content, list) and content:
+                        first = content[0]
+                        text = first.get("text", "") if isinstance(first, dict) else ""
+                        if "openclaw-tui" not in text:
+                            prev_was_tui_in = False
+                            continue
+                        body = _strip_sender_block(text)
+                        messages.append({
+                            "timestamp": ts,
+                            "direction": "in",
+                            "sender": "User",
+                            "text": body,
+                        })
+                        if today and today in str(ts):
+                            today_in += 1
+                        prev_was_tui_in = True
+                        continue
+
+                    # Outbound — assistant reply that immediately follows a
+                    # TUI inbound (OpenClaw replies to whichever channel the
+                    # last user message came from)
+                    if role == "assistant" and prev_was_tui_in and isinstance(content, list):
+                        reply_parts = []
+                        for blk in content:
+                            if isinstance(blk, dict) and blk.get("type") == "text":
+                                t = blk.get("text", "")
+                                if t:
+                                    reply_parts.append(t)
+                        if reply_parts:
+                            messages.append({
+                                "timestamp": ts,
+                                "direction": "out",
+                                "sender": "Clawd",
+                                "text": " ".join(reply_parts),
+                            })
+                            if today and today in str(ts):
+                                today_out += 1
+                        prev_was_tui_in = False
+                        continue
+
+                    # toolResult / other roles don't toggle the tui flag
+                    if role not in ("toolResult",):
+                        prev_was_tui_in = False
+        except Exception:
+            continue
+
+    # Newest first, cap to limit
+    messages.sort(key=lambda m: m.get("timestamp", ""), reverse=True)
+    messages = messages[:limit]
+
+    return jsonify({
+        "messages": messages,
+        "todayIn": today_in,
+        "todayOut": today_out,
+        "total": len(messages),
+        "status": "connected",
+    })
 
 
 @bp_channels.route("/api/channel/matrix")
