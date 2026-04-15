@@ -8148,87 +8148,22 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/crons.html' %}
 
 <!-- MEMORY -->
-<div class="page" id="page-memory">
-  <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadMemory()">↻ Refresh</button>
-  </div>
-  <div id="memory-analytics-panel" style="margin-bottom:12px"></div>
-  <div class="card" id="memory-list">Loading...</div>
-  <div class="file-viewer" id="file-viewer">
-    <div class="file-viewer-header">
-      <span class="file-viewer-title" id="file-viewer-title"></span>
-      <button class="file-viewer-close" onclick="closeFileViewer()">✕ Close</button>
-    </div>
-    <div class="file-viewer-content" id="file-viewer-content"></div>
-  </div>
-</div>
+{% include 'tabs/memory.html' %}
 
 <!-- TRANSCRIPTS -->
-<div class="page" id="page-transcripts">
-  <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadTranscripts()">↻ Refresh</button>
-    <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← Back to list</button>
-  </div>
-  <div class="card" id="transcript-list">Loading...</div>
-  <div id="transcript-viewer" style="display:none">
-    <div class="transcript-viewer-meta" id="transcript-meta"></div>
-    <!-- Session Replay Controls -->
-    <div id="replay-controls" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:10px;padding:12px 14px;margin-bottom:10px;">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
-        <button id="replay-prev" onclick="replayPrev()" style="padding:5px 12px;border-radius:6px;border:none;background:var(--button-bg);color:var(--text-primary);cursor:pointer;font-size:14px;">&#9664;</button>
-        <span id="replay-pos" style="font-size:13px;color:var(--text-muted);min-width:60px;text-align:center;">0/0</span>
-        <button id="replay-next" onclick="replayNext()" style="padding:5px 12px;border-radius:6px;border:none;background:var(--button-bg);color:var(--text-primary);cursor:pointer;font-size:14px;">&#9654;</button>
-        <input type="range" id="replay-scrubber" min="0" max="0" value="0" oninput="replayJumpTo(parseInt(this.value))" style="flex:1;min-width:120px;accent-color:#6366f1;">
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <button class="replay-filter active-filter" data-type="all" onclick="replayFilter('all')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:#6366f1;color:#fff;font-size:12px;cursor:pointer;">All</button>
-        <button class="replay-filter" data-type="tool_use" onclick="replayFilter('tool_use')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#128295; Tools</button>
-        <button class="replay-filter" data-type="thinking" onclick="replayFilter('thinking')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#129504; Thinking</button>
-        <button class="replay-filter" data-type="assistant" onclick="replayFilter('assistant')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#129776; AI</button>
-        <button class="replay-filter" data-type="user" onclick="replayFilter('user')" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border-secondary);background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;">&#128100; User</button>
-      </div>
-    </div>
-    <div class="chat-messages" id="transcript-messages"></div>
-  </div>
-</div>
+{% include 'tabs/transcripts.html' %}
 
 
 <!-- UPGRADE IMPACT -->
-<div class="page" id="page-version-impact">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#128200; Upgrade Impact</h2>
-    <button class="refresh-btn" onclick="loadVersionImpact()">&#8635; Refresh</button>
-  </div>
-  <div id="version-impact-content" style="padding:8px 0;">
-    <div style="color:var(--text-muted);font-size:13px;">Loading...</div>
-  </div>
-</div>
+{% include 'tabs/version-impact.html' %}
 
 <!-- SESSION CLUSTERS -->
-<div class="page" id="page-clusters">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#129492; Session Clusters</h2>
-    <button class="refresh-btn" onclick="loadClusters()">&#8635; Refresh</button>
-  </div>
-  <div id="clusters-content" style="padding:8px 0;">
-    <div style="color:var(--text-muted);font-size:13px;">Loading...</div>
-  </div>
-</div>
+{% include 'tabs/clusters.html' %}
 
 <!-- HISTORY -->
 
 <!-- RATE LIMITS -->
-<div class="page" id="page-limits">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#9889; API Rate Limit Monitor</h2>
-    <button class="refresh-btn" onclick="loadRateLimits()">&#8635; Refresh</button>
-  </div>
-  <p style="font-size:12px;color:var(--text-muted);margin:0 0 14px 0;">Rolling 1-minute window utilisation per provider. Red = &ge;90%, amber = &ge;70%. Data sourced from OTLP metrics.</p>
-  <div id="rate-limits-content">
-    <div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">Loading rate limit data...</div>
-  </div>
-  <div id="rate-limits-hourly" style="margin-top:16px;"></div>
-</div>
+{% include 'tabs/limits.html' %}
 
 {% include 'tabs/history.html' %}
 
@@ -8236,41 +8171,7 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/flow.html' %}
 
 <!-- BRAIN -->
-<div class="page" id="page-brain">
-  <div style="padding:12px 0 8px 0;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
-      <div style="display:flex;align-items:center;gap:8px;"><span id="brain-live-indicator"></span><button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button></div>
-    </div>
-    <!-- Activity density chart -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Activity density -- last 60 min (30s buckets)</div>
-      <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
-    </div>
-    <div class="brain-view-toggle">
-      
-    </div>
-    <!-- Source filter chips -->
-    <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
-      <button class="brain-chip active" data-source="all" onclick="setBrainFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
-    </div>
-    <!-- Type filter chips (separate container to prevent duplication) -->
-    <div id="brain-type-chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px;"></div>
-    <!-- Event stream -->
-    <div id="brain-feed" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <span style="font-size:11px;color:var(--text-muted);">Live event stream (newest first)</span>
-        <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">↑ new events</span>
-      </div>
-      <div id="brain-stream" style="max-height:calc(100vh - 320px);overflow-y:auto;">
-        <div style="color:var(--text-muted);padding:20px">Loading...</div>
-      </div>
-    </div>
-    <div id="brain-graph-wrap" class="brain-graph-container" style="display:none;">
-      <canvas id="brain-graph-canvas"></canvas>
-    </div>
-  </div>
-</div><!-- end page-brain -->
+{% include 'tabs/brain.html' %}
 
 <!-- SECURITY -->
 {% include 'tabs/security.html' %}
@@ -8282,42 +8183,10 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/nemoclaw.html' %}
 
 <!-- SUB-AGENT TREE (theme 2) -->
-<div class="page" id="page-subagents">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#129313; Sub-Agent Tree</h2>
-    <button class="refresh-btn" onclick="loadSubagents()">&#8635; Refresh</button>
-  </div>
-  <div id="subagents-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
-</div><!-- end page-subagents (theme 2) -->
+{% include 'tabs/subagents.html' %}
 
 
-<div class="page" id="page-logs">
-  <div class="refresh-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-    <button class="refresh-btn" onclick="loadLogs()">&#8635; Refresh</button>
-    <label style="font-size:12px;color:var(--text-secondary);">Lines:
-      <input id="log-lines" type="number" value="200" min="10" max="2000" step="10"
-        style="width:60px;margin-left:4px;padding:3px 6px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">
-    </label>
-    <input id="log-filter" type="text" placeholder="Filter logs…" oninput="filterLogLines()"
-      style="padding:5px 10px;border-radius:7px;border:1px solid var(--border-primary);background:var(--bg-secondary);color:var(--text-primary);font-size:12px;width:180px;">
-    <div style="display:flex;gap:4px;flex-wrap:wrap;">
-      <button class="time-btn active" id="log-filter-all"   onclick="setLogLevel('all',this)">All</button>
-      <button class="time-btn"        id="log-filter-info"  onclick="setLogLevel('info',this)">Info</button>
-      <button class="time-btn"        id="log-filter-warn"  onclick="setLogLevel('warn',this)">Warn</button>
-      <button class="time-btn"        id="log-filter-error" onclick="setLogLevel('error',this)">Error</button>
-    </div>
-    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer;margin-left:auto;">
-      <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
-    </label>
-    <span id="log-stream-status" style="font-size:11px;color:var(--text-muted);">&#9679; Connecting…</span>
-  </div>
-  <div class="card" style="padding:0;overflow:hidden;margin-top:8px;">
-    <div id="logs-full"
-      style="font-family:monospace;font-size:12px;padding:12px 16px;max-height:calc(100vh - 180px);overflow-y:auto;background:var(--bg-secondary);border-radius:8px;">
-      <div style="color:var(--text-muted);text-align:center;padding:24px;">Loading logs…</div>
-    </div>
-  </div>
-</div>
+{% include 'tabs/logs.html' %}
 
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </div> <!-- end zoom-wrapper -->
