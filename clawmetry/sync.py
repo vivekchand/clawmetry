@@ -1472,6 +1472,7 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                         "display_name": label or sid[:8],
                         "status": "completed",
                         "model": model,
+                        "recent_model": last_seen_model or model,
                         "total_tokens": total_tokens,
                         "total_cost": total_cost,
                         "started_at": started_at,
