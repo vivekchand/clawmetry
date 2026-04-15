@@ -1,0 +1,56 @@
+<div class="page" id="page-models">
+  <div class="refresh-bar">
+    <button class="refresh-btn" onclick="loadModelAttribution()">&#x21bb; Refresh</button>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-title"><span class="icon">&#x1F916;</span> Primary Model</div>
+      <div class="card-value" id="model-primary">--</div>
+      <div class="card-sub" id="model-primary-pct"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#x1F504;</span> Model Diversity</div>
+      <div class="card-value" id="model-count">--</div>
+      <div class="card-sub">distinct models used</div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#x26A1;</span> Fallback Rate</div>
+      <div class="card-value" id="model-fallback-rate">--</div>
+      <div class="card-sub" id="model-fallback-detail"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="icon">&#x1F4AC;</span> Total Turns</div>
+      <div class="card-value" id="model-total-turns">--</div>
+      <div class="card-sub">assistant responses tracked</div>
+    </div>
+  </div>
+  <div class="section-title">&#x1F916; Model Mix</div>
+  <div class="card">
+    <div id="model-mix-chart" style="padding:8px 0;">Loading...</div>
+  </div>
+  <div class="section-title">&#x1F4CA; Per-Session Breakdown</div>
+  <div class="card">
+    <table class="usage-table" id="model-sessions-table" style="width:100%;">
+      <thead><tr>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Model</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Sessions</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Turns</th>
+        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Share</th>
+      </tr></thead>
+      <tbody><tr><td colspan="4" style="color:#666;padding:8px;">Loading...</td></tr></tbody>
+    </table>
+  </div>
+  <div id="model-switches-section" style="display:none;">
+    <div class="section-title">&#x1F500; Model Switches <span id="model-switches-count" style="font-size:13px;color:var(--text-muted);font-weight:400;"></span></div>
+    <div class="card">
+      <table class="usage-table" id="model-switches-table" style="width:100%;">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Session</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">From</th>
+          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">To</th>
+        </tr></thead>
+        <tbody><tr><td colspan="3" style="color:#666;padding:8px;">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div><!-- end page-models (theme 2) -->
