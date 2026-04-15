@@ -76,6 +76,12 @@ from helpers.pricing import (  # noqa: F401 — re-export for routes/
     _provider_from_model,
     _infer_provider_from_model,
 )
+from helpers.logs import (  # noqa: F401 — re-export for routes/
+    _grep_log_file,
+    _tail_lines,
+    _get_log_dirs,
+    _find_log_file,
+)
 from routes.usage import bp_usage
 from routes.crons import bp_crons
 from routes.health import bp_health
@@ -134,50 +140,7 @@ import tempfile as _tempfile
 import platform as _platform
 
 
-def _grep_log_file(filepath, pattern):
-    """Cross-platform grep: return list of lines matching pattern (case-insensitive)."""
-    results = []
-    try:
-        with open(filepath, "r", errors="replace") as _f:
-            for _line in _f:
-                if _re.search(pattern, _line, _re.IGNORECASE):
-                    results.append(_line.rstrip("\n"))
-    except (OSError, IOError):
-        pass
-    return results
-
-
-def _tail_lines(filepath, n=200):
-    """Cross-platform tail: return last n lines of a file as a list of strings."""
-    try:
-        fsize = os.path.getsize(filepath)
-        with open(filepath, "rb") as _f:
-            try:
-                _f.seek(-min(n * 500, fsize), 2)
-            except OSError:
-                _f.seek(0)
-            return _f.read().decode("utf-8", errors="replace").splitlines()[-n:]
-    except (OSError, IOError):
-        return []
-
-
-def _get_log_dirs():
-    """Return candidate log directories.
-
-    OpenClaw 2026.4+ writes to ~/.openclaw/logs/. Older versions and Docker
-    setups still drop into /tmp/openclaw or /tmp/moltbot. We probe all of
-    them so the dashboard works regardless of installation age.
-    """
-    home_logs = os.path.expanduser("~/.openclaw/logs")
-    home_logs_alt = os.path.expanduser("~/.openclaw-dev/logs")  # `--dev` profile
-    if sys.platform == "win32":
-        return [
-            home_logs,
-            os.path.join(os.environ.get("APPDATA", ""), "openclaw", "logs"),
-            os.path.join(_tempfile.gettempdir(), "openclaw"),
-            os.path.join(_tempfile.gettempdir(), "moltbot"),
-        ]
-    return [home_logs, home_logs_alt, "/tmp/openclaw", "/tmp/moltbot"]
+# _grep_log_file, _tail_lines, _get_log_dirs moved to helpers/logs.py (re-exported above)
 
 
 def _detect_host_hardware():
@@ -6048,50 +6011,7 @@ app = Flask(__name__)
 import platform as _platform
 
 
-def _grep_log_file(filepath, pattern):
-    """Cross-platform grep: return list of lines matching pattern (case-insensitive)."""
-    results = []
-    try:
-        with open(filepath, "r", errors="replace") as _f:
-            for _line in _f:
-                if _re.search(pattern, _line, _re.IGNORECASE):
-                    results.append(_line.rstrip("\n"))
-    except (OSError, IOError):
-        pass
-    return results
-
-
-def _tail_lines(filepath, n=200):
-    """Cross-platform tail: return last n lines of a file as a list of strings."""
-    try:
-        fsize = os.path.getsize(filepath)
-        with open(filepath, "rb") as _f:
-            try:
-                _f.seek(-min(n * 500, fsize), 2)
-            except OSError:
-                _f.seek(0)
-            return _f.read().decode("utf-8", errors="replace").splitlines()[-n:]
-    except (OSError, IOError):
-        return []
-
-
-def _get_log_dirs():
-    """Return candidate log directories.
-
-    OpenClaw 2026.4+ writes to ~/.openclaw/logs/. Older versions and Docker
-    setups still drop into /tmp/openclaw or /tmp/moltbot. We probe all of
-    them so the dashboard works regardless of installation age.
-    """
-    home_logs = os.path.expanduser("~/.openclaw/logs")
-    home_logs_alt = os.path.expanduser("~/.openclaw-dev/logs")  # `--dev` profile
-    if sys.platform == "win32":
-        return [
-            home_logs,
-            os.path.join(os.environ.get("APPDATA", ""), "openclaw", "logs"),
-            os.path.join(_tempfile.gettempdir(), "openclaw"),
-            os.path.join(_tempfile.gettempdir(), "moltbot"),
-        ]
-    return [home_logs, home_logs_alt, "/tmp/openclaw", "/tmp/moltbot"]
+# _grep_log_file, _tail_lines, _get_log_dirs moved to helpers/logs.py (re-exported above)
 
 
 def _detect_host_hardware():
@@ -19641,18 +19561,7 @@ def _cron_runs_from_transcripts(job_id):
 #  /api/cron-health)
 
 
-def _find_log_file(ds):
-    """Find log file for a given date string, trying multiple prefixes and dirs."""
-    dirs = [LOG_DIR] + _get_log_dirs()
-    prefixes = ["openclaw-", "moltbot-"]
-    for d in dirs:
-        if not d or not os.path.isdir(d):
-            continue
-        for p in prefixes:
-            f = os.path.join(d, f"{p}{ds}.log")
-            if os.path.exists(f):
-                return f
-    return None
+# _find_log_file moved to helpers/logs.py (re-exported above)
 
 
 # _infer_provider_from_model moved to helpers/pricing.py (re-exported above)
