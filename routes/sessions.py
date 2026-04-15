@@ -722,7 +722,10 @@ def api_subagents():
             "task": sp.get("task"),
             "error": sp.get("error"),
             "runId": sp.get("runId"),
-            "model": sp.get("modelApplied") or "",
+            # modelApplied in legacy OpenClaw spawn results is a bool "was a
+            # model override applied?", not the model name. Coerce non-string
+            # values to "" so the UI doesn't render "True" in a model slot.
+            "model": sp.get("modelApplied") if isinstance(sp.get("modelApplied"), str) else "",
             "updatedAt": ts_ms,
             "startedAt": ts_ms,
             "depth": 1,
