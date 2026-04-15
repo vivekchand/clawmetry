@@ -1,0 +1,8 @@
+recursive-include static *
+recursive-include helpers *.py
+recursive-include routes *.py
+include CLAUDE.md
+include ARCHITECTURE.md
+include CHANGELOG.md
+include LICENSE
+include README.md
