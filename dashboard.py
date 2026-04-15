@@ -129,14 +129,22 @@ def _tail_lines(filepath, n=200):
 
 
 def _get_log_dirs():
-    """Return platform-appropriate candidate log directories."""
+    """Return candidate log directories.
+
+    OpenClaw 2026.4+ writes to ~/.openclaw/logs/. Older versions and Docker
+    setups still drop into /tmp/openclaw or /tmp/moltbot. We probe all of
+    them so the dashboard works regardless of installation age.
+    """
+    home_logs = os.path.expanduser("~/.openclaw/logs")
+    home_logs_alt = os.path.expanduser("~/.openclaw-dev/logs")  # `--dev` profile
     if sys.platform == "win32":
         return [
+            home_logs,
             os.path.join(os.environ.get("APPDATA", ""), "openclaw", "logs"),
             os.path.join(_tempfile.gettempdir(), "openclaw"),
             os.path.join(_tempfile.gettempdir(), "moltbot"),
         ]
-    return ["/tmp/openclaw", "/tmp/moltbot"]
+    return [home_logs, home_logs_alt, "/tmp/openclaw", "/tmp/moltbot"]
 
 
 _CURRENT_PLATFORM = _platform.system().lower()
@@ -5947,14 +5955,22 @@ def _tail_lines(filepath, n=200):
 
 
 def _get_log_dirs():
-    """Return platform-appropriate candidate log directories."""
+    """Return candidate log directories.
+
+    OpenClaw 2026.4+ writes to ~/.openclaw/logs/. Older versions and Docker
+    setups still drop into /tmp/openclaw or /tmp/moltbot. We probe all of
+    them so the dashboard works regardless of installation age.
+    """
+    home_logs = os.path.expanduser("~/.openclaw/logs")
+    home_logs_alt = os.path.expanduser("~/.openclaw-dev/logs")  # `--dev` profile
     if sys.platform == "win32":
         return [
+            home_logs,
             os.path.join(os.environ.get("APPDATA", ""), "openclaw", "logs"),
             os.path.join(_tempfile.gettempdir(), "openclaw"),
             os.path.join(_tempfile.gettempdir(), "moltbot"),
         ]
-    return ["/tmp/openclaw", "/tmp/moltbot"]
+    return [home_logs, home_logs_alt, "/tmp/openclaw", "/tmp/moltbot"]
 
 
 _CURRENT_PLATFORM = _platform.system().lower()
@@ -28366,21 +28382,28 @@ def api_component_machine():
 
 @bp_components.route("/api/component/gateway")
 def api_component_gateway():
-    """Parse gateway routing events from today's log file."""
+    """Parse gateway routing events from today's log file.
+
+    Supports two on-disk formats:
+      1. Legacy per-day JSONL: openclaw-YYYY-MM-DD.log / moltbot-YYYY-MM-DD.log
+      2. Current rolling plain-text: gateway.log (OpenClaw 2026.4+)
+         Format: "ISO-TS [tag] message", e.g.
+           2026-04-15T09:36:55.977+02:00 [ws] ⇄ res ✗ cron.list 0ms errorCode=...
+    """
     import re
 
     limit = int(request.args.get("limit", 50))
     offset = int(request.args.get("offset", 0))
     today = datetime.now().strftime("%Y-%m-%d")
-    # Try both openclaw and moltbot log dirs/naming
-    candidates = (
-        [
-            os.path.join(LOG_DIR, f"openclaw-{today}.log"),
-            os.path.join(LOG_DIR, f"moltbot-{today}.log"),
-        ]
-        + [os.path.join(d, f"openclaw-{today}.log") for d in _get_log_dirs()]
-        + [os.path.join(d, f"moltbot-{today}.log") for d in _get_log_dirs()]
-    )
+    log_dirs = [d for d in [LOG_DIR, *_get_log_dirs()] if d]
+    log_dirs = list(dict.fromkeys(log_dirs))
+    candidates = []
+    for d in log_dirs:
+        candidates.extend([
+            os.path.join(d, f"openclaw-{today}.log"),
+            os.path.join(d, f"moltbot-{today}.log"),
+            os.path.join(d, "gateway.log"),  # OpenClaw 2026.4+ rolling log
+        ])
     candidates = list(dict.fromkeys(candidates))  # deduplicate preserving order
     log_path = next((p for p in candidates if os.path.exists(p)), None)
 
@@ -28395,11 +28418,78 @@ def api_component_gateway():
     if not log_path:
         return jsonify({"routes": [], "stats": stats, "total": 0})
 
+    is_plaintext = os.path.basename(log_path) == "gateway.log"
+
+    def _parse_plaintext_line(line):
+        """Parse one '[TS] [tag] message' line from gateway.log.
+
+        Returns (route_dict, hit_category) or (None, None).
+        """
+        m = re.match(
+            r"^(\d{4}-\d{2}-\d{2}T[\d:.+\-]+)\s+\[([^\]]+)\]\s+(.*)$",
+            line,
+        )
+        if not m:
+            return None, None
+        ts, tag, body = m.group(1), m.group(2), m.group(3)
+        if not ts.startswith(today):
+            return None, None
+        # Default route shape
+        route = {
+            "timestamp": ts,
+            "from": tag,
+            "to": "",
+            "session": "",
+            "type": "message",
+            "status": "ok",
+        }
+        # Errors first (any line carrying errorCode or "res ✗")
+        if "errorCode=" in body or "res ✗" in body:
+            route["status"] = "error"
+            m_meth = re.search(r"res\s+✗\s+(\S+)", body)
+            if m_meth:
+                route["to"] = m_meth.group(1)
+            return route, "today_errors"
+        # ws successful RPC
+        if tag == "ws":
+            m_meth = re.search(r"res\s+✓\s+(\S+)", body)
+            if m_meth:
+                route["to"] = m_meth.group(1)
+                meth = m_meth.group(1)
+                if meth.startswith("cron."):
+                    route["type"] = "cron"
+                    return route, "today_crons"
+                if "heartbeat" in meth.lower():
+                    route["type"] = "heartbeat"
+                    return route, "today_heartbeats"
+                return route, "today_messages"
+            # Connection events still count as a message
+            if "connected" in body or "disconnected" in body:
+                return route, "today_messages"
+            return None, None
+        if tag == "heartbeat":
+            route["type"] = "heartbeat"
+            return route, "today_heartbeats"
+        if tag in ("cron", "crons"):
+            route["type"] = "cron"
+            return route, "today_crons"
+        # Fall through: count miscellaneous tags as messages so the panel isn't
+        # silent when unfamiliar log lines appear.
+        return route, "today_messages"
+
     try:
         with open(log_path, "r") as f:
             for line in f:
                 line = line.strip()
                 if not line:
+                    continue
+                # Plain-text branch for OpenClaw 2026.4+ rolling gateway.log
+                if is_plaintext:
+                    route, cat = _parse_plaintext_line(line)
+                    if route is not None:
+                        if cat:
+                            stats[cat] = stats.get(cat, 0) + 1
+                        routes.append(route)
                     continue
                 try:
                     entry = json.loads(line)
