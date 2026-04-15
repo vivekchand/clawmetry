@@ -25,11 +25,18 @@
       <path class="flow-path" id="path-human-tg"  d="M 60 56 C 60 70, 65 85, 75 100"/>
       <path class="flow-path" id="path-human-sig" d="M 60 56 C 55 90, 60 140, 75 170"/>
       <path class="flow-path" id="path-human-wa"  d="M 60 56 C 50 110, 55 200, 75 240"/>
+      <!-- TUI + WebChat share the tg / sig slots visually but carry their own path ids so
+           the Flow animation map can trigger the correct channel node when an inbound
+           event arrives via TUI or /webchat, instead of squashing to the tg slot. -->
+      <path class="flow-path" id="path-human-tui"     d="M 60 56 C 60 70, 65 85, 75 100"/>
+      <path class="flow-path" id="path-human-webchat" d="M 60 56 C 55 90, 60 140, 75 170"/>
 
       <!-- Channel -> Gateway paths -->
-      <path class="flow-path" id="path-tg-gw"  d="M 130 120 C 150 120, 160 165, 180 170"/>
-      <path class="flow-path" id="path-sig-gw" d="M 130 190 C 150 190, 160 185, 180 183"/>
-      <path class="flow-path" id="path-wa-gw"  d="M 130 260 C 150 260, 160 200, 180 195"/>
+      <path class="flow-path" id="path-tg-gw"      d="M 130 120 C 150 120, 160 165, 180 170"/>
+      <path class="flow-path" id="path-sig-gw"     d="M 130 190 C 150 190, 160 185, 180 183"/>
+      <path class="flow-path" id="path-wa-gw"      d="M 130 260 C 150 260, 160 200, 180 195"/>
+      <path class="flow-path" id="path-tui-gw"     d="M 130 120 C 150 120, 160 165, 180 170"/>
+      <path class="flow-path" id="path-webchat-gw" d="M 130 190 C 150 190, 160 185, 180 183"/>
 
       <!-- Gateway -> Brain -->
       <path class="flow-path" id="path-gw-brain" d="M 290 183 C 305 183, 315 175, 330 175"/>

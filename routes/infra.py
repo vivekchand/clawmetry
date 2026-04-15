@@ -109,51 +109,119 @@ def api_flow_events():
 
     gw_log = os.path.join(os.path.expanduser("~"), ".openclaw", "logs", "gateway.log")
 
+    # OpenClaw emits tool names verified in production session JSONLs.
+    # Map → the short tool-key our Flow SVG path ids expect:
+    #   node-exec / path-brain-exec     ← exec, process, read, write, edit, write_file
+    #   node-browser / path-brain-browser ← web_fetch, ollama_web_fetch, image
+    #   node-search  / path-brain-search  ← web_search, ollama_web_search
+    #   node-memory  / path-brain-memory  ← memory_search, memory_get
+    #   node-session / path-brain-session ← sessions_spawn
+    #   node-cron    / path-brain-cron    ← cron
+    #   node-tts     / path-brain-tts     ← tts
+    # Missing mappings fall through to raw tool name (which may not have a path).
     _TOOL_MAP = {
-        "web_search": ("tool_call", "search"),
-        "exec": ("tool_call", "exec"),
-        "browser": ("tool_call", "browser"),
-        "web_fetch": ("tool_call", "browser"),
-        "memory_search": ("tool_call", "memory"),
-        "memory_get": ("tool_call", "memory"),
-        "message": ("msg_out", "telegram"),
-        "tts": ("tool_call", "tts"),
-        "sessions_spawn": ("tool_call", "session"),
-        "cron": ("tool_call", "cron"),
+        "exec": "exec",
+        "process": "exec",
+        "read": "exec",
+        "write": "exec",
+        "write_file": "exec",
+        "edit": "exec",
+        "web_search": "search",
+        "ollama_web_search": "search",
+        "web_fetch": "browser",
+        "ollama_web_fetch": "browser",
+        "browser": "browser",
+        "image": "browser",
+        "memory_search": "memory",
+        "memory_get": "memory",
+        "sessions_spawn": "session",
+        "cron": "cron",
+        "tts": "tts",
     }
 
+    # Inbound messages arrive as user.content[0].text with a `Sender (untrusted
+    # metadata)` JSON block identifying the channel label. Map known labels to
+    # our channel keys; fall back to "telegram" for unknown (current UI default).
+    _CHANNEL_LABELS = {
+        "openclaw-tui":         "tui",
+        "openclaw-control-ui":  "webchat",
+        "openclaw-webchat":     "webchat",
+    }
+
+    def _extract_channel(text):
+        """Parse `Sender (untrusted metadata)` JSON block from user message text.
+
+        Returns channel key ("tui" / "webchat" / "telegram" / ...) or None.
+        Telegram/Signal/WhatsApp don't set a special label, so fall through to
+        "telegram" as the legacy default (matches pre-fix behaviour).
+        """
+        if not isinstance(text, str) or "Sender (untrusted metadata)" not in text:
+            return None
+        try:
+            start = text.index("```json")
+            end = text.index("```", start + 8)
+            meta = json.loads(text[start + 7:end].strip())
+            label = str(meta.get("label") or meta.get("id") or "").lower()
+            if label in _CHANNEL_LABELS:
+                return _CHANNEL_LABELS[label]
+            if label:
+                return label
+        except Exception:
+            pass
+        return None
+
     def _parse_gw(line):
-        for ch in ("telegram", "imessage", "whatsapp", "signal", "discord"):
-            if f"[{ch}]" in line or f"channels/{ch}" in line:
-                if any(x in line for x in ("sendMessage ok", "send ok", "sent ok")):
+        """Parse gateway.log for channel I/O events. OpenClaw 2026.4+ logs format:
+        `YYYY-MM-DDTHH:MM:SS... [telegram] sendMessage ok chat=... message=...`"""
+        for ch in ("telegram", "imessage", "whatsapp", "signal", "discord",
+                   "slack", "irc", "webchat", "bluebubbles"):
+            if f"[{ch}]" in line:
+                if "sendMessage ok" in line or "send ok" in line or "sent ok" in line:
                     return {"type": "msg_out", "channel": ch}
-                if any(x in line for x in ("received", "inbound", "run start")):
-                    return {"type": "msg_in", "channel": ch}
+                # Inbound via logs is rare; most arrive via session JSONL instead.
         return None
 
     def _parse_jsonl(obj, last_tool):
-        otype = obj.get("type")
-        role = obj.get("role")
-        if otype == "tool_use":
-            name = obj.get("name", "")
-            mapping = _TOOL_MAP.get(name)
-            if mapping:
-                ev_type, tool_key = mapping
-                last_tool[0] = tool_key
-                if ev_type == "msg_out":
-                    return {"type": "msg_out", "channel": tool_key}
-                return {"type": "tool_call", "tool": tool_key}
-            last_tool[0] = name
-            return {"type": "tool_call", "tool": name}
-        if otype == "tool_result":
-            return {"type": "tool_result", "tool": last_tool[0] or "exec"}
+        """Parse a session JSONL line. OpenClaw wraps conversation entries in
+        a `type=message` envelope with a nested `message.role` and
+        `message.content[]` array. Tool calls live in `content[].type=toolCall`,
+        NOT the outer type. Tool results arrive as `role=toolResult`.
+        """
+        if obj.get("type") != "message":
+            return None
+        msg = obj.get("message") or {}
+        if not isinstance(msg, dict):
+            return None
+        role = msg.get("role", "")
+        content = msg.get("content") or []
+
+        # Assistant tool invocations — walk content[] for toolCall items.
+        if role == "assistant" and isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "toolCall":
+                    name = item.get("name") or ""
+                    tool_key = _TOOL_MAP.get(name, name)
+                    last_tool[0] = tool_key
+                    return {"type": "tool_call", "tool": tool_key}
+            # Pure-text assistant reply has no explicit channel (the reply leg
+            # is better driven by gateway.log `sendMessage ok`); skip here.
+            return None
+
+        # Tool results — `role=toolResult` with `toolName` on the envelope.
+        if role == "toolResult":
+            name = msg.get("toolName") or ""
+            tool_key = _TOOL_MAP.get(name, last_tool[0] or "exec")
+            return {"type": "tool_result", "tool": tool_key}
+
+        # User inbound — extract channel from the Sender metadata block.
         if role == "user":
-            content = obj.get("content", "")
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "tool_result":
-                        return {"type": "tool_result", "tool": last_tool[0] or "exec"}
-            return {"type": "msg_in", "channel": "telegram"}
+            text = ""
+            if isinstance(content, list) and content:
+                first = content[0]
+                if isinstance(first, dict):
+                    text = first.get("text") or ""
+            ch = _extract_channel(text) or "telegram"
+            return {"type": "msg_in", "channel": ch}
         return None
 
     def generate():

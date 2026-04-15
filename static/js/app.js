@@ -4893,6 +4893,12 @@ function _startFlowSse() {
         flowStats.events++;
       } else if (type === 'tool_result') {
         var resultTool = evt.tool || 'tool';
+        // Animate the tool→brain path in reverse — the result coming back.
+        animateParticle('path-brain-' + resultTool, '#50c070', 600, true);
+        highlightNode('node-' + resultTool, 1500);
+        setTimeout(function() {
+          animateParticle('path-gw-brain', '#50c070', 500, true);
+        }, 500);
         var resultSnippet = evt.result ? String(evt.result).substring(0, 80).replace(/\n/g, ' ') : '';
         var resultText = '✓ ' + resultTool + (resultSnippet ? ': ' + resultSnippet : ' done');
         addFlowFeedItem(resultText, '#50c070', 'result');
@@ -5108,24 +5114,39 @@ function highlightNode(nodeId, dur) {
   }
 }
 
+// Map full OpenClaw channel names → the short key used in SVG path ids
+// (path-human-<key>, path-<key>-gw). Channels not in this table fall back
+// to the telegram slot path, matching the dynamic Flow channel logic.
+var _CH_PATH_KEY = {
+  telegram: 'tg',
+  signal:   'sig',
+  whatsapp: 'wa',
+  tui:      'tui',
+  webchat:  'webchat',
+};
+function _chPathKey(ch) {
+  if (!ch) return 'tg';
+  return _CH_PATH_KEY[ch] || _CH_PATH_KEY[ch.toLowerCase()] || 'sig';
+}
+function _chNodeId(ch) {
+  // Prefer a dedicated node-<channel>; fall back to signal (the shared slot).
+  var byName = 'node-' + (ch || 'telegram').toLowerCase();
+  return document.getElementById(byName) ? byName : 'node-signal';
+}
+
 function triggerInbound(ch) {
-  ch = ch || 'tg';
-  var chNodeId = ch === 'tg' ? 'node-telegram' : ch === 'sig' ? 'node-signal' : 'node-whatsapp';
-  highlightNode(chNodeId, 3000);
-  animateParticle('path-human-' + ch, '#c0a0ff', 550, false);
+  var key = _chPathKey(ch);
+  highlightNode(_chNodeId(ch), 3000);
+  animateParticle('path-human-' + key, '#c0a0ff', 550, false);
   highlightNode('node-human', 2200);
   setTimeout(function() {
-    animateParticle('path-' + ch + '-gw', '#60a0ff', 800, false);
+    animateParticle('path-' + key + '-gw', '#60a0ff', 800, false);
     highlightNode('node-gateway', 2000);
   }, 400);
   setTimeout(function() {
     animateParticle('path-gw-brain', '#60a0ff', 600, false);
     highlightNode('node-brain', 2500);
   }, 1050);
-  setTimeout(function() {
-    animateParticle('path-brain-session', '#60a0ff', 400, false);
-    highlightNode('node-session', 1500);
-  }, 1550);
   setTimeout(function() { triggerInfraNetwork(); }, 300);
 }
 
@@ -5150,14 +5171,15 @@ function triggerToolCall(toolName) {
 }
 
 function triggerOutbound(ch) {
-  ch = ch || 'tg';
+  var key = _chPathKey(ch);
   animateParticle('path-gw-brain', '#50e080', 600, true);
   highlightNode('node-gateway', 2000);
   setTimeout(function() {
-    animateParticle('path-' + ch + '-gw', '#50e080', 800, true);
+    animateParticle('path-' + key + '-gw', '#50e080', 800, true);
+    highlightNode(_chNodeId(ch), 2200);
   }, 500);
   setTimeout(function() {
-    animateParticle('path-human-' + ch, '#50e080', 550, true);
+    animateParticle('path-human-' + key, '#50e080', 550, true);
     highlightNode('node-human', 1800);
   }, 1200);
   setTimeout(function() { triggerInfraNetwork(); }, 200);
