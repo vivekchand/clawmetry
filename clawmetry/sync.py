@@ -1175,6 +1175,62 @@ def _detect_ollama_for_heartbeat():
     return result
 
 
+# ── Daemon-collected snapshots ────────────────────────────────────────────────
+# Cloud's tabs (Security, Models, Upgrades, Clusters, …) need data the OSS
+# routes/* endpoints derive from local state — host filesystem checks,
+# `openclaw --version` output, gateway WebSocket, etc. None of that exists
+# on Cloud Run. The daemon collects locally and pushes on the heartbeat;
+# cloud stores the latest blob per node and serves it via cloud-side
+# `/api/<feature>` handlers that mirror the OSS shape.
+#
+# Each collector caches its result in `_snapshot_cache` so we don't
+# recompute every heartbeat (most of these are ~100ms-1s and don't change
+# minute-to-minute). Re-collected at the interval below or when missing.
+
+_snapshot_cache: dict = {}            # name → (value, computed_at_unix_ts)
+_SNAPSHOT_TTL_SEC = 300               # 5 min — security posture etc.
+
+
+def _collect_security_posture() -> dict | None:
+    """Run OSS `_scan_security_posture()` locally and return its result.
+
+    Imports OSS dashboard.py via importlib so we don't pull the whole Flask
+    app into the daemon process. Cached for 5 min — the underlying checks
+    are filesystem reads (~50 ms total) but we don't need fresher data than
+    that for a posture overview.
+    """
+    cached = _snapshot_cache.get("security_posture")
+    if cached and (time.time() - cached[1]) < _SNAPSHOT_TTL_SEC:
+        return cached[0]
+    try:
+        # Resolve OSS dashboard.py from the installed clawmetry package
+        # (parent dir holds dashboard.py per setup.py's `py_modules`).
+        import clawmetry as _cm_pkg
+        import importlib.util as _ilu
+        oss_dashboard_path = os.path.join(
+            os.path.dirname(os.path.dirname(_cm_pkg.__file__)),
+            "dashboard.py",
+        )
+        if not os.path.isfile(oss_dashboard_path):
+            return None
+        spec = _ilu.spec_from_file_location("_oss_dashboard_for_snapshot", oss_dashboard_path)
+        mod = _ilu.module_from_spec(spec)
+        # OSS dashboard.py uses sys.modules.setdefault("dashboard", ...) at
+        # load — register first so it doesn't KeyError.
+        import sys as _sys
+        _sys.modules.setdefault("_oss_dashboard_for_snapshot", mod)
+        spec.loader.exec_module(mod)
+        scan = getattr(mod, "_scan_security_posture", None)
+        if not scan:
+            return None
+        result = scan()
+        _snapshot_cache["security_posture"] = (result, time.time())
+        return result
+    except Exception as e:
+        log.warning(f"_collect_security_posture failed: {e}")
+        return None
+
+
 def send_heartbeat(config: dict) -> bool:
     """Send heartbeat to cloud. Returns True on success, False on failure."""
     payload = {
@@ -1185,6 +1241,10 @@ def send_heartbeat(config: dict) -> bool:
         "e2e": bool(config.get("encryption_key")),
         "ollama": _detect_ollama_for_heartbeat(),
     }
+    # Daemon-collected snapshots (see _collect_security_posture docstring)
+    sec = _collect_security_posture()
+    if sec is not None:
+        payload["security_posture"] = sec
     last_err = None
     for attempt in range(3):
         try:
