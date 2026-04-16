@@ -7782,10 +7782,17 @@ async function loadModalTranscript() {
         if (ec) ec.textContent = '📊 ' + _modalEvents.length + ' events';
         var mc = document.getElementById('modal-msg-count');
         if (mc) mc.textContent = '💬 ' + (data.messageCount || 0) + ' messages';
-        // Real transcript available — restore the tab strip + footer that
-        // the fallback renderer hides.
+        // Real transcript available — restore the Summary/Narrative/Full Logs
+        // tab strip + footer that the fallback renderer swapped out.
         var tabsEl = document.querySelector('#task-modal-overlay .modal-tabs');
-        if (tabsEl) tabsEl.style.display = '';
+        if (tabsEl) {
+          tabsEl.style.display = '';
+          if (tabsEl.dataset.fallbackMode && tabsEl.dataset.originalHTML) {
+            tabsEl.innerHTML = tabsEl.dataset.originalHTML;
+            delete tabsEl.dataset.fallbackMode;
+            delete tabsEl.dataset.originalHTML;
+          }
+        }
         var footer = document.querySelector('#task-modal-overlay .modal-footer');
         if (footer) footer.style.display = '';
         renderModalContent();
@@ -7804,6 +7811,23 @@ async function loadModalTranscript() {
 // runtime) and finds the matching entry by sessionId or key. Renders a
 // card-style summary with the spawn metadata + any error OpenClaw
 // returned. Works for failed spawns AND stale successful ones.
+// Which fallback pane is active. Persists across auto-refresh cycles so
+// switching to "Brain Events" doesn't snap back to "Overview" every 4s.
+window._fallbackTab = window._fallbackTab || 'overview';
+
+function _switchFallbackTab(tab) {
+  window._fallbackTab = tab;
+  // Toggle tab-strip active state
+  document.querySelectorAll('#task-modal-overlay .modal-tab').forEach(function(t) {
+    t.classList.toggle('active', (t.dataset.fallbackTab || '') === tab);
+  });
+  // Toggle pane visibility
+  var ov = document.getElementById('fallback-pane-overview');
+  var br = document.getElementById('fallback-pane-brain');
+  if (ov) ov.style.display = (tab === 'overview') ? '' : 'none';
+  if (br) br.style.display = (tab === 'brain')    ? '' : 'none';
+}
+
 async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
   var el = document.getElementById('modal-content');
   if (!el) return;
@@ -7820,121 +7844,93 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
     }
     var startedAt = match.startedAt ? new Date(match.startedAt).toLocaleString() : '';
     var statusColor = { active:'#22c55e', idle:'#f59e0b', stale:'#6b7280', failed:'#ef4444' }[match.status] || '#6b7280';
-    var html = '<div style="padding:20px;display:flex;flex-direction:column;gap:16px;">';
-    html += '<div style="display:flex;align-items:center;gap:10px;">'
-         +  '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:' + statusColor + ';"></span>'
-         +  '<strong style="font-size:15px;color:var(--text-primary);">' + escHtml(match.displayName || 'subagent') + '</strong>'
-         +  '<span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' + escHtml(match.status) + '</span>'
-         +  '</div>';
+
+    // Build Overview pane HTML
+    var overviewHtml = '<div style="padding:20px;display:flex;flex-direction:column;gap:16px;">';
+    overviewHtml += '<div style="display:flex;align-items:center;gap:10px;">'
+                 +  '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:' + statusColor + ';"></span>'
+                 +  '<strong style="font-size:15px;color:var(--text-primary);">' + escHtml(match.displayName || 'subagent') + '</strong>'
+                 +  '<span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' + escHtml(match.status) + '</span>'
+                 +  '</div>';
     if (match.task) {
-      html += '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Task</div>'
-           +  '<div style="font-size:13px;color:var(--text-primary);line-height:1.5;white-space:pre-wrap;">' + escHtml(match.task) + '</div></div>';
+      overviewHtml += '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Task</div>'
+                   +  '<div style="font-size:13px;color:var(--text-primary);line-height:1.5;white-space:pre-wrap;">' + escHtml(match.task) + '</div></div>';
     }
-    // The OpenClaw error card is rendered once, after the Activity section
-    // below, so failed-spawn modals don't show the same error text twice.
     var meta = [];
     if (startedAt) meta.push(['Started', startedAt]);
     // Prefer the child's actual runtime (from OpenClaw completion event) over
-    // our "time since spawn" calculation — only the former is the real work
-    // duration of the child. runtimeFormatted is e.g. "1s", runtime is e.g.
-    // "72h 49m" which is misleading for a 1-second run.
+    // our "time since spawn" calculation — runtimeFormatted is e.g. "1s",
+    // match.runtime is e.g. "72h 49m" which is misleading for a 1-second run.
     var rtDisplay = match.runtimeFormatted || match.runtime || '';
     if (rtDisplay) meta.push(['Runtime', rtDisplay]);
     if (match.model && match.model !== 'unknown') meta.push(['Model', match.model]);
     if (match.parent) meta.push(['Parent', match.parent]);
     if (match.runId) meta.push(['Run ID', match.runId]);
     if (match.completionStatus) meta.push(['Outcome', match.completionStatus]);
-    var tokenSummary = '';
     if (match.tokensIn || match.tokensOut) {
-      tokenSummary = 'in ' + (match.tokensIn || 0) + ' / out ' + (match.tokensOut || 0);
-      meta.push(['Tokens', tokenSummary]);
+      meta.push(['Tokens', 'in ' + (match.tokensIn || 0) + ' / out ' + (match.tokensOut || 0)]);
     }
     if (meta.length) {
-      html += '<div style="display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-size:12px;">';
+      overviewHtml += '<div style="display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;font-size:12px;">';
       meta.forEach(function(row) {
-        html += '<div style="color:var(--text-muted);">' + escHtml(row[0]) + '</div>'
-             +  '<div style="color:var(--text-primary);font-family:monospace;overflow-wrap:anywhere;">' + escHtml(row[1]) + '</div>';
+        overviewHtml += '<div style="color:var(--text-muted);">' + escHtml(row[0]) + '</div>'
+                     +  '<div style="color:var(--text-primary);font-family:monospace;overflow-wrap:anywhere;">' + escHtml(row[1]) + '</div>';
       });
-      html += '</div>';
+      overviewHtml += '</div>';
     }
-
-    // --- Activity / Log section ---
-    // Users came here expecting "sub agent logs". Render whatever we have:
-    //   - completionResult: the child's actual output (OpenClaw auto-announce)
-    //   - spawnAck:         the spawn handshake JSON from OpenClaw
-    //   - error:            validation / runtime failure message
-    // This is the most useful thing we can show without a live child JSONL.
     var logParts = [];
     if (match.completionResult && match.completionResult !== '(no output)') {
-      logParts.push({
-        label: 'Subagent output',
-        icon: '📤',
-        color: '#22c55e',
-        text: match.completionResult,
-      });
+      logParts.push({ label:'Subagent output', icon:'📤', color:'#22c55e', text: match.completionResult });
     } else if (match.completionStatus) {
-      // Completion event exists but child returned nothing
-      logParts.push({
-        label: 'Subagent output',
-        icon: '📤',
-        color: '#6b7280',
-        text: '(Subagent completed with no output — OpenClaw reported "' + match.completionStatus + '")',
-      });
+      logParts.push({ label:'Subagent output', icon:'📤', color:'#6b7280',
+                      text: '(Subagent completed with no output — OpenClaw reported "' + match.completionStatus + '")' });
     }
-    // For failed spawns, spawnAck is the same text as match.error, which is
-    // already surfaced in the error card below — don't duplicate.
     if (match.spawnAck && !match.error) {
-      logParts.push({
-        label: 'Spawn handshake',
-        icon: '🤝',
-        color: '#3b82f6',
-        text: match.spawnAck,
-      });
+      logParts.push({ label:'Spawn handshake', icon:'🤝', color:'#3b82f6', text: match.spawnAck });
     }
     if (logParts.length) {
-      html += '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Activity</div>';
+      overviewHtml += '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Activity</div>';
       logParts.forEach(function(part) {
-        html += '<div style="border:1px solid var(--border-primary);border-radius:8px;margin-bottom:10px;overflow:hidden;">'
-             +  '<div style="padding:6px 10px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:11px;color:' + part.color + ';font-weight:600;">'
-             +  part.icon + ' ' + escHtml(part.label) + '</div>'
-             +  '<pre style="margin:0;padding:10px 12px;font-size:12px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;max-height:260px;overflow:auto;">'
-             +  escHtml(part.text) + '</pre></div>';
+        overviewHtml += '<div style="border:1px solid var(--border-primary);border-radius:8px;margin-bottom:10px;overflow:hidden;">'
+                     +  '<div style="padding:6px 10px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:11px;color:' + part.color + ';font-weight:600;">'
+                     +  part.icon + ' ' + escHtml(part.label) + '</div>'
+                     +  '<pre style="margin:0;padding:10px 12px;font-size:12px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;max-height:260px;overflow:auto;">'
+                     +  escHtml(part.text) + '</pre></div>';
       });
-      html += '</div>';
+      overviewHtml += '</div>';
     }
+    overviewHtml += '</div>';
 
-    // --- Brain events for this subagent's time window ---
-    // Fetches the same /api/brain-history that powers the Brain tab and
-    // filters to events (a) originating from the parent session or child
-    // session, (b) within [spawn - 30s, spawn + 10min] so we capture the
-    // lead-up and the immediate response. Rendered in the same row format
-    // as the Brain tab so users see IDENTICAL content scoped to this task.
-    html += '<div id="modal-brain-events-slot"></div>';
+    // Brain pane — populated asynchronously by _renderModalBrainEvents.
+    var brainHtml = '<div id="modal-brain-events-slot" style="padding:14px 20px;"></div>';
 
-    // Hide the Summary / Narrative / Full Logs tab strip when there's no
-    // live transcript — the fallback renders everything in one flow, the
-    // tabs have nothing to switch between. Shown again when a real
-    // transcript loads (see loadModalTranscript).
+    // Replace the modal-tabs strip with our 2-tab layout for fallback mode
+    // (Overview / Brain Events). Restored to Summary/Narrative/Full Logs
+    // by loadModalTranscript when a live transcript is found.
     try {
-      var tabsEl = document.querySelector('#task-modal-overlay .modal-tabs');
-      if (tabsEl) tabsEl.style.display = 'none';
+      var tabsStrip = document.querySelector('#task-modal-overlay .modal-tabs');
+      if (tabsStrip && !tabsStrip.dataset.fallbackMode) {
+        tabsStrip.dataset.fallbackMode = '1';
+        tabsStrip.dataset.originalHTML = tabsStrip.innerHTML;
+      }
+      if (tabsStrip) {
+        tabsStrip.style.display = '';
+        tabsStrip.innerHTML =
+          '<div class="modal-tab' + (window._fallbackTab === 'overview' ? ' active' : '') + '" data-fallback-tab="overview" onclick="_switchFallbackTab(\'overview\')">Overview</div>' +
+          '<div class="modal-tab' + (window._fallbackTab === 'brain' ? ' active' : '') + '" data-fallback-tab="brain" onclick="_switchFallbackTab(\'brain\')">Brain Events</div>';
+      }
+      // Footer isn't meaningful in fallback (no event/message counters).
       var footer = document.querySelector('#task-modal-overlay .modal-footer');
       if (footer) footer.style.display = 'none';
     } catch(e) {}
 
-    // The error message is already surfaced via the FAILED pill at the top,
-    // the Brain events showing the agent's reaction to the error, and the
-    // explainer below. Previously we rendered a separate red "OpenClaw
-    // error" card here but it duplicated information already on screen.
+    // Render both panes, show the active one.
+    var showOv = window._fallbackTab !== 'brain';
+    el.innerHTML =
+      '<div id="fallback-pane-overview" style="display:' + (showOv ? '' : 'none') + ';">' + overviewHtml + '</div>' +
+      '<div id="fallback-pane-brain" style="display:'    + (showOv ? 'none' : '') + ';">' + brainHtml + '</div>';
 
-    // Previously we appended an explainer block ("this spawn failed…",
-    // "child JSONL was GC'd…") here, but the FAILED/STALE status pill,
-    // activity cards, and inline Brain events already make the story clear.
-    // The explainer leaned into parent-vs-child-JSONL jargon that users
-    // didn't need.
-    html += '</div>';
-    el.innerHTML = html;
-    // Populate the Brain-events slot asynchronously (fire-and-forget).
+    // Populate Brain events asynchronously (fire-and-forget).
     _renderModalBrainEvents(match).catch(function(){ /* non-fatal */ });
   } catch(e) {
     el.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + escHtml(reason) + '</div>';
