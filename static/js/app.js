@@ -7824,11 +7824,8 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
       html += '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Task</div>'
            +  '<div style="font-size:13px;color:var(--text-primary);line-height:1.5;white-space:pre-wrap;">' + escHtml(match.task) + '</div></div>';
     }
-    if (match.error) {
-      html += '<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:12px;">'
-           +  '<div style="font-size:11px;color:#ef4444;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">⚠️ OpenClaw error</div>'
-           +  '<div style="font-size:13px;color:#fca5a5;line-height:1.5;font-family:monospace;">' + escHtml(match.error) + '</div></div>';
-    }
+    // The OpenClaw error card is rendered once, after the Activity section
+    // below, so failed-spawn modals don't show the same error text twice.
     var meta = [];
     if (startedAt) meta.push(['Started', startedAt]);
     // Prefer the child's actual runtime (from OpenClaw completion event) over
