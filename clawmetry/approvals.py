@@ -410,7 +410,14 @@ def watch_iteration(api_key: str, node_id: str,
             continue
         try:
             size = os.path.getsize(fpath)
-            offset = _file_offsets.get(fpath, size)  # default: start at EOF
+            # First time we see this file: anchor to current EOF *and persist
+            # the watermark*, so subsequent appends are visible. The previous
+            # version re-defaulted to `size` every iteration, which silently
+            # absorbed any new bytes.
+            if fpath not in _file_offsets:
+                _file_offsets[fpath] = size
+                continue
+            offset = _file_offsets[fpath]
             if offset > size:
                 offset = 0  # log rotated
             if offset == size:
