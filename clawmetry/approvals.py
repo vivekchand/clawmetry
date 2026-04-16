@@ -127,39 +127,97 @@ def _yaml_scalar(s: str):
     return s
 
 
-def load_policies() -> list[dict]:
-    """Load + compile policies from disk. Returns empty list when no file."""
-    if not POLICIES_PATH.exists():
-        return []
+def _compile_policy(p: dict) -> Optional[dict]:
+    """Compile a single raw policy dict into a match-ready dict, or None."""
+    match = p.get("match") or {}
+    # Cloud-stored policies use top-level fields instead of nested `match`
+    tool = (match.get("tool") or p.get("tool") or "").strip()
+    cmd_re_str = match.get("command_regex") or (
+        p.get("pattern") if p.get("pattern_type") == "command_regex" else None
+    )
+    cmd_not_re = match.get("command_not_regex")
+    args_re = match.get("args_regex")
     try:
-        raw = POLICIES_PATH.read_text(errors="replace")
-        policies = _load_yaml(raw)
-    except Exception as e:
-        log.warning(f"failed to read {POLICIES_PATH}: {e}")
-        return []
-    compiled = []
-    for p in policies:
-        if not isinstance(p, dict):
-            continue
-        match = p.get("match") or {}
+        return {
+            "name": p.get("name") or "(unnamed)",
+            "tool": tool,
+            "command_regex": re.compile(cmd_re_str) if cmd_re_str else None,
+            "command_not_regex": re.compile(cmd_not_re) if cmd_not_re else None,
+            "args_regex": re.compile(args_re) if args_re else None,
+            "action": (p.get("action") or "require_approval").strip(),
+            "timeout": int(p.get("timeout") or 60),
+            "on_timeout": (p.get("on_timeout") or "deny").strip(),
+        }
+    except re.error as re_err:
+        log.warning(f"policy '{p.get('name')}' has bad regex: {re_err}")
+        return None
+
+
+def load_policies(api_key: Optional[str] = None) -> list[dict]:
+    """Load policies from local YAML + cloud (if api_key is set).
+
+    Cloud-stored policies (created from the UI) take precedence and are
+    merged with local YAML policies. This lets non-technical users create
+    rules from the dashboard while power users keep their YAML.
+    """
+    compiled: list[dict] = []
+
+    # 1) Cloud-stored policies (UI-created)
+    if api_key:
         try:
-            cmd_re = match.get("command_regex")
-            cmd_not_re = match.get("command_not_regex")
-            compiled.append({
-                "name": p.get("name") or "(unnamed)",
-                "tool": (match.get("tool") or "").strip(),
-                "command_regex": re.compile(cmd_re) if cmd_re else None,
-                "command_not_regex": re.compile(cmd_not_re) if cmd_not_re else None,
-                "args_regex": re.compile(match["args_regex"]) if match.get("args_regex") else None,
-                "action": (p.get("action") or "require_approval").strip(),
-                "timeout": int(p.get("timeout") or 60),
-                "on_timeout": (p.get("on_timeout") or "deny").strip(),
-            })
-        except re.error as re_err:
-            log.warning(f"policy '{p.get('name')}' has bad regex: {re_err}")
+            cloud = _fetch_cloud_policies(api_key)
+            for p in cloud:
+                if not p.get("enabled", True):
+                    continue
+                c = _compile_policy(p)
+                if c:
+                    compiled.append(c)
+            if compiled:
+                log.debug(f"loaded {len(compiled)} cloud policies")
+        except Exception as e:
+            log.debug(f"cloud policies fetch failed (will use local): {e}")
+
+    # 2) Local YAML policies
+    if POLICIES_PATH.exists():
+        try:
+            raw = POLICIES_PATH.read_text(errors="replace")
+            for p in _load_yaml(raw):
+                if not isinstance(p, dict):
+                    continue
+                c = _compile_policy(p)
+                if c:
+                    compiled.append(c)
+        except Exception as e:
+            log.warning(f"failed to read {POLICIES_PATH}: {e}")
+
     if compiled:
-        log.info(f"loaded {len(compiled)} approval policies from {POLICIES_PATH}")
+        log.info(f"loaded {len(compiled)} approval policies "
+                 f"(cloud + {POLICIES_PATH})")
     return compiled
+
+
+_cloud_policies_cache: tuple = (0.0, [])
+_CLOUD_CACHE_TTL = 30.0  # re-fetch from cloud every 30 s
+
+
+def _fetch_cloud_policies(api_key: str) -> list[dict]:
+    """GET /api/cloud/policies with a short TTL cache."""
+    global _cloud_policies_cache
+    now = time.time()
+    if now - _cloud_policies_cache[0] < _CLOUD_CACHE_TTL:
+        return _cloud_policies_cache[1]
+    import urllib.request
+    from clawmetry.sync import INGEST_URL
+    req = urllib.request.Request(
+        f"{INGEST_URL.rstrip('/')}/api/cloud/policies",
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read())
+    policies = data.get("policies") or []
+    _cloud_policies_cache = (now, policies)
+    return policies
 
 
 # ── Match engine ──────────────────────────────────────────────────────────
@@ -469,7 +527,7 @@ def watcher_loop(api_key: str, node_id: str,
             log.info("approvals watcher stop signal received")
             return
         try:
-            policies = load_policies()
+            policies = load_policies(api_key=api_key)
             n = watch_iteration(api_key, node_id, policies=policies)
             if n:
                 log.debug(f"approvals: scanned {n} new toolCalls")

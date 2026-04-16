@@ -1,73 +1,232 @@
-<!-- APPROVALS TAB — cloud-mediated approval queue
-     vivekchand/clawmetry#667 + vivekchand/clawmetry-cloud#337 -->
+<!-- APPROVALS TAB — visual policy builder + approval queue
+     Designed for non-technical users: zero YAML, one-click everything. -->
 <div class="page" id="page-approvals">
-  <div style="padding:12px 0 8px 0;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <div>
-        <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128737;&#65039; Approvals</span>
-        <span id="approvals-pending-count" style="margin-left:8px;font-size:11px;color:var(--text-muted);"></span>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <span id="approvals-updated" style="font-size:11px;color:var(--text-muted);"></span>
-        <button class="refresh-btn" onclick="loadApprovalsTab()">&#8635; Refresh</button>
-      </div>
-    </div>
+<div style="padding:12px 0 8px 0;">
 
-    <!-- Empty state shown when no policies are configured -->
-    <div id="approvals-no-policies" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:14px;">
-      <div style="font-size:13px;color:var(--text-primary);margin-bottom:6px;font-weight:700;">No approval policies configured.</div>
-      <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">
-        Create <code style="background:var(--bg-primary);padding:1px 6px;border-radius:4px;">~/.clawmetry/policies.yml</code>
-        to require human approval before risky agent actions execute.
-        See <a href="https://github.com/vivekchand/clawmetry/issues/667" target="_blank" style="color:var(--text-accent);">issue #667</a> for the YAML format,
-        or copy the starter template:
-      </div>
-      <pre style="margin-top:10px;padding:10px 12px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;color:var(--text-secondary);">- name: Block rm -rf
-  match:
-    tool: exec
-    command_regex: 'rm\s+-rf'
-  action: require_approval
-  timeout: 60
-  on_timeout: deny
-
-- name: Approve git push --force
-  match:
-    tool: exec
-    command_regex: 'git push.*--force'
-  action: require_approval
-  timeout: 300
-  on_timeout: deny</pre>
-    </div>
-
-    <!-- Pending queue -->
-    <div style="margin-bottom:14px;">
-      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Pending</div>
-      <div id="approvals-pending-list">
-        <div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">Loading…</div>
-      </div>
-    </div>
-
-    <!-- History -->
+  <!-- Header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
     <div>
-      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Recent decisions</div>
-      <div id="approvals-history-list">
-        <div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">Loading…</div>
+      <span style="font-size:15px;font-weight:700;color:var(--text-primary);">Approvals</span>
+      <span id="approvals-pending-count" style="margin-left:8px;font-size:11px;color:var(--text-muted);"></span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <span id="approvals-updated" style="font-size:11px;color:var(--text-muted);"></span>
+      <button class="refresh-btn" onclick="loadApprovalsTab()">&#8635; Refresh</button>
+    </div>
+  </div>
+
+  <!-- ═══ SECTION 1: Pending Queue (always visible at top) ═══ -->
+  <div id="approvals-pending-section" style="margin-bottom:16px;">
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Pending Approvals</div>
+    <div id="approvals-pending-list">
+      <div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">Loading...</div>
+    </div>
+  </div>
+
+  <!-- ═══ SECTION 2: Protection Rules (visual policy builder) ═══ -->
+  <div style="margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Protection Rules</div>
+      <button onclick="toggleCreateRuleForm()" id="btn-create-rule" style="background:var(--bg-accent,#3b82f6);color:#fff;border:0;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">+ New Rule</button>
+    </div>
+
+    <!-- Preset cards grid -->
+    <div id="approvals-presets-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:12px;">
+    </div>
+
+    <!-- Create custom rule form (hidden by default) -->
+    <div id="create-rule-form" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">Create Custom Rule</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Rule name</label>
+          <input id="rule-name" type="text" placeholder="e.g. Block production deploys" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Tool type</label>
+          <select id="rule-tool" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+            <option value="">Any tool</option>
+            <option value="exec">Shell commands (exec)</option>
+            <option value="write">File writes (write)</option>
+            <option value="edit">File edits (edit)</option>
+            <option value="http">HTTP requests (http)</option>
+          </select>
+        </div>
+        <div style="grid-column:1/-1;">
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Block commands matching</label>
+          <input id="rule-pattern" type="text" placeholder="e.g. deploy, sudo, DROP TABLE" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+          <div style="font-size:10px;color:var(--text-faint);margin-top:3px;">Enter keywords separated by commas. The agent will be paused when any of these are detected.</div>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Approval timeout</label>
+          <select id="rule-timeout" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+            <option value="30">30 seconds</option>
+            <option value="60" selected>1 minute</option>
+            <option value="120">2 minutes</option>
+            <option value="300">5 minutes</option>
+            <option value="600">10 minutes</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">If no one responds</label>
+          <select id="rule-on-timeout" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+            <option value="deny" selected>Block the action (safer)</option>
+            <option value="approve">Allow the action</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button onclick="saveCustomRule()" style="background:#22c55e;color:#062614;border:0;padding:8px 20px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Save Rule</button>
+        <button onclick="toggleCreateRuleForm()" style="background:var(--bg-primary);color:var(--text-muted);border:1px solid var(--border);padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;">Cancel</button>
       </div>
     </div>
   </div>
+
+  <!-- ═══ SECTION 3: Notification Channels ═══ -->
+  <div style="margin-bottom:16px;">
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Get Notified</div>
+    <div id="approvals-integrations" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
+    </div>
+  </div>
+
+  <!-- ═══ SECTION 4: Recent Decisions ═══ -->
+  <div>
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Recent Decisions</div>
+    <div id="approvals-history-list">
+      <div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">No history yet.</div>
+    </div>
+  </div>
+
+</div>
 </div><!-- end page-approvals -->
 
 <script>
 (function(){
-  // Cloud iframe context: token is window.CLOUD_TOKEN; node_id pulled from
-  // CLOUD_NODE_ID. Local OSS context: hit /api/cloud/approvals via the
-  // existing fetch shim (same Authorization header from auth-bootstrap).
+  /* ── Helpers ── */
   function _q() {
     var p = '';
     if (window.CLOUD_NODE_ID) p += '&node_id=' + encodeURIComponent(window.CLOUD_NODE_ID);
     return p;
   }
+  function _authHeaders() {
+    var h = {'Content-Type':'application/json'};
+    var t = window.CLOUD_TOKEN || localStorage.getItem('clawmetry_token') || '';
+    if (t) h['Authorization'] = 'Bearer ' + t;
+    return h;
+  }
 
+  /* ── Preset policies ── */
+  var PRESETS = [
+    {key:'rm_rf', name:'Block destructive deletes', icon:'&#128465;',
+     desc:'Stops rm -rf, shred, unlink on important paths',
+     tool:'exec', pattern:'rm\\s+-rf|shred\\s|unlink\\s+/', timeout:60, on_timeout:'deny',
+     color:'#ef4444'},
+    {key:'force_push', name:'Block force pushes', icon:'&#9888;&#65039;',
+     desc:'Requires approval before git push --force',
+     tool:'exec', pattern:'git\\s+push.*--force|git\\s+push.*-f\\b', timeout:300, on_timeout:'deny',
+     color:'#f59e0b'},
+    {key:'db_mutation', name:'Block database mutations', icon:'&#128451;',
+     desc:'Catches DROP TABLE, TRUNCATE, DELETE without WHERE',
+     tool:'exec', pattern:'DROP\\s+TABLE|TRUNCATE\\s|DELETE\\s+FROM.*(?!WHERE)', timeout:120, on_timeout:'deny',
+     color:'#f97316'},
+    {key:'sudo', name:'Block sudo / root commands', icon:'&#128274;',
+     desc:'Prevents privilege escalation via sudo or su',
+     tool:'exec', pattern:'\\bsudo\\s|\\bsu\\s+-|\\bsu\\s+root', timeout:60, on_timeout:'deny',
+     color:'#dc2626'},
+    {key:'secrets', name:'Protect secrets & credentials', icon:'&#128273;',
+     desc:'Blocks access to .env, credentials, private keys',
+     tool:'', pattern:'\\.env\\b|credentials|private_key|secret_key|api_key|AWS_SECRET', timeout:60, on_timeout:'deny',
+     color:'#8b5cf6'},
+    {key:'pkg_install', name:'Block package installs', icon:'&#128230;',
+     desc:'Requires approval for pip install, npm install, apt install',
+     tool:'exec', pattern:'pip\\s+install|npm\\s+install|apt\\s+install|brew\\s+install', timeout:120, on_timeout:'deny',
+     color:'#6366f1'},
+    {key:'network', name:'Block outbound network calls', icon:'&#127760;',
+     desc:'Catches curl, wget, fetch to external URLs',
+     tool:'exec', pattern:'\\bcurl\\s|\\bwget\\s|\\bfetch\\(|requests\\.get|httpx\\.', timeout:60, on_timeout:'deny',
+     color:'#0ea5e9'},
+    {key:'sys_config', name:'Block system config changes', icon:'&#9881;&#65039;',
+     desc:'Prevents writes to /etc, systemctl, crontab edits',
+     tool:'exec', pattern:'/etc/|systemctl|crontab|chmod\\s+777|chown\\s+root', timeout:60, on_timeout:'deny',
+     color:'#64748b'}
+  ];
+
+  /* ── Integration channels ── */
+  var CHANNELS = [
+    {key:'email', name:'Email', icon:'&#9993;&#65039;', desc:'Get notified at your signup email',
+     color:'#3b82f6', fields:[]},
+    {key:'slack', name:'Slack', icon:'&#128172;', desc:'Post to a Slack channel',
+     color:'#4A154B', fields:[{key:'webhook_url', label:'Webhook URL', placeholder:'https://hooks.slack.com/services/...'}]},
+    {key:'pagerduty', name:'PagerDuty', icon:'&#128225;', desc:'Trigger PagerDuty incidents',
+     color:'#06AC38', fields:[{key:'routing_key', label:'Integration Key', placeholder:'Paste your PagerDuty routing key'}]},
+    {key:'telegram', name:'Telegram', icon:'&#9992;&#65039;', desc:'Send alerts to a Telegram chat',
+     color:'#2AABEE', fields:[{key:'bot_token', label:'Bot Token', placeholder:'123456:ABC-DEF...'}, {key:'chat_id', label:'Chat ID', placeholder:'-1001234567890'}]}
+  ];
+
+  /* ── Render preset cards ── */
+  function renderPresets(savedPolicies) {
+    var grid = document.getElementById('approvals-presets-grid');
+    if (!grid) return;
+    var enabledKeys = {};
+    (savedPolicies || []).forEach(function(p) {
+      if (p.preset_key) enabledKeys[p.preset_key] = p;
+      else if (p.name) enabledKeys[p.name] = p;
+    });
+    grid.innerHTML = PRESETS.map(function(p) {
+      var saved = enabledKeys[p.key];
+      var on = saved && saved.enabled !== false;
+      var toggleId = 'toggle-' + p.key;
+      return '<div style="background:var(--bg-secondary);border:1px solid ' + (on ? p.color + '55' : 'var(--border)') + ';border-radius:10px;padding:14px;transition:border-color 0.2s;">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
+        + '<div style="display:flex;align-items:center;gap:8px;">'
+        + '<span style="font-size:16px;">' + p.icon + '</span>'
+        + '<span style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(p.name) + '</span>'
+        + '</div>'
+        + '<label style="position:relative;display:inline-block;width:40px;height:22px;cursor:pointer;">'
+        + '<input type="checkbox" id="' + toggleId + '" ' + (on ? 'checked' : '') + ' onchange="togglePresetPolicy(\'' + p.key + '\', this.checked)" style="opacity:0;width:0;height:0;">'
+        + '<span style="position:absolute;inset:0;background:' + (on ? p.color : '#374151') + ';border-radius:11px;transition:background 0.2s;"></span>'
+        + '<span style="position:absolute;top:2px;left:' + (on ? '20px' : '2px') + ';width:18px;height:18px;background:#fff;border-radius:50%;transition:left 0.2s;"></span>'
+        + '</label>'
+        + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);line-height:1.4;">' + escHtml(p.desc) + '</div>'
+        + '</div>';
+    }).join('');
+  }
+
+  /* ── Render integration cards ── */
+  function renderIntegrations(savedIntegrations) {
+    var el = document.getElementById('approvals-integrations');
+    if (!el) return;
+    var saved = {};
+    (savedIntegrations || []).forEach(function(i) { saved[i.channel] = i; });
+    el.innerHTML = CHANNELS.map(function(ch) {
+      var s = saved[ch.key];
+      var on = s && s.enabled;
+      var configuring = false;
+      return '<div id="integ-' + ch.key + '" style="background:var(--bg-secondary);border:1px solid ' + (on ? ch.color + '44' : 'var(--border)') + ';border-radius:10px;padding:14px;">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
+        + '<div style="display:flex;align-items:center;gap:6px;">'
+        + '<span style="font-size:14px;">' + ch.icon + '</span>'
+        + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">' + ch.name + '</span>'
+        + (on ? '<span style="font-size:9px;background:' + ch.color + '22;color:' + ch.color + ';padding:1px 6px;border-radius:10px;font-weight:600;">CONNECTED</span>' : '')
+        + '</div>'
+        + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">' + escHtml(ch.desc) + '</div>'
+        + (ch.fields.length === 0
+          ? '<button onclick="saveIntegration(\'' + ch.key + '\', {})" style="width:100%;padding:7px;border:1px solid ' + ch.color + '44;background:' + (on ? ch.color + '15' : 'transparent') + ';color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">' + (on ? 'Enabled' : 'Enable') + '</button>'
+          : '<div id="integ-fields-' + ch.key + '">'
+            + ch.fields.map(function(f) {
+                var val = (s && s.config && s.config[f.key]) || '';
+                return '<input type="text" id="integ-' + ch.key + '-' + f.key + '" value="' + escHtml(val) + '" placeholder="' + escHtml(f.placeholder) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:5px;background:var(--bg-primary);color:var(--text-primary);font-size:11px;margin-bottom:6px;">';
+              }).join('')
+            + '<button onclick="saveIntegrationFromFields(\'' + ch.key + '\')" style="width:100%;padding:7px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">' + (on ? 'Update' : 'Connect') + '</button>'
+            + '</div>'
+        )
+        + '</div>';
+    }).join('');
+  }
+
+  /* ── Approval row renderer (kept from v1) ── */
   function _renderRow(r, pending) {
     var statusColors = {pending:'#f59e0b', approved:'#22c55e', denied:'#ef4444',
                         timeout:'#6b7280', expired:'#6b7280'};
@@ -80,7 +239,7 @@
     html += '<span style="font-weight:700;color:var(--text-primary);font-size:13px;">' + escHtml(r.tool_name || '?') + '</span>';
     html += '<span style="background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(r.status) + '</span>';
     if (r.policy_name) {
-      html += '<span style="color:var(--text-muted);font-size:11px;">policy: ' + escHtml(r.policy_name) + '</span>';
+      html += '<span style="color:var(--text-muted);font-size:11px;">rule: ' + escHtml(r.policy_name) + '</span>';
     }
     html += '<span style="color:var(--text-faint);font-size:10px;margin-left:auto;">' + escHtml(when) + '</span>';
     html += '</div>';
@@ -90,8 +249,8 @@
     html += '<pre style="margin:0;padding:8px 10px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;max-height:120px;color:var(--text-secondary);">' + escHtml(argsPreview) + '</pre>';
     if (pending) {
       html += '<div style="display:flex;gap:8px;margin-top:10px;">';
-      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" style="background:#22c55e;color:#062614;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">&#10003; Approve</button>';
-      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:#ef4444;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">&#10005; Deny</button>';
+      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" style="background:#22c55e;color:#062614;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Approve</button>';
+      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:#ef4444;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Deny</button>';
       html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
       html += '</div>';
     } else if (r.decided_by) {
@@ -101,22 +260,37 @@
     return html;
   }
 
+  /* ── Main loader ── */
   window.loadApprovalsTab = async function() {
     try {
-      var pending = await fetchJsonWithTimeout('/api/cloud/approvals?status=pending&limit=50' + _q(), 6000);
-      var history = await fetchJsonWithTimeout('/api/cloud/approvals?limit=50' + _q(), 6000);
+      var [pending, history, policies, integrations] = await Promise.all([
+        fetchJsonWithTimeout('/api/cloud/approvals?status=pending&limit=50' + _q(), 6000).catch(function(){return {approvals:[]};}),
+        fetchJsonWithTimeout('/api/cloud/approvals?limit=50' + _q(), 6000).catch(function(){return {approvals:[]};}),
+        fetchJsonWithTimeout('/api/cloud/policies?' + _q().replace(/^&/,''), 6000).catch(function(){return {policies:[]};}),
+        fetchJsonWithTimeout('/api/cloud/integrations?' + _q().replace(/^&/,''), 6000).catch(function(){return {integrations:[]};})
+      ]);
       var p = (pending.approvals || []).filter(function(r){return r.status==='pending';});
       var h = (history.approvals || []).filter(function(r){return r.status!=='pending';});
+
+      // Pending
       var pe = document.getElementById('approvals-pending-list');
-      var he = document.getElementById('approvals-history-list');
       if (p.length === 0) {
-        pe.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">No pending approvals. Create policies in <code>~/.clawmetry/policies.yml</code> to gate risky tools.</div>';
-        document.getElementById('approvals-no-policies').style.display = '';
+        pe.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">No pending approvals right now.</div>';
       } else {
         pe.innerHTML = p.map(function(r){return _renderRow(r, true);}).join('');
-        document.getElementById('approvals-no-policies').style.display = 'none';
       }
-      he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('') : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">No history yet.</div>';
+
+      // Policies
+      renderPresets(policies.policies || []);
+
+      // Integrations
+      renderIntegrations(integrations.integrations || []);
+
+      // History
+      var he = document.getElementById('approvals-history-list');
+      he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('') : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">No decisions yet. Enable a protection rule above to get started.</div>';
+
+      // Counts + badge
       document.getElementById('approvals-pending-count').textContent = p.length ? '(' + p.length + ' pending)' : '';
       document.getElementById('approvals-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
       var nav = document.getElementById('nav-approvals-badge');
@@ -129,10 +303,107 @@
     }
   };
 
+  /* ── Toggle preset policy ── */
+  window.togglePresetPolicy = async function(presetKey, enabled) {
+    var preset = PRESETS.find(function(p){return p.key === presetKey;});
+    if (!preset) return;
+    try {
+      var r = await fetch('/api/cloud/policies', {
+        method: 'POST', headers: _authHeaders(),
+        body: JSON.stringify({
+          name: preset.name,
+          tool: preset.tool,
+          pattern_type: 'command_regex',
+          pattern: preset.pattern,
+          action: 'require_approval',
+          timeout: preset.timeout,
+          on_timeout: preset.on_timeout,
+          enabled: enabled,
+          preset_key: preset.key
+        })
+      });
+      if (!r.ok) {
+        var d = await r.json().catch(function(){return {};});
+        throw new Error(d.error || ('HTTP ' + r.status));
+      }
+      loadApprovalsTab();
+    } catch(e) {
+      alert('Failed to save rule: ' + e);
+      loadApprovalsTab();
+    }
+  };
+
+  /* ── Save custom rule ── */
+  window.saveCustomRule = async function() {
+    var name = (document.getElementById('rule-name').value || '').trim();
+    var tool = document.getElementById('rule-tool').value;
+    var patternRaw = (document.getElementById('rule-pattern').value || '').trim();
+    var timeout = parseInt(document.getElementById('rule-timeout').value) || 60;
+    var onTimeout = document.getElementById('rule-on-timeout').value || 'deny';
+    if (!name) { alert('Please enter a rule name.'); return; }
+    if (!patternRaw) { alert('Please enter at least one keyword to match.'); return; }
+    // Convert comma-separated keywords to regex alternation
+    var pattern = patternRaw.split(',').map(function(s){return s.trim();}).filter(Boolean).join('|');
+    try {
+      var r = await fetch('/api/cloud/policies', {
+        method: 'POST', headers: _authHeaders(),
+        body: JSON.stringify({
+          name: name, tool: tool, pattern_type: 'command_regex',
+          pattern: pattern, action: 'require_approval',
+          timeout: timeout, on_timeout: onTimeout, enabled: true
+        })
+      });
+      if (!r.ok) {
+        var d = await r.json().catch(function(){return {};});
+        throw new Error(d.error || ('HTTP ' + r.status));
+      }
+      document.getElementById('rule-name').value = '';
+      document.getElementById('rule-pattern').value = '';
+      document.getElementById('create-rule-form').style.display = 'none';
+      loadApprovalsTab();
+    } catch(e) {
+      alert('Failed to save rule: ' + e);
+    }
+  };
+
+  window.toggleCreateRuleForm = function() {
+    var f = document.getElementById('create-rule-form');
+    f.style.display = f.style.display === 'none' ? '' : 'none';
+  };
+
+  /* ── Save integration ── */
+  window.saveIntegration = async function(channel, config) {
+    try {
+      var r = await fetch('/api/cloud/integrations', {
+        method: 'POST', headers: _authHeaders(),
+        body: JSON.stringify({channel: channel, enabled: true, config: config || {}})
+      });
+      if (!r.ok) {
+        var d = await r.json().catch(function(){return {};});
+        throw new Error(d.error || ('HTTP ' + r.status));
+      }
+      loadApprovalsTab();
+    } catch(e) {
+      alert('Failed to save integration: ' + e);
+    }
+  };
+
+  window.saveIntegrationFromFields = function(channel) {
+    var ch = CHANNELS.find(function(c){return c.key === channel;});
+    if (!ch) return;
+    var config = {};
+    ch.fields.forEach(function(f) {
+      var el = document.getElementById('integ-' + channel + '-' + f.key);
+      if (el) config[f.key] = el.value.trim();
+    });
+    saveIntegration(channel, config);
+  };
+
+  /* ── Decide (approve/deny) ── */
   window.decideApproval = async function(id, action) {
     try {
       var r = await fetch('/api/cloud/approvals/' + encodeURIComponent(id) + '/decide', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
+        method: 'POST', headers: _authHeaders(),
         body: JSON.stringify({action: action})
       });
       var d = await r.json();
@@ -143,10 +414,10 @@
     }
   };
 
-  // Light-touch background poll for badge updates (10s) — only when not on Approvals tab
+  /* ── Background badge poll ── */
   setInterval(function(){
     var pg = document.getElementById('page-approvals');
-    if (pg && pg.classList.contains('active')) return; // foreground refresh handled separately
+    if (pg && pg.classList.contains('active')) return;
     fetchJsonWithTimeout('/api/cloud/approvals?status=pending&limit=10' + _q(), 4000)
       .then(function(d){
         var n = (d.approvals || []).length;
