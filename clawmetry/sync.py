@@ -955,12 +955,16 @@ def sync_sessions_recent(
 
     # Build subagent map (same logic as sync_sessions)
     # Cache sessions.json for 60 seconds to avoid re-parsing every call
+    global _sessions_json_cache
     file_to_subagent_id: dict[str, str] = {}
     index_path = os.path.join(sessions_dir, "sessions.json")
     if os.path.isfile(index_path):
         try:
             current_mtime = os.path.getmtime(index_path)
-            if _sessions_json_cache["data"] is not None and _sessions_json_cache["mtime"] == current_mtime:
+            if (
+                _sessions_json_cache["data"] is not None
+                and _sessions_json_cache["mtime"] == current_mtime
+            ):
                 file_to_subagent_id = _sessions_json_cache["data"]
             else:
                 with open(index_path) as _fi:
@@ -969,8 +973,14 @@ def sync_sessions_recent(
                     if ":subagent:" in _k and isinstance(_meta, dict):
                         _sf = _meta.get("sessionFile", "")
                         if _sf:
-                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[-1]
-                _sessions_json_cache = {"ts": time.time(), "data": file_to_subagent_id.copy(), "mtime": current_mtime}
+                            file_to_subagent_id[os.path.basename(_sf)] = _k.split(":")[
+                                -1
+                            ]
+                _sessions_json_cache = {
+                    "ts": time.time(),
+                    "data": file_to_subagent_id.copy(),
+                    "mtime": current_mtime,
+                }
         except Exception:
             pass
 
@@ -3054,8 +3064,6 @@ if __name__ == "__main__":
             log.error(traceback.format_exc())
             log.info("Restarting in 15 seconds...")
             time.sleep(15)
-
-
 
 
 def run_daemon() -> None:
