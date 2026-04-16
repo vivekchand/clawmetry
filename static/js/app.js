@@ -7782,6 +7782,12 @@ async function loadModalTranscript() {
         if (ec) ec.textContent = '📊 ' + _modalEvents.length + ' events';
         var mc = document.getElementById('modal-msg-count');
         if (mc) mc.textContent = '💬 ' + (data.messageCount || 0) + ' messages';
+        // Real transcript available — restore the tab strip + footer that
+        // the fallback renderer hides.
+        var tabsEl = document.querySelector('#task-modal-overlay .modal-tabs');
+        if (tabsEl) tabsEl.style.display = '';
+        var footer = document.querySelector('#task-modal-overlay .modal-footer');
+        if (footer) footer.style.display = '';
         renderModalContent();
         return;
       }
@@ -7905,11 +7911,21 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
     // as the Brain tab so users see IDENTICAL content scoped to this task.
     html += '<div id="modal-brain-events-slot"></div>';
 
-    if (match.error) {
-      html += '<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:12px;">'
-           +  '<div style="font-size:11px;color:#ef4444;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">⚠️ OpenClaw error</div>'
-           +  '<div style="font-size:13px;color:#fca5a5;line-height:1.5;font-family:monospace;white-space:pre-wrap;">' + escHtml(match.error) + '</div></div>';
-    }
+    // Hide the Summary / Narrative / Full Logs tab strip when there's no
+    // live transcript — the fallback renders everything in one flow, the
+    // tabs have nothing to switch between. Shown again when a real
+    // transcript loads (see loadModalTranscript).
+    try {
+      var tabsEl = document.querySelector('#task-modal-overlay .modal-tabs');
+      if (tabsEl) tabsEl.style.display = 'none';
+      var footer = document.querySelector('#task-modal-overlay .modal-footer');
+      if (footer) footer.style.display = 'none';
+    } catch(e) {}
+
+    // The error message is already surfaced via the FAILED pill at the top,
+    // the Brain events showing the agent's reaction to the error, and the
+    // explainer below. Previously we rendered a separate red "OpenClaw
+    // error" card here but it duplicated information already on screen.
 
     // Explain the data source so users understand why the Activity panel
     // doesn't look like a typical live transcript.
