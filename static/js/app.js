@@ -7927,26 +7927,11 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
     // explainer below. Previously we rendered a separate red "OpenClaw
     // error" card here but it duplicated information already on screen.
 
-    // Explain the data source so users understand why the Activity panel
-    // doesn't look like a typical live transcript.
-    var hasChildKey = (match.key || '').indexOf('agent:main:subagent:') === 0;
-    var explainer = '';
-    if (match.error || match.status === 'failed') {
-      explainer = '❌ This spawn attempt failed — OpenClaw rejected the call before a child session could be created. '
-                + 'The SPAWN entry you see in the Brain tab is the assistant\'s toolCall in the <em>parent</em> session, '
-                + 'not a child session. There\'s no child transcript to show.';
-    } else if (match.status === 'stale' && hasChildKey) {
-      explainer = '📄 The child session has stopped writing to its own JSONL (OpenClaw stops tracking subagents '
-                + 'after completion / TTL). The metadata and output above were reconstructed from the <em>parent</em> '
-                + 'session\'s spawn records + completion event, which persist as long as the parent does.';
-    } else if (match.status === 'stale') {
-      explainer = '📄 This spawn attempt is older than the active window. The metadata above comes from the '
-                + 'parent session\'s JSONL record of the spawn call.';
-    }
-    if (explainer) {
-      html += '<div style="font-size:12px;color:var(--text-muted);padding:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;line-height:1.5;">'
-           +  explainer + '</div>';
-    }
+    // Previously we appended an explainer block ("this spawn failed…",
+    // "child JSONL was GC'd…") here, but the FAILED/STALE status pill,
+    // activity cards, and inline Brain events already make the story clear.
+    // The explainer leaned into parent-vs-child-JSONL jargon that users
+    // didn't need.
     html += '</div>';
     el.innerHTML = html;
     // Populate the Brain-events slot asynchronously (fire-and-forget).
