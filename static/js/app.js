@@ -7859,17 +7859,19 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
       }
       return;
     }
-    // Idempotency guard: if the critical fields haven't changed since the
-    // last render, skip rebuilding the DOM. This keeps scroll position and
-    // prevents the Brain Events pane from re-flashing.
+    // Idempotency guard: if the critical fields haven't changed AND the DOM
+    // already contains the rendered overview pane (i.e. this isn't the first
+    // render), skip rebuilding. We check `fallback-pane-overview` presence
+    // so a fresh openTaskModal (which resets modal-content) always re-paints
+    // even when the fingerprint coincidentally matches a previous subagent.
     var fingerprint = JSON.stringify([
       match.status, match.task, match.error, match.completionResult,
       match.completionStatus, match.runtimeFormatted, match.tokensIn, match.tokensOut,
     ]);
-    if (el.dataset.spawnFingerprint === fingerprint) {
+    if (document.getElementById('fallback-pane-overview')
+        && el.dataset.spawnFingerprint === fingerprint) {
       return;
     }
-    el.dataset.spawnFingerprint = fingerprint;
     var startedAt = match.startedAt ? new Date(match.startedAt).toLocaleString() : '';
     var statusColor = { active:'#22c55e', idle:'#f59e0b', stale:'#6b7280', failed:'#ef4444' }[match.status] || '#6b7280';
 
@@ -7957,6 +7959,10 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
     el.innerHTML =
       '<div id="fallback-pane-overview" style="display:' + (showOv ? '' : 'none') + ';">' + overviewHtml + '</div>' +
       '<div id="fallback-pane-brain" style="display:'    + (showOv ? 'none' : '') + ';">' + brainHtml + '</div>';
+    // Record the fingerprint AFTER the DOM write so concurrent calls don't
+    // see a stored fingerprint that matches the state they're about to
+    // render and bail out before writing anything.
+    el.dataset.spawnFingerprint = fingerprint;
 
     // Populate Brain events asynchronously (fire-and-forget).
     _renderModalBrainEvents(match).catch(function(){ /* non-fatal */ });
