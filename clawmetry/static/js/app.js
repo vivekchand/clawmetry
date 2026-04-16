@@ -1826,7 +1826,11 @@ async function ncReject(sandbox, chunkId, btn) {
 }
 
 async function loadSecurityPosture() {
-  if (window.CLOUD_MODE) return;
+  // Cloud mode no longer short-circuits this — the daemon now collects
+  // posture locally and pushes on its heartbeat, cloud stores it per node,
+  // and `/api/security/posture` returns the synced snapshot. The cloud-
+  // mode fetch shim auto-injects ?node_id=<current> + &token=<cm_> so the
+  // call works against either OSS-local OR cloud-served handler.
   try {
     var data = await fetchJsonWithTimeout('/api/security/posture', 25000);
     var badge = document.getElementById('posture-score-badge');
