@@ -216,14 +216,21 @@
 
   /* ── Integration channels ── */
   var CHANNELS = [
-    {key:'email', name:'Email', icon:'&#9993;&#65039;', desc:'Get notified at your signup email',
-     color:'#3b82f6', fields:[]},
+    {key:'email', name:'Email', icon:'&#9993;&#65039;', desc:'Notifications to your signup email',
+     color:'#3b82f6', fields:[],
+     howTo:'Approval alerts will be sent to the email you signed up with. No setup needed.'},
     {key:'slack', name:'Slack', icon:'&#128172;', desc:'Post to a Slack channel',
-     color:'#4A154B', fields:[{key:'webhook_url', label:'Webhook URL', placeholder:'https://hooks.slack.com/services/...'}]},
+     color:'#4A154B',
+     fields:[{key:'webhook_url', label:'Webhook URL', placeholder:'https://hooks.slack.com/services/T.../B.../xxx'}],
+     howTo:'1. Go to <b>api.slack.com/apps</b> and click <b>Create New App</b><br>2. Choose <b>From scratch</b>, name it "ClawMetry Alerts"<br>3. Click <b>Incoming Webhooks</b> → toggle ON<br>4. Click <b>Add New Webhook to Workspace</b> → pick your channel<br>5. Copy the webhook URL and paste it below'},
     {key:'pagerduty', name:'PagerDuty', icon:'&#128225;', desc:'Trigger PagerDuty incidents',
-     color:'#06AC38', fields:[{key:'routing_key', label:'Integration Key', placeholder:'Paste your PagerDuty routing key'}]},
+     color:'#06AC38',
+     fields:[{key:'routing_key', label:'Integration Key', placeholder:'e.g. R03F...'}],
+     howTo:'1. In PagerDuty, go to <b>Services</b> → pick your service<br>2. Click <b>Integrations</b> tab → <b>+ Add Integration</b><br>3. Choose <b>Events API v2</b><br>4. Copy the <b>Integration Key</b> and paste it below'},
     {key:'telegram', name:'Telegram', icon:'&#9992;&#65039;', desc:'Send alerts to a Telegram chat',
-     color:'#2AABEE', fields:[{key:'bot_token', label:'Bot Token', placeholder:'123456:ABC-DEF...'}, {key:'chat_id', label:'Chat ID', placeholder:'-1001234567890'}]}
+     color:'#2AABEE',
+     fields:[{key:'bot_token', label:'Bot Token', placeholder:'123456:ABC-DEF...'}, {key:'chat_id', label:'Chat ID', placeholder:'-1001234567890'}],
+     howTo:'1. Open Telegram, search for <b>@BotFather</b><br>2. Send <b>/newbot</b> and follow the prompts<br>3. Copy the <b>bot token</b> and paste it below<br>4. Add the bot to your group chat<br>5. Get the chat ID: send a message in the group, then visit<br>&nbsp;&nbsp;&nbsp;<code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>'}
   ];
 
   /* ── Render preset cards ── */
@@ -257,37 +264,105 @@
   }
 
   /* ── Render integration cards ── */
+  var _savedIntegrations = {};
   function renderIntegrations(savedIntegrations) {
     var el = document.getElementById('approvals-integrations');
     if (!el) return;
-    var saved = {};
-    (savedIntegrations || []).forEach(function(i) { saved[i.channel] = i; });
+    _savedIntegrations = {};
+    (savedIntegrations || []).forEach(function(i) { _savedIntegrations[i.channel] = i; });
     el.innerHTML = CHANNELS.map(function(ch) {
-      var s = saved[ch.key];
+      var s = _savedIntegrations[ch.key];
       var on = s && s.enabled;
-      var configuring = false;
-      return '<div id="integ-' + ch.key + '" style="background:var(--bg-secondary);border:1px solid ' + (on ? ch.color + '44' : 'var(--border)') + ';border-radius:10px;padding:14px;">'
-        + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
-        + '<div style="display:flex;align-items:center;gap:6px;">'
-        + '<span style="font-size:14px;">' + ch.icon + '</span>'
-        + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">' + ch.name + '</span>'
-        + (on ? '<span style="font-size:9px;background:' + ch.color + '22;color:' + ch.color + ';padding:1px 6px;border-radius:10px;font-weight:600;">CONNECTED</span>' : '')
-        + '</div>'
-        + '</div>'
-        + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">' + escHtml(ch.desc) + '</div>'
-        + (ch.fields.length === 0
-          ? '<button onclick="saveIntegration(\'' + ch.key + '\', {})" style="width:100%;padding:7px;border:1px solid ' + ch.color + '44;background:' + (on ? ch.color + '15' : 'transparent') + ';color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">' + (on ? 'Enabled' : 'Enable') + '</button>'
-          : '<div id="integ-fields-' + ch.key + '">'
-            + ch.fields.map(function(f) {
-                var val = (s && s.config && s.config[f.key]) || '';
-                return '<input type="text" id="integ-' + ch.key + '-' + f.key + '" value="' + escHtml(val) + '" placeholder="' + escHtml(f.placeholder) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:5px;background:var(--bg-primary);color:var(--text-primary);font-size:11px;margin-bottom:6px;">';
-              }).join('')
-            + '<button onclick="saveIntegrationFromFields(\'' + ch.key + '\')" style="width:100%;padding:7px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">' + (on ? 'Update' : 'Connect') + '</button>'
-            + '</div>'
+      return '<div style="background:var(--bg-secondary);border:1px solid ' + (on ? ch.color + '44' : 'var(--border)') + ';border-radius:10px;padding:14px;text-align:center;">'
+        + '<div style="font-size:20px;margin-bottom:6px;">' + ch.icon + '</div>'
+        + '<div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">' + ch.name + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">' + escHtml(ch.desc) + '</div>'
+        + (on
+          ? '<button onclick="openIntegrationSetup(\'' + ch.key + '\')" style="width:100%;padding:8px;border:1px solid ' + ch.color + '44;background:' + ch.color + '15;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Connected</button>'
+          : '<button onclick="openIntegrationSetup(\'' + ch.key + '\')" style="width:100%;padding:8px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Connect</button>'
         )
         + '</div>';
     }).join('');
   }
+
+  /* ── Integration setup modal ── */
+  window.openIntegrationSetup = function(channelKey) {
+    if (_showUpgradeIfNeeded()) return;
+    var ch = CHANNELS.find(function(c){return c.key === channelKey;});
+    if (!ch) return;
+    var s = _savedIntegrations[ch.key];
+    var on = s && s.enabled;
+    var modal = document.getElementById('approvals-upgrade-modal');
+    // Reuse the modal container with different content
+    var html = '<div style="background:var(--bg-secondary,#131929);border:1px solid ' + ch.color + '44;border-radius:16px;padding:28px 32px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);">';
+    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">';
+    html += '<span style="font-size:24px;">' + ch.icon + '</span>';
+    html += '<span style="font-size:16px;font-weight:700;color:var(--text-primary,#e2e8f0);">Connect ' + ch.name + '</span>';
+    html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-muted);font-size:18px;" onclick="closeIntegrationSetup()">&times;</span>';
+    html += '</div>';
+    // How-to instructions
+    if (ch.howTo) {
+      html += '<div style="background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.15);border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:var(--text-secondary,#cbd5e1);line-height:1.7;">';
+      html += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted,#94a3b8);margin-bottom:6px;">How to set up</div>';
+      html += ch.howTo;
+      html += '</div>';
+    }
+    // Fields
+    if (ch.fields.length > 0) {
+      ch.fields.forEach(function(f) {
+        var val = (s && s.config && s.config[f.key]) || '';
+        html += '<label style="font-size:11px;color:var(--text-muted,#94a3b8);display:block;margin-bottom:4px;">' + escHtml(f.label) + '</label>';
+        html += '<input type="text" id="setup-' + ch.key + '-' + f.key + '" value="' + escHtml(val) + '" placeholder="' + escHtml(f.placeholder) + '" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border,#1e293b);border-radius:6px;background:var(--bg-primary,#0B0F1A);color:var(--text-primary,#e2e8f0);font-size:12px;margin-bottom:10px;">';
+      });
+    }
+    // Buttons
+    html += '<div style="display:flex;gap:8px;margin-top:6px;">';
+    html += '<button onclick="submitIntegrationSetup(\'' + ch.key + '\')" style="flex:1;padding:10px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">' + (on ? 'Update' : 'Connect') + '</button>';
+    if (on) {
+      html += '<button onclick="disconnectIntegration(\'' + ch.key + '\')" style="padding:10px 16px;border:1px solid #ef444444;background:transparent;color:#ef4444;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Disconnect</button>';
+    }
+    html += '</div>';
+    html += '</div>';
+    // Show in a fresh overlay
+    var overlay = document.getElementById('integration-setup-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'integration-setup-overlay';
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;';
+      overlay.onclick = function(e){if(e.target===overlay)closeIntegrationSetup();};
+      document.body.appendChild(overlay);
+    }
+    overlay.innerHTML = html;
+    overlay.style.display = 'flex';
+  };
+
+  window.closeIntegrationSetup = function() {
+    var o = document.getElementById('integration-setup-overlay');
+    if (o) o.style.display = 'none';
+  };
+
+  window.submitIntegrationSetup = function(channelKey) {
+    var ch = CHANNELS.find(function(c){return c.key === channelKey;});
+    if (!ch) return;
+    var config = {};
+    ch.fields.forEach(function(f) {
+      var el = document.getElementById('setup-' + channelKey + '-' + f.key);
+      if (el) config[f.key] = el.value.trim();
+    });
+    closeIntegrationSetup();
+    saveIntegration(channelKey, config);
+  };
+
+  window.disconnectIntegration = async function(channelKey) {
+    closeIntegrationSetup();
+    try {
+      await fetch('/api/cloud/integrations', {
+        method: 'POST', headers: _authHeaders(),
+        body: JSON.stringify({channel: channelKey, enabled: false, config: {}})
+      });
+      loadApprovalsTab();
+    } catch(e) { alert('Failed: ' + e); }
+  };
 
   /* ── Approval row renderer (kept from v1) ── */
   function _renderRow(r, pending) {
