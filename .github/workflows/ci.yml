@@ -152,3 +152,56 @@ jobs:
       - name: Smoke test - syntax valid
         run: python3 -c "import dashboard; print('✅ Import OK')"
         continue-on-error: true  # May fail if dashboard has top-level side effects
+
+  # ── Wheel-install verification: routes/, helpers/, static/, templates/ ────
+  # This catches packaging regressions that source-checkout tests miss.
+  # If static/js/app.js doesn't ship in the wheel, the dashboard's frontend
+  # 404s for everyone who `pip install clawmetry` — which is how cloud
+  # consumes the package too. This job proves the wheel contains what it
+  # needs to run end-to-end, in a fresh venv isolated from the source tree.
+  wheel-install:
+    name: Wheel install & asset presence
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+      - name: Install wheel in isolated venv
+        run: |
+          python -m venv /tmp/vwheel
+          /tmp/vwheel/bin/pip install --upgrade pip
+          /tmp/vwheel/bin/pip install dist/clawmetry-*.whl flask waitress cryptography pytest requests
+      - name: Verify runtime assets shipped in wheel
+        run: |
+          /tmp/vwheel/bin/python -c "
+          import clawmetry, pathlib
+          root = pathlib.Path(clawmetry.__file__).parent
+          for p in ('static/js/app.js',
+                    'static/img/logo.svg',
+                    'templates/tabs/flow.html'):
+              assert (root/p).exists(), f'missing in wheel: {p}'
+          import dashboard  # ensures top-level module + routes/ + helpers/ all import
+          from routes.sessions import bp_sessions
+          from helpers.gateway import _gw_ws_rpc
+          print('wheel ships all runtime assets; dashboard imports clean')
+          "
+      - name: Start dashboard from installed wheel & hit /static/js/app.js
+        run: |
+          mkdir -p /tmp/wheel-run && cd /tmp/wheel-run
+          OPENCLAW_GATEWAY_TOKEN=ci-test-token /tmp/vwheel/bin/python -c "import dashboard; dashboard.main()" --port 8955 --no-debug &
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer ci-test-token" http://localhost:8955/api/health && echo "Ready" && break
+            sleep 1
+          done
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:8955/static/js/app.js)
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ /static/js/app.js returned HTTP $STATUS — wheel is broken"
+            exit 1
+          fi
+          echo "✅ /static/js/app.js served from installed wheel"

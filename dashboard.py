@@ -143,7 +143,11 @@ except ImportError:
         pass  # noqa
 
 
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    static_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'static'),
+    template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
+)
 
 # ── Cross-platform helpers ──────────────────────────────────────────────
 import re as _re
@@ -5930,7 +5934,11 @@ except ImportError:
     trace_service_pb2 = None
 
 
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    static_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'static'),
+    template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
+)
 
 # ── Cross-platform helpers ──────────────────────────────────────────────
 import platform as _platform

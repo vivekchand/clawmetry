@@ -1,7 +1,7 @@
-recursive-include static *
+recursive-include clawmetry/static *
+recursive-include clawmetry/templates *.html
 recursive-include helpers *.py
 recursive-include routes *.py
-recursive-include templates *.html
 include CLAUDE.md
 include ARCHITECTURE.md
 include CHANGELOG.md
