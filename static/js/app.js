@@ -7736,8 +7736,16 @@ function openTaskModal(sessionId, taskName, sessionKey) {
   _modalTab = 'summary';
   document.querySelectorAll('.modal-tab').forEach(function(t,i){t.classList.toggle('active',i===0);});
   loadModalTranscript();
-  if (_modalAutoRefresh) {
+  // Auto-refresh only makes sense for LIVE subagents (those with a sessionId
+  // whose transcript can update). Failed/stale entries open in fallback mode
+  // and their data is immutable — refreshing just causes flicker. The user
+  // can re-enable via the checkbox if needed.
+  if (_modalAutoRefresh && sessionId) {
     _modalRefreshTimer = setInterval(loadModalTranscript, 4000);
+  } else {
+    // Reflect the disabled state in the checkbox so the UX matches.
+    var cb = document.getElementById('modal-auto-refresh-cb');
+    if (cb && !sessionId) cb.checked = false;
   }
   document.addEventListener('keydown', _modalEscHandler);
 }
@@ -7831,7 +7839,14 @@ function _switchFallbackTab(tab) {
 async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
   var el = document.getElementById('modal-content');
   if (!el) return;
-  el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Loading subagent info...</div>';
+  // Only show the "Loading..." placeholder on the first render. Subsequent
+  // re-renders (tab switches, auto-refresh) keep the existing content
+  // visible until the fetch resolves, avoiding a flicker that makes the
+  // modal hard to read through.
+  var alreadyRendered = !!document.getElementById('fallback-pane-overview');
+  if (!alreadyRendered) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Loading subagent info...</div>';
+  }
   try {
     var saData = await fetch('/api/subagents').then(function(r){return r.json();}).catch(function(){return {subagents:[]};});
     var entries = saData.subagents || [];
@@ -7839,9 +7854,22 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
       return a.sessionId === sessionIdOrKey || a.key === sessionIdOrKey;
     });
     if (!match) {
-      el.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + escHtml(reason) + '</div>';
+      if (!alreadyRendered) {
+        el.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + escHtml(reason) + '</div>';
+      }
       return;
     }
+    // Idempotency guard: if the critical fields haven't changed since the
+    // last render, skip rebuilding the DOM. This keeps scroll position and
+    // prevents the Brain Events pane from re-flashing.
+    var fingerprint = JSON.stringify([
+      match.status, match.task, match.error, match.completionResult,
+      match.completionStatus, match.runtimeFormatted, match.tokensIn, match.tokensOut,
+    ]);
+    if (el.dataset.spawnFingerprint === fingerprint) {
+      return;
+    }
+    el.dataset.spawnFingerprint = fingerprint;
     var startedAt = match.startedAt ? new Date(match.startedAt).toLocaleString() : '';
     var statusColor = { active:'#22c55e', idle:'#f59e0b', stale:'#6b7280', failed:'#ef4444' }[match.status] || '#6b7280';
 
