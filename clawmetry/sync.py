@@ -2937,6 +2937,18 @@ def run_daemon() -> None:
     try:
         from clawmetry import approvals as _approvals
         _approvals_stop = threading.Event()
+        # Route the approvals logger through the same handlers as our sync
+        # logger so watcher activity (policy fires, decisions, kills) shows
+        # up in ~/.clawmetry/sync.log alongside the sync line items.
+        try:
+            _ap_log = logging.getLogger("clawmetry-approvals")
+            _ap_log.setLevel(logging.INFO)
+            _ap_log.propagate = False
+            for _h in list(log.handlers):
+                if _h not in _ap_log.handlers:
+                    _ap_log.addHandler(_h)
+        except Exception:
+            pass
 
         def _approvals_worker():
             try:
