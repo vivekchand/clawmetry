@@ -214,10 +214,34 @@ def match_policy(policies: list[dict], tool_name: str, args: dict):
 
 
 def _post_approval_request(api_key: str, payload: dict) -> Optional[dict]:
-    """POST to cloud's /api/approvals/request. Returns dict or None on failure."""
+    """POST to cloud's /api/approvals/request. Returns dict or None on failure.
+
+    We don't reuse `clawmetry.sync._post` because that ships X-Api-Key, but
+    the cloud auth shim only honors `Authorization: Bearer` for /api/* paths.
+    """
+    import urllib.request, urllib.error
+    from clawmetry.sync import INGEST_URL
     try:
-        from clawmetry.sync import _post
-        return _post("/api/approvals/request", payload, api_key, timeout=10)
+        body = json.dumps(payload).encode()
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        if payload.get("node_id"):
+            headers["X-Node-Id"] = payload["node_id"]
+        req = urllib.request.Request(
+            f"{INGEST_URL.rstrip('/')}/api/approvals/request",
+            data=body, headers=headers, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            err_body = ""
+        log.warning(f"approval request POST failed: HTTP {e.code} — {err_body}")
+        return None
     except Exception as e:
         log.warning(f"approval request POST failed: {e}")
         return None
@@ -386,7 +410,14 @@ def watch_iteration(api_key: str, node_id: str,
             continue
         try:
             size = os.path.getsize(fpath)
-            offset = _file_offsets.get(fpath, size)  # default: start at EOF
+            # First time we see this file: anchor to current EOF *and persist
+            # the watermark*, so subsequent appends are visible. The previous
+            # version re-defaulted to `size` every iteration, which silently
+            # absorbed any new bytes.
+            if fpath not in _file_offsets:
+                _file_offsets[fpath] = size
+                continue
+            offset = _file_offsets[fpath]
             if offset > size:
                 offset = 0  # log rotated
             if offset == size:
