@@ -8,6 +8,7 @@ Validates:
 - Graceful handling of unknown models / missing usage fields
 - Import is idempotent (safe to import multiple times)
 """
+
 from __future__ import annotations
 
 import json
@@ -25,56 +26,77 @@ os.environ["CLAWMETRY_NO_INTERCEPT"] = "1"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_anthropic_response(model: str, inp: int, out: int) -> bytes:
-    return json.dumps({
-        "model": model,
-        "usage": {"input_tokens": inp, "output_tokens": out},
-    }).encode()
+    return json.dumps(
+        {
+            "model": model,
+            "usage": {"input_tokens": inp, "output_tokens": out},
+        }
+    ).encode()
 
 
 def _make_openai_response(model: str, inp: int, out: int) -> bytes:
-    return json.dumps({
-        "model": model,
-        "usage": {"prompt_tokens": inp, "completion_tokens": out},
-    }).encode()
+    return json.dumps(
+        {
+            "model": model,
+            "usage": {"prompt_tokens": inp, "completion_tokens": out},
+        }
+    ).encode()
 
 
 def _make_gemini_response(inp: int, out: int) -> bytes:
-    return json.dumps({
-        "model": "gemini-1.5-flash",
-        "usageMetadata": {"promptTokenCount": inp, "candidatesTokenCount": out},
-    }).encode()
+    return json.dumps(
+        {
+            "model": "gemini-1.5-flash",
+            "usageMetadata": {"promptTokenCount": inp, "candidatesTokenCount": out},
+        }
+    ).encode()
 
 
 # ---------------------------------------------------------------------------
 # Provider detection
 # ---------------------------------------------------------------------------
 
+
 class TestProviderDetection(unittest.TestCase):
     def _detect(self, url: str):
         from clawmetry.providers_pricing import PROVIDER_MAP
+
         for hostname, info in PROVIDER_MAP.items():
             if hostname in url:
                 return info["name"]
         return None
 
     def test_anthropic_detected(self):
-        self.assertEqual(self._detect("https://api.anthropic.com/v1/messages"), "anthropic")
+        self.assertEqual(
+            self._detect("https://api.anthropic.com/v1/messages"), "anthropic"
+        )
 
     def test_openai_detected(self):
-        self.assertEqual(self._detect("https://api.openai.com/v1/chat/completions"), "openai")
+        self.assertEqual(
+            self._detect("https://api.openai.com/v1/chat/completions"), "openai"
+        )
 
     def test_gemini_detected(self):
-        self.assertIsNotNone(self._detect("https://generativelanguage.googleapis.com/v1beta/models"))
+        self.assertIsNotNone(
+            self._detect("https://generativelanguage.googleapis.com/v1beta/models")
+        )
 
     def test_groq_detected(self):
-        self.assertEqual(self._detect("https://api.groq.com/openai/v1/chat/completions"), "groq")
+        self.assertEqual(
+            self._detect("https://api.groq.com/openai/v1/chat/completions"), "groq"
+        )
 
     def test_mistral_detected(self):
-        self.assertEqual(self._detect("https://api.mistral.ai/v1/chat/completions"), "mistral")
+        self.assertEqual(
+            self._detect("https://api.mistral.ai/v1/chat/completions"), "mistral"
+        )
 
     def test_together_detected(self):
-        self.assertIsNotNone(self._detect("https://api.together.xyz/v1/chat/completions"))
+        self.assertIsNotNone(
+            self._detect("https://api.together.xyz/v1/chat/completions")
+        )
 
     def test_cohere_detected(self):
         self.assertIsNotNone(self._detect("https://api.cohere.com/v2/chat"))
@@ -90,9 +112,11 @@ class TestProviderDetection(unittest.TestCase):
 # Token / cost parsing
 # ---------------------------------------------------------------------------
 
+
 class TestCostParsing(unittest.TestCase):
     def setUp(self):
         from clawmetry.providers_pricing import estimate_cost_usd
+
         self.estimate = estimate_cost_usd
 
     def test_anthropic_cost_positive(self):
@@ -130,7 +154,9 @@ class TestCostParsing(unittest.TestCase):
             cost = self.estimate("totally-unknown-provider", 1000, 500)
             self.assertGreaterEqual(cost, 0.0)
         except Exception as e:
-            self.fail(f"estimate_cost_usd raised unexpectedly for unknown provider: {e}")
+            self.fail(
+                f"estimate_cost_usd raised unexpectedly for unknown provider: {e}"
+            )
 
     def test_sanity_1k_tokens_under_10_cents(self):
         # Even the most expensive model (claude-3-opus, $75/1M out) should be < $0.10 for 1K tokens
@@ -142,10 +168,12 @@ class TestCostParsing(unittest.TestCase):
 # Interceptor response parsing
 # ---------------------------------------------------------------------------
 
+
 class TestResponseParsing(unittest.TestCase):
     def _parse(self, provider: str, body: bytes):
         """Call interceptor._handle_response and return what it recorded."""
         from clawmetry import interceptor
+
         # Reset ledger for isolation
         with interceptor._lock:
             interceptor._ledger["calls"] = 0
@@ -197,6 +225,7 @@ class TestResponseParsing(unittest.TestCase):
 
     def test_non_llm_url_ignored(self):
         from clawmetry import interceptor
+
         with interceptor._lock:
             interceptor._ledger["calls"] = 0
         body = _make_anthropic_response("claude-3-5-sonnet-20241022", 100, 50)
@@ -209,9 +238,11 @@ class TestResponseParsing(unittest.TestCase):
 # Accumulator totals (multiple calls)
 # ---------------------------------------------------------------------------
 
+
 class TestAccumulatorTotals(unittest.TestCase):
     def test_multiple_calls_accumulate(self):
         from clawmetry import interceptor
+
         with interceptor._lock:
             interceptor._ledger["calls"] = 0
             interceptor._ledger["cost_usd"] = 0.0
@@ -221,7 +252,9 @@ class TestAccumulatorTotals(unittest.TestCase):
 
         for _ in range(3):
             body = _make_anthropic_response("claude-3-5-sonnet-20241022", 100, 50)
-            interceptor._handle_response_sync("https://api.anthropic.com/v1/messages", body)
+            interceptor._handle_response_sync(
+                "https://api.anthropic.com/v1/messages", body
+            )
 
         with interceptor._lock:
             self.assertEqual(interceptor._ledger["calls"], 3)
@@ -231,6 +264,7 @@ class TestAccumulatorTotals(unittest.TestCase):
 
     def test_multi_provider_accumulate(self):
         from clawmetry import interceptor
+
         with interceptor._lock:
             interceptor._ledger["calls"] = 0
             interceptor._ledger["providers"] = {}
@@ -255,18 +289,23 @@ class TestAccumulatorTotals(unittest.TestCase):
 # clawmetry.track module
 # ---------------------------------------------------------------------------
 
+
 class TestTrackModule(unittest.TestCase):
-    def test_import_does_not_raise(self):
-        """track.py must be importable without error (even with CLAWMETRY_NO_INTERCEPT=1)."""
-        try:
-            import importlib
-            import clawmetry.track
-            importlib.reload(clawmetry.track)
-        except Exception as e:
-            self.fail(f"import clawmetry.track raised: {e}")
+    def test_interceptor_exports_activate_not_patch_all(self):
+        """interceptor.py must export activate(), not patch_all()."""
+        from clawmetry import interceptor
+
+        self.assertTrue(
+            hasattr(interceptor, "activate"), "interceptor.activate must exist"
+        )
+        self.assertFalse(
+            hasattr(interceptor, "patch_all"),
+            "interceptor.patch_all must NOT exist (it doesn't)",
+        )
 
     def test_get_stats_returns_dict(self):
         from clawmetry.track import get_stats
+
         stats = get_stats()
         # When NO_INTERCEPT=1 the interceptor is not patched but get_stats still returns a dict
         self.assertIsInstance(stats, dict)
@@ -284,10 +323,12 @@ class TestTrackModule(unittest.TestCase):
 # Graceful degradation (missing httpx / requests)
 # ---------------------------------------------------------------------------
 
+
 class TestGracefulDegradation(unittest.TestCase):
     def test_patch_all_without_httpx_does_not_raise(self):
         """patch_all() should not raise if httpx is absent."""
         from clawmetry import interceptor
+
         # Temporarily hide httpx
         with patch.dict(sys.modules, {"httpx": None}):
             try:
@@ -300,6 +341,7 @@ class TestGracefulDegradation(unittest.TestCase):
     def test_patch_all_without_requests_does_not_raise(self):
         """patch_all() should not raise if requests is absent."""
         from clawmetry import interceptor
+
         with patch.dict(sys.modules, {"requests": None}):
             try:
                 interceptor._patched["requests"] = False
