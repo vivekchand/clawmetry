@@ -104,6 +104,7 @@ from routes.fleet_history import bp_fleet, bp_history
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
 from routes.meta import bp_auth, bp_gateway, bp_otel, bp_version, bp_version_impact, bp_clusters
 from routes.nemoclaw import bp_nemoclaw
+from helpers.openapi import bp_openapi
 
 # History / time-series module
 try:
@@ -3261,6 +3262,7 @@ function clawmetryLogout(){
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
       <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
@@ -7732,6 +7734,17 @@ def detect_config(args=None):
     app.register_blueprint(bp_version_impact)
     app.register_blueprint(bp_clusters)
     app.register_blueprint(bp_nemoclaw)
+    app.register_blueprint(bp_openapi)
+
+    # Local-OSS shim for cloud-only approvals endpoint. Returns {approvals:[]}
+    # when no cloud sync is configured so the Approvals tab renders the
+    # policies-empty-state instead of "Failed to load: HTTP 404".
+    @app.route("/api/cloud/approvals", endpoint="oss_approvals_shim")
+    def _oss_approvals_shim():
+        from flask import jsonify as _jsonify
+        return _jsonify({"approvals": [], "count": 0,
+                         "note": "OSS install — connect to ClawMetry Cloud "
+                                 "(`clawmetry connect`) to enable cloud-mediated approvals."})
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -7995,6 +8008,9 @@ DASHBOARD_HTML = r"""
 
 <!-- SECURITY -->
 {% include 'tabs/security.html' %}
+
+<!-- APPROVALS — cloud-mediated approval queue (#667) -->
+{% include 'tabs/approvals.html' %}
 
 <!-- MODEL ATTRIBUTION (theme 2) -->
 {% include 'tabs/models.html' %}

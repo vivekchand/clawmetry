@@ -1,0 +1,160 @@
+<!-- APPROVALS TAB — cloud-mediated approval queue
+     vivekchand/clawmetry#667 + vivekchand/clawmetry-cloud#337 -->
+<div class="page" id="page-approvals">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div>
+        <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128737;&#65039; Approvals</span>
+        <span id="approvals-pending-count" style="margin-left:8px;font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span id="approvals-updated" style="font-size:11px;color:var(--text-muted);"></span>
+        <button class="refresh-btn" onclick="loadApprovalsTab()">&#8635; Refresh</button>
+      </div>
+    </div>
+
+    <!-- Empty state shown when no policies are configured -->
+    <div id="approvals-no-policies" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:14px;">
+      <div style="font-size:13px;color:var(--text-primary);margin-bottom:6px;font-weight:700;">No approval policies configured.</div>
+      <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">
+        Create <code style="background:var(--bg-primary);padding:1px 6px;border-radius:4px;">~/.clawmetry/policies.yml</code>
+        to require human approval before risky agent actions execute.
+        See <a href="https://github.com/vivekchand/clawmetry/issues/667" target="_blank" style="color:var(--text-accent);">issue #667</a> for the YAML format,
+        or copy the starter template:
+      </div>
+      <pre style="margin-top:10px;padding:10px 12px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;color:var(--text-secondary);">- name: Block rm -rf
+  match:
+    tool: exec
+    command_regex: 'rm\s+-rf'
+  action: require_approval
+  timeout: 60
+  on_timeout: deny
+
+- name: Approve git push --force
+  match:
+    tool: exec
+    command_regex: 'git push.*--force'
+  action: require_approval
+  timeout: 300
+  on_timeout: deny</pre>
+    </div>
+
+    <!-- Pending queue -->
+    <div style="margin-bottom:14px;">
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Pending</div>
+      <div id="approvals-pending-list">
+        <div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">Loading…</div>
+      </div>
+    </div>
+
+    <!-- History -->
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Recent decisions</div>
+      <div id="approvals-history-list">
+        <div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">Loading…</div>
+      </div>
+    </div>
+  </div>
+</div><!-- end page-approvals -->
+
+<script>
+(function(){
+  // Cloud iframe context: token is window.CLOUD_TOKEN; node_id pulled from
+  // CLOUD_NODE_ID. Local OSS context: hit /api/cloud/approvals via the
+  // existing fetch shim (same Authorization header from auth-bootstrap).
+  function _q() {
+    var p = '';
+    if (window.CLOUD_NODE_ID) p += '&node_id=' + encodeURIComponent(window.CLOUD_NODE_ID);
+    return p;
+  }
+
+  function _renderRow(r, pending) {
+    var statusColors = {pending:'#f59e0b', approved:'#22c55e', denied:'#ef4444',
+                        timeout:'#6b7280', expired:'#6b7280'};
+    var c = statusColors[r.status] || '#6b7280';
+    var argsPreview = '';
+    try { argsPreview = JSON.stringify(r.args || {}).slice(0, 200); } catch(e) {}
+    var when = (r.requested_at || '').replace('T',' ').slice(0,19);
+    var html = '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-left:3px solid ' + c + ';border-radius:8px;padding:12px 14px;margin-bottom:8px;">';
+    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">';
+    html += '<span style="font-weight:700;color:var(--text-primary);font-size:13px;">' + escHtml(r.tool_name || '?') + '</span>';
+    html += '<span style="background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(r.status) + '</span>';
+    if (r.policy_name) {
+      html += '<span style="color:var(--text-muted);font-size:11px;">policy: ' + escHtml(r.policy_name) + '</span>';
+    }
+    html += '<span style="color:var(--text-faint);font-size:10px;margin-left:auto;">' + escHtml(when) + '</span>';
+    html += '</div>';
+    if (r.context) {
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">' + escHtml(r.context) + '</div>';
+    }
+    html += '<pre style="margin:0;padding:8px 10px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;max-height:120px;color:var(--text-secondary);">' + escHtml(argsPreview) + '</pre>';
+    if (pending) {
+      html += '<div style="display:flex;gap:8px;margin-top:10px;">';
+      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" style="background:#22c55e;color:#062614;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">&#10003; Approve</button>';
+      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:#ef4444;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">&#10005; Deny</button>';
+      html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
+      html += '</div>';
+    } else if (r.decided_by) {
+      html += '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Decided by ' + escHtml(r.decided_by) + ' at ' + escHtml((r.decided_at||'').slice(11,19)) + '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  window.loadApprovalsTab = async function() {
+    try {
+      var pending = await fetchJsonWithTimeout('/api/cloud/approvals?status=pending&limit=50' + _q(), 6000);
+      var history = await fetchJsonWithTimeout('/api/cloud/approvals?limit=50' + _q(), 6000);
+      var p = (pending.approvals || []).filter(function(r){return r.status==='pending';});
+      var h = (history.approvals || []).filter(function(r){return r.status!=='pending';});
+      var pe = document.getElementById('approvals-pending-list');
+      var he = document.getElementById('approvals-history-list');
+      if (p.length === 0) {
+        pe.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">No pending approvals. Create policies in <code>~/.clawmetry/policies.yml</code> to gate risky tools.</div>';
+        document.getElementById('approvals-no-policies').style.display = '';
+      } else {
+        pe.innerHTML = p.map(function(r){return _renderRow(r, true);}).join('');
+        document.getElementById('approvals-no-policies').style.display = 'none';
+      }
+      he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('') : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">No history yet.</div>';
+      document.getElementById('approvals-pending-count').textContent = p.length ? '(' + p.length + ' pending)' : '';
+      document.getElementById('approvals-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      var nav = document.getElementById('nav-approvals-badge');
+      if (nav) {
+        if (p.length > 0) { nav.style.display = ''; nav.textContent = p.length; }
+        else { nav.style.display = 'none'; }
+      }
+    } catch(e) {
+      document.getElementById('approvals-pending-list').innerHTML = '<div style="padding:14px;color:var(--text-error);font-size:12px;">Failed to load: ' + escHtml(String(e)) + '</div>';
+    }
+  };
+
+  window.decideApproval = async function(id, action) {
+    try {
+      var r = await fetch('/api/cloud/approvals/' + encodeURIComponent(id) + '/decide', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({action: action})
+      });
+      var d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      loadApprovalsTab();
+    } catch(e) {
+      alert('Decision failed: ' + e);
+    }
+  };
+
+  // Light-touch background poll for badge updates (10s) — only when not on Approvals tab
+  setInterval(function(){
+    var pg = document.getElementById('page-approvals');
+    if (pg && pg.classList.contains('active')) return; // foreground refresh handled separately
+    fetchJsonWithTimeout('/api/cloud/approvals?status=pending&limit=10' + _q(), 4000)
+      .then(function(d){
+        var n = (d.approvals || []).length;
+        var nav = document.getElementById('nav-approvals-badge');
+        if (!nav) return;
+        if (n > 0) { nav.style.display = ''; nav.textContent = n; }
+        else { nav.style.display = 'none'; }
+      }).catch(function(){});
+  }, 10000);
+})();
+</script>

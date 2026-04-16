@@ -2929,6 +2929,35 @@ def run_daemon() -> None:
         t = threading.Thread(target=_backfill_worker, daemon=True, name="backfill")
         t.start()
 
+    # ── Cloud-mediated approvals watcher (vivekchand/clawmetry#667) ──
+    # Background thread that tails session JSONLs for risky toolCalls and
+    # blocks the agent (via gateway sessions_kill) when a human denies in
+    # the cloud. No-op when ~/.clawmetry/policies.yml is empty/missing,
+    # so this is a non-breaking default-off feature for OSS users.
+    try:
+        from clawmetry import approvals as _approvals
+        _approvals_stop = threading.Event()
+
+        def _approvals_worker():
+            try:
+                _approvals.watcher_loop(
+                    api_key=config["api_key"],
+                    node_id=config["node_id"],
+                    interval_sec=2.0,
+                    stop_event=_approvals_stop,
+                )
+            except Exception as _ape:
+                log.warning(f"approvals watcher exited: {_ape}")
+
+        t_app = threading.Thread(
+            target=_approvals_worker, daemon=True, name="approvals-watcher"
+        )
+        t_app.start()
+        log.info("approvals watcher thread started "
+                 f"(policies: {_approvals.POLICIES_PATH})")
+    except Exception as _e:
+        log.warning(f"approvals watcher failed to start: {_e}")
+
     heartbeat_interval = 60
     snapshot_interval = 60  # system snapshot (subagents, flow metrics) every 60s
     log_sync_interval = 60  # log lines are low-priority; streamer covers real-time
