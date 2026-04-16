@@ -7897,6 +7897,14 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
       html += '</div>';
     }
 
+    // --- Brain events for this subagent's time window ---
+    // Fetches the same /api/brain-history that powers the Brain tab and
+    // filters to events (a) originating from the parent session or child
+    // session, (b) within [spawn - 30s, spawn + 10min] so we capture the
+    // lead-up and the immediate response. Rendered in the same row format
+    // as the Brain tab so users see IDENTICAL content scoped to this task.
+    html += '<div id="modal-brain-events-slot"></div>';
+
     if (match.error) {
       html += '<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:12px;">'
            +  '<div style="font-size:11px;color:#ef4444;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:4px;">⚠️ OpenClaw error</div>'
@@ -7925,8 +7933,97 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
     }
     html += '</div>';
     el.innerHTML = html;
+    // Populate the Brain-events slot asynchronously (fire-and-forget).
+    _renderModalBrainEvents(match).catch(function(){ /* non-fatal */ });
   } catch(e) {
     el.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + escHtml(reason) + '</div>';
+  }
+}
+
+// Fetch /api/brain-history and render a per-subagent slice into the slot
+// the spawn-info renderer left behind. Filter rules:
+//   - match by source session UUID (parent OR child)
+//   - time window: 30s before startedAt → 10 min after, or until
+//     completionTs+1min if we have it
+//   - drop CONTEXT entries (they're always present, not actionable here)
+async function _renderModalBrainEvents(match) {
+  var slot = document.getElementById('modal-brain-events-slot');
+  if (!slot) return;
+  try {
+    var parentUuid = (match.parent || '').split(':').pop() || '';
+    var childUuid  = (match.key || '').split(':').pop() || '';
+    var candidates = [parentUuid, childUuid, match.sessionId].filter(Boolean);
+    if (!candidates.length) return;
+
+    var startedMs = match.startedAt || Date.now();
+    var endMs;
+    if (match.completionTs) {
+      var t = Date.parse(match.completionTs);
+      if (!isNaN(t)) endMs = t + 60000;  // +1 min buffer after completion
+    }
+    if (!endMs) endMs = startedMs + 600000;  // default: +10 min
+    var winStart = startedMs - 30000;        // -30s lead-up
+
+    var data = await fetchJsonWithTimeout('/api/brain-history?limit=500', 6000);
+    var events = (data && data.events) ? data.events : [];
+    var filtered = events.filter(function(ev) {
+      if ((ev.type || '').toUpperCase() === 'CONTEXT') return false;
+      var src = ev.source || '';
+      if (candidates.indexOf(src) < 0) return false;
+      var ts = Date.parse(ev.time || '');
+      if (isNaN(ts)) return true;  // keep undated events
+      return ts >= winStart && ts <= endMs;
+    });
+    // Sort ascending (chronological) for reading top-to-bottom.
+    filtered.sort(function(a, b) {
+      return (a.time || '').localeCompare(b.time || '');
+    });
+
+    if (!filtered.length) {
+      slot.innerHTML = '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Brain events</div>'
+                     + '<div style="padding:10px 12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:6px;font-size:12px;color:var(--text-muted);">'
+                     + 'No Brain events found in the window around this spawn ('
+                     + new Date(winStart).toLocaleTimeString() + ' – '
+                     + new Date(endMs).toLocaleTimeString() + ').</div></div>';
+      return;
+    }
+
+    var TYPE_STYLE = {
+      USER:{c:'#9ab4ff',icon:'💬'}, AGENT:{c:'#c0a0ff',icon:'🤖'},
+      THINK:{c:'#6ec1e4',icon:'🧠'}, EXEC:{c:'#f0c060',icon:'⚡'},
+      READ:{c:'#78dca7',icon:'📖'}, WRITE:{c:'#78dca7',icon:'✏️'},
+      SEARCH:{c:'#f28fb0',icon:'🔍'}, BROWSER:{c:'#9cd88a',icon:'🌐'},
+      MSG:{c:'#8ec7ff',icon:'💬'}, SPAWN:{c:'#d19cf5',icon:'✨'},
+      RESULT:{c:'#78dca7',icon:'✓'}, TOOL:{c:'#f0c060',icon:'⚙️'},
+    };
+
+    var rows = '';
+    filtered.forEach(function(ev) {
+      var type = (ev.type || 'TOOL').toUpperCase();
+      var style = TYPE_STYLE[type] || {c:'#c0c0c0', icon:'•'};
+      var t = ev.time ? new Date(ev.time) : null;
+      var ts = t && !isNaN(t.getTime())
+        ? t.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'})
+        : '';
+      var detail = escHtml(ev.detail || '');
+      if (detail.length > 200) detail = detail.substring(0, 197) + '…';
+      var src = ev.sourceLabel || ev.source || '';
+      if (src.length > 14) src = src.substring(0, 12) + '…';
+      rows += '<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
+           +  '<span style="color:var(--text-faint);min-width:62px;font-size:10.5px;font-variant-numeric:tabular-nums;">' + ts + '</span>'
+           +  '<span style="font-size:12px;min-width:16px;text-align:center;">' + style.icon + '</span>'
+           +  '<span style="color:' + style.c + ';min-width:54px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;">' + type + '</span>'
+           +  '<span style="color:#d0d0d0;flex:1;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.45;">' + detail + '</span>'
+           +  '</div>';
+    });
+    slot.innerHTML = '<div><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:8px;">'
+                   + '<span>🧠 Brain events</span>'
+                   + '<span style="color:var(--text-faint);font-weight:500;text-transform:none;letter-spacing:0;">'
+                   + '(' + filtered.length + ' entries around this spawn)</span></div>'
+                   + '<div style="border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);padding:4px 12px;max-height:360px;overflow:auto;">'
+                   + rows + '</div></div>';
+  } catch (e) {
+    // Silent — modal already has the essentials, Brain-events is a bonus.
   }
 }
 
