@@ -968,22 +968,22 @@ async function loadActiveTasks() {
     // Fetch active sub-agents
     var saData = await fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; });
 
-    // Priority: live > recent failure > recent stale-but-completed.
-    // - active / idle: always show (subagent still alive)
-    // - failed (last 24h): show so user sees "agent tried X but OpenClaw
-    //   rejected with Y" instead of a silently empty panel
-    // - stale (last 24h): show only when no active/idle/failed exists,
-    //   so the panel can report "Recent spawns (last 24h)" on a quiet
-    //   dashboard
-    var DAY_AGO = Date.now() - 86400_000;
+    // "Active Tasks" should mean ACTIVE. Previously we lingered failed
+    // and stale entries here for 24h, which meant a subagent that failed
+    // hours ago still appeared as if it were current. Tightened:
+    //   - active / idle: always show (subagent still alive)
+    //   - failed: only within the last 10 minutes, and only when there's
+    //     nothing live — so a just-failed spawn still surfaces briefly.
+    //   - stale / older failures: don't show. The subagent detail modal
+    //     and the Brain tab are the right surfaces for history.
+    var RECENT_MS = 10 * 60 * 1000;
+    var now = Date.now();
     var all = (saData.subagents || []);
     var live = all.filter(function(a) { return a.status === 'active' || a.status === 'idle'; });
-    var failed = all.filter(function(a) { return a.status === 'failed' && (a.updatedAt || 0) > DAY_AGO; });
-    var stale = all.filter(function(a) { return a.status === 'stale' && (a.updatedAt || 0) > DAY_AGO; });
-    var agents = live.concat(failed);
-    // Only fall back to stale when nothing live/failed — keep the panel
-    // concise when there's real work to show.
-    if (!agents.length) agents = stale.slice(0, 6);
+    var recentFailed = all.filter(function(a) {
+      return a.status === 'failed' && (now - (a.updatedAt || 0)) < RECENT_MS;
+    });
+    var agents = live.length ? live : recentFailed.slice(0, 3);
 
     if (agents.length === 0) {
       grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
