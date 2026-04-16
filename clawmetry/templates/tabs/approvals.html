@@ -245,18 +245,16 @@
     grid.innerHTML = PRESETS.map(function(p) {
       var saved = enabledKeys[p.key];
       var on = saved && saved.enabled !== false;
-      var toggleId = 'toggle-' + p.key;
-      return '<div style="background:var(--bg-secondary);border:1px solid ' + (on ? p.color + '55' : 'var(--border)') + ';border-radius:10px;padding:14px;transition:border-color 0.2s;">'
+      return '<div id="preset-card-' + p.key + '" style="background:var(--bg-secondary);border:1px solid ' + (on ? p.color + '55' : 'var(--border)') + ';border-radius:10px;padding:14px;transition:border-color 0.2s;">'
         + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
         + '<div style="display:flex;align-items:center;gap:8px;">'
         + '<span style="font-size:16px;">' + p.icon + '</span>'
         + '<span style="font-size:13px;font-weight:700;color:var(--text-primary);">' + escHtml(p.name) + '</span>'
         + '</div>'
-        + '<label style="position:relative;display:inline-block;width:40px;height:22px;cursor:pointer;">'
-        + '<input type="checkbox" id="' + toggleId + '" ' + (on ? 'checked' : '') + ' onchange="togglePresetPolicy(\'' + p.key + '\', this.checked)" style="opacity:0;width:0;height:0;">'
-        + '<span style="position:absolute;inset:0;background:' + (on ? p.color : '#374151') + ';border-radius:11px;transition:background 0.2s;"></span>'
-        + '<span style="position:absolute;top:2px;left:' + (on ? '20px' : '2px') + ';width:18px;height:18px;background:#fff;border-radius:50%;transition:left 0.2s;"></span>'
-        + '</label>'
+        + '<div onclick="togglePresetPolicy(\'' + p.key + '\',' + (on ? 'false' : 'true') + ')" style="position:relative;width:42px;height:24px;cursor:pointer;flex-shrink:0;">'
+        + '<div style="position:absolute;inset:0;background:' + (on ? p.color : '#374151') + ';border-radius:12px;transition:background 0.2s;"></div>'
+        + '<div style="position:absolute;top:3px;left:' + (on ? '21px' : '3px') + ';width:18px;height:18px;background:#fff;border-radius:50%;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.3);"></div>'
+        + '</div>'
         + '</div>'
         + '<div style="font-size:11px;color:var(--text-muted);line-height:1.4;">' + escHtml(p.desc) + '</div>'
         + '</div>';
@@ -442,13 +440,22 @@
   };
 
   /* ── Toggle preset policy ── */
+  var _toggleBusy = {};
   window.togglePresetPolicy = async function(presetKey, enabled) {
-    if (_showUpgradeIfNeeded()) {
-      loadApprovalsTab(); // reset checkbox
-      return;
-    }
+    if (_toggleBusy[presetKey]) return;
+    if (_showUpgradeIfNeeded()) return;
+    _toggleBusy[presetKey] = true;
     var preset = PRESETS.find(function(p){return p.key === presetKey;});
-    if (!preset) return;
+    if (!preset) { delete _toggleBusy[presetKey]; return; }
+    // Instant visual feedback before API call
+    var card = document.getElementById('preset-card-' + presetKey);
+    if (card) {
+      var track = card.querySelector('div[onclick] > div:first-child');
+      var knob = card.querySelector('div[onclick] > div:last-child');
+      if (track) track.style.background = enabled ? preset.color : '#374151';
+      if (knob) knob.style.left = enabled ? '21px' : '3px';
+      card.style.borderColor = enabled ? preset.color + '55' : 'var(--border)';
+    }
     try {
       var r = await fetch('/api/cloud/policies', {
         method: 'POST', headers: _authHeaders(),
@@ -473,6 +480,8 @@
     } catch(e) {
       alert('Failed to save rule: ' + e);
       loadApprovalsTab();
+    } finally {
+      delete _toggleBusy[presetKey];
     }
   };
 
