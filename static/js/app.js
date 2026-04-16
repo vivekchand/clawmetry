@@ -4117,11 +4117,24 @@ function _buildReplayEvent(m, idx) {
   var type = role;
   if (role === 'assistant' && m.content && m.content.indexOf('[tool_use]') !== -1) type = 'tool_use';
   if (role === 'assistant' && m.content && m.content.indexOf('<antml_thinking>') !== -1) type = 'thinking';
-  return { role: role, type: type, content: m.content || '', timestamp: m.timestamp, tokens: m.tokens || null, originalIndex: idx };
+  if (role === 'compaction') type = 'compaction';
+  // Capture compaction-specific fields
+  var extra = {};
+  if (role === 'compaction') {
+    extra.tokens_before = m.tokens_before;
+    extra.first_kept_entry_id = m.first_kept_entry_id;
+    extra.from_hook = m.from_hook;
+    extra.summary_truncated = m.summary_truncated;
+  }
+  return { role: role, type: type, content: m.content || '', timestamp: m.timestamp, tokens: m.tokens || null, originalIndex: idx, extra: extra };
 }
 
 function _renderReplayEvent(ev, highlighted) {
   var role = ev.role;
+  // Handle compaction events specially
+  if (role === 'compaction') {
+    return _renderCompactionEvent(ev, highlighted);
+  }
   var cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
   var content = ev.content;
   var needsTruncate = content.length > 800;
@@ -4130,16 +4143,62 @@ function _renderReplayEvent(ev, highlighted) {
   var html = '<div class="chat-msg ' + cls + '" id="replay-msg-' + ev.originalIndex + '" style="' + highlightStyle + '">';
   html += '<div class="chat-role">' + escHtml(role) + '</div>';
   if (needsTruncate) {
-    html += '<div class="chat-content-truncated" id="msg-' + ev.originalIndex + '-short">' + escHtml(displayContent) + '</div>';
-    html += '<div id="msg-' + ev.originalIndex + '-full" style="display:none;white-space:pre-wrap;">' + escHtml(content) + '</div>';
-    html += '<div class="chat-expand" onclick="toggleMsg(' + ev.originalIndex + ')">Show more (' + content.length + ' chars)</div>';
+    html += '<div class="chat-content-truncated" id="msg-' + ev.originalIndex + '-short" style="white-space:pre-wrap;word-break:break-word;">' + escHtml(displayContent) + '</div>';
+    html += '<div id="msg-' + ev.originalIndex + '-full" style="display:none;white-space:pre-wrap;word-break:break-word;">' + escHtml(content) + '</div>';
+    html += '<div class="chat-expand" onclick="toggleMsg(' + ev.originalIndex + ')" style="color:#6366f1;cursor:pointer;font-size:11px;margin-top:4px;">Show more (' + content.length + ' chars)</div>';
   } else {
-    html += '<div style="white-space:pre-wrap;">' + escHtml(content) + '</div>';
+    html += '<div style="white-space:pre-wrap;word-break:break-word;">' + escHtml(content) + '</div>';
   }
   if (ev.tokens) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">&#128200; ' + ev.tokens + ' tokens</div>';
   if (ev.timestamp) html += '<div class="chat-ts">' + new Date(ev.timestamp).toLocaleString() + '</div>';
   html += '</div>';
   return html;
+}
+
+// ── Compaction Event Renderer ─────────────────────────────────────────────
+function _renderCompactionEvent(ev, highlighted) {
+  var content = ev.content || '';
+  var extra = ev.extra || {};
+  var tokensBefore = extra.tokens_before || 0;
+  var isTruncated = extra.summary_truncated;
+  var highlightStyle = highlighted ? 'box-shadow:0 0 0 2px #eab308;' : '';
+  var html = '<div class="chat-msg" id="replay-msg-' + ev.originalIndex + '" style="' + highlightStyle + 'background:linear-gradient(135deg, rgba(234,179,8,0.1) 0%, rgba(234,179,8,0.05) 100%);border-left:3px solid #eab308;">';
+  html += '<div class="chat-role" style="color:#eab308;">&#128204; Compaction Summary</div>';
+  html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">';
+  html += '&#128200; ' + (tokensBefore/1000).toFixed(1) + 'K tokens compacted';
+  if (extra.from_hook) html += ' (auto)';
+  html += ' | Entry ' + (extra.first_kept_entry_id || '...');
+  html += '</div>';
+  // Summary content with expandable toggle
+  if (content) {
+    var needsExpand = content.length > 300 || isTruncated;
+    var displayContent = needsExpand ? content.substring(0, 300) : content;
+    html += '<div id="compaction-' + ev.originalIndex + '-short" style="white-space:pre-wrap;word-break:break-word;font-size:13px;">' + escHtml(displayContent);
+    if (needsExpand) html += '...';
+    html += '</div>';
+    if (needsExpand) {
+      html += '<div id="compaction-' + ev.originalIndex + '-full" style="display:none;white-space:pre-wrap;word-break:break-word;font-size:13px;">' + escHtml(content) + '</div>';
+      html += '<div style="color:#eab308;cursor:pointer;font-size:11px;margin-top:6px;" onclick="toggleCompaction(' + ev.originalIndex + ')">↓ Expand summary</div>';
+    }
+  }
+  if (ev.timestamp) html += '<div class="chat-ts">' + new Date(ev.timestamp).toLocaleString() + '</div>';
+  html += '</div>';
+  return html;
+}
+
+function toggleCompaction(idx) {
+  var short = document.getElementById('compaction-' + idx + '-short');
+  var full = document.getElementById('compaction-' + idx + '-full');
+  var toggle = short.nextElementSibling.nextElementSibling;
+  if (short.style.display === 'none') {
+    short.style.display = '';
+    full.style.display = 'none';
+    if (toggle) toggle.textContent = '\u2193 Expand summary';
+  } else {
+    short.style.display = 'none';
+    full.style.display = '';
+    if (toggle) toggle.textContent = '\u2191 Collapse summary';
+  }
 }
 
 function _replayFilteredEvents() {
@@ -4224,16 +4283,50 @@ async function viewTranscript(sessionId) {
   window._replayIndex = 0;
   window._replayFilter = 'all';
   try {
-    var data = await fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json());
+    // Fetch transcript and compaction markers in parallel
+    var [data, compactionsData] = await Promise.all([
+      fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json()),
+      fetch('/api/compactions?session_id=' + encodeURIComponent(sessionId) + '&summary_chars=5000').then(r => r.json()).catch(() => ({compactions: []}))
+    ]);
+    var compactions = compactionsData.compactions || [];
     // Metadata
     var metaHtml = '<div class="stat-row"><span class="stat-label">Session</span><span class="stat-val">' + escHtml(data.name) + '</span></div>';
     metaHtml += '<div class="stat-row"><span class="stat-label">Messages</span><span class="stat-val">' + data.messageCount + '</span></div>';
     if (data.model) metaHtml += '<div class="stat-row"><span class="stat-label">Model</span><span class="stat-val"><span class="badge model">' + escHtml(data.model) + '</span></span></div>';
     if (data.totalTokens) metaHtml += '<div class="stat-row"><span class="stat-label">Tokens</span><span class="stat-val"><span class="badge tokens">' + (data.totalTokens/1000).toFixed(0) + 'K</span></span></div>';
     if (data.duration) metaHtml += '<div class="stat-row"><span class="stat-label">Duration</span><span class="stat-val">' + data.duration + '</span></div>';
+    // Add compaction summary if any compactions exist
+    if (compactions.length > 0) {
+      var totalCompacted = compactions.reduce(function(sum, c) { return sum + (c.tokens_before || 0); }, 0);
+      metaHtml += '<div class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-secondary);">';
+      metaHtml += '<span class="stat-label">💾 Compactions</span><span class="stat-val">' + compactions.length + ' (' + (totalCompacted/1000).toFixed(1) + 'K tokens)</span>';
+      metaHtml += '</div>';
+    }
     document.getElementById('transcript-meta').innerHTML = metaHtml;
-    // Build replay events array (store parsed events for replay)
-    window._replayEvents = (data.messages || []).map(function(m, idx) {
+    // Build replay events array - include compaction markers as special events
+    var events = [];
+    var compactionIdx = 0;
+    // Merge compaction markers into the message stream based on timestamp
+    var compactionMarkers = compactions.map(function(c) {
+      return {
+        role: 'compaction',
+        type: 'compaction',
+        content: c.summary || '',
+        timestamp: c.ts_ms,
+        tokens_before: c.tokens_before,
+        first_kept_entry_id: c.first_kept_entry_id,
+        from_hook: c.from_hook,
+        summary_truncated: c.summary_truncated
+      };
+    });
+    // Combine messages and compaction markers, then sort by timestamp
+    var allMessages = (data.messages || []).concat(compactionMarkers);
+    allMessages.sort(function(a, b) {
+      var ta = a.timestamp || 0;
+      var tb = b.timestamp || 0;
+      return ta - tb;
+    });
+    window._replayEvents = allMessages.map(function(m, idx) {
       return _buildReplayEvent(m, idx);
     });
     if (window._replayEvents.length > 0) {
