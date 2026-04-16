@@ -7736,15 +7736,32 @@ def detect_config(args=None):
     app.register_blueprint(bp_nemoclaw)
     app.register_blueprint(bp_openapi)
 
-    # Local-OSS shim for cloud-only approvals endpoint. Returns {approvals:[]}
-    # when no cloud sync is configured so the Approvals tab renders the
-    # policies-empty-state instead of "Failed to load: HTTP 404".
+    # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
+    # Approvals tab renders cleanly without cloud sync.
+    _oss_note = ("OSS install — connect to ClawMetry Cloud "
+                 "(`clawmetry connect`) to enable cloud-mediated approvals.")
     @app.route("/api/cloud/approvals", endpoint="oss_approvals_shim")
     def _oss_approvals_shim():
         from flask import jsonify as _jsonify
-        return _jsonify({"approvals": [], "count": 0,
-                         "note": "OSS install — connect to ClawMetry Cloud "
-                                 "(`clawmetry connect`) to enable cloud-mediated approvals."})
+        return _jsonify({"approvals": [], "count": 0, "note": _oss_note})
+
+    @app.route("/api/cloud/policies", endpoint="oss_policies_shim",
+               methods=["GET", "POST"])
+    def _oss_policies_shim():
+        from flask import jsonify as _jsonify, request as _req
+        if _req.method == "POST":
+            return _jsonify({"error": "Connect to ClawMetry Cloud to save "
+                             "policies from the UI.", "note": _oss_note}), 402
+        return _jsonify({"policies": [], "count": 0, "note": _oss_note})
+
+    @app.route("/api/cloud/integrations", endpoint="oss_integrations_shim",
+               methods=["GET", "POST"])
+    def _oss_integrations_shim():
+        from flask import jsonify as _jsonify, request as _req
+        if _req.method == "POST":
+            return _jsonify({"error": "Connect to ClawMetry Cloud to save "
+                             "integrations.", "note": _oss_note}), 402
+        return _jsonify({"integrations": [], "count": 0, "note": _oss_note})
     # ────────────────────────────────────────────────────────────────────────
 
 
