@@ -734,12 +734,17 @@ def api_subagents():
     except Exception:
         pass
 
-    # Source 2: full session list for the depth/parent filter
+    # Source 2: full session list for the depth/parent filter.
+    # IMPORTANT: copy the list before mutating. `_d._get_sessions()` returns a
+    # reference to _sessions_cache["data"]; calling `.insert()` on the return
+    # value would append registry + spawn entries to the cache itself, so
+    # every subsequent /api/subagents call inherits the previous call's
+    # appends — subagents get duplicated exponentially (6x, 8x, 10x...).
     gw_data = _d._gw_invoke("sessions_list", {"limit": 100, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
-        all_sessions = gw_data["sessions"]
+        all_sessions = list(gw_data["sessions"])
     else:
-        all_sessions = _d._get_sessions()
+        all_sessions = list(_d._get_sessions() or [])
 
     # Prepend registry entries — normalise to the same shape so the filter
     # below treats them uniformly. Registry-provided entries always pass
