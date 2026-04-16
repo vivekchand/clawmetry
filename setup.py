@@ -1,5 +1,5 @@
 import re
-from setuptools import setup
+from setuptools import setup, find_packages
 
 with open("README.md", "r", encoding="utf-8") as f:
     long_description = f.read()
@@ -17,9 +17,27 @@ setup(
     author="Vivek Chand",
     author_email="vivek@clawmetry.com",
     url="https://github.com/vivekchand/clawmetry",
+    # dashboard.py stays a top-level module so `python -m dashboard` and
+    # existing import-paths keep working. routes/ and helpers/ are top-level
+    # packages it imports at module load; they must ship in the wheel.
     py_modules=["dashboard"],
-    packages=["clawmetry"],
-    package_data={"clawmetry": ["resources/*.sh", "py.typed"]},
+    packages=find_packages() + ["routes", "helpers"],
+    # static/ and templates/ now live INSIDE the clawmetry package so they
+    # ship via package_data (wheel-safe). Flask is configured in dashboard.py
+    # to find them via os.path.dirname(clawmetry.__file__).
+    package_data={
+        "clawmetry": [
+            "resources/*.sh",
+            "py.typed",
+            "static/**/*",
+            "static/**/*.*",
+            "templates/**/*",
+            "templates/**/*.*",
+        ],
+        "routes":  ["*.py"],
+        "helpers": ["*.py"],
+    },
+    include_package_data=True,
     python_requires=">=3.8",
     install_requires=[
         "flask>=2.0,<4",
