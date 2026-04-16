@@ -1033,10 +1033,10 @@ async function loadActiveTasks() {
         var taskPreview = agent.task.length > 90 ? agent.task.substring(0, 87) + '…' : agent.task;
         html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;line-height:1.4;">' + escHtml(taskPreview) + '</div>';
       }
-      // Error line for failed spawns
-      if (agent.status === 'failed' && agent.error) {
-        html += '<div style="font-size:11px;color:#ef4444;margin-top:4px;line-height:1.4;">⚠️ ' + escHtml(agent.error) + '</div>';
-      }
+      // The failed badge in the top-right already conveys status; the raw
+      // OpenClaw error string ("Validation failed for tool 'subagents':")
+      // was redundant on the card and too jargon-y. Full error is still
+      // surfaced in the modal when the user clicks through.
       html += '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">';
       if (badge2) {
         html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:' + badge2.color + '22;color:' + badge2.color + ';border:1px solid ' + badge2.color + '44;">' + badge2.label + '</span>';
