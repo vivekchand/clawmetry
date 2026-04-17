@@ -815,3 +815,48 @@ class TestPluginTrend:
         """days param limits the response window."""
         d = assert_ok(get(api, base_url, "/api/usage/by-plugin/trend?days=7"))
         assert len(d["days"]) == 7, f"Expected 7 days, got {len(d['days'])}"
+
+
+# ---------------------------------------------------------------------------
+# Autonomy Score (#688)
+# ---------------------------------------------------------------------------
+
+
+class TestAutonomy:
+    def test_autonomy_endpoint_ok(self, api, base_url):
+        r = api.get(f"{base_url}/api/autonomy")
+        assert r.status_code == 200
+        d = r.json()
+        assert "score" in d
+        assert "trend_direction" in d
+
+    def test_autonomy_empty_ok(self, api, base_url):
+        r = api.get(f"{base_url}/api/autonomy")
+        d = r.json()
+        # Empty case: all-nullable fields ok
+        assert d["trend_direction"] in ["improving", "declining", "flat", "no_data"]
+
+    def test_autonomy_structure(self, api, base_url):
+        """Response always has all expected keys."""
+        d = assert_ok(get(api, base_url, "/api/autonomy"))
+        assert_keys(
+            d,
+            "score",
+            "median_gap_seconds_7d",
+            "autonomy_ratio_7d",
+            "trend_slope_7d",
+            "trend_direction",
+            "samples_7d",
+            "series_daily",
+        )
+
+    def test_autonomy_series_daily_is_list(self, api, base_url):
+        """series_daily is always a list."""
+        d = assert_ok(get(api, base_url, "/api/autonomy"))
+        assert isinstance(d["series_daily"], list), "series_daily must be a list"
+
+    def test_autonomy_score_range(self, api, base_url):
+        """If score is not null it must be in [0, 1]."""
+        d = assert_ok(get(api, base_url, "/api/autonomy"))
+        if d["score"] is not None:
+            assert 0.0 <= d["score"] <= 1.0, f"score out of range: {d['score']}"
