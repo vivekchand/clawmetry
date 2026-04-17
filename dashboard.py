@@ -8615,6 +8615,8 @@ DASHBOARD_HTML = r"""
 
 {% include 'tabs/logs.html' %}
 
+{% include 'tabs/selfconfig.html' %}
+
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </div> <!-- end zoom-wrapper -->
 

@@ -1,4 +1,27 @@
 <div class="page active" id="page-overview">
+  <!-- PRIMARY KPI: Autonomy Score (#688) -->
+  <div id="autonomy-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;">
+    <div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">&#127919; Autonomy Score</div>
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+        <span id="autonomy-score-value" style="font-size:48px;font-weight:800;line-height:1;color:var(--text-primary);">--</span>
+        <span id="autonomy-trend-badge" style="font-size:13px;font-weight:600;padding:3px 8px;border-radius:20px;"></span>
+      </div>
+      <div id="autonomy-median-gap" style="font-size:13px;color:var(--text-muted);margin-top:6px;">Median time between nudges: --</div>
+      <div id="autonomy-trend-pct" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
+      <div style="font-size:10px;color:var(--text-muted);margin-top:10px;font-style:italic;line-height:1.4;max-width:420px;">
+        Alex&#8217;s definition: &#8220;Success = human nudges space out exponentially&#8221;
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-align:right;">7-day autonomy ratio</div>
+      <svg id="autonomy-sparkline" width="160" height="48" viewBox="0 0 160 48" style="overflow:visible;">
+        <text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">No data yet</text>
+      </svg>
+      <div id="autonomy-samples" style="font-size:10px;color:var(--text-muted);margin-top:4px;text-align:right;"></div>
+    </div>
+  </div>
+
   <div class="refresh-bar" style="margin-bottom:6px;">
     <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>
@@ -330,4 +353,34 @@
   </div>
 
   <!-- old system health removed, now inside tasks pane -->
+
+  <!-- Heartbeat Liveness Panel (#686) -->
+  <div id="heartbeat-panel" style="margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:14px 18px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x2764;&#xfe0f; Heartbeat</span>
+      <span id="hb-status-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:rgba(107,114,128,0.2);color:var(--text-muted);">...</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:48px;">
+        <div id="hb-pulse-dot" style="width:20px;height:20px;border-radius:50%;background:#6b7280;animation:none;"></div>
+        <span id="hb-pulse-label" style="font-size:10px;color:var(--text-muted);">no data</span>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:5px;min-width:200px;">
+        <div style="font-size:12px;color:var(--text-primary);">Last beat: <span id="hb-last-beat" style="font-weight:600;color:var(--text-success);">--</span></div>
+        <div style="font-size:12px;color:var(--text-primary);">Cadence (24h): <span id="hb-cadence" style="font-weight:600;">-- / --</span> expected</div>
+        <div style="font-size:12px;color:var(--text-primary);">Idle replies: <span id="hb-ok-ratio" style="font-weight:600;color:var(--text-success);">--%</span> &middot; Action taken: <span id="hb-action-ratio" style="font-weight:600;">--%</span></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;align-items:center;">
+        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Last 10 beats</div>
+        <div id="hb-sparkline" style="display:flex;align-items:center;gap:4px;height:20px;">
+          <span style="font-size:11px;color:var(--text-muted);">--</span>
+        </div>
+      </div>
+    </div>
+    <style>
+      @keyframes hb-pulse-healthy { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(1.15)} }
+      @keyframes hb-pulse-drifting { 0%,100%{opacity:1} 50%{opacity:.4} }
+      @keyframes hb-pulse-missed { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(239,68,68,.4)} 70%{opacity:.8;box-shadow:0 0 0 8px rgba(239,68,68,0)} }
+    </style>
+  </div>
 </div>

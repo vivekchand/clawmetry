@@ -517,6 +517,7 @@ function switchTab(name) {
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
   if (name === 'usage') loadUsage();
   if (name === 'skills') loadSkills();
+  if (name === 'selfconfig') loadSelfConfig();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
@@ -539,6 +540,346 @@ function switchTab(name) {
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
+}
+
+// ── Autonomy Score (#688) ────────────────────────────────────────────────────
+async function loadAutonomy() {
+  var scoreEl = document.getElementById('autonomy-score-value');
+  var badgeEl = document.getElementById('autonomy-trend-badge');
+  var gapEl   = document.getElementById('autonomy-median-gap');
+  var trendEl = document.getElementById('autonomy-trend-pct');
+  var svgEl   = document.getElementById('autonomy-sparkline');
+  var sampEl  = document.getElementById('autonomy-samples');
+  if (!scoreEl) return;
+  try {
+    var d = await (typeof fetchJsonWithTimeout === 'function'
+      ? fetchJsonWithTimeout('/api/autonomy', 5000)
+      : fetch('/api/autonomy').then(function(r){return r.json();}));
+    if (d.score == null) {
+      scoreEl.textContent = '--';
+      if (gapEl) gapEl.textContent = 'No data yet \u2014 start using your agent to track autonomy';
+      if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; }
+      if (trendEl) trendEl.textContent = '';
+      if (sampEl) sampEl.textContent = '';
+      return;
+    }
+    scoreEl.textContent = d.score.toFixed(2);
+    if (gapEl && d.median_gap_seconds_7d != null) {
+      var secs = Math.round(d.median_gap_seconds_7d);
+      var hrs = Math.floor(secs / 3600);
+      var mins = Math.floor((secs % 3600) / 60);
+      var s = secs % 60;
+      var parts = [];
+      if (hrs > 0) parts.push(hrs + 'h');
+      if (mins > 0) parts.push(mins + 'm');
+      parts.push(s + 's');
+      gapEl.textContent = 'Median time between nudges: ' + parts.join(' ');
+    }
+    if (badgeEl) {
+      var dir = d.trend_direction || 'flat';
+      if (dir === 'improving') {
+        badgeEl.textContent = '\u2191 improving';
+        badgeEl.style.background = 'rgba(16,185,129,0.18)';
+        badgeEl.style.color = '#10b981';
+        badgeEl.style.border = '1px solid rgba(16,185,129,0.35)';
+      } else if (dir === 'declining') {
+        badgeEl.textContent = '\u2193 declining';
+        badgeEl.style.background = 'rgba(239,68,68,0.18)';
+        badgeEl.style.color = '#ef4444';
+        badgeEl.style.border = '1px solid rgba(239,68,68,0.35)';
+      } else if (dir === 'no_data') {
+        badgeEl.textContent = 'no data';
+        badgeEl.style.background = 'rgba(100,116,139,0.18)';
+        badgeEl.style.color = 'var(--text-muted)';
+        badgeEl.style.border = '1px solid var(--border-primary)';
+      } else {
+        badgeEl.textContent = '\u2015 steady';
+        badgeEl.style.background = 'rgba(100,116,139,0.18)';
+        badgeEl.style.color = 'var(--text-muted)';
+        badgeEl.style.border = '1px solid var(--border-primary)';
+      }
+    }
+    if (trendEl && d.trend_slope_7d != null) {
+      var pct = Math.round(d.trend_slope_7d * 100);
+      if (pct > 0) trendEl.textContent = '+' + pct + '% this week';
+      else if (pct < 0) trendEl.textContent = pct + '% this week';
+      else trendEl.textContent = '';
+    }
+    if (sampEl && d.samples_7d != null) {
+      sampEl.textContent = d.samples_7d + ' user msg' + (d.samples_7d !== 1 ? 's' : '') + ' in 7d';
+    }
+    if (svgEl && d.series_daily && d.series_daily.length > 0) {
+      var ratios = d.series_daily.map(function(e){ return e.autonomy_ratio; });
+      var valid = ratios.filter(function(v){ return v != null; });
+      if (valid.length >= 2) {
+        var W = 160, H = 48, pad = 4;
+        var n = ratios.length;
+        var step = (W - pad * 2) / Math.max(n - 1, 1);
+        var pts = ratios.map(function(v, i) {
+          var x = pad + i * step;
+          var y = v == null ? null : H - pad - v * (H - pad * 2);
+          return {x: x, y: y};
+        });
+        var pathD = '';
+        pts.forEach(function(p, i) {
+          if (p.y == null) return;
+          if (!pathD || pts.slice(0, i).every(function(q){ return q.y == null; })) {
+            pathD += 'M' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+          } else {
+            pathD += ' L' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+          }
+        });
+        var svgContent = '';
+        var firstP = pts.find(function(p){ return p.y != null; });
+        var lastP = null; pts.forEach(function(p){ if(p.y != null) lastP = p; });
+        if (firstP && lastP && pathD) {
+          var fillD = pathD + ' L' + lastP.x.toFixed(1) + ',' + (H - pad) + ' L' + firstP.x.toFixed(1) + ',' + (H - pad) + ' Z';
+          svgContent += '<path d="' + fillD + '" fill="rgba(99,102,241,0.15)" stroke="none"/>';
+          svgContent += '<path d="' + pathD + '" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+        }
+        pts.forEach(function(p) {
+          if (p.y == null) return;
+          svgContent += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="2.5" fill="#6366f1"/>';
+        });
+        svgEl.innerHTML = svgContent;
+      } else {
+        svgEl.innerHTML = '<text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">Not enough data</text>';
+      }
+    }
+  } catch(e) {
+    console.warn('autonomy load failed', e);
+    if (scoreEl) scoreEl.textContent = '--';
+    if (gapEl) gapEl.textContent = 'No data yet \u2014 start using your agent to track autonomy';
+  }
+}
+
+// ── Heartbeat Liveness Panel (#686) ──────────────────────────────────────────
+async function loadHeartbeat() {
+  try {
+    var d = await (typeof fetchJsonWithTimeout === 'function'
+      ? fetchJsonWithTimeout('/api/heartbeat', 5000)
+      : fetch('/api/heartbeat').then(function(r){return r.json();}));
+    var dot = document.getElementById('hb-pulse-dot');
+    var label = document.getElementById('hb-pulse-label');
+    var badge = document.getElementById('hb-status-badge');
+    var lastBeat = document.getElementById('hb-last-beat');
+    var cadenceEl = document.getElementById('hb-cadence');
+    var okRatioEl = document.getElementById('hb-ok-ratio');
+    var actionRatioEl = document.getElementById('hb-action-ratio');
+    var sparkEl = document.getElementById('hb-sparkline');
+    if (!dot) return;
+    var status = d.status || 'never';
+    var colors = { healthy: '#22c55e', drifting: '#f59e0b', missed: '#ef4444', never: '#6b7280' };
+    var anims = {
+      healthy: 'hb-pulse-healthy 2s ease-in-out infinite',
+      drifting: 'hb-pulse-drifting 1.5s ease-in-out infinite',
+      missed: 'hb-pulse-missed 1.2s ease-in-out infinite',
+      never: 'none'
+    };
+    var badgeColors = {
+      healthy: { bg: 'rgba(34,197,94,0.15)', color: '#4ade80' },
+      drifting: { bg: 'rgba(245,158,11,0.15)', color: '#fbbf24' },
+      missed: { bg: 'rgba(239,68,68,0.15)', color: '#f87171' },
+      never: { bg: 'rgba(107,114,128,0.15)', color: '#9ca3af' }
+    };
+    dot.style.background = colors[status] || colors.never;
+    dot.style.animation = anims[status] || 'none';
+    if (label) label.textContent = status;
+    if (badge) {
+      var bc = badgeColors[status] || badgeColors.never;
+      badge.style.background = bc.bg;
+      badge.style.color = bc.color;
+      badge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    }
+    if (lastBeat) {
+      if (d.last_heartbeat_age_seconds !== null && d.last_heartbeat_age_seconds !== undefined) {
+        var age = d.last_heartbeat_age_seconds;
+        var ageStr;
+        if (age < 60) ageStr = age + 's ago';
+        else if (age < 3600) ageStr = Math.floor(age / 60) + ' min ago';
+        else if (age < 86400) ageStr = Math.floor(age / 3600) + 'h ago';
+        else ageStr = Math.floor(age / 86400) + 'd ago';
+        lastBeat.textContent = ageStr;
+        lastBeat.style.color = colors[status] || '#9ca3af';
+      } else {
+        lastBeat.textContent = 'never';
+        lastBeat.style.color = '#9ca3af';
+      }
+    }
+    if (cadenceEl && d.cadence_24h) {
+      var c = d.cadence_24h;
+      var pct = c.expected_beats > 0 ? Math.round(c.on_time_ratio * 100) : 0;
+      cadenceEl.textContent = c.actual_beats + ' / ' + c.expected_beats + ' expected (' + pct + '%)';
+    }
+    if (okRatioEl && d.ok_vs_action_24h) {
+      var oa = d.ok_vs_action_24h;
+      okRatioEl.textContent = Math.round(oa.ok_ratio * 100) + '%';
+      if (actionRatioEl) {
+        var actionPct = Math.round((1 - oa.ok_ratio) * 100);
+        actionRatioEl.textContent = actionPct + '%';
+        actionRatioEl.style.color = actionPct > 20 ? '#f87171' : '#fbbf24';
+      }
+    }
+    if (sparkEl && d.recent_beats && d.recent_beats.length > 0) {
+      sparkEl.innerHTML = d.recent_beats.map(function(b) {
+        var cc = b.outcome === 'ok' ? '#22c55e' : '#f59e0b';
+        var title = b.outcome === 'ok' ? 'HEARTBEAT_OK' : 'Action taken';
+        return '<span title="' + title + '" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + cc + ';"></span>';
+      }).join('');
+    } else if (sparkEl) {
+      sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">no beats yet</span>';
+    }
+  } catch(e) { console.warn('heartbeat panel load failed', e); }
+}
+
+// ── Self-Configuration Diff Viewer (#689) ────────────────────────────────────
+var _selfconfigCurrentFile = null;
+var _selfconfigRevisions = [];
+
+async function loadSelfConfig() {
+  var inner = document.getElementById('selfconfig-files-inner');
+  if (!inner) return;
+  inner.innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
+  var detailEmpty = document.getElementById('selfconfig-empty-state');
+  var detailRevs = document.getElementById('selfconfig-revisions-panel');
+  var detailDiff = document.getElementById('selfconfig-diff-panel');
+  if (detailEmpty) { detailEmpty.style.display = 'block'; }
+  if (detailRevs) { detailRevs.style.display = 'none'; }
+  if (detailDiff) { detailDiff.style.display = 'none'; }
+  try {
+    var d = await (typeof fetchJsonWithTimeout === 'function'
+      ? fetchJsonWithTimeout('/api/selfconfig', 5000)
+      : fetch('/api/selfconfig').then(function(r){return r.json();}));
+    var files = d.files || [];
+    var hasAnyRevisions = files.some(function(f) { return f.revision_count > 0; });
+    var noHistMsg = document.getElementById('selfconfig-no-history-msg');
+    if (noHistMsg) noHistMsg.style.display = hasAnyRevisions ? 'none' : 'block';
+    if (!files.length) {
+      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">No tracked files found.</span>';
+      return;
+    }
+    inner.innerHTML = files.map(function(f) {
+      var badge = f.is_values_file
+        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;">VALUES</span>'
+        : '';
+      var revCount = f.revision_count > 0
+        ? ' <span style="color:var(--text-muted);font-size:10px;">(' + f.revision_count + ' rev' + (f.revision_count !== 1 ? 's' : '') + ')</span>'
+        : ' <span style="color:var(--text-muted);font-size:10px;">(no edits)</span>';
+      var existStyle = f.exists ? '' : 'opacity:0.5;';
+      return '<div onclick="loadSelfConfigHistory(\'' + f.name + '\')" style="cursor:pointer;padding:7px 8px;border-radius:6px;margin-bottom:4px;' + existStyle + 'border:1px solid transparent;transition:all 0.15s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'transparent\'">'
+        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + f.name + badge + '</div>'
+        + '<div style="font-size:11px;margin-top:2px;">' + revCount + '</div>'
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading files.</span>';
+  }
+}
+
+async function loadSelfConfigHistory(filename) {
+  _selfconfigCurrentFile = filename;
+  var emptyEl = document.getElementById('selfconfig-empty-state');
+  var revsPanel = document.getElementById('selfconfig-revisions-panel');
+  var diffPanel = document.getElementById('selfconfig-diff-panel');
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (diffPanel) diffPanel.style.display = 'none';
+  if (revsPanel) revsPanel.style.display = 'block';
+  var headEl = document.getElementById('selfconfig-filename-heading');
+  var badgeEl = document.getElementById('selfconfig-values-badge');
+  var listEl = document.getElementById('selfconfig-revisions-list');
+  if (headEl) headEl.textContent = filename;
+  if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
+  try {
+    var d = await (typeof fetchJsonWithTimeout === 'function'
+      ? fetchJsonWithTimeout('/api/selfconfig/' + encodeURIComponent(filename), 5000)
+      : fetch('/api/selfconfig/' + encodeURIComponent(filename)).then(function(r){return r.json();}));
+    if (badgeEl) badgeEl.style.display = d.is_values_file ? 'block' : 'none';
+    _selfconfigRevisions = d.revisions || [];
+    if (!_selfconfigRevisions.length) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No revisions recorded yet. Edits will appear here automatically.</div>';
+      return;
+    }
+    listEl.innerHTML = _selfconfigRevisions.map(function(rev, idx) {
+      var dt = new Date(rev.ts * 1000).toLocaleString();
+      var delta = '';
+      if (idx < _selfconfigRevisions.length - 1) {
+        var prevSize = _selfconfigRevisions[idx + 1].size;
+        var diff = rev.size - prevSize;
+        delta = diff > 0
+          ? '<span style="color:#22c55e;font-weight:600;">+' + diff + '</span>'
+          : diff < 0
+            ? '<span style="color:#ef4444;font-weight:600;">' + diff + '</span>'
+            : '<span style="color:var(--text-muted);">±0</span>';
+      } else {
+        delta = '<span style="color:var(--text-muted);font-size:10px;">initial</span>';
+      }
+      var prevTs = idx < _selfconfigRevisions.length - 1 ? _selfconfigRevisions[idx + 1].ts : null;
+      var diffBtn = prevTs !== null
+        ? '<button onclick="loadSelfConfigDiff(\'' + filename + '\',' + prevTs + ',' + rev.ts + ')" style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;color:var(--text-secondary);margin-left:8px;">View diff</button>'
+        : '';
+      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px;border-radius:6px;margin-bottom:4px;background:var(--bg-primary);border:1px solid var(--border-primary);">'
+        + '<div>'
+        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + dt + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + rev.size.toLocaleString() + ' bytes &nbsp; ' + delta + '</div>'
+        + '</div>'
+        + diffBtn
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading history.</span>';
+  }
+}
+
+async function loadSelfConfigDiff(filename, fromTs, toTs) {
+  var diffPanel = document.getElementById('selfconfig-diff-panel');
+  var revsPanel = document.getElementById('selfconfig-revisions-panel');
+  var emptyEl   = document.getElementById('selfconfig-empty-state');
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (revsPanel) revsPanel.style.display = 'none';
+  if (diffPanel) diffPanel.style.display = 'block';
+  var headEl    = document.getElementById('selfconfig-diff-heading');
+  var statsEl   = document.getElementById('selfconfig-diff-stats');
+  var contentEl = document.getElementById('selfconfig-diff-content');
+  if (headEl) headEl.textContent = filename + ' diff';
+  if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);">Loading diff...</span>';
+  try {
+    var url = '/api/selfconfig/' + encodeURIComponent(filename) + '/diff?from=' + fromTs + '&to=' + toTs;
+    var d = await (typeof fetchJsonWithTimeout === 'function'
+      ? fetchJsonWithTimeout(url, 8000)
+      : fetch(url).then(function(r){return r.json();}));
+    if (statsEl) {
+      statsEl.innerHTML = '<span style="color:#22c55e;">+' + d.added_chars + '</span> / <span style="color:#ef4444;">-' + d.removed_chars + '</span> chars'
+        + (d.truncated ? ' <span style="color:#f59e0b;">(truncated)</span>' : '');
+    }
+    var lines = d.diff_lines || [];
+    if (!lines.length) {
+      contentEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No changes detected between these two versions.</div>';
+      return;
+    }
+    contentEl.innerHTML = lines.map(function(line) {
+      var txt = (line.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      if (line.type === 'added') {
+        return '<div style="background:rgba(34,197,94,0.12);color:#86efac;padding:1px 6px;white-space:pre;">' + txt + '</div>';
+      } else if (line.type === 'removed') {
+        return '<div style="background:rgba(239,68,68,0.12);color:#fca5a5;padding:1px 6px;white-space:pre;">' + txt + '</div>';
+      } else if (line.type === 'meta') {
+        return '<div style="color:var(--text-muted);padding:1px 6px;white-space:pre;font-size:11px;">' + txt + '</div>';
+      } else {
+        return '<div style="color:var(--text-secondary);padding:1px 6px;white-space:pre;">' + txt + '</div>';
+      }
+    }).join('');
+  } catch(e) {
+    if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading diff.</span>';
+  }
+}
+
+function selfconfigBackToRevisions() {
+  var diffPanel = document.getElementById('selfconfig-diff-panel');
+  var revsPanel = document.getElementById('selfconfig-revisions-panel');
+  if (diffPanel) diffPanel.style.display = 'none';
+  if (revsPanel && _selfconfigCurrentFile) {
+    revsPanel.style.display = 'block';
+  }
 }
 
 // ── Skills Fidelity (#687) ───────────────────────────────────────────────────
@@ -799,6 +1140,8 @@ async function loadAll() {
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
+    if (typeof loadAutonomy === 'function') loadAutonomy().catch(function(e){console.warn('autonomy failed',e)});
+    if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
