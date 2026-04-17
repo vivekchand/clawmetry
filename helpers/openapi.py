@@ -226,6 +226,24 @@ _TAGS = [
 
 def _tag_for(path: str) -> list[str]:
     p = path.lower()
+    # v1 public API — clean domain tags
+    if p.startswith("/api/v1/nodes"):
+        return ["Nodes"]
+    if p.startswith("/api/v1/sessions"):
+        return ["Sessions"]
+    if p.startswith("/api/v1/activity"):
+        return ["Activity"]
+    if p.startswith("/api/v1/usage"):
+        return ["Usage"]
+    if p.startswith("/api/v1/approvals") or p.startswith("/api/v1/policies") or p.startswith("/api/v1/integrations"):
+        return ["Approvals"]
+    if p.startswith("/api/v1/security"):
+        return ["Security"]
+    if p.startswith("/api/v1/account"):
+        return ["Account"]
+    if p.startswith("/api/v1/"):
+        return ["Other"]
+    # Legacy internal endpoints
     if p.startswith("/api/cloud/approvals") or "/approvals" in p or p.startswith("/approve/"):
         return ["approvals"]
     if p.startswith("/ingest/"):
@@ -279,15 +297,23 @@ def _flask_to_openapi_path(rule: str) -> tuple[str, list[dict]]:
     return new_path, params
 
 
-def build_spec(app) -> dict:
-    """Walk the Flask url_map and assemble an OpenAPI 3.1 spec."""
+def build_spec(app, v1_only: bool = False) -> dict:
+    """Walk the Flask url_map and assemble an OpenAPI 3.1 spec.
+
+    When v1_only=True, only document /api/v1/* endpoints — the clean
+    public API for integrators, mobile apps, and custom widgets.
+    """
     paths: dict = {}
     seen: set[str] = set()
     for rule in app.url_map.iter_rules():
         path = rule.rule
-        # Only document API endpoints + the public approve page.
-        if not (path.startswith("/api/") or path.startswith("/approve/")):
-            continue
+        if v1_only:
+            if not path.startswith("/api/v1/"):
+                continue
+        else:
+            # Only document API endpoints + the public approve page.
+            if not (path.startswith("/api/") or path.startswith("/approve/")):
+                continue
         if path in seen:
             # Methods overlap on same path get merged below.
             pass
@@ -379,8 +405,16 @@ def _detect_version() -> str:
 
 @bp_openapi.route("/openapi.json")
 def openapi_json():
-    """Return the auto-generated OpenAPI 3.1 spec for this ClawMetry instance."""
-    return jsonify(build_spec(current_app))
+    """Return the auto-generated OpenAPI 3.1 spec for this ClawMetry instance.
+
+    In cloud mode (CLOUD_MODE=true or v1_only query param), only show
+    the clean /api/v1/* public API. Otherwise show all endpoints.
+    """
+    from flask import request
+    v1 = (request.args.get("v1_only") == "1"
+          or getattr(current_app, '_cloud_mode', False)
+          or bool(current_app.config.get("CLOUD_MODE")))
+    return jsonify(build_spec(current_app, v1_only=v1))
 
 
 @bp_openapi.route("/api/docs")
