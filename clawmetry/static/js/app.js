@@ -516,6 +516,7 @@ function switchTab(name) {
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
   if (name === 'usage') loadUsage();
+  if (name === 'skills') loadSkills();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
@@ -538,6 +539,77 @@ function switchTab(name) {
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
+}
+
+// ── Skills Fidelity (#687) ───────────────────────────────────────────────────
+async function loadSkills() {
+  var summaryEl = document.getElementById('skills-summary-row');
+  var listEl = document.getElementById('skills-list');
+  if (!summaryEl || !listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
+  try {
+    var data = await fetch('/api/skills').then(function(r) { return r.json(); });
+    var skills = data.skills || [];
+    var summary = data.summary || {};
+    var wastePct = summary.total_header_tokens > 0
+      ? Math.round(summary.wasted_header_tokens / summary.total_header_tokens * 100) : 0;
+    summaryEl.innerHTML =
+      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--text-primary);">' +
+        '<strong>' + (summary.total_installed || 0) + '</strong> skills installed' +
+      '</div>' +
+      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:#ef4444;">' +
+        '<strong>' + (summary.dead_count || 0) + '</strong> dead' +
+      '</div>' +
+      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:#f59e0b;">' +
+        '<strong>' + (summary.stuck_count || 0) + '</strong> stuck' +
+      '</div>' +
+      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--text-muted);">' +
+        '<strong>' + (summary.wasted_header_tokens || 0) + '</strong> tokens wasted on dead skills (' + wastePct + '%)' +
+      '</div>';
+    if (skills.length === 0) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No skills installed.</div>';
+      return;
+    }
+    var _statusColor = { healthy: '#22c55e', unused: '#94a3b8', dead: '#ef4444', stuck: '#f59e0b' };
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
+      '<thead><tr style="color:var(--text-muted);text-align:left;border-bottom:1px solid var(--border-primary);">' +
+        '<th style="padding:8px 10px;">Name</th>' +
+        '<th style="padding:8px 10px;">Description</th>' +
+        '<th style="padding:8px 10px;">Status</th>' +
+        '<th style="padding:8px 10px;text-align:right;">Header Tokens</th>' +
+        '<th style="padding:8px 10px;text-align:right;">Body Fetches (7d)</th>' +
+        '<th style="padding:8px 10px;text-align:right;">Linked Reads (7d)</th>' +
+        '<th style="padding:8px 10px;">Last Used</th>' +
+      '</tr></thead><tbody>';
+    skills.forEach(function(sk, idx) {
+      var desc = (sk.description || '').length > 60 ? sk.description.slice(0, 57) + '...' : (sk.description || '—');
+      var sc = _statusColor[sk.status] || '#94a3b8';
+      var badge = '<span style="background:' + sc + '22;color:' + sc + ';border:1px solid ' + sc + '44;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:600;">' + (sk.status || '?') + '</span>';
+      var lastUsed = sk.last_used_ts ? new Date(sk.last_used_ts * 1000).toLocaleDateString() : '—';
+      var rowBg = idx % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)';
+      var detailId = 'skill-detail-' + idx;
+      html += '<tr style="background:' + rowBg + ';cursor:pointer;border-bottom:1px solid var(--border-primary);" onclick="var d=document.getElementById(\'' + detailId + '\');d.style.display=d.style.display===\'none\'?\'table-row\':\'none\'">' +
+        '<td style="padding:8px 10px;font-weight:600;color:var(--text-primary);">' + escHtml(sk.name) + '</td>' +
+        '<td style="padding:8px 10px;color:var(--text-muted);">' + escHtml(desc) + '</td>' +
+        '<td style="padding:8px 10px;">' + badge + '</td>' +
+        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.header_tokens || 0) + '</td>' +
+        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.body_fetch_count_7d || 0) + '</td>' +
+        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.linked_file_read_count_7d || 0) + '</td>' +
+        '<td style="padding:8px 10px;color:var(--text-muted);">' + lastUsed + '</td>' +
+      '</tr>' +
+      '<tr id="' + detailId + '" style="display:none;background:var(--bg-tertiary);">' +
+        '<td colspan="7" style="padding:12px 20px;color:var(--text-muted);font-size:12px;">' +
+          '<strong>Description:</strong> ' + escHtml(sk.description || '(none)') + '<br>' +
+          '<strong>Has body:</strong> ' + (sk.has_body ? 'yes' : 'no') + ' &nbsp;|&nbsp; ' +
+          '<strong>Has linked files:</strong> ' + (sk.has_linked_files ? 'yes' : 'no') +
+        '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table>';
+    listEl.innerHTML = html;
+  } catch (e) {
+    if (listEl) listEl.innerHTML = '<div style="color:#ef4444;font-size:13px;padding:16px;">Failed to load skills: ' + e + '</div>';
+  }
 }
 
 var _sunSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';

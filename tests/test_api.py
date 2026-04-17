@@ -246,6 +246,61 @@ class TestTranscripts:
         assert isinstance(d, (list, dict))
 
 
+class TestSkills:
+    """Tests for /api/skills — skills fidelity telemetry (GH #687)."""
+
+    def test_skills_list_ok(self, api, base_url):
+        r = api.get(f"{base_url}/api/skills")
+        assert r.status_code == 200
+        d = r.json()
+        assert "skills" in d
+        assert "summary" in d
+
+    def test_summary_has_counts(self, api, base_url):
+        r = api.get(f"{base_url}/api/skills")
+        d = r.json()
+        assert "total_installed" in d["summary"]
+        assert "dead_count" in d["summary"]
+
+    def test_skills_is_list(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skills"))
+        assert isinstance(d["skills"], list)
+
+    def test_summary_keys(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skills"))
+        s = d["summary"]
+        assert_keys(s, "total_installed", "dead_count", "stuck_count",
+                    "total_header_tokens", "wasted_header_tokens")
+
+    def test_skill_shape_when_present(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skills"))
+        for skill in d["skills"]:
+            assert_keys(
+                skill,
+                "name",
+                "description",
+                "header_tokens",
+                "has_body",
+                "has_linked_files",
+                "body_fetch_count_7d",
+                "linked_file_read_count_7d",
+                "status",
+            )
+            assert skill["status"] in ("healthy", "dead", "stuck", "unused")
+            assert isinstance(skill["header_tokens"], int)
+            assert isinstance(skill["body_fetch_count_7d"], int)
+            assert isinstance(skill["linked_file_read_count_7d"], int)
+
+    def test_summary_counts_non_negative(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skills"))
+        s = d["summary"]
+        assert s["total_installed"] >= 0
+        assert s["dead_count"] >= 0
+        assert s["stuck_count"] >= 0
+        assert s["total_header_tokens"] >= 0
+        assert s["wasted_header_tokens"] >= 0
+
+
 class TestUsage:
     def test_status(self, api, base_url):
         r = get(api, base_url, "/api/usage")
