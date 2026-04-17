@@ -418,6 +418,74 @@ class TestHeartbeatStatus:
 
 
 # ---------------------------------------------------------------------------
+# Heartbeat Liveness Panel (#686)
+# ---------------------------------------------------------------------------
+
+
+class TestHeartbeat:
+    def test_heartbeat_endpoint_ok(self, api, base_url):
+        """Heartbeat liveness endpoint returns 200 with correct shape."""
+        r = api.get(f"{base_url}/api/heartbeat")
+        assert r.status_code == 200
+        d = r.json()
+        assert "status" in d
+        assert d["status"] in ["healthy", "drifting", "missed", "never"]
+        assert "cadence_24h" in d
+
+    def test_heartbeat_required_keys(self, api, base_url):
+        """All required top-level keys are present."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        assert_keys(
+            d,
+            "last_heartbeat_ts",
+            "expected_interval_seconds",
+            "status",
+            "cadence_24h",
+            "ok_vs_action_24h",
+            "recent_beats",
+        )
+
+    def test_heartbeat_cadence_shape(self, api, base_url):
+        """cadence_24h has expected_beats, actual_beats, on_time_ratio."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        c = d["cadence_24h"]
+        assert isinstance(c, dict)
+        assert_keys(c, "expected_beats", "actual_beats", "on_time_ratio")
+        assert c["expected_beats"] > 0, "expected_beats should be positive"
+        assert c["actual_beats"] >= 0, "actual_beats should be non-negative"
+        assert 0.0 <= c["on_time_ratio"] <= 1.0, "on_time_ratio should be in [0, 1]"
+
+    def test_heartbeat_ok_vs_action_shape(self, api, base_url):
+        """ok_vs_action_24h has heartbeat_ok_count, action_taken_count, ok_ratio."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        oa = d["ok_vs_action_24h"]
+        assert isinstance(oa, dict)
+        assert_keys(oa, "heartbeat_ok_count", "action_taken_count", "ok_ratio")
+        assert oa["heartbeat_ok_count"] >= 0
+        assert oa["action_taken_count"] >= 0
+        assert 0.0 <= oa["ok_ratio"] <= 1.0
+
+    def test_heartbeat_recent_beats_is_list(self, api, base_url):
+        """recent_beats is a list with at most 10 entries."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        assert isinstance(d["recent_beats"], list)
+        assert len(d["recent_beats"]) <= 10
+
+    def test_heartbeat_interval_positive(self, api, base_url):
+        """expected_interval_seconds is a positive integer."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        assert isinstance(d["expected_interval_seconds"], int)
+        assert d["expected_interval_seconds"] > 0
+
+    def test_heartbeat_never_state(self, api, base_url):
+        """If no heartbeats recorded, status is 'never' and ts is 0."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        if d["status"] == "never":
+            assert d["last_heartbeat_ts"] == 0
+            assert d["last_heartbeat_age_seconds"] is None
+
+
+# ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
 

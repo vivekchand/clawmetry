@@ -104,6 +104,7 @@ from routes.fleet_history import bp_fleet, bp_history
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
 from routes.meta import bp_auth, bp_gateway, bp_otel, bp_version, bp_version_impact, bp_clusters
 from routes.nemoclaw import bp_nemoclaw
+from routes.heartbeat import bp_heartbeat
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -3597,6 +3598,39 @@ function clawmetryLogout(){
   </div>
 
   <!-- old system health removed, now inside tasks pane -->
+
+  <!-- ❤️ Heartbeat Liveness Panel (#686) -->
+  <div id="heartbeat-panel" style="margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:14px 18px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x2764;&#xfe0f; Heartbeat</span>
+      <span id="hb-status-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:rgba(107,114,128,0.2);color:var(--text-muted);">...</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+      <!-- Pulse indicator -->
+      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:48px;">
+        <div id="hb-pulse-dot" style="width:20px;height:20px;border-radius:50%;background:#6b7280;animation:none;"></div>
+        <span id="hb-pulse-label" style="font-size:10px;color:var(--text-muted);">no data</span>
+      </div>
+      <!-- Stats -->
+      <div style="flex:1;display:flex;flex-direction:column;gap:5px;min-width:200px;">
+        <div style="font-size:12px;color:var(--text-primary);">Last beat: <span id="hb-last-beat" style="font-weight:600;color:var(--text-success);">--</span></div>
+        <div style="font-size:12px;color:var(--text-primary);">Cadence (24h): <span id="hb-cadence" style="font-weight:600;">-- / --</span> expected</div>
+        <div style="font-size:12px;color:var(--text-primary);">Idle replies: <span id="hb-ok-ratio" style="font-weight:600;color:var(--text-success);">--%</span> &middot; Action taken: <span id="hb-action-ratio" style="font-weight:600;">--%</span></div>
+      </div>
+      <!-- Recent beats sparkline -->
+      <div style="display:flex;flex-direction:column;gap:4px;align-items:center;">
+        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Last 10 beats</div>
+        <div id="hb-sparkline" style="display:flex;align-items:center;gap:4px;height:20px;">
+          <span style="font-size:11px;color:var(--text-muted);">--</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <style>
+    @keyframes hb-pulse-healthy { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(1.15)} }
+    @keyframes hb-pulse-drifting { 0%,100%{opacity:1} 50%{opacity:.4} }
+    @keyframes hb-pulse-missed { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(239,68,68,.4)} 70%{opacity:.8;box-shadow:0 0 0 8px rgba(239,68,68,0)} }
+  </style>
 </div>
 
 <!-- USAGE -->
@@ -5056,6 +5090,7 @@ async function loadAll() {
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
+    if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -5113,6 +5148,94 @@ async function loadReliabilityCard() {
     el = document.getElementById('reliability-detail-lt');
     if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
   } catch(e) { console.warn('reliability card load failed', e); }
+}
+
+async function loadHeartbeat() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/heartbeat', 5000);
+    var dot = document.getElementById('hb-pulse-dot');
+    var label = document.getElementById('hb-pulse-label');
+    var badge = document.getElementById('hb-status-badge');
+    var lastBeat = document.getElementById('hb-last-beat');
+    var cadenceEl = document.getElementById('hb-cadence');
+    var okRatioEl = document.getElementById('hb-ok-ratio');
+    var actionRatioEl = document.getElementById('hb-action-ratio');
+    var sparkEl = document.getElementById('hb-sparkline');
+
+    if (!dot) return;
+
+    var status = d.status || 'never';
+    var colors = { healthy: '#22c55e', drifting: '#f59e0b', missed: '#ef4444', never: '#6b7280' };
+    var anims = {
+      healthy: 'hb-pulse-healthy 2s ease-in-out infinite',
+      drifting: 'hb-pulse-drifting 1.5s ease-in-out infinite',
+      missed: 'hb-pulse-missed 1.2s ease-in-out infinite',
+      never: 'none'
+    };
+    var badgeColors = {
+      healthy: { bg: 'rgba(34,197,94,0.15)', color: '#4ade80' },
+      drifting: { bg: 'rgba(245,158,11,0.15)', color: '#fbbf24' },
+      missed: { bg: 'rgba(239,68,68,0.15)', color: '#f87171' },
+      never: { bg: 'rgba(107,114,128,0.15)', color: '#9ca3af' }
+    };
+
+    dot.style.background = colors[status] || colors.never;
+    dot.style.animation = anims[status] || 'none';
+    if (label) label.textContent = status;
+
+    if (badge) {
+      var bc = badgeColors[status] || badgeColors.never;
+      badge.style.background = bc.bg;
+      badge.style.color = bc.color;
+      badge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    }
+
+    // Last beat age
+    if (lastBeat) {
+      if (d.last_heartbeat_age_seconds !== null && d.last_heartbeat_age_seconds !== undefined) {
+        var age = d.last_heartbeat_age_seconds;
+        var ageStr;
+        if (age < 60) ageStr = age + 's ago';
+        else if (age < 3600) ageStr = Math.floor(age / 60) + ' min ago';
+        else if (age < 86400) ageStr = Math.floor(age / 3600) + 'h ago';
+        else ageStr = Math.floor(age / 86400) + 'd ago';
+        lastBeat.textContent = ageStr;
+        lastBeat.style.color = colors[status] || '#9ca3af';
+      } else {
+        lastBeat.textContent = 'never';
+        lastBeat.style.color = '#9ca3af';
+      }
+    }
+
+    // Cadence
+    if (cadenceEl && d.cadence_24h) {
+      var c = d.cadence_24h;
+      var pct = c.expected_beats > 0 ? Math.round(c.on_time_ratio * 100) : 0;
+      cadenceEl.textContent = c.actual_beats + ' / ' + c.expected_beats + ' expected (' + pct + '%)';
+    }
+
+    // OK vs Action ratios
+    if (okRatioEl && d.ok_vs_action_24h) {
+      var oa = d.ok_vs_action_24h;
+      okRatioEl.textContent = Math.round(oa.ok_ratio * 100) + '%';
+      if (actionRatioEl) {
+        var actionPct = Math.round((1 - oa.ok_ratio) * 100);
+        actionRatioEl.textContent = actionPct + '%';
+        actionRatioEl.style.color = actionPct > 20 ? '#f87171' : '#fbbf24';
+      }
+    }
+
+    // Sparkline of last 10 beats
+    if (sparkEl && d.recent_beats && d.recent_beats.length > 0) {
+      sparkEl.innerHTML = d.recent_beats.map(function(b) {
+        var c = b.outcome === 'ok' ? '#22c55e' : '#f59e0b';
+        var title = b.outcome === 'ok' ? 'HEARTBEAT_OK' : 'Action taken';
+        return '<span title="' + title + '" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + c + ';"></span>';
+      }).join('');
+    } else if (sparkEl) {
+      sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">no beats yet</span>';
+    }
+  } catch(e) { console.warn('heartbeat panel load failed', e); }
 }
 
 async function loadMiniWidgets(overview, usage) {
@@ -7734,6 +7857,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_version_impact)
     app.register_blueprint(bp_clusters)
     app.register_blueprint(bp_nemoclaw)
+    app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_openapi)
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
