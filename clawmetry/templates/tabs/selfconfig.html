@@ -1,46 +1,38 @@
 <div class="page" id="page-selfconfig">
   <div style="padding:12px 0 8px 0;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:14px;font-weight:700;color:var(--text-primary);">Self-Configuration History</span>
-        <span style="font-size:11px;color:var(--text-muted);background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:2px 10px;">agent-managed files</span>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:var(--text-primary);">Your agent's mind</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">When your agent updates what it knows about you or how it behaves, the change shows up here.</div>
       </div>
       <button class="refresh-btn" onclick="loadSelfConfig()">&#8635; Refresh</button>
     </div>
-    <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.5;">
-      Tracks agent edits to USER.md, SOUL.md, AGENTS.md, TOOLS.md, IDENTITY.md, MEMORY.md. SOUL.md changes highlighted as values drift (<a href="https://github.com/vivekchand/clawmetry/issues/689" target="_blank" style="color:var(--text-muted);">#689</a>).
-    </div>
-    <!-- Two-column layout: file list + detail pane -->
-    <div style="display:grid;grid-template-columns:240px 1fr;gap:12px;min-height:400px;">
-      <!-- File list (left) -->
+    <div style="display:grid;grid-template-columns:280px 1fr;gap:12px;min-height:400px;margin-top:14px;">
       <div id="selfconfig-file-list" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px;">
-        <div style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:1px;margin-bottom:8px;">TRACKED FILES</div>
         <div id="selfconfig-files-inner" style="color:var(--text-muted);font-size:12px;">Loading...</div>
       </div>
-      <!-- Detail pane (right) -->
       <div id="selfconfig-detail-pane" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:14px;">
-        <div id="selfconfig-empty-state" style="color:var(--text-muted);font-size:13px;padding:24px 0;text-align:center;">
-          Select a file on the left to view its revision history.
+        <div id="selfconfig-empty-state" style="color:var(--text-muted);font-size:13px;padding:40px 0;text-align:center;">
+          <div style="font-size:28px;margin-bottom:8px;opacity:0.4;">&#128270;</div>
+          Pick something on the left to see what your agent learned.
         </div>
         <div id="selfconfig-revisions-panel" style="display:none;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-            <div style="font-size:13px;font-weight:700;color:var(--text-primary);" id="selfconfig-filename-heading"></div>
-            <div id="selfconfig-values-badge" style="display:none;background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:10px;padding:2px 10px;font-size:11px;font-weight:700;">&#9888; VALUES FILE</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <div style="font-size:16px;font-weight:700;color:var(--text-primary);" id="selfconfig-filename-heading"></div>
+            <div id="selfconfig-values-badge" style="display:none;background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:10px;padding:3px 10px;font-size:11px;font-weight:700;" title="Changes here affect how your agent thinks and behaves.">&#9888; Sensitive</div>
           </div>
-          <div id="selfconfig-revisions-list" style="font-size:12px;"></div>
+          <div id="selfconfig-file-description" style="font-size:12px;color:var(--text-muted);margin-bottom:16px;"></div>
+          <div id="selfconfig-revisions-list" style="font-size:13px;"></div>
         </div>
         <div id="selfconfig-diff-panel" style="display:none;">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
             <button onclick="selfconfigBackToRevisions()" style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);">&#8592; Back</button>
-            <span style="font-size:12px;font-weight:700;color:var(--text-primary);" id="selfconfig-diff-heading"></span>
-            <span id="selfconfig-diff-stats" style="font-size:11px;color:var(--text-muted);"></span>
+            <span style="font-size:14px;font-weight:700;color:var(--text-primary);" id="selfconfig-diff-heading"></span>
+            <span id="selfconfig-diff-stats" style="font-size:12px;color:var(--text-muted);margin-left:auto;"></span>
           </div>
           <div id="selfconfig-diff-content" style="font-family:'JetBrains Mono','SF Mono',monospace;font-size:12px;line-height:1.6;overflow-x:auto;"></div>
         </div>
       </div>
-    </div>
-    <div id="selfconfig-no-history-msg" style="display:none;margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:20px;text-align:center;">
-      <div style="font-size:13px;color:var(--text-muted);">No self-configuration edits yet. ClawMetry snapshots these files and shows diffs when your agent updates them.</div>
     </div>
   </div>
 </div><!-- end page-selfconfig -->

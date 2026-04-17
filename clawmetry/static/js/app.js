@@ -542,72 +542,125 @@ function exportUsageData() {
   window.location.href = '/api/usage/export';
 }
 
-// ── Autonomy Score (#688) ────────────────────────────────────────────────────
+// ── Human-friendly helpers (shared) ──────────────────────────────────────────
+function _friendlyDuration(secs) {
+  if (secs == null || isNaN(secs)) return '—';
+  secs = Math.round(secs);
+  if (secs < 60) return secs + ' seconds';
+  if (secs < 3600) {
+    var m = Math.round(secs / 60);
+    return m + (m === 1 ? ' minute' : ' minutes');
+  }
+  if (secs < 86400) {
+    var h = Math.floor(secs / 3600);
+    var mm = Math.round((secs % 3600) / 60);
+    if (mm === 0) return h + (h === 1 ? ' hour' : ' hours');
+    return h + 'h ' + mm + 'm';
+  }
+  var d = Math.round(secs / 86400);
+  return d + (d === 1 ? ' day' : ' days');
+}
+
+function _friendlyAgo(seconds) {
+  if (seconds == null) return 'never';
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) {
+    var m = Math.floor(seconds / 60);
+    return m + (m === 1 ? ' minute ago' : ' minutes ago');
+  }
+  if (seconds < 86400) {
+    var h = Math.floor(seconds / 3600);
+    return h + (h === 1 ? ' hour ago' : ' hours ago');
+  }
+  var d = Math.floor(seconds / 86400);
+  return d + (d === 1 ? ' day ago' : ' days ago');
+}
+
+function _friendlyTimestamp(ts) {
+  if (!ts) return '—';
+  var d = new Date(ts * 1000);
+  var now = new Date();
+  var sameDay = d.toDateString() === now.toDateString();
+  var yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  var wasYesterday = d.toDateString() === yesterday.toDateString();
+  var time = d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  if (sameDay) return 'Today at ' + time;
+  if (wasYesterday) return 'Yesterday at ' + time;
+  var daysAgo = Math.floor((now - d) / 86400000);
+  if (daysAgo < 7) return d.toLocaleDateString([], {weekday:'long'}) + ' at ' + time;
+  return d.toLocaleDateString([], {month:'short', day:'numeric'}) + ' at ' + time;
+}
+
+function _friendlyBytes(n) {
+  if (n == null) return '—';
+  if (n < 1024) return n + ' bytes';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// ── Autonomy: how independently your agent runs ──────────────────────────────
 async function loadAutonomy() {
-  var scoreEl = document.getElementById('autonomy-score-value');
+  var labelEl = document.getElementById('autonomy-score-label');
   var badgeEl = document.getElementById('autonomy-trend-badge');
   var gapEl   = document.getElementById('autonomy-median-gap');
   var trendEl = document.getElementById('autonomy-trend-pct');
   var svgEl   = document.getElementById('autonomy-sparkline');
   var sampEl  = document.getElementById('autonomy-samples');
-  if (!scoreEl) return;
+  if (!labelEl) return;
+
+  function scoreToLabel(s) {
+    if (s >= 0.8) return { text: 'Fully independent', color: '#22c55e' };
+    if (s >= 0.5) return { text: 'Mostly independent', color: '#84cc16' };
+    if (s >= 0.2) return { text: 'Getting there', color: '#f59e0b' };
+    return { text: 'Needs guidance', color: '#94a3b8' };
+  }
+
   try {
     var d = await (typeof fetchJsonWithTimeout === 'function'
       ? fetchJsonWithTimeout('/api/autonomy', 5000)
       : fetch('/api/autonomy').then(function(r){return r.json();}));
+
     if (d.score == null) {
-      scoreEl.textContent = '--';
-      if (gapEl) gapEl.textContent = 'No data yet \u2014 start using your agent to track autonomy';
-      if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; }
+      labelEl.textContent = 'Just getting started';
+      labelEl.style.color = 'var(--text-muted)';
+      if (gapEl) gapEl.textContent = 'Use your agent a bit and we\u2019ll show how independent it\u2019s becoming.';
+      if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; badgeEl.style.border = ''; }
       if (trendEl) trendEl.textContent = '';
       if (sampEl) sampEl.textContent = '';
       return;
     }
-    scoreEl.textContent = d.score.toFixed(2);
+
+    var lbl = scoreToLabel(d.score);
+    labelEl.textContent = lbl.text;
+    labelEl.style.color = lbl.color;
+
     if (gapEl && d.median_gap_seconds_7d != null) {
-      var secs = Math.round(d.median_gap_seconds_7d);
-      var hrs = Math.floor(secs / 3600);
-      var mins = Math.floor((secs % 3600) / 60);
-      var s = secs % 60;
-      var parts = [];
-      if (hrs > 0) parts.push(hrs + 'h');
-      if (mins > 0) parts.push(mins + 'm');
-      parts.push(s + 's');
-      gapEl.textContent = 'Median time between nudges: ' + parts.join(' ');
+      gapEl.textContent = 'You check in about every ' + _friendlyDuration(d.median_gap_seconds_7d) + '.';
+    } else if (gapEl) {
+      gapEl.textContent = '';
     }
+
     if (badgeEl) {
       var dir = d.trend_direction || 'flat';
-      if (dir === 'improving') {
-        badgeEl.textContent = '\u2191 improving';
-        badgeEl.style.background = 'rgba(16,185,129,0.18)';
-        badgeEl.style.color = '#10b981';
-        badgeEl.style.border = '1px solid rgba(16,185,129,0.35)';
-      } else if (dir === 'declining') {
-        badgeEl.textContent = '\u2193 declining';
-        badgeEl.style.background = 'rgba(239,68,68,0.18)';
-        badgeEl.style.color = '#ef4444';
-        badgeEl.style.border = '1px solid rgba(239,68,68,0.35)';
-      } else if (dir === 'no_data') {
-        badgeEl.textContent = 'no data';
-        badgeEl.style.background = 'rgba(100,116,139,0.18)';
-        badgeEl.style.color = 'var(--text-muted)';
-        badgeEl.style.border = '1px solid var(--border-primary)';
-      } else {
-        badgeEl.textContent = '\u2015 steady';
-        badgeEl.style.background = 'rgba(100,116,139,0.18)';
-        badgeEl.style.color = 'var(--text-muted)';
-        badgeEl.style.border = '1px solid var(--border-primary)';
-      }
+      var presets = {
+        improving:  { text: '\u2191 getting more independent', bg: 'rgba(34,197,94,0.15)', color: '#22c55e', border: 'rgba(34,197,94,0.4)' },
+        declining:  { text: '\u2193 needs more guidance',      bg: 'rgba(239,68,68,0.15)', color: '#ef4444', border: 'rgba(239,68,68,0.4)' },
+        flat:       { text: 'steady this week',                bg: 'rgba(100,116,139,0.12)', color: 'var(--text-muted)', border: 'var(--border-primary)' },
+        no_data:    { text: 'no data yet',                     bg: 'rgba(100,116,139,0.12)', color: 'var(--text-muted)', border: 'var(--border-primary)' }
+      };
+      var p = presets[dir] || presets.flat;
+      badgeEl.textContent = p.text;
+      badgeEl.style.background = p.bg;
+      badgeEl.style.color = p.color;
+      badgeEl.style.border = '1px solid ' + p.border;
     }
-    if (trendEl && d.trend_slope_7d != null) {
-      var pct = Math.round(d.trend_slope_7d * 100);
-      if (pct > 0) trendEl.textContent = '+' + pct + '% this week';
-      else if (pct < 0) trendEl.textContent = pct + '% this week';
-      else trendEl.textContent = '';
-    }
+
+    if (trendEl) trendEl.textContent = '';
+
     if (sampEl && d.samples_7d != null) {
-      sampEl.textContent = d.samples_7d + ' user msg' + (d.samples_7d !== 1 ? 's' : '') + ' in 7d';
+      sampEl.textContent = d.samples_7d + ' check-in' + (d.samples_7d !== 1 ? 's' : '') + ' this week';
     }
+
     if (svgEl && d.series_daily && d.series_daily.length > 0) {
       var ratios = d.series_daily.map(function(e){ return e.autonomy_ratio; });
       var valid = ratios.filter(function(v){ return v != null; });
@@ -643,17 +696,17 @@ async function loadAutonomy() {
         });
         svgEl.innerHTML = svgContent;
       } else {
-        svgEl.innerHTML = '<text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">Not enough data</text>';
+        svgEl.innerHTML = '<text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">Not enough data yet</text>';
       }
     }
   } catch(e) {
     console.warn('autonomy load failed', e);
-    if (scoreEl) scoreEl.textContent = '--';
-    if (gapEl) gapEl.textContent = 'No data yet \u2014 start using your agent to track autonomy';
+    if (labelEl) labelEl.textContent = '—';
+    if (gapEl) gapEl.textContent = 'Couldn\u2019t load right now.';
   }
 }
 
-// ── Heartbeat Liveness Panel (#686) ──────────────────────────────────────────
+// ── Heartbeat: is your agent alive? ──────────────────────────────────────────
 async function loadHeartbeat() {
   try {
     var d = await (typeof fetchJsonWithTimeout === 'function'
@@ -664,82 +717,113 @@ async function loadHeartbeat() {
     var badge = document.getElementById('hb-status-badge');
     var lastBeat = document.getElementById('hb-last-beat');
     var cadenceEl = document.getElementById('hb-cadence');
-    var okRatioEl = document.getElementById('hb-ok-ratio');
-    var actionRatioEl = document.getElementById('hb-action-ratio');
+    var okRatioLineEl = document.getElementById('hb-ok-ratio-line');
     var sparkEl = document.getElementById('hb-sparkline');
     if (!dot) return;
+
     var status = d.status || 'never';
+    var labels = {
+      healthy:  { status: 'Alive and well',   pulse: 'checking in',    badge: 'Healthy' },
+      drifting: { status: 'Running a bit late', pulse: 'slow',         badge: 'Late' },
+      missed:   { status: 'Something\u2019s wrong', pulse: 'missed',   badge: 'Missed' },
+      never:    { status: 'No check-ins yet', pulse: 'waiting...',     badge: 'Waiting' }
+    };
     var colors = { healthy: '#22c55e', drifting: '#f59e0b', missed: '#ef4444', never: '#6b7280' };
     var anims = {
-      healthy: 'hb-pulse-healthy 2s ease-in-out infinite',
+      healthy:  'hb-pulse-healthy 2s ease-in-out infinite',
       drifting: 'hb-pulse-drifting 1.5s ease-in-out infinite',
-      missed: 'hb-pulse-missed 1.2s ease-in-out infinite',
-      never: 'none'
+      missed:   'hb-pulse-missed 1.2s ease-in-out infinite',
+      never:    'none'
     };
     var badgeColors = {
-      healthy: { bg: 'rgba(34,197,94,0.15)', color: '#4ade80' },
-      drifting: { bg: 'rgba(245,158,11,0.15)', color: '#fbbf24' },
-      missed: { bg: 'rgba(239,68,68,0.15)', color: '#f87171' },
-      never: { bg: 'rgba(107,114,128,0.15)', color: '#9ca3af' }
+      healthy:  { bg: 'rgba(34,197,94,0.15)',   color: '#4ade80' },
+      drifting: { bg: 'rgba(245,158,11,0.15)',  color: '#fbbf24' },
+      missed:   { bg: 'rgba(239,68,68,0.15)',   color: '#f87171' },
+      never:    { bg: 'rgba(107,114,128,0.15)', color: '#9ca3af' }
     };
+    var L = labels[status] || labels.never;
+
     dot.style.background = colors[status] || colors.never;
     dot.style.animation = anims[status] || 'none';
-    if (label) label.textContent = status;
+    if (label) label.textContent = L.pulse;
     if (badge) {
       var bc = badgeColors[status] || badgeColors.never;
       badge.style.background = bc.bg;
       badge.style.color = bc.color;
-      badge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+      badge.textContent = L.badge;
     }
+
     if (lastBeat) {
-      if (d.last_heartbeat_age_seconds !== null && d.last_heartbeat_age_seconds !== undefined) {
-        var age = d.last_heartbeat_age_seconds;
-        var ageStr;
-        if (age < 60) ageStr = age + 's ago';
-        else if (age < 3600) ageStr = Math.floor(age / 60) + ' min ago';
-        else if (age < 86400) ageStr = Math.floor(age / 3600) + 'h ago';
-        else ageStr = Math.floor(age / 86400) + 'd ago';
-        lastBeat.textContent = ageStr;
+      if (status === 'never') {
+        lastBeat.textContent = 'not yet';
+        lastBeat.style.color = '#9ca3af';
+      } else if (d.last_heartbeat_age_seconds !== null && d.last_heartbeat_age_seconds !== undefined) {
+        lastBeat.textContent = _friendlyAgo(d.last_heartbeat_age_seconds);
         lastBeat.style.color = colors[status] || '#9ca3af';
       } else {
-        lastBeat.textContent = 'never';
+        lastBeat.textContent = 'not yet';
         lastBeat.style.color = '#9ca3af';
       }
     }
+
     if (cadenceEl && d.cadence_24h) {
       var c = d.cadence_24h;
-      var pct = c.expected_beats > 0 ? Math.round(c.on_time_ratio * 100) : 0;
-      cadenceEl.textContent = c.actual_beats + ' / ' + c.expected_beats + ' expected (' + pct + '%)';
-    }
-    if (okRatioEl && d.ok_vs_action_24h) {
-      var oa = d.ok_vs_action_24h;
-      okRatioEl.textContent = Math.round(oa.ok_ratio * 100) + '%';
-      if (actionRatioEl) {
-        var actionPct = Math.round((1 - oa.ok_ratio) * 100);
-        actionRatioEl.textContent = actionPct + '%';
-        actionRatioEl.style.color = actionPct > 20 ? '#f87171' : '#fbbf24';
+      if (c.expected_beats === 0) {
+        cadenceEl.textContent = '';
+      } else if (c.actual_beats === 0) {
+        cadenceEl.textContent = 'Expected ' + c.expected_beats + ' check-ins today, got none yet';
+      } else {
+        cadenceEl.textContent = 'Checked in ' + c.actual_beats + ' of ' + c.expected_beats + ' expected today';
       }
     }
+
+    if (okRatioLineEl && d.ok_vs_action_24h) {
+      var oa = d.ok_vs_action_24h;
+      var total = oa.heartbeat_ok_count + oa.action_taken_count;
+      if (total === 0) {
+        okRatioLineEl.textContent = '';
+      } else {
+        var quietPct = Math.round(oa.ok_ratio * 100);
+        var actedPct = 100 - quietPct;
+        okRatioLineEl.textContent = quietPct + '% quiet check-ins' + (actedPct > 0 ? ' \u00B7 ' + actedPct + '% took action' : '');
+      }
+    }
+
     if (sparkEl && d.recent_beats && d.recent_beats.length > 0) {
       sparkEl.innerHTML = d.recent_beats.map(function(b) {
         var cc = b.outcome === 'ok' ? '#22c55e' : '#f59e0b';
-        var title = b.outcome === 'ok' ? 'HEARTBEAT_OK' : 'Action taken';
+        var title = b.outcome === 'ok' ? 'Quiet check-in' : 'Took action';
         return '<span title="' + title + '" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + cc + ';"></span>';
       }).join('');
     } else if (sparkEl) {
-      sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">no beats yet</span>';
+      sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">none yet</span>';
     }
   } catch(e) { console.warn('heartbeat panel load failed', e); }
 }
 
-// ── Self-Configuration Diff Viewer (#689) ────────────────────────────────────
+// ── Mind: what your agent knows about itself and you ─────────────────────────
 var _selfconfigCurrentFile = null;
 var _selfconfigRevisions = [];
+
+// Friendly labels for the internal file names. Keeps the underlying filename
+// searchable in devtools but shows plain English in the UI.
+var _CONFIG_FILE_META = {
+  'USER.md':     { icon: '\uD83D\uDC64', title: 'About you',       desc: 'What your agent knows about you.' },
+  'SOUL.md':     { icon: '\uD83C\uDFAD', title: 'Personality',     desc: 'How your agent talks, thinks and treats you.' },
+  'AGENTS.md':   { icon: '\uD83E\uDDE0', title: 'How it thinks',   desc: 'The rules your agent uses to make decisions.' },
+  'TOOLS.md':    { icon: '\uD83D\uDEE0\uFE0F', title: 'Tools',     desc: 'Commands and shortcuts your agent knows.' },
+  'IDENTITY.md': { icon: '\u2728',       title: 'Name & vibe',     desc: 'Who your agent is \u2014 name, creature, vibe.' },
+  'MEMORY.md':   { icon: '\uD83D\uDCDD', title: 'Memory',          desc: 'Notes your agent keeps over time.' }
+};
+
+function _configMeta(filename) {
+  return _CONFIG_FILE_META[filename] || { icon: '\uD83D\uDCC4', title: filename, desc: '' };
+}
 
 async function loadSelfConfig() {
   var inner = document.getElementById('selfconfig-files-inner');
   if (!inner) return;
-  inner.innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
+  inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Loading...</span>';
   var detailEmpty = document.getElementById('selfconfig-empty-state');
   var detailRevs = document.getElementById('selfconfig-revisions-panel');
   var detailDiff = document.getElementById('selfconfig-diff-panel');
@@ -751,28 +835,35 @@ async function loadSelfConfig() {
       ? fetchJsonWithTimeout('/api/selfconfig', 5000)
       : fetch('/api/selfconfig').then(function(r){return r.json();}));
     var files = d.files || [];
-    var hasAnyRevisions = files.some(function(f) { return f.revision_count > 0; });
-    var noHistMsg = document.getElementById('selfconfig-no-history-msg');
-    if (noHistMsg) noHistMsg.style.display = hasAnyRevisions ? 'none' : 'block';
     if (!files.length) {
-      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">No tracked files found.</span>';
+      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Nothing to show yet \u2014 your agent hasn\u2019t set itself up.</span>';
       return;
     }
     inner.innerHTML = files.map(function(f) {
-      var badge = f.is_values_file
-        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;">VALUES</span>'
+      var meta = _configMeta(f.name);
+      var sensitive = f.is_values_file
+        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;" title="Changes here affect how your agent behaves.">Sensitive</span>'
         : '';
-      var revCount = f.revision_count > 0
-        ? ' <span style="color:var(--text-muted);font-size:10px;">(' + f.revision_count + ' rev' + (f.revision_count !== 1 ? 's' : '') + ')</span>'
-        : ' <span style="color:var(--text-muted);font-size:10px;">(no edits)</span>';
-      var existStyle = f.exists ? '' : 'opacity:0.5;';
-      return '<div onclick="loadSelfConfigHistory(\'' + f.name + '\')" style="cursor:pointer;padding:7px 8px;border-radius:6px;margin-bottom:4px;' + existStyle + 'border:1px solid transparent;transition:all 0.15s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'transparent\'">'
-        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + f.name + badge + '</div>'
-        + '<div style="font-size:11px;margin-top:2px;">' + revCount + '</div>'
+      var sub;
+      if (!f.exists) {
+        sub = '<span style="color:var(--text-muted);">not set up yet</span>';
+      } else if (f.revision_count <= 1) {
+        sub = '<span style="color:var(--text-muted);">no changes yet</span>';
+      } else {
+        sub = '<span style="color:var(--text-muted);">changed ' + (f.revision_count - 1) + ' time' + ((f.revision_count - 1) === 1 ? '' : 's') + '</span>';
+      }
+      var existStyle = f.exists ? '' : 'opacity:0.55;';
+      return '<div onclick="loadSelfConfigHistory(\'' + f.name + '\')" style="cursor:pointer;padding:9px 10px;border-radius:7px;margin-bottom:4px;' + existStyle + 'border:1px solid transparent;transition:background 0.15s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'transparent\'">'
+        + '<div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--text-primary);">'
+        + '<span style="font-size:16px;">' + meta.icon + '</span>'
+        + '<span>' + meta.title + '</span>'
+        + sensitive
+        + '</div>'
+        + '<div style="font-size:11px;margin-top:3px;margin-left:24px;">' + sub + '</div>'
         + '</div>';
     }).join('');
   } catch(e) {
-    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading files.</span>';
+    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Couldn\u2019t load right now.</span>';
   }
 }
 
@@ -785,10 +876,13 @@ async function loadSelfConfigHistory(filename) {
   if (diffPanel) diffPanel.style.display = 'none';
   if (revsPanel) revsPanel.style.display = 'block';
   var headEl = document.getElementById('selfconfig-filename-heading');
+  var descEl = document.getElementById('selfconfig-file-description');
   var badgeEl = document.getElementById('selfconfig-values-badge');
   var listEl = document.getElementById('selfconfig-revisions-list');
-  if (headEl) headEl.textContent = filename;
-  if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
+  var meta = _configMeta(filename);
+  if (headEl) headEl.textContent = meta.icon + '  ' + meta.title;
+  if (descEl) descEl.textContent = meta.desc;
+  if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Loading...</span>';
   try {
     var d = await (typeof fetchJsonWithTimeout === 'function'
       ? fetchJsonWithTimeout('/api/selfconfig/' + encodeURIComponent(filename), 5000)
@@ -796,37 +890,39 @@ async function loadSelfConfigHistory(filename) {
     if (badgeEl) badgeEl.style.display = d.is_values_file ? 'block' : 'none';
     _selfconfigRevisions = d.revisions || [];
     if (!_selfconfigRevisions.length) {
-      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No revisions recorded yet. Edits will appear here automatically.</div>';
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px 0;text-align:center;">Nothing has changed here yet. Changes will show up automatically.</div>';
       return;
     }
     listEl.innerHTML = _selfconfigRevisions.map(function(rev, idx) {
-      var dt = new Date(rev.ts * 1000).toLocaleString();
-      var delta = '';
-      if (idx < _selfconfigRevisions.length - 1) {
+      var isOldest = idx === _selfconfigRevisions.length - 1;
+      var when = _friendlyTimestamp(rev.ts);
+      var size = _friendlyBytes(rev.size);
+      var delta, label;
+      if (isOldest) {
+        label = '<span style="color:var(--text-muted);font-size:11px;">First version</span>';
+        delta = '';
+      } else {
         var prevSize = _selfconfigRevisions[idx + 1].size;
         var diff = rev.size - prevSize;
-        delta = diff > 0
-          ? '<span style="color:#22c55e;font-weight:600;">+' + diff + '</span>'
-          : diff < 0
-            ? '<span style="color:#ef4444;font-weight:600;">' + diff + '</span>'
-            : '<span style="color:var(--text-muted);">±0</span>';
-      } else {
-        delta = '<span style="color:var(--text-muted);font-size:10px;">initial</span>';
+        label = '<span style="color:var(--text-muted);font-size:11px;">Updated</span>';
+        if (diff > 0) delta = ' &nbsp;<span style="color:#22c55e;font-weight:600;">grew by ' + _friendlyBytes(diff) + '</span>';
+        else if (diff < 0) delta = ' &nbsp;<span style="color:#ef4444;font-weight:600;">shrank by ' + _friendlyBytes(-diff) + '</span>';
+        else delta = ' &nbsp;<span style="color:var(--text-muted);">same size</span>';
       }
-      var prevTs = idx < _selfconfigRevisions.length - 1 ? _selfconfigRevisions[idx + 1].ts : null;
+      var prevTs = isOldest ? null : _selfconfigRevisions[idx + 1].ts;
       var diffBtn = prevTs !== null
-        ? '<button onclick="loadSelfConfigDiff(\'' + filename + '\',' + prevTs + ',' + rev.ts + ')" style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;color:var(--text-secondary);margin-left:8px;">View diff</button>'
+        ? '<button onclick="loadSelfConfigDiff(\'' + filename + '\',' + prevTs + ',' + rev.ts + ')" style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);margin-left:8px;">See what changed</button>'
         : '';
-      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px;border-radius:6px;margin-bottom:4px;background:var(--bg-primary);border:1px solid var(--border-primary);">'
+      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:7px;margin-bottom:6px;background:var(--bg-primary);border:1px solid var(--border-primary);">'
         + '<div>'
-        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + dt + '</div>'
-        + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + rev.size.toLocaleString() + ' bytes &nbsp; ' + delta + '</div>'
+        + '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + when + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:3px;">' + label + ' &nbsp;\u00B7&nbsp; ' + size + delta + '</div>'
         + '</div>'
         + diffBtn
         + '</div>';
     }).join('');
   } catch(e) {
-    if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading history.</span>';
+    if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Couldn\u2019t load right now.</span>';
   }
 }
 
@@ -840,20 +936,25 @@ async function loadSelfConfigDiff(filename, fromTs, toTs) {
   var headEl    = document.getElementById('selfconfig-diff-heading');
   var statsEl   = document.getElementById('selfconfig-diff-stats');
   var contentEl = document.getElementById('selfconfig-diff-content');
-  if (headEl) headEl.textContent = filename + ' diff';
-  if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);">Loading diff...</span>';
+  var meta = _configMeta(filename);
+  if (headEl) headEl.textContent = meta.icon + '  What changed in ' + meta.title;
+  if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Loading...</span>';
   try {
     var url = '/api/selfconfig/' + encodeURIComponent(filename) + '/diff?from=' + fromTs + '&to=' + toTs;
     var d = await (typeof fetchJsonWithTimeout === 'function'
       ? fetchJsonWithTimeout(url, 8000)
       : fetch(url).then(function(r){return r.json();}));
     if (statsEl) {
-      statsEl.innerHTML = '<span style="color:#22c55e;">+' + d.added_chars + '</span> / <span style="color:#ef4444;">-' + d.removed_chars + '</span> chars'
-        + (d.truncated ? ' <span style="color:#f59e0b;">(truncated)</span>' : '');
+      var added = d.added_chars || 0;
+      var removed = d.removed_chars || 0;
+      var parts = [];
+      if (added) parts.push('<span style="color:#22c55e;">+' + added + ' added</span>');
+      if (removed) parts.push('<span style="color:#ef4444;">\u2212' + removed + ' removed</span>');
+      statsEl.innerHTML = parts.join(' &nbsp;\u00B7&nbsp; ') + (d.truncated ? ' <span style="color:#f59e0b;">(shortened)</span>' : '');
     }
     var lines = d.diff_lines || [];
     if (!lines.length) {
-      contentEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No changes detected between these two versions.</div>';
+      contentEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">No changes between these two versions.</div>';
       return;
     }
     contentEl.innerHTML = lines.map(function(line) {
@@ -869,7 +970,7 @@ async function loadSelfConfigDiff(filename, fromTs, toTs) {
       }
     }).join('');
   } catch(e) {
-    if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading diff.</span>';
+    if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Couldn\u2019t load this comparison.</span>';
   }
 }
 
@@ -882,7 +983,20 @@ function selfconfigBackToRevisions() {
   }
 }
 
-// ── Skills Fidelity (#687) ───────────────────────────────────────────────────
+// ── Skills: shortcuts your agent can use ─────────────────────────────────────
+var _skillsShowDetails = false;
+
+function _skillStatusPill(status) {
+  var map = {
+    healthy: { label: 'Working',          color: '#22c55e' },
+    unused:  { label: 'Never used',       color: '#94a3b8' },
+    dead:    { label: 'Safe to remove',   color: '#ef4444' },
+    stuck:   { label: 'Not working',      color: '#f59e0b' }
+  };
+  var s = map[status] || { label: status || '\u2014', color: '#94a3b8' };
+  return '<span style="background:' + s.color + '22;color:' + s.color + ';border:1px solid ' + s.color + '44;border-radius:10px;padding:2px 10px;font-size:11px;font-weight:600;">' + s.label + '</span>';
+}
+
 async function loadSkills() {
   var summaryEl = document.getElementById('skills-summary-row');
   var listEl = document.getElementById('skills-list');
@@ -892,64 +1006,72 @@ async function loadSkills() {
     var data = await fetch('/api/skills').then(function(r) { return r.json(); });
     var skills = data.skills || [];
     var summary = data.summary || {};
-    var wastePct = summary.total_header_tokens > 0
-      ? Math.round(summary.wasted_header_tokens / summary.total_header_tokens * 100) : 0;
+    var installed = summary.total_installed || 0;
+    var dead = summary.dead_count || 0;
+    var stuck = summary.stuck_count || 0;
+
+    function card(title, value, color, sub) {
+      return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:12px 18px;min-width:140px;">'
+        + '<div style="font-size:22px;font-weight:700;color:' + (color || 'var(--text-primary)') + ';line-height:1.1;">' + value + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;text-transform:uppercase;letter-spacing:1px;">' + title + '</div>'
+        + (sub ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + sub + '</div>' : '')
+        + '</div>';
+    }
+
     summaryEl.innerHTML =
-      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--text-primary);">' +
-        '<strong>' + (summary.total_installed || 0) + '</strong> skills installed' +
-      '</div>' +
-      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:#ef4444;">' +
-        '<strong>' + (summary.dead_count || 0) + '</strong> dead' +
-      '</div>' +
-      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:#f59e0b;">' +
-        '<strong>' + (summary.stuck_count || 0) + '</strong> stuck' +
-      '</div>' +
-      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--text-muted);">' +
-        '<strong>' + (summary.wasted_header_tokens || 0) + '</strong> tokens wasted on dead skills (' + wastePct + '%)' +
-      '</div>';
+      card('Installed', installed, 'var(--text-primary)') +
+      (dead   > 0 ? card('Safe to remove', dead,  '#ef4444', 'never used') : '') +
+      (stuck  > 0 ? card('Not working',    stuck, '#f59e0b', 'broken or misdescribed') : '') +
+      (dead === 0 && stuck === 0 && installed > 0
+        ? card('All good', '\u2713', '#22c55e', 'every skill is being used')
+        : '');
+
     if (skills.length === 0) {
-      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No skills installed.</div>';
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Nothing installed yet. Skills let your agent handle specific tasks \u2014 add some to get started.</div>';
       return;
     }
-    var _statusColor = { healthy: '#22c55e', unused: '#94a3b8', dead: '#ef4444', stuck: '#f59e0b' };
-    var html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
-      '<thead><tr style="color:var(--text-muted);text-align:left;border-bottom:1px solid var(--border-primary);">' +
-        '<th style="padding:8px 10px;">Name</th>' +
-        '<th style="padding:8px 10px;">Description</th>' +
-        '<th style="padding:8px 10px;">Status</th>' +
-        '<th style="padding:8px 10px;text-align:right;">Header Tokens</th>' +
-        '<th style="padding:8px 10px;text-align:right;">Body Fetches (7d)</th>' +
-        '<th style="padding:8px 10px;text-align:right;">Linked Reads (7d)</th>' +
-        '<th style="padding:8px 10px;">Last Used</th>' +
+
+    // Sort: problematic first (dead, stuck), then unused, then healthy
+    var order = { dead: 0, stuck: 1, unused: 2, healthy: 3 };
+    skills.sort(function(a, b) { return (order[a.status] || 9) - (order[b.status] || 9); });
+
+    var toggleBtn = '<div style="text-align:right;margin-bottom:8px;">'
+      + '<button onclick="_skillsShowDetails=!_skillsShowDetails;loadSkills();" style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);">'
+      + (_skillsShowDetails ? 'Hide details' : 'Show details') + '</button></div>';
+
+    var html = toggleBtn + '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
+      '<thead><tr style="color:var(--text-muted);text-align:left;border-bottom:1px solid var(--border-primary);font-size:11px;text-transform:uppercase;letter-spacing:1px;">' +
+        '<th style="padding:10px 10px;">Skill</th>' +
+        '<th style="padding:10px 10px;">What it does</th>' +
+        '<th style="padding:10px 10px;">Status</th>' +
+        '<th style="padding:10px 10px;">Last used</th>' +
+        (_skillsShowDetails
+          ? '<th style="padding:10px 10px;text-align:right;" title="Tokens always loaded into the agent\'s context">Always loaded</th>'
+            + '<th style="padding:10px 10px;text-align:right;" title="Times the agent decided to look at this skill in the last 7 days">Used (7d)</th>'
+          : '') +
       '</tr></thead><tbody>';
+
     skills.forEach(function(sk, idx) {
-      var desc = (sk.description || '').length > 60 ? sk.description.slice(0, 57) + '...' : (sk.description || '—');
-      var sc = _statusColor[sk.status] || '#94a3b8';
-      var badge = '<span style="background:' + sc + '22;color:' + sc + ';border:1px solid ' + sc + '44;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:600;">' + (sk.status || '?') + '</span>';
-      var lastUsed = sk.last_used_ts ? new Date(sk.last_used_ts * 1000).toLocaleDateString() : '—';
+      var desc = (sk.description || '').length > 80 ? sk.description.slice(0, 77) + '...' : (sk.description || '\u2014');
+      var lastUsed = sk.last_used_ts
+        ? _friendlyAgo(Math.floor(Date.now() / 1000) - sk.last_used_ts)
+        : (sk.status === 'dead' || sk.status === 'unused' ? '\u2014' : 'recently');
       var rowBg = idx % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)';
-      var detailId = 'skill-detail-' + idx;
-      html += '<tr style="background:' + rowBg + ';cursor:pointer;border-bottom:1px solid var(--border-primary);" onclick="var d=document.getElementById(\'' + detailId + '\');d.style.display=d.style.display===\'none\'?\'table-row\':\'none\'">' +
-        '<td style="padding:8px 10px;font-weight:600;color:var(--text-primary);">' + escHtml(sk.name) + '</td>' +
-        '<td style="padding:8px 10px;color:var(--text-muted);">' + escHtml(desc) + '</td>' +
-        '<td style="padding:8px 10px;">' + badge + '</td>' +
-        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.header_tokens || 0) + '</td>' +
-        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.body_fetch_count_7d || 0) + '</td>' +
-        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.linked_file_read_count_7d || 0) + '</td>' +
-        '<td style="padding:8px 10px;color:var(--text-muted);">' + lastUsed + '</td>' +
-      '</tr>' +
-      '<tr id="' + detailId + '" style="display:none;background:var(--bg-tertiary);">' +
-        '<td colspan="7" style="padding:12px 20px;color:var(--text-muted);font-size:12px;">' +
-          '<strong>Description:</strong> ' + escHtml(sk.description || '(none)') + '<br>' +
-          '<strong>Has body:</strong> ' + (sk.has_body ? 'yes' : 'no') + ' &nbsp;|&nbsp; ' +
-          '<strong>Has linked files:</strong> ' + (sk.has_linked_files ? 'yes' : 'no') +
-        '</td>' +
-      '</tr>';
+      html += '<tr style="background:' + rowBg + ';border-bottom:1px solid var(--border-primary);">' +
+        '<td style="padding:10px 10px;font-weight:600;color:var(--text-primary);">' + escHtml(sk.name) + '</td>' +
+        '<td style="padding:10px 10px;color:var(--text-muted);">' + escHtml(desc) + '</td>' +
+        '<td style="padding:10px 10px;">' + _skillStatusPill(sk.status) + '</td>' +
+        '<td style="padding:10px 10px;color:var(--text-muted);">' + lastUsed + '</td>' +
+        (_skillsShowDetails
+          ? '<td style="padding:10px 10px;text-align:right;color:var(--text-muted);">' + (sk.header_tokens || 0).toLocaleString() + ' tokens</td>'
+            + '<td style="padding:10px 10px;text-align:right;color:var(--text-muted);">' + ((sk.body_fetch_count_7d || 0) + (sk.linked_file_read_count_7d || 0)) + ' times</td>'
+          : '') +
+        '</tr>';
     });
     html += '</tbody></table>';
     listEl.innerHTML = html;
   } catch (e) {
-    if (listEl) listEl.innerHTML = '<div style="color:#ef4444;font-size:13px;padding:16px;">Failed to load skills: ' + e + '</div>';
+    if (listEl) listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Couldn\u2019t load right now.</div>';
   }
 }
 

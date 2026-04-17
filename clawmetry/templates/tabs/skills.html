@@ -1,8 +1,11 @@
 <div class="page" id="page-skills">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#127381; Skills Fidelity</h2>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">&#127381; Skills</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Shortcuts your agent can use. We flag ones that are never used so you can clean them up.</div>
+    </div>
     <button class="refresh-btn" onclick="loadSkills()">&#8635; Refresh</button>
   </div>
-  <div id="skills-summary-row" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;"></div>
+  <div id="skills-summary-row" style="display:flex;gap:12px;flex-wrap:wrap;margin:14px 0 16px 0;"></div>
   <div id="skills-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
 </div><!-- end page-skills -->
