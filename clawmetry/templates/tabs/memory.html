@@ -1,14 +1,100 @@
 <div class="page" id="page-memory">
-  <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadMemory()">↻ Refresh</button>
-  </div>
-  <div id="memory-analytics-panel" style="margin-bottom:12px"></div>
-  <div class="card" id="memory-list">Loading...</div>
-  <div class="file-viewer" id="file-viewer">
-    <div class="file-viewer-header">
-      <span class="file-viewer-title" id="file-viewer-title"></span>
-      <button class="file-viewer-close" onclick="closeFileViewer()">✕ Close</button>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">Memory</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Markdown files your agent reads and updates. Edit them too if you want.</div>
     </div>
-    <div class="file-viewer-content" id="file-viewer-content"></div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <div class="mem-view-tab" data-view="summary" onclick="memorySwitchView('summary')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg-secondary);border:1px solid var(--border-primary);color:var(--text-primary);">Summary</div>
+      <div class="mem-view-tab" data-view="all" onclick="memorySwitchView('all')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;border:1px solid transparent;color:var(--text-muted);">All files</div>
+      <button class="refresh-btn" onclick="loadMemory()" style="margin-left:8px;">&#8635;</button>
+    </div>
+  </div>
+
+  <!-- SUMMARY VIEW (IDE-style single surface) -->
+  <div id="memory-summary-view">
+    <div class="mem-ide" style="display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:520px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">
+
+      <!-- Main: sidebar + content -->
+      <div style="flex:1;display:flex;overflow:hidden;">
+
+        <!-- LEFT SIDEBAR: Explorer + History -->
+        <div class="mem-ide-sidebar" style="width:260px;min-width:220px;flex-shrink:0;display:flex;flex-direction:column;background:var(--bg-secondary);border-right:1px solid var(--border-primary);overflow-y:auto;">
+          <div class="mem-ide-section-header" style="padding:10px 12px 6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-muted);">Explorer</div>
+          <div id="selfconfig-files-inner" style="padding:0 4px 6px;">Loading...</div>
+
+          <div id="selfconfig-timeline-wrap" style="display:none;border-top:1px solid var(--border-primary);margin-top:4px;padding-top:4px;">
+            <div class="mem-ide-section-header" style="padding:10px 12px 6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-muted);display:flex;align-items:center;justify-content:space-between;">
+              <span id="selfconfig-timeline-heading">History</span>
+            </div>
+            <div id="selfconfig-timeline" style="padding:0 4px 8px;"></div>
+          </div>
+        </div>
+
+        <!-- RIGHT: content area -->
+        <div class="mem-ide-main" style="flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg-primary);">
+          <!-- File tab bar -->
+          <div class="mem-ide-tabbar" style="display:flex;align-items:center;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);min-height:32px;">
+            <div id="selfconfig-file-tab" style="display:flex;align-items:center;gap:8px;padding:6px 14px;background:var(--bg-primary);border-right:1px solid var(--border-primary);border-top:2px solid #6366f1;font-family:'JetBrains Mono','SF Mono',monospace;font-size:12px;color:var(--text-primary);">
+              <span id="selfconfig-reader-title">—</span>
+              <span id="selfconfig-reader-badge" style="display:none;background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:6px;padding:0 5px;font-size:9px;font-weight:700;letter-spacing:0.3px;">SENSITIVE</span>
+            </div>
+            <div style="flex:1;"></div>
+            <div id="selfconfig-editor-toolbar" style="display:none;align-items:center;gap:0;padding-right:8px;">
+              <div class="sc-mode-btn" data-mode="preview" onclick="selfconfigSetMode('preview')" style="padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-primary);border-bottom:2px solid #6366f1;">Preview</div>
+              <div class="sc-mode-btn" data-mode="edit" onclick="selfconfigSetMode('edit')" style="padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-muted);border-bottom:2px solid transparent;">Edit</div>
+            </div>
+          </div>
+
+          <!-- Past-version banner -->
+          <div id="selfconfig-reader-banner" style="display:none;padding:8px 14px;background:rgba(99,102,241,0.08);border-bottom:1px solid rgba(99,102,241,0.2);font-size:12px;color:var(--text-secondary);align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;">
+            <div id="selfconfig-reader-banner-text">Viewing a past version</div>
+            <div style="display:flex;gap:6px;">
+              <button onclick="selfconfigRestoreVersion()" style="background:rgba(99,102,241,0.2);border:1px solid rgba(99,102,241,0.4);color:#a5b4fc;border-radius:5px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">Restore this version</button>
+              <button onclick="selfconfigBackToNow()" style="background:transparent;border:1px solid rgba(99,102,241,0.4);color:#a5b4fc;border-radius:5px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">Back to now</button>
+            </div>
+          </div>
+
+          <!-- Preview body -->
+          <div id="selfconfig-reader-body" style="flex:1;padding:18px 24px 20px 24px;overflow-y:auto;font-size:14px;line-height:1.65;color:var(--text-primary);background:var(--bg-primary);"></div>
+
+          <!-- Editor body -->
+          <div id="selfconfig-editor-body" style="display:none;flex:1;flex-direction:column;overflow:hidden;background:var(--bg-primary);">
+            <div style="flex:1;display:flex;overflow:hidden;position:relative;">
+              <div id="selfconfig-editor-gutter" style="width:48px;padding:12px 8px 12px 14px;background:var(--bg-primary);color:var(--text-muted);font-family:'JetBrains Mono','SF Mono',monospace;font-size:12px;line-height:1.55;text-align:right;user-select:none;white-space:pre;overflow:hidden;border-right:1px solid var(--border-primary);"></div>
+              <textarea id="selfconfig-editor-textarea" spellcheck="false" oninput="selfconfigOnEditorInput()" onscroll="selfconfigSyncGutterScroll()" style="flex:1;padding:12px 18px;background:var(--bg-primary);border:none;color:var(--text-primary);font-family:'JetBrains Mono','SF Mono',monospace;font-size:13px;line-height:1.55;resize:none;outline:none;"></textarea>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:flex-end;gap:6px;padding:6px 14px;background:var(--bg-secondary);border-top:1px solid var(--border-primary);">
+              <button onclick="selfconfigDiscardEdit()" style="background:transparent;border:1px solid var(--border-primary);color:var(--text-muted);border-radius:4px;padding:4px 12px;font-size:11px;font-weight:600;cursor:pointer;">Discard</button>
+              <button id="selfconfig-save-btn" onclick="selfconfigSave()" style="background:#6366f1;border:1px solid #6366f1;color:white;border-radius:4px;padding:4px 14px;font-size:11px;font-weight:600;cursor:pointer;">Save</button>
+            </div>
+          </div>
+
+          <!-- Status bar -->
+          <div class="mem-ide-statusbar" style="display:flex;align-items:center;padding:5px 14px;background:var(--bg-secondary);border-top:1px solid var(--border-primary);color:var(--text-muted);font-family:'JetBrains Mono','SF Mono',monospace;font-size:10.5px;gap:14px;min-height:24px;">
+            <span id="selfconfig-status-file" style="color:var(--text-secondary);font-weight:600;"></span>
+            <span id="selfconfig-status-mode"></span>
+            <span id="selfconfig-status-size"></span>
+            <span id="selfconfig-status-updated"></span>
+            <span style="flex:1;"></span>
+            <span id="selfconfig-status-right" style="opacity:0.7;">Markdown</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ALL FILES VIEW -->
+  <div id="memory-all-view" style="display:none;">
+    <div id="memory-analytics-panel" style="margin-bottom:12px"></div>
+    <div class="card" id="memory-list">Loading...</div>
+    <div class="file-viewer" id="file-viewer">
+      <div class="file-viewer-header">
+        <span class="file-viewer-title" id="file-viewer-title"></span>
+        <button class="file-viewer-close" onclick="closeFileViewer()">&times; Close</button>
+      </div>
+      <div class="file-viewer-content" id="file-viewer-content"></div>
+    </div>
   </div>
 </div>

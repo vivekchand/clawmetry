@@ -370,7 +370,7 @@ def api_memory_files():
     return jsonify(_d._get_memory_files())
 
 
-@bp_memory.route("/api/file")
+@bp_memory.route("/api/file", methods=["GET"])
 def api_view_file():
     """Return the contents of a memory file."""
     import dashboard as _d
@@ -382,8 +382,40 @@ def api_view_file():
         return jsonify({"error": "File not found"}), 404
     try:
         with open(full, "r") as f:
-            content = f.read(100_000)
-        return jsonify({"path": path, "content": content})
+            content = f.read(500_000)
+        return jsonify({
+            "path": path,
+            "content": content,
+            "size": os.path.getsize(full),
+            "mtime": int(os.path.getmtime(full)),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp_memory.route("/api/file", methods=["POST", "PUT"])
+def api_write_file():
+    """Write content to a memory file (user-initiated edit)."""
+    import dashboard as _d
+    body = request.get_json(silent=True) or {}
+    path = body.get("path", "")
+    content = body.get("content")
+    if not path or content is None or not isinstance(content, str):
+        return jsonify({"error": "path and content (string) are required"}), 400
+    if len(content.encode("utf-8")) > 500_000:
+        return jsonify({"error": "File too large (>500 KB)"}), 413
+    full = os.path.normpath(os.path.join(_d.WORKSPACE, path))
+    if not full.startswith(os.path.normpath(_d.WORKSPACE)):
+        return jsonify({"error": "Access denied"}), 403
+    try:
+        os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
+        with open(full, "w", encoding="utf-8") as f:
+            f.write(content)
+        return jsonify({
+            "ok": True,
+            "path": path,
+            "size": os.path.getsize(full),
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

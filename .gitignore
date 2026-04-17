@@ -26,3 +26,4 @@ Thumbs.db
 # Logs
 *.log
 .clawmetry-fleet.db
+.claude/worktrees/

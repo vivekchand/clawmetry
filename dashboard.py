@@ -104,6 +104,10 @@ from routes.fleet_history import bp_fleet, bp_history
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
 from routes.meta import bp_auth, bp_gateway, bp_otel, bp_version, bp_version_impact, bp_clusters
 from routes.nemoclaw import bp_nemoclaw
+from routes.skills import bp_skills
+from routes.heartbeat import bp_heartbeat
+from routes.autonomy import bp_autonomy
+from routes.selfconfig import bp_selfconfig
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -3258,6 +3262,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
+    <div class="nav-tab" onclick="switchTab('skills')">Skills</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
@@ -3427,6 +3432,43 @@ function clawmetryLogout(){
 
 <!-- OVERVIEW (Split-Screen Hacker Dashboard) -->
 <div class="page active" id="page-overview">
+
+  <!-- PRIMARY KPI: Autonomy Score (#688) -->
+  <div id="autonomy-card" style="
+    background:var(--bg-secondary);
+    border:2px solid var(--border-primary);
+    border-radius:12px;
+    padding:18px 22px;
+    margin-bottom:14px;
+    box-shadow:var(--card-shadow);
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:16px;
+    align-items:start;
+  ">
+    <!-- Left: big number + subtitle -->
+    <div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">&#127919; Autonomy Score</div>
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+        <span id="autonomy-score-value" style="font-size:48px;font-weight:800;line-height:1;color:var(--text-primary);">--</span>
+        <span id="autonomy-trend-badge" style="font-size:13px;font-weight:600;padding:3px 8px;border-radius:20px;"></span>
+      </div>
+      <div id="autonomy-median-gap" style="font-size:13px;color:var(--text-muted);margin-top:6px;">Median time between nudges: --</div>
+      <div id="autonomy-trend-pct" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
+      <div style="font-size:10px;color:var(--text-muted);margin-top:10px;font-style:italic;line-height:1.4;max-width:420px;">
+        Alex&#8217;s definition: &#8220;Success = human nudges space out exponentially&#8221;
+      </div>
+    </div>
+    <!-- Right: sparkline -->
+    <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-align:right;">7-day autonomy ratio</div>
+      <svg id="autonomy-sparkline" width="160" height="48" viewBox="0 0 160 48" style="overflow:visible;">
+        <text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">No data yet</text>
+      </svg>
+      <div id="autonomy-samples" style="font-size:10px;color:var(--text-muted);margin-top:4px;text-align:right;"></div>
+    </div>
+  </div>
+
   <div class="refresh-bar" style="margin-bottom:6px;">
     <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>
@@ -3597,6 +3639,39 @@ function clawmetryLogout(){
   </div>
 
   <!-- old system health removed, now inside tasks pane -->
+
+  <!-- ❤️ Heartbeat Liveness Panel (#686) -->
+  <div id="heartbeat-panel" style="margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:14px 18px;box-shadow:var(--card-shadow);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x2764;&#xfe0f; Heartbeat</span>
+      <span id="hb-status-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:rgba(107,114,128,0.2);color:var(--text-muted);">...</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+      <!-- Pulse indicator -->
+      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:48px;">
+        <div id="hb-pulse-dot" style="width:20px;height:20px;border-radius:50%;background:#6b7280;animation:none;"></div>
+        <span id="hb-pulse-label" style="font-size:10px;color:var(--text-muted);">no data</span>
+      </div>
+      <!-- Stats -->
+      <div style="flex:1;display:flex;flex-direction:column;gap:5px;min-width:200px;">
+        <div style="font-size:12px;color:var(--text-primary);">Last beat: <span id="hb-last-beat" style="font-weight:600;color:var(--text-success);">--</span></div>
+        <div style="font-size:12px;color:var(--text-primary);">Cadence (24h): <span id="hb-cadence" style="font-weight:600;">-- / --</span> expected</div>
+        <div style="font-size:12px;color:var(--text-primary);">Idle replies: <span id="hb-ok-ratio" style="font-weight:600;color:var(--text-success);">--%</span> &middot; Action taken: <span id="hb-action-ratio" style="font-weight:600;">--%</span></div>
+      </div>
+      <!-- Recent beats sparkline -->
+      <div style="display:flex;flex-direction:column;gap:4px;align-items:center;">
+        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Last 10 beats</div>
+        <div id="hb-sparkline" style="display:flex;align-items:center;gap:4px;height:20px;">
+          <span style="font-size:11px;color:var(--text-muted);">--</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <style>
+    @keyframes hb-pulse-healthy { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(1.15)} }
+    @keyframes hb-pulse-drifting { 0%,100%{opacity:1} 50%{opacity:.4} }
+    @keyframes hb-pulse-missed { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(239,68,68,.4)} 70%{opacity:.8;box-shadow:0 0 0 8px rgba(239,68,68,0)} }
+  </style>
 </div>
 
 <!-- USAGE -->
@@ -4378,6 +4453,52 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-nemoclaw -->
 
+<!-- SELF-CONFIG DIFF VIEWER -->
+<div class="page" id="page-selfconfig">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:14px;font-weight:700;color:var(--text-primary);">Self-Configuration History</span>
+        <span style="font-size:11px;color:var(--text-muted);background:var(--bg-secondary);border:1px solid var(--border);border-radius:12px;padding:2px 10px;">agent-managed files</span>
+      </div>
+      <button class="refresh-btn" onclick="loadSelfConfig()">&#8635; Refresh</button>
+    </div>
+    <!-- Two-column layout: file list + detail pane -->
+    <div style="display:grid;grid-template-columns:220px 1fr;gap:12px;min-height:400px;">
+      <!-- File list (left) -->
+      <div id="selfconfig-file-list" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px;">
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:1px;margin-bottom:8px;">TRACKED FILES</div>
+        <div id="selfconfig-files-inner" style="color:var(--text-muted);font-size:12px;">Loading...</div>
+      </div>
+      <!-- Detail pane (right) -->
+      <div id="selfconfig-detail-pane" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+        <div id="selfconfig-empty-state" style="color:var(--text-muted);font-size:13px;padding:24px 0;text-align:center;">
+          Select a file on the left to view its revision history.
+        </div>
+        <div id="selfconfig-revisions-panel" style="display:none;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div style="font-size:13px;font-weight:700;color:var(--text-primary);" id="selfconfig-filename-heading"></div>
+            <div id="selfconfig-values-badge" style="display:none;background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:10px;padding:2px 10px;font-size:11px;font-weight:700;">&#9888; VALUES FILE</div>
+          </div>
+          <div id="selfconfig-revisions-list" style="font-size:12px;"></div>
+        </div>
+        <div id="selfconfig-diff-panel" style="display:none;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+            <button onclick="selfconfigBackToRevisions()" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);">&#8592; Back</button>
+            <span style="font-size:12px;font-weight:700;color:var(--text-primary);" id="selfconfig-diff-heading"></span>
+            <span id="selfconfig-diff-stats" style="font-size:11px;color:var(--text-muted);"></span>
+          </div>
+          <div id="selfconfig-diff-content" style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;line-height:1.6;overflow-x:auto;"></div>
+        </div>
+      </div>
+    </div>
+    <!-- Empty state when no edits ever detected -->
+    <div id="selfconfig-no-history-msg" style="display:none;margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:20px;text-align:center;">
+      <div style="font-size:13px;color:var(--text-muted);">No self-configuration edits yet. ClawMetry snapshots these files and shows diffs when your agent updates them.</div>
+    </div>
+  </div>
+</div><!-- end page-selfconfig -->
+
 <!-- SUB-AGENT TREE -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar">
@@ -4386,6 +4507,15 @@ function clawmetryLogout(){
   </div>
   <div id="subagents-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
 </div><!-- end page-subagents -->
+
+<div class="page" id="page-skills">
+  <div class="refresh-bar">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#127381; Skills Fidelity</h2>
+    <button class="refresh-btn" onclick="loadSkills()">&#8635; Refresh</button>
+  </div>
+  <div id="skills-summary-row" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;"></div>
+  <div id="skills-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
+</div><!-- end page-skills -->
 
 
 <script>
@@ -4786,6 +4916,7 @@ function switchTab(name) {
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
   if (name === 'usage') loadUsage();
+  if (name === 'skills') loadSkills();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
@@ -4803,11 +4934,230 @@ function switchTab(name) {
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
+  if (name === 'selfconfig') loadSelfConfig();
 }
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
 }
+
+async function loadSkills() {
+  var summaryEl = document.getElementById('skills-summary-row');
+  var listEl = document.getElementById('skills-list');
+  if (!summaryEl || !listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
+  try {
+    var data = await fetch('/api/skills').then(function(r){return r.json();});
+    var skills = data.skills || [];
+    var summary = data.summary || {};
+    var wastePct = summary.total_header_tokens > 0
+      ? Math.round(summary.wasted_header_tokens / summary.total_header_tokens * 100) : 0;
+    summaryEl.innerHTML =
+      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--text-primary);">' +
+        '<strong>' + (summary.total_installed||0) + '</strong> skills installed' +
+      '</div>' +
+      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:#ef4444;">' +
+        '<strong>' + (summary.dead_count||0) + '</strong> dead' +
+      '</div>' +
+      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:#f59e0b;">' +
+        '<strong>' + (summary.stuck_count||0) + '</strong> stuck' +
+      '</div>' +
+      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--text-muted);">' +
+        '<strong>' + (summary.wasted_header_tokens||0) + '</strong> tokens wasted on dead skills (' + wastePct + '%)' +
+      '</div>';
+    if (skills.length === 0) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No skills installed.</div>';
+      return;
+    }
+    var _statusColor = {healthy:'#22c55e', unused:'#94a3b8', dead:'#ef4444', stuck:'#f59e0b'};
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
+      '<thead><tr style="color:var(--text-muted);text-align:left;border-bottom:1px solid var(--border-primary);">' +
+        '<th style="padding:8px 10px;">Name</th>' +
+        '<th style="padding:8px 10px;">Description</th>' +
+        '<th style="padding:8px 10px;">Status</th>' +
+        '<th style="padding:8px 10px;text-align:right;">Header Tokens</th>' +
+        '<th style="padding:8px 10px;text-align:right;">Body Fetches (7d)</th>' +
+        '<th style="padding:8px 10px;text-align:right;">Linked Reads (7d)</th>' +
+        '<th style="padding:8px 10px;">Last Used</th>' +
+      '</tr></thead><tbody>';
+    skills.forEach(function(sk, idx) {
+      var desc = (sk.description||'').length > 60 ? sk.description.slice(0,57)+'...' : (sk.description||'—');
+      var sc = _statusColor[sk.status] || '#94a3b8';
+      var badge = '<span style="background:' + sc + '22;color:' + sc + ';border:1px solid ' + sc + '44;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:600;">' + (sk.status||'?') + '</span>';
+      var lastUsed = sk.last_used_ts ? new Date(sk.last_used_ts * 1000).toLocaleDateString() : '—';
+      var rowBg = idx % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)';
+      var detailId = 'skill-detail-' + idx;
+      html += '<tr style="background:' + rowBg + ';cursor:pointer;border-bottom:1px solid var(--border-primary);" onclick="var d=document.getElementById(\'' + detailId + '\');d.style.display=d.style.display===\'none\'?\'table-row\':\'none\'">' +
+        '<td style="padding:8px 10px;font-weight:600;color:var(--text-primary);">' + escHtml(sk.name) + '</td>' +
+        '<td style="padding:8px 10px;color:var(--text-muted);">' + escHtml(desc) + '</td>' +
+        '<td style="padding:8px 10px;">' + badge + '</td>' +
+        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.header_tokens||0) + '</td>' +
+        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.body_fetch_count_7d||0) + '</td>' +
+        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.linked_file_read_count_7d||0) + '</td>' +
+        '<td style="padding:8px 10px;color:var(--text-muted);">' + lastUsed + '</td>' +
+      '</tr>' +
+      '<tr id="' + detailId + '" style="display:none;background:var(--bg-tertiary);">' +
+        '<td colspan="7" style="padding:12px 20px;color:var(--text-muted);font-size:12px;">' +
+          '<strong>Description:</strong> ' + escHtml(sk.description||'(none)') + '<br>' +
+          '<strong>Has body:</strong> ' + (sk.has_body?'yes':'no') + ' &nbsp;|&nbsp; ' +
+          '<strong>Has linked files:</strong> ' + (sk.has_linked_files?'yes':'no') +
+        '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table>';
+    listEl.innerHTML = html;
+  } catch(e) {
+    if (listEl) listEl.innerHTML = '<div style="color:#ef4444;font-size:13px;padding:16px;">Failed to load skills: ' + e + '</div>';
+  }
+}
+
+// ═══ SELF-CONFIG DIFF VIEWER ═════════════════════════════════════════════════
+
+var _selfconfigCurrentFile = null;
+var _selfconfigRevisions = [];
+
+async function loadSelfConfig() {
+  var inner = document.getElementById('selfconfig-files-inner');
+  if (!inner) return;
+  inner.innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
+  // Reset detail pane
+  var detailEmpty = document.getElementById('selfconfig-empty-state');
+  var detailRevs = document.getElementById('selfconfig-revisions-panel');
+  var detailDiff = document.getElementById('selfconfig-diff-panel');
+  if (detailEmpty) { detailEmpty.style.display = 'block'; }
+  if (detailRevs) { detailRevs.style.display = 'none'; }
+  if (detailDiff) { detailDiff.style.display = 'none'; }
+  try {
+    var d = await fetchJsonWithTimeout('/api/selfconfig', 5000);
+    var files = d.files || [];
+    var hasAnyRevisions = files.some(function(f) { return f.revision_count > 0; });
+    var noHistMsg = document.getElementById('selfconfig-no-history-msg');
+    if (noHistMsg) noHistMsg.style.display = hasAnyRevisions ? 'none' : 'block';
+    if (!files.length) {
+      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">No tracked files found.</span>';
+      return;
+    }
+    inner.innerHTML = files.map(function(f) {
+      var badge = f.is_values_file
+        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;">VALUES</span>'
+        : '';
+      var revCount = f.revision_count > 0
+        ? ' <span style="color:var(--text-muted);font-size:10px;">(' + f.revision_count + ' rev' + (f.revision_count !== 1 ? 's' : '') + ')</span>'
+        : ' <span style="color:var(--text-muted);font-size:10px;">(no edits)</span>';
+      var existStyle = f.exists ? '' : 'opacity:0.5;';
+      return '<div onclick="loadSelfConfigHistory(\'' + f.name + '\')" style="cursor:pointer;padding:7px 8px;border-radius:6px;margin-bottom:4px;' + existStyle + 'border:1px solid transparent;transition:all 0.15s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'transparent\'">'
+        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + f.name + badge + '</div>'
+        + '<div style="font-size:11px;margin-top:2px;">' + revCount + '</div>'
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading files.</span>';
+  }
+}
+
+async function loadSelfConfigHistory(filename) {
+  _selfconfigCurrentFile = filename;
+  var emptyEl = document.getElementById('selfconfig-empty-state');
+  var revsPanel = document.getElementById('selfconfig-revisions-panel');
+  var diffPanel = document.getElementById('selfconfig-diff-panel');
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (diffPanel) diffPanel.style.display = 'none';
+  if (revsPanel) revsPanel.style.display = 'block';
+  var headEl = document.getElementById('selfconfig-filename-heading');
+  var badgeEl = document.getElementById('selfconfig-values-badge');
+  var listEl = document.getElementById('selfconfig-revisions-list');
+  if (headEl) headEl.textContent = filename;
+  if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
+  try {
+    var d = await fetchJsonWithTimeout('/api/selfconfig/' + encodeURIComponent(filename), 5000);
+    if (badgeEl) badgeEl.style.display = d.is_values_file ? 'block' : 'none';
+    _selfconfigRevisions = d.revisions || [];
+    if (!_selfconfigRevisions.length) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No revisions recorded yet. Edits will appear here automatically.</div>';
+      return;
+    }
+    listEl.innerHTML = _selfconfigRevisions.map(function(rev, idx) {
+      var dt = new Date(rev.ts * 1000).toLocaleString();
+      var delta = '';
+      if (idx < _selfconfigRevisions.length - 1) {
+        var prevSize = _selfconfigRevisions[idx + 1].size;
+        var diff = rev.size - prevSize;
+        delta = diff > 0
+          ? '<span style="color:#22c55e;font-weight:600;">+' + diff + '</span>'
+          : diff < 0
+            ? '<span style="color:#ef4444;font-weight:600;">' + diff + '</span>'
+            : '<span style="color:var(--text-muted);">±0</span>';
+      } else {
+        delta = '<span style="color:var(--text-muted);font-size:10px;">initial</span>';
+      }
+      var prevTs = idx < _selfconfigRevisions.length - 1 ? _selfconfigRevisions[idx + 1].ts : null;
+      var diffBtn = prevTs !== null
+        ? '<button onclick="loadSelfConfigDiff(\'' + filename + '\',' + prevTs + ',' + rev.ts + ')" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;color:var(--text-secondary);margin-left:8px;">View diff</button>'
+        : '';
+      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px;border-radius:6px;margin-bottom:4px;background:var(--bg-primary);border:1px solid var(--border-secondary);">'
+        + '<div>'
+        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + dt + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + rev.size.toLocaleString() + ' bytes &nbsp; ' + delta + '</div>'
+        + '</div>'
+        + diffBtn
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading history.</span>';
+  }
+}
+
+async function loadSelfConfigDiff(filename, fromTs, toTs) {
+  var diffPanel = document.getElementById('selfconfig-diff-panel');
+  var revsPanel = document.getElementById('selfconfig-revisions-panel');
+  var emptyEl   = document.getElementById('selfconfig-empty-state');
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (revsPanel) revsPanel.style.display = 'none';
+  if (diffPanel) diffPanel.style.display = 'block';
+  var headEl    = document.getElementById('selfconfig-diff-heading');
+  var statsEl   = document.getElementById('selfconfig-diff-stats');
+  var contentEl = document.getElementById('selfconfig-diff-content');
+  if (headEl) headEl.textContent = filename + ' diff';
+  if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);">Loading diff...</span>';
+  try {
+    var url = '/api/selfconfig/' + encodeURIComponent(filename) + '/diff?from=' + fromTs + '&to=' + toTs;
+    var d = await fetchJsonWithTimeout(url, 8000);
+    if (statsEl) {
+      statsEl.innerHTML = '<span style="color:#22c55e;">+' + d.added_chars + '</span> / <span style="color:#ef4444;">-' + d.removed_chars + '</span> chars'
+        + (d.truncated ? ' <span style="color:#f59e0b;">(truncated)</span>' : '');
+    }
+    var lines = d.diff_lines || [];
+    if (!lines.length) {
+      contentEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No changes detected between these two versions.</div>';
+      return;
+    }
+    contentEl.innerHTML = lines.map(function(line) {
+      var txt = (line.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      if (line.type === 'added') {
+        return '<div style="background:rgba(34,197,94,0.12);color:#86efac;padding:1px 6px;white-space:pre;">' + txt + '</div>';
+      } else if (line.type === 'removed') {
+        return '<div style="background:rgba(239,68,68,0.12);color:#fca5a5;padding:1px 6px;white-space:pre;">' + txt + '</div>';
+      } else if (line.type === 'meta') {
+        return '<div style="color:var(--text-muted);padding:1px 6px;white-space:pre;font-size:11px;">' + txt + '</div>';
+      } else {
+        return '<div style="color:var(--text-secondary);padding:1px 6px;white-space:pre;">' + txt + '</div>';
+      }
+    }).join('');
+  } catch(e) {
+    if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading diff.</span>';
+  }
+}
+
+function selfconfigBackToRevisions() {
+  var diffPanel = document.getElementById('selfconfig-diff-panel');
+  var revsPanel = document.getElementById('selfconfig-revisions-panel');
+  if (diffPanel) diffPanel.style.display = 'none';
+  if (revsPanel && _selfconfigCurrentFile) {
+    revsPanel.style.display = 'block';
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 
 var _sunSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
 var _moonSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
@@ -5042,6 +5392,130 @@ async function killSession(sessionId) {
   } catch(e) { alert('Error: ' + e.message); }
 }
 
+// ---------------------------------------------------------------------------
+// Autonomy Score loader (#688)
+// ---------------------------------------------------------------------------
+async function loadAutonomy() {
+  var scoreEl = document.getElementById('autonomy-score-value');
+  var badgeEl = document.getElementById('autonomy-trend-badge');
+  var gapEl   = document.getElementById('autonomy-median-gap');
+  var trendEl = document.getElementById('autonomy-trend-pct');
+  var svgEl   = document.getElementById('autonomy-sparkline');
+  var sampEl  = document.getElementById('autonomy-samples');
+  if (!scoreEl) return;
+  try {
+    var d = await fetchJsonWithTimeout('/api/autonomy', 5000);
+
+    // Score
+    if (d.score == null) {
+      scoreEl.textContent = '--';
+      if (gapEl) gapEl.textContent = 'No data yet \u2014 start using your agent to track autonomy';
+      if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; }
+      if (trendEl) trendEl.textContent = '';
+      if (sampEl) sampEl.textContent = '';
+      return;
+    }
+    scoreEl.textContent = d.score.toFixed(2);
+
+    // Median gap
+    if (gapEl && d.median_gap_seconds_7d != null) {
+      var secs = Math.round(d.median_gap_seconds_7d);
+      var hrs = Math.floor(secs / 3600);
+      var mins = Math.floor((secs % 3600) / 60);
+      var s = secs % 60;
+      var parts = [];
+      if (hrs > 0) parts.push(hrs + 'h');
+      if (mins > 0) parts.push(mins + 'm');
+      parts.push(s + 's');
+      gapEl.textContent = 'Median time between nudges: ' + parts.join(' ');
+    } else if (gapEl) {
+      gapEl.textContent = 'Median time between nudges: --';
+    }
+
+    // Trend badge
+    if (badgeEl) {
+      var dir = d.trend_direction || 'flat';
+      if (dir === 'improving') {
+        badgeEl.textContent = '\u2191 improving';
+        badgeEl.style.background = 'rgba(16,185,129,0.18)';
+        badgeEl.style.color = '#10b981';
+        badgeEl.style.border = '1px solid rgba(16,185,129,0.35)';
+      } else if (dir === 'declining') {
+        badgeEl.textContent = '\u2193 declining';
+        badgeEl.style.background = 'rgba(239,68,68,0.18)';
+        badgeEl.style.color = '#ef4444';
+        badgeEl.style.border = '1px solid rgba(239,68,68,0.35)';
+      } else {
+        badgeEl.textContent = '\u2015 steady';
+        badgeEl.style.background = 'rgba(100,116,139,0.18)';
+        badgeEl.style.color = 'var(--text-muted)';
+        badgeEl.style.border = '1px solid var(--border-primary)';
+      }
+    }
+
+    // Trend pct from slope
+    if (trendEl && d.trend_slope_7d != null) {
+      var pct = Math.round(d.trend_slope_7d * 100);
+      if (pct > 0) trendEl.textContent = '+' + pct + '% this week';
+      else if (pct < 0) trendEl.textContent = pct + '% this week';
+      else trendEl.textContent = '';
+    }
+
+    // Samples
+    if (sampEl && d.samples_7d != null) {
+      sampEl.textContent = d.samples_7d + ' user msg' + (d.samples_7d !== 1 ? 's' : '') + ' in 7d';
+    }
+
+    // Sparkline — inline SVG of daily autonomy_ratio
+    if (svgEl && d.series_daily && d.series_daily.length > 0) {
+      var ratios = d.series_daily.map(function(e){ return e.autonomy_ratio; });
+      var valid = ratios.filter(function(v){ return v != null; });
+      if (valid.length >= 2) {
+        var W = 160, H = 48, pad = 4;
+        var minV = 0, maxV = 1;
+        var n = ratios.length;
+        var step = (W - pad * 2) / Math.max(n - 1, 1);
+        var pts = ratios.map(function(v, i) {
+          var x = pad + i * step;
+          var y = v == null ? null : H - pad - (v - minV) / (maxV - minV) * (H - pad * 2);
+          return {x: x, y: y, v: v};
+        });
+        // Build polyline from non-null points
+        var pathD = '';
+        pts.forEach(function(p, i) {
+          if (p.y == null) return;
+          if (!pathD || pts.slice(0, i).every(function(q){ return q.y == null; })) {
+            pathD += 'M' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+          } else {
+            pathD += ' L' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+          }
+        });
+        var svgContent = '';
+        // Area fill
+        var firstP = pts.find(function(p){ return p.y != null; });
+        var lastP = null; pts.forEach(function(p){ if(p.y != null) lastP = p; });
+        if (firstP && lastP && pathD) {
+          var fillD = pathD + ' L' + lastP.x.toFixed(1) + ',' + (H - pad) + ' L' + firstP.x.toFixed(1) + ',' + (H - pad) + ' Z';
+          svgContent += '<path d="' + fillD + '" fill="rgba(99,102,241,0.15)" stroke="none"/>';
+          svgContent += '<path d="' + pathD + '" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+        }
+        // Dots
+        pts.forEach(function(p) {
+          if (p.y == null) return;
+          svgContent += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="2.5" fill="#6366f1"/>';
+        });
+        svgEl.innerHTML = svgContent;
+      } else {
+        svgEl.innerHTML = '<text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">Not enough data</text>';
+      }
+    }
+  } catch(e) {
+    console.warn('autonomy load failed', e);
+    if (scoreEl) scoreEl.textContent = '--';
+    if (gapEl) gapEl.textContent = 'No data yet \u2014 start using your agent to track autonomy';
+  }
+}
+
 async function loadAll() {
   try {
     // Render overview quickly; do not block on heavy usage aggregation.
@@ -5049,6 +5523,7 @@ async function loadAll() {
 
     // Start secondary panels immediately.
     startActiveTasksRefresh();
+    loadAutonomy().catch(function(e){console.warn('autonomy failed',e)});
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
@@ -5056,6 +5531,7 @@ async function loadAll() {
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
+    if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -5113,6 +5589,94 @@ async function loadReliabilityCard() {
     el = document.getElementById('reliability-detail-lt');
     if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
   } catch(e) { console.warn('reliability card load failed', e); }
+}
+
+async function loadHeartbeat() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/heartbeat', 5000);
+    var dot = document.getElementById('hb-pulse-dot');
+    var label = document.getElementById('hb-pulse-label');
+    var badge = document.getElementById('hb-status-badge');
+    var lastBeat = document.getElementById('hb-last-beat');
+    var cadenceEl = document.getElementById('hb-cadence');
+    var okRatioEl = document.getElementById('hb-ok-ratio');
+    var actionRatioEl = document.getElementById('hb-action-ratio');
+    var sparkEl = document.getElementById('hb-sparkline');
+
+    if (!dot) return;
+
+    var status = d.status || 'never';
+    var colors = { healthy: '#22c55e', drifting: '#f59e0b', missed: '#ef4444', never: '#6b7280' };
+    var anims = {
+      healthy: 'hb-pulse-healthy 2s ease-in-out infinite',
+      drifting: 'hb-pulse-drifting 1.5s ease-in-out infinite',
+      missed: 'hb-pulse-missed 1.2s ease-in-out infinite',
+      never: 'none'
+    };
+    var badgeColors = {
+      healthy: { bg: 'rgba(34,197,94,0.15)', color: '#4ade80' },
+      drifting: { bg: 'rgba(245,158,11,0.15)', color: '#fbbf24' },
+      missed: { bg: 'rgba(239,68,68,0.15)', color: '#f87171' },
+      never: { bg: 'rgba(107,114,128,0.15)', color: '#9ca3af' }
+    };
+
+    dot.style.background = colors[status] || colors.never;
+    dot.style.animation = anims[status] || 'none';
+    if (label) label.textContent = status;
+
+    if (badge) {
+      var bc = badgeColors[status] || badgeColors.never;
+      badge.style.background = bc.bg;
+      badge.style.color = bc.color;
+      badge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    }
+
+    // Last beat age
+    if (lastBeat) {
+      if (d.last_heartbeat_age_seconds !== null && d.last_heartbeat_age_seconds !== undefined) {
+        var age = d.last_heartbeat_age_seconds;
+        var ageStr;
+        if (age < 60) ageStr = age + 's ago';
+        else if (age < 3600) ageStr = Math.floor(age / 60) + ' min ago';
+        else if (age < 86400) ageStr = Math.floor(age / 3600) + 'h ago';
+        else ageStr = Math.floor(age / 86400) + 'd ago';
+        lastBeat.textContent = ageStr;
+        lastBeat.style.color = colors[status] || '#9ca3af';
+      } else {
+        lastBeat.textContent = 'never';
+        lastBeat.style.color = '#9ca3af';
+      }
+    }
+
+    // Cadence
+    if (cadenceEl && d.cadence_24h) {
+      var c = d.cadence_24h;
+      var pct = c.expected_beats > 0 ? Math.round(c.on_time_ratio * 100) : 0;
+      cadenceEl.textContent = c.actual_beats + ' / ' + c.expected_beats + ' expected (' + pct + '%)';
+    }
+
+    // OK vs Action ratios
+    if (okRatioEl && d.ok_vs_action_24h) {
+      var oa = d.ok_vs_action_24h;
+      okRatioEl.textContent = Math.round(oa.ok_ratio * 100) + '%';
+      if (actionRatioEl) {
+        var actionPct = Math.round((1 - oa.ok_ratio) * 100);
+        actionRatioEl.textContent = actionPct + '%';
+        actionRatioEl.style.color = actionPct > 20 ? '#f87171' : '#fbbf24';
+      }
+    }
+
+    // Sparkline of last 10 beats
+    if (sparkEl && d.recent_beats && d.recent_beats.length > 0) {
+      sparkEl.innerHTML = d.recent_beats.map(function(b) {
+        var c = b.outcome === 'ok' ? '#22c55e' : '#f59e0b';
+        var title = b.outcome === 'ok' ? 'HEARTBEAT_OK' : 'Action taken';
+        return '<span title="' + title + '" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + c + ';"></span>';
+      }).join('');
+    } else if (sparkEl) {
+      sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">no beats yet</span>';
+    }
+  } catch(e) { console.warn('heartbeat panel load failed', e); }
 }
 
 async function loadMiniWidgets(overview, usage) {
@@ -7712,6 +8276,7 @@ def detect_config(args=None):
 
     # ── Register blueprints (Phase 4) ───────────────────────────────────────
     app.register_blueprint(bp_alerts)
+    app.register_blueprint(bp_autonomy)
     app.register_blueprint(bp_auth)
     app.register_blueprint(bp_brain)
     app.register_blueprint(bp_budget)
@@ -7734,6 +8299,9 @@ def detect_config(args=None):
     app.register_blueprint(bp_version_impact)
     app.register_blueprint(bp_clusters)
     app.register_blueprint(bp_nemoclaw)
+    app.register_blueprint(bp_skills)
+    app.register_blueprint(bp_heartbeat)
+    app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_openapi)
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
@@ -7961,6 +8529,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
+    <div class="nav-tab" onclick="switchTab('skills')">Skills</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
@@ -8039,6 +8608,8 @@ DASHBOARD_HTML = r"""
 <!-- SUB-AGENT TREE (theme 2) -->
 {% include 'tabs/subagents.html' %}
 
+<!-- SKILLS FIDELITY (#687) -->
+{% include 'tabs/skills.html' %}
 
 {% include 'tabs/logs.html' %}
 

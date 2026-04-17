@@ -246,6 +246,61 @@ class TestTranscripts:
         assert isinstance(d, (list, dict))
 
 
+class TestSkills:
+    """Tests for /api/skills — skills fidelity telemetry (GH #687)."""
+
+    def test_skills_list_ok(self, api, base_url):
+        r = api.get(f"{base_url}/api/skills")
+        assert r.status_code == 200
+        d = r.json()
+        assert "skills" in d
+        assert "summary" in d
+
+    def test_summary_has_counts(self, api, base_url):
+        r = api.get(f"{base_url}/api/skills")
+        d = r.json()
+        assert "total_installed" in d["summary"]
+        assert "dead_count" in d["summary"]
+
+    def test_skills_is_list(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skills"))
+        assert isinstance(d["skills"], list)
+
+    def test_summary_keys(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skills"))
+        s = d["summary"]
+        assert_keys(s, "total_installed", "dead_count", "stuck_count",
+                    "total_header_tokens", "wasted_header_tokens")
+
+    def test_skill_shape_when_present(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skills"))
+        for skill in d["skills"]:
+            assert_keys(
+                skill,
+                "name",
+                "description",
+                "header_tokens",
+                "has_body",
+                "has_linked_files",
+                "body_fetch_count_7d",
+                "linked_file_read_count_7d",
+                "status",
+            )
+            assert skill["status"] in ("healthy", "dead", "stuck", "unused")
+            assert isinstance(skill["header_tokens"], int)
+            assert isinstance(skill["body_fetch_count_7d"], int)
+            assert isinstance(skill["linked_file_read_count_7d"], int)
+
+    def test_summary_counts_non_negative(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/skills"))
+        s = d["summary"]
+        assert s["total_installed"] >= 0
+        assert s["dead_count"] >= 0
+        assert s["stuck_count"] >= 0
+        assert s["total_header_tokens"] >= 0
+        assert s["wasted_header_tokens"] >= 0
+
+
 class TestUsage:
     def test_status(self, api, base_url):
         r = get(api, base_url, "/api/usage")
@@ -415,6 +470,74 @@ class TestHeartbeatStatus:
         assert "sync" in ss
         assert "resources" in ss
         assert ss["resources"] in ("ok", "warn", "critical")
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat Liveness Panel (#686)
+# ---------------------------------------------------------------------------
+
+
+class TestHeartbeat:
+    def test_heartbeat_endpoint_ok(self, api, base_url):
+        """Heartbeat liveness endpoint returns 200 with correct shape."""
+        r = api.get(f"{base_url}/api/heartbeat")
+        assert r.status_code == 200
+        d = r.json()
+        assert "status" in d
+        assert d["status"] in ["healthy", "drifting", "missed", "never"]
+        assert "cadence_24h" in d
+
+    def test_heartbeat_required_keys(self, api, base_url):
+        """All required top-level keys are present."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        assert_keys(
+            d,
+            "last_heartbeat_ts",
+            "expected_interval_seconds",
+            "status",
+            "cadence_24h",
+            "ok_vs_action_24h",
+            "recent_beats",
+        )
+
+    def test_heartbeat_cadence_shape(self, api, base_url):
+        """cadence_24h has expected_beats, actual_beats, on_time_ratio."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        c = d["cadence_24h"]
+        assert isinstance(c, dict)
+        assert_keys(c, "expected_beats", "actual_beats", "on_time_ratio")
+        assert c["expected_beats"] > 0, "expected_beats should be positive"
+        assert c["actual_beats"] >= 0, "actual_beats should be non-negative"
+        assert 0.0 <= c["on_time_ratio"] <= 1.0, "on_time_ratio should be in [0, 1]"
+
+    def test_heartbeat_ok_vs_action_shape(self, api, base_url):
+        """ok_vs_action_24h has heartbeat_ok_count, action_taken_count, ok_ratio."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        oa = d["ok_vs_action_24h"]
+        assert isinstance(oa, dict)
+        assert_keys(oa, "heartbeat_ok_count", "action_taken_count", "ok_ratio")
+        assert oa["heartbeat_ok_count"] >= 0
+        assert oa["action_taken_count"] >= 0
+        assert 0.0 <= oa["ok_ratio"] <= 1.0
+
+    def test_heartbeat_recent_beats_is_list(self, api, base_url):
+        """recent_beats is a list with at most 10 entries."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        assert isinstance(d["recent_beats"], list)
+        assert len(d["recent_beats"]) <= 10
+
+    def test_heartbeat_interval_positive(self, api, base_url):
+        """expected_interval_seconds is a positive integer."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        assert isinstance(d["expected_interval_seconds"], int)
+        assert d["expected_interval_seconds"] > 0
+
+    def test_heartbeat_never_state(self, api, base_url):
+        """If no heartbeats recorded, status is 'never' and ts is 0."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat"))
+        if d["status"] == "never":
+            assert d["last_heartbeat_ts"] == 0
+            assert d["last_heartbeat_age_seconds"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -815,3 +938,141 @@ class TestPluginTrend:
         """days param limits the response window."""
         d = assert_ok(get(api, base_url, "/api/usage/by-plugin/trend?days=7"))
         assert len(d["days"]) == 7, f"Expected 7 days, got {len(d['days'])}"
+
+
+# ---------------------------------------------------------------------------
+# Autonomy Score (#688)
+# ---------------------------------------------------------------------------
+
+
+class TestAutonomy:
+    def test_autonomy_endpoint_ok(self, api, base_url):
+        r = api.get(f"{base_url}/api/autonomy")
+        assert r.status_code == 200
+        d = r.json()
+        assert "score" in d
+        assert "trend_direction" in d
+
+    def test_autonomy_empty_ok(self, api, base_url):
+        r = api.get(f"{base_url}/api/autonomy")
+        d = r.json()
+        # Empty case: all-nullable fields ok
+        assert d["trend_direction"] in ["improving", "declining", "flat", "no_data"]
+
+    def test_autonomy_structure(self, api, base_url):
+        """Response always has all expected keys."""
+        d = assert_ok(get(api, base_url, "/api/autonomy"))
+        assert_keys(
+            d,
+            "score",
+            "median_gap_seconds_7d",
+            "autonomy_ratio_7d",
+            "trend_slope_7d",
+            "trend_direction",
+            "samples_7d",
+            "series_daily",
+        )
+
+    def test_autonomy_series_daily_is_list(self, api, base_url):
+        """series_daily is always a list."""
+        d = assert_ok(get(api, base_url, "/api/autonomy"))
+        assert isinstance(d["series_daily"], list), "series_daily must be a list"
+
+    def test_autonomy_score_range(self, api, base_url):
+        """If score is not null it must be in [0, 1]."""
+        d = assert_ok(get(api, base_url, "/api/autonomy"))
+        if d["score"] is not None:
+            assert 0.0 <= d["score"] <= 1.0, f"score out of range: {d['score']}"
+
+
+# ---------------------------------------------------------------------------
+# Self-Configuration Diff Viewer (#689)
+# ---------------------------------------------------------------------------
+
+
+class TestSelfConfig:
+    """Tests for issue #689 — self-configuration diff viewer."""
+
+    def test_selfconfig_list_ok(self, api, base_url):
+        """GET /api/selfconfig returns HTTP 200 with files list."""
+        r = get(api, base_url, "/api/selfconfig")
+        assert r.status_code == 200, (
+            f"Expected 200 for {r.url}, got {r.status_code}: {r.text[:200]}"
+        )
+        d = r.json()
+        assert "files" in d, "Response must contain 'files' key"
+
+    def test_selfconfig_list_structure(self, api, base_url):
+        """Each file entry has required keys."""
+        d = assert_ok(get(api, base_url, "/api/selfconfig"))
+        for f in d.get("files", []):
+            for key in ("name", "tracked", "exists", "revision_count", "is_values_file"):
+                assert key in f, f"Missing key '{key}' in file entry: {f}"
+
+    def test_selfconfig_soul_is_values_file(self, api, base_url):
+        """SOUL.md must have is_values_file=True; other files must not."""
+        d = assert_ok(get(api, base_url, "/api/selfconfig"))
+        for f in d.get("files", []):
+            if f["name"] == "SOUL.md":
+                assert f["is_values_file"] is True, "SOUL.md must be a values file"
+            else:
+                assert f["is_values_file"] is False, (
+                    f"{f['name']} should not be a values file"
+                )
+
+    def test_selfconfig_storage_path_present(self, api, base_url):
+        """Response includes storage_path key."""
+        d = assert_ok(get(api, base_url, "/api/selfconfig"))
+        assert "storage_path" in d, "Response must include 'storage_path'"
+
+    def test_unknown_file_404(self, api, base_url):
+        """Requesting a non-tracked file returns 404 or graceful empty."""
+        r = get(api, base_url, "/api/selfconfig/nonexistent_file_xyz.md")
+        assert r.status_code in [200, 404], (
+            f"Expected 200 or 404, got {r.status_code}: {r.text[:200]}"
+        )
+
+    def test_selfconfig_known_file_200(self, api, base_url):
+        """Requesting a tracked file name returns 200."""
+        r = get(api, base_url, "/api/selfconfig/SOUL.md")
+        assert r.status_code == 200, (
+            f"Expected 200 for SOUL.md, got {r.status_code}: {r.text[:200]}"
+        )
+        d = r.json()
+        assert "name" in d and d["name"] == "SOUL.md"
+        assert "revisions" in d, "Response must contain 'revisions' list"
+
+    def test_selfconfig_diff_missing_params(self, api, base_url):
+        """Diff endpoint returns 400 when from/to params are missing."""
+        r = get(api, base_url, "/api/selfconfig/SOUL.md/diff")
+        assert r.status_code == 400, (
+            f"Expected 400 when diff params missing, got {r.status_code}"
+        )
+
+    def test_selfconfig_content_without_ts_returns_live(self, api, base_url):
+        """Content endpoint without ts returns the live file contents."""
+        r = get(api, base_url, "/api/selfconfig/SOUL.md/content")
+        assert r.status_code == 200, (
+            f"Expected 200 for live content, got {r.status_code}"
+        )
+        d = r.json()
+        assert d["name"] == "SOUL.md"
+        assert "content" in d
+        assert "exists" in d
+
+    def test_selfconfig_diff_has_summary(self, api, base_url):
+        """Diff endpoint now returns a plain-English summary + line counts."""
+        # Fetch revisions to find a pair to diff
+        rev_r = get(api, base_url, "/api/selfconfig/USER.md")
+        if rev_r.status_code != 200:
+            return  # env without USER.md — skip
+        revs = rev_r.json().get("revisions", [])
+        if len(revs) < 2:
+            return  # only one revision — nothing to diff
+        r = get(api, base_url, f"/api/selfconfig/USER.md/diff?from={revs[1]['ts']}&to={revs[0]['ts']}")
+        assert r.status_code == 200
+        d = r.json()
+        assert "summary" in d
+        assert isinstance(d["summary"], str)
+        assert "added_lines" in d
+        assert "removed_lines" in d

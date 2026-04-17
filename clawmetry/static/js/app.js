@@ -516,6 +516,7 @@ function switchTab(name) {
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
   if (name === 'usage') loadUsage();
+  if (name === 'skills') loadSkills();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
@@ -538,6 +539,855 @@ function switchTab(name) {
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
+}
+
+// ── Human-friendly helpers (shared) ──────────────────────────────────────────
+function _friendlyDuration(secs) {
+  if (secs == null || isNaN(secs)) return '—';
+  secs = Math.round(secs);
+  if (secs < 60) return secs + ' seconds';
+  if (secs < 3600) {
+    var m = Math.round(secs / 60);
+    return m + (m === 1 ? ' minute' : ' minutes');
+  }
+  if (secs < 86400) {
+    var h = Math.floor(secs / 3600);
+    var mm = Math.round((secs % 3600) / 60);
+    if (mm === 0) return h + (h === 1 ? ' hour' : ' hours');
+    return h + 'h ' + mm + 'm';
+  }
+  var d = Math.round(secs / 86400);
+  return d + (d === 1 ? ' day' : ' days');
+}
+
+function _friendlyAgo(seconds) {
+  if (seconds == null) return 'never';
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) {
+    var m = Math.floor(seconds / 60);
+    return m + (m === 1 ? ' minute ago' : ' minutes ago');
+  }
+  if (seconds < 86400) {
+    var h = Math.floor(seconds / 3600);
+    return h + (h === 1 ? ' hour ago' : ' hours ago');
+  }
+  var d = Math.floor(seconds / 86400);
+  return d + (d === 1 ? ' day ago' : ' days ago');
+}
+
+function _friendlyTimestamp(ts) {
+  if (!ts) return '—';
+  var d = new Date(ts * 1000);
+  var now = new Date();
+  var sameDay = d.toDateString() === now.toDateString();
+  var yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  var wasYesterday = d.toDateString() === yesterday.toDateString();
+  var time = d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  if (sameDay) return 'Today at ' + time;
+  if (wasYesterday) return 'Yesterday at ' + time;
+  var daysAgo = Math.floor((now - d) / 86400000);
+  if (daysAgo < 7) return d.toLocaleDateString([], {weekday:'long'}) + ' at ' + time;
+  return d.toLocaleDateString([], {month:'short', day:'numeric'}) + ' at ' + time;
+}
+
+function _friendlyBytes(n) {
+  if (n == null) return '—';
+  if (n < 1024) return n + ' bytes';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// ── Autonomy: how independently your agent runs ──────────────────────────────
+async function loadAutonomy() {
+  var labelEl = document.getElementById('autonomy-score-label');
+  var badgeEl = document.getElementById('autonomy-trend-badge');
+  var gapEl   = document.getElementById('autonomy-median-gap');
+  var trendEl = document.getElementById('autonomy-trend-pct');
+  var svgEl   = document.getElementById('autonomy-sparkline');
+  var sampEl  = document.getElementById('autonomy-samples');
+  if (!labelEl) return;
+
+  function scoreToLabel(s) {
+    if (s >= 0.8) return { text: 'Fully independent', color: '#22c55e' };
+    if (s >= 0.5) return { text: 'Mostly independent', color: '#84cc16' };
+    if (s >= 0.2) return { text: 'Getting there', color: '#f59e0b' };
+    return { text: 'Needs guidance', color: '#94a3b8' };
+  }
+
+  try {
+    var d = await (typeof fetchJsonWithTimeout === 'function'
+      ? fetchJsonWithTimeout('/api/autonomy', 5000)
+      : fetch('/api/autonomy').then(function(r){return r.json();}));
+
+    if (d.score == null) {
+      labelEl.textContent = 'Just getting started';
+      labelEl.style.color = 'var(--text-muted)';
+      if (gapEl) gapEl.textContent = 'Use your agent a bit and we\u2019ll show how independent it\u2019s becoming.';
+      if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; badgeEl.style.border = ''; }
+      if (trendEl) trendEl.textContent = '';
+      if (sampEl) sampEl.textContent = '';
+      return;
+    }
+
+    var lbl = scoreToLabel(d.score);
+    labelEl.textContent = lbl.text;
+    labelEl.style.color = lbl.color;
+
+    if (gapEl && d.median_gap_seconds_7d != null) {
+      gapEl.textContent = 'You check in about every ' + _friendlyDuration(d.median_gap_seconds_7d) + '.';
+    } else if (gapEl) {
+      gapEl.textContent = '';
+    }
+
+    if (badgeEl) {
+      var dir = d.trend_direction || 'flat';
+      var presets = {
+        improving:  { text: '\u2191 getting more independent', bg: 'rgba(34,197,94,0.15)', color: '#22c55e', border: 'rgba(34,197,94,0.4)' },
+        declining:  { text: '\u2193 needs more guidance',      bg: 'rgba(239,68,68,0.15)', color: '#ef4444', border: 'rgba(239,68,68,0.4)' },
+        flat:       { text: 'steady this week',                bg: 'rgba(100,116,139,0.12)', color: 'var(--text-muted)', border: 'var(--border-primary)' },
+        no_data:    { text: 'no data yet',                     bg: 'rgba(100,116,139,0.12)', color: 'var(--text-muted)', border: 'var(--border-primary)' }
+      };
+      var p = presets[dir] || presets.flat;
+      badgeEl.textContent = p.text;
+      badgeEl.style.background = p.bg;
+      badgeEl.style.color = p.color;
+      badgeEl.style.border = '1px solid ' + p.border;
+    }
+
+    if (trendEl) trendEl.textContent = '';
+
+    if (sampEl && d.samples_7d != null) {
+      sampEl.textContent = d.samples_7d + ' check-in' + (d.samples_7d !== 1 ? 's' : '') + ' this week';
+    }
+
+    if (svgEl && d.series_daily && d.series_daily.length > 0) {
+      var ratios = d.series_daily.map(function(e){ return e.autonomy_ratio; });
+      var valid = ratios.filter(function(v){ return v != null; });
+      if (valid.length >= 2) {
+        var W = 160, H = 48, pad = 4;
+        var n = ratios.length;
+        var step = (W - pad * 2) / Math.max(n - 1, 1);
+        var pts = ratios.map(function(v, i) {
+          var x = pad + i * step;
+          var y = v == null ? null : H - pad - v * (H - pad * 2);
+          return {x: x, y: y};
+        });
+        var pathD = '';
+        pts.forEach(function(p, i) {
+          if (p.y == null) return;
+          if (!pathD || pts.slice(0, i).every(function(q){ return q.y == null; })) {
+            pathD += 'M' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+          } else {
+            pathD += ' L' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+          }
+        });
+        var svgContent = '';
+        var firstP = pts.find(function(p){ return p.y != null; });
+        var lastP = null; pts.forEach(function(p){ if(p.y != null) lastP = p; });
+        if (firstP && lastP && pathD) {
+          var fillD = pathD + ' L' + lastP.x.toFixed(1) + ',' + (H - pad) + ' L' + firstP.x.toFixed(1) + ',' + (H - pad) + ' Z';
+          svgContent += '<path d="' + fillD + '" fill="rgba(99,102,241,0.15)" stroke="none"/>';
+          svgContent += '<path d="' + pathD + '" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+        }
+        pts.forEach(function(p) {
+          if (p.y == null) return;
+          svgContent += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="2.5" fill="#6366f1"/>';
+        });
+        svgEl.innerHTML = svgContent;
+      } else {
+        svgEl.innerHTML = '<text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">Not enough data yet</text>';
+      }
+    }
+  } catch(e) {
+    console.warn('autonomy load failed', e);
+    if (labelEl) labelEl.textContent = '—';
+    if (gapEl) gapEl.textContent = 'Couldn\u2019t load right now.';
+  }
+}
+
+// ── Heartbeat: is your agent alive? ──────────────────────────────────────────
+async function loadHeartbeat() {
+  try {
+    var d = await (typeof fetchJsonWithTimeout === 'function'
+      ? fetchJsonWithTimeout('/api/heartbeat', 5000)
+      : fetch('/api/heartbeat').then(function(r){return r.json();}));
+    var dot = document.getElementById('hb-pulse-dot');
+    var label = document.getElementById('hb-pulse-label');
+    var badge = document.getElementById('hb-status-badge');
+    var lastBeat = document.getElementById('hb-last-beat');
+    var cadenceEl = document.getElementById('hb-cadence');
+    var okRatioLineEl = document.getElementById('hb-ok-ratio-line');
+    var sparkEl = document.getElementById('hb-sparkline');
+    if (!dot) return;
+
+    var status = d.status || 'never';
+    var labels = {
+      healthy:  { status: 'Alive and well',   pulse: 'checking in',    badge: 'Healthy' },
+      drifting: { status: 'Running a bit late', pulse: 'slow',         badge: 'Late' },
+      missed:   { status: 'Something\u2019s wrong', pulse: 'missed',   badge: 'Missed' },
+      never:    { status: 'No check-ins yet', pulse: 'waiting...',     badge: 'Waiting' }
+    };
+    var colors = { healthy: '#22c55e', drifting: '#f59e0b', missed: '#ef4444', never: '#6b7280' };
+    var anims = {
+      healthy:  'hb-pulse-healthy 2s ease-in-out infinite',
+      drifting: 'hb-pulse-drifting 1.5s ease-in-out infinite',
+      missed:   'hb-pulse-missed 1.2s ease-in-out infinite',
+      never:    'none'
+    };
+    var badgeColors = {
+      healthy:  { bg: 'rgba(34,197,94,0.15)',   color: '#4ade80' },
+      drifting: { bg: 'rgba(245,158,11,0.15)',  color: '#fbbf24' },
+      missed:   { bg: 'rgba(239,68,68,0.15)',   color: '#f87171' },
+      never:    { bg: 'rgba(107,114,128,0.15)', color: '#9ca3af' }
+    };
+    var L = labels[status] || labels.never;
+
+    dot.style.background = colors[status] || colors.never;
+    dot.style.animation = anims[status] || 'none';
+    if (label) label.textContent = L.pulse;
+    if (badge) {
+      var bc = badgeColors[status] || badgeColors.never;
+      badge.style.background = bc.bg;
+      badge.style.color = bc.color;
+      badge.textContent = L.badge;
+    }
+
+    if (lastBeat) {
+      if (status === 'never') {
+        lastBeat.textContent = 'not yet';
+        lastBeat.style.color = '#9ca3af';
+      } else if (d.last_heartbeat_age_seconds !== null && d.last_heartbeat_age_seconds !== undefined) {
+        lastBeat.textContent = _friendlyAgo(d.last_heartbeat_age_seconds);
+        lastBeat.style.color = colors[status] || '#9ca3af';
+      } else {
+        lastBeat.textContent = 'not yet';
+        lastBeat.style.color = '#9ca3af';
+      }
+    }
+
+    if (cadenceEl && d.cadence_24h) {
+      var c = d.cadence_24h;
+      if (c.expected_beats === 0) {
+        cadenceEl.textContent = '';
+      } else if (c.actual_beats === 0) {
+        cadenceEl.textContent = 'Expected ' + c.expected_beats + ' check-ins today, got none yet';
+      } else {
+        cadenceEl.textContent = 'Checked in ' + c.actual_beats + ' of ' + c.expected_beats + ' expected today';
+      }
+    }
+
+    if (okRatioLineEl && d.ok_vs_action_24h) {
+      var oa = d.ok_vs_action_24h;
+      var total = oa.heartbeat_ok_count + oa.action_taken_count;
+      if (total === 0) {
+        okRatioLineEl.textContent = '';
+      } else {
+        var quietPct = Math.round(oa.ok_ratio * 100);
+        var actedPct = 100 - quietPct;
+        okRatioLineEl.textContent = quietPct + '% quiet check-ins' + (actedPct > 0 ? ' \u00B7 ' + actedPct + '% took action' : '');
+      }
+    }
+
+    if (sparkEl && d.recent_beats && d.recent_beats.length > 0) {
+      sparkEl.innerHTML = d.recent_beats.map(function(b) {
+        var cc = b.outcome === 'ok' ? '#22c55e' : '#f59e0b';
+        var title = b.outcome === 'ok' ? 'Quiet check-in' : 'Took action';
+        return '<span title="' + title + '" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + cc + ';"></span>';
+      }).join('');
+    } else if (sparkEl) {
+      sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">none yet</span>';
+    }
+  } catch(e) { console.warn('heartbeat panel load failed', e); }
+}
+
+// ── Memory: commit-log + editor ──────────────────────────────────────────────
+var _selfconfigCurrentFile = null;
+var _selfconfigRevisions = [];
+var _selfconfigSelectedTs = null;   // null = "now" (live file)
+var _selfconfigMode = 'preview';    // 'preview' | 'edit'
+var _selfconfigOriginal = '';       // content loaded into editor (for dirty-check)
+
+// One-line descriptions shown under each filename. Keep filenames as primary —
+// users are technical enough to grok .md; descriptions are secondary hints.
+var _CONFIG_FILE_META = {
+  'USER.md':     { desc: 'What your agent knows about you.' },
+  'SOUL.md':     { desc: 'How your agent talks, thinks and treats you.' },
+  'AGENTS.md':   { desc: 'The rules your agent uses to make decisions.' },
+  'TOOLS.md':    { desc: 'Commands and shortcuts your agent knows.' },
+  'IDENTITY.md': { desc: 'Who your agent is \u2014 name, creature, vibe.' },
+  'MEMORY.md':   { desc: 'Notes your agent keeps over time.' }
+};
+
+function _configMeta(filename) {
+  return _CONFIG_FILE_META[filename] || { desc: '' };
+}
+
+// Escape HTML for safe injection of raw file content.
+function _escapeHtml(s) {
+  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Render markdown to HTML if marked is available, otherwise escaped <pre>.
+function _renderMarkdown(text) {
+  if (typeof marked !== 'undefined' && marked.parse) {
+    try { return marked.parse(text || ''); } catch (_) {}
+  }
+  return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + _escapeHtml(text || '') + '</pre>';
+}
+
+// Tracked file metadata (for history + sensitive flag) — populated from
+// /api/selfconfig. Keyed by filename (root-level only).
+var _selfconfigTrackedMeta = {};
+
+function _isTrackedFile(path) {
+  return path && _selfconfigTrackedMeta.hasOwnProperty(path);
+}
+
+function _fileSizeStr(size) {
+  if (size == null) return '';
+  if (size < 1024) return size + ' B';
+  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + 'K';
+  return (size / (1024 * 1024)).toFixed(1) + 'M';
+}
+
+function _fileIconSvg() {
+  return '<svg width="13" height="13" viewBox="0 0 16 16" style="flex-shrink:0;margin-right:6px;opacity:0.65;" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 1.5h7l3 3V14a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 14V1.5z"/><path d="M10 1.5V4.5h3"/></svg>';
+}
+
+function _folderIconSvg() {
+  return '<svg width="13" height="13" viewBox="0 0 16 16" style="flex-shrink:0;margin-right:6px;opacity:0.7;" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 3.5h4l1 1.5h8v8.5a.5.5 0 0 1-.5.5h-12A.5.5 0 0 1 1.5 13.5v-10z"/></svg>';
+}
+
+async function loadSelfConfig() {
+  var inner = document.getElementById('selfconfig-files-inner');
+  if (!inner) return;
+  inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Loading\u2026</span>';
+  try {
+    // Fetch tracked-file metadata (for sensitive/history flags) and the
+    // real filesystem listing in parallel.
+    var filesReq = fetch('/api/memory-files').then(function(r){return r.json();}).catch(function(){return [];});
+    var trackedReq = fetch('/api/selfconfig').then(function(r){return r.json();}).catch(function(){return {files:[]};});
+    var results = await Promise.all([filesReq, trackedReq]);
+    var realFiles = results[0] || [];
+    var tracked = (results[1] && results[1].files) || [];
+
+    _selfconfigTrackedMeta = {};
+    tracked.forEach(function(t) { _selfconfigTrackedMeta[t.name] = t; });
+
+    if (!realFiles.length) {
+      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">No markdown files yet.</span>';
+      return;
+    }
+
+    // Group: root files + folders (e.g. memory/2026-04-13.md).
+    var roots = [];
+    var folders = {};
+    realFiles.forEach(function(f) {
+      var parts = f.path.split('/');
+      if (parts.length <= 1) {
+        roots.push(f);
+      } else {
+        var dir = parts.slice(0, -1).join('/');
+        if (!folders[dir]) folders[dir] = [];
+        folders[dir].push(f);
+      }
+    });
+
+    // Sort: tracked identity files first, then alphabetical.
+    var trackedOrder = ['USER.md','SOUL.md','IDENTITY.md','AGENTS.md','TOOLS.md','HEARTBEAT.md','MEMORY.md'];
+    roots.sort(function(a, b) {
+      var ia = trackedOrder.indexOf(a.path);
+      var ib = trackedOrder.indexOf(b.path);
+      if (ia === -1) ia = 100;
+      if (ib === -1) ib = 100;
+      if (ia !== ib) return ia - ib;
+      return a.path.localeCompare(b.path);
+    });
+
+    var html = '';
+    roots.forEach(function(f) { html += _selfconfigFileRow(f.path, f.size, 0); });
+    Object.keys(folders).sort().forEach(function(dir) {
+      html += _selfconfigFolderRow(dir);
+      folders[dir].sort(function(a, b) { return b.path.localeCompare(a.path); });  // newest first
+      folders[dir].forEach(function(f) {
+        var name = f.path.split('/').pop();
+        html += _selfconfigFileRow(f.path, f.size, 1, name);
+      });
+    });
+    inner.innerHTML = html;
+
+    // Auto-open the first file if nothing is selected.
+    if (!_selfconfigCurrentFile) {
+      var first = roots[0] || (Object.values(folders)[0] || [])[0];
+      if (first) selfconfigOpenFile(first.path);
+    } else {
+      selfconfigOpenFile(_selfconfigCurrentFile, _selfconfigSelectedTs);
+    }
+  } catch(e) {
+    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Couldn\u2019t load right now.</span>';
+  }
+}
+
+function _selfconfigFileRow(path, size, depth, displayName) {
+  var tracked = _selfconfigTrackedMeta[path];
+  var sensitive = (tracked && tracked.is_values_file)
+    ? ' <span title="Sensitive \u2014 changes here affect how your agent behaves." style="color:#fb923c;font-size:9px;margin-left:4px;vertical-align:middle;">&#9888;</span>'
+    : '';
+  var recentDot = '';
+  var mtime = tracked ? tracked.last_modified_ts : 0;
+  if (mtime) {
+    var ageMin = (Date.now() / 1000 - mtime) / 60;
+    if (ageMin < 1440) {
+      recentDot = ' <span title="Changed in the last 24 hours" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#6366f1;vertical-align:middle;margin-left:5px;"></span>';
+    }
+  }
+  var active = (path === _selfconfigCurrentFile);
+  var activeStyle = active
+    ? 'background:rgba(99,102,241,0.14);color:var(--text-primary);'
+    : 'color:var(--text-secondary);';
+  var indent = depth > 0 ? 'padding-left:' + (10 + depth * 14) + 'px;' : '';
+  var name = displayName || path;
+  return '<div data-filename="' + path + '" data-active="' + (active ? '1' : '') + '" onclick="selfconfigOpenFile(\'' + path + '\')" style="display:flex;align-items:center;cursor:pointer;padding:4px 10px;' + indent + 'margin:0;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;line-height:1.55;transition:background 0.1s;' + activeStyle + '" onmouseover="if(!this.dataset.active)this.style.background=\'var(--bg-hover)\'" onmouseout="if(!this.dataset.active)this.style.background=\'\'">'
+    + _fileIconSvg()
+    + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + name + '</span>'
+    + sensitive
+    + recentDot
+    + '<span style="margin-left:8px;color:var(--text-muted);font-size:10.5px;flex-shrink:0;">' + _fileSizeStr(size) + '</span>'
+    + '</div>';
+}
+
+function _selfconfigFolderRow(dir) {
+  var name = dir.split('/').pop() || dir;
+  return '<div style="display:flex;align-items:center;padding:4px 10px;margin:4px 0 0;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:11px;line-height:1.55;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.6px;">'
+    + _folderIconSvg()
+    + '<span>' + name + '</span>'
+    + '</div>';
+}
+
+// Open a file in the reader. ``ts`` = null → show current live content.
+async function selfconfigOpenFile(filename, ts) {
+  _selfconfigCurrentFile = filename;
+  window._selfconfigCurrentFile = filename;
+  _selfconfigSelectedTs = (ts == null) ? null : ts;
+  // Highlight the selected file in the list.
+  document.querySelectorAll('#selfconfig-files-inner [data-filename]').forEach(function(el) {
+    var match = el.getAttribute('data-filename') === filename;
+    el.dataset.active = match ? '1' : '';
+    el.style.background = match ? 'rgba(99,102,241,0.14)' : '';
+  });
+  // Only tracked (root-level identity) files get a revision timeline.
+  if (_isTrackedFile(filename)) {
+    _selfconfigRenderTimeline(filename);
+  } else {
+    var wrap = document.getElementById('selfconfig-timeline-wrap');
+    if (wrap) wrap.style.display = 'none';
+  }
+  await _selfconfigRenderReader(filename, _selfconfigSelectedTs);
+}
+
+function selfconfigBackToNow() {
+  if (_selfconfigCurrentFile) selfconfigOpenFile(_selfconfigCurrentFile, null);
+}
+
+// Populate the timeline of commits on the left-hand sidebar.
+async function _selfconfigRenderTimeline(filename) {
+  var wrap = document.getElementById('selfconfig-timeline-wrap');
+  var list = document.getElementById('selfconfig-timeline');
+  var heading = document.getElementById('selfconfig-timeline-heading');
+  if (!wrap || !list) return;
+  wrap.style.display = 'block';
+  if (heading) heading.textContent = 'History \u00B7 ' + filename;
+  list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Loading...</span>';
+  try {
+    var d = await (typeof fetchJsonWithTimeout === 'function'
+      ? fetchJsonWithTimeout('/api/selfconfig/' + encodeURIComponent(filename), 5000)
+      : fetch('/api/selfconfig/' + encodeURIComponent(filename)).then(function(r){return r.json();}));
+    _selfconfigRevisions = d.revisions || [];
+    if (!_selfconfigRevisions.length) {
+      list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 6px;">No changes yet. When your agent updates this, it\u2019ll show up here.</div>';
+      return;
+    }
+    // Pre-fetch summaries for each adjacent pair in the background (non-blocking).
+    _selfconfigRevisions.forEach(function(rev, idx) {
+      if (idx < _selfconfigRevisions.length - 1 && !rev._summary) {
+        var prevTs = _selfconfigRevisions[idx + 1].ts;
+        fetch('/api/selfconfig/' + encodeURIComponent(filename) + '/diff?from=' + prevTs + '&to=' + rev.ts)
+          .then(function(r){return r.json();})
+          .then(function(dd){
+            rev._summary = dd.summary || '';
+            rev._addedLines = dd.added_lines || 0;
+            rev._removedLines = dd.removed_lines || 0;
+            _renderTimelineRows(filename);
+          }).catch(function(){});
+      }
+    });
+    _renderTimelineRows(filename);
+  } catch(e) {
+    list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Couldn\u2019t load.</span>';
+  }
+}
+
+function _renderTimelineRows(filename) {
+  var list = document.getElementById('selfconfig-timeline');
+  if (!list) return;
+  var rows = [];
+  // "Now" entry at top.
+  var nowActive = _selfconfigSelectedTs == null;
+  rows.push(_selfconfigRowHtml(filename, null, {
+    label: 'Now',
+    sub: 'Current version',
+    active: nowActive
+  }));
+  // One row per revision, newest first.
+  _selfconfigRevisions.forEach(function(rev, idx) {
+    var isFirst = idx === _selfconfigRevisions.length - 1;
+    var when = _friendlyTimestamp(rev.ts);
+    var summary;
+    if (isFirst) {
+      summary = 'Created';
+    } else if (rev._summary) {
+      summary = rev._summary;
+    } else {
+      summary = 'Updated';
+    }
+    var lineDelta = '';
+    if (rev._addedLines != null || rev._removedLines != null) {
+      var a = rev._addedLines || 0;
+      var r = rev._removedLines || 0;
+      var parts = [];
+      if (a) parts.push('<span style="color:#22c55e;">+' + a + '</span>');
+      if (r) parts.push('<span style="color:#ef4444;">\u2212' + r + '</span>');
+      if (parts.length) lineDelta = ' &nbsp;\u00B7&nbsp; ' + parts.join(' ');
+    }
+    rows.push(_selfconfigRowHtml(filename, rev.ts, {
+      label: when,
+      sub: summary + lineDelta,
+      active: _selfconfigSelectedTs === rev.ts
+    }));
+  });
+  list.innerHTML = rows.join('');
+}
+
+function _selfconfigRowHtml(filename, ts, opts) {
+  var dotColor = ts == null ? '#22c55e' : '#64748b';
+  var activeBg = opts.active ? 'background:rgba(99,102,241,0.12);' : '';
+  var tsArg = ts == null ? 'null' : ts;
+  return '<div onclick="selfconfigOpenFile(\'' + filename + '\',' + tsArg + ')" style="cursor:pointer;position:relative;padding:5px 10px 5px 22px;border-radius:3px;margin:0;transition:background 0.1s;' + activeBg + '" ' + (opts.active ? 'data-active="1"' : '') + ' onmouseover="if(!this.dataset.active)this.style.background=\'var(--bg-hover)\'" onmouseout="if(!this.dataset.active)this.style.background=\'\'">'
+    + '<span style="position:absolute;left:8px;top:9px;width:6px;height:6px;border-radius:50%;background:' + dotColor + ';"></span>'
+    + '<div style="font-size:11px;font-weight:600;color:var(--text-primary);line-height:1.4;">' + opts.label + '</div>'
+    + '<div style="font-size:10.5px;color:var(--text-muted);margin-top:1px;line-height:1.35;">' + opts.sub + '</div>'
+    + '</div>';
+}
+
+// Populate the reader pane — shows the file content at the requested version.
+async function _selfconfigRenderReader(filename, ts) {
+  var titleEl = document.getElementById('selfconfig-reader-title');
+  var badgeEl = document.getElementById('selfconfig-reader-badge');
+  var bodyEl = document.getElementById('selfconfig-reader-body');
+  var editorBody = document.getElementById('selfconfig-editor-body');
+  var editorToolbar = document.getElementById('selfconfig-editor-toolbar');
+  var bannerEl = document.getElementById('selfconfig-reader-banner');
+  var bannerText = document.getElementById('selfconfig-reader-banner-text');
+
+  var tracked = _isTrackedFile(filename);
+  var meta = tracked ? _selfconfigTrackedMeta[filename] : null;
+
+  if (titleEl) titleEl.textContent = filename;
+  if (badgeEl) badgeEl.style.display = (meta && meta.is_values_file) ? 'inline-block' : 'none';
+  if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">Loading\u2026</div>';
+
+  // Edit toolbar is available for live files (any, tracked or not). Past
+  // versions are only reachable for tracked files — they remain read-only.
+  if (editorToolbar) editorToolbar.style.display = (ts == null) ? 'flex' : 'none';
+
+  if (bannerEl) {
+    if (ts == null) {
+      bannerEl.style.display = 'none';
+    } else {
+      bannerEl.style.display = 'flex';
+      if (bannerText) bannerText.textContent = 'Viewing the version from ' + _friendlyTimestamp(ts);
+    }
+  }
+
+  _selfconfigMode = 'preview';
+  _selfconfigUpdateModeButtons();
+  if (bodyEl) bodyEl.style.display = 'block';
+  if (editorBody) editorBody.style.display = 'none';
+
+  _selfconfigUpdateStatusBar(filename, ts, null);
+
+  try {
+    var url, d;
+    if (tracked) {
+      url = '/api/selfconfig/' + encodeURIComponent(filename) + '/content' + (ts == null ? '' : '?ts=' + ts);
+      d = await fetch(url).then(function(r){return r.json();});
+      _selfconfigOriginal = d.content || '';
+    } else {
+      // Untracked file (e.g. memory/2026-04-13.md) — use /api/file.
+      url = '/api/file?path=' + encodeURIComponent(filename);
+      d = await fetch(url).then(function(r){return r.json();});
+      if (d.error) throw new Error(d.error);
+      _selfconfigOriginal = d.content || '';
+      d.exists = true;
+      d.ts = d.mtime;
+    }
+    if (bodyEl) {
+      if (!d.exists && ts == null) {
+        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file hasn\u2019t been created yet. Click <strong>Edit</strong> above to write the first version.</div>';
+      } else if (!d.content || !d.content.trim()) {
+        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file is empty.</div>';
+      } else {
+        bodyEl.innerHTML = '<div class="mem-prose">' + _renderMarkdown(d.content) + '</div>';
+      }
+    }
+    _selfconfigUpdateStatusBar(filename, ts, d);
+  } catch(e) {
+    if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">Couldn\u2019t load this version.</div>';
+  }
+}
+
+function _selfconfigUpdateStatusBar(filename, ts, d) {
+  var fileEl = document.getElementById('selfconfig-status-file');
+  var modeEl = document.getElementById('selfconfig-status-mode');
+  var sizeEl = document.getElementById('selfconfig-status-size');
+  var updatedEl = document.getElementById('selfconfig-status-updated');
+  if (fileEl) fileEl.textContent = filename || '—';
+  if (modeEl) modeEl.textContent = (_selfconfigSelectedTs == null)
+    ? (_selfconfigMode === 'edit' ? 'Editing' : 'Preview')
+    : 'History';
+  if (sizeEl) {
+    var src = d && typeof d.content === 'string' ? d.content : (_selfconfigOriginal || '');
+    var lines = src ? src.split('\n').length : 0;
+    var bytes = src ? new Blob([src]).size : 0;
+    sizeEl.textContent = lines + ' line' + (lines === 1 ? '' : 's') + ' \u00B7 ' + _friendlyBytes(bytes);
+  }
+  if (updatedEl) {
+    if (ts != null) updatedEl.textContent = 'Viewing ' + _friendlyTimestamp(ts);
+    else if (d && d.ts) updatedEl.textContent = 'Updated ' + _friendlyTimestamp(d.ts);
+    else updatedEl.textContent = '';
+  }
+}
+
+// ── Editor controls ──────────────────────────────────────────────────────────
+
+function _selfconfigUpdateModeButtons() {
+  document.querySelectorAll('.sc-mode-btn').forEach(function(btn) {
+    var active = btn.getAttribute('data-mode') === _selfconfigMode;
+    btn.style.background = active ? 'var(--bg-primary)' : 'transparent';
+    btn.style.border = active ? '1px solid var(--border-primary)' : '1px solid transparent';
+    btn.style.color = active ? 'var(--text-primary)' : 'var(--text-muted)';
+  });
+}
+
+function selfconfigSetMode(mode) {
+  if (_selfconfigSelectedTs != null && mode === 'edit') return;  // read-only for past versions
+  _selfconfigMode = mode;
+  _selfconfigUpdateModeButtons();
+  var bodyEl = document.getElementById('selfconfig-reader-body');
+  var editorBody = document.getElementById('selfconfig-editor-body');
+  var textarea = document.getElementById('selfconfig-editor-textarea');
+  if (mode === 'edit') {
+    if (bodyEl) bodyEl.style.display = 'none';
+    if (editorBody) editorBody.style.display = 'flex';
+    if (textarea) {
+      textarea.value = _selfconfigOriginal || '';
+      _selfconfigRenderLineNumbers();
+      setTimeout(function(){ textarea.focus(); }, 30);
+    }
+  } else {
+    if (bodyEl) bodyEl.style.display = 'block';
+    if (editorBody) editorBody.style.display = 'none';
+  }
+  _selfconfigUpdateStatusBar(_selfconfigCurrentFile, _selfconfigSelectedTs, null);
+}
+
+function _selfconfigRenderLineNumbers() {
+  var textarea = document.getElementById('selfconfig-editor-textarea');
+  var gutter = document.getElementById('selfconfig-editor-gutter');
+  if (!textarea || !gutter) return;
+  var count = (textarea.value || '').split('\n').length;
+  var nums = new Array(count);
+  for (var i = 0; i < count; i++) nums[i] = (i + 1);
+  gutter.textContent = nums.join('\n');
+  gutter.scrollTop = textarea.scrollTop;
+}
+
+function selfconfigOnEditorInput() {
+  _selfconfigRenderLineNumbers();
+  _selfconfigUpdateStatusBar(_selfconfigCurrentFile, null, null);
+}
+
+function selfconfigSyncGutterScroll() {
+  var textarea = document.getElementById('selfconfig-editor-textarea');
+  var gutter = document.getElementById('selfconfig-editor-gutter');
+  if (textarea && gutter) gutter.scrollTop = textarea.scrollTop;
+}
+
+function selfconfigDiscardEdit() {
+  var textarea = document.getElementById('selfconfig-editor-textarea');
+  if (textarea && textarea.value !== _selfconfigOriginal) {
+    if (!confirm('Discard unsaved changes?')) return;
+  }
+  selfconfigSetMode('preview');
+}
+
+async function selfconfigSave() {
+  var textarea = document.getElementById('selfconfig-editor-textarea');
+  var btn = document.getElementById('selfconfig-save-btn');
+  if (!textarea || !_selfconfigCurrentFile) return;
+  var newContent = textarea.value;
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; btn.style.opacity = '0.6'; }
+  var tracked = _isTrackedFile(_selfconfigCurrentFile);
+  try {
+    var r;
+    if (tracked) {
+      r = await fetch('/api/selfconfig/' + encodeURIComponent(_selfconfigCurrentFile) + '/content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: newContent })
+      });
+    } else {
+      r = await fetch('/api/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: _selfconfigCurrentFile, content: newContent })
+      });
+    }
+    if (!r.ok) {
+      var err = await r.json().catch(function(){ return {}; });
+      throw new Error(err.error || ('HTTP ' + r.status));
+    }
+    _selfconfigOriginal = newContent;
+    if (tracked) {
+      await _selfconfigRenderTimeline(_selfconfigCurrentFile);
+    }
+    loadSelfConfig();
+    selfconfigSetMode('preview');
+  } catch(e) {
+    alert('Save failed: ' + (e.message || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; btn.style.opacity = '1'; }
+  }
+}
+
+async function selfconfigRestoreVersion() {
+  if (_selfconfigSelectedTs == null || !_selfconfigCurrentFile) return;
+  if (!confirm('Restore this version? The current content will be replaced (but saved as a new version in history).')) return;
+  try {
+    // Fetch the historical version's content, then save it as the live file.
+    var url = '/api/selfconfig/' + encodeURIComponent(_selfconfigCurrentFile) + '/content?ts=' + _selfconfigSelectedTs;
+    var d = await fetch(url).then(function(r){return r.json();});
+    var content = d.content || '';
+    var r = await fetch('/api/selfconfig/' + encodeURIComponent(_selfconfigCurrentFile) + '/content', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: content })
+    });
+    if (!r.ok) throw new Error('Save failed');
+    // Return to "now" with the restored content.
+    await selfconfigOpenFile(_selfconfigCurrentFile, null);
+    loadSelfConfig();
+  } catch(e) {
+    alert('Couldn\u2019t restore: ' + (e.message || e));
+  }
+}
+
+// Kept as public shims so older buttons/links still resolve.
+async function loadSelfConfigHistory(filename) { return selfconfigOpenFile(filename, null); }
+async function loadSelfConfigDiff(filename, fromTs, toTs) { return selfconfigOpenFile(filename, toTs); }
+function selfconfigBackToRevisions() { selfconfigBackToNow(); }
+
+// ── Skills: shortcuts your agent can use ─────────────────────────────────────
+var _skillsShowDetails = false;
+
+function _skillStatusPill(status) {
+  var map = {
+    healthy: { label: 'Working',          color: '#22c55e' },
+    unused:  { label: 'Never used',       color: '#94a3b8' },
+    dead:    { label: 'Safe to remove',   color: '#ef4444' },
+    stuck:   { label: 'Not working',      color: '#f59e0b' }
+  };
+  var s = map[status] || { label: status || '\u2014', color: '#94a3b8' };
+  return '<span style="background:' + s.color + '22;color:' + s.color + ';border:1px solid ' + s.color + '44;border-radius:10px;padding:2px 10px;font-size:11px;font-weight:600;">' + s.label + '</span>';
+}
+
+async function loadSkills() {
+  var summaryEl = document.getElementById('skills-summary-row');
+  var listEl = document.getElementById('skills-list');
+  if (!summaryEl || !listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
+  try {
+    var data = await fetch('/api/skills').then(function(r) { return r.json(); });
+    var skills = data.skills || [];
+    var summary = data.summary || {};
+    var installed = summary.total_installed || 0;
+    var dead = summary.dead_count || 0;
+    var stuck = summary.stuck_count || 0;
+
+    function card(title, value, color, sub) {
+      return '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:12px 18px;min-width:140px;">'
+        + '<div style="font-size:22px;font-weight:700;color:' + (color || 'var(--text-primary)') + ';line-height:1.1;">' + value + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;text-transform:uppercase;letter-spacing:1px;">' + title + '</div>'
+        + (sub ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + sub + '</div>' : '')
+        + '</div>';
+    }
+
+    summaryEl.innerHTML =
+      card('Installed', installed, 'var(--text-primary)') +
+      (dead   > 0 ? card('Safe to remove', dead,  '#ef4444', 'never used') : '') +
+      (stuck  > 0 ? card('Not working',    stuck, '#f59e0b', 'broken or misdescribed') : '') +
+      (dead === 0 && stuck === 0 && installed > 0
+        ? card('All good', '\u2713', '#22c55e', 'every skill is being used')
+        : '');
+
+    if (skills.length === 0) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Nothing installed yet. Skills let your agent handle specific tasks \u2014 add some to get started.</div>';
+      return;
+    }
+
+    // Sort: problematic first (dead, stuck), then unused, then healthy
+    var order = { dead: 0, stuck: 1, unused: 2, healthy: 3 };
+    skills.sort(function(a, b) { return (order[a.status] || 9) - (order[b.status] || 9); });
+
+    var toggleBtn = '<div style="text-align:right;margin-bottom:8px;">'
+      + '<button onclick="_skillsShowDetails=!_skillsShowDetails;loadSkills();" style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);">'
+      + (_skillsShowDetails ? 'Hide details' : 'Show details') + '</button></div>';
+
+    var html = toggleBtn + '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
+      '<thead><tr style="color:var(--text-muted);text-align:left;border-bottom:1px solid var(--border-primary);font-size:11px;text-transform:uppercase;letter-spacing:1px;">' +
+        '<th style="padding:10px 10px;">Skill</th>' +
+        '<th style="padding:10px 10px;">What it does</th>' +
+        '<th style="padding:10px 10px;">Status</th>' +
+        '<th style="padding:10px 10px;">Last used</th>' +
+        (_skillsShowDetails
+          ? '<th style="padding:10px 10px;text-align:right;" title="Tokens always loaded into the agent\'s context">Always loaded</th>'
+            + '<th style="padding:10px 10px;text-align:right;" title="Times the agent decided to look at this skill in the last 7 days">Used (7d)</th>'
+          : '') +
+      '</tr></thead><tbody>';
+
+    skills.forEach(function(sk, idx) {
+      var desc = (sk.description || '').length > 80 ? sk.description.slice(0, 77) + '...' : (sk.description || '\u2014');
+      var lastUsed = sk.last_used_ts
+        ? _friendlyAgo(Math.floor(Date.now() / 1000) - sk.last_used_ts)
+        : (sk.status === 'dead' || sk.status === 'unused' ? '\u2014' : 'recently');
+      var rowBg = idx % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)';
+      html += '<tr style="background:' + rowBg + ';border-bottom:1px solid var(--border-primary);">' +
+        '<td style="padding:10px 10px;font-weight:600;color:var(--text-primary);">' + escHtml(sk.name) + '</td>' +
+        '<td style="padding:10px 10px;color:var(--text-muted);">' + escHtml(desc) + '</td>' +
+        '<td style="padding:10px 10px;">' + _skillStatusPill(sk.status) + '</td>' +
+        '<td style="padding:10px 10px;color:var(--text-muted);">' + lastUsed + '</td>' +
+        (_skillsShowDetails
+          ? '<td style="padding:10px 10px;text-align:right;color:var(--text-muted);">' + (sk.header_tokens || 0).toLocaleString() + ' tokens</td>'
+            + '<td style="padding:10px 10px;text-align:right;color:var(--text-muted);">' + ((sk.body_fetch_count_7d || 0) + (sk.linked_file_read_count_7d || 0)) + ' times</td>'
+          : '') +
+        '</tr>';
+    });
+    html += '</tbody></table>';
+    listEl.innerHTML = html;
+  } catch (e) {
+    if (listEl) listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Couldn\u2019t load right now.</div>';
+  }
 }
 
 var _sunSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
@@ -727,6 +1577,8 @@ async function loadAll() {
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
+    if (typeof loadAutonomy === 'function') loadAutonomy().catch(function(e){console.warn('autonomy failed',e)});
+    if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -2922,7 +3774,33 @@ async function loadMemoryAnalytics() {
   } catch(e) { panel.innerHTML = ''; }
 }
 
+// Switch between Summary (friendly change-history) and All files (raw explorer).
+function memorySwitchView(view) {
+  var summary = document.getElementById('memory-summary-view');
+  var all = document.getElementById('memory-all-view');
+  if (summary) summary.style.display = view === 'summary' ? 'block' : 'none';
+  if (all) all.style.display = view === 'all' ? 'block' : 'none';
+  document.querySelectorAll('.mem-view-tab').forEach(function(t) {
+    var active = t.getAttribute('data-view') === view;
+    t.style.background = active ? 'var(--bg-secondary)' : 'transparent';
+    t.style.border = active ? '1px solid var(--border-primary)' : '1px solid transparent';
+    t.style.color = active ? 'var(--text-primary)' : 'var(--text-muted)';
+  });
+  if (view === 'summary') {
+    if (typeof loadSelfConfig === 'function') loadSelfConfig();
+  } else {
+    _loadMemoryAllFiles();
+  }
+}
+
+// Entry point called by nav switchTab + loadAll bootstrap.
 async function loadMemory() {
+  // Default to Summary (friendly) view.
+  if (typeof loadSelfConfig === 'function') loadSelfConfig();
+}
+
+// Legacy raw file explorer — runs only when "All files" is selected.
+async function _loadMemoryAllFiles() {
   if (window.CLOUD_MODE) {
     var el = document.getElementById('memory-list');
     if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">Memory files are stored locally on the agent machine and are not synced to cloud.</div>';
