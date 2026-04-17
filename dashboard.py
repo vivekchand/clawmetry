@@ -8310,7 +8310,9 @@ def detect_config(args=None):
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
     from clawmetry.adapters import registry as _adapter_registry
     from clawmetry.adapters.openclaw import OpenClawAdapter
+    from clawmetry.adapters.hermes import HermesAdapter
     _adapter_registry.register(OpenClawAdapter())
+    _adapter_registry.register(HermesAdapter())
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
     # Approvals tab renders cleanly without cloud sync.
