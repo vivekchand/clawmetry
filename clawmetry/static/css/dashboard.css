@@ -971,3 +971,20 @@
     .mem-file-row { flex-direction: column; gap: 4px; }
     .cron-job { flex-wrap: wrap; gap: 6px; }
   }
+
+/* Memory → Summary: prose rendering of markdown files */
+.mem-prose { font-size: 14px; line-height: 1.65; color: var(--text-primary); }
+.mem-prose h1 { font-size: 19px; font-weight: 700; margin: 18px 0 10px; color: var(--text-primary); }
+.mem-prose h2 { font-size: 15px; font-weight: 700; margin: 20px 0 8px; color: var(--text-primary); letter-spacing: 0.2px; text-transform: none; }
+.mem-prose h3 { font-size: 13px; font-weight: 700; margin: 16px 0 6px; color: var(--text-secondary); }
+.mem-prose p { margin: 0 0 10px; }
+.mem-prose ul, .mem-prose ol { margin: 0 0 12px 22px; padding: 0; }
+.mem-prose li { margin: 3px 0; }
+.mem-prose li strong { color: var(--text-primary); font-weight: 600; }
+.mem-prose li em { color: var(--text-muted); font-style: normal; }
+.mem-prose blockquote { margin: 10px 0; padding: 6px 14px; border-left: 2px solid var(--border-primary); color: var(--text-muted); font-style: italic; }
+.mem-prose code { background: var(--bg-tertiary, rgba(99,102,241,0.1)); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.mem-prose pre { background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; }
+.mem-prose hr { border: 0; border-top: 1px solid var(--border-primary); margin: 18px 0; }
+.mem-prose a { color: #a5b4fc; text-decoration: none; border-bottom: 1px solid rgba(165,180,252,0.3); }
+.mem-prose a:hover { border-bottom-color: #a5b4fc; }

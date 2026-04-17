@@ -800,11 +800,12 @@ async function loadHeartbeat() {
   } catch(e) { console.warn('heartbeat panel load failed', e); }
 }
 
-// ── Mind: what your agent knows about itself and you ─────────────────────────
+// ── Memory: commit-log + content viewer ──────────────────────────────────────
 var _selfconfigCurrentFile = null;
 var _selfconfigRevisions = [];
+var _selfconfigSelectedTs = null;   // null = "now" (live file)
 
-// Friendly labels for the internal file names. Keeps the underlying filename
+// Friendly labels for the 6 tracked files. Keeps the underlying filename
 // searchable in devtools but shows plain English in the UI.
 var _CONFIG_FILE_META = {
   'USER.md':     { icon: '\uD83D\uDC64', title: 'About you',       desc: 'What your agent knows about you.' },
@@ -819,168 +820,226 @@ function _configMeta(filename) {
   return _CONFIG_FILE_META[filename] || { icon: '\uD83D\uDCC4', title: filename, desc: '' };
 }
 
+// Escape HTML for safe injection of raw file content.
+function _escapeHtml(s) {
+  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Render markdown to HTML if marked is available, otherwise escaped <pre>.
+function _renderMarkdown(text) {
+  if (typeof marked !== 'undefined' && marked.parse) {
+    try { return marked.parse(text || ''); } catch (_) {}
+  }
+  return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + _escapeHtml(text || '') + '</pre>';
+}
+
 async function loadSelfConfig() {
   var inner = document.getElementById('selfconfig-files-inner');
   if (!inner) return;
-  inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Loading...</span>';
-  var detailEmpty = document.getElementById('selfconfig-empty-state');
-  var detailRevs = document.getElementById('selfconfig-revisions-panel');
-  var detailDiff = document.getElementById('selfconfig-diff-panel');
-  if (detailEmpty) { detailEmpty.style.display = 'block'; }
-  if (detailRevs) { detailRevs.style.display = 'none'; }
-  if (detailDiff) { detailDiff.style.display = 'none'; }
+  inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Loading...</span>';
   try {
     var d = await (typeof fetchJsonWithTimeout === 'function'
       ? fetchJsonWithTimeout('/api/selfconfig', 5000)
       : fetch('/api/selfconfig').then(function(r){return r.json();}));
     var files = d.files || [];
     if (!files.length) {
-      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Nothing to show yet \u2014 your agent hasn\u2019t set itself up.</span>';
+      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Nothing to show yet.</span>';
       return;
     }
     inner.innerHTML = files.map(function(f) {
       var meta = _configMeta(f.name);
       var sensitive = f.is_values_file
-        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;" title="Changes here affect how your agent behaves.">Sensitive</span>'
+        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:7px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px;letter-spacing:0.3px;" title="Changes here affect how your agent behaves.">SENSITIVE</span>'
         : '';
-      var sub;
-      if (!f.exists) {
-        sub = '<span style="color:var(--text-muted);">not set up yet</span>';
-      } else if (f.revision_count <= 1) {
-        sub = '<span style="color:var(--text-muted);">no changes yet</span>';
-      } else {
-        sub = '<span style="color:var(--text-muted);">changed ' + (f.revision_count - 1) + ' time' + ((f.revision_count - 1) === 1 ? '' : 's') + '</span>';
+      var recentDot = '';
+      if (f.exists && f.last_modified_ts) {
+        var ageMin = (Date.now() / 1000 - f.last_modified_ts) / 60;
+        if (ageMin < 1440) {
+          recentDot = ' <span title="Changed in the last 24 hours" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#6366f1;vertical-align:middle;margin-left:4px;"></span>';
+        }
       }
-      var existStyle = f.exists ? '' : 'opacity:0.55;';
-      return '<div onclick="loadSelfConfigHistory(\'' + f.name + '\')" style="cursor:pointer;padding:9px 10px;border-radius:7px;margin-bottom:4px;' + existStyle + 'border:1px solid transparent;transition:background 0.15s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'transparent\'">'
+      var existStyle = f.exists ? '' : 'opacity:0.45;';
+      var activeStyle = (f.name === _selfconfigCurrentFile)
+        ? 'background:var(--bg-tertiary,rgba(99,102,241,0.08));border-color:rgba(99,102,241,0.3);'
+        : 'border-color:transparent;';
+      return '<div data-filename="' + f.name + '" onclick="selfconfigOpenFile(\'' + f.name + '\')" style="cursor:pointer;padding:8px 10px;border-radius:6px;margin-bottom:2px;' + existStyle + 'border:1px solid transparent;transition:background 0.12s;' + activeStyle + '" onmouseover="if(this.dataset.filename!==window._selfconfigCurrentFile)this.style.background=\'var(--bg-hover)\'" onmouseout="if(this.dataset.filename!==window._selfconfigCurrentFile)this.style.background=\'\'">'
         + '<div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--text-primary);">'
-        + '<span style="font-size:16px;">' + meta.icon + '</span>'
+        + '<span style="font-size:15px;">' + meta.icon + '</span>'
         + '<span>' + meta.title + '</span>'
         + sensitive
+        + recentDot
         + '</div>'
-        + '<div style="font-size:11px;margin-top:3px;margin-left:24px;">' + sub + '</div>'
         + '</div>';
     }).join('');
+    // Auto-open the first existing file if nothing is selected yet.
+    if (!_selfconfigCurrentFile) {
+      var firstExisting = files.find(function(f){ return f.exists; }) || files[0];
+      if (firstExisting) selfconfigOpenFile(firstExisting.name);
+    } else {
+      // Refresh the content of the currently-open file in case it changed.
+      selfconfigOpenFile(_selfconfigCurrentFile, _selfconfigSelectedTs);
+    }
   } catch(e) {
-    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Couldn\u2019t load right now.</span>';
+    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Couldn\u2019t load right now.</span>';
   }
 }
 
-async function loadSelfConfigHistory(filename) {
+// Open a file in the reader. ``ts`` = null → show current live content.
+async function selfconfigOpenFile(filename, ts) {
   _selfconfigCurrentFile = filename;
-  var emptyEl = document.getElementById('selfconfig-empty-state');
-  var revsPanel = document.getElementById('selfconfig-revisions-panel');
-  var diffPanel = document.getElementById('selfconfig-diff-panel');
-  if (emptyEl) emptyEl.style.display = 'none';
-  if (diffPanel) diffPanel.style.display = 'none';
-  if (revsPanel) revsPanel.style.display = 'block';
-  var headEl = document.getElementById('selfconfig-filename-heading');
-  var descEl = document.getElementById('selfconfig-file-description');
-  var badgeEl = document.getElementById('selfconfig-values-badge');
-  var listEl = document.getElementById('selfconfig-revisions-list');
+  window._selfconfigCurrentFile = filename;  // for inline handlers
+  _selfconfigSelectedTs = (ts == null) ? null : ts;
+  // Highlight the selected file in the list.
+  document.querySelectorAll('#selfconfig-files-inner [data-filename]').forEach(function(el) {
+    var match = el.getAttribute('data-filename') === filename;
+    el.style.background = match ? 'var(--bg-tertiary,rgba(99,102,241,0.08))' : '';
+    el.style.borderColor = match ? 'rgba(99,102,241,0.3)' : 'transparent';
+  });
+  _selfconfigRenderTimeline(filename);
+  await _selfconfigRenderReader(filename, _selfconfigSelectedTs);
+}
+
+function selfconfigBackToNow() {
+  if (_selfconfigCurrentFile) selfconfigOpenFile(_selfconfigCurrentFile, null);
+}
+
+// Populate the timeline of commits on the left-hand sidebar.
+async function _selfconfigRenderTimeline(filename) {
+  var wrap = document.getElementById('selfconfig-timeline-wrap');
+  var list = document.getElementById('selfconfig-timeline');
+  var heading = document.getElementById('selfconfig-timeline-heading');
+  if (!wrap || !list) return;
+  wrap.style.display = 'block';
   var meta = _configMeta(filename);
-  if (headEl) headEl.textContent = meta.icon + '  ' + meta.title;
-  if (descEl) descEl.textContent = meta.desc;
-  if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Loading...</span>';
+  if (heading) heading.textContent = 'Changes to ' + meta.title;
+  list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Loading...</span>';
   try {
     var d = await (typeof fetchJsonWithTimeout === 'function'
       ? fetchJsonWithTimeout('/api/selfconfig/' + encodeURIComponent(filename), 5000)
       : fetch('/api/selfconfig/' + encodeURIComponent(filename)).then(function(r){return r.json();}));
-    if (badgeEl) badgeEl.style.display = d.is_values_file ? 'block' : 'none';
     _selfconfigRevisions = d.revisions || [];
     if (!_selfconfigRevisions.length) {
-      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px 0;text-align:center;">Nothing has changed here yet. Changes will show up automatically.</div>';
+      list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 6px;">No changes yet. When your agent updates this, it\u2019ll show up here.</div>';
       return;
     }
-    listEl.innerHTML = _selfconfigRevisions.map(function(rev, idx) {
-      var isOldest = idx === _selfconfigRevisions.length - 1;
-      var when = _friendlyTimestamp(rev.ts);
-      var size = _friendlyBytes(rev.size);
-      var delta, label;
-      if (isOldest) {
-        label = '<span style="color:var(--text-muted);font-size:11px;">First version</span>';
-        delta = '';
-      } else {
-        var prevSize = _selfconfigRevisions[idx + 1].size;
-        var diff = rev.size - prevSize;
-        label = '<span style="color:var(--text-muted);font-size:11px;">Updated</span>';
-        if (diff > 0) delta = ' &nbsp;<span style="color:#22c55e;font-weight:600;">grew by ' + _friendlyBytes(diff) + '</span>';
-        else if (diff < 0) delta = ' &nbsp;<span style="color:#ef4444;font-weight:600;">shrank by ' + _friendlyBytes(-diff) + '</span>';
-        else delta = ' &nbsp;<span style="color:var(--text-muted);">same size</span>';
+    // Pre-fetch summaries for each adjacent pair in the background (non-blocking).
+    _selfconfigRevisions.forEach(function(rev, idx) {
+      if (idx < _selfconfigRevisions.length - 1 && !rev._summary) {
+        var prevTs = _selfconfigRevisions[idx + 1].ts;
+        fetch('/api/selfconfig/' + encodeURIComponent(filename) + '/diff?from=' + prevTs + '&to=' + rev.ts)
+          .then(function(r){return r.json();})
+          .then(function(dd){
+            rev._summary = dd.summary || '';
+            rev._addedLines = dd.added_lines || 0;
+            rev._removedLines = dd.removed_lines || 0;
+            _renderTimelineRows(filename);
+          }).catch(function(){});
       }
-      var prevTs = isOldest ? null : _selfconfigRevisions[idx + 1].ts;
-      var diffBtn = prevTs !== null
-        ? '<button onclick="loadSelfConfigDiff(\'' + filename + '\',' + prevTs + ',' + rev.ts + ')" style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);margin-left:8px;">See what changed</button>'
-        : '';
-      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:7px;margin-bottom:6px;background:var(--bg-primary);border:1px solid var(--border-primary);">'
-        + '<div>'
-        + '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + when + '</div>'
-        + '<div style="font-size:11px;color:var(--text-muted);margin-top:3px;">' + label + ' &nbsp;\u00B7&nbsp; ' + size + delta + '</div>'
-        + '</div>'
-        + diffBtn
-        + '</div>';
-    }).join('');
+    });
+    _renderTimelineRows(filename);
   } catch(e) {
-    if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Couldn\u2019t load right now.</span>';
+    list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Couldn\u2019t load.</span>';
   }
 }
 
-async function loadSelfConfigDiff(filename, fromTs, toTs) {
-  var diffPanel = document.getElementById('selfconfig-diff-panel');
-  var revsPanel = document.getElementById('selfconfig-revisions-panel');
-  var emptyEl   = document.getElementById('selfconfig-empty-state');
-  if (emptyEl) emptyEl.style.display = 'none';
-  if (revsPanel) revsPanel.style.display = 'none';
-  if (diffPanel) diffPanel.style.display = 'block';
-  var headEl    = document.getElementById('selfconfig-diff-heading');
-  var statsEl   = document.getElementById('selfconfig-diff-stats');
-  var contentEl = document.getElementById('selfconfig-diff-content');
-  var meta = _configMeta(filename);
-  if (headEl) headEl.textContent = meta.icon + '  What changed in ' + meta.title;
-  if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Loading...</span>';
-  try {
-    var url = '/api/selfconfig/' + encodeURIComponent(filename) + '/diff?from=' + fromTs + '&to=' + toTs;
-    var d = await (typeof fetchJsonWithTimeout === 'function'
-      ? fetchJsonWithTimeout(url, 8000)
-      : fetch(url).then(function(r){return r.json();}));
-    if (statsEl) {
-      var added = d.added_chars || 0;
-      var removed = d.removed_chars || 0;
+function _renderTimelineRows(filename) {
+  var list = document.getElementById('selfconfig-timeline');
+  if (!list) return;
+  var rows = [];
+  // "Now" entry at top.
+  var nowActive = _selfconfigSelectedTs == null;
+  rows.push(_selfconfigRowHtml(filename, null, {
+    label: 'Now',
+    sub: 'Current version',
+    active: nowActive
+  }));
+  // One row per revision, newest first.
+  _selfconfigRevisions.forEach(function(rev, idx) {
+    var isFirst = idx === _selfconfigRevisions.length - 1;
+    var when = _friendlyTimestamp(rev.ts);
+    var summary;
+    if (isFirst) {
+      summary = 'Created';
+    } else if (rev._summary) {
+      summary = rev._summary;
+    } else {
+      summary = 'Updated';
+    }
+    var lineDelta = '';
+    if (rev._addedLines != null || rev._removedLines != null) {
+      var a = rev._addedLines || 0;
+      var r = rev._removedLines || 0;
       var parts = [];
-      if (added) parts.push('<span style="color:#22c55e;">+' + added + ' added</span>');
-      if (removed) parts.push('<span style="color:#ef4444;">\u2212' + removed + ' removed</span>');
-      statsEl.innerHTML = parts.join(' &nbsp;\u00B7&nbsp; ') + (d.truncated ? ' <span style="color:#f59e0b;">(shortened)</span>' : '');
+      if (a) parts.push('<span style="color:#22c55e;">+' + a + '</span>');
+      if (r) parts.push('<span style="color:#ef4444;">\u2212' + r + '</span>');
+      if (parts.length) lineDelta = ' &nbsp;\u00B7&nbsp; ' + parts.join(' ');
     }
-    var lines = d.diff_lines || [];
-    if (!lines.length) {
-      contentEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">No changes between these two versions.</div>';
-      return;
+    rows.push(_selfconfigRowHtml(filename, rev.ts, {
+      label: when,
+      sub: summary + lineDelta,
+      active: _selfconfigSelectedTs === rev.ts
+    }));
+  });
+  list.innerHTML = rows.join('');
+}
+
+function _selfconfigRowHtml(filename, ts, opts) {
+  var dotColor = ts == null ? '#22c55e' : '#64748b';
+  var activeBg = opts.active ? 'background:rgba(99,102,241,0.12);border-color:rgba(99,102,241,0.35);' : '';
+  var tsArg = ts == null ? 'null' : ts;
+  return '<div onclick="selfconfigOpenFile(\'' + filename + '\',' + tsArg + ')" style="cursor:pointer;position:relative;padding:9px 10px 9px 22px;border-radius:6px;margin-bottom:2px;border:1px solid transparent;transition:background 0.12s;' + activeBg + '" onmouseover="if(!this.style.background)this.style.background=\'var(--bg-hover)\'" onmouseout="if(this.style.border.indexOf(\'rgba(99,102,241\')===-1)this.style.background=\'\'">'
+    + '<span style="position:absolute;left:8px;top:13px;width:7px;height:7px;border-radius:50%;background:' + dotColor + ';"></span>'
+    + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + opts.label + '</div>'
+    + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.4;">' + opts.sub + '</div>'
+    + '</div>';
+}
+
+// Populate the reader pane — shows the file content at the requested version.
+async function _selfconfigRenderReader(filename, ts) {
+  var meta = _configMeta(filename);
+  var iconEl = document.getElementById('selfconfig-reader-icon');
+  var titleEl = document.getElementById('selfconfig-reader-title');
+  var badgeEl = document.getElementById('selfconfig-reader-badge');
+  var subEl = document.getElementById('selfconfig-reader-sub');
+  var bodyEl = document.getElementById('selfconfig-reader-body');
+  var bannerEl = document.getElementById('selfconfig-reader-banner');
+  var bannerText = document.getElementById('selfconfig-reader-banner-text');
+  if (iconEl) iconEl.textContent = meta.icon;
+  if (titleEl) titleEl.textContent = meta.title;
+  if (badgeEl) badgeEl.style.display = (filename === 'SOUL.md') ? 'inline-block' : 'none';
+  if (subEl) subEl.textContent = meta.desc;
+  if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">Loading...</div>';
+  if (bannerEl) {
+    if (ts == null) {
+      bannerEl.style.display = 'none';
+    } else {
+      bannerEl.style.display = 'flex';
+      if (bannerText) bannerText.textContent = 'Viewing a past version from ' + _friendlyTimestamp(ts);
     }
-    contentEl.innerHTML = lines.map(function(line) {
-      var txt = (line.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      if (line.type === 'added') {
-        return '<div style="background:rgba(34,197,94,0.12);color:#86efac;padding:1px 6px;white-space:pre;">' + txt + '</div>';
-      } else if (line.type === 'removed') {
-        return '<div style="background:rgba(239,68,68,0.12);color:#fca5a5;padding:1px 6px;white-space:pre;">' + txt + '</div>';
-      } else if (line.type === 'meta') {
-        return '<div style="color:var(--text-muted);padding:1px 6px;white-space:pre;font-size:11px;">' + txt + '</div>';
+  }
+  try {
+    var url = '/api/selfconfig/' + encodeURIComponent(filename) + '/content' + (ts == null ? '' : '?ts=' + ts);
+    var d = await fetch(url).then(function(r){return r.json();});
+    if (bodyEl) {
+      if (!d.exists && ts == null) {
+        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">Your agent hasn\u2019t written anything here yet. When it does, you\u2019ll see the content here automatically.</div>';
+      } else if (!d.content || !d.content.trim()) {
+        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">This version is empty.</div>';
       } else {
-        return '<div style="color:var(--text-secondary);padding:1px 6px;white-space:pre;">' + txt + '</div>';
+        bodyEl.innerHTML = '<div class="mem-prose">' + _renderMarkdown(d.content) + '</div>';
       }
-    }).join('');
+    }
   } catch(e) {
-    if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Couldn\u2019t load this comparison.</span>';
+    if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">Couldn\u2019t load this version.</div>';
   }
 }
 
-function selfconfigBackToRevisions() {
-  var diffPanel = document.getElementById('selfconfig-diff-panel');
-  var revsPanel = document.getElementById('selfconfig-revisions-panel');
-  if (diffPanel) diffPanel.style.display = 'none';
-  if (revsPanel && _selfconfigCurrentFile) {
-    revsPanel.style.display = 'block';
-  }
-}
+// Kept as public shims so older buttons/links still resolve (no-op — the new
+// selection model handles what these used to do).
+async function loadSelfConfigHistory(filename) { return selfconfigOpenFile(filename, null); }
+async function loadSelfConfigDiff(filename, fromTs, toTs) { return selfconfigOpenFile(filename, toTs); }
+function selfconfigBackToRevisions() { selfconfigBackToNow(); }
 
 // ── Skills: shortcuts your agent can use ─────────────────────────────────────
 var _skillsShowDetails = false;

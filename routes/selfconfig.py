@@ -323,6 +323,10 @@ def api_selfconfig_diff(filename):
     diff_lines = []
     added_chars = 0
     removed_chars = 0
+    added_lines_count = 0
+    removed_lines_count = 0
+    added_raw = []  # text of added lines, for summarization
+    removed_raw = []
 
     for line in raw_diff:
         if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
@@ -330,13 +334,19 @@ def api_selfconfig_diff(filename):
         elif line.startswith("+"):
             text = line[1:]
             added_chars += len(text)
+            added_lines_count += 1
+            added_raw.append(text)
             diff_lines.append({"type": "added", "text": "+ " + text})
         elif line.startswith("-"):
             text = line[1:]
             removed_chars += len(text)
+            removed_lines_count += 1
+            removed_raw.append(text)
             diff_lines.append({"type": "removed", "text": "- " + text})
         else:
             diff_lines.append({"type": "context", "text": line})
+
+    summary = _summarize_change(added_raw, removed_raw)
 
     return jsonify({
         "name": filename,
@@ -345,19 +355,113 @@ def api_selfconfig_diff(filename):
         "diff_lines": diff_lines,
         "added_chars": added_chars,
         "removed_chars": removed_chars,
+        "added_lines": added_lines_count,
+        "removed_lines": removed_lines_count,
+        "summary": summary,
         "truncated": truncated,
     })
 
 
+def _summarize_change(added_raw, removed_raw):
+    """
+    Generate a 1-line plain-English summary of a change.
+
+    Heuristics:
+      * If the change adds/edits markdown fields (``- **Name:** …``), list the
+        field names.
+      * If lines are mostly additions under a ``## Heading``, mention the
+        heading ("added notes under Context").
+      * If the change is a pure deletion, say "Removed ...".
+      * Fall back to a small/large change descriptor so the UI never shows
+        raw byte counts.
+    """
+    import re
+
+    def _extract_field_names(lines):
+        names = []
+        for line in lines:
+            m = re.match(r"\s*[-*]\s*\*\*([^*]+?)[:\*]", line)
+            if m:
+                nm = m.group(1).strip().rstrip(":").strip()
+                if nm and nm not in names:
+                    names.append(nm)
+        return names
+
+    def _extract_headings(lines):
+        heads = []
+        for line in lines:
+            m = re.match(r"\s*#{1,6}\s+(.+?)\s*$", line)
+            if m:
+                h = m.group(1).strip()
+                if h and h not in heads:
+                    heads.append(h)
+        return heads
+
+    added_fields = _extract_field_names(added_raw)
+    removed_fields = _extract_field_names(removed_raw)
+    common_fields = [f for f in added_fields if f in removed_fields]
+    only_added = [f for f in added_fields if f not in common_fields]
+    only_removed = [f for f in removed_fields if f not in common_fields]
+
+    if common_fields and not only_added and not only_removed:
+        parts = common_fields[:3]
+        suffix = (", and " + str(len(common_fields) - 3) + " more") if len(common_fields) > 3 else ""
+        return "Updated " + ", ".join(parts) + suffix
+    if only_added and not only_removed and not common_fields:
+        parts = only_added[:3]
+        suffix = (", and " + str(len(only_added) - 3) + " more") if len(only_added) > 3 else ""
+        return "Added " + ", ".join(parts) + suffix
+    if common_fields or only_added:
+        fields = (common_fields + only_added)[:3]
+        suffix = (" and more") if len(common_fields + only_added) > 3 else ""
+        return "Edited " + ", ".join(fields) + suffix
+
+    added_headings = _extract_headings(added_raw)
+    if added_headings:
+        return "Added a '" + added_headings[0] + "' section"
+
+    # Plain-prose change with no obvious structure.
+    total = len(added_raw) + len(removed_raw)
+    if len(added_raw) > 0 and len(removed_raw) == 0:
+        return "Added new notes"
+    if len(removed_raw) > 0 and len(added_raw) == 0:
+        return "Removed some content"
+    if total <= 4:
+        return "Small tweak"
+    if total <= 20:
+        return "Reworded a paragraph"
+    return "Substantial rewrite"
+
+
 @bp_selfconfig.route("/api/selfconfig/<filename>/content")
 def api_selfconfig_content(filename):
-    """Return the raw content of a specific versioned snapshot."""
+    """Return the content of a version, or the live file if ``ts`` is omitted."""
     if filename not in _TRACKED_FILES:
         return jsonify({"error": f"Unknown file: {filename}"}), 404
 
     ts_str = request.args.get("ts", "")
+
     if not ts_str:
-        return jsonify({"error": "'ts' query param is required"}), 400
+        # No ts => return the live file on disk (the "current" version).
+        path = _locate_file(filename)
+        if path is None:
+            return jsonify({
+                "name": filename,
+                "ts": None,
+                "content": "",
+                "truncated": False,
+                "exists": False,
+                "is_values_file": filename in _VALUES_FILES,
+            })
+        data, truncated = _read_file_safe(path)
+        return jsonify({
+            "name": filename,
+            "ts": int(os.path.getmtime(path)),
+            "content": data.decode("utf-8", errors="replace"),
+            "truncated": truncated,
+            "exists": True,
+            "is_values_file": filename in _VALUES_FILES,
+        })
 
     try:
         ts = int(ts_str)
@@ -376,5 +480,6 @@ def api_selfconfig_content(filename):
         "ts": ts,
         "content": content,
         "truncated": truncated,
+        "exists": True,
         "is_values_file": filename in _VALUES_FILES,
     })

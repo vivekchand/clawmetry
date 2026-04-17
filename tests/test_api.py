@@ -1049,9 +1049,30 @@ class TestSelfConfig:
             f"Expected 400 when diff params missing, got {r.status_code}"
         )
 
-    def test_selfconfig_content_missing_ts(self, api, base_url):
-        """Content endpoint returns 400 when ts param is missing."""
+    def test_selfconfig_content_without_ts_returns_live(self, api, base_url):
+        """Content endpoint without ts returns the live file contents."""
         r = get(api, base_url, "/api/selfconfig/SOUL.md/content")
-        assert r.status_code == 400, (
-            f"Expected 400 when ts param missing, got {r.status_code}"
+        assert r.status_code == 200, (
+            f"Expected 200 for live content, got {r.status_code}"
         )
+        d = r.json()
+        assert d["name"] == "SOUL.md"
+        assert "content" in d
+        assert "exists" in d
+
+    def test_selfconfig_diff_has_summary(self, api, base_url):
+        """Diff endpoint now returns a plain-English summary + line counts."""
+        # Fetch revisions to find a pair to diff
+        rev_r = get(api, base_url, "/api/selfconfig/USER.md")
+        if rev_r.status_code != 200:
+            return  # env without USER.md — skip
+        revs = rev_r.json().get("revisions", [])
+        if len(revs) < 2:
+            return  # only one revision — nothing to diff
+        r = get(api, base_url, f"/api/selfconfig/USER.md/diff?from={revs[1]['ts']}&to={revs[0]['ts']}")
+        assert r.status_code == 200
+        d = r.json()
+        assert "summary" in d
+        assert isinstance(d["summary"], str)
+        assert "added_lines" in d
+        assert "removed_lines" in d
