@@ -49,7 +49,7 @@ def _parse_ts(msg: dict, file_mtime: float) -> float:
     return file_mtime
 
 
-def _median_safe(values: list) -> float | None:
+def _median_safe(values: list):
     """Return median of *values*, or None if list is empty."""
     if not values:
         return None
