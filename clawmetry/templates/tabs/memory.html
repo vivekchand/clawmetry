@@ -1,14 +1,57 @@
 <div class="page" id="page-memory">
-  <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadMemory()">↻ Refresh</button>
-  </div>
-  <div id="memory-analytics-panel" style="margin-bottom:12px"></div>
-  <div class="card" id="memory-list">Loading...</div>
-  <div class="file-viewer" id="file-viewer">
-    <div class="file-viewer-header">
-      <span class="file-viewer-title" id="file-viewer-title"></span>
-      <button class="file-viewer-close" onclick="closeFileViewer()">✕ Close</button>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">Memory</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">What your agent remembers &mdash; about you, about itself, and day-to-day notes.</div>
     </div>
-    <div class="file-viewer-content" id="file-viewer-content"></div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <div class="mem-view-tab" data-view="summary" onclick="memorySwitchView('summary')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg-secondary);border:1px solid var(--border-primary);color:var(--text-primary);">Summary</div>
+      <div class="mem-view-tab" data-view="all" onclick="memorySwitchView('all')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;border:1px solid transparent;color:var(--text-muted);">All files</div>
+      <button class="refresh-btn" onclick="loadMemory()" style="margin-left:8px;">&#8635;</button>
+    </div>
+  </div>
+
+  <!-- SUMMARY VIEW (default) — change history over curated files -->
+  <div id="memory-summary-view">
+    <div style="display:grid;grid-template-columns:280px 1fr;gap:12px;min-height:400px;">
+      <div id="selfconfig-file-list" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px;">
+        <div id="selfconfig-files-inner" style="color:var(--text-muted);font-size:12px;">Loading...</div>
+      </div>
+      <div id="selfconfig-detail-pane" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:14px;">
+        <div id="selfconfig-empty-state" style="color:var(--text-muted);font-size:13px;padding:40px 0;text-align:center;">
+          <div style="font-size:28px;margin-bottom:8px;opacity:0.4;">&#128270;</div>
+          Pick something on the left to see what your agent learned.
+        </div>
+        <div id="selfconfig-revisions-panel" style="display:none;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <div style="font-size:16px;font-weight:700;color:var(--text-primary);" id="selfconfig-filename-heading"></div>
+            <div id="selfconfig-values-badge" style="display:none;background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:10px;padding:3px 10px;font-size:11px;font-weight:700;" title="Changes here affect how your agent thinks and behaves.">&#9888; Sensitive</div>
+          </div>
+          <div id="selfconfig-file-description" style="font-size:12px;color:var(--text-muted);margin-bottom:16px;"></div>
+          <div id="selfconfig-revisions-list" style="font-size:13px;"></div>
+        </div>
+        <div id="selfconfig-diff-panel" style="display:none;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <button onclick="selfconfigBackToRevisions()" style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);">&#8592; Back</button>
+            <span style="font-size:14px;font-weight:700;color:var(--text-primary);" id="selfconfig-diff-heading"></span>
+            <span id="selfconfig-diff-stats" style="font-size:12px;color:var(--text-muted);margin-left:auto;"></span>
+          </div>
+          <div id="selfconfig-diff-content" style="font-family:'JetBrains Mono','SF Mono',monospace;font-size:12px;line-height:1.6;overflow-x:auto;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ALL FILES VIEW — raw file explorer + context budgets -->
+  <div id="memory-all-view" style="display:none;">
+    <div id="memory-analytics-panel" style="margin-bottom:12px"></div>
+    <div class="card" id="memory-list">Loading...</div>
+    <div class="file-viewer" id="file-viewer">
+      <div class="file-viewer-header">
+        <span class="file-viewer-title" id="file-viewer-title"></span>
+        <button class="file-viewer-close" onclick="closeFileViewer()">&times; Close</button>
+      </div>
+      <div class="file-viewer-content" id="file-viewer-content"></div>
+    </div>
   </div>
 </div>

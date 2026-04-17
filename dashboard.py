@@ -3266,7 +3266,6 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
-    <div class="nav-tab" onclick="switchTab('selfconfig')" title="What your agent knows about itself and you">Mind</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
@@ -8534,7 +8533,6 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
-    <div class="nav-tab" onclick="switchTab('selfconfig')" title="What your agent knows about itself and you">Mind</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
@@ -8614,8 +8612,6 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/skills.html' %}
 
 {% include 'tabs/logs.html' %}
-
-{% include 'tabs/selfconfig.html' %}
 
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </div> <!-- end zoom-wrapper -->

@@ -517,7 +517,6 @@ function switchTab(name) {
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
   if (name === 'usage') loadUsage();
   if (name === 'skills') loadSkills();
-  if (name === 'selfconfig') loadSelfConfig();
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
@@ -3459,7 +3458,33 @@ async function loadMemoryAnalytics() {
   } catch(e) { panel.innerHTML = ''; }
 }
 
+// Switch between Summary (friendly change-history) and All files (raw explorer).
+function memorySwitchView(view) {
+  var summary = document.getElementById('memory-summary-view');
+  var all = document.getElementById('memory-all-view');
+  if (summary) summary.style.display = view === 'summary' ? 'block' : 'none';
+  if (all) all.style.display = view === 'all' ? 'block' : 'none';
+  document.querySelectorAll('.mem-view-tab').forEach(function(t) {
+    var active = t.getAttribute('data-view') === view;
+    t.style.background = active ? 'var(--bg-secondary)' : 'transparent';
+    t.style.border = active ? '1px solid var(--border-primary)' : '1px solid transparent';
+    t.style.color = active ? 'var(--text-primary)' : 'var(--text-muted)';
+  });
+  if (view === 'summary') {
+    if (typeof loadSelfConfig === 'function') loadSelfConfig();
+  } else {
+    _loadMemoryAllFiles();
+  }
+}
+
+// Entry point called by nav switchTab + loadAll bootstrap.
 async function loadMemory() {
+  // Default to Summary (friendly) view.
+  if (typeof loadSelfConfig === 'function') loadSelfConfig();
+}
+
+// Legacy raw file explorer — runs only when "All files" is selected.
+async function _loadMemoryAllFiles() {
   if (window.CLOUD_MODE) {
     var el = document.getElementById('memory-list');
     if (el) el.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">Memory files are stored locally on the agent machine and are not synced to cloud.</div>';
