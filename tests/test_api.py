@@ -983,3 +983,75 @@ class TestAutonomy:
         d = assert_ok(get(api, base_url, "/api/autonomy"))
         if d["score"] is not None:
             assert 0.0 <= d["score"] <= 1.0, f"score out of range: {d['score']}"
+
+
+# ---------------------------------------------------------------------------
+# Self-Configuration Diff Viewer (#689)
+# ---------------------------------------------------------------------------
+
+
+class TestSelfConfig:
+    """Tests for issue #689 — self-configuration diff viewer."""
+
+    def test_selfconfig_list_ok(self, api, base_url):
+        """GET /api/selfconfig returns HTTP 200 with files list."""
+        r = get(api, base_url, "/api/selfconfig")
+        assert r.status_code == 200, (
+            f"Expected 200 for {r.url}, got {r.status_code}: {r.text[:200]}"
+        )
+        d = r.json()
+        assert "files" in d, "Response must contain 'files' key"
+
+    def test_selfconfig_list_structure(self, api, base_url):
+        """Each file entry has required keys."""
+        d = assert_ok(get(api, base_url, "/api/selfconfig"))
+        for f in d.get("files", []):
+            for key in ("name", "tracked", "exists", "revision_count", "is_values_file"):
+                assert key in f, f"Missing key '{key}' in file entry: {f}"
+
+    def test_selfconfig_soul_is_values_file(self, api, base_url):
+        """SOUL.md must have is_values_file=True; other files must not."""
+        d = assert_ok(get(api, base_url, "/api/selfconfig"))
+        for f in d.get("files", []):
+            if f["name"] == "SOUL.md":
+                assert f["is_values_file"] is True, "SOUL.md must be a values file"
+            else:
+                assert f["is_values_file"] is False, (
+                    f"{f['name']} should not be a values file"
+                )
+
+    def test_selfconfig_storage_path_present(self, api, base_url):
+        """Response includes storage_path key."""
+        d = assert_ok(get(api, base_url, "/api/selfconfig"))
+        assert "storage_path" in d, "Response must include 'storage_path'"
+
+    def test_unknown_file_404(self, api, base_url):
+        """Requesting a non-tracked file returns 404 or graceful empty."""
+        r = get(api, base_url, "/api/selfconfig/nonexistent_file_xyz.md")
+        assert r.status_code in [200, 404], (
+            f"Expected 200 or 404, got {r.status_code}: {r.text[:200]}"
+        )
+
+    def test_selfconfig_known_file_200(self, api, base_url):
+        """Requesting a tracked file name returns 200."""
+        r = get(api, base_url, "/api/selfconfig/SOUL.md")
+        assert r.status_code == 200, (
+            f"Expected 200 for SOUL.md, got {r.status_code}: {r.text[:200]}"
+        )
+        d = r.json()
+        assert "name" in d and d["name"] == "SOUL.md"
+        assert "revisions" in d, "Response must contain 'revisions' list"
+
+    def test_selfconfig_diff_missing_params(self, api, base_url):
+        """Diff endpoint returns 400 when from/to params are missing."""
+        r = get(api, base_url, "/api/selfconfig/SOUL.md/diff")
+        assert r.status_code == 400, (
+            f"Expected 400 when diff params missing, got {r.status_code}"
+        )
+
+    def test_selfconfig_content_missing_ts(self, api, base_url):
+        """Content endpoint returns 400 when ts param is missing."""
+        r = get(api, base_url, "/api/selfconfig/SOUL.md/content")
+        assert r.status_code == 400, (
+            f"Expected 400 when ts param missing, got {r.status_code}"
+        )
