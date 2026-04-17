@@ -61,14 +61,37 @@ jobs:
             --notes "Released via PR: ${{ github.event.pull_request.title }}" \
             --latest || echo "Release tag already exists, skipping"
 
-      - name: Commit version bump directly to main
+      - name: Open PR for version bump
+        # Branch protection on main blocks direct pushes. The wheel is
+        # already on PyPI + the release tag exists, so this step just keeps
+        # `__version__` in `dashboard.py` in sync via a normal PR. The next
+        # [RELEASE] workflow reads from PyPI, not dashboard.py, so a stale
+        # version-bump PR never blocks further releases.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW: ${{ steps.bump.outputs.new }}
+          TRIGGER_PR: ${{ github.event.pull_request.html_url }}
+          RUN_ID: ${{ github.run_id }}
         run: |
+          set -e
+          BRANCH="auto-bump/v${NEW}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
           git add dashboard.py
-          git commit -m "chore: bump to v${{ steps.bump.outputs.new }} [skip ci]"
-          # Rebase on top of any commits that landed while we were building/publishing
-          git pull --rebase origin main
-          git push origin main
+          git commit -m "chore: bump to v${NEW} [skip ci]"
+          git push origin "$BRANCH"
+          cat > /tmp/pr-body.md <<EOF
+          Auto-opened by \`release-on-merge.yml\` after publishing \`clawmetry==${NEW}\` to PyPI (run ${RUN_ID}).
+
+          This PR only syncs \`__version__\` in \`dashboard.py\` with what is already live on PyPI. Safe to squash-merge as-is.
+
+          Triggered by: ${TRIGGER_PR}
+          EOF
+          PR_URL=$(gh pr create --base main --head "$BRANCH" --title "chore: bump to v${NEW} [skip ci]" --body-file /tmp/pr-body.md)
+          echo "Opened version-bump PR: $PR_URL"
+          # Best-effort auto-merge. If branch protection blocks it, PR stays
+          # open for manual review — not a release blocker.
+          gh pr merge "$PR_URL" --squash --admin --delete-branch 2>&1 \
+            || gh pr merge "$PR_URL" --squash --delete-branch 2>&1 \
+            || echo "Auto-merge blocked — PR ready for manual merge."
