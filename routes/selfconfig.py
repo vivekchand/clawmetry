@@ -433,7 +433,70 @@ def _summarize_change(added_raw, removed_raw):
     return "Substantial rewrite"
 
 
-@bp_selfconfig.route("/api/selfconfig/<filename>/content")
+@bp_selfconfig.route("/api/selfconfig/<filename>/content", methods=["POST", "PUT"])
+def api_selfconfig_content_write(filename):
+    """
+    Write content back to the tracked file on disk.
+
+    Body: {"content": "...markdown..."}
+
+    After writing, runs ``_snapshot_if_changed`` so the new version is
+    recorded in the revision history.
+    """
+    if filename not in _TRACKED_FILES:
+        return jsonify({"error": f"Unknown file: {filename}"}), 404
+
+    body = request.get_json(silent=True) or {}
+    new_content = body.get("content")
+    if new_content is None or not isinstance(new_content, str):
+        return jsonify({"error": "'content' field (string) is required"}), 400
+
+    # Respect the 500 KB read cap on writes too.
+    if len(new_content.encode("utf-8")) > _MAX_FILE_BYTES:
+        return jsonify({"error": f"File too large (>{_MAX_FILE_BYTES} bytes)"}), 413
+
+    # Locate where the file should go. Prefer existing location; fall back to
+    # WORKSPACE root if the file doesn't exist yet.
+    path = _locate_file(filename)
+    if path is None:
+        try:
+            import dashboard as _d
+            workspace = getattr(_d, "WORKSPACE", None)
+        except Exception:
+            workspace = None
+        if workspace and os.path.isdir(os.path.join(workspace, "workspace")):
+            path = os.path.join(workspace, "workspace", filename)
+        elif workspace:
+            path = os.path.join(workspace, filename)
+        else:
+            path = os.path.expanduser(os.path.join("~/.openclaw/workspace", filename))
+
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(new_content)
+    except Exception as exc:
+        log.warning("selfconfig: failed to write %s: %s", path, exc)
+        return jsonify({"error": f"Failed to write file: {exc}"}), 500
+
+    # Force a fresh snapshot so the new version is recorded immediately.
+    index = _load_index()
+    index["_last_run_ts"] = 0
+    _save_index(index)
+    try:
+        _snapshot_if_changed()
+    except Exception as exc:
+        log.warning("selfconfig: snapshot after write failed: %s", exc)
+
+    return jsonify({
+        "ok": True,
+        "name": filename,
+        "path": path,
+        "size": len(new_content.encode("utf-8")),
+    })
+
+
+@bp_selfconfig.route("/api/selfconfig/<filename>/content", methods=["GET"])
 def api_selfconfig_content(filename):
     """Return the content of a version, or the live file if ``ts`` is omitted."""
     if filename not in _TRACKED_FILES:

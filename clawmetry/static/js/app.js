@@ -800,24 +800,26 @@ async function loadHeartbeat() {
   } catch(e) { console.warn('heartbeat panel load failed', e); }
 }
 
-// ── Memory: commit-log + content viewer ──────────────────────────────────────
+// ── Memory: commit-log + editor ──────────────────────────────────────────────
 var _selfconfigCurrentFile = null;
 var _selfconfigRevisions = [];
 var _selfconfigSelectedTs = null;   // null = "now" (live file)
+var _selfconfigMode = 'preview';    // 'preview' | 'edit'
+var _selfconfigOriginal = '';       // content loaded into editor (for dirty-check)
 
-// Friendly labels for the 6 tracked files. Keeps the underlying filename
-// searchable in devtools but shows plain English in the UI.
+// One-line descriptions shown under each filename. Keep filenames as primary —
+// users are technical enough to grok .md; descriptions are secondary hints.
 var _CONFIG_FILE_META = {
-  'USER.md':     { icon: '\uD83D\uDC64', title: 'About you',       desc: 'What your agent knows about you.' },
-  'SOUL.md':     { icon: '\uD83C\uDFAD', title: 'Personality',     desc: 'How your agent talks, thinks and treats you.' },
-  'AGENTS.md':   { icon: '\uD83E\uDDE0', title: 'How it thinks',   desc: 'The rules your agent uses to make decisions.' },
-  'TOOLS.md':    { icon: '\uD83D\uDEE0\uFE0F', title: 'Tools',     desc: 'Commands and shortcuts your agent knows.' },
-  'IDENTITY.md': { icon: '\u2728',       title: 'Name & vibe',     desc: 'Who your agent is \u2014 name, creature, vibe.' },
-  'MEMORY.md':   { icon: '\uD83D\uDCDD', title: 'Memory',          desc: 'Notes your agent keeps over time.' }
+  'USER.md':     { desc: 'What your agent knows about you.' },
+  'SOUL.md':     { desc: 'How your agent talks, thinks and treats you.' },
+  'AGENTS.md':   { desc: 'The rules your agent uses to make decisions.' },
+  'TOOLS.md':    { desc: 'Commands and shortcuts your agent knows.' },
+  'IDENTITY.md': { desc: 'Who your agent is \u2014 name, creature, vibe.' },
+  'MEMORY.md':   { desc: 'Notes your agent keeps over time.' }
 };
 
 function _configMeta(filename) {
-  return _CONFIG_FILE_META[filename] || { icon: '\uD83D\uDCC4', title: filename, desc: '' };
+  return _CONFIG_FILE_META[filename] || { desc: '' };
 }
 
 // Escape HTML for safe injection of raw file content.
@@ -850,26 +852,27 @@ async function loadSelfConfig() {
     inner.innerHTML = files.map(function(f) {
       var meta = _configMeta(f.name);
       var sensitive = f.is_values_file
-        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:7px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px;letter-spacing:0.3px;" title="Changes here affect how your agent behaves.">SENSITIVE</span>'
+        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:6px;padding:0 5px;font-size:9px;font-weight:700;margin-left:6px;letter-spacing:0.3px;vertical-align:middle;" title="Changes here affect how your agent behaves.">SENSITIVE</span>'
         : '';
       var recentDot = '';
       if (f.exists && f.last_modified_ts) {
         var ageMin = (Date.now() / 1000 - f.last_modified_ts) / 60;
         if (ageMin < 1440) {
-          recentDot = ' <span title="Changed in the last 24 hours" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#6366f1;vertical-align:middle;margin-left:4px;"></span>';
+          recentDot = ' <span title="Changed in the last 24 hours" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#6366f1;vertical-align:middle;margin-left:6px;"></span>';
         }
       }
-      var existStyle = f.exists ? '' : 'opacity:0.45;';
+      var existHint = f.exists ? '' : ' <span style="font-size:10px;color:var(--text-muted);font-weight:400;">(empty)</span>';
       var activeStyle = (f.name === _selfconfigCurrentFile)
         ? 'background:var(--bg-tertiary,rgba(99,102,241,0.08));border-color:rgba(99,102,241,0.3);'
         : 'border-color:transparent;';
-      return '<div data-filename="' + f.name + '" onclick="selfconfigOpenFile(\'' + f.name + '\')" style="cursor:pointer;padding:8px 10px;border-radius:6px;margin-bottom:2px;' + existStyle + 'border:1px solid transparent;transition:background 0.12s;' + activeStyle + '" onmouseover="if(this.dataset.filename!==window._selfconfigCurrentFile)this.style.background=\'var(--bg-hover)\'" onmouseout="if(this.dataset.filename!==window._selfconfigCurrentFile)this.style.background=\'\'">'
-        + '<div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--text-primary);">'
-        + '<span style="font-size:15px;">' + meta.icon + '</span>'
-        + '<span>' + meta.title + '</span>'
+      return '<div data-filename="' + f.name + '" onclick="selfconfigOpenFile(\'' + f.name + '\')" style="cursor:pointer;padding:8px 10px;border-radius:6px;margin-bottom:2px;border:1px solid transparent;transition:background 0.12s;' + activeStyle + '" onmouseover="if(this.dataset.filename!==window._selfconfigCurrentFile)this.style.background=\'var(--bg-hover)\'" onmouseout="if(this.dataset.filename!==window._selfconfigCurrentFile)this.style.background=\'\'">'
+        + '<div style="display:flex;align-items:center;">'
+        + '<span style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:13px;font-weight:600;color:var(--text-primary);">' + f.name + '</span>'
+        + existHint
         + sensitive
         + recentDot
         + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:3px;line-height:1.4;">' + (meta.desc || '') + '</div>'
         + '</div>';
     }).join('');
     // Auto-open the first existing file if nothing is selected yet.
@@ -911,8 +914,7 @@ async function _selfconfigRenderTimeline(filename) {
   var heading = document.getElementById('selfconfig-timeline-heading');
   if (!wrap || !list) return;
   wrap.style.display = 'block';
-  var meta = _configMeta(filename);
-  if (heading) heading.textContent = 'Changes to ' + meta.title;
+  if (heading) heading.textContent = 'History \u00B7 ' + filename;
   list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Loading...</span>';
   try {
     var d = await (typeof fetchJsonWithTimeout === 'function'
@@ -998,32 +1000,45 @@ function _selfconfigRowHtml(filename, ts, opts) {
 // Populate the reader pane — shows the file content at the requested version.
 async function _selfconfigRenderReader(filename, ts) {
   var meta = _configMeta(filename);
-  var iconEl = document.getElementById('selfconfig-reader-icon');
   var titleEl = document.getElementById('selfconfig-reader-title');
   var badgeEl = document.getElementById('selfconfig-reader-badge');
   var subEl = document.getElementById('selfconfig-reader-sub');
   var bodyEl = document.getElementById('selfconfig-reader-body');
+  var editorBody = document.getElementById('selfconfig-editor-body');
+  var editorToolbar = document.getElementById('selfconfig-editor-toolbar');
   var bannerEl = document.getElementById('selfconfig-reader-banner');
   var bannerText = document.getElementById('selfconfig-reader-banner-text');
-  if (iconEl) iconEl.textContent = meta.icon;
-  if (titleEl) titleEl.textContent = meta.title;
+
+  if (titleEl) titleEl.textContent = filename;
   if (badgeEl) badgeEl.style.display = (filename === 'SOUL.md') ? 'inline-block' : 'none';
   if (subEl) subEl.textContent = meta.desc;
   if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">Loading...</div>';
+
+  // Edit toolbar is only available when viewing the live file.
+  if (editorToolbar) editorToolbar.style.display = (ts == null) ? 'flex' : 'none';
+
   if (bannerEl) {
     if (ts == null) {
       bannerEl.style.display = 'none';
     } else {
       bannerEl.style.display = 'flex';
-      if (bannerText) bannerText.textContent = 'Viewing a past version from ' + _friendlyTimestamp(ts);
+      if (bannerText) bannerText.textContent = 'Viewing the version from ' + _friendlyTimestamp(ts);
     }
   }
+
+  // Force preview mode when switching files / versions.
+  _selfconfigMode = 'preview';
+  _selfconfigUpdateModeButtons();
+  if (bodyEl) bodyEl.style.display = 'block';
+  if (editorBody) editorBody.style.display = 'none';
+
   try {
     var url = '/api/selfconfig/' + encodeURIComponent(filename) + '/content' + (ts == null ? '' : '?ts=' + ts);
     var d = await fetch(url).then(function(r){return r.json();});
+    _selfconfigOriginal = d.content || '';
     if (bodyEl) {
       if (!d.exists && ts == null) {
-        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">Your agent hasn\u2019t written anything here yet. When it does, you\u2019ll see the content here automatically.</div>';
+        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">This file hasn\u2019t been created yet. Click <strong>Edit</strong> above to write the first version.</div>';
       } else if (!d.content || !d.content.trim()) {
         bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">This version is empty.</div>';
       } else {
@@ -1035,8 +1050,102 @@ async function _selfconfigRenderReader(filename, ts) {
   }
 }
 
-// Kept as public shims so older buttons/links still resolve (no-op — the new
-// selection model handles what these used to do).
+// ── Editor controls ──────────────────────────────────────────────────────────
+
+function _selfconfigUpdateModeButtons() {
+  document.querySelectorAll('.sc-mode-btn').forEach(function(btn) {
+    var active = btn.getAttribute('data-mode') === _selfconfigMode;
+    btn.style.background = active ? 'var(--bg-primary)' : 'transparent';
+    btn.style.border = active ? '1px solid var(--border-primary)' : '1px solid transparent';
+    btn.style.color = active ? 'var(--text-primary)' : 'var(--text-muted)';
+  });
+}
+
+function selfconfigSetMode(mode) {
+  if (_selfconfigSelectedTs != null && mode === 'edit') return;  // read-only for past versions
+  _selfconfigMode = mode;
+  _selfconfigUpdateModeButtons();
+  var bodyEl = document.getElementById('selfconfig-reader-body');
+  var editorBody = document.getElementById('selfconfig-editor-body');
+  var textarea = document.getElementById('selfconfig-editor-textarea');
+  var statusEl = document.getElementById('selfconfig-editor-status');
+  if (mode === 'edit') {
+    if (bodyEl) bodyEl.style.display = 'none';
+    if (editorBody) editorBody.style.display = 'flex';
+    if (textarea) {
+      textarea.value = _selfconfigOriginal || '';
+      setTimeout(function(){ textarea.focus(); }, 30);
+    }
+    if (statusEl) statusEl.textContent = '';
+  } else {
+    if (bodyEl) bodyEl.style.display = 'block';
+    if (editorBody) editorBody.style.display = 'none';
+  }
+}
+
+function selfconfigDiscardEdit() {
+  var textarea = document.getElementById('selfconfig-editor-textarea');
+  if (textarea && textarea.value !== _selfconfigOriginal) {
+    if (!confirm('Discard unsaved changes?')) return;
+  }
+  selfconfigSetMode('preview');
+}
+
+async function selfconfigSave() {
+  var textarea = document.getElementById('selfconfig-editor-textarea');
+  var btn = document.getElementById('selfconfig-save-btn');
+  var statusEl = document.getElementById('selfconfig-editor-status');
+  if (!textarea || !_selfconfigCurrentFile) return;
+  var newContent = textarea.value;
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; btn.style.opacity = '0.6'; }
+  if (statusEl) statusEl.textContent = 'Saving...';
+  try {
+    var r = await fetch('/api/selfconfig/' + encodeURIComponent(_selfconfigCurrentFile) + '/content', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: newContent })
+    });
+    if (!r.ok) {
+      var err = await r.json().catch(function(){ return {}; });
+      throw new Error(err.error || ('HTTP ' + r.status));
+    }
+    _selfconfigOriginal = newContent;
+    if (statusEl) statusEl.textContent = 'Saved.';
+    // Refresh timeline + re-render preview after save.
+    await _selfconfigRenderTimeline(_selfconfigCurrentFile);
+    // Update the file list to reflect the new recency dot.
+    loadSelfConfig();
+    selfconfigSetMode('preview');
+  } catch(e) {
+    if (statusEl) statusEl.textContent = 'Save failed: ' + (e.message || e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; btn.style.opacity = '1'; }
+  }
+}
+
+async function selfconfigRestoreVersion() {
+  if (_selfconfigSelectedTs == null || !_selfconfigCurrentFile) return;
+  if (!confirm('Restore this version? The current content will be replaced (but saved as a new version in history).')) return;
+  try {
+    // Fetch the historical version's content, then save it as the live file.
+    var url = '/api/selfconfig/' + encodeURIComponent(_selfconfigCurrentFile) + '/content?ts=' + _selfconfigSelectedTs;
+    var d = await fetch(url).then(function(r){return r.json();});
+    var content = d.content || '';
+    var r = await fetch('/api/selfconfig/' + encodeURIComponent(_selfconfigCurrentFile) + '/content', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: content })
+    });
+    if (!r.ok) throw new Error('Save failed');
+    // Return to "now" with the restored content.
+    await selfconfigOpenFile(_selfconfigCurrentFile, null);
+    loadSelfConfig();
+  } catch(e) {
+    alert('Couldn\u2019t restore: ' + (e.message || e));
+  }
+}
+
+// Kept as public shims so older buttons/links still resolve.
 async function loadSelfConfigHistory(filename) { return selfconfigOpenFile(filename, null); }
 async function loadSelfConfigDiff(filename, fromTs, toTs) { return selfconfigOpenFile(filename, toTs); }
 function selfconfigBackToRevisions() { selfconfigBackToNow(); }

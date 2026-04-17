@@ -2,7 +2,7 @@
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:16px;flex-wrap:wrap;">
     <div>
       <div style="font-size:18px;font-weight:700;color:var(--text-primary);">Memory</div>
-      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">What your agent remembers &mdash; about you, about itself, and day-to-day notes.</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Markdown files your agent reads and updates over time. You can edit them too.</div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;">
       <div class="mem-view-tab" data-view="summary" onclick="memorySwitchView('summary')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg-secondary);border:1px solid var(--border-primary);color:var(--text-primary);">Summary</div>
@@ -11,34 +11,62 @@
     </div>
   </div>
 
-  <!-- SUMMARY VIEW — commit-log style history over curated files -->
+  <!-- SUMMARY VIEW -->
   <div id="memory-summary-view">
-    <div style="display:grid;grid-template-columns:320px 1fr;gap:16px;min-height:500px;">
+    <div style="display:grid;grid-template-columns:320px 1fr;gap:16px;min-height:540px;">
 
-      <!-- LEFT: file list + commit timeline -->
+      <!-- LEFT: file tree + commit timeline -->
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:6px;">
-          <div id="selfconfig-files-inner" style="color:var(--text-muted);font-size:12px;padding:6px;">Loading...</div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:1.2px;color:var(--text-muted);text-transform:uppercase;padding:6px 8px 4px 8px;">Files</div>
+          <div id="selfconfig-files-inner" style="color:var(--text-muted);font-size:12px;padding:4px 6px 6px 6px;">Loading...</div>
         </div>
-        <div id="selfconfig-timeline-wrap" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:12px 10px;display:none;">
-          <div style="font-size:10px;font-weight:700;letter-spacing:1.2px;color:var(--text-muted);text-transform:uppercase;padding:0 6px 8px 6px;" id="selfconfig-timeline-heading">Recent changes</div>
-          <div id="selfconfig-timeline" style="font-size:12px;"></div>
+        <div id="selfconfig-timeline-wrap" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:6px;display:none;">
+          <div style="font-size:10px;font-weight:700;letter-spacing:1.2px;color:var(--text-muted);text-transform:uppercase;padding:6px 8px 4px 8px;" id="selfconfig-timeline-heading">History</div>
+          <div id="selfconfig-timeline" style="font-size:12px;padding:2px;"></div>
         </div>
       </div>
 
-      <!-- RIGHT: content viewer (always inhabited) -->
-      <div id="selfconfig-reader" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:0;overflow:hidden;min-height:500px;display:flex;flex-direction:column;">
-        <div id="selfconfig-reader-banner" style="display:none;padding:10px 16px;background:rgba(99,102,241,0.08);border-bottom:1px solid rgba(99,102,241,0.2);font-size:12px;color:var(--text-secondary);align-items:center;gap:12px;justify-content:space-between;">
+      <!-- RIGHT: editor (reader + editor in one) -->
+      <div id="selfconfig-reader" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:0;overflow:hidden;min-height:540px;display:flex;flex-direction:column;">
+        <!-- Header: filename + description + mode toggle -->
+        <div style="padding:14px 18px 10px 18px;border-bottom:1px solid var(--border-primary);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:200px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-family:'JetBrains Mono','SF Mono',monospace;font-size:14px;font-weight:700;color:var(--text-primary);" id="selfconfig-reader-title">Pick a file</span>
+              <span id="selfconfig-reader-badge" style="display:none;background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;">&#9888; Sensitive</span>
+            </div>
+            <div id="selfconfig-reader-sub" style="font-size:11px;color:var(--text-muted);margin-top:3px;"></div>
+          </div>
+          <div id="selfconfig-editor-toolbar" style="display:none;align-items:center;gap:6px;">
+            <div class="sc-mode-btn" data-mode="preview" onclick="selfconfigSetMode('preview')" style="padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;background:var(--bg-primary);border:1px solid var(--border-primary);color:var(--text-primary);">Preview</div>
+            <div class="sc-mode-btn" data-mode="edit" onclick="selfconfigSetMode('edit')" style="padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;background:transparent;border:1px solid transparent;color:var(--text-muted);">Edit</div>
+          </div>
+        </div>
+
+        <!-- Banner when viewing a past version -->
+        <div id="selfconfig-reader-banner" style="display:none;padding:10px 18px;background:rgba(99,102,241,0.08);border-bottom:1px solid rgba(99,102,241,0.2);font-size:12px;color:var(--text-secondary);align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;">
           <div id="selfconfig-reader-banner-text">Viewing a past version</div>
-          <button id="selfconfig-reader-back" onclick="selfconfigBackToNow()" style="background:transparent;border:1px solid rgba(99,102,241,0.4);color:#a5b4fc;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">Back to now</button>
+          <div style="display:flex;gap:6px;">
+            <button onclick="selfconfigRestoreVersion()" style="background:rgba(99,102,241,0.2);border:1px solid rgba(99,102,241,0.4);color:#a5b4fc;border-radius:5px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">Restore this version</button>
+            <button onclick="selfconfigBackToNow()" style="background:transparent;border:1px solid rgba(99,102,241,0.4);color:#a5b4fc;border-radius:5px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">Back to now</button>
+          </div>
         </div>
-        <div id="selfconfig-reader-header" style="padding:16px 22px 8px 22px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <span id="selfconfig-reader-icon" style="font-size:22px;">&#128270;</span>
-          <span id="selfconfig-reader-title" style="font-size:17px;font-weight:700;color:var(--text-primary);">Pick something on the left</span>
-          <span id="selfconfig-reader-badge" style="display:none;background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;">&#9888; Sensitive</span>
+
+        <!-- Preview body -->
+        <div id="selfconfig-reader-body" style="flex:1;padding:14px 20px 16px 20px;overflow-y:auto;font-size:14px;line-height:1.65;color:var(--text-primary);"></div>
+
+        <!-- Editor body (hidden by default) -->
+        <div id="selfconfig-editor-body" style="display:none;flex:1;flex-direction:column;overflow:hidden;">
+          <textarea id="selfconfig-editor-textarea" spellcheck="false" style="flex:1;width:100%;padding:14px 20px;background:var(--bg-primary);border:none;color:var(--text-primary);font-family:'JetBrains Mono','SF Mono',monospace;font-size:13px;line-height:1.55;resize:none;outline:none;"></textarea>
+          <div style="padding:10px 18px;border-top:1px solid var(--border-primary);display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--bg-secondary);">
+            <div id="selfconfig-editor-status" style="font-size:11px;color:var(--text-muted);">Unsaved changes are kept only in this tab.</div>
+            <div style="display:flex;gap:6px;">
+              <button onclick="selfconfigDiscardEdit()" style="background:transparent;border:1px solid var(--border-primary);color:var(--text-muted);border-radius:5px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;">Discard</button>
+              <button id="selfconfig-save-btn" onclick="selfconfigSave()" style="background:#6366f1;border:1px solid #6366f1;color:white;border-radius:5px;padding:5px 14px;font-size:11px;font-weight:600;cursor:pointer;">Save</button>
+            </div>
+          </div>
         </div>
-        <div id="selfconfig-reader-sub" style="padding:0 22px 12px 22px;font-size:12px;color:var(--text-muted);"></div>
-        <div id="selfconfig-reader-body" style="flex:1;padding:8px 22px 20px 22px;overflow-y:auto;font-size:14px;line-height:1.65;color:var(--text-primary);"></div>
       </div>
 
     </div>
