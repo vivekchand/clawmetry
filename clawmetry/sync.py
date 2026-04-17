@@ -3159,6 +3159,199 @@ if __name__ == "__main__":
 
 
 
+def _compute_autonomy_daily_series(sessions_dir, days=90):
+    """
+    Compute per-day autonomy aggregates from local session transcripts.
+
+    Returns a list of ``{day, median_gap_sec, autonomy_ratio, sample_count}``
+    covering the last ``days`` days (UTC). Days with no user activity are
+    skipped — we don't send empty days to cloud.
+
+    The heavy lifting happens **here, on the user's machine**. Only the tiny
+    aggregate leaves the box. See memory note ``local_compute_cloud_display``.
+    """
+    from collections import defaultdict
+    from datetime import datetime as _dt_ad, timedelta as _td_ad, timezone as _tz_ad
+
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return []
+
+    now_utc = _dt_ad.now(tz=_tz_ad.utc)
+    cutoff_ts = now_utc.timestamp() - days * 86400
+
+    try:
+        files = [
+            f for f in os.listdir(sessions_dir)
+            if f.endswith(".jsonl") and ".deleted." not in f and ".reset." not in f
+        ]
+    except OSError:
+        return []
+
+    daily = defaultdict(lambda: {"gaps": [], "no_nudge_sessions": 0, "sessions": 0, "user_msgs": 0})
+
+    def _ts_of(msg_or_ev, fallback):
+        for key in ("timestamp", "ts", "created_at", "time"):
+            val = msg_or_ev.get(key)
+            if val is None:
+                continue
+            if isinstance(val, (int, float)):
+                return float(val) / (1000.0 if val > 10**12 else 1.0)
+            if isinstance(val, str):
+                try:
+                    if val.endswith("Z"):
+                        val = val[:-1] + "+00:00"
+                    return _dt_ad.fromisoformat(val).timestamp()
+                except (ValueError, TypeError):
+                    continue
+        return fallback
+
+    for fname in files:
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            file_mtime = os.path.getmtime(fpath)
+        except OSError:
+            file_mtime = now_utc.timestamp()
+        if file_mtime < cutoff_ts:
+            continue
+
+        user_timestamps = []
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if not isinstance(ev, dict):
+                        continue
+                    msg = ev.get("message") if ev.get("type") == "message" else ev
+                    if not isinstance(msg, dict):
+                        continue
+                    if msg.get("role") != "user":
+                        continue
+                    ts = _ts_of(msg, file_mtime)
+                    if ts == file_mtime and ev.get("type") == "message":
+                        ts = _ts_of(ev, file_mtime)
+                    if ts < cutoff_ts:
+                        continue
+                    user_timestamps.append(ts)
+        except OSError:
+            continue
+
+        if not user_timestamps:
+            continue
+        user_timestamps.sort()
+
+        # Gaps between consecutive user messages in this session.
+        session_gaps = [
+            user_timestamps[i + 1] - user_timestamps[i]
+            for i in range(len(user_timestamps) - 1)
+            if user_timestamps[i + 1] - user_timestamps[i] > 0
+        ]
+        is_no_nudge = len(user_timestamps) <= 1
+
+        day_key = _dt_ad.fromtimestamp(user_timestamps[0], tz=_tz_ad.utc).strftime("%Y-%m-%d")
+        daily[day_key]["gaps"].extend(session_gaps)
+        daily[day_key]["sessions"] += 1
+        daily[day_key]["user_msgs"] += len(user_timestamps)
+        if is_no_nudge:
+            daily[day_key]["no_nudge_sessions"] += 1
+
+    def _median(xs):
+        xs = [x for x in xs if x is not None]
+        if not xs:
+            return None
+        xs.sort()
+        n = len(xs)
+        m = n // 2
+        return float(xs[m]) if n % 2 else (xs[m - 1] + xs[m]) / 2.0
+
+    series = []
+    # Build trailing 7-day slopes so cloud can see "improving/declining" hint.
+    day_keys_sorted = sorted(daily.keys())
+    for day_key in day_keys_sorted:
+        bucket = daily[day_key]
+        if bucket["sessions"] <= 0:
+            continue
+        series.append({
+            "day": day_key,
+            "median_gap_sec": _median(bucket["gaps"]),
+            "autonomy_ratio": bucket["no_nudge_sessions"] / bucket["sessions"],
+            "sample_count": bucket["user_msgs"],
+            "trend_slope": None,  # filled in below if we can
+        })
+
+    # Rolling 7-day slope (normalized by running median).
+    for i, entry in enumerate(series):
+        window = series[max(0, i - 6): i + 1]
+        if len(window) < 2:
+            continue
+        gaps = [w["median_gap_sec"] for w in window if w["median_gap_sec"] is not None]
+        if len(gaps) < 2:
+            continue
+        xs = list(range(len(gaps)))
+        n = len(xs)
+        mean_x = sum(xs) / n
+        mean_y = sum(gaps) / n
+        num = sum((xs[k] - mean_x) * (gaps[k] - mean_y) for k in range(n))
+        den = sum((xs[k] - mean_x) ** 2 for k in range(n))
+        raw = num / den if den else 0.0
+        med = _median(gaps)
+        entry["trend_slope"] = round(raw / med, 6) if med else 0.0
+
+    return series
+
+
+def sync_autonomy(config, state, paths):
+    """
+    Push a daily autonomy aggregate to cloud (if opted in).
+
+    Runs at most once per local-day: we record the last pushed UTC day in
+    ``state['autonomy_last_day']`` and skip until that rolls over. On first
+    run, pushes up to 90 days of history. Each subsequent run pushes
+    whatever has changed.
+    """
+    api_key = config.get("api_key") or ""
+    if not api_key:
+        return 0
+    # User can opt out of sending analytics even if cloud sync is on.
+    if config.get("cloud_autonomy_sync") is False:
+        return 0
+
+    from datetime import datetime as _dt_as, timezone as _tz_as
+    today = _dt_as.now(tz=_tz_as.utc).strftime("%Y-%m-%d")
+    last_pushed = state.get("autonomy_last_day", "")
+    # Skip if we already pushed today, unless we've never pushed anything.
+    if last_pushed == today and state.get("autonomy_pushed_any"):
+        return 0
+
+    sessions_dir = paths.get("sessions_dir") or paths.get("sessions")
+    series = _compute_autonomy_daily_series(sessions_dir, days=90)
+    if not series:
+        return 0
+
+    # Only send days we haven't pushed yet — or all of them on first run.
+    if state.get("autonomy_pushed_any"):
+        series = [s for s in series if s["day"] >= last_pushed]
+    if not series:
+        state["autonomy_last_day"] = today
+        return 0
+
+    node_id = config.get("node_id") or get_machine_id()
+    payload = {"node_id": node_id, "snapshots": series}
+    try:
+        _post("/ingest/autonomy", payload, api_key, timeout=30)
+        state["autonomy_last_day"] = today
+        state["autonomy_pushed_any"] = True
+        return len(series)
+    except Exception as e:
+        log.warning(f"sync_autonomy failed: {e}")
+        return 0
+
+
 def run_daemon() -> None:
     """Run the sync daemon - main loop for continuous synchronization."""
     config = load_config()
@@ -3175,6 +3368,7 @@ def run_daemon() -> None:
             sync_crons(config, state, paths)
             sync_memory(config, state, paths)
             sync_system_snapshot(config, state, paths)
+            sync_autonomy(config, state, paths)
             save_state(state)
         except Exception as e:
             log.error(f"Sync error: {e}")
