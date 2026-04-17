@@ -104,6 +104,7 @@ from routes.fleet_history import bp_fleet, bp_history
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
 from routes.meta import bp_auth, bp_gateway, bp_otel, bp_version, bp_version_impact, bp_clusters
 from routes.nemoclaw import bp_nemoclaw
+from routes.selfconfig import bp_selfconfig
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -3261,6 +3262,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('selfconfig')">Config</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
@@ -4378,6 +4380,52 @@ function clawmetryLogout(){
   </div>
 </div><!-- end page-nemoclaw -->
 
+<!-- SELF-CONFIG DIFF VIEWER -->
+<div class="page" id="page-selfconfig">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:14px;font-weight:700;color:var(--text-primary);">Self-Configuration History</span>
+        <span style="font-size:11px;color:var(--text-muted);background:var(--bg-secondary);border:1px solid var(--border);border-radius:12px;padding:2px 10px;">agent-managed files</span>
+      </div>
+      <button class="refresh-btn" onclick="loadSelfConfig()">&#8635; Refresh</button>
+    </div>
+    <!-- Two-column layout: file list + detail pane -->
+    <div style="display:grid;grid-template-columns:220px 1fr;gap:12px;min-height:400px;">
+      <!-- File list (left) -->
+      <div id="selfconfig-file-list" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px;">
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:1px;margin-bottom:8px;">TRACKED FILES</div>
+        <div id="selfconfig-files-inner" style="color:var(--text-muted);font-size:12px;">Loading...</div>
+      </div>
+      <!-- Detail pane (right) -->
+      <div id="selfconfig-detail-pane" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
+        <div id="selfconfig-empty-state" style="color:var(--text-muted);font-size:13px;padding:24px 0;text-align:center;">
+          Select a file on the left to view its revision history.
+        </div>
+        <div id="selfconfig-revisions-panel" style="display:none;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div style="font-size:13px;font-weight:700;color:var(--text-primary);" id="selfconfig-filename-heading"></div>
+            <div id="selfconfig-values-badge" style="display:none;background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:10px;padding:2px 10px;font-size:11px;font-weight:700;">&#9888; VALUES FILE</div>
+          </div>
+          <div id="selfconfig-revisions-list" style="font-size:12px;"></div>
+        </div>
+        <div id="selfconfig-diff-panel" style="display:none;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+            <button onclick="selfconfigBackToRevisions()" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);">&#8592; Back</button>
+            <span style="font-size:12px;font-weight:700;color:var(--text-primary);" id="selfconfig-diff-heading"></span>
+            <span id="selfconfig-diff-stats" style="font-size:11px;color:var(--text-muted);"></span>
+          </div>
+          <div id="selfconfig-diff-content" style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;line-height:1.6;overflow-x:auto;"></div>
+        </div>
+      </div>
+    </div>
+    <!-- Empty state when no edits ever detected -->
+    <div id="selfconfig-no-history-msg" style="display:none;margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:20px;text-align:center;">
+      <div style="font-size:13px;color:var(--text-muted);">No self-configuration edits yet. ClawMetry snapshots these files and shows diffs when your agent updates them.</div>
+    </div>
+  </div>
+</div><!-- end page-selfconfig -->
+
 <!-- SUB-AGENT TREE -->
 <div class="page" id="page-subagents">
   <div class="refresh-bar">
@@ -4803,11 +4851,160 @@ function switchTab(name) {
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
+  if (name === 'selfconfig') loadSelfConfig();
 }
 
 function exportUsageData() {
   window.location.href = '/api/usage/export';
 }
+
+// ═══ SELF-CONFIG DIFF VIEWER ═════════════════════════════════════════════════
+
+var _selfconfigCurrentFile = null;
+var _selfconfigRevisions = [];
+
+async function loadSelfConfig() {
+  var inner = document.getElementById('selfconfig-files-inner');
+  if (!inner) return;
+  inner.innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
+  // Reset detail pane
+  var detailEmpty = document.getElementById('selfconfig-empty-state');
+  var detailRevs = document.getElementById('selfconfig-revisions-panel');
+  var detailDiff = document.getElementById('selfconfig-diff-panel');
+  if (detailEmpty) { detailEmpty.style.display = 'block'; }
+  if (detailRevs) { detailRevs.style.display = 'none'; }
+  if (detailDiff) { detailDiff.style.display = 'none'; }
+  try {
+    var d = await fetchJsonWithTimeout('/api/selfconfig', 5000);
+    var files = d.files || [];
+    var hasAnyRevisions = files.some(function(f) { return f.revision_count > 0; });
+    var noHistMsg = document.getElementById('selfconfig-no-history-msg');
+    if (noHistMsg) noHistMsg.style.display = hasAnyRevisions ? 'none' : 'block';
+    if (!files.length) {
+      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">No tracked files found.</span>';
+      return;
+    }
+    inner.innerHTML = files.map(function(f) {
+      var badge = f.is_values_file
+        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;">VALUES</span>'
+        : '';
+      var revCount = f.revision_count > 0
+        ? ' <span style="color:var(--text-muted);font-size:10px;">(' + f.revision_count + ' rev' + (f.revision_count !== 1 ? 's' : '') + ')</span>'
+        : ' <span style="color:var(--text-muted);font-size:10px;">(no edits)</span>';
+      var existStyle = f.exists ? '' : 'opacity:0.5;';
+      return '<div onclick="loadSelfConfigHistory(\'' + f.name + '\')" style="cursor:pointer;padding:7px 8px;border-radius:6px;margin-bottom:4px;' + existStyle + 'border:1px solid transparent;transition:all 0.15s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'transparent\'">'
+        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + f.name + badge + '</div>'
+        + '<div style="font-size:11px;margin-top:2px;">' + revCount + '</div>'
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading files.</span>';
+  }
+}
+
+async function loadSelfConfigHistory(filename) {
+  _selfconfigCurrentFile = filename;
+  var emptyEl = document.getElementById('selfconfig-empty-state');
+  var revsPanel = document.getElementById('selfconfig-revisions-panel');
+  var diffPanel = document.getElementById('selfconfig-diff-panel');
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (diffPanel) diffPanel.style.display = 'none';
+  if (revsPanel) revsPanel.style.display = 'block';
+  var headEl = document.getElementById('selfconfig-filename-heading');
+  var badgeEl = document.getElementById('selfconfig-values-badge');
+  var listEl = document.getElementById('selfconfig-revisions-list');
+  if (headEl) headEl.textContent = filename;
+  if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
+  try {
+    var d = await fetchJsonWithTimeout('/api/selfconfig/' + encodeURIComponent(filename), 5000);
+    if (badgeEl) badgeEl.style.display = d.is_values_file ? 'block' : 'none';
+    _selfconfigRevisions = d.revisions || [];
+    if (!_selfconfigRevisions.length) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No revisions recorded yet. Edits will appear here automatically.</div>';
+      return;
+    }
+    listEl.innerHTML = _selfconfigRevisions.map(function(rev, idx) {
+      var dt = new Date(rev.ts * 1000).toLocaleString();
+      var delta = '';
+      if (idx < _selfconfigRevisions.length - 1) {
+        var prevSize = _selfconfigRevisions[idx + 1].size;
+        var diff = rev.size - prevSize;
+        delta = diff > 0
+          ? '<span style="color:#22c55e;font-weight:600;">+' + diff + '</span>'
+          : diff < 0
+            ? '<span style="color:#ef4444;font-weight:600;">' + diff + '</span>'
+            : '<span style="color:var(--text-muted);">±0</span>';
+      } else {
+        delta = '<span style="color:var(--text-muted);font-size:10px;">initial</span>';
+      }
+      var prevTs = idx < _selfconfigRevisions.length - 1 ? _selfconfigRevisions[idx + 1].ts : null;
+      var diffBtn = prevTs !== null
+        ? '<button onclick="loadSelfConfigDiff(\'' + filename + '\',' + prevTs + ',' + rev.ts + ')" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;color:var(--text-secondary);margin-left:8px;">View diff</button>'
+        : '';
+      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px;border-radius:6px;margin-bottom:4px;background:var(--bg-primary);border:1px solid var(--border-secondary);">'
+        + '<div>'
+        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + dt + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + rev.size.toLocaleString() + ' bytes &nbsp; ' + delta + '</div>'
+        + '</div>'
+        + diffBtn
+        + '</div>';
+    }).join('');
+  } catch(e) {
+    if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading history.</span>';
+  }
+}
+
+async function loadSelfConfigDiff(filename, fromTs, toTs) {
+  var diffPanel = document.getElementById('selfconfig-diff-panel');
+  var revsPanel = document.getElementById('selfconfig-revisions-panel');
+  var emptyEl   = document.getElementById('selfconfig-empty-state');
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (revsPanel) revsPanel.style.display = 'none';
+  if (diffPanel) diffPanel.style.display = 'block';
+  var headEl    = document.getElementById('selfconfig-diff-heading');
+  var statsEl   = document.getElementById('selfconfig-diff-stats');
+  var contentEl = document.getElementById('selfconfig-diff-content');
+  if (headEl) headEl.textContent = filename + ' diff';
+  if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);">Loading diff...</span>';
+  try {
+    var url = '/api/selfconfig/' + encodeURIComponent(filename) + '/diff?from=' + fromTs + '&to=' + toTs;
+    var d = await fetchJsonWithTimeout(url, 8000);
+    if (statsEl) {
+      statsEl.innerHTML = '<span style="color:#22c55e;">+' + d.added_chars + '</span> / <span style="color:#ef4444;">-' + d.removed_chars + '</span> chars'
+        + (d.truncated ? ' <span style="color:#f59e0b;">(truncated)</span>' : '');
+    }
+    var lines = d.diff_lines || [];
+    if (!lines.length) {
+      contentEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No changes detected between these two versions.</div>';
+      return;
+    }
+    contentEl.innerHTML = lines.map(function(line) {
+      var txt = (line.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      if (line.type === 'added') {
+        return '<div style="background:rgba(34,197,94,0.12);color:#86efac;padding:1px 6px;white-space:pre;">' + txt + '</div>';
+      } else if (line.type === 'removed') {
+        return '<div style="background:rgba(239,68,68,0.12);color:#fca5a5;padding:1px 6px;white-space:pre;">' + txt + '</div>';
+      } else if (line.type === 'meta') {
+        return '<div style="color:var(--text-muted);padding:1px 6px;white-space:pre;font-size:11px;">' + txt + '</div>';
+      } else {
+        return '<div style="color:var(--text-secondary);padding:1px 6px;white-space:pre;">' + txt + '</div>';
+      }
+    }).join('');
+  } catch(e) {
+    if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading diff.</span>';
+  }
+}
+
+function selfconfigBackToRevisions() {
+  var diffPanel = document.getElementById('selfconfig-diff-panel');
+  var revsPanel = document.getElementById('selfconfig-revisions-panel');
+  if (diffPanel) diffPanel.style.display = 'none';
+  if (revsPanel && _selfconfigCurrentFile) {
+    revsPanel.style.display = 'block';
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 
 var _sunSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
 var _moonSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
@@ -7734,6 +7931,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_version_impact)
     app.register_blueprint(bp_clusters)
     app.register_blueprint(bp_nemoclaw)
+    app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_openapi)
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
@@ -7964,6 +8162,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
+    <div class="nav-tab" onclick="switchTab('selfconfig')">Config</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
