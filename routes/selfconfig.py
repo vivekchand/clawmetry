@@ -225,6 +225,12 @@ def api_selfconfig_list():
         elif len(revisions) == 1:
             last_edit_delta = revisions[0]["size"]
 
+        size = 0
+        if path is not None:
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
         files.append({
             "name": filename,
             "tracked": True,
@@ -233,6 +239,7 @@ def api_selfconfig_list():
             "last_modified_ts": meta.get("last_modified_ts", 0),
             "revision_count": len(revisions),
             "last_edit_delta_chars": last_edit_delta,
+            "size": size,
             "is_values_file": filename in _VALUES_FILES,
         })
 

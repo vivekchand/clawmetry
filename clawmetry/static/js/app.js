@@ -836,51 +836,92 @@ function _renderMarkdown(text) {
   return '<pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + _escapeHtml(text || '') + '</pre>';
 }
 
+// Tracked file metadata (for history + sensitive flag) — populated from
+// /api/selfconfig. Keyed by filename (root-level only).
+var _selfconfigTrackedMeta = {};
+
+function _isTrackedFile(path) {
+  return path && _selfconfigTrackedMeta.hasOwnProperty(path);
+}
+
+function _fileSizeStr(size) {
+  if (size == null) return '';
+  if (size < 1024) return size + ' B';
+  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + 'K';
+  return (size / (1024 * 1024)).toFixed(1) + 'M';
+}
+
+function _fileIconSvg() {
+  return '<svg width="13" height="13" viewBox="0 0 16 16" style="flex-shrink:0;margin-right:6px;opacity:0.65;" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 1.5h7l3 3V14a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 14V1.5z"/><path d="M10 1.5V4.5h3"/></svg>';
+}
+
+function _folderIconSvg() {
+  return '<svg width="13" height="13" viewBox="0 0 16 16" style="flex-shrink:0;margin-right:6px;opacity:0.7;" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 3.5h4l1 1.5h8v8.5a.5.5 0 0 1-.5.5h-12A.5.5 0 0 1 1.5 13.5v-10z"/></svg>';
+}
+
 async function loadSelfConfig() {
   var inner = document.getElementById('selfconfig-files-inner');
   if (!inner) return;
-  inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Loading...</span>';
+  inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Loading\u2026</span>';
   try {
-    var d = await (typeof fetchJsonWithTimeout === 'function'
-      ? fetchJsonWithTimeout('/api/selfconfig', 5000)
-      : fetch('/api/selfconfig').then(function(r){return r.json();}));
-    var files = d.files || [];
-    if (!files.length) {
-      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">Nothing to show yet.</span>';
+    // Fetch tracked-file metadata (for sensitive/history flags) and the
+    // real filesystem listing in parallel.
+    var filesReq = fetch('/api/memory-files').then(function(r){return r.json();}).catch(function(){return [];});
+    var trackedReq = fetch('/api/selfconfig').then(function(r){return r.json();}).catch(function(){return {files:[]};});
+    var results = await Promise.all([filesReq, trackedReq]);
+    var realFiles = results[0] || [];
+    var tracked = (results[1] && results[1].files) || [];
+
+    _selfconfigTrackedMeta = {};
+    tracked.forEach(function(t) { _selfconfigTrackedMeta[t.name] = t; });
+
+    if (!realFiles.length) {
+      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">No markdown files yet.</span>';
       return;
     }
-    inner.innerHTML = files.map(function(f) {
-      var meta = _configMeta(f.name);
-      var sensitive = f.is_values_file
-        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:6px;padding:0 5px;font-size:9px;font-weight:700;margin-left:6px;letter-spacing:0.3px;vertical-align:middle;" title="Changes here affect how your agent behaves.">SENSITIVE</span>'
-        : '';
-      var recentDot = '';
-      if (f.exists && f.last_modified_ts) {
-        var ageMin = (Date.now() / 1000 - f.last_modified_ts) / 60;
-        if (ageMin < 1440) {
-          recentDot = ' <span title="Changed in the last 24 hours" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#6366f1;vertical-align:middle;margin-left:6px;"></span>';
-        }
+
+    // Group: root files + folders (e.g. memory/2026-04-13.md).
+    var roots = [];
+    var folders = {};
+    realFiles.forEach(function(f) {
+      var parts = f.path.split('/');
+      if (parts.length <= 1) {
+        roots.push(f);
+      } else {
+        var dir = parts.slice(0, -1).join('/');
+        if (!folders[dir]) folders[dir] = [];
+        folders[dir].push(f);
       }
-      var existHint = f.exists ? '' : ' <span style="font-size:10px;color:var(--text-muted);font-weight:400;">(empty)</span>';
-      var activeStyle = (f.name === _selfconfigCurrentFile)
-        ? 'background:var(--bg-tertiary,rgba(99,102,241,0.08));border-color:rgba(99,102,241,0.3);'
-        : 'border-color:transparent;';
-      return '<div data-filename="' + f.name + '" onclick="selfconfigOpenFile(\'' + f.name + '\')" style="cursor:pointer;padding:8px 10px;border-radius:6px;margin-bottom:2px;border:1px solid transparent;transition:background 0.12s;' + activeStyle + '" onmouseover="if(this.dataset.filename!==window._selfconfigCurrentFile)this.style.background=\'var(--bg-hover)\'" onmouseout="if(this.dataset.filename!==window._selfconfigCurrentFile)this.style.background=\'\'">'
-        + '<div style="display:flex;align-items:center;">'
-        + '<span style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:13px;font-weight:600;color:var(--text-primary);">' + f.name + '</span>'
-        + existHint
-        + sensitive
-        + recentDot
-        + '</div>'
-        + '<div style="font-size:11px;color:var(--text-muted);margin-top:3px;line-height:1.4;">' + (meta.desc || '') + '</div>'
-        + '</div>';
-    }).join('');
-    // Auto-open the first existing file if nothing is selected yet.
+    });
+
+    // Sort: tracked identity files first, then alphabetical.
+    var trackedOrder = ['USER.md','SOUL.md','IDENTITY.md','AGENTS.md','TOOLS.md','HEARTBEAT.md','MEMORY.md'];
+    roots.sort(function(a, b) {
+      var ia = trackedOrder.indexOf(a.path);
+      var ib = trackedOrder.indexOf(b.path);
+      if (ia === -1) ia = 100;
+      if (ib === -1) ib = 100;
+      if (ia !== ib) return ia - ib;
+      return a.path.localeCompare(b.path);
+    });
+
+    var html = '';
+    roots.forEach(function(f) { html += _selfconfigFileRow(f.path, f.size, 0); });
+    Object.keys(folders).sort().forEach(function(dir) {
+      html += _selfconfigFolderRow(dir);
+      folders[dir].sort(function(a, b) { return b.path.localeCompare(a.path); });  // newest first
+      folders[dir].forEach(function(f) {
+        var name = f.path.split('/').pop();
+        html += _selfconfigFileRow(f.path, f.size, 1, name);
+      });
+    });
+    inner.innerHTML = html;
+
+    // Auto-open the first file if nothing is selected.
     if (!_selfconfigCurrentFile) {
-      var firstExisting = files.find(function(f){ return f.exists; }) || files[0];
-      if (firstExisting) selfconfigOpenFile(firstExisting.name);
+      var first = roots[0] || (Object.values(folders)[0] || [])[0];
+      if (first) selfconfigOpenFile(first.path);
     } else {
-      // Refresh the content of the currently-open file in case it changed.
       selfconfigOpenFile(_selfconfigCurrentFile, _selfconfigSelectedTs);
     }
   } catch(e) {
@@ -888,18 +929,60 @@ async function loadSelfConfig() {
   }
 }
 
+function _selfconfigFileRow(path, size, depth, displayName) {
+  var tracked = _selfconfigTrackedMeta[path];
+  var sensitive = (tracked && tracked.is_values_file)
+    ? ' <span title="Sensitive \u2014 changes here affect how your agent behaves." style="color:#fb923c;font-size:9px;margin-left:4px;vertical-align:middle;">&#9888;</span>'
+    : '';
+  var recentDot = '';
+  var mtime = tracked ? tracked.last_modified_ts : 0;
+  if (mtime) {
+    var ageMin = (Date.now() / 1000 - mtime) / 60;
+    if (ageMin < 1440) {
+      recentDot = ' <span title="Changed in the last 24 hours" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#6366f1;vertical-align:middle;margin-left:5px;"></span>';
+    }
+  }
+  var active = (path === _selfconfigCurrentFile);
+  var activeStyle = active
+    ? 'background:rgba(99,102,241,0.14);color:var(--text-primary);'
+    : 'color:var(--text-secondary);';
+  var indent = depth > 0 ? 'padding-left:' + (10 + depth * 14) + 'px;' : '';
+  var name = displayName || path;
+  return '<div data-filename="' + path + '" data-active="' + (active ? '1' : '') + '" onclick="selfconfigOpenFile(\'' + path + '\')" style="display:flex;align-items:center;cursor:pointer;padding:4px 10px;' + indent + 'margin:0;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;line-height:1.55;transition:background 0.1s;' + activeStyle + '" onmouseover="if(!this.dataset.active)this.style.background=\'var(--bg-hover)\'" onmouseout="if(!this.dataset.active)this.style.background=\'\'">'
+    + _fileIconSvg()
+    + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + name + '</span>'
+    + sensitive
+    + recentDot
+    + '<span style="margin-left:8px;color:var(--text-muted);font-size:10.5px;flex-shrink:0;">' + _fileSizeStr(size) + '</span>'
+    + '</div>';
+}
+
+function _selfconfigFolderRow(dir) {
+  var name = dir.split('/').pop() || dir;
+  return '<div style="display:flex;align-items:center;padding:4px 10px;margin:4px 0 0;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:11px;line-height:1.55;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.6px;">'
+    + _folderIconSvg()
+    + '<span>' + name + '</span>'
+    + '</div>';
+}
+
 // Open a file in the reader. ``ts`` = null → show current live content.
 async function selfconfigOpenFile(filename, ts) {
   _selfconfigCurrentFile = filename;
-  window._selfconfigCurrentFile = filename;  // for inline handlers
+  window._selfconfigCurrentFile = filename;
   _selfconfigSelectedTs = (ts == null) ? null : ts;
   // Highlight the selected file in the list.
   document.querySelectorAll('#selfconfig-files-inner [data-filename]').forEach(function(el) {
     var match = el.getAttribute('data-filename') === filename;
-    el.style.background = match ? 'var(--bg-tertiary,rgba(99,102,241,0.08))' : '';
-    el.style.borderColor = match ? 'rgba(99,102,241,0.3)' : 'transparent';
+    el.dataset.active = match ? '1' : '';
+    el.style.background = match ? 'rgba(99,102,241,0.14)' : '';
   });
-  _selfconfigRenderTimeline(filename);
+  // Only tracked (root-level identity) files get a revision timeline.
+  if (_isTrackedFile(filename)) {
+    _selfconfigRenderTimeline(filename);
+  } else {
+    var wrap = document.getElementById('selfconfig-timeline-wrap');
+    if (wrap) wrap.style.display = 'none';
+  }
   await _selfconfigRenderReader(filename, _selfconfigSelectedTs);
 }
 
@@ -988,33 +1071,34 @@ function _renderTimelineRows(filename) {
 
 function _selfconfigRowHtml(filename, ts, opts) {
   var dotColor = ts == null ? '#22c55e' : '#64748b';
-  var activeBg = opts.active ? 'background:rgba(99,102,241,0.12);border-color:rgba(99,102,241,0.35);' : '';
+  var activeBg = opts.active ? 'background:rgba(99,102,241,0.12);' : '';
   var tsArg = ts == null ? 'null' : ts;
-  return '<div onclick="selfconfigOpenFile(\'' + filename + '\',' + tsArg + ')" style="cursor:pointer;position:relative;padding:9px 10px 9px 22px;border-radius:6px;margin-bottom:2px;border:1px solid transparent;transition:background 0.12s;' + activeBg + '" onmouseover="if(!this.style.background)this.style.background=\'var(--bg-hover)\'" onmouseout="if(this.style.border.indexOf(\'rgba(99,102,241\')===-1)this.style.background=\'\'">'
-    + '<span style="position:absolute;left:8px;top:13px;width:7px;height:7px;border-radius:50%;background:' + dotColor + ';"></span>'
-    + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + opts.label + '</div>'
-    + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.4;">' + opts.sub + '</div>'
+  return '<div onclick="selfconfigOpenFile(\'' + filename + '\',' + tsArg + ')" style="cursor:pointer;position:relative;padding:5px 10px 5px 22px;border-radius:3px;margin:0;transition:background 0.1s;' + activeBg + '" ' + (opts.active ? 'data-active="1"' : '') + ' onmouseover="if(!this.dataset.active)this.style.background=\'var(--bg-hover)\'" onmouseout="if(!this.dataset.active)this.style.background=\'\'">'
+    + '<span style="position:absolute;left:8px;top:9px;width:6px;height:6px;border-radius:50%;background:' + dotColor + ';"></span>'
+    + '<div style="font-size:11px;font-weight:600;color:var(--text-primary);line-height:1.4;">' + opts.label + '</div>'
+    + '<div style="font-size:10.5px;color:var(--text-muted);margin-top:1px;line-height:1.35;">' + opts.sub + '</div>'
     + '</div>';
 }
 
 // Populate the reader pane — shows the file content at the requested version.
 async function _selfconfigRenderReader(filename, ts) {
-  var meta = _configMeta(filename);
   var titleEl = document.getElementById('selfconfig-reader-title');
   var badgeEl = document.getElementById('selfconfig-reader-badge');
-  var subEl = document.getElementById('selfconfig-reader-sub');
   var bodyEl = document.getElementById('selfconfig-reader-body');
   var editorBody = document.getElementById('selfconfig-editor-body');
   var editorToolbar = document.getElementById('selfconfig-editor-toolbar');
   var bannerEl = document.getElementById('selfconfig-reader-banner');
   var bannerText = document.getElementById('selfconfig-reader-banner-text');
 
-  if (titleEl) titleEl.textContent = filename;
-  if (badgeEl) badgeEl.style.display = (filename === 'SOUL.md') ? 'inline-block' : 'none';
-  if (subEl) subEl.textContent = meta.desc;
-  if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">Loading...</div>';
+  var tracked = _isTrackedFile(filename);
+  var meta = tracked ? _selfconfigTrackedMeta[filename] : null;
 
-  // Edit toolbar is only available when viewing the live file.
+  if (titleEl) titleEl.textContent = filename;
+  if (badgeEl) badgeEl.style.display = (meta && meta.is_values_file) ? 'inline-block' : 'none';
+  if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">Loading\u2026</div>';
+
+  // Edit toolbar is available for live files (any, tracked or not). Past
+  // versions are only reachable for tracked files — they remain read-only.
   if (editorToolbar) editorToolbar.style.display = (ts == null) ? 'flex' : 'none';
 
   if (bannerEl) {
@@ -1026,27 +1110,62 @@ async function _selfconfigRenderReader(filename, ts) {
     }
   }
 
-  // Force preview mode when switching files / versions.
   _selfconfigMode = 'preview';
   _selfconfigUpdateModeButtons();
   if (bodyEl) bodyEl.style.display = 'block';
   if (editorBody) editorBody.style.display = 'none';
 
+  _selfconfigUpdateStatusBar(filename, ts, null);
+
   try {
-    var url = '/api/selfconfig/' + encodeURIComponent(filename) + '/content' + (ts == null ? '' : '?ts=' + ts);
-    var d = await fetch(url).then(function(r){return r.json();});
-    _selfconfigOriginal = d.content || '';
+    var url, d;
+    if (tracked) {
+      url = '/api/selfconfig/' + encodeURIComponent(filename) + '/content' + (ts == null ? '' : '?ts=' + ts);
+      d = await fetch(url).then(function(r){return r.json();});
+      _selfconfigOriginal = d.content || '';
+    } else {
+      // Untracked file (e.g. memory/2026-04-13.md) — use /api/file.
+      url = '/api/file?path=' + encodeURIComponent(filename);
+      d = await fetch(url).then(function(r){return r.json();});
+      if (d.error) throw new Error(d.error);
+      _selfconfigOriginal = d.content || '';
+      d.exists = true;
+      d.ts = d.mtime;
+    }
     if (bodyEl) {
       if (!d.exists && ts == null) {
-        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">This file hasn\u2019t been created yet. Click <strong>Edit</strong> above to write the first version.</div>';
+        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file hasn\u2019t been created yet. Click <strong>Edit</strong> above to write the first version.</div>';
       } else if (!d.content || !d.content.trim()) {
-        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">This version is empty.</div>';
+        bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file is empty.</div>';
       } else {
         bodyEl.innerHTML = '<div class="mem-prose">' + _renderMarkdown(d.content) + '</div>';
       }
     }
+    _selfconfigUpdateStatusBar(filename, ts, d);
   } catch(e) {
-    if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:12px 0;">Couldn\u2019t load this version.</div>';
+    if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">Couldn\u2019t load this version.</div>';
+  }
+}
+
+function _selfconfigUpdateStatusBar(filename, ts, d) {
+  var fileEl = document.getElementById('selfconfig-status-file');
+  var modeEl = document.getElementById('selfconfig-status-mode');
+  var sizeEl = document.getElementById('selfconfig-status-size');
+  var updatedEl = document.getElementById('selfconfig-status-updated');
+  if (fileEl) fileEl.textContent = filename || '—';
+  if (modeEl) modeEl.textContent = (_selfconfigSelectedTs == null)
+    ? (_selfconfigMode === 'edit' ? 'Editing' : 'Preview')
+    : 'History';
+  if (sizeEl) {
+    var src = d && typeof d.content === 'string' ? d.content : (_selfconfigOriginal || '');
+    var lines = src ? src.split('\n').length : 0;
+    var bytes = src ? new Blob([src]).size : 0;
+    sizeEl.textContent = lines + ' line' + (lines === 1 ? '' : 's') + ' \u00B7 ' + _friendlyBytes(bytes);
+  }
+  if (updatedEl) {
+    if (ts != null) updatedEl.textContent = 'Viewing ' + _friendlyTimestamp(ts);
+    else if (d && d.ts) updatedEl.textContent = 'Updated ' + _friendlyTimestamp(d.ts);
+    else updatedEl.textContent = '';
   }
 }
 
@@ -1068,19 +1187,41 @@ function selfconfigSetMode(mode) {
   var bodyEl = document.getElementById('selfconfig-reader-body');
   var editorBody = document.getElementById('selfconfig-editor-body');
   var textarea = document.getElementById('selfconfig-editor-textarea');
-  var statusEl = document.getElementById('selfconfig-editor-status');
   if (mode === 'edit') {
     if (bodyEl) bodyEl.style.display = 'none';
     if (editorBody) editorBody.style.display = 'flex';
     if (textarea) {
       textarea.value = _selfconfigOriginal || '';
+      _selfconfigRenderLineNumbers();
       setTimeout(function(){ textarea.focus(); }, 30);
     }
-    if (statusEl) statusEl.textContent = '';
   } else {
     if (bodyEl) bodyEl.style.display = 'block';
     if (editorBody) editorBody.style.display = 'none';
   }
+  _selfconfigUpdateStatusBar(_selfconfigCurrentFile, _selfconfigSelectedTs, null);
+}
+
+function _selfconfigRenderLineNumbers() {
+  var textarea = document.getElementById('selfconfig-editor-textarea');
+  var gutter = document.getElementById('selfconfig-editor-gutter');
+  if (!textarea || !gutter) return;
+  var count = (textarea.value || '').split('\n').length;
+  var nums = new Array(count);
+  for (var i = 0; i < count; i++) nums[i] = (i + 1);
+  gutter.textContent = nums.join('\n');
+  gutter.scrollTop = textarea.scrollTop;
+}
+
+function selfconfigOnEditorInput() {
+  _selfconfigRenderLineNumbers();
+  _selfconfigUpdateStatusBar(_selfconfigCurrentFile, null, null);
+}
+
+function selfconfigSyncGutterScroll() {
+  var textarea = document.getElementById('selfconfig-editor-textarea');
+  var gutter = document.getElementById('selfconfig-editor-gutter');
+  if (textarea && gutter) gutter.scrollTop = textarea.scrollTop;
 }
 
 function selfconfigDiscardEdit() {
@@ -1094,30 +1235,37 @@ function selfconfigDiscardEdit() {
 async function selfconfigSave() {
   var textarea = document.getElementById('selfconfig-editor-textarea');
   var btn = document.getElementById('selfconfig-save-btn');
-  var statusEl = document.getElementById('selfconfig-editor-status');
   if (!textarea || !_selfconfigCurrentFile) return;
   var newContent = textarea.value;
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; btn.style.opacity = '0.6'; }
-  if (statusEl) statusEl.textContent = 'Saving...';
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; btn.style.opacity = '0.6'; }
+  var tracked = _isTrackedFile(_selfconfigCurrentFile);
   try {
-    var r = await fetch('/api/selfconfig/' + encodeURIComponent(_selfconfigCurrentFile) + '/content', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: newContent })
-    });
+    var r;
+    if (tracked) {
+      r = await fetch('/api/selfconfig/' + encodeURIComponent(_selfconfigCurrentFile) + '/content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: newContent })
+      });
+    } else {
+      r = await fetch('/api/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: _selfconfigCurrentFile, content: newContent })
+      });
+    }
     if (!r.ok) {
       var err = await r.json().catch(function(){ return {}; });
       throw new Error(err.error || ('HTTP ' + r.status));
     }
     _selfconfigOriginal = newContent;
-    if (statusEl) statusEl.textContent = 'Saved.';
-    // Refresh timeline + re-render preview after save.
-    await _selfconfigRenderTimeline(_selfconfigCurrentFile);
-    // Update the file list to reflect the new recency dot.
+    if (tracked) {
+      await _selfconfigRenderTimeline(_selfconfigCurrentFile);
+    }
     loadSelfConfig();
     selfconfigSetMode('preview');
   } catch(e) {
-    if (statusEl) statusEl.textContent = 'Save failed: ' + (e.message || e);
+    alert('Save failed: ' + (e.message || e));
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Save'; btn.style.opacity = '1'; }
   }
