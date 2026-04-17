@@ -1346,9 +1346,15 @@ async function loadSkills() {
       return;
     }
 
-    // Sort: problematic first (dead, stuck), then unused, then healthy
+    // Sort: problematic first (dead, stuck), then unused, then healthy.
+    // Use `in` not `||` — `order['dead']` is 0 which is falsy, the `||`
+    // variant accidentally sent 'dead' to the end of the list.
     var order = { dead: 0, stuck: 1, unused: 2, healthy: 3 };
-    skills.sort(function(a, b) { return (order[a.status] || 9) - (order[b.status] || 9); });
+    skills.sort(function(a, b) {
+      var oa = a.status in order ? order[a.status] : 99;
+      var ob = b.status in order ? order[b.status] : 99;
+      return oa - ob;
+    });
 
     var toggleBtn = '<div style="text-align:right;margin-bottom:8px;">'
       + '<button onclick="_skillsShowDetails=!_skillsShowDetails;loadSkills();" style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);">'
