@@ -106,6 +106,7 @@ from routes.meta import bp_auth, bp_gateway, bp_otel, bp_version, bp_version_imp
 from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
+from routes.autonomy import bp_autonomy
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -3430,6 +3431,43 @@ function clawmetryLogout(){
 
 <!-- OVERVIEW (Split-Screen Hacker Dashboard) -->
 <div class="page active" id="page-overview">
+
+  <!-- PRIMARY KPI: Autonomy Score (#688) -->
+  <div id="autonomy-card" style="
+    background:var(--bg-secondary);
+    border:2px solid var(--border-primary);
+    border-radius:12px;
+    padding:18px 22px;
+    margin-bottom:14px;
+    box-shadow:var(--card-shadow);
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:16px;
+    align-items:start;
+  ">
+    <!-- Left: big number + subtitle -->
+    <div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">&#127919; Autonomy Score</div>
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+        <span id="autonomy-score-value" style="font-size:48px;font-weight:800;line-height:1;color:var(--text-primary);">--</span>
+        <span id="autonomy-trend-badge" style="font-size:13px;font-weight:600;padding:3px 8px;border-radius:20px;"></span>
+      </div>
+      <div id="autonomy-median-gap" style="font-size:13px;color:var(--text-muted);margin-top:6px;">Median time between nudges: --</div>
+      <div id="autonomy-trend-pct" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
+      <div style="font-size:10px;color:var(--text-muted);margin-top:10px;font-style:italic;line-height:1.4;max-width:420px;">
+        Alex&#8217;s definition: &#8220;Success = human nudges space out exponentially&#8221;
+      </div>
+    </div>
+    <!-- Right: sparkline -->
+    <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-align:right;">7-day autonomy ratio</div>
+      <svg id="autonomy-sparkline" width="160" height="48" viewBox="0 0 160 48" style="overflow:visible;">
+        <text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">No data yet</text>
+      </svg>
+      <div id="autonomy-samples" style="font-size:10px;color:var(--text-muted);margin-top:4px;text-align:right;"></div>
+    </div>
+  </div>
+
   <div class="refresh-bar" style="margin-bottom:6px;">
     <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>
@@ -5158,6 +5196,130 @@ async function killSession(sessionId) {
   } catch(e) { alert('Error: ' + e.message); }
 }
 
+// ---------------------------------------------------------------------------
+// Autonomy Score loader (#688)
+// ---------------------------------------------------------------------------
+async function loadAutonomy() {
+  var scoreEl = document.getElementById('autonomy-score-value');
+  var badgeEl = document.getElementById('autonomy-trend-badge');
+  var gapEl   = document.getElementById('autonomy-median-gap');
+  var trendEl = document.getElementById('autonomy-trend-pct');
+  var svgEl   = document.getElementById('autonomy-sparkline');
+  var sampEl  = document.getElementById('autonomy-samples');
+  if (!scoreEl) return;
+  try {
+    var d = await fetchJsonWithTimeout('/api/autonomy', 5000);
+
+    // Score
+    if (d.score == null) {
+      scoreEl.textContent = '--';
+      if (gapEl) gapEl.textContent = 'No data yet \u2014 start using your agent to track autonomy';
+      if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; }
+      if (trendEl) trendEl.textContent = '';
+      if (sampEl) sampEl.textContent = '';
+      return;
+    }
+    scoreEl.textContent = d.score.toFixed(2);
+
+    // Median gap
+    if (gapEl && d.median_gap_seconds_7d != null) {
+      var secs = Math.round(d.median_gap_seconds_7d);
+      var hrs = Math.floor(secs / 3600);
+      var mins = Math.floor((secs % 3600) / 60);
+      var s = secs % 60;
+      var parts = [];
+      if (hrs > 0) parts.push(hrs + 'h');
+      if (mins > 0) parts.push(mins + 'm');
+      parts.push(s + 's');
+      gapEl.textContent = 'Median time between nudges: ' + parts.join(' ');
+    } else if (gapEl) {
+      gapEl.textContent = 'Median time between nudges: --';
+    }
+
+    // Trend badge
+    if (badgeEl) {
+      var dir = d.trend_direction || 'flat';
+      if (dir === 'improving') {
+        badgeEl.textContent = '\u2191 improving';
+        badgeEl.style.background = 'rgba(16,185,129,0.18)';
+        badgeEl.style.color = '#10b981';
+        badgeEl.style.border = '1px solid rgba(16,185,129,0.35)';
+      } else if (dir === 'declining') {
+        badgeEl.textContent = '\u2193 declining';
+        badgeEl.style.background = 'rgba(239,68,68,0.18)';
+        badgeEl.style.color = '#ef4444';
+        badgeEl.style.border = '1px solid rgba(239,68,68,0.35)';
+      } else {
+        badgeEl.textContent = '\u2015 steady';
+        badgeEl.style.background = 'rgba(100,116,139,0.18)';
+        badgeEl.style.color = 'var(--text-muted)';
+        badgeEl.style.border = '1px solid var(--border-primary)';
+      }
+    }
+
+    // Trend pct from slope
+    if (trendEl && d.trend_slope_7d != null) {
+      var pct = Math.round(d.trend_slope_7d * 100);
+      if (pct > 0) trendEl.textContent = '+' + pct + '% this week';
+      else if (pct < 0) trendEl.textContent = pct + '% this week';
+      else trendEl.textContent = '';
+    }
+
+    // Samples
+    if (sampEl && d.samples_7d != null) {
+      sampEl.textContent = d.samples_7d + ' user msg' + (d.samples_7d !== 1 ? 's' : '') + ' in 7d';
+    }
+
+    // Sparkline — inline SVG of daily autonomy_ratio
+    if (svgEl && d.series_daily && d.series_daily.length > 0) {
+      var ratios = d.series_daily.map(function(e){ return e.autonomy_ratio; });
+      var valid = ratios.filter(function(v){ return v != null; });
+      if (valid.length >= 2) {
+        var W = 160, H = 48, pad = 4;
+        var minV = 0, maxV = 1;
+        var n = ratios.length;
+        var step = (W - pad * 2) / Math.max(n - 1, 1);
+        var pts = ratios.map(function(v, i) {
+          var x = pad + i * step;
+          var y = v == null ? null : H - pad - (v - minV) / (maxV - minV) * (H - pad * 2);
+          return {x: x, y: y, v: v};
+        });
+        // Build polyline from non-null points
+        var pathD = '';
+        pts.forEach(function(p, i) {
+          if (p.y == null) return;
+          if (!pathD || pts.slice(0, i).every(function(q){ return q.y == null; })) {
+            pathD += 'M' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+          } else {
+            pathD += ' L' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+          }
+        });
+        var svgContent = '';
+        // Area fill
+        var firstP = pts.find(function(p){ return p.y != null; });
+        var lastP = null; pts.forEach(function(p){ if(p.y != null) lastP = p; });
+        if (firstP && lastP && pathD) {
+          var fillD = pathD + ' L' + lastP.x.toFixed(1) + ',' + (H - pad) + ' L' + firstP.x.toFixed(1) + ',' + (H - pad) + ' Z';
+          svgContent += '<path d="' + fillD + '" fill="rgba(99,102,241,0.15)" stroke="none"/>';
+          svgContent += '<path d="' + pathD + '" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+        }
+        // Dots
+        pts.forEach(function(p) {
+          if (p.y == null) return;
+          svgContent += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="2.5" fill="#6366f1"/>';
+        });
+        svgEl.innerHTML = svgContent;
+      } else {
+        svgEl.innerHTML = '<text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">Not enough data</text>';
+      }
+    }
+  } catch(e) {
+    console.warn('autonomy load failed', e);
+    if (scoreEl) scoreEl.textContent = '--';
+    if (gapEl) gapEl.textContent = 'No data yet \u2014 start using your agent to track autonomy';
+  }
+}
+
 async function loadAll() {
   try {
     // Render overview quickly; do not block on heavy usage aggregation.
@@ -5165,6 +5327,7 @@ async function loadAll() {
 
     // Start secondary panels immediately.
     startActiveTasksRefresh();
+    loadAutonomy().catch(function(e){console.warn('autonomy failed',e)});
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
@@ -7917,6 +8080,7 @@ def detect_config(args=None):
 
     # ── Register blueprints (Phase 4) ───────────────────────────────────────
     app.register_blueprint(bp_alerts)
+    app.register_blueprint(bp_autonomy)
     app.register_blueprint(bp_auth)
     app.register_blueprint(bp_brain)
     app.register_blueprint(bp_budget)
