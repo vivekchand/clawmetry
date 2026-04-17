@@ -99,7 +99,7 @@ def _versioned_path(filename: str, ts: int) -> str:
     return os.path.join(file_dir, f"v{ts}.md")
 
 
-def _locate_file(filename: str) -> str | None:
+def _locate_file(filename):
     """
     Find a tracked file on disk.  Checks:
       1. WORKSPACE root
@@ -125,7 +125,7 @@ def _locate_file(filename: str) -> str | None:
     return None
 
 
-def _read_file_safe(path: str) -> tuple[bytes, bool]:
+def _read_file_safe(path):
     """
     Read a file, capped at _MAX_FILE_BYTES.
     Returns (content_bytes, truncated).
@@ -298,7 +298,7 @@ def api_selfconfig_diff(filename):
     except ValueError:
         return jsonify({"error": "'from' and 'to' must be integer timestamps"}), 400
 
-    def _read_version(ts: int) -> tuple[str, bool]:
+    def _read_version(ts):
         path = _versioned_path(filename, ts)
         if not os.path.isfile(path):
             return "", False
