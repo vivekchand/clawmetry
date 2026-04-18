@@ -1031,6 +1031,40 @@ def _cmd_uninstall() -> None:
     print()
 
     # Execute uninstall
+    # 0. Purge server-side registration (node_registry + node data)
+    try:
+        import json as _json_u
+        cfg_path = home / ".clawmetry" / "config.json"
+        if cfg_path.exists():
+            with open(cfg_path) as _f:
+                _cfg = _json_u.load(_f)
+            _api_key = _cfg.get("api_key", "")
+            _node_id = _cfg.get("node_id", "")
+            if _api_key:
+                import socket
+                _hostname = socket.gethostname()
+                try:
+                    import urllib.request
+                    _req = urllib.request.Request(
+                        "https://app.clawmetry.com/api/unregister",
+                        data=_json_u.dumps({
+                            "node_id": _node_id,
+                            "hostname": _hostname,
+                        }).encode(),
+                        headers={
+                            "X-Api-Key": _api_key,
+                            "Content-Type": "application/json",
+                        },
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(_req, timeout=10) as _resp:
+                        _result = _json_u.loads(_resp.read())
+                    print("  ✅  Purged server-side registration")
+                except Exception as _e:
+                    print(f"  ⚠️  Could not purge server ({_e})")
+    except Exception:
+        pass
+
     # 1. Stop daemons
     if system == "Darwin":
         plist = home / "Library" / "LaunchAgents" / "com.clawmetry.sync.plist"
