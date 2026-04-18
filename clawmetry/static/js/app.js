@@ -524,6 +524,7 @@ function switchTab(name) {
   if (name === 'clusters') loadClusters();
   if (name === 'limits') loadRateLimits();
   if (name === 'flow') initFlow();
+  if (name === 'context') loadContextInspector();
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
@@ -2460,6 +2461,132 @@ function _buildSourcesList(events) {
     }
   });
   return sources;
+}
+
+// ── LLM Context Inspector ─────────────────────────────────────────────────
+async function loadContextInspector() {
+  try {
+    // Fetch overview for model + token info
+    var ov = await fetch('/api/overview').then(function(r){return r.json();}).catch(function(){return {};});
+    // Fetch brain history for compaction events + turn count
+    var brain = await fetch('/api/brain-history').then(function(r){return r.json();}).catch(function(){return {events:[]};});
+    // Fetch skills for header token count
+    var skills = await fetch('/api/skills').then(function(r){return r.json();}).catch(function(){return {skills:[],summary:{}};});
+
+    var contextWindow = ov.contextWindow || 200000;
+    var mainTokens = ov.mainTokens || 0;
+    var model = ov.model || 'unknown';
+    var events = brain.events || [];
+
+    // Context window usage bar
+    var pct = contextWindow > 0 ? Math.min(100, Math.round(mainTokens / contextWindow * 100)) : 0;
+    var usageFill = document.getElementById('ctx-usage-fill');
+    if (usageFill) usageFill.style.width = pct + '%';
+    var usageText = document.getElementById('ctx-usage-text');
+    if (usageText) usageText.textContent = _fmtTokens(mainTokens) + ' / ' + _fmtTokens(contextWindow) + ' tokens (' + pct + '%)';
+    var windowMax = document.getElementById('ctx-window-max');
+    if (windowMax) windowMax.textContent = _fmtTokens(contextWindow);
+    var threshold = document.getElementById('ctx-compact-threshold');
+    if (threshold) threshold.textContent = 'Compaction at ~' + _fmtTokens(Math.round(contextWindow * 0.8));
+
+    // Stats cards
+    var turns = events.filter(function(e){return e.type === 'USER';}).length;
+    var compactions = events.filter(function(e){return e.type === 'CONTEXT' && (e.detail||'').indexOf('Compact') >= 0;}).length;
+    var el;
+    el = document.getElementById('ctx-total-turns'); if (el) el.textContent = turns;
+    el = document.getElementById('ctx-compactions'); if (el) el.textContent = compactions;
+    el = document.getElementById('ctx-model-name'); if (el) { el.textContent = model.split('/').pop(); el.style.fontSize = model.length > 20 ? '14px' : '20px'; }
+
+    // Context composition breakdown
+    var skillHeaderTokens = (skills.summary || {}).total_header_tokens || 0;
+    var memoryFiles = ov.memoryCount || 0;
+    var memorySize = ov.memorySize || 0;
+    var memoryTokens = Math.round(memorySize / 4); // rough estimate
+
+    // Estimate system prompt sections based on known OpenClaw structure
+    var sections = [
+      {name: '## Tooling', tokens: Math.round(contextWindow * 0.015), color: '#3b82f6', desc: 'Tool list + descriptions'},
+      {name: '## Safety', tokens: 120, color: '#ef4444', desc: 'Safety guardrails'},
+      {name: '## Skills', tokens: skillHeaderTokens || Math.round(contextWindow * 0.008), color: '#f59e0b', desc: (skills.skills||[]).length + ' skill headers always loaded'},
+      {name: '## Memories', tokens: 200, color: '#8b5cf6', desc: 'Memory tool guidance'},
+      {name: '## Workspace', tokens: 150, color: '#06b6d4', desc: 'Working directory + docs path'},
+      {name: '## Heartbeats', tokens: 80, color: '#10b981', desc: 'Heartbeat prompt'},
+      {name: 'Bootstrap: SOUL.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.2)) : 750, color: '#e879f9', desc: 'Agent identity + personality'},
+      {name: 'Bootstrap: AGENTS.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.15)) : 500, color: '#c084fc', desc: 'Workspace configuration'},
+      {name: 'Bootstrap: TOOLS.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.1)) : 400, color: '#a78bfa', desc: 'Custom tool instructions'},
+      {name: 'Bootstrap: MEMORY.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.3)) : 1000, color: '#818cf8', desc: 'Persistent agent memory'},
+      {name: 'Tool schemas (JSON)', tokens: Math.round(contextWindow * 0.035), color: '#64748b', desc: 'Hidden but counted in context'},
+      {name: 'Conversation history', tokens: Math.max(0, mainTokens - Math.round(contextWindow * 0.08)), color: '#22c55e', desc: 'Recent messages + tool results'},
+    ];
+
+    var totalSysPrompt = 0;
+    sections.forEach(function(s) { if (s.name.indexOf('Conversation') === -1) totalSysPrompt += s.tokens; });
+    var sysTotalEl = document.getElementById('ctx-sysprompt-total');
+    if (sysTotalEl) sysTotalEl.textContent = '~' + _fmtTokens(totalSysPrompt) + ' tokens (estimated)';
+
+    // Render composition bars
+    var barsEl = document.getElementById('ctx-composition-bars');
+    if (barsEl) {
+      var maxTokens = Math.max.apply(null, sections.map(function(s){return s.tokens;}));
+      var html = '';
+      sections.forEach(function(s) {
+        var barPct = maxTokens > 0 ? Math.max(1, Math.round(s.tokens / maxTokens * 100)) : 0;
+        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
+        html += '<div style="min-width:160px;font-size:11px;color:var(--text-secondary);white-space:nowrap;">' + escHtml(s.name) + '</div>';
+        html += '<div style="flex:1;height:14px;background:var(--bg-primary);border-radius:4px;overflow:hidden;border:1px solid var(--border);">';
+        html += '<div style="height:100%;width:' + barPct + '%;background:' + s.color + ';border-radius:4px;transition:width 0.5s;"></div>';
+        html += '</div>';
+        html += '<div style="min-width:70px;text-align:right;font-size:11px;color:var(--text-muted);font-family:monospace;">' + _fmtTokens(s.tokens) + '</div>';
+        html += '</div>';
+      });
+      barsEl.innerHTML = html;
+    }
+
+    // Render system prompt sections (expandable)
+    var secEl = document.getElementById('ctx-sysprompt-sections');
+    if (secEl) {
+      var html = '';
+      sections.filter(function(s){return s.name.indexOf('Conversation') === -1;}).forEach(function(s) {
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);">';
+        html += '<span style="width:8px;height:8px;border-radius:50%;background:' + s.color + ';flex-shrink:0;"></span>';
+        html += '<span style="font-size:12px;color:var(--text-primary);min-width:160px;">' + escHtml(s.name) + '</span>';
+        html += '<span style="font-size:11px;color:var(--text-muted);flex:1;">' + escHtml(s.desc) + '</span>';
+        html += '<span style="font-size:11px;color:var(--text-secondary);font-family:monospace;">' + _fmtTokens(s.tokens) + '</span>';
+        html += '</div>';
+      });
+      secEl.innerHTML = html;
+    }
+
+    // Compaction log
+    var compactionEvents = events.filter(function(e) {
+      return e.type === 'CONTEXT' && (e.detail||'').toLowerCase().indexOf('compact') >= 0;
+    });
+    var logEl = document.getElementById('ctx-compaction-log');
+    if (logEl) {
+      if (compactionEvents.length === 0) {
+        logEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">No compactions yet. Context hasn\'t exceeded the ~' + _fmtTokens(Math.round(contextWindow * 0.8)) + ' threshold.</div>';
+      } else {
+        var html = '';
+        compactionEvents.forEach(function(ev) {
+          html += '<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;">';
+          html += '<span style="color:var(--text-muted);margin-right:8px;">' + formatBrainTime(ev.time) + '</span>';
+          html += '<span style="color:#f59e0b;font-weight:600;">Compaction</span> ';
+          html += '<span style="color:var(--text-secondary);">' + escHtml((ev.detail||'').substring(0, 200)) + '</span>';
+          html += '</div>';
+        });
+        logEl.innerHTML = html;
+      }
+    }
+  } catch(e) {
+    var barsEl = document.getElementById('ctx-composition-bars');
+    if (barsEl) barsEl.innerHTML = '<div style="color:var(--text-error);font-size:12px;">Error loading context data: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+function _fmtTokens(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
 }
 
 async function loadBrainPage(silent) {

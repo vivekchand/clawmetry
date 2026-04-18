@@ -1,0 +1,70 @@
+<div class="page" id="page-context">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">&#x1F9E0; LLM Context Inspector</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">See exactly what context is assembled and sent to the LLM each turn.</div>
+    </div>
+    <button class="refresh-btn" onclick="loadContextInspector()">&#8635; Refresh</button>
+  </div>
+
+  <!-- Context Window Usage Bar -->
+  <div id="context-window-bar" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <span style="font-size:13px;font-weight:600;color:var(--text-primary);">Context Window Usage</span>
+      <span style="font-size:12px;color:var(--text-muted);" id="ctx-usage-text">-- / -- tokens</span>
+    </div>
+    <div style="height:20px;background:var(--bg-primary);border-radius:10px;overflow:hidden;border:1px solid var(--border);">
+      <div id="ctx-usage-fill" style="height:100%;border-radius:10px;transition:width 0.5s;width:0%;background:linear-gradient(90deg, #22c55e 0%, #f59e0b 70%, #ef4444 90%);"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:4px;">
+      <span style="font-size:10px;color:var(--text-muted);">0</span>
+      <span style="font-size:10px;color:var(--text-muted);" id="ctx-compact-threshold">Compaction threshold</span>
+      <span style="font-size:10px;color:var(--text-muted);" id="ctx-window-max">--</span>
+    </div>
+  </div>
+
+  <!-- Context Composition Breakdown -->
+  <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;">
+    <!-- Stacked bar chart -->
+    <div style="flex:1;min-width:400px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px 20px;">
+      <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:12px;">Context Composition</div>
+      <div id="ctx-composition-bars">
+        <div style="color:var(--text-muted);font-size:12px;">Loading...</div>
+      </div>
+    </div>
+    <!-- Stats cards -->
+    <div style="min-width:200px;display:flex;flex-direction:column;gap:8px;">
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px 16px;">
+        <div style="font-size:20px;font-weight:700;color:var(--text-primary);" id="ctx-total-turns">--</div>
+        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Total Turns</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px 16px;">
+        <div style="font-size:20px;font-weight:700;color:#f59e0b;" id="ctx-compactions">--</div>
+        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Compactions</div>
+      </div>
+      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px 16px;">
+        <div style="font-size:20px;font-weight:700;color:#22c55e;" id="ctx-model-name">--</div>
+        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Active Model</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- System Prompt Breakdown -->
+  <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <span style="font-size:13px;font-weight:600;color:var(--text-primary);">System Prompt Sections</span>
+      <span style="font-size:11px;color:var(--text-muted);" id="ctx-sysprompt-total">-- tokens total</span>
+    </div>
+    <div id="ctx-sysprompt-sections">
+      <div style="color:var(--text-muted);font-size:12px;">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Compaction History -->
+  <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px 20px;">
+    <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:10px;">Compaction History</div>
+    <div id="ctx-compaction-log" style="max-height:300px;overflow-y:auto;">
+      <div style="color:var(--text-muted);font-size:12px;">No compactions yet — context hasn't exceeded the threshold.</div>
+    </div>
+  </div>
+</div><!-- end page-context -->
