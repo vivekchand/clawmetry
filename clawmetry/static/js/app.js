@@ -2059,7 +2059,19 @@ function renderBrainDetail(detail) {
 
 var _brainFilter = 'all';
 var _brainTypeFilter = 'all';
+var _brainChannelFilter = 'all';
 var _brainAllEvents = [];
+
+var _channelIcons = {
+  'telegram': '📱', 'whatsapp': '💬', 'discord': '🎮', 'slack': '📢',
+  'signal': '📡', 'irc': '💻', 'imessage': '🍎', 'webchat': '🌐',
+  'googlechat': '📧', 'cli': '🖥️', 'cron': '⏰'
+};
+var _channelColors = {
+  'telegram': '#2f9ef4', 'whatsapp': '#25d366', 'discord': '#5865F2', 'slack': '#4A154B',
+  'signal': '#3a76f0', 'irc': '#6B7280', 'imessage': '#34C759', 'webchat': '#0EA5E9',
+  'googlechat': '#1A73E8', 'cli': '#94a3b8', 'cron': '#6B7280'
+};
 
 var _brainTypeIcons = {
   'EXEC': '⚙️', 'SHELL': '⚙️', 'READ': '📖', 'WRITE': '✏️',
@@ -2129,13 +2141,36 @@ function renderBrainTypeChips(events) {
   container.innerHTML = html;
 }
 
+function renderBrainChannelChips(channels) {
+  var container = document.getElementById('brain-channel-chips');
+  if (!container) return;
+  if (!channels || Object.keys(channels).length < 2) { container.innerHTML = ''; return; }
+  var html = '<button class="brain-ch-chip" onclick="setBrainChannelFilter(\'all\',this)" style="padding:2px 9px;border-radius:10px;border:1px solid #666;background:' + (_brainChannelFilter === 'all' ? 'rgba(100,100,200,0.15)' : 'transparent') + ';color:#888;font-size:10px;cursor:pointer;font-weight:' + (_brainChannelFilter === 'all' ? '600' : '400') + ';">All channels</button>';
+  Object.keys(channels).sort().forEach(function(ch) {
+    var ico = _channelIcons[ch] || '📨';
+    var col = _channelColors[ch] || '#888';
+    var isActive = _brainChannelFilter === ch;
+    html += '<button class="brain-ch-chip" onclick="setBrainChannelFilter(\'' + ch + '\',this)" style="padding:2px 9px;border-radius:10px;border:1px solid ' + col + ';background:' + (isActive ? col + '22' : 'transparent') + ';color:' + col + ';font-size:10px;cursor:pointer;font-weight:' + (isActive ? '600' : '400') + ';">' + ico + ' ' + ch + ' (' + channels[ch] + ')</button>';
+  });
+  container.innerHTML = html;
+}
+
+function setBrainChannelFilter(ch, btn) {
+  _brainChannelFilter = ch;
+  renderBrainChannelChips(window._brainChannelCounts || {});
+  renderBrainStream(_brainAllEvents);
+}
+
 function renderBrainStream(events) {
   var el = document.getElementById('brain-stream');
   if (!el) return;
   var filtered = _brainFilter === 'all' ? events : events.filter(function(ev) { return ev.source === _brainFilter; });
-    if (_brainTypeFilter !== 'all') {
-      filtered = filtered.filter(function(ev) { return ev.type === _brainTypeFilter; });
-    }
+  if (_brainTypeFilter !== 'all') {
+    filtered = filtered.filter(function(ev) { return ev.type === _brainTypeFilter; });
+  }
+  if (_brainChannelFilter !== 'all') {
+    filtered = filtered.filter(function(ev) { return (ev.channel || '') === _brainChannelFilter; });
+  }
   filtered = filtered.slice().sort(function(a,b){
     var ta = a.time ? new Date(a.time).getTime() : 0;
     var tb = b.time ? new Date(b.time).getTime() : 0;
@@ -2151,16 +2186,26 @@ function renderBrainStream(events) {
     var evType = ev.type || 'TOOL';
     var icon = _brainTypeIcons[evType] || '🔧';
     var fullSrc = ev.sourceLabel || ev.source || 'main';
-    /* Short agent ID: show role/last segment only; full ID in title attribute */
     var srcParts = fullSrc.split(':');
     var shortSrc = srcParts[srcParts.length - 1] || fullSrc;
     if (shortSrc.length > 12) shortSrc = shortSrc.slice(0, 8) + '\u2026';
     var roleIcon = fullSrc.indexOf('subagent') >= 0 ? '\uD83E\uDD16' : '\uD83E\uDDE0';
+    // Channel badge
+    var chBadge = '';
+    var ch = ev.channel || '';
+    if (ch) {
+      var chIco = _channelIcons[ch] || '📨';
+      var chCol = _channelColors[ch] || '#667';
+      var chLabel = ch.charAt(0).toUpperCase() + ch.slice(1);
+      if (ev.channelSubject) chLabel += ':' + (ev.channelSubject.length > 14 ? ev.channelSubject.slice(0, 12) + '\u2026' : ev.channelSubject);
+      chBadge = '<span class="brain-channel" style="color:' + chCol + ';font-size:10px;flex-shrink:0;opacity:0.8;white-space:nowrap;" title="' + escHtml(ch + (ev.channelSubject ? ': ' + ev.channelSubject : '')) + '">' + chIco + ' ' + escHtml(chLabel) + '</span>';
+    }
     html += '<div class="brain-event" onclick="this.classList.toggle(\'expanded\')">';
     html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
     html += '<span class="brain-type" style="background:rgba(100,100,100,0.15);color:' + color + ';padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;min-width:70px;text-align:center;display:inline-block;white-space:nowrap;">' + icon + ' ' + escHtml(evType) + '</span>';
     html += '<span class="brain-source" style="color:' + color + ';flex-shrink:0;" title="' + escHtml(fullSrc) + '">' + roleIcon + ' ' + escHtml(shortSrc) + '</span>';
+    html += chBadge;
     html += '</div>';
     html += '<span class="brain-detail">' + renderBrainDetail(ev.detail || '') + '</span>';
     html += '</div>';
@@ -2331,6 +2376,13 @@ async function loadBrainPage(silent) {
     _brainAllEvents = events;
     renderBrainFilterChips(data.sources || []);
     renderBrainTypeChips(events);
+    // Channel filter chips
+    window._brainChannelCounts = data.channels || {};
+    if (!Object.keys(window._brainChannelCounts).length) {
+      // Build from events if API didn't provide
+      events.forEach(function(ev) { if (ev.channel) window._brainChannelCounts[ev.channel] = (window._brainChannelCounts[ev.channel]||0) + 1; });
+    }
+    renderBrainChannelChips(window._brainChannelCounts);
     renderBrainChart(events);
     if (typeof syncBrainGraph === 'function') syncBrainGraph(events);
     var streamEl = document.getElementById('brain-stream');

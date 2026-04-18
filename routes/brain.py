@@ -30,10 +30,11 @@ def api_brain_history():
     # Return unified event stream - v2 no truncation
     events = []
 
-    # Build sessionId to displayName map
+    # Build sessionId to displayName + channel map
     session_dir = _d.SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
     index_path = os.path.join(session_dir, "sessions.json")
     sid_to_label = {}
+    sid_to_channel = {}  # sessionId → {channel, chatType, subject}
     try:
         with open(index_path, "r") as f:
             index = json.load(f)
@@ -42,6 +43,21 @@ def api_brain_history():
             label = meta.get("displayName") or meta.get("label") or ""
             if sid and label:
                 sid_to_label[sid] = label
+            if sid:
+                # Parse channel from session key: agent:<id>:<channel>:group|channel:<chatId>
+                # or from metadata fields
+                channel = meta.get("provider", "")
+                chat_type = meta.get("chatType", "")
+                subject = meta.get("subject") or meta.get("displayName") or ""
+                if not channel:
+                    # Parse from key: agent:main:telegram:group:-100...
+                    parts = key.split(":")
+                    if len(parts) >= 3 and parts[2] not in ("main", "subagent"):
+                        channel = parts[2]
+                    elif len(parts) == 3 and parts[2] == "main":
+                        channel = "cli"
+                if channel:
+                    sid_to_channel[sid] = {"channel": channel, "chatType": chat_type, "subject": subject}
     except Exception:
         pass
 
@@ -198,6 +214,7 @@ def api_brain_history():
             fname = os.path.basename(sf).replace(".jsonl", "")
             label = sid_to_label.get(fname, "")
             source_id = fname
+            ch_info = sid_to_channel.get(fname, {})
             import re as _re
 
             source_label = (
@@ -460,11 +477,28 @@ def api_brain_history():
                     "color": ev.get("color", "#888"),
                 }
             )
+    # Enrich events with channel info from session index
+    for ev in events:
+        src = ev.get("source", "")
+        if src in sid_to_channel:
+            ev["channel"] = sid_to_channel[src].get("channel", "")
+            ev["channelSubject"] = sid_to_channel[src].get("subject", "")
+            ev["chatType"] = sid_to_channel[src].get("chatType", "")
+        elif src == "main":
+            ev["channel"] = "cli"
+
+    # Build channel summary for filter chips
+    channel_counts = {}
+    for ev in events:
+        ch = ev.get("channel", "")
+        if ch:
+            channel_counts[ch] = channel_counts.get(ch, 0) + 1
+
     try:
         _d._ext_emit("brain.event", {"count": len(events)})
     except Exception:
         pass
-    return jsonify({"events": events, "total": len(events), "sources": sources_seen})
+    return jsonify({"events": events, "total": len(events), "sources": sources_seen, "channels": channel_counts})
 
 
 @bp_brain.route("/api/brain-stream")
