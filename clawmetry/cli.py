@@ -437,7 +437,9 @@ def _cmd_connect(args) -> None:
 
     # Verify ownership via OTP when key is passed directly (not from interactive flow)
     # Skip if this key is already verified (saved in config) — enables Docker restarts
-    if args.key:
+    # Skip if --no-verify is set (agent-driven setup via /api/register, key was just created)
+    _skip_verify = getattr(args, "no_verify", False)
+    if args.key and not _skip_verify:
         if _saved_api_key and api_key == _saved_api_key:
             pass  # Already verified — reconnecting with same key
         else:
@@ -1800,6 +1802,11 @@ def main() -> None:
         "--key-only",
         action="store_true",
         help="Save key + config only, do not start daemon (for NemoClaw host use)",
+    )
+    p_connect.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip OTP ownership verification (for agent-driven setup via /api/register)",
     )
     p_connect.add_argument(
         "--no-daemon",
