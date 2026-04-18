@@ -524,9 +524,22 @@ def _cmd_connect(args) -> None:
 
     # Start daemon
     _start_daemon(config, args)
+
+    # Open browser with encryption key in URL fragment (never sent to server)
+    # The #key=... fragment stays client-side — true E2E encryption
+    _node_id = config.get("node_id", "")
+    _dashboard_url = f"https://app.clawmetry.com/cloud?token={api_key}#key={enc_key}&node={_node_id}"
+
     print()
-    print("  All done! Open app.clawmetry.com to see your dashboard.")
+    print("  All done! Opening your dashboard...")
+    print(f"  https://app.clawmetry.com/cloud")
     print()
+
+    try:
+        import webbrowser
+        webbrowser.open(_dashboard_url)
+    except Exception:
+        pass
 
 
 def _start_daemon(config: dict, args) -> None:
