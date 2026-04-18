@@ -2314,26 +2314,58 @@ function renderBrainStream(events) {
         var turnDuration = turnStart && turnEnd ? ((turnStart - turnEnd) / 1000).toFixed(1) : '?';
         var llmCalls = turnEvents.filter(function(e){return e.type==='AGENT'||e.type==='THINK';}).length;
         var toolCalls = turnEvents.filter(function(e){return e.type==='EXEC'||e.type==='READ'||e.type==='WRITE'||e.type==='BROWSER'||e.type==='SEARCH'||e.type==='TOOL';}).length;
+        // Detect sub-agent events (different source = sub-agent)
+        var parentSource = ev.source || 'main';
+        var subagentSources = {};
+        turnEvents.forEach(function(te) {
+          var teSrc = te.source || 'main';
+          if (teSrc !== parentSource && teSrc !== 'main') {
+            subagentSources[teSrc] = (subagentSources[teSrc] || 0) + 1;
+          }
+        });
+        var subagentCount = Object.keys(subagentSources).length;
+
         // Summary badge
-        turnTimeline = '<div class="brain-turn-summary" style="display:flex;gap:6px;margin-top:2px;font-size:10px;color:var(--text-muted);">';
+        turnTimeline = '<div class="brain-turn-summary" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px;font-size:10px;color:var(--text-muted);">';
         turnTimeline += '<span style="background:rgba(139,92,246,0.15);color:#a78bfa;padding:1px 6px;border-radius:3px;">&#9881; ' + turnEvents.length + ' steps</span>';
         if (llmCalls > 0) turnTimeline += '<span style="background:rgba(59,130,246,0.15);color:#60a5fa;padding:1px 6px;border-radius:3px;">&#129302; ' + llmCalls + ' LLM</span>';
         if (toolCalls > 0) turnTimeline += '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;padding:1px 6px;border-radius:3px;">&#128295; ' + toolCalls + ' tools</span>';
+        if (subagentCount > 0) turnTimeline += '<span style="background:rgba(236,72,153,0.15);color:#ec4899;padding:1px 6px;border-radius:3px;">&#129302; ' + subagentCount + ' sub-agent' + (subagentCount > 1 ? 's' : '') + '</span>';
         if (turnDuration !== '?' && parseFloat(turnDuration) > 0) turnTimeline += '<span style="background:rgba(16,185,129,0.15);color:#10b981;padding:1px 6px;border-radius:3px;">&#9202; ' + turnDuration + 's</span>';
         turnTimeline += '</div>';
         // Expandable timeline detail
         turnTimeline += '<div class="brain-turn-detail" style="display:none;margin-top:6px;padding:6px 0 2px 16px;border-left:2px solid rgba(139,92,246,0.3);">';
+        var currentSubagent = null;
         turnEvents.forEach(function(te) {
           var teIcon = _brainTypeIcons[te.type] || '&#128295;';
           var teTime = formatBrainTime(te.time);
           var teDetail = (te.detail || '').substring(0, 120);
-          var teCol = {'AGENT':'#a855f7','THINK':'#94a3b8','EXEC':'#f59e0b','READ':'#6ee7b7','WRITE':'#10b981','BROWSER':'#ec4899','SEARCH':'#06b6d4','TOOL':'#f97316','RESULT':'#6ee7b7'}[te.type] || '#888';
-          turnTimeline += '<div style="display:flex;gap:6px;align-items:flex-start;padding:2px 0;font-size:11px;">';
+          var teCol = {'AGENT':'#a855f7','THINK':'#94a3b8','EXEC':'#f59e0b','READ':'#6ee7b7','WRITE':'#10b981','BROWSER':'#ec4899','SEARCH':'#06b6d4','TOOL':'#f97316','RESULT':'#6ee7b7','SPAWN':'#ec4899'}[te.type] || '#888';
+          var teSrc = te.source || 'main';
+          var isSubagent = teSrc !== parentSource && teSrc !== 'main';
+
+          // Sub-agent group header
+          if (isSubagent && currentSubagent !== teSrc) {
+            if (currentSubagent) turnTimeline += '</div>'; // close previous
+            currentSubagent = teSrc;
+            var saLabel = (te.sourceLabel || teSrc).split(':').pop();
+            if (saLabel.length > 10) saLabel = saLabel.slice(0, 8);
+            var saEvents = subagentSources[teSrc] || 0;
+            turnTimeline += '<div style="margin:4px 0 2px 0;padding:4px 8px;background:rgba(236,72,153,0.08);border:1px solid rgba(236,72,153,0.2);border-radius:6px;">';
+            turnTimeline += '<div style="font-size:10px;font-weight:600;color:#ec4899;margin-bottom:3px;">&#129302; Sub-agent: ' + escHtml(saLabel) + ' (' + saEvents + ' steps)</div>';
+          } else if (!isSubagent && currentSubagent) {
+            turnTimeline += '</div>'; // close sub-agent group
+            currentSubagent = null;
+          }
+
+          var indent = isSubagent ? 'padding-left:12px;' : '';
+          turnTimeline += '<div style="display:flex;gap:6px;align-items:flex-start;padding:2px 0;font-size:11px;' + indent + '">';
           turnTimeline += '<span style="color:var(--text-faint);min-width:50px;flex-shrink:0;">' + teTime + '</span>';
           turnTimeline += '<span style="color:' + teCol + ';min-width:55px;font-weight:600;flex-shrink:0;">' + teIcon + ' ' + te.type + '</span>';
           turnTimeline += '<span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(teDetail) + '</span>';
           turnTimeline += '</div>';
         });
+        if (currentSubagent) turnTimeline += '</div>'; // close last sub-agent group
         turnTimeline += '</div>';
       }
     }
