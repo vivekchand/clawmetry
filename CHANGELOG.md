@@ -2,6 +2,13 @@
 
 ---
 
+## v0.12.120
+
+### Improved
+- **Uninstall purges server-side registration** — `clawmetry uninstall` now calls `/api/unregister` to delete the node_registry entry, preventing stale account re-linking on reinstall (#741)
+
+---
+
 ## v0.12.119
 
 ### Improved
