@@ -9094,13 +9094,775 @@ def _check_auth():
 
 # (moved to routes/sessions.py)
 
+<<<<<<< Updated upstream
+=======
+    model_name = main.get("model") or "unknown"
+    return jsonify(
+        {
+            "model": model_name,
+            "provider": _infer_provider_from_model(model_name),
+            "sessionCount": len(sessions),
+            "sessions": len(sessions),  # alias for E2E compatibility
+            "activeSessions": len([s for s in sessions if s.get("active")]),
+            "mainSessionUpdated": main.get("updatedAt"),
+            "mainTokens": main.get("totalTokens", 0),
+            "contextWindow": main.get("contextTokens", 200000),
+            "cronCount": len(crons),
+            "cronEnabled": enabled,
+            "cronDisabled": disabled,
+            "memoryCount": len(mem_files),
+            "memorySize": total_size,
+            "system": system,
+            "infra": infra,
+        }
+    )
+>>>>>>> Stashed changes
 
 # (moved to routes/sessions.py)
 
 
+<<<<<<< Updated upstream
 # (8 route handlers moved to routes/crons.py: /api/crons, /api/cron/fix,
 #  /api/cron/run, /api/cron/toggle, /api/cron/delete, /api/cron/update,
 #  /api/cron/create, /api/cron/<job_id>/runs)
+=======
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    if not os.path.isdir(sessions_dir):
+        return jsonify({"calls": [], "error": "sessions dir not found"})
+    # Find the main session: largest recently-modified JSONL (main sessions accumulate far more data)
+    candidates = []
+    for f in os.listdir(sessions_dir):
+        if not f.endswith(".jsonl"):
+            continue
+        fp = os.path.join(sessions_dir, f)
+        try:
+            st = os.stat(fp)
+            # Only consider files modified in last 24h
+            if time.time() - st.st_mtime < 86400:
+                candidates.append((fp, st.st_size, st.st_mtime))
+        except Exception:
+            continue
+    if not candidates:
+        return jsonify({"calls": []})
+    # Pick most recently modified file (active main session)
+    candidates.sort(key=lambda x: x[2], reverse=True)
+    best = candidates[0][0]
+    best_mt = candidates[0][2]
+    if not best:
+        return jsonify({"calls": []})
+    # Read last ~200 lines to find tool calls
+    try:
+        with open(best, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            chunk = min(size, 512000)
+            fh.seek(max(0, size - chunk))
+            tail = fh.read().decode("utf-8", errors="replace")
+        lines = tail.strip().split("\n")
+    except Exception:
+        return jsonify({"calls": []})
+    tool_icons = {
+        "exec": "🔧",
+        "Read": "📖",
+        "read": "📖",
+        "Edit": "✏️",
+        "edit": "✏️",
+        "Write": "✏️",
+        "write": "✏️",
+        "web_search": "🌐",
+        "web_fetch": "🌐",
+        "browser": "🖥️",
+        "message": "💬",
+        "tts": "🔊",
+        "image": "🖼️",
+        "canvas": "🎨",
+        "nodes": "📱",
+        "process": "🔧",
+    }
+    calls = []
+    for line in lines:
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        msg = obj.get("message", obj)
+        ts = obj.get("timestamp") or msg.get("timestamp")
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if item.get("type") != "toolCall":
+                continue
+            name = item.get("name", "?")
+            args = item.get("arguments", {}) or {}
+            # Build summary
+            if name == "exec":
+                summary = args.get("command", "")[:60]
+            elif name in ("Read", "read"):
+                summary = (args.get("file_path") or args.get("path") or "")[:60]
+            elif name in ("Edit", "edit"):
+                summary = (args.get("file_path") or args.get("path") or "")[:60]
+            elif name in ("Write", "write"):
+                summary = (args.get("file_path") or args.get("path") or "")[:60]
+            elif name == "web_search":
+                summary = args.get("query", "")[:60]
+            elif name == "web_fetch":
+                summary = args.get("url", "")[:60]
+            elif name == "browser":
+                summary = args.get("action", "")
+            elif name == "message":
+                action = args.get("action", "")
+                target = args.get("target") or args.get("to") or args.get("channel", "")
+                msg = (args.get("message") or "")[:40]
+                summary = (
+                    f"{action} -> {target}: {msg}" if msg else f"{action} -> {target}"
+                )
+                summary = summary[:60]
+            elif name == "tts":
+                summary = args.get("text", "")[:60]
+            elif name == "process":
+                action = args.get("action", "")
+                sid = args.get("sessionId", "")[:15]
+                summary = f"{action}: {sid}" if sid else action
+            elif name == "sessions_spawn":
+                task = (args.get("task", "") or args.get("label", ""))[:50]
+                summary = task
+            elif name == "sessions_send":
+                label = args.get("label") or args.get("sessionKey", "")
+                summary = f"-> {label}"[:60]
+            elif name == "cron":
+                action = args.get("action", "")
+                jid = args.get("jobId", "")[:10]
+                summary = f"{action} {jid}".strip()
+            elif name == "gateway":
+                summary = args.get("action", "")
+            elif name == "session_status":
+                summary = "checking status"
+            elif name == "image":
+                summary = (args.get("prompt", "") or args.get("image", ""))[:60]
+            else:
+                # Clean up dict display
+                s = str(args)
+                if len(s) > 60:
+                    s = s[:57] + "..."
+                summary = s
+            icon = tool_icons.get(name, "⚙️")
+            calls.append({"ts": ts, "name": name, "icon": icon, "summary": summary})
+    # Return last 20
+    calls = calls[-20:]
+    return jsonify(
+        {"calls": calls, "sessionFile": os.path.basename(best), "lastModified": best_mt}
+    )
+
+
+@bp_sessions.route("/api/sessions")
+def api_sessions():
+    gw_data = _gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
+    if gw_data and "sessions" in gw_data:
+        return jsonify({"sessions": _augment_sessions_with_burn(gw_data["sessions"])})
+    return jsonify({"sessions": _augment_sessions_with_burn(_get_sessions())})
+
+
+@bp_sessions.route("/api/prompt-errors")
+def api_prompt_errors():
+    """Surface OpenClaw `openclaw:prompt-error` custom events.
+
+    Each event marks a real provider failure — rate limit, auth, model-not-found,
+    context overflow, etc. Scans session JSONLs and returns the most recent
+    errors (default 50, newest first) so the UI can render them as an alerts
+    banner.
+    """
+    try:
+        limit = max(1, min(int(request.args.get("limit", "50")), 500))
+    except ValueError:
+        limit = 50
+    try:
+        since_ms = int(request.args.get("since", "0") or 0)
+    except ValueError:
+        since_ms = 0
+
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    if not os.path.isdir(sessions_dir):
+        return jsonify({"errors": [], "total": 0, "note": "sessions dir not found"})
+
+    errors: list = []
+    try:
+        files = sorted(
+            (
+                f
+                for f in os.listdir(sessions_dir)
+                if f.endswith(".jsonl") and ".deleted." not in f and ".reset." not in f
+            ),
+            key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+            reverse=True,
+        )[:100]
+    except OSError:
+        files = []
+
+    for fname in files:
+        fpath = os.path.join(sessions_dir, fname)
+        sid = fname[:-len(".jsonl")] if fname.endswith(".jsonl") else fname
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw or '"openclaw:prompt-error"' not in raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    if ev.get("type") != "custom":
+                        continue
+                    if ev.get("customType") != "openclaw:prompt-error":
+                        continue
+                    ts = ev.get("timestamp", "")
+                    ts_ms = 0
+                    if isinstance(ts, str) and ts:
+                        try:
+                            from datetime import datetime as _dt, timezone as _tz
+                            ts_ms = int(
+                                _dt.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                                * 1000
+                            )
+                        except Exception:
+                            ts_ms = 0
+                    if since_ms and ts_ms and ts_ms < since_ms:
+                        continue
+                    data = ev.get("data", {}) or {}
+                    errors.append(
+                        {
+                            "timestamp": ts,
+                            "ts_ms": ts_ms,
+                            "session_id": sid,
+                            "run_id": data.get("runId", ""),
+                            "provider": data.get("provider", ""),
+                            "model": data.get("model", ""),
+                            "api": data.get("api", ""),
+                            "error": data.get("error", ""),
+                        }
+                    )
+        except Exception:
+            continue
+
+    errors.sort(key=lambda e: e.get("ts_ms", 0), reverse=True)
+    return jsonify(
+        {
+            "errors": errors[:limit],
+            "total": len(errors),
+        }
+    )
+
+
+@bp_sessions.route("/api/subagents")
+def api_subagents():
+    """Return sub-agent list with depth/parent fields for the tree view."""
+    now_ms = time.time() * 1000
+    gw_data = _gw_invoke("sessions_list", {"limit": 100, "messageLimit": 0})
+    if gw_data and "sessions" in gw_data:
+        all_sessions = gw_data["sessions"]
+    else:
+        all_sessions = _get_sessions()
+
+    subagents = []
+    counts = {"total": 0, "active": 0, "idle": 0, "stale": 0}
+    for s in all_sessions:
+        sid = s.get("sessionId") or s.get("key", "")
+        if not sid:
+            continue
+        age_ms = now_ms - (s.get("updatedAt") or s.get("lastActiveMs", 0) or 0)
+        if age_ms < 120000:
+            status = "active"
+        elif age_ms < 600000:
+            status = "idle"
+        else:
+            status = "stale"
+        depth = int(s.get("depth", 0) or 0)
+        parent = s.get("spawnedBy") or s.get("parentKey") or None
+        is_subagent = depth > 0 or "subagent" in sid.lower() or bool(parent)
+        if not is_subagent:
+            continue
+        tokens = int(s.get("totalTokens") or 0)
+        model = s.get("model") or s.get("modelRef") or "unknown"
+        display = s.get("displayName") or s.get("label") or sid[:20]
+        started = s.get("startedAt") or s.get("updatedAt") or now_ms
+        elapsed_s = max(0, int((now_ms - started) / 1000))
+        if elapsed_s < 60:
+            runtime = f"{elapsed_s}s"
+        elif elapsed_s < 3600:
+            runtime = f"{elapsed_s // 60}m"
+        else:
+            runtime = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+        counts["total"] += 1
+        counts[status] += 1
+        subagents.append({
+            "sessionId": sid,
+            "displayName": display,
+            "model": model,
+            "status": status,
+            "depth": depth,
+            "parent": parent,
+            "totalTokens": tokens,
+            "runtime": runtime,
+            "updatedAt": s.get("updatedAt") or s.get("lastActiveMs", 0),
+        })
+
+    subagents.sort(key=lambda x: (0 if x["status"] == "active" else 1 if x["status"] == "idle" else 2, x["depth"]))
+    return jsonify({"subagents": subagents, "counts": counts})
+
+
+@bp_sessions.route("/api/delegation-tree")
+def api_delegation_tree():
+    """Agent delegation chains -- inspired by AgentWeave provenance tracing.
+
+    Reads sessions.json, groups subagents by their spawnedBy parent key,
+    and returns per-chain token totals and estimated cost.
+    """
+    sessions_dir = _get_sessions_dir()
+    index_path = os.path.join(sessions_dir, "sessions.json")
+    try:
+        with open(index_path) as f:
+            all_sessions = json.load(f)
+    except Exception:
+        return jsonify(
+            {"chains": [], "total_subagents": 0, "total_chain_cost_usd": 0.0}
+        )
+
+    usd_per_tok = _estimate_usd_per_token()
+    now_ms = time.time() * 1000
+
+    main_sessions = {}
+    subagent_sessions = []
+    for key, val in all_sessions.items():
+        if not isinstance(val, dict):
+            continue
+        if ":subagent:" in key:
+            subagent_sessions.append((key, val))
+        else:
+            main_sessions[key] = val
+
+    chains_map = {}
+    for key, sa in subagent_sessions:
+        parent_key = sa.get("spawnedBy", "unknown")
+        if parent_key not in chains_map:
+            chains_map[parent_key] = []
+        age_ms = now_ms - sa.get("updatedAt", 0)
+        status = (
+            "active" if age_ms < 120000 else ("idle" if age_ms < 600000 else "stale")
+        )
+        total_tok = int(sa.get("totalTokens") or 0)
+        chains_map[parent_key].append(
+            {
+                "key": key,
+                "label": sa.get("label") or key.split(":")[-1],
+                "model": sa.get("model", "unknown"),
+                "prov_agent_type": "subagent",
+                "prov_session_turn": 2,
+                "prov_parent_key": parent_key,
+                "prov_total_tokens": total_tok,
+                "input_tokens": int(sa.get("inputTokens") or 0),
+                "output_tokens": int(sa.get("outputTokens") or 0),
+                "total_tokens": total_tok,
+                "cost_usd": round(total_tok * usd_per_tok, 6),
+                "status": status,
+                "updated_at": sa.get("updatedAt", 0),
+            }
+        )
+
+    chains = []
+    total_chain_cost = 0.0
+    for parent_key, children in chains_map.items():
+        parts = parent_key.split(":")
+        channel = parts[2] if len(parts) > 2 else "unknown"
+        display = parts[-1] if len(parts) > 0 else parent_key
+        chain_tokens = sum(c["total_tokens"] for c in children)
+        chain_cost = round(chain_tokens * usd_per_tok, 6)
+        total_chain_cost += chain_cost
+        parent_meta = main_sessions.get(parent_key, {})
+        chains.append(
+            {
+                "parent_key": parent_key,
+                "parent_display": parent_meta.get("displayName")
+                or parent_meta.get("subject")
+                or display,
+                "parent_channel": channel,
+                "children": sorted(
+                    children, key=lambda x: x["total_tokens"], reverse=True
+                ),
+                "chain_tokens": chain_tokens,
+                "chain_cost_usd": chain_cost,
+                "child_count": len(children),
+            }
+        )
+
+    chains.sort(key=lambda x: x["chain_tokens"], reverse=True)
+    return jsonify(
+        {
+            "chains": chains,
+            "total_subagents": len(subagent_sessions),
+            "total_chain_cost_usd": round(total_chain_cost, 4),
+        }
+    )
+
+
+@bp_sessions.route("/api/export/otlp")
+def api_export_otlp():
+    """Export recent sessions as OTLP ResourceSpans JSON.
+
+    Compatible with Grafana Tempo, Jaeger, and any OTLP-capable backend.
+    """
+    import hashlib
+
+    sessions_dir = _get_sessions_dir()
+    index_path = os.path.join(sessions_dir, "sessions.json")
+    try:
+        with open(index_path) as f:
+            all_sessions = json.load(f)
+    except Exception:
+        return jsonify({"resourceSpans": []})
+
+    cutoff_ms = (time.time() - 86400) * 1000
+    resource_spans = []
+    count = 0
+
+    for key, val in all_sessions.items():
+        if not isinstance(val, dict):
+            continue
+        if val.get("updatedAt", 0) < cutoff_ms:
+            continue
+        if count >= 100:
+            break
+        count += 1
+
+        is_subagent = ":subagent:" in key
+        agent_type = "subagent" if is_subagent else "main"
+        session_id = val.get("sessionId", key.split(":")[-1])
+        trace_id = hashlib.md5(session_id.encode()).hexdigest()
+        span_id = trace_id[:16]
+        total_tokens = int(val.get("totalTokens") or 0)
+
+        attrs = [
+            {"key": "service.name", "value": {"stringValue": "clawmetry"}},
+            {"key": "prov.agent.id", "value": {"stringValue": key}},
+            {"key": "prov.agent.type", "value": {"stringValue": agent_type}},
+            {
+                "key": "prov.agent.model",
+                "value": {"stringValue": val.get("model", "unknown")},
+            },
+            {"key": "prov.llm.total_tokens", "value": {"intValue": total_tokens}},
+            {
+                "key": "prov.session.turn",
+                "value": {"intValue": 2 if is_subagent else 1},
+            },
+        ]
+        if is_subagent and val.get("spawnedBy"):
+            attrs.append(
+                {
+                    "key": "prov.parent.session.id",
+                    "value": {"stringValue": val["spawnedBy"]},
+                }
+            )
+        if val.get("label"):
+            attrs.append(
+                {"key": "prov.task.label", "value": {"stringValue": val["label"]}}
+            )
+
+        updated_ns = int(val.get("updatedAt", 0)) * 1000000
+
+        resource_spans.append(
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": "clawmetry"}},
+                    ]
+                },
+                "scopeSpans": [
+                    {
+                        "scope": {"name": "clawmetry.agent", "version": "1.0"},
+                        "spans": [
+                            {
+                                "traceId": trace_id,
+                                "spanId": span_id,
+                                "name": "agent.turn",
+                                "kind": 3,
+                                "startTimeUnixNano": updated_ns - 1000000000,
+                                "endTimeUnixNano": updated_ns,
+                                "attributes": attrs,
+                                "status": {"code": 1},
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+    return jsonify({"resourceSpans": resource_spans})
+
+
+@bp_sessions.route("/api/sessions/cost-breakdown")
+def api_sessions_cost_breakdown():
+    """Per-session cost breakdown: top sessions by total cost, sorted descending."""
+    analytics = _compute_transcript_analytics()
+    sessions = analytics.get("sessions", [])
+    usd_per_token = _estimate_usd_per_token()
+    result = []
+    for s in sessions:
+        cost = s.get("cost_usd", 0.0) or 0.0
+        tokens = s.get("tokens", 0) or 0
+        # Estimate cost from tokens if cost is zero
+        if cost == 0.0 and tokens > 0:
+            cost = tokens * usd_per_token
+        result.append(
+            {
+                "session_id": s.get("session_id", ""),
+                "tokens": tokens,
+                "cost_usd": round(cost, 6),
+                "model": s.get("model", "unknown"),
+                "day": s.get("day", ""),
+                "start_ts": s.get("start_ts", 0),
+            }
+        )
+    result.sort(key=lambda x: x["cost_usd"], reverse=True)
+    top10 = result[:10]
+    total_cost = sum(r["cost_usd"] for r in result)
+    return jsonify(
+        {"sessions": result, "top10": top10, "total_cost_usd": round(total_cost, 4)}
+    )
+
+
+@bp_sessions.route("/api/sessions/<session_id>/stop", methods=["POST"])
+def api_session_stop(session_id):
+    """Emergency stop for a session: SIGTERM if pid is known and/or .stop signal file."""
+    target = _resolve_session_stop_target(session_id)
+    sid = target.get("session_id", "")
+    if not sid:
+        return jsonify({"ok": False, "error": "Invalid session id"}), 400
+
+    did_signal = False
+    did_file = False
+    errors = []
+    pid = target.get("pid")
+    if isinstance(pid, int) and pid > 1 and sys.platform != "win32":
+        try:
+            os.kill(pid, 15)  # SIGTERM
+            did_signal = True
+        except Exception as e:
+            errors.append(f"sigterm_failed:{e}")
+
+    stop_path = target.get("stop_path", "")
+    try:
+        if stop_path:
+            with open(stop_path, "w") as f:
+                f.write(
+                    json.dumps(
+                        {"timestamp": time.time(), "reason": "dashboard_emergency_stop"}
+                    )
+                )
+            did_file = True
+    except Exception as e:
+        errors.append(f"stop_file_failed:{e}")
+
+    if not did_signal and not did_file:
+        return jsonify(
+            {"ok": False, "error": "Unable to issue stop signal", "details": errors}
+        ), 500
+    return jsonify(
+        {
+            "ok": True,
+            "session_id": sid,
+            "sigterm_sent": did_signal,
+            "stop_file_written": did_file,
+            "errors": errors,
+        }
+    )
+
+
+@bp_crons.route("/api/crons")
+def api_crons():
+    def _with_costs(jobs):
+        if not isinstance(jobs, list):
+            return jobs
+        analytics = _compute_transcript_analytics()
+        sessions = [
+            s for s in analytics.get("sessions", []) if s.get("is_cron_candidate")
+        ]
+        if not sessions:
+            return jobs
+
+        cost_by_job = defaultdict(float)
+        count_by_job = defaultdict(int)
+        session_ids_by_job = defaultdict(list)
+
+        for sess in sessions:
+            best_idx = None
+            best_score = 0
+            for idx, job in enumerate(jobs):
+                score = _score_cron_match(sess, job if isinstance(job, dict) else {})
+                if score > best_score:
+                    best_score = score
+                    best_idx = idx
+            if best_idx is not None and best_score >= 20:
+                cost = float(sess.get("cost_usd", 0.0) or 0.0)
+                cost_by_job[best_idx] += cost
+                count_by_job[best_idx] += 1
+                if len(session_ids_by_job[best_idx]) < 10:
+                    session_ids_by_job[best_idx].append(sess.get("session_id", ""))
+
+        out = []
+        for idx, job in enumerate(jobs):
+            if not isinstance(job, dict):
+                out.append(job)
+                continue
+            j2 = dict(job)
+            j2["cost_usd"] = round(cost_by_job.get(idx, 0.0), 6)
+            j2["cost_session_count"] = int(count_by_job.get(idx, 0))
+            j2["cost_session_ids"] = session_ids_by_job.get(idx, [])
+            out.append(j2)
+        return out
+
+    # Try gateway API first
+    gw_data = _gw_invoke("cron", {"action": "list", "includeDisabled": True})
+    if gw_data and "jobs" in gw_data:
+        jobs = _with_costs(gw_data.get("jobs", []))
+        try:
+            _ext_emit("cron.run", {"count": len(gw_data.get("jobs", []))})
+        except Exception:
+            pass
+        return jsonify({"jobs": jobs})
+    return jsonify({"jobs": _with_costs(_get_crons())})
+
+
+@bp_crons.route("/api/cron/fix", methods=["POST"])
+def api_cron_fix():
+    data = request.get_json(silent=True) or {}
+    job_id = data.get("jobId", "")
+    if not job_id:
+        return jsonify({"error": "Missing jobId"}), 400
+    # Find the job name for context
+    job_name = job_id
+    for j in _get_crons():
+        if j.get("id") == job_id:
+            job_name = j.get("name", job_id)
+            break
+    # TODO: integrate with AI agent messaging system
+    return jsonify({"ok": True, "message": f'Fix request submitted for "{job_name}"'})
+
+
+@bp_crons.route("/api/cron/run", methods=["POST"])
+def api_cron_run():
+    data = request.get_json(silent=True) or {}
+    job_id = data.get("jobId", "")
+    if not job_id:
+        return jsonify({"error": "Missing jobId"}), 400
+    if _budget_paused:
+        return jsonify(
+            {"error": "Auto-pause active: refusing new session starts", "paused": True}
+        ), 429
+    result = _gw_invoke("cron", {"action": "run", "jobId": job_id})
+    if result is None:
+        return jsonify({"error": "Gateway unavailable"}), 502
+    return jsonify({"ok": True, "message": "Job triggered", "result": result})
+
+
+@bp_crons.route("/api/cron/toggle", methods=["POST"])
+def api_cron_toggle():
+    data = request.get_json(silent=True) or {}
+    job_id = data.get("jobId", "")
+    enabled = data.get("enabled", True)
+    if not job_id:
+        return jsonify({"error": "Missing jobId"}), 400
+    result = _gw_invoke(
+        "cron", {"action": "update", "jobId": job_id, "patch": {"enabled": enabled}}
+    )
+    if result is None:
+        return jsonify({"error": "Gateway unavailable"}), 502
+    return jsonify(
+        {"ok": True, "message": "Job enabled" if enabled else "Job disabled"}
+    )
+
+
+@bp_crons.route("/api/cron/delete", methods=["POST"])
+def api_cron_delete():
+    data = request.get_json(silent=True) or {}
+    job_id = data.get("jobId", "")
+    if not job_id:
+        return jsonify({"error": "Missing jobId"}), 400
+    result = _gw_invoke("cron", {"action": "remove", "jobId": job_id})
+    if result is None:
+        return jsonify({"error": "Gateway unavailable"}), 502
+    return jsonify({"ok": True, "message": "Job deleted"})
+
+
+@bp_crons.route("/api/cron/update", methods=["POST"])
+def api_cron_update():
+    data = request.get_json(silent=True) or {}
+    job_id = data.get("jobId", "")
+    patch = data.get("patch", {})
+    if not job_id:
+        return jsonify({"error": "Missing jobId"}), 400
+    if not patch:
+        return jsonify({"error": "Missing patch"}), 400
+    result = _gw_invoke("cron", {"action": "update", "jobId": job_id, "patch": patch})
+    if result is None:
+        return jsonify({"error": "Gateway unavailable"}), 502
+    return jsonify({"ok": True, "message": "Job updated"})
+
+
+@bp_crons.route("/api/cron/create", methods=["POST"])
+def api_cron_create():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "").strip()
+    schedule = data.get("schedule")
+    enabled = data.get("enabled", True)
+    if not name:
+        return jsonify({"error": "Missing name"}), 400
+    if not schedule:
+        return jsonify({"error": "Missing schedule"}), 400
+    if _budget_paused:
+        return jsonify(
+            {"error": "Auto-pause active: refusing new session starts", "paused": True}
+        ), 429
+    args = {
+        "action": "add",
+        "name": name,
+        "schedule": schedule,
+        "enabled": enabled,
+    }
+    if data.get("prompt"):
+        args["prompt"] = data["prompt"]
+    if data.get("channel"):
+        args["channel"] = data["channel"]
+    if data.get("model"):
+        args["model"] = data["model"]
+    result = _gw_invoke("cron", args)
+    if result is None:
+        return jsonify({"error": "Gateway unavailable"}), 502
+    return jsonify({"ok": True, "message": f'Job "{name}" created', "result": result})
+
+
+@bp_crons.route("/api/cron/<job_id>/runs")
+def api_cron_runs(job_id):
+    """Return run history for a specific cron job.
+
+    Tries gateway RPC first; falls back to parsing JSONL session transcripts
+    for cron candidate sessions attributed to this job.
+    Returns enriched list with p50/p95 duration stats.
+    """
+    # Try gateway API first
+    result = _gw_invoke("cron", {"action": "runs", "jobId": job_id, "limit": 50})
+    if result is not None:
+        runs = result.get("runs", result) if isinstance(result, dict) else result
+        if isinstance(runs, list) and runs:
+            return jsonify(_enrich_cron_runs(job_id, runs))
+
+    # Fallback: derive runs from transcript analytics
+    runs = _cron_runs_from_transcripts(job_id)
+    return jsonify(_enrich_cron_runs(job_id, runs))
+>>>>>>> Stashed changes
 
 
 def _enrich_cron_runs(job_id, runs):
@@ -10730,6 +11492,803 @@ def _build_cost_comparison():
     }
 
 
+<<<<<<< Updated upstream
+=======
+@bp_usage.route("/api/usage/export")
+def api_usage_export():
+    """Export usage data as CSV."""
+    try:
+        # Get usage data
+        if _has_otel_data():
+            data = _get_otel_usage_data()
+        else:
+            # Call the same logic as /api/usage but get full data
+            sessions_dir = SESSIONS_DIR or os.path.expanduser(
+                "~/.openclaw/agents/main/sessions"
+            )
+            daily_tokens = {}
+
+            if os.path.isdir(sessions_dir):
+                for fname in os.listdir(sessions_dir):
+                    if not fname.endswith(".jsonl"):
+                        continue
+                    fpath = os.path.join(sessions_dir, fname)
+                    try:
+                        fmtime = datetime.fromtimestamp(os.path.getmtime(fpath))
+                        with open(fpath, "r") as f:
+                            for line in f:
+                                try:
+                                    obj = json.loads(line.strip())
+                                    tokens = 0
+                                    usage = (
+                                        obj.get("usage") or obj.get("tokens_used") or {}
+                                    )
+                                    if isinstance(usage, dict):
+                                        tokens = (
+                                            usage.get("total_tokens")
+                                            or usage.get("totalTokens")
+                                            or (
+                                                usage.get("input_tokens", 0)
+                                                + usage.get("output_tokens", 0)
+                                            )
+                                            or 0
+                                        )
+                                    elif isinstance(usage, (int, float)):
+                                        tokens = int(usage)
+                                    if not tokens:
+                                        content = obj.get("content", "")
+                                        if (
+                                            isinstance(content, str)
+                                            and len(content) > 0
+                                        ):
+                                            tokens = max(1, len(content) // 4)
+                                        elif isinstance(content, list):
+                                            total_len = sum(
+                                                len(str(c.get("text", "")))
+                                                for c in content
+                                                if isinstance(c, dict)
+                                            )
+                                            tokens = (
+                                                max(1, total_len // 4)
+                                                if total_len
+                                                else 0
+                                            )
+                                    ts = (
+                                        obj.get("timestamp")
+                                        or obj.get("time")
+                                        or obj.get("created_at")
+                                    )
+                                    if ts:
+                                        if isinstance(ts, (int, float)):
+                                            dt = datetime.fromtimestamp(
+                                                ts / 1000 if ts > 1e12 else ts
+                                            )
+                                        else:
+                                            try:
+                                                dt = datetime.fromisoformat(
+                                                    str(ts).replace("Z", "+00:00")
+                                                )
+                                            except Exception:
+                                                dt = fmtime
+                                    else:
+                                        dt = fmtime
+                                    day = dt.strftime("%Y-%m-%d")
+                                    if tokens > 0:
+                                        daily_tokens[day] = (
+                                            daily_tokens.get(day, 0) + tokens
+                                        )
+                                except (json.JSONDecodeError, ValueError):
+                                    pass
+                    except Exception:
+                        pass
+
+            today = datetime.now()
+            today_str = today.strftime("%Y-%m-%d")
+            week_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+            month_start = today.strftime("%Y-%m-01")
+
+            # Build data structure similar to OTLP
+            days = []
+            for i in range(30, -1, -1):  # Last 30 days for export
+                d = today - timedelta(days=i)
+                ds = d.strftime("%Y-%m-%d")
+                tokens = daily_tokens.get(ds, 0)
+                cost = round(tokens * (30.0 / 1_000_000), 4)  # Default pricing
+                days.append({"date": ds, "tokens": tokens, "cost": cost})
+
+            data = {'days': days}
+
+        # Generate CSV content
+        csv_lines = ['Date,Tokens,Cost']
+        for day in data['days']:
+            csv_lines.append(f"{day['date']},{day['tokens']},{day.get('cost', 0):.4f}")
+
+        csv_content = '\n'.join(csv_lines)
+
+        response = make_response(csv_content)
+        response.headers['Content-Type'] = 'text/csv'
+        response.headers['Content-Disposition'] = f'attachment; filename=openclaw-usage-{datetime.now().strftime("%Y%m%d")}.csv'
+        return response
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp_usage.route('/api/model-attribution')
+def api_model_attribution():
+    """Per-model turn/session breakdown and switch history (GH #300)."""
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    model_turns = {}    # model -> assistant turn count
+    model_sessions = {} # model -> session count
+    switches = []       # list of {session, from_model, to_model}
+
+    if os.path.isdir(sessions_dir):
+        for fname in os.listdir(sessions_dir):
+            if not fname.endswith('.jsonl') or 'deleted' in fname:
+                continue
+            sid = fname.replace('.jsonl', '')
+            fpath = os.path.join(sessions_dir, fname)
+            try:
+                current_model = None
+                session_start_model = None
+                with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        t = obj.get('type', '')
+                        # Detect model changes
+                        if t == 'model_change':
+                            new_model = obj.get('modelId') or obj.get('model') or ''
+                            if new_model:
+                                if current_model and current_model != new_model:
+                                    switches.append({
+                                        'session': sid,
+                                        'from_model': current_model,
+                                        'to_model': new_model,
+                                    })
+                                current_model = new_model
+                                if session_start_model is None:
+                                    session_start_model = new_model
+                        elif t == 'custom':
+                            ct = obj.get('customType', '')
+                            if ct == 'model-snapshot':
+                                d = obj.get('data', {})
+                                m = d.get('modelId') or d.get('model') or ''
+                                if m and current_model is None:
+                                    current_model = m
+                                    session_start_model = m
+                        # Count assistant turns per model
+                        msg = obj.get('message', {})
+                        if isinstance(msg, dict) and msg.get('role') == 'assistant':
+                            m = msg.get('model') or obj.get('model') or current_model or 'unknown'
+                            if m:
+                                model_turns[m] = model_turns.get(m, 0) + 1
+                # Track which model a session primarily used (first detected)
+                primary = session_start_model or current_model
+                if primary:
+                    model_sessions[primary] = model_sessions.get(primary, 0) + 1
+            except Exception:
+                pass
+
+    total_turns = sum(model_turns.values())
+    # Build sorted model list
+    sorted_models = sorted(model_turns.items(), key=lambda x: -x[1])
+    primary_model = sorted_models[0][0] if sorted_models else ''
+
+    models_out = []
+    for m, turns in sorted_models:
+        models_out.append({
+            'model': m,
+            'turns': turns,
+            'sessions': model_sessions.get(m, 0),
+            'provider': _provider_from_model(m),
+            'share_pct': round(turns / total_turns * 100, 2) if total_turns else 0,
+        })
+
+    return jsonify({
+        'models': models_out,
+        'primary_model': primary_model,
+        'total_turns': total_turns,
+        'model_count': len(model_turns),
+        'switches': switches[:50],  # cap at 50 for response size
+        'switch_count': len(switches),
+    })
+
+
+@bp_usage.route('/api/skill-attribution')
+def api_skill_attribution():
+    """Per-skill cost attribution with ClawHub integration hooks (GH #308).
+
+    Detects skill invocations by scanning session transcripts for SKILL.md file
+    reads. Each time a SKILL.md is read, the session's token cost is attributed
+    to that skill (shared equally when multiple skills are read in one session).
+
+    Returns:
+        {
+          "skills": [
+            {
+              "name": str,
+              "invocations": int,
+              "total_cost_usd": float,
+              "avg_cost_usd": float,
+              "last_used": str | null,   # ISO timestamp
+              "clawhub_url": str,        # future ClawHub skill marketplace link
+            }
+          ],
+          "top5_week": [...],            # top 5 by total_cost_usd in last 7 days
+          "total_cost": float,
+          "note": str,
+          "clawhub": {"enabled": false, "url": null},
+        }
+    """
+    import re as _re
+
+    sessions_dir = _get_sessions_dir()
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return jsonify({
+            "skills": [], "top5_week": [], "total_cost": 0.0,
+            "note": "No sessions directory found.",
+            "clawhub": {"enabled": False, "url": None},
+        })
+
+    SKILL_MD_RE = _re.compile(r'[/\\]([^/\\]+)[/\\]SKILL\.md', _re.IGNORECASE)
+    # Also match bare "SKILL.md" references with skill name in path context
+    SKILL_PATH_RE = _re.compile(r'skills[/\\]([^/\\]+)', _re.IGNORECASE)
+
+    skill_stats = {}   # name -> {invocations, total_cost, last_used_ts}
+    now_ts = time.time()
+    week_cutoff = now_ts - 7 * 86400
+    usd_per_token = _estimate_usd_per_token()
+
+    try:
+        for fname in os.listdir(sessions_dir):
+            if not fname.endswith('.jsonl'):
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            session_skills = set()
+            session_tokens = 0
+            session_cost = 0.0
+            session_ts = os.path.getmtime(fpath)
+
+            try:
+                with open(fpath, 'r', errors='replace') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+
+                        # Detect SKILL.md file reads in tool calls / tool results
+                        raw = json.dumps(obj)
+                        for m in SKILL_MD_RE.finditer(raw):
+                            skill_name = m.group(1)
+                            if skill_name and skill_name.lower() != 'skills':
+                                session_skills.add(skill_name)
+                        # Fallback: skills/ path pattern
+                        if not session_skills:
+                            for m in SKILL_PATH_RE.finditer(raw):
+                                candidate = m.group(1)
+                                if candidate and 'SKILL' in raw[m.start():m.end()+30].upper():
+                                    session_skills.add(candidate)
+
+                        # Accumulate session tokens/cost
+                        usage = _extract_usage_metrics(obj)
+                        if usage['tokens'] > 0:
+                            session_tokens += usage['tokens']
+                            session_cost += usage['cost'] if usage['cost'] > 0 else (
+                                usage['tokens'] * usd_per_token
+                            )
+            except Exception:
+                continue
+
+            if not session_skills:
+                continue
+
+            share = session_cost / len(session_skills) if session_skills else 0.0
+            for skill in session_skills:
+                if skill not in skill_stats:
+                    skill_stats[skill] = {'invocations': 0, 'total_cost': 0.0, 'last_used_ts': 0.0}
+                skill_stats[skill]['invocations'] += 1
+                skill_stats[skill]['total_cost'] += share
+                if session_ts > skill_stats[skill]['last_used_ts']:
+                    skill_stats[skill]['last_used_ts'] = session_ts
+    except Exception:
+        pass
+
+    skills_out = []
+    total_cost = 0.0
+    for name, st in sorted(skill_stats.items(), key=lambda x: -x[1]['total_cost']):
+        inv = st['invocations']
+        tc = round(float(st['total_cost']), 6)
+        avg = round(tc / inv, 6) if inv else 0.0
+        lts = st['last_used_ts']
+        last_used = datetime.utcfromtimestamp(lts).strftime('%Y-%m-%dT%H:%M:%SZ') if lts else None
+        total_cost += tc
+        skills_out.append({
+            'name': name,
+            'invocations': inv,
+            'total_cost_usd': tc,
+            'avg_cost_usd': avg,
+            'last_used': last_used,
+            'clawhub_url': f'https://clawhub.dev/skills/{name}',
+        })
+
+    # top5 this week
+    top5_week = [
+        s for s in skills_out
+        if s['last_used'] and s['last_used'] >= datetime.utcfromtimestamp(week_cutoff).strftime('%Y-%m-%dT%H:%M:%SZ')
+    ][:5]
+
+    note = 'Skills detected from SKILL.md file reads in session transcripts.'
+
+    return jsonify({
+        'skills': skills_out,
+        'top5_week': top5_week,
+        'total_cost': round(total_cost, 6),
+        'note': note,
+        'clawhub': {'enabled': False, 'url': None},
+    })
+
+
+@bp_usage.route('/api/token-velocity')
+def api_token_velocity():
+    """Sliding 2-min token velocity endpoint — detects runaway agent loops (GH #313).
+
+    Returns:
+      {
+        alert: bool,
+        level: "ok" | "warning" | "critical",
+        velocity_2min: int,       # total tokens in last 2 minutes
+        cost_per_min: float,      # estimated USD/min burn rate
+        flagged_sessions: [       # sessions exceeding thresholds
+          {id, tokens_2min, tool_chain_len, cost_per_min}
+        ]
+      }
+
+    Thresholds:
+      warning:  velocity_2min >= 8000
+      critical: velocity_2min >= 15000 OR tool_chain_len >= 20
+    """
+    WARN_TOKENS   = 8000
+    CRIT_TOKENS   = 15000
+    CRIT_TOOLS    = 20
+
+    now        = time.time()
+    window_2min = now - 120
+
+    sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    total_tokens_2min = 0
+    flagged = []
+
+    try:
+        if os.path.isdir(sessions_dir):
+            candidates = sorted(
+                [f for f in os.listdir(sessions_dir)
+                 if f.endswith('.jsonl') and 'deleted' not in f],
+                key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+                reverse=True
+            )[:20]
+
+            for fname in candidates:
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if now - mtime > 300:          # skip inactive sessions > 5 min
+                        continue
+                    tokens_2min   = 0
+                    consecutive   = 0
+                    max_chain     = 0
+                    with open(fpath, 'r', errors='replace') as fh:
+                        lines = list(fh)
+                    for line in lines:
+                        try:
+                            obj = json.loads(line.strip())
+                        except Exception:
+                            continue
+                        ts = _json_ts_to_epoch(
+                            obj.get('timestamp') or obj.get('time') or obj.get('created_at')
+                        )
+                        msg     = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+                        role    = msg.get('role', '') or obj.get('role', '')
+                        content = msg.get('content', [])
+                        is_tool = False
+                        if isinstance(content, list):
+                            for blk in content:
+                                if isinstance(blk, dict) and blk.get('type') == 'tool_use':
+                                    is_tool = True
+                                    break
+                        if role == 'user' and not is_tool:
+                            consecutive = 0
+                        elif is_tool or role == 'assistant':
+                            consecutive += 1
+                            max_chain = max(max_chain, consecutive)
+                        if ts and ts >= window_2min:
+                            usage = msg.get('usage', {}) if isinstance(msg.get('usage'), dict) else {}
+                            tok = float(
+                                usage.get('total_tokens')
+                                or usage.get('totalTokens')
+                                or (usage.get('input_tokens', 0) + usage.get('output_tokens', 0))
+                                or 0
+                            )
+                            tokens_2min += int(tok)
+
+                    total_tokens_2min += tokens_2min
+                    usd_per_token = _estimate_usd_per_token()
+                    sess_tpm = _session_burn_stats(fname.replace('.jsonl', '')).get('tokensPerMin', 0)
+                    sess_cpm = round(sess_tpm * usd_per_token, 5)
+
+                    if tokens_2min >= WARN_TOKENS or max_chain >= CRIT_TOOLS:
+                        flagged.append({
+                            'id':           fname.replace('.jsonl', ''),
+                            'tokens_2min':  tokens_2min,
+                            'tool_chain_len': max_chain,
+                            'cost_per_min': sess_cpm,
+                        })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    if total_tokens_2min >= CRIT_TOKENS or any(s['tool_chain_len'] >= CRIT_TOOLS for s in flagged):
+        level = 'critical'
+    elif total_tokens_2min >= WARN_TOKENS:
+        level = 'warning'
+    else:
+        level = 'ok'
+
+    usd_per_token  = _estimate_usd_per_token()
+    cost_per_min   = round(total_tokens_2min / 2 * usd_per_token, 5)   # tokens/2min → per min
+
+    return jsonify({
+        'alert':            level != 'ok',
+        'level':            level,
+        'velocity_2min':    total_tokens_2min,
+        'cost_per_min':     cost_per_min,
+        'flagged_sessions': flagged,
+    })
+
+
+@bp_sessions.route('/api/transcripts')
+def api_transcripts():
+    """List available session transcript .jsonl files."""
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    transcripts = []
+    if os.path.isdir(sessions_dir):
+        for fname in sorted(
+            os.listdir(sessions_dir),
+            key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+            reverse=True,
+        ):
+            if not fname.endswith(".jsonl") or "deleted" in fname:
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            try:
+                msg_count = 0
+                with open(fpath) as f:
+                    for _ in f:
+                        msg_count += 1
+                transcripts.append(
+                    {
+                        "id": fname.replace(".jsonl", ""),
+                        "name": fname.replace(".jsonl", "")[:40],
+                        "messages": msg_count,
+                        "size": os.path.getsize(fpath),
+                        "modified": int(os.path.getmtime(fpath) * 1000),
+                    }
+                )
+            except Exception:
+                pass
+    return jsonify({"transcripts": transcripts[:50]})
+
+
+@bp_sessions.route("/api/transcript/<session_id>")
+def api_transcript(session_id):
+    """Parse and return a session transcript for the chat viewer."""
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.join(sessions_dir, session_id + ".jsonl")
+    # Sanitize path
+    fpath = os.path.normpath(fpath)
+    if not fpath.startswith(os.path.normpath(sessions_dir)):
+        return jsonify({"error": "Access denied"}), 403
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Transcript not found"}), 404
+
+    messages = []
+    model = None
+    total_tokens = 0
+    first_ts = None
+    last_ts = None
+    try:
+        with open(fpath) as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                    role = obj.get("role", obj.get("type", "unknown"))
+                    content = obj.get("content", "")
+                    if isinstance(content, list):
+                        parts = []
+                        for part in content:
+                            if isinstance(part, dict):
+                                parts.append(part.get("text", str(part)))
+                            else:
+                                parts.append(str(part))
+                        content = "\n".join(parts)
+                    elif not isinstance(content, str):
+                        content = str(content) if content else ""
+                    # Tool use handling
+                    if obj.get("tool_calls") or obj.get("tool_use"):
+                        tools = obj.get("tool_calls") or obj.get("tool_use") or []
+                        if isinstance(tools, list):
+                            for tc in tools:
+                                tname = tc.get(
+                                    "name", tc.get("function", {}).get("name", "tool")
+                                )
+                                messages.append(
+                                    {
+                                        "role": "tool",
+                                        "content": f"[Tool Call: {tname}]\n{json.dumps(tc.get('input', tc.get('arguments', {})), indent=2)[:500]}",
+                                        "timestamp": obj.get("timestamp")
+                                        or obj.get("time"),
+                                    }
+                                )
+                    if role == "tool_result":
+                        role = "tool"
+                    ts = (
+                        obj.get("timestamp") or obj.get("time") or obj.get("created_at")
+                    )
+                    if ts:
+                        if isinstance(ts, (int, float)):
+                            ts_ms = int(ts * 1000) if ts < 1e12 else int(ts)
+                        else:
+                            try:
+                                ts_ms = int(
+                                    datetime.fromisoformat(
+                                        str(ts).replace("Z", "+00:00")
+                                    ).timestamp()
+                                    * 1000
+                                )
+                            except Exception:
+                                ts_ms = None
+                        if ts_ms:
+                            if not first_ts or ts_ms < first_ts:
+                                first_ts = ts_ms
+                            if not last_ts or ts_ms > last_ts:
+                                last_ts = ts_ms
+                    else:
+                        ts_ms = None
+                    if not model:
+                        model = obj.get("model")
+                    usage = obj.get("usage", {})
+                    if isinstance(usage, dict):
+                        total_tokens += usage.get("total_tokens", 0) or (
+                            usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                        )
+                    if content or role in ("user", "assistant", "system"):
+                        messages.append(
+                            {
+                                "role": role,
+                                "content": content,
+                                "timestamp": ts_ms,
+                            }
+                        )
+                except (json.JSONDecodeError, ValueError):
+                    pass
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    duration = None
+    if first_ts and last_ts and last_ts > first_ts:
+        dur_sec = (last_ts - first_ts) / 1000
+        if dur_sec < 60:
+            duration = f"{dur_sec:.0f}s"
+        elif dur_sec < 3600:
+            duration = f"{dur_sec / 60:.0f}m"
+        else:
+            duration = f"{dur_sec / 3600:.1f}h"
+
+    return jsonify(
+        {
+            "name": session_id[:40],
+            "messageCount": len(messages),
+            "model": model,
+            "totalTokens": total_tokens,
+            "duration": duration,
+            "messages": messages[:500],  # Cap at 500 messages
+        }
+    )
+
+
+@bp_sessions.route("/api/transcript-events/<session_id>")
+def api_transcript_events(session_id):
+    """Parse a session transcript JSONL into structured events for the detail modal."""
+    sessions_dir = SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.join(sessions_dir, session_id + ".jsonl")
+    fpath = os.path.normpath(fpath)
+    if not fpath.startswith(os.path.normpath(sessions_dir)):
+        return jsonify({"error": "Access denied"}), 403
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Transcript not found"}), 404
+
+    events = []
+    msg_count = 0
+    try:
+        with open(fpath) as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                ts = obj.get("timestamp") or obj.get("time") or obj.get("created_at")
+                ts_val = None
+                if ts:
+                    if isinstance(ts, (int, float)):
+                        ts_val = int(ts * 1000) if ts < 1e12 else int(ts)
+                    else:
+                        try:
+                            ts_val = int(
+                                datetime.fromisoformat(
+                                    str(ts).replace("Z", "+00:00")
+                                ).timestamp()
+                                * 1000
+                            )
+                        except Exception:
+                            pass
+
+                obj_type = obj.get("type", "")
+                if obj_type == "message":
+                    msg = obj.get("message", {})
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    msg_count += 1
+
+                    if isinstance(content, list):
+                        for block in content:
+                            if not isinstance(block, dict):
+                                continue
+                            btype = block.get("type", "")
+                            if btype == "thinking":
+                                events.append(
+                                    {
+                                        "type": "thinking",
+                                        "text": block.get("thinking", "")[:2000],
+                                        "thinking_chars": len(block.get("thinking", "")),
+                                        "timestamp": ts_val,
+                                    }
+                                )
+                            elif btype == "text":
+                                text = block.get("text", "")
+                                if role == "user":
+                                    events.append(
+                                        {
+                                            "type": "user",
+                                            "text": text[:3000],
+                                            "timestamp": ts_val,
+                                        }
+                                    )
+                                elif role == "assistant":
+                                    events.append(
+                                        {
+                                            "type": "agent",
+                                            "text": text[:3000],
+                                            "timestamp": ts_val,
+                                        }
+                                    )
+                            elif btype in ("toolCall", "tool_use"):
+                                name = block.get("name", "?")
+                                args = (
+                                    block.get("arguments") or block.get("input") or {}
+                                )
+                                args_str = (
+                                    json.dumps(args, indent=2)[:1000]
+                                    if isinstance(args, dict)
+                                    else str(args)[:1000]
+                                )
+                                if name == "exec":
+                                    cmd = (
+                                        args.get("command", "")
+                                        if isinstance(args, dict)
+                                        else ""
+                                    )
+                                    events.append(
+                                        {
+                                            "type": "exec",
+                                            "command": cmd,
+                                            "toolName": name,
+                                            "args": args_str,
+                                            "timestamp": ts_val,
+                                        }
+                                    )
+                                elif name in ("Read", "read"):
+                                    fp = (
+                                        (
+                                            args.get("file_path")
+                                            or args.get("path")
+                                            or ""
+                                        )
+                                        if isinstance(args, dict)
+                                        else ""
+                                    )
+                                    events.append(
+                                        {
+                                            "type": "read",
+                                            "file": fp,
+                                            "toolName": name,
+                                            "args": args_str,
+                                            "timestamp": ts_val,
+                                        }
+                                    )
+                                else:
+                                    events.append(
+                                        {
+                                            "type": "tool",
+                                            "toolName": name,
+                                            "args": args_str,
+                                            "timestamp": ts_val,
+                                        }
+                                    )
+                    elif isinstance(content, str) and content:
+                        if role == "user":
+                            events.append(
+                                {
+                                    "type": "user",
+                                    "text": content[:3000],
+                                    "timestamp": ts_val,
+                                }
+                            )
+                        elif role == "assistant":
+                            events.append(
+                                {
+                                    "type": "agent",
+                                    "text": content[:3000],
+                                    "timestamp": ts_val,
+                                }
+                            )
+                        elif role == "toolResult":
+                            events.append(
+                                {
+                                    "type": "result",
+                                    "text": content[:2000],
+                                    "timestamp": ts_val,
+                                }
+                            )
+
+                    if role == "toolResult" and isinstance(content, list):
+                        text_parts = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                text_parts.append(block.get("text", ""))
+                        if text_parts:
+                            events.append(
+                                {
+                                    "type": "result",
+                                    "text": "\n".join(text_parts)[:2000],
+                                    "timestamp": ts_val,
+                                }
+                            )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify(
+        {"events": events[-500:], "messageCount": msg_count, "totalEvents": len(events)}
+    )
+
+
+>>>>>>> Stashed changes
 def _summarize_tool_input(name, inp):
     """Create a human-readable one-line summary of a tool call."""
     if name == "exec":
