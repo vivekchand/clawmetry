@@ -153,27 +153,20 @@
         <text x="235" y="188" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🔀 Gateway</text>
       </g>
 
-      <!-- Brain -->
+      <!-- Brain (Agent Runtime) -->
       <g class="flow-node flow-node-brain brain-group" id="node-brain">
-        <rect x="330" y="130" width="180" height="90" rx="12" ry="12" fill="#C62828" stroke="#B71C1C" stroke-width="3" filter="url(#dropShadow)"/>
-        <text x="420" y="162" style="font-size:24px;text-anchor:middle;">&#x1F9E0;</text>
-        <text x="420" y="186" style="
-          font-size:18px;
-          font-weight:800;
-          fill:#FFD54F;
-          text-anchor:middle;
-          " id="brain-model-label">AI Model</text>
-        <text x="420" y="203" style="
-          font-size:10px;
-          fill:#ffccbc;
-          text-anchor:middle;
-          " id="brain-model-text">unknown</text>
-        <text x="420" y="214" style="
-          font-size:8px;
-          fill:#a7f3d0;
-          text-anchor:middle;
-          " id="brain-billing-text">Auth: unknown</text>
-        <circle cx="420" cy="225" r="4" fill="#FF8A65">
+        <rect x="330" y="115" width="180" height="120" rx="12" ry="12" fill="#C62828" stroke="#B71C1C" stroke-width="3" filter="url(#dropShadow)"/>
+        <text x="345" y="133" style="font-size:8px;fill:#ffccbc;text-transform:uppercase;letter-spacing:1px;">Agent Runtime</text>
+        <text x="420" y="155" style="font-size:20px;text-anchor:middle;">&#x1F9E0;</text>
+        <!-- Primary provider (active) -->
+        <circle cx="348" cy="172" r="4" fill="#4ade80" id="brain-provider-dot"/>
+        <text x="356" y="176" style="font-size:12px;font-weight:700;fill:#FFD54F;" id="brain-model-label">AI Model</text>
+        <text x="356" y="189" style="font-size:9px;fill:#ffccbc;" id="brain-model-text">unknown</text>
+        <!-- Fallback providers (shown dynamically) -->
+        <text x="356" y="202" style="font-size:8px;fill:#888;opacity:0.6;" id="brain-fallback-1"></text>
+        <text x="356" y="213" style="font-size:8px;fill:#888;opacity:0.6;" id="brain-fallback-2"></text>
+        <text x="356" y="226" style="font-size:8px;fill:#a7f3d0;" id="brain-billing-text">Auth: unknown</text>
+        <circle cx="420" cy="240" r="4" fill="#FF8A65">
           <animate attributeName="r" values="3;5;3" dur="1.1s" repeatCount="indefinite"/>
           <animate attributeName="opacity" values="0.5;1;0.5" dur="1.1s" repeatCount="indefinite"/>
         </circle>
@@ -230,6 +223,17 @@
           ">&#x1F4BE; Memory</text>
         <circle class="tool-indicator" id="ind-memory" cx="665" cy="378" r="5" fill="#7986CB"/>
       </g>
+
+      <!-- Skills (dynamically populated) -->
+      <g id="flow-skills-group">
+        <text x="725" y="84" style="font-size:9px;fill:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;font-weight:600;">Skills</text>
+        <g id="flow-skills-list">
+          <!-- Skills populated by JS from /api/skills -->
+        </g>
+      </g>
+
+      <!-- Brain -> Skills paths -->
+      <path class="flow-path" id="path-brain-skills" d="M 510 160 C 560 140, 660 100, 700 95" style="stroke-dasharray:4 3;opacity:0.4;"/>
 
       <!-- Cost Optimizer -->
       <g class="flow-node flow-node-optimizer" id="node-cost-optimizer">
