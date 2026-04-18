@@ -1379,7 +1379,7 @@ async function loadSkills() {
         : (sk.status === 'dead' || sk.status === 'unused' ? '\u2014' : 'recently');
       var rowBg = idx % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)';
       html += '<tr style="background:' + rowBg + ';border-bottom:1px solid var(--border-primary);">' +
-        '<td style="padding:10px 10px;font-weight:600;color:var(--text-primary);">' + escHtml(sk.name) + '</td>' +
+        '<td style="padding:10px 10px;font-weight:600;color:var(--text-primary);"><a href="#" onclick="event.preventDefault();openSkillBrowser(\'' + escHtml(sk.name) + '\')" style="color:var(--text-primary);text-decoration:none;border-bottom:1px dashed var(--border-primary);" title="Browse skill files">' + escHtml(sk.name) + '</a></td>' +
         '<td style="padding:10px 10px;color:var(--text-muted);">' + escHtml(desc) + '</td>' +
         '<td style="padding:10px 10px;">' + _skillStatusPill(sk.status) + '</td>' +
         '<td style="padding:10px 10px;color:var(--text-muted);">' + lastUsed + '</td>' +
@@ -1393,6 +1393,87 @@ async function loadSkills() {
     listEl.innerHTML = html;
   } catch (e) {
     if (listEl) listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Couldn\u2019t load right now.</div>';
+  }
+}
+
+// ── Skills Browser ────────────────────────────────────────────────────────
+async function openSkillBrowser(skillName) {
+  var listEl = document.getElementById('skills-list');
+  var browserEl = document.getElementById('skills-browser');
+  var treeEl = document.getElementById('skills-browser-tree');
+  var contentEl = document.getElementById('skills-browser-content');
+  if (!browserEl || !treeEl || !contentEl) return;
+
+  listEl.style.display = 'none';
+  browserEl.style.display = '';
+  treeEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);">Loading...</div>';
+  contentEl.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:60px;">Loading skill...</div>';
+
+  try {
+    var data = await fetch('/api/skills/' + encodeURIComponent(skillName)).then(function(r) { return r.json(); });
+    var files = data.files || [];
+    var statusCol = {'healthy':'#22c55e','dead':'#ef4444','stuck':'#f59e0b','unused':'#6b7280'};
+
+    // Build tree
+    var html = '<div style="padding:8px 12px;border-bottom:1px solid var(--border);margin-bottom:4px;">';
+    html += '<div style="font-weight:700;font-size:13px;color:var(--text-primary);">' + escHtml(skillName) + '</div>';
+    html += '<div style="font-size:10px;color:' + (statusCol[data.status] || '#888') + ';margin-top:2px;">' + (data.status || '').toUpperCase() + ' &middot; ' + (data.header_tokens || 0) + ' header tokens</div>';
+    if (data.description) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + escHtml(data.description) + '</div>';
+    html += '</div>';
+
+    files.forEach(function(f) {
+      var indent = (f.depth || 0) * 16;
+      var isDir = f.path.endsWith('/');
+      var icon = f.path.endsWith('.md') ? '📄' : (f.path.endsWith('.py') ? '🐍' : (f.path.endsWith('.sh') ? '📜' : (f.path.endsWith('.js') || f.path.endsWith('.ts') ? '📦' : '📄')));
+      var sizeStr = f.size > 1024 ? (f.size / 1024).toFixed(1) + 'K' : f.size + 'B';
+      html += '<div onclick="loadSkillFile(\'' + escHtml(skillName) + '\',\'' + escHtml(f.path) + '\')" style="padding:4px 12px 4px ' + (12 + indent) + 'px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:12px;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
+      html += '<span>' + icon + '</span>';
+      html += '<span style="color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(f.path.split('/').pop()) + '</span>';
+      html += '<span style="color:var(--text-faint);font-size:10px;">' + sizeStr + '</span>';
+      html += '</div>';
+    });
+    treeEl.innerHTML = html;
+
+    // Auto-load SKILL.md
+    loadSkillFile(skillName, 'SKILL.md');
+  } catch(e) {
+    treeEl.innerHTML = '<div style="padding:12px;color:var(--text-error);">Error: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+async function loadSkillFile(skillName, filePath) {
+  var contentEl = document.getElementById('skills-browser-content');
+  if (!contentEl) return;
+  contentEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;">Loading...</div>';
+
+  try {
+    var data = await fetch('/api/skills/' + encodeURIComponent(skillName) + '/file?path=' + encodeURIComponent(filePath)).then(function(r) { return r.json(); });
+    if (data.error) { contentEl.innerHTML = '<div style="color:var(--text-error);padding:20px;">' + escHtml(data.error) + '</div>'; return; }
+
+    var header = '<div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:12px;">';
+    header += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + escHtml(filePath) + '</div>';
+    header += '<div style="font-size:11px;color:var(--text-muted);">' + escHtml(skillName) + ' &middot; ' + (data.language || 'text') + ' &middot; ' + data.size + ' bytes</div>';
+    header += '</div>';
+
+    var content = data.content || '';
+    if (data.language === 'markdown') {
+      // Simple markdown rendering
+      content = content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      content = content.replace(/^### (.+)$/gm, '<h3 style="margin:16px 0 8px;font-size:14px;color:var(--text-primary);">$1</h3>');
+      content = content.replace(/^## (.+)$/gm, '<h2 style="margin:20px 0 8px;font-size:16px;color:var(--text-primary);">$1</h2>');
+      content = content.replace(/^# (.+)$/gm, '<h1 style="margin:20px 0 8px;font-size:18px;color:var(--text-primary);">$1</h1>');
+      content = content.replace(/`([^`]+)`/g, '<code style="background:var(--bg-secondary);padding:1px 5px;border-radius:3px;font-size:12px;">$1</code>');
+      content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      content = content.replace(/^- (.+)$/gm, '<div style="padding-left:16px;">&bull; $1</div>');
+      content = content.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">');
+      content = '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);">' + content + '</div>';
+    } else {
+      content = '<pre style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px 16px;font-size:12px;line-height:1.6;overflow-x:auto;color:var(--text-primary);white-space:pre-wrap;">' + escHtml(content) + '</pre>';
+    }
+
+    contentEl.innerHTML = header + content;
+  } catch(e) {
+    contentEl.innerHTML = '<div style="color:var(--text-error);padding:20px;">Error: ' + escHtml(String(e)) + '</div>';
   }
 }
 
@@ -2200,12 +2281,29 @@ function renderBrainStream(events) {
       if (ev.channelSubject) chLabel += ':' + (ev.channelSubject.length > 14 ? ev.channelSubject.slice(0, 12) + '\u2026' : ev.channelSubject);
       chBadge = '<span class="brain-channel" style="color:' + chCol + ';font-size:10px;flex-shrink:0;opacity:0.8;white-space:nowrap;" title="' + escHtml(ch + (ev.channelSubject ? ': ' + ev.channelSubject : '')) + '">' + chIco + ' ' + escHtml(chLabel) + '</span>';
     }
+    // Skill badge — detect from detail path or ev.skill field
+    var skillBadge = '';
+    var skillName = ev.skill || '';
+    if (!skillName) {
+      var det = ev.detail || '';
+      var skillMatch = det.match(/\/skills\/([^\/\s]+)/);
+      if (skillMatch) skillName = skillMatch[1];
+      // Also detect cron-invoked skills from [cron:uuid name] pattern
+      if (!skillName && det.indexOf('[cron:') === 0) {
+        var cronNameMatch = det.match(/\[cron:[0-9a-f-]+ ([^\]]+)\]/);
+        if (cronNameMatch) skillName = cronNameMatch[1];
+      }
+    }
+    if (skillName) {
+      skillBadge = '<span class="brain-skill" style="color:#f59e0b;font-size:10px;flex-shrink:0;white-space:nowrap;" title="Skill: ' + escHtml(skillName) + '">🎯 ' + escHtml(skillName.length > 16 ? skillName.slice(0, 14) + '\u2026' : skillName) + '</span>';
+    }
     html += '<div class="brain-event" onclick="this.classList.toggle(\'expanded\')">';
     html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
     html += '<span class="brain-type" style="background:rgba(100,100,100,0.15);color:' + color + ';padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;min-width:70px;text-align:center;display:inline-block;white-space:nowrap;">' + icon + ' ' + escHtml(evType) + '</span>';
     html += '<span class="brain-source" style="color:' + color + ';flex-shrink:0;" title="' + escHtml(fullSrc) + '">' + roleIcon + ' ' + escHtml(shortSrc) + '</span>';
     html += chBadge;
+    html += skillBadge;
     html += '</div>';
     html += '<span class="brain-detail">' + renderBrainDetail(ev.detail || '') + '</span>';
     html += '</div>';
