@@ -4173,11 +4173,12 @@ async function loadSystemHealth() {
         if (hbGap != null) {
           hbDetail = hbGap >= 3600 ? Math.floor(hbGap/3600) + 'h ' + Math.floor((hbGap%3600)/60) + 'm ago' : Math.floor(hbGap/60) + 'm ago';
         }
-        var hbInterval = Math.floor(hbData.interval_seconds / 60);
+        var hbInterval = hbData.interval_seconds ? Math.floor(hbData.interval_seconds / 60) : 0;
         var hbColor = hbStatus === 'ok' ? 'var(--text-success)' : (hbStatus === 'warning' ? '#f59e0b' : (hbStatus === 'silent' ? 'var(--text-error)' : 'var(--text-muted)'));
+        var hbIntervalStr = hbInterval > 0 ? 'every ' + hbInterval + 'm' : '';
         hbEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:13px;">'
           + hbDot + ' <span style="font-weight:600;color:' + hbColor + ';">' + hbLabel + '</span>'
-          + (hbDetail ? '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">Last: ' + hbDetail + ' (every ' + hbInterval + 'm)</span>' : '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">Interval: ' + hbInterval + 'm</span>')
+          + (hbDetail ? '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">Last: ' + hbDetail + (hbIntervalStr ? ' (' + hbIntervalStr + ')' : '') + '</span>' : (hbIntervalStr ? '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">' + hbIntervalStr + '</span>' : ''))
           + '</div>';
       }
     } catch(e) {}
