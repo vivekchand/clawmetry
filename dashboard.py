@@ -3264,6 +3264,7 @@ function clawmetryLogout(){
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('skills')">Skills</div>
+    <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
@@ -8531,6 +8532,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('skills')">Skills</div>
+    <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
@@ -8592,6 +8594,9 @@ DASHBOARD_HTML = r"""
 
 <!-- BRAIN -->
 {% include 'tabs/brain.html' %}
+
+<!-- CONTEXT INSPECTOR -->
+{% include 'tabs/context.html' %}
 
 <!-- SECURITY -->
 {% include 'tabs/security.html' %}
