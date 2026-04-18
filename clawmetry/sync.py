@@ -1433,17 +1433,27 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
         # as batches flush, so later batches benefit from a stronger
         # signal at the cost of slightly less consistent fallback.
         _default_model = ""
+        _sid_to_key: dict[str, str] = {}  # sessionId → session key (for channel info)
+        _sid_to_meta: dict[str, dict] = {}  # sessionId → {provider, chatType, subject}
         _idx_path = sessions_dir / "sessions.json"
         if _idx_path.exists():
             try:
                 with open(_idx_path) as _fi:
                     _idx = json.load(_fi)
                 for _k, _meta in _idx.items():
-                    if isinstance(_meta, dict) and "subagent" not in _k:
-                        _m = (_meta.get("model") or "").strip()
-                        if _m:
-                            _default_model = _m
-                            break
+                    if isinstance(_meta, dict):
+                        _sid = _meta.get("sessionId", "")
+                        if _sid:
+                            _sid_to_key[_sid] = _k
+                            _sid_to_meta[_sid] = {
+                                "provider": _meta.get("provider", ""),
+                                "chatType": _meta.get("chatType", ""),
+                                "subject": _meta.get("subject") or _meta.get("displayName") or "",
+                            }
+                        if "subagent" not in _k:
+                            _m = (_meta.get("model") or "").strip()
+                            if _m and not _default_model:
+                                _default_model = _m
             except Exception:
                 pass
         model_counts: dict = {}
@@ -1531,10 +1541,17 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
 
                 if model:
                     model_counts[model] = model_counts.get(model, 0) + 1
+                # Resolve display name from session key when available
+                _sk = _sid_to_key.get(sid, "")
+                _sm = _sid_to_meta.get(sid, {})
+                _dn = label or _sm.get("subject") or _sk or sid[:8]
                 batch.append(
                     {
                         "session_id": sid,
-                        "display_name": label or sid[:8],
+                        "display_name": _dn,
+                        "session_key": _sk,
+                        "channel": _sm.get("provider", ""),
+                        "chat_type": _sm.get("chatType", ""),
                         "status": "completed",
                         "model": model,
                         "recent_model": last_seen_model or model,
