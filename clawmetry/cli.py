@@ -329,7 +329,7 @@ def _verify_key_ownership(api_key: str) -> None:
         except OSError:
             print("\n  ❌  OTP verification requires an interactive terminal.")
             print("  Run 'clawmetry connect --key cm_xxx' from an interactive shell,")
-            print("  or use 'clawmetry onboard' for the full setup wizard.\n")
+            print("  or use 'clawmetry setup' for the full setup wizard.\n")
             sys.exit(1)
 
     def _input(prompt):
@@ -1350,8 +1350,51 @@ def _print_nemoclaw_nodes(args) -> None:
             )
 
 
+def _instant_register(BOLD, GREEN, DIM):
+    """Register a new cloud account without OTP. Returns (api_key, dashboard_url, node_id) or None."""
+    import urllib.request
+    import urllib.error
+    import json as _json
+    import socket
+    import platform
+
+    INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+    url = INGEST_URL.rstrip("/") + "/api/register"
+
+    hostname = socket.gethostname()
+    try:
+        from clawmetry.sync import get_machine_id
+
+        machine_id = get_machine_id()
+    except Exception:
+        machine_id = hostname
+
+    body = _json.dumps({
+        "hostname": hostname,
+        "machine_id": machine_id,
+        "platform": platform.system(),
+    }).encode()
+
+    req = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = _json.loads(resp.read())
+    except Exception as e:
+        print(f"  {DIM(f'Could not reach cloud: {e}')}")
+        return None
+
+    if not result.get("ok"):
+        _reg_err = result.get("error", "unknown")
+        print(f"  {DIM(f'Registration error: {_reg_err}')}")
+        return None
+
+    return result
+
+
 def _cmd_onboard(args) -> None:
-    """clawmetry onboard — interactive first-time setup wizard."""
+    """clawmetry onboard / setup -- interactive first-time setup wizard."""
     import os as _os
 
     _is_tty = sys.stdout.isatty()
@@ -1386,24 +1429,41 @@ def _cmd_onboard(args) -> None:
             return _tty.readline().rstrip("\n")
         return input(prompt)
 
-    already_connected = bool(
-        _os.environ.get("CLAWMETRY_API_KEY") or _os.environ.get("CLAWMETRY_NODE_ID")
-    )
+    # Check if already connected
+    already_connected = False
+    try:
+        import json as _jcfg
+        _cfgpath = _os.path.expanduser("~/.clawmetry/config.json")
+        if _os.path.exists(_cfgpath):
+            _cfg = _jcfg.load(open(_cfgpath))
+            if _cfg.get("api_key"):
+                already_connected = True
+    except Exception:
+        pass
+    if _os.environ.get("CLAWMETRY_API_KEY") or _os.environ.get("CLAWMETRY_NODE_ID"):
+        already_connected = True
+
     if already_connected:
-        print(f"\n  {GREEN(BOLD('✓ Already connected to ClawMetry Cloud'))}")
+        print(f"\n  {GREEN(BOLD('Already connected to ClawMetry Cloud'))}")
         _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
         print(f"  {DIM('Run  clawmetry status  to check sync health.')}\n")
         return
 
-    print(f"\n  {BOLD('Connect to ClawMetry Cloud to monitor from anywhere:')}")
-    print(f"  {BOLD('app.clawmetry.com')}")
-    print(f"\n  {DIM('E2E encrypted. Only you can read it.')}\n")
-    print(f"      {BOLD('[Y]')} Start 7-day trial {DIM('(then $5/node/mo)')}")
-    print(f"      {BOLD('[n]')} Run locally for now")
-    print(f"          {DIM('Enable cloud anytime: clawmetry connect')}\n")
+    # Get version for banner
+    try:
+        import importlib.metadata
+        _ver = importlib.metadata.version("clawmetry")
+    except Exception:
+        _ver = ""
+    _ver_str = f" {_ver}" if _ver else ""
+
+    print(f"\n  {BOLD(f'ClawMetry{_ver_str} installed!')}")
+    print()
+    print(f"  Monitor your AI agents from anywhere with ClawMetry Cloud.")
+    print()
 
     try:
-        choice = _input("  → [Y/n]: ").strip().lower() or "y"
+        choice = _input("  Do you have a ClawMetry account? [y/N]: ").strip().lower() or "n"
     except (EOFError, KeyboardInterrupt):
         choice = "n"
         print()
@@ -1411,39 +1471,224 @@ def _cmd_onboard(args) -> None:
     print()
 
     if choice in ("y", "yes"):
-        print()
+        # Existing user: email -> OTP -> connect
         import argparse as _ap
 
-        _fake_args = _ap.Namespace(key=None, foreground=False, custom_node_id=None)
+        _fake_args = _ap.Namespace(
+            key=None, foreground=False, custom_node_id=None,
+            enc_key=None, key_only=False, no_daemon=False,
+        )
         _cmd_connect(_fake_args)
 
         print()
         _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
-
-        print(f"\n  {BOLD('All done!')}\n")
-
-        try:
-            _input("  Press Enter to open your ClawMetry dashboard...")
-        except (EOFError, KeyboardInterrupt):
-            pass
-
-        try:
-            import webbrowser
-
-            webbrowser.open("https://app.clawmetry.com")
-        except Exception:
-            pass
     else:
-        print(f"  {GREEN('✓')} ClawMetry installed (local mode)\n")
-        print("  Start your dashboard:")
-        print(
-            f"    {CYAN('clawmetry --host 0.0.0.0 --port 8900')}          {DIM('# foreground (LAN)')}"
+        # New user: instant registration (no OTP)
+        print(f"  Setting up your cloud dashboard...")
+        print()
+
+        result = _instant_register(BOLD, GREEN, DIM)
+        if result is None:
+            # Registration failed -- fall back to local mode
+            print(f"  {GREEN('Installed')} (local mode)\n")
+            print("  Start your dashboard:")
+            print(
+                f"    {CYAN('clawmetry --host 0.0.0.0 --port 8900')}          {DIM('# foreground (LAN)')}"
+            )
+            print(f"\n  {DIM('Connect to cloud later: clawmetry setup')}\n")
+            _print_nemoclaw_preset_hint(BOLD, CYAN, DIM)
+            return
+
+        api_key = result.get("api_key", "")
+        dashboard_url = result.get("dashboard_url", "")
+        dashboard_id = result.get("dashboard_id", "")
+        node_id = result.get("node_id", "")
+
+        # Build the bookmarkable URL
+        if dashboard_id:
+            bookmark_url = f"https://app.clawmetry.com/d/{dashboard_id}"
+        else:
+            bookmark_url = dashboard_url
+
+        # Generate E2E encryption key and save config
+        from clawmetry.sync import generate_encryption_key, save_config
+        import platform
+
+        enc_key = generate_encryption_key()
+        config = {
+            "api_key": api_key,
+            "node_id": node_id,
+            "platform": platform.system(),
+            "connected_at": __import__("datetime").datetime.now().isoformat(),
+            "encryption_key": enc_key,
+            "dashboard_id": dashboard_id,
+        }
+        save_config(config)
+
+        print(f"  {GREEN(BOLD('Dashboard ready!'))}")
+        print()
+        print(f"     {BOLD(bookmark_url)}")
+        print()
+        print(f"     Bookmark this URL -- it's your private dashboard.")
+        print(f"     Data is E2E encrypted. Only you can read it.")
+        print()
+        print(f"  {DIM('Want to add more nodes or never lose access?')}")
+        print(f"  {DIM('Run:')} {CYAN('clawmetry account')}")
+        print(f"  {DIM('(creates an email-based account to manage all your nodes)')}")
+        print()
+
+        _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
+
+        # Start sync daemon
+        print(f"  Starting sync daemon...")
+        _stop_existing_daemon()
+        _start_daemon(config, args)
+        print(f"  {GREEN(BOLD('Your agent is now being monitored!'))}")
+        print()
+
+
+def _cmd_account(args) -> None:
+    """clawmetry account -- link email to existing account or show account info."""
+    import os as _os
+
+    _is_tty = sys.stdout.isatty()
+
+    def _c(code, text):
+        return f"\033[{code}m{text}\033[0m" if _is_tty else text
+
+    def BOLD(t):
+        return _c("1", t)
+
+    def GREEN(t):
+        return _c("32", t)
+
+    def CYAN(t):
+        return _c("36", t)
+
+    def DIM(t):
+        return _c("2", t)
+
+    # When stdin is piped (curl | bash), read from /dev/tty
+    _tty = None
+    if not sys.stdin.isatty():
+        try:
+            _tty = open("/dev/tty", "r")
+        except OSError:
+            pass
+
+    def _input(prompt):
+        if _tty is not None:
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+            return _tty.readline().rstrip("\n")
+        return input(prompt)
+
+    # Load config
+    cfg = {}
+    try:
+        import json as _jcfg
+        _cfgpath = _os.path.expanduser("~/.clawmetry/config.json")
+        if _os.path.exists(_cfgpath):
+            cfg = _jcfg.load(open(_cfgpath))
+    except Exception:
+        pass
+
+    api_key = cfg.get("api_key", "")
+    if not api_key:
+        print(f"\n  {DIM('Not connected to ClawMetry Cloud yet.')}")
+        print(f"  {DIM('Run:')} {CYAN('clawmetry setup')}\n")
+        return
+
+    dashboard_id = cfg.get("dashboard_id", "")
+    node_id = cfg.get("node_id", "")
+
+    # Check if this account already has an email linked (not a placeholder)
+    import urllib.request
+    import urllib.error
+    import json as _json
+
+    INGEST_URL = _os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+
+    def _api_call(path, body):
+        url = INGEST_URL.rstrip("/") + path
+        data = _json.dumps(body).encode()
+        req = urllib.request.Request(
+            url, data=data, headers={"Content-Type": "application/json"}, method="POST"
         )
-        print(
-            f"    {CYAN('clawmetry start --host 0.0.0.0 --port 8900')}    {DIM('# background service')}\n"
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return _json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            return {"error": e.read().decode()[:200]}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # Show account info
+    print()
+    print(f"  {BOLD('ClawMetry Account')}")
+    print()
+    print(f"  Node:      {node_id}")
+    if dashboard_id:
+        print(f"  Dashboard: https://app.clawmetry.com/d/{dashboard_id}")
+    print(f"  API key:   {api_key[:8]}...")
+    print()
+
+    # Prompt to link email if not yet linked
+    print(f"  {BOLD('Link an email to secure your account:')}")
+    print(f"  {DIM('This lets you recover access and manage multiple nodes.')}")
+    print()
+
+    try:
+        email_input = _input("  Email (or press Enter to skip): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        email_input = ""
+        print()
+
+    if not email_input:
+        print(f"\n  {DIM('Skipped. Run  clawmetry account  anytime to link an email.')}\n")
+        return
+
+    import re as _re
+    if not _re.match(r"^[^@]+@[^@]+\.[^@]+$", email_input):
+        print(f"\n  {DIM('That does not look like a valid email.')}\n")
+        return
+
+    # Send OTP
+    print(f"\n  Sending verification code to {email_input}...", end="", flush=True)
+    r = _api_call("/api/auth/email-otp", {"action": "send", "email": email_input})
+    if r.get("error"):
+        print(f" {DIM(r['error'])}")
+        return
+    print(f" {GREEN('sent')}")
+    print()
+
+    # Verify OTP
+    for attempt in range(3):
+        try:
+            otp = _input("  Enter the 6-digit code: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if not otp:
+            continue
+        print("  Verifying...", end="", flush=True)
+        r2 = _api_call(
+            "/api/auth/email-otp",
+            {"action": "verify", "email": email_input, "otp": otp, "link_key": api_key},
         )
-        print(f"  {DIM('Connect to cloud later: clawmetry connect')}\n")
-        _print_nemoclaw_preset_hint(BOLD, CYAN, DIM)
+        if r2.get("error"):
+            print(f" {DIM(r2['error'])}")
+            if attempt < 2:
+                print("  Try again.")
+            continue
+        print(f" {GREEN('verified')}")
+        print(f"\n  {GREEN(BOLD('Email linked to your account!'))}")
+        if dashboard_id:
+            print(f"  Dashboard: https://app.clawmetry.com/d/{dashboard_id}")
+        print()
+        return
+
+    print(f"\n  {DIM('Could not verify. Try again later with: clawmetry account')}\n")
 
 
 def _cmd_proxy(args) -> None:
@@ -1816,6 +2061,24 @@ def main() -> None:
         help="Custom node name (default: hostname)",
     )
 
+    # setup — alias for onboard (new user-facing name)
+    p_setup = sub.add_parser(
+        "setup", help="Setup wizard — connect to ClawMetry Cloud"
+    )
+    p_setup.add_argument("--key", metavar="cm_xxx", help="API key (skip prompt)")
+    p_setup.add_argument(
+        "--foreground", action="store_true", help="Run daemon in foreground"
+    )
+    p_setup.add_argument(
+        "--node-id",
+        metavar="NAME",
+        dest="custom_node_id",
+        help="Custom node name (default: hostname)",
+    )
+
+    # account — link email or show account info
+    sub.add_parser("account", help="Link email to account or show account info")
+
     # nemoclaw-daemons
     sub.add_parser(
         "nemoclaw-daemons",
@@ -1891,6 +2154,8 @@ def main() -> None:
     # Parse just the first token to decide if it's a sub-command or dashboard flag
     _subcmds = (
         "onboard",
+        "setup",
+        "account",
         "connect",
         "disconnect",
         "status",
@@ -1905,8 +2170,10 @@ def main() -> None:
         if getattr(args, "openclaw_dir", None):
             os.environ["CLAWMETRY_OPENCLAW_DIR"] = os.path.expanduser(args.openclaw_dir)
 
-        if args.cmd == "onboard":
+        if args.cmd in ("onboard", "setup"):
             _cmd_onboard(args)
+        elif args.cmd == "account":
+            _cmd_account(args)
         elif args.cmd == "connect":
             _cmd_connect(args)
         elif args.cmd == "disconnect":
