@@ -147,7 +147,12 @@
   var _hasProAccess = null; // null = unknown, true/false after first check
 
   function _checkProAccess() {
-    // Cloud mode with an active trial or paid plan → true
+    // Free plan users must upgrade for approvals/integrations
+    var plan = window.CLOUD_PLAN || '';
+    if (plan === 'free') return false;
+    // Paid (cloud_pro, pro) or active trial → allow
+    if (plan === 'cloud_pro' || plan === 'pro' || plan === 'trial') return true;
+    // Cloud mode with a token but no plan set yet → allow (backwards compat)
     if (window.CLOUD_MODE || window.CLOUD_TOKEN) return true;
     var t = localStorage.getItem('clawmetry_token') || '';
     if (t && t.startsWith('cm_')) return true;
