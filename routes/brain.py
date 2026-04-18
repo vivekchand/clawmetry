@@ -487,6 +487,15 @@ def api_brain_history():
         elif src == "main":
             ev["channel"] = "cli"
 
+    # Enrich with skill info — detect /skills/ paths in event details
+    import re as _re_skill
+    _skill_pat = _re_skill.compile(r'/skills/([^/\s]+)')
+    for ev in events:
+        detail = ev.get("detail", "")
+        m = _skill_pat.search(detail)
+        if m:
+            ev["skill"] = m.group(1)
+
     # Build channel summary for filter chips
     channel_counts = {}
     for ev in events:

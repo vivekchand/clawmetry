@@ -408,6 +408,20 @@ def api_skill_detail(skill_name):
     else:
         status = "healthy"
 
+    # Build file tree for browser
+    file_tree = []
+    for root, dirs, files in os.walk(skill_dir):
+        rel = os.path.relpath(root, skill_dir)
+        depth = 0 if rel == "." else rel.count(os.sep) + 1
+        for fname in sorted(files):
+            fpath = os.path.join(root, fname)
+            frel = os.path.relpath(fpath, skill_dir)
+            try:
+                fsize = os.path.getsize(fpath)
+            except OSError:
+                fsize = 0
+            file_tree.append({"path": frel, "size": fsize, "depth": depth})
+
     return jsonify({
         "name": skill_name,
         "description": description,
@@ -419,4 +433,44 @@ def api_skill_detail(skill_name):
         "linked_file_read_count_7d": linked_file_read_count_7d,
         "last_used_ts": last_used_ts,
         "status": status,
+        "files": file_tree,
+    })
+
+
+@bp_skills.route("/api/skills/<skill_name>/file")
+def api_skill_file(skill_name):
+    """Return the content of a file within a skill directory."""
+    from flask import request
+    skills_dir = _get_skills_dir()
+    if not skills_dir:
+        return jsonify({"error": "skills directory not found"}), 404
+    skill_dir = os.path.join(skills_dir, skill_name)
+    if not os.path.isdir(skill_dir):
+        return jsonify({"error": "skill not found"}), 404
+
+    file_path = request.args.get("path", "SKILL.md")
+    # Security: prevent directory traversal
+    full_path = os.path.normpath(os.path.join(skill_dir, file_path))
+    if not full_path.startswith(os.path.normpath(skill_dir)):
+        return jsonify({"error": "invalid path"}), 400
+
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "file not found"}), 404
+
+    try:
+        with open(full_path, "r", errors="replace") as f:
+            content = f.read(100_000)  # cap at 100KB
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+
+    ext = os.path.splitext(file_path)[1].lower()
+    lang = {"py": "python", "sh": "bash", "js": "javascript", "ts": "typescript",
+            "json": "json", "yaml": "yaml", "yml": "yaml", "md": "markdown",
+            "toml": "toml"}.get(ext.lstrip("."), "text")
+
+    return jsonify({
+        "path": file_path,
+        "content": content,
+        "language": lang,
+        "size": len(content),
     })
