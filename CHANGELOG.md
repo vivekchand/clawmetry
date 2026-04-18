@@ -2,6 +2,11 @@
 
 ---
 
+## v0.12.119
+
+### Improved
+- **E2E secret key shown during install** — `curl | bash` now displays the encryption key so users can paste it when opening the dashboard (#738)
+
 ## v0.12.118
 
 ### Agent Observability Suite
