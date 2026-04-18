@@ -1531,6 +1531,14 @@ def _cmd_onboard(args) -> None:
         print()
         print(f"     Bookmark this URL -- it's your private dashboard.")
         print(f"     Data is E2E encrypted. Only you can read it.")
+
+        # Auto-open the dashboard in browser
+        try:
+            import webbrowser
+            webbrowser.open(bookmark_url)
+            print(f"     {DIM('(opened in your browser)')}")
+        except Exception:
+            pass
         print()
         print(f"  {DIM('Want to add more nodes or never lose access?')}")
         print(f"  {DIM('Run:')} {CYAN('clawmetry account')}")
