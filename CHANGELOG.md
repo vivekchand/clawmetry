@@ -1,6 +1,27 @@
 ## [Unreleased]
 
-### Added
+---
+
+## v0.12.118
+
+### Agent Observability Suite
+- **Real-time event streamer** — Dropbox-style file-size diffing pushes brain events instantly instead of 15s polling (#718)
+- **Channel session badges** — Telegram/WhatsApp/Discord/Slack/IRC/iMessage badges in Brain tab with filter chips (#725)
+- **Channel metadata sync** — session_key, channel, chat_type synced to cloud for multi-channel visibility (#726)
+- **Skill badges + file browser** — skill usage badges on brain events + IDE-like skill file browser (#728)
+- **Flow tab architecture upgrade** — provider stack with fallback slots, skills column, Brain→Skills path (#729)
+- **LLM Context Inspector** — token breakdown bars, system prompt viewer, compaction history (#730)
+- **Agent Runtime Timeline** — per-turn drill-down with tool/LLM/user phase bars (#731)
+- **ACP sub-agent visibility** — nested sub-agent events in runtime timeline (#732)
+- **E2E key from URL fragment** — encryption key passed via `#hash`, never touches the server (#734)
+
+### Fixed
+- Heartbeat interval NaN when `interval_seconds` is missing (#717)
+
+### Docs
+- Comprehensive agent observability guide with architecture diagrams (OBSERVABILITY.md) (#733)
+
+### Added (prior unreleased)
 - **Cloud autonomy trending** (pairs with clawmetry-cloud#360). The sync daemon now computes a daily autonomy aggregate (median nudge gap, autonomy ratio, 7-day trend slope) locally from session transcripts and pushes only the aggregate — not raw content — to `ingest.clawmetry.com/ingest/autonomy`. Raw memory stays E2E-encrypted; cloud displays the trend on `app.clawmetry.com/fleet`. Throttled to one push per UTC day. Respects `cloud_autonomy_sync: false` opt-out.
 
 ### Fixed
