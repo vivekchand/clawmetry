@@ -1544,6 +1544,13 @@ def _cmd_onboard(args) -> None:
         print()
         print(f"     Bookmark this URL -- it's your private dashboard.")
         print(f"     Data is E2E encrypted. Only you can read it.")
+        print()
+        print(f"  {BOLD('Your secret key')} (paste this when opening the dashboard):")
+        print()
+        print(f"     {CYAN(enc_key)}")
+        print()
+        print(f"     {DIM('Keep this safe -- you need it to view your data.')}")
+        print(f"     {DIM('Run')} {CYAN('clawmetry status --show-key')} {DIM('to see it again.')}")
 
         # Auto-open the dashboard in browser
         try:
