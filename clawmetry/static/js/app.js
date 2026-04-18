@@ -6152,10 +6152,43 @@ function initFlow() {
     }, 1000);
   }).catch(function(){});
 
+  // Populate skills in Flow diagram
+  _populateFlowSkills();
+
   // Connect to the typed flow-events SSE (tails gateway.log + session JSONL)
   _startFlowSse();
-  
+
   setInterval(updateFlowStats, updateInterval);
+}
+
+function _populateFlowSkills() {
+  fetch('/api/skills').then(function(r){return r.json();}).then(function(d) {
+    var skills = (d.skills || []).filter(function(s) { return s.status !== 'dead'; }).slice(0, 6);
+    var container = document.getElementById('flow-skills-list');
+    if (!container || !skills.length) return;
+    var ns = 'http://www.w3.org/2000/svg';
+    var statusColors = {healthy:'#22c55e', stuck:'#f59e0b', unused:'#6b7280', dead:'#ef4444'};
+    skills.forEach(function(sk, i) {
+      var y = 95 + i * 30;
+      var g = document.createElementNS(ns, 'g');
+      g.setAttribute('class', 'flow-node');
+      var rect = document.createElementNS(ns, 'rect');
+      rect.setAttribute('x', '700'); rect.setAttribute('y', String(y));
+      rect.setAttribute('width', '120'); rect.setAttribute('height', '24');
+      rect.setAttribute('rx', '6'); rect.setAttribute('ry', '6');
+      rect.setAttribute('fill', '#7c2d12'); rect.setAttribute('stroke', '#9a3412');
+      rect.setAttribute('stroke-width', '1'); rect.setAttribute('filter', 'url(#dropShadowLight)');
+      var dot = document.createElementNS(ns, 'circle');
+      dot.setAttribute('cx', '712'); dot.setAttribute('cy', String(y + 12));
+      dot.setAttribute('r', '3'); dot.setAttribute('fill', statusColors[sk.status] || '#888');
+      var text = document.createElementNS(ns, 'text');
+      text.setAttribute('x', '720'); text.setAttribute('y', String(y + 16));
+      text.setAttribute('style', 'font-size:10px;fill:#fed7aa;font-weight:600;');
+      text.textContent = sk.name.length > 14 ? sk.name.slice(0, 12) + '\u2026' : sk.name;
+      g.appendChild(rect); g.appendChild(dot); g.appendChild(text);
+      container.appendChild(g);
+    });
+  }).catch(function(){});
 }
 
 // Add subtle animation to help users understand the flow
