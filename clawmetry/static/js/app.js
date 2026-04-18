@@ -2298,7 +2298,46 @@ function renderBrainStream(events) {
     if (skillName) {
       skillBadge = '<span class="brain-skill" style="color:#f59e0b;font-size:10px;flex-shrink:0;white-space:nowrap;" title="Skill: ' + escHtml(skillName) + '">🎯 ' + escHtml(skillName.length > 16 ? skillName.slice(0, 14) + '\u2026' : skillName) + '</span>';
     }
-    html += '<div class="brain-event" onclick="this.classList.toggle(\'expanded\')">';
+    // Build turn timeline for USER events (Phase 4: Agent Runtime Timeline)
+    var turnTimeline = '';
+    if (evType === 'USER') {
+      // Find all events in this turn (from this USER to the next USER)
+      var evIdx = filtered.indexOf(ev);
+      var turnEvents = [];
+      for (var ti = evIdx + 1; ti < filtered.length; ti++) {
+        if (filtered[ti].type === 'USER') break;
+        turnEvents.push(filtered[ti]);
+      }
+      if (turnEvents.length > 0) {
+        var turnStart = ev.time ? new Date(ev.time).getTime() : 0;
+        var turnEnd = turnEvents.length > 0 && turnEvents[turnEvents.length-1].time ? new Date(turnEvents[turnEvents.length-1].time).getTime() : turnStart;
+        var turnDuration = turnStart && turnEnd ? ((turnStart - turnEnd) / 1000).toFixed(1) : '?';
+        var llmCalls = turnEvents.filter(function(e){return e.type==='AGENT'||e.type==='THINK';}).length;
+        var toolCalls = turnEvents.filter(function(e){return e.type==='EXEC'||e.type==='READ'||e.type==='WRITE'||e.type==='BROWSER'||e.type==='SEARCH'||e.type==='TOOL';}).length;
+        // Summary badge
+        turnTimeline = '<div class="brain-turn-summary" style="display:flex;gap:6px;margin-top:2px;font-size:10px;color:var(--text-muted);">';
+        turnTimeline += '<span style="background:rgba(139,92,246,0.15);color:#a78bfa;padding:1px 6px;border-radius:3px;">&#9881; ' + turnEvents.length + ' steps</span>';
+        if (llmCalls > 0) turnTimeline += '<span style="background:rgba(59,130,246,0.15);color:#60a5fa;padding:1px 6px;border-radius:3px;">&#129302; ' + llmCalls + ' LLM</span>';
+        if (toolCalls > 0) turnTimeline += '<span style="background:rgba(245,158,11,0.15);color:#f59e0b;padding:1px 6px;border-radius:3px;">&#128295; ' + toolCalls + ' tools</span>';
+        if (turnDuration !== '?' && parseFloat(turnDuration) > 0) turnTimeline += '<span style="background:rgba(16,185,129,0.15);color:#10b981;padding:1px 6px;border-radius:3px;">&#9202; ' + turnDuration + 's</span>';
+        turnTimeline += '</div>';
+        // Expandable timeline detail
+        turnTimeline += '<div class="brain-turn-detail" style="display:none;margin-top:6px;padding:6px 0 2px 16px;border-left:2px solid rgba(139,92,246,0.3);">';
+        turnEvents.forEach(function(te) {
+          var teIcon = _brainTypeIcons[te.type] || '&#128295;';
+          var teTime = formatBrainTime(te.time);
+          var teDetail = (te.detail || '').substring(0, 120);
+          var teCol = {'AGENT':'#a855f7','THINK':'#94a3b8','EXEC':'#f59e0b','READ':'#6ee7b7','WRITE':'#10b981','BROWSER':'#ec4899','SEARCH':'#06b6d4','TOOL':'#f97316','RESULT':'#6ee7b7'}[te.type] || '#888';
+          turnTimeline += '<div style="display:flex;gap:6px;align-items:flex-start;padding:2px 0;font-size:11px;">';
+          turnTimeline += '<span style="color:var(--text-faint);min-width:50px;flex-shrink:0;">' + teTime + '</span>';
+          turnTimeline += '<span style="color:' + teCol + ';min-width:55px;font-weight:600;flex-shrink:0;">' + teIcon + ' ' + te.type + '</span>';
+          turnTimeline += '<span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(teDetail) + '</span>';
+          turnTimeline += '</div>';
+        });
+        turnTimeline += '</div>';
+      }
+    }
+    html += '<div class="brain-event" onclick="this.classList.toggle(\'expanded\');var td=this.querySelector(\'.brain-turn-detail\');if(td)td.style.display=td.style.display===\'none\'?\'\':\'none\';">';
     html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
     html += '<span class="brain-type" style="background:rgba(100,100,100,0.15);color:' + color + ';padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;min-width:70px;text-align:center;display:inline-block;white-space:nowrap;">' + icon + ' ' + escHtml(evType) + '</span>';
@@ -2307,6 +2346,7 @@ function renderBrainStream(events) {
     html += skillBadge;
     html += '</div>';
     html += '<span class="brain-detail">' + renderBrainDetail(ev.detail || '') + '</span>';
+    html += turnTimeline;
     html += '</div>';
   });
   el.innerHTML = html;
