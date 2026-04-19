@@ -182,7 +182,7 @@ def api_gw_config():
                             "instanceId": "clawmetry-validate",
                         },
                         "role": "operator",
-                        "scopes": ["operator.admin"],
+                        "scopes": ["operator.read", "operator.admin"],
                         "auth": {"token": token},
                     },
                 }
