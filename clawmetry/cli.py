@@ -1041,27 +1041,30 @@ def _cmd_uninstall() -> None:
             _api_key = _cfg.get("api_key", "")
             _node_id = _cfg.get("node_id", "")
             if _api_key:
-                import socket
+                import socket, threading
                 _hostname = socket.gethostname()
-                try:
-                    import urllib.request
-                    _req = urllib.request.Request(
-                        "https://app.clawmetry.com/api/unregister",
-                        data=_json_u.dumps({
-                            "node_id": _node_id,
-                            "hostname": _hostname,
-                        }).encode(),
-                        headers={
-                            "X-Api-Key": _api_key,
-                            "Content-Type": "application/json",
-                        },
-                        method="POST",
-                    )
-                    with urllib.request.urlopen(_req, timeout=30) as _resp:
-                        _result = _json_u.loads(_resp.read())
-                    print("  ✅  Purged server-side registration")
-                except Exception as _e:
-                    print(f"  ⚠️  Could not purge server ({_e})")
+                def _purge_server():
+                    try:
+                        import urllib.request
+                        _req = urllib.request.Request(
+                            "https://app.clawmetry.com/api/unregister",
+                            data=_json_u.dumps({
+                                "node_id": _node_id,
+                                "hostname": _hostname,
+                            }).encode(),
+                            headers={
+                                "X-Api-Key": _api_key,
+                                "Content-Type": "application/json",
+                            },
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(_req, timeout=120) as _resp:
+                            pass
+                    except Exception:
+                        pass
+                _t = threading.Thread(target=_purge_server, daemon=True)
+                _t.start()
+                print("  ⏳  Purging server-side registration (background)...")
     except Exception:
         pass
 
