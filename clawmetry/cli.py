@@ -1057,7 +1057,7 @@ def _cmd_uninstall() -> None:
                         },
                         method="POST",
                     )
-                    with urllib.request.urlopen(_req, timeout=10) as _resp:
+                    with urllib.request.urlopen(_req, timeout=30) as _resp:
                         _result = _json_u.loads(_resp.read())
                     print("  ✅  Purged server-side registration")
                 except Exception as _e:
