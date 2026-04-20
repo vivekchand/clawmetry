@@ -2978,6 +2978,35 @@ DASHBOARD_HTML = r"""
   .modal-tab:hover { color: var(--text-secondary); }
   .modal-tab.active { color: var(--text-accent); border-bottom-color: var(--text-accent); }
   .modal-content { flex: 1; overflow-y: auto; padding: 20px; -webkit-overflow-scrolling: touch; }
+  /* Subagent Tree Styles */
+  .subagent-tree { font-size: 13px; }
+  .subagent-tree-node { margin: 4px 0; }
+  .subagent-tree-children { margin-left: 24px; padding-left: 8px; border-left: 2px solid var(--border-primary); }
+  .subagent-tree-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-secondary); cursor: pointer; transition: all 0.15s; }
+  .subagent-tree-item:hover { background: var(--bg-hover); border-color: var(--border-primary); }
+  .subagent-tree-item.root { background: var(--bg-accent); color: white; border-color: var(--bg-accent); }
+  .subagent-tree-item.root:hover { opacity: 0.95; }
+  .subagent-tree-status { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .subagent-tree-status.active { background: #22c55e; }
+  .subagent-tree-status.idle { background: #f59e0b; }
+  .subagent-tree-status.stale { background: #6b7280; }
+  .subagent-tree-status.failed { background: #ef4444; }
+  .subagent-tree-status.succeeded { background: #22c55e; }
+  .subagent-tree-status.running { background: #3b82f6; }
+  .subagent-tree-status.unknown { background: #9ca3af; }
+  .subagent-tree-info { flex: 1; min-width: 0; }
+  .subagent-tree-label { font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subagent-tree-item.root .subagent-tree-label { color: white; }
+  .subagent-tree-meta { display: flex; gap: 12px; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .subagent-tree-item.root .subagent-tree-meta { color: rgba(255,255,255,0.7); }
+  .subagent-tree-meta span { display: flex; align-items: center; gap: 4px; }
+  .subagent-tree-toggle { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); transition: transform 0.15s; }
+  .subagent-tree-toggle.collapsed::before { content: '▶'; font-size: 10px; }
+  .subagent-tree-toggle.expanded::before { content: '▼'; font-size: 10px; }
+  .subagent-tree-toggle.leaf::before { content: '•'; font-size: 8px; opacity: 0.5; }
+  .subagent-tree-empty { text-align: center; padding: 40px; color: var(--text-muted); }
+  .subagent-tree-loading { text-align: center; padding: 40px; color: var(--text-muted); }
+  .subagent-tree-error { text-align: center; padding: 40px; color: var(--text-error); }
   .modal-footer { border-top: 1px solid var(--border-primary); padding: 10px 20px; display: flex; gap: 16px; font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
   /* Modal event items */
   .evt-item { border: 1px solid var(--border-secondary); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
@@ -8379,7 +8408,7 @@ function toggleModalAutoRefresh() {
 
 function switchModalTab(tab) {
   _modalTab = tab;
-  document.querySelectorAll('.modal-tab').forEach(function(t){ t.classList.toggle('active', t.textContent.toLowerCase().indexOf(tab) >= 0 || (tab==='full' && t.textContent==='Full Logs')); });
+  document.querySelectorAll('.modal-tab').forEach(function(t){ t.classList.toggle('active', t.textContent.toLowerCase().indexOf(tab) >= 0 || (tab==='full' && t.textContent==='Full Logs') || (tab==='subagents' && t.textContent==='Subagents')); });
   renderModalContent();
 }
 
@@ -8405,6 +8434,7 @@ function renderModalContent() {
   var el = document.getElementById('modal-content');
   if (_modalTab === 'summary') renderModalSummary(el);
   else if (_modalTab === 'narrative') renderModalNarrative(el);
+  else if (_modalTab === 'subagents') renderModalSubagents(el);
   else renderModalFull(el);
 }
 
@@ -8511,6 +8541,119 @@ function renderModalFull(el) {
     html += '</div>';
   });
   el.innerHTML = html || '<div style="padding:20px;color:var(--text-muted);">No events yet</div>';
+}
+
+// Subagent tree rendering
+var _subagentTreeData = null;
+var _subagentTreeCollapsed = new Set();
+
+async function renderModalSubagents(el) {
+  // Show loading state
+  el.innerHTML = '<div class="subagent-tree-loading">Loading subagent tree...</div>';
+
+  try {
+    var sessionId = _modalSessionId || window._modalSessionKey || '';
+    if (!sessionId) {
+      el.innerHTML = '<div class="subagent-tree-empty">No session ID available</div>';
+      return;
+    }
+
+    var r = await fetch('/api/session/' + encodeURIComponent(sessionId) + '/subagent-tree');
+    var data = await r.json();
+
+    if (data.error) {
+      el.innerHTML = '<div class="subagent-tree-error">' + escHtml(data.error) + '</div>';
+      return;
+    }
+
+    if (!data.tree || data.count === 0) {
+      el.innerHTML = '<div class="subagent-tree-empty">No subagents spawned from this session</div>';
+      return;
+    }
+
+    _subagentTreeData = data.tree;
+    renderSubagentTree(el, data.tree);
+  } catch(e) {
+    el.innerHTML = '<div class="subagent-tree-error">Failed to load subagent tree: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function renderSubagentTree(el, tree) {
+  var html = '<div class="subagent-tree">';
+  html += renderSubagentTreeNode(tree, true);
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function renderSubagentTreeNode(node, isRoot) {
+  var hasChildren = node.children && node.children.length > 0;
+  var nodeId = node.session_key || node.id || 'root';
+  var isCollapsed = _subagentTreeCollapsed.has(nodeId);
+
+  // Status color
+  var status = (node.status || 'unknown').toLowerCase();
+  if (status === 'succeeded') status = 'succeeded';
+  else if (status === 'failed') status = 'failed';
+  else if (status === 'running') status = 'running';
+  else if (status === 'active') status = 'active';
+  else status = 'unknown';
+
+  var html = '<div class="subagent-tree-node">';
+
+  // Toggle button
+  var toggleClass = 'leaf';
+  var toggleAction = '';
+  if (hasChildren) {
+    toggleClass = isCollapsed ? 'collapsed' : 'expanded';
+    toggleAction = 'onclick="toggleSubagentTreeNode(\'' + escHtml(nodeId).replace(/'/g, "\\'") + '\')"';
+  }
+
+  // Item row
+  var clickHandler = isRoot ? '' : ' onclick="openTaskModal(\'' + escHtml(node.session_key || '').replace(/'/g, "\\'") + '\', \'' + escHtml(node.label || 'Subagent').replace(/'/g, "\\'") + '\', \'' + escHtml(node.session_key || '').replace(/'/g, "\\'") + '\')"';
+  html += '<div class="subagent-tree-item ' + (isRoot ? 'root' : '') + '"' + clickHandler + '>';
+  html += '<span class="subagent-tree-toggle ' + toggleClass + '" ' + toggleAction + '></span>';
+  html += '<span class="subagent-tree-status ' + status + '" title="Status: ' + escHtml(node.status || 'unknown') + '"></span>';
+  html += '<div class="subagent-tree-info">';
+  html += '<div class="subagent-tree-label">' + escHtml(node.label || 'Untitled') + '</div>';
+
+  // Meta info
+  var meta = [];
+  if (node.duration_formatted) meta.push('⏱ ' + escHtml(node.duration_formatted));
+  if (node.total_tokens) meta.push('📝 ' + (node.total_tokens > 1000 ? (node.total_tokens/1000).toFixed(1) + 'K' : node.total_tokens) + ' tokens');
+  if (node.cost_usd) meta.push('💰 $' + node.cost_usd.toFixed(4));
+  if (node.terminal_outcome && node.terminal_outcome !== '(no output)') meta.push('✓ ' + escHtml(node.terminal_outcome.substring(0, 40)));
+
+  if (meta.length > 0) {
+    html += '<div class="subagent-tree-meta">' + meta.join(' · ') + '</div>';
+  }
+
+  html += '</div>'; // end subagent-tree-info
+  html += '</div>'; // end subagent-tree-item
+
+  // Children
+  if (hasChildren && !isCollapsed) {
+    html += '<div class="subagent-tree-children">';
+    for (var i = 0; i < node.children.length; i++) {
+      html += renderSubagentTreeNode(node.children[i], false);
+    }
+    html += '</div>';
+  }
+
+  html += '</div>'; // end subagent-tree-node
+  return html;
+}
+
+function toggleSubagentTreeNode(nodeId) {
+  if (_subagentTreeCollapsed.has(nodeId)) {
+    _subagentTreeCollapsed.delete(nodeId);
+  } else {
+    _subagentTreeCollapsed.add(nodeId);
+  }
+  // Re-render if data is available
+  if (_subagentTreeData) {
+    var el = document.getElementById('modal-content');
+    renderSubagentTree(el, _subagentTreeData);
+  }
 }
 
 // Initialize theme and zoom on page load
@@ -8945,6 +9088,7 @@ async function showSnapshot(ts) {
       <div class="modal-tab active" onclick="switchModalTab('summary')">Summary</div>
       <div class="modal-tab" onclick="switchModalTab('narrative')">Narrative</div>
       <div class="modal-tab" onclick="switchModalTab('full')">Full Logs</div>
+      <div class="modal-tab" onclick="switchModalTab('subagents')">Subagents</div>
     </div>
     <div class="modal-content" id="modal-content">Loading...</div>
     <div class="modal-footer">
@@ -13867,6 +14011,176 @@ def _run_setup_wizard():
     print()
     print("  Run 'clawmetry' to start with cloud sync enabled.")
     print()
+
+
+@app.route('/api/session/<session_id>/subagent-tree')
+def api_session_subagent_tree(session_id):
+    """Get the subagent tree for a given session from runs.sqlite.
+
+    Returns a hierarchical tree of subagents spawned by this session,
+    including their status, duration, tokens, cost, and terminal outcome.
+    """
+    import sqlite3
+
+    runs_db_path = os.path.expanduser('~/.openclaw/tasks/runs.sqlite')
+    if not os.path.isfile(runs_db_path):
+        return jsonify({
+            'tree': None,
+            'nodes': [],
+            'error': 'runs.sqlite not found'
+        })
+
+    # Build the requester_session_key from the session_id
+    # Session IDs can be bare UUIDs or full keys like agent:main:subagent:xxx
+    if session_id.startswith('agent:main:'):
+        requester_key = session_id
+    else:
+        # Try to construct the key - could be main session or subagent
+        requester_key = f'agent:main:subagent:{session_id}'
+
+    nodes = []
+    seen_keys = set()
+
+    def fetch_children(parent_key, depth=0):
+        """Recursively fetch child subagents from runs.sqlite."""
+        children = []
+        try:
+            conn = sqlite3.connect(runs_db_path)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT task_id, parent_task_id, child_session_key, agent_id,
+                          run_id, label, task, status, delivery_status,
+                          created_at, started_at, ended_at, last_event_at,
+                          error, progress_summary, terminal_summary, terminal_outcome
+                   FROM task_runs
+                   WHERE requester_session_key = ?
+                   ORDER BY COALESCE(started_at, created_at, 0) ASC""",
+                (parent_key,)
+            )
+            for row in cur.fetchall():
+                d = dict(row)
+                child_key = d.get('child_session_key')
+                if child_key in seen_keys:
+                    continue
+                seen_keys.add(child_key)
+
+                # Calculate duration
+                started = d.get('started_at') or 0
+                ended = d.get('ended_at') or 0
+                duration_ms = max(0, ended - started) if started and ended else 0
+
+                node = {
+                    'id': d.get('task_id'),
+                    'session_key': child_key,
+                    'parent_session_key': parent_key,
+                    'label': d.get('label') or d.get('task', 'Untitled')[:60],
+                    'task': d.get('task', ''),
+                    'status': d.get('status') or 'unknown',
+                    'delivery_status': d.get('delivery_status') or 'unknown',
+                    'agent_id': d.get('agent_id', ''),
+                    'run_id': d.get('run_id', ''),
+                    'depth': depth,
+                    'created_at': d.get('created_at'),
+                    'started_at': started,
+                    'ended_at': ended,
+                    'duration_ms': duration_ms,
+                    'duration_formatted': _format_duration(duration_ms),
+                    'error': d.get('error', ''),
+                    'terminal_outcome': d.get('terminal_outcome') or d.get('terminal_summary', ''),
+                    'progress_summary': d.get('progress_summary', ''),
+                    'children': []
+                }
+
+                # Try to get token/cost data from the child session
+                if child_key:
+                    node.update(_get_session_metrics(child_key))
+
+                # Recursively fetch grandchildren
+                if child_key:
+                    node['children'] = fetch_children(child_key, depth + 1)
+
+                children.append(node)
+            conn.close()
+        except Exception as e:
+            pass
+        return children
+
+    # Start building the tree from the given session
+    tree_root = {
+        'session_key': requester_key,
+        'label': 'Current Session',
+        'status': 'root',
+        'depth': 0,
+        'children': []
+    }
+
+    # Try to get more info about the current session
+    tree_root.update(_get_session_metrics(requester_key))
+
+    # Fetch children
+    tree_root['children'] = fetch_children(requester_key, depth=1)
+
+    # Flatten nodes for easy rendering
+    def collect_nodes(node, flat_list):
+        flat_list.append(node)
+        for child in node.get('children', []):
+            collect_nodes(child, flat_list)
+
+    all_nodes = []
+    collect_nodes(tree_root, all_nodes)
+
+    return jsonify({
+        'tree': tree_root,
+        'nodes': all_nodes,
+        'session_id': session_id,
+        'requester_key': requester_key,
+        'count': len(all_nodes) - 1  # exclude root
+    })
+
+
+def _get_session_metrics(session_key):
+    """Get token/cost metrics for a session from sessions.json."""
+    metrics = {
+        'tokens_in': 0,
+        'tokens_out': 0,
+        'total_tokens': 0,
+        'cost_usd': 0.0
+    }
+    try:
+        sessions_dir = SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+        index_path = os.path.join(sessions_dir, 'sessions.json')
+        if os.path.exists(index_path):
+            with open(index_path, 'r') as f:
+                index = json.load(f)
+            if session_key in index:
+                meta = index[session_key]
+                metrics['tokens_in'] = meta.get('inputTokens', 0)
+                metrics['tokens_out'] = meta.get('outputTokens', 0)
+                metrics['total_tokens'] = meta.get('totalTokens', 0)
+                # Calculate approximate cost if available
+                metrics['cost_usd'] = meta.get('costUsd', 0.0)
+                metrics['model'] = meta.get('model', 'unknown')
+    except Exception:
+        pass
+    return metrics
+
+
+def _format_duration(ms):
+    """Format milliseconds into human-readable duration."""
+    if ms < 1000:
+        return f"{ms}ms"
+    secs = ms // 1000
+    if secs < 60:
+        return f"{secs}s"
+    mins = secs // 60
+    if mins < 60:
+        return f"{mins}m {secs % 60}s"
+    hours = mins // 60
+    if hours < 24:
+        return f"{hours}h {mins % 60}m"
+    days = hours // 24
+    return f"{days}d {hours % 24}h"
 
 
 def main():
