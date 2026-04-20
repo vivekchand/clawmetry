@@ -412,14 +412,14 @@ SANDBOX_SCRIPT
 fi
 
 # ── Onboarding ───────────────────────────────────────────────────────────────
-# Runs: clawmetry setup (skipped when NemoClaw is detected — setup happens inside sandbox)
+# Runs: clawmetry onboard (skipped when NemoClaw is detected — setup happens inside sandbox)
 
 if [ "${CLAWMETRY_SKIP_ONBOARD:-}" = "1" ] || [ "$NEMOCLAW_DETECTED" = "1" ]; then
   [ "$NEMOCLAW_DETECTED" = "1" ] || echo -e "  ${DIM}Skipping onboard (CLAWMETRY_SKIP_ONBOARD=1)${NC}"
 elif (exec </dev/tty) 2>/dev/null; then
-  "$CLAWMETRY_BIN" setup </dev/tty || true
+  "$CLAWMETRY_BIN" onboard </dev/tty || true
 else
-  "$CLAWMETRY_BIN" setup || true
+  "$CLAWMETRY_BIN" onboard || true
 fi
 
 # ── PATH reminder if needed ──────────────────────────────────────────────────
