@@ -2510,9 +2510,9 @@ DASHBOARD_HTML = r"""
   [id$="node-feishu"] rect { fill: #3370FF !important; stroke: #2050CC !important; }
   [id$="node-zalo"] rect { fill: #0068FF !important; stroke: #0050CC !important; }
   [id$="node-gateway"] rect { fill: #334155 !important; stroke: #1f2937 !important; }
-  [id$="node-brain"] rect { fill: #a63a16 !important; stroke: #7c2d12 !important; }
-  [id$="brain-model-label"] { fill: #fde68a !important; }
-  [id$="brain-model-text"] { fill: #fed7aa !important; }
+  [id$="node-brain"] rect { fill: #312e81 !important; stroke: #1e1b4b !important; }
+  [id$="brain-model-label"] { fill: #e0e7ff !important; }
+  [id$="brain-model-text"] { fill: #c7d2fe !important; }
   [id$="node-session"] rect { fill: #3158d4 !important; stroke: #2648b6 !important; }
   [id$="node-exec"] rect { fill: #d97706 !important; stroke: #b45309 !important; }
   [id$="node-browser"] rect { fill: #5b39c6 !important; stroke: #4629a1 !important; }
@@ -2544,7 +2544,7 @@ DASHBOARD_HTML = r"""
   .flow-path.glow-yellow { stroke: #f0c040; filter: drop-shadow(0 0 6px rgba(240,192,64,0.6)); }
   .flow-path.glow-green { stroke: #50e080; filter: drop-shadow(0 0 6px rgba(80,224,128,0.6)); }
   .flow-path.glow-red { stroke: #e04040; filter: drop-shadow(0 0 6px rgba(224,64,64,0.6)); }
-  @keyframes brainPulse { 0%,100% { filter: drop-shadow(0 0 6px rgba(240,192,64,0.25)); } 50% { filter: drop-shadow(0 0 22px rgba(240,192,64,0.7)); } }
+  @keyframes brainPulse { 0%,100% { filter: drop-shadow(0 0 6px rgba(129,140,248,0.18)); } 50% { filter: drop-shadow(0 0 18px rgba(129,140,248,0.45)); } }
   .brain-group { animation: brainPulse 2.2s ease-in-out infinite; }
   .tool-indicator { opacity: 0.2; transition: opacity 0.3s ease; }
   .tool-indicator.active { opacity: 1; }
@@ -4081,8 +4081,8 @@ function clawmetryLogout(){
         <rect x="330" y="130" width="180" height="90" rx="12" ry="12" fill="#C62828" stroke="#B71C1C" stroke-width="3" filter="url(#dropShadow)"/>
         <text x="420" y="162" style="font-size:24px;text-anchor:middle;">&#x1F9E0;</text>
         <text x="420" y="186" style="font-size:18px;font-weight:800;fill:#FFD54F;text-anchor:middle;" id="brain-model-label">AI Model</text>
-        <text x="420" y="203" style="font-size:10px;fill:#ffccbc;text-anchor:middle;" id="brain-model-text">unknown</text>
-        <text x="420" y="214" style="font-size:8px;fill:#a7f3d0;text-anchor:middle;" id="brain-billing-text">Auth: unknown</text>
+        <text x="420" y="203" style="font-size:10px;fill:#c7d2fe;text-anchor:middle;" id="brain-model-text">unknown</text>
+        <text x="420" y="214" style="font-size:8px;fill:#a5b4fc;text-anchor:middle;" id="brain-billing-text">Auth: unknown</text>
         <circle cx="420" cy="225" r="4" fill="#FF8A65">
           <animate attributeName="r" values="3;5;3" dur="1.1s" repeatCount="indefinite"/>
           <animate attributeName="opacity" values="0.5;1;0.5" dur="1.1s" repeatCount="indefinite"/>
