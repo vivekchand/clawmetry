@@ -372,9 +372,9 @@
   [id$="node-feishu"] rect { fill: #3370FF !important; stroke: #2050CC !important; }
   [id$="node-zalo"] rect { fill: #0068FF !important; stroke: #0050CC !important; }
   [id$="node-gateway"] rect { fill: #334155 !important; stroke: #1f2937 !important; }
-  [id$="node-brain"] rect { fill: #a63a16 !important; stroke: #7c2d12 !important; }
-  [id$="brain-model-label"] { fill: #fde68a !important; }
-  [id$="brain-model-text"] { fill: #fed7aa !important; }
+  [id$="node-brain"] rect { fill: #312e81 !important; stroke: #1e1b4b !important; }
+  [id$="brain-model-label"] { fill: #e0e7ff !important; }
+  [id$="brain-model-text"] { fill: #c7d2fe !important; }
   [id$="node-session"] rect { fill: #3158d4 !important; stroke: #2648b6 !important; }
   [id$="node-exec"] rect { fill: #d97706 !important; stroke: #b45309 !important; }
   [id$="node-browser"] rect { fill: #5b39c6 !important; stroke: #4629a1 !important; }
@@ -406,7 +406,7 @@
   .flow-path.glow-yellow { stroke: #f0c040; filter: drop-shadow(0 0 6px rgba(240,192,64,0.6)); }
   .flow-path.glow-green { stroke: #50e080; filter: drop-shadow(0 0 6px rgba(80,224,128,0.6)); }
   .flow-path.glow-red { stroke: #e04040; filter: drop-shadow(0 0 6px rgba(224,64,64,0.6)); }
-  @keyframes brainPulse { 0%,100% { filter: drop-shadow(0 0 6px rgba(240,192,64,0.25)); } 50% { filter: drop-shadow(0 0 22px rgba(240,192,64,0.7)); } }
+  @keyframes brainPulse { 0%,100% { filter: drop-shadow(0 0 6px rgba(129,140,248,0.18)); } 50% { filter: drop-shadow(0 0 18px rgba(129,140,248,0.45)); } }
   .brain-group { animation: brainPulse 2.2s ease-in-out infinite; }
   @keyframes livePulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
   .tool-indicator { opacity: 0.2; transition: opacity 0.3s ease; }
