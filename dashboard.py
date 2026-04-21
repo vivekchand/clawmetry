@@ -9909,6 +9909,14 @@ def _compute_transcript_analytics():
                             if cost > 0:
                                 s_cost += cost
 
+                            # Bucket to this event's actual date, not the
+                            # session start date. Fixes the bug where a
+                            # long-running session's entire token total
+                            # piled onto the day the session started.
+                            _ev_date = (ts or fallback_dt).strftime("%Y-%m-%d")
+                            daily_tokens[_ev_date] = daily_tokens.get(_ev_date, 0) + tokens
+                            daily_cost[_ev_date] = daily_cost.get(_ev_date, 0.0) + cost
+
                             plugins = _extract_tool_plugins(obj)
                             if plugins:
                                 share_tokens = float(tokens) / float(len(plugins))
@@ -9942,9 +9950,9 @@ def _compute_transcript_analytics():
                 if s_end is None:
                     s_end = fallback_dt
 
-                day = s_start.strftime("%Y-%m-%d")
-                daily_tokens[day] = daily_tokens.get(day, 0) + s_tokens
-                daily_cost[day] = daily_cost.get(day, 0.0) + s_cost
+                # daily_tokens/daily_cost are now populated per-event above
+                # (bucketed by each event's timestamp, not the session start).
+                # Only model_usage still aggregates per-session.
                 model_usage[s_model] = model_usage.get(s_model, 0) + s_tokens
 
                 search_text = " ".join(search_parts)
@@ -9959,7 +9967,7 @@ def _compute_transcript_analytics():
                         "model": s_model,
                         "start_ts": s_start.timestamp() if s_start else 0,
                         "end_ts": s_end.timestamp() if s_end else 0,
-                        "day": day,
+                        "day": s_start.strftime("%Y-%m-%d") if s_start else fallback_dt.strftime("%Y-%m-%d"),
                         "search_text": search_text,
                         "explicit_cron_refs": explicit_cron_refs,
                         "is_cron_candidate": ("cron" in search_text)
@@ -10229,6 +10237,14 @@ def _compute_transcript_analytics():
                             if cost > 0:
                                 s_cost += cost
 
+                            # Bucket to this event's actual date, not the
+                            # session start date. Fixes the bug where a
+                            # long-running session's entire token total
+                            # piled onto the day the session started.
+                            _ev_date = (ts or fallback_dt).strftime("%Y-%m-%d")
+                            daily_tokens[_ev_date] = daily_tokens.get(_ev_date, 0) + tokens
+                            daily_cost[_ev_date] = daily_cost.get(_ev_date, 0.0) + cost
+
                             plugins = _extract_tool_plugins(obj)
                             if plugins:
                                 share_tokens = float(tokens) / float(len(plugins))
@@ -10272,9 +10288,9 @@ def _compute_transcript_analytics():
                 if s_end is None:
                     s_end = fallback_dt
 
-                day = s_start.strftime("%Y-%m-%d")
-                daily_tokens[day] = daily_tokens.get(day, 0) + s_tokens
-                daily_cost[day] = daily_cost.get(day, 0.0) + s_cost
+                # daily_tokens/daily_cost are now populated per-event above
+                # (bucketed by each event's timestamp, not the session start).
+                # Only model_usage still aggregates per-session.
                 model_usage[s_model] = model_usage.get(s_model, 0) + s_tokens
 
                 search_text = " ".join(search_parts)
@@ -10289,7 +10305,7 @@ def _compute_transcript_analytics():
                         "model": s_model,
                         "start_ts": s_start.timestamp() if s_start else 0,
                         "end_ts": s_end.timestamp() if s_end else 0,
-                        "day": day,
+                        "day": s_start.strftime("%Y-%m-%d") if s_start else fallback_dt.strftime("%Y-%m-%d"),
                         "search_text": search_text,
                         "explicit_cron_refs": explicit_cron_refs,
                         "is_cron_candidate": ("cron" in search_text)
