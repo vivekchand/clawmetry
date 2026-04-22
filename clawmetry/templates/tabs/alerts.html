@@ -1,0 +1,120 @@
+<!--
+  Alerts tab — Cloud-Pro feature.
+
+  Three states (resolved at runtime by alerts.js):
+    1. OSS-only (no cloud account)  → "Sign up for ClawMetry Cloud" modal
+    2. Cloud Free / trial_expired   → "Upgrade to Pro" modal (1 teaser rule visible)
+    3. Cloud Pro / active trial     → fully wired
+
+  Whichever state, the *full* tab shell renders so users see the value before
+  the soft paywall fires (per project_free_plan_upsell memory).
+-->
+<div class="page" id="page-alerts">
+  <div class="alerts-head">
+    <div>
+      <h2 class="alerts-title">
+        Alerts
+        <span class="pro-chip" title="Pro feature">Pro</span>
+      </h2>
+      <div class="alerts-sub">Get notified when something goes wrong with your agents.</div>
+    </div>
+    <button class="alerts-btn-primary" onclick="alertsHandleNewRule()">+ New alert rule</button>
+  </div>
+
+  <div id="alerts-trial-banner" class="alerts-trial-banner" style="display:none;">
+    <div class="msg">
+      <b>You're on a 7-day Pro trial</b> — unlock multi-channel delivery to
+      Slack, PagerDuty, Telegram, and Email.
+      <span id="alerts-trial-days-left" style="color:var(--text-muted);"></span>
+    </div>
+    <button class="alerts-btn-pro" onclick="alertsHandleUpgrade()">Upgrade to Pro</button>
+  </div>
+
+  <div id="alerts-rules-list" class="alerts-list">
+    <div class="alerts-loading">Loading alerts…</div>
+  </div>
+
+  <h4 class="alerts-section-h">Recent alert history</h4>
+  <div id="alerts-history-list" class="alerts-history">
+    <div class="alerts-loading">Loading history…</div>
+  </div>
+
+  <div class="alerts-shared-note">
+    <div class="l">
+      Delivery channels: <b id="alerts-channels-summary">Slack · Email · PagerDuty · Telegram</b>
+      <span style="color:var(--text-muted);font-style:italic;"> shared with Approvals</span>
+    </div>
+    <button class="alerts-btn-ghost" onclick="alertsHandleManageChannels()">Manage channels →</button>
+  </div>
+</div>
+
+<!-- ── Paywall modal (used for all three Free/no-account states) ────────── -->
+<div class="alerts-modal-overlay" id="alerts-paywall-modal" style="display:none;" onclick="alertsClosePaywall(event)">
+  <div class="alerts-modal-card" onclick="event.stopPropagation()">
+    <div class="alerts-modal-icon">🔔</div>
+    <h3 class="alerts-modal-title" id="alerts-paywall-title">Sign up for ClawMetry Cloud</h3>
+    <p class="alerts-modal-body" id="alerts-paywall-body">
+      Alerts need the cloud to deliver Slack / PagerDuty / Telegram / Email
+      messages. Sign up — your data stays encrypted, Pro features include a
+      7-day free trial.
+    </p>
+    <div class="alerts-modal-actions">
+      <button class="alerts-btn-pro" id="alerts-paywall-cta" onclick="alertsCtaClick()">Sign up for Cloud</button>
+      <button class="alerts-btn-ghost" onclick="alertsClosePaywall()">Maybe later</button>
+    </div>
+    <div class="alerts-modal-footnote">No credit card · free tier available · 7-day Pro trial</div>
+  </div>
+</div>
+
+<!-- ── Rule editor modal (Pro-tier only) ────────────────────────────────── -->
+<div class="alerts-modal-overlay" id="alerts-editor-modal" style="display:none;" onclick="alertsCloseEditor(event)">
+  <div class="alerts-editor-card" onclick="event.stopPropagation()">
+    <div class="alerts-editor-head">
+      <h3 id="alerts-editor-title">New alert rule</h3>
+      <button class="alerts-modal-close" onclick="alertsCloseEditor()">×</button>
+    </div>
+
+    <div class="alerts-editor-section">
+      <div class="alerts-editor-step">1. What should trigger this alert?</div>
+      <div class="alerts-seg" id="alerts-type-seg">
+        <button data-type="daily_spend" onclick="alertsPickType('daily_spend')">💰 Cost</button>
+        <button data-type="node_offline" class="active" onclick="alertsPickType('node_offline')">🤖 Agent</button>
+        <button data-type="session_cost" onclick="alertsPickType('session_cost')">🧵 Session</button>
+        <button data-type="cron_failure" onclick="alertsPickType('cron_failure')">⏱ Cron</button>
+        <button data-type="error_rate" onclick="alertsPickType('error_rate')">🛠 Tool fails</button>
+      </div>
+      <div class="alerts-editor-form" id="alerts-editor-form">
+        <!-- populated by alertsRenderTypeForm() -->
+      </div>
+    </div>
+
+    <div class="alerts-editor-section">
+      <div class="alerts-editor-step">2. Where should we notify you?</div>
+      <div id="alerts-editor-channels">
+        <div class="alerts-loading">Loading your channels…</div>
+      </div>
+      <button class="alerts-btn-ghost" onclick="alertsHandleManageChannels()" style="margin-top:6px;">+ Add channel</button>
+    </div>
+
+    <div class="alerts-editor-section">
+      <div class="alerts-editor-step">3. When should we re-alert?</div>
+      <label class="alerts-radio">
+        <input type="radio" name="alerts-re" value="once" checked />
+        Once per incident (auto-resolve after 30 min)
+      </label>
+      <label class="alerts-radio">
+        <input type="radio" name="alerts-re" value="every_15m" />
+        Every 15 minutes while active
+      </label>
+      <label class="alerts-radio">
+        <input type="radio" name="alerts-re" value="every_1h" />
+        Every hour while active
+      </label>
+    </div>
+
+    <div class="alerts-editor-actions">
+      <button class="alerts-btn-ghost" onclick="alertsCloseEditor()">Cancel</button>
+      <button class="alerts-btn-primary" onclick="alertsSaveRule()">Save &amp; enable</button>
+    </div>
+  </div>
+</div>
