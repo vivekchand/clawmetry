@@ -147,6 +147,8 @@
       const ts = rule.last_triggered_at
         ? `Last: ${formatTimeAgo(rule.last_triggered_at)} · ${rule.trigger_count}× total`
         : `Never triggered`;
+      const toggleLabel = rule.enabled ? 'Disable' : 'Enable';
+      const toggleCls = rule.enabled ? 'alerts-btn-ghost' : 'alerts-btn-primary';
       return `
         <div class="alerts-rule-row" data-rule-id="${rule.id}">
           <div class="alerts-rule-dot ${dotCls}" title="${rule.enabled ? 'Enabled' : 'Disabled'}"
@@ -156,6 +158,7 @@
             <div class="alerts-rule-meta">${meta.verb} ${rule.threshold_value}${rule.threshold_unit ? ' ' + escape(rule.threshold_unit) : ''} · ${ts}</div>
           </div>
           <div class="alerts-rule-chan">${channelPills || '<span class="alerts-chan-pill off">no channels</span>'}</div>
+          <button class="${toggleCls}" onclick="alertsToggleRule('${rule.id}', ${!rule.enabled})">${toggleLabel}</button>
           <button class="alerts-btn-ghost" onclick="alertsHandleEdit('${rule.id}')">Edit</button>
         </div>
       `;
@@ -176,6 +179,7 @@
             <div class="alerts-rule-meta">Tap to customize — saves require Cloud Pro</div>
           </div>
           <div class="alerts-rule-chan"><span class="alerts-chan-pill off">${ex._exampleChannels}</span></div>
+          <button class="alerts-btn-primary" onclick="event.stopPropagation();alertsToggleRule('${ex.id}', true)">Enable</button>
           <button class="alerts-btn-ghost" onclick="event.stopPropagation();alertsHandleEdit('${ex.id}')">Edit</button>
         </div>
       `;

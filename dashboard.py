@@ -9836,9 +9836,10 @@ def _compute_transcript_analytics():
 
     if os.path.isdir(sessions_dir):
         for fname in os.listdir(sessions_dir):
-            if not fname.endswith(".jsonl"):
+            # Accept both live `.jsonl` and archived `.jsonl.reset.<ts>` files.
+            if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
                 continue
-            sid = fname.replace(".jsonl", "")
+            sid = fname.split(".jsonl", 1)[0]
             fpath = os.path.join(sessions_dir, fname)
             fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
 
@@ -10164,9 +10165,13 @@ def _compute_transcript_analytics():
 
     if os.path.isdir(sessions_dir):
         for fname in os.listdir(sessions_dir):
-            if not fname.endswith(".jsonl"):
+            # Accept both live `.jsonl` and archived `.jsonl.reset.<ts>` files.
+            # Reset archives carry real historical token usage from earlier
+            # days; skipping them was making the 14-day chart pile every
+            # past-day total onto today.
+            if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
                 continue
-            sid = fname.replace(".jsonl", "")
+            sid = fname.split(".jsonl", 1)[0]
             fpath = os.path.join(sessions_dir, fname)
             fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
 
@@ -10240,8 +10245,9 @@ def _compute_transcript_analytics():
                                     else 0.0
                                 )
                                 # Track daily breakdown for trend analysis (GH#201)
-                                # day is resolved when s_start is known; use fallback_dt day here
-                                _ev_day = fallback_dt.strftime("%Y-%m-%d")
+                                # use the event's actual day so trend lines
+                                # match the headline 14-day chart.
+                                _ev_day = (ts or fallback_dt).strftime("%Y-%m-%d")
                                 for p in plugins:
                                     plugin_stats[p]["tokens"] += share_tokens
                                     plugin_stats[p]["cost"] += share_cost

@@ -1037,7 +1037,7 @@
 }
 .alerts-loading { padding: 18px; color: var(--text-muted); font-size: 13px; text-align: center; }
 .alerts-rule-row {
-  display: grid; grid-template-columns: 24px 1fr auto auto;
+  display: grid; grid-template-columns: 24px 1fr auto auto auto;
   gap: 16px; align-items: center; padding: 13px 18px;
   border-bottom: 1px solid var(--border-secondary);
 }
