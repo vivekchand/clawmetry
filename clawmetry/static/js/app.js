@@ -2662,8 +2662,81 @@ function _fmtTokens(n) {
   return String(n);
 }
 
+// ── Advisor: natural-language Q&A over the agent's recent activity ─────────
+async function advisorProbe() {
+  try {
+    var s = await fetchJsonWithTimeout('/api/advisor/status', 3000);
+    if (s && s.available) {
+      var card = document.getElementById('advisor-card');
+      if (card) card.style.display = '';
+    }
+  } catch (e) { /* keep hidden */ }
+}
+window.advisorPrefill = function (q) {
+  var el = document.getElementById('advisor-q');
+  if (el) { el.value = q; el.focus(); }
+};
+// Minimal markdown renderer — bold, italic, inline code, paragraph breaks.
+// Escapes HTML first so LLM output can't inject tags.
+function advisorRenderMarkdown(text) {
+  var esc = String(text || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Inline code `x` — process FIRST so asterisks inside code aren't misread
+  esc = esc.replace(/`([^`\n]+)`/g, '<code style="background:rgba(168,85,247,0.18);padding:2px 6px;border-radius:4px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:#ddd6fe;">$1</code>');
+  // Bold **x** and __x__
+  esc = esc.replace(/\*\*([^\*\n]+)\*\*/g, '<strong style="color:#fff;font-weight:600;">$1</strong>');
+  esc = esc.replace(/__([^_\n]+)__/g, '<strong style="color:#fff;font-weight:600;">$1</strong>');
+  // Italic *x* and _x_ — require non-space boundary to avoid matching snake_case
+  esc = esc.replace(/(^|[\s\(])\*([^\*\n]+)\*/g, '$1<em>$2</em>');
+  esc = esc.replace(/(^|[\s\(])_([^_\n]+)_(?=$|[\s\.,\)])/g, '$1<em>$2</em>');
+  // Paragraph breaks on blank line; single newlines become <br>
+  var paras = esc.split(/\n{2,}/).map(function (p) {
+    return '<p style="margin:0 0 10px 0;">' + p.replace(/\n/g, '<br>') + '</p>';
+  });
+  // Drop trailing empty paragraph
+  return paras.join('').replace(/<p[^>]*>\s*<\/p>/g, '');
+}
+
+window.advisorAsk = async function () {
+  var input = document.getElementById('advisor-q');
+  var wrap = document.getElementById('advisor-answer-wrap');
+  var qEl = document.getElementById('advisor-answer-q');
+  var out = document.getElementById('advisor-answer');
+  var metaEl = document.getElementById('advisor-answer-meta');
+  var q = (input && input.value || '').trim();
+  if (!q || !wrap || !out) return;
+  wrap.style.display = '';
+  if (qEl) qEl.textContent = '› ' + q;
+  out.innerHTML = '<span style="color:#a855f7;">Thinking…</span>';
+  if (metaEl) metaEl.textContent = '';
+  try {
+    var resp = await fetch('/api/advisor/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q }),
+    });
+    var d = await resp.json();
+    if (!resp.ok) {
+      out.textContent = (d && d.message) || (d && d.detail) || ('Error ' + resp.status);
+      return;
+    }
+    out.innerHTML = advisorRenderMarkdown(d.answer || '(empty answer)');
+    if (metaEl) {
+      var parts = [];
+      if (d.model) parts.push(d.model);
+      var totalTokens = (d.input_tokens || 0) + (d.output_tokens || 0);
+      if (totalTokens) parts.push(totalTokens + ' tokens');
+      if (typeof d.events_in_context === 'number') parts.push(d.events_in_context + ' events in context');
+      metaEl.textContent = parts.length ? parts.join(' · ') : '';
+    }
+  } catch (e) {
+    out.textContent = 'Network error: ' + e.message;
+  }
+};
+
 async function loadBrainPage(silent) {
   if (window.CLOUD_MODE) return;
+  if (!silent) advisorProbe();
   try {
     var data = await fetchJsonWithTimeout('/api/brain-history', 8000);
     var events = (data.events || []).slice().sort(function(a,b){
