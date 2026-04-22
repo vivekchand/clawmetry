@@ -44,7 +44,14 @@
           style="font-size:11px;padding:4px 10px;border-radius:12px;background:rgba(168,85,247,0.1);
                  border:1px solid rgba(168,85,247,0.2);color:#c4b5fd;cursor:pointer;">
           Is my agent looping?</button>
+        <button id="selfevolve-run-btn" onclick="selfevolveRun()"
+          title="Run a structured review of recent activity"
+          style="font-size:11px;padding:4px 10px;border-radius:12px;background:rgba(96,165,250,0.1);
+                 border:1px solid rgba(96,165,250,0.3);color:#93c5fd;cursor:pointer;display:none;">
+          🔄 Self-Evolve →</button>
       </div>
+      <div id="selfevolve-status" style="font-size:11px;color:var(--text-muted);margin-top:8px;"></div>
+      <div id="selfevolve-findings" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
       <div id="advisor-answer-wrap" style="display:none;margin-top:12px;">
         <div id="advisor-answer-q" style="
           font-size:12px;color:var(--text-muted);margin-bottom:6px;font-style:italic;"></div>
@@ -61,28 +68,6 @@
         <div id="advisor-answer-meta" style="
           font-size:11px;color:var(--text-muted);margin-top:6px;font-family:monospace;"></div>
       </div>
-    </div>
-
-    <!-- Self-Evolve: standing review of agent trajectory -->
-    <div id="selfevolve-card" style="
-      background:var(--bg-secondary);
-      border:1px solid var(--border);
-      border-radius:8px;
-      padding:14px 16px;
-      margin-bottom:12px;
-      display:none;
-      ">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:14px;font-weight:700;color:#60a5fa;">🔄 Self-Evolve</span>
-          <span style="font-size:11px;color:var(--text-muted);">how this agent could improve</span>
-        </div>
-        <button id="selfevolve-run-btn" onclick="selfevolveRun()"
-          style="padding:6px 14px;background:#2563eb;color:#fff;border:none;border-radius:8px;
-                 font-size:12px;font-weight:600;cursor:pointer;">Analyze</button>
-      </div>
-      <div id="selfevolve-status" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;"></div>
-      <div id="selfevolve-findings" style="display:flex;flex-direction:column;gap:8px;"></div>
     </div>
 
     <!-- Activity density chart -->
