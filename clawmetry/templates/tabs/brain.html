@@ -44,14 +44,17 @@
           style="font-size:11px;padding:4px 10px;border-radius:12px;background:rgba(168,85,247,0.1);
                  border:1px solid rgba(168,85,247,0.2);color:#c4b5fd;cursor:pointer;">
           Is my agent looping?</button>
-        <button id="selfevolve-run-btn" onclick="selfevolveRun()"
-          title="Run a structured review of recent activity"
-          style="font-size:11px;padding:4px 10px;border-radius:12px;background:rgba(96,165,250,0.1);
-                 border:1px solid rgba(96,165,250,0.3);color:#93c5fd;cursor:pointer;display:none;">
-          🔄 Self-Evolve →</button>
       </div>
-      <div id="selfevolve-status" style="font-size:11px;color:var(--text-muted);margin-top:8px;"></div>
-      <div id="selfevolve-findings" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
+      <!-- Contextual link to the standalone Self-Evolve page. Hidden until
+           the probe confirms auth, so users without Anthropic creds don't
+           see a dead-end link. -->
+      <div id="advisor-selfevolve-hint" style="display:none;margin-top:8px;font-size:11px;color:var(--text-muted);">
+        Want a structured review with severity-ranked findings instead?
+        <a href="#selfevolve" onclick="switchTab('selfevolve');return false;"
+           style="color:#60a5fa;text-decoration:none;font-weight:600;cursor:pointer;">
+          Run Self-Evolve →
+        </a>
+      </div>
       <div id="advisor-answer-wrap" style="display:none;margin-top:12px;">
         <div id="advisor-answer-q" style="
           font-size:12px;color:var(--text-muted);margin-bottom:6px;font-style:italic;"></div>
