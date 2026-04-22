@@ -230,9 +230,15 @@ def api_brain_history():
 
             with open(sf, "r", errors="replace") as fh:
                 all_lines = fh.readlines()
-                raw_lines = (
-                    all_lines[:20] + all_lines[-600:]
-                )  # first 20 (system context) + last 600
+                # Want: first 20 (system context) + last 600 (recent activity).
+                # For files <= 620 lines the two slices overlap and we end up
+                # parsing the same JSONL line twice -> duplicate events in the
+                # Brain feed (same timestamp, same source, same payload).
+                total = len(all_lines)
+                if total <= 620:
+                    raw_lines = all_lines
+                else:
+                    raw_lines = all_lines[:20] + all_lines[-600:]
 
             for raw in raw_lines:
                 raw = raw.strip()
@@ -456,6 +462,26 @@ def api_brain_history():
                     )
                 except Exception:
                     pass
+
+    # Belt-and-suspenders dedupe: identical (time, source, type, detail) tuples
+    # can sneak in from (a) overlapping file slices, (b) the same session being
+    # recorded in two log paths, or (c) the synthetic CONTEXT pass replaying an
+    # event already parsed from JSONL. Drop the second-and-later occurrence
+    # rather than letting them double-render in the feed.
+    seen_keys = set()
+    deduped = []
+    for ev in events:
+        key = (
+            ev.get("time", ""),
+            ev.get("source", ""),
+            ev.get("type", ""),
+            (ev.get("detail") or "")[:200],
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(ev)
+    events = deduped
 
     events.sort(
         key=lambda ev: ev.get("time", "") or "", reverse=True
