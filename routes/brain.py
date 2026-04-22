@@ -252,10 +252,14 @@ def api_brain_history():
                 role = obj.get("role", "")
                 content_obj = obj.get("content", "")
 
-                if obj.get("type") == "message":
+                # OpenClaw uses type=message; claude-cli uses type=user/assistant
+                # with the same {role,content} nested under obj.message.
+                if obj.get("type") in ("message", "user", "assistant") and isinstance(
+                    obj.get("message"), dict
+                ):
                     inner = obj.get("message", {})
-                    role = inner.get("role", "")
-                    content_obj = inner.get("content", [])
+                    role = inner.get("role", role) or obj.get("type", "")
+                    content_obj = inner.get("content", content_obj)
 
                 # System context (injected files, workspace context)
                 if role == "system" and ts:
@@ -621,10 +625,14 @@ def api_brain_stream():
             return None
         role = obj.get("role", "")
         content_obj = obj.get("content", "")
-        if obj.get("type") == "message":
+        # OpenClaw wraps via type=message; claude-cli uses type=user/assistant
+        # with the same {role,content} nested under obj.message. Unwrap both.
+        if obj.get("type") in ("message", "user", "assistant") and isinstance(
+            obj.get("message"), dict
+        ):
             inner = obj.get("message", {})
-            role = inner.get("role", "")
-            content_obj = inner.get("content", [])
+            role = inner.get("role", role) or obj.get("type", "")
+            content_obj = inner.get("content", content_obj)
 
         if role == "assistant" and isinstance(content_obj, list):
             for block in content_obj:
