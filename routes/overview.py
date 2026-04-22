@@ -527,6 +527,56 @@ def cloud_cta_status():
     return jsonify({"connected": bool(token)})
 
 
+@bp_overview.route(
+    "/api/cloud-proxy/<path:cloud_path>",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+def cloud_proxy(cloud_path):
+    """Forward an authenticated request to https://app.clawmetry.com/<path>.
+
+    Used by the Alerts tab (and anything else that needs cloud-side data) so
+    the cm_ token never has to leave the OSS dashboard. The token is read from
+    ~/.openclaw/openclaw.json.cloudToken and injected as Bearer.
+
+    Returns 401 if no cloud token is configured (UI shows the "Sign up for
+    Cloud" CTA in that case).
+    """
+    import dashboard as _d
+    import urllib.error
+    import urllib.request
+
+    token = _d._read_cloud_token()
+    if not token:
+        return jsonify({"error": "cloud_not_connected"}), 401
+
+    url = "https://app.clawmetry.com/" + cloud_path
+    if request.query_string:
+        url += "?" + request.query_string.decode("utf-8", errors="replace")
+
+    body = None
+    if request.method in ("POST", "PUT", "PATCH"):
+        body = request.get_data() or b""
+
+    headers = {
+        "Authorization": "Bearer " + token,
+        "Content-Type": request.headers.get("Content-Type", "application/json"),
+        "Accept": "application/json",
+    }
+
+    req = urllib.request.Request(url, data=body, headers=headers, method=request.method)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = resp.read()
+            ct = resp.headers.get("Content-Type", "application/json")
+            return (payload, resp.status, {"Content-Type": ct})
+    except urllib.error.HTTPError as e:
+        # Pass through 4xx/5xx with body so the UI can read 402 upgrade_required etc.
+        return (e.read() or b"{}", e.code,
+                {"Content-Type": e.headers.get("Content-Type", "application/json")})
+    except Exception as e:
+        return jsonify({"error": "proxy_failed", "detail": str(e)[:200]}), 502
+
+
 @bp_overview.route("/api/cloud-cta/send-otp", methods=["POST"])
 def cloud_cta_send_otp():
     import urllib.request as _ur

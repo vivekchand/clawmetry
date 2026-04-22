@@ -3486,6 +3486,62 @@ def sync_autonomy(config, state, paths):
         return 0
 
 
+ALERTS_EVAL_INTERVAL_SEC = 300  # Re-evaluate alerts every 5 minutes
+
+
+def evaluate_alerts(config: dict, state: dict) -> int:
+    """Trigger cloud-side alert evaluation for this node.
+
+    The cloud holds the rules and runs the actual threshold checks against the
+    sessions/events tables it already syncs from this daemon. We just poke the
+    `/api/internal/evaluate-alerts` endpoint on a schedule.
+
+    Throttled to ALERTS_EVAL_INTERVAL_SEC because:
+      - The 60s sync tick is unnecessarily aggressive for cost / heartbeat /
+        cron-failure rules
+      - Cloud also enforces a 1-hour debounce per alert (`_debounce_ok`), so
+        more frequent calls would waste cycles, not catch more incidents
+
+    Skips silently if the user has no cloud account configured -- alerts is a
+    Cloud-Pro-only feature (see project_alerts_pro_feature memory).
+    """
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not api_key or not api_key.startswith("cm_"):
+        return 0  # No cloud account: nothing to evaluate
+    if not node_id:
+        return 0
+
+    last = state.get("alerts_last_eval_ts", 0)
+    now = time.time()
+    if (now - last) < ALERTS_EVAL_INTERVAL_SEC:
+        return 0
+
+    try:
+        result = _post(
+            "/api/internal/evaluate-alerts",
+            {"node_id": node_id},
+            api_key,
+            timeout=20,
+        )
+        state["alerts_last_eval_ts"] = now
+        triggered = result.get("triggered") if isinstance(result, dict) else None
+        if triggered:
+            log.info(
+                "[alerts] evaluated %s rules, %s triggered",
+                result.get("evaluated", "?"),
+                len(triggered),
+            )
+        return len(triggered or [])
+    except Exception as e:
+        # Cloud may return 402 if user is on Free tier and alerts are gated;
+        # log once and don't keep retrying every cycle.
+        log.warning(f"alerts evaluation skipped: {e}")
+        # Still record the timestamp so we back off rather than retry on every tick
+        state["alerts_last_eval_ts"] = now
+        return 0
+
+
 def run_daemon() -> None:
     """Run the sync daemon - main loop for continuous synchronization."""
     config = load_config()
@@ -3503,6 +3559,7 @@ def run_daemon() -> None:
             sync_memory(config, state, paths)
             sync_system_snapshot(config, state, paths)
             sync_autonomy(config, state, paths)
+            evaluate_alerts(config, state)
             save_state(state)
         except Exception as e:
             log.error(f"Sync error: {e}")
