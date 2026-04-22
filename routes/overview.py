@@ -318,6 +318,50 @@ def api_overview():
         infra["storage"] = "Disk"
 
     model_name = main.get("model") or "unknown"
+
+    # Scan for recent prompt errors (openclaw:prompt-error events)
+    prompt_error_banner = None
+    try:
+        import glob
+
+        session_dir = _d.SESSIONS_DIR or os.path.expanduser(
+            "~/.openclaw/agents/main/sessions"
+        )
+        if os.path.isdir(session_dir):
+            session_files = sorted(
+                glob.glob(os.path.join(session_dir, "*.jsonl")),
+                key=os.path.getmtime,
+                reverse=True,
+            )[:10]  # Check last 10 sessions
+            for sf in session_files:
+                with open(sf, "r", errors="replace") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        if (
+                            obj.get("type") == "custom"
+                            and obj.get("customType") == "openclaw:prompt-error"
+                        ):
+                            data = obj.get("data", {}) or {}
+                            prompt_error_banner = {
+                                "type": "prompt_error",
+                                "severity": "warning",
+                                "message": f"Prompt error: {data.get('error', 'Unknown error')[:50]}...",
+                                "model": data.get("model", "unknown"),
+                                "provider": data.get("provider", "unknown"),
+                                "retries": data.get("retries", 0),
+                            }
+                            break
+                if prompt_error_banner:
+                    break
+    except Exception:
+        pass
+
     return jsonify(
         {
             "model": model_name,
@@ -335,6 +379,7 @@ def api_overview():
             "memorySize": total_size,
             "system": system,
             "infra": infra,
+            "banner": prompt_error_banner,
         }
     )
 

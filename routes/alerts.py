@@ -400,3 +400,83 @@ def api_alert_channels_test():
     if not sent:
         return jsonify({"ok": False, "error": "No configured webhook URL for selected target"}), 400
     return jsonify({"ok": True, "sent": sent})
+
+
+# ── Prompt Error Tracking Routes ──────────────────────────────────────────
+
+
+@bp_alerts.route("/api/prompt-errors")
+def api_prompt_errors():
+    """Scan recent session JSONLs for openclaw:prompt-error events.
+
+    Returns a list of prompt errors found in the last N sessions,
+    useful for catching failing model invocations before they cascade.
+    """
+    import dashboard as _d
+    import os
+    import glob
+    from datetime import datetime, timezone
+
+    session_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    errors = []
+    limit = request.args.get("limit", 10, type=int)
+
+    if not os.path.isdir(session_dir):
+        return jsonify({"errors": [], "count": 0, "banner": None})
+
+    # Get most recent JSONL files
+    session_files = sorted(
+        glob.glob(os.path.join(session_dir, "*.jsonl")),
+        key=os.path.getmtime,
+        reverse=True,
+    )[:20]  # Check last 20 sessions
+
+    for sf in session_files:
+        try:
+            with open(sf, "r", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    # Check for openclaw:prompt-error custom events
+                    if (
+                        obj.get("type") == "custom"
+                        and obj.get("customType") == "openclaw:prompt-error"
+                    ):
+                        data = obj.get("data", {}) or {}
+                        timestamp = obj.get("timestamp", "")
+                        error_info = {
+                            "timestamp": timestamp,
+                            "session_id": os.path.basename(sf).replace(".jsonl", ""),
+                            "error": data.get("error", "Unknown error"),
+                            "model": data.get("model", "unknown"),
+                            "provider": data.get("provider", "unknown"),
+                            "retries": data.get("retries", 0),
+                        }
+                        errors.append(error_info)
+                        if len(errors) >= limit:
+                            break
+        except Exception:
+            continue
+        if len(errors) >= limit:
+            break
+
+    # Build banner message for most recent error
+    banner = None
+    if errors:
+        latest = errors[0]
+        banner = {
+            "type": "prompt_error",
+            "severity": "warning",
+            "message": f"Prompt error: {latest['error'][:60]}... (model: {latest['model']})",
+            "count": len(errors),
+            "latest_at": latest["timestamp"],
+        }
+
+    return jsonify({"errors": errors[:limit], "count": len(errors), "banner": banner})
