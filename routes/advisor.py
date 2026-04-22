@@ -196,12 +196,18 @@ SYSTEM_PROMPT = (
 # ── LLM call ──────────────────────────────────────────────────────────────────
 
 
-def _call_anthropic_api(api_key: str, prompt: str) -> dict:
+def _call_anthropic_api(
+    api_key: str,
+    prompt: str,
+    system: str | None = None,
+    max_tokens: int = MAX_ANSWER_TOKENS,
+    timeout: int = REQUEST_TIMEOUT_SEC,
+) -> dict:
     """Direct call to /v1/messages with a real ANTHROPIC_API_KEY."""
     body = {
         "model": DEFAULT_MODEL,
-        "max_tokens": MAX_ANSWER_TOKENS,
-        "system": SYSTEM_PROMPT,
+        "max_tokens": max_tokens,
+        "system": system or SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": prompt}],
     }
     headers = {
@@ -216,7 +222,7 @@ def _call_anthropic_api(api_key: str, prompt: str) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", errors="replace")
@@ -225,20 +231,25 @@ def _call_anthropic_api(api_key: str, prompt: str) -> dict:
         return {"_error": True, "status": 0, "body": str(e)[:500]}
 
 
-def _call_via_claude_cli(claude_bin: str, prompt: str) -> dict:
+def _call_via_claude_cli(
+    claude_bin: str,
+    prompt: str,
+    system: str | None = None,
+    timeout: int = REQUEST_TIMEOUT_SEC,
+) -> dict:
     """Shell out to `claude -p` so OAuth-only users still work.
 
     Normalise the response into the same shape `_call_anthropic_api`
     returns (content blocks + usage) so the endpoint stays uniform.
     """
-    full_prompt = SYSTEM_PROMPT + "\n\n---\n\n" + prompt
+    full_prompt = (system or SYSTEM_PROMPT) + "\n\n---\n\n" + prompt
     try:
         proc = subprocess.run(
             [claude_bin, "-p"],
             input=full_prompt,
             capture_output=True,
             text=True,
-            timeout=REQUEST_TIMEOUT_SEC,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         return {"_error": True, "status": 504, "body": "claude CLI timed out"}

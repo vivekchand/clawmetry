@@ -63,6 +63,28 @@
       </div>
     </div>
 
+    <!-- Self-Evolve: standing review of agent trajectory -->
+    <div id="selfevolve-card" style="
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:14px 16px;
+      margin-bottom:12px;
+      display:none;
+      ">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:14px;font-weight:700;color:#60a5fa;">🔄 Self-Evolve</span>
+          <span style="font-size:11px;color:var(--text-muted);">how this agent could improve</span>
+        </div>
+        <button id="selfevolve-run-btn" onclick="selfevolveRun()"
+          style="padding:6px 14px;background:#2563eb;color:#fff;border:none;border-radius:8px;
+                 font-size:12px;font-weight:600;cursor:pointer;">Analyze</button>
+      </div>
+      <div id="selfevolve-status" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;"></div>
+      <div id="selfevolve-findings" style="display:flex;flex-direction:column;gap:8px;"></div>
+    </div>
+
     <!-- Activity density chart -->
     <div style="
       background:var(--bg-secondary);
