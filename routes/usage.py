@@ -61,6 +61,10 @@ def api_usage():
     analytics = _d._compute_transcript_analytics()
     daily_tokens = analytics.get("daily_tokens", {})
     daily_cost = analytics.get("daily_cost", {})
+    daily_input_tokens = analytics.get("daily_input_tokens", {})
+    daily_output_tokens = analytics.get("daily_output_tokens", {})
+    daily_cache_read_tokens = analytics.get("daily_cache_read_tokens", {})
+    daily_cache_write_tokens = analytics.get("daily_cache_write_tokens", {})
     model_usage = analytics.get("model_usage", {})
     session_summaries = analytics.get("sessions", [])
     session_costs = {
@@ -69,7 +73,7 @@ def api_usage():
     }
     anomalies = _d._compute_session_cost_anomalies(session_summaries)
 
-    # Build response data
+    # Build response data with cache token breakdown
     today = datetime.now()
     days = []
     for i in range(13, -1, -1):
@@ -80,6 +84,10 @@ def api_usage():
                 "date": ds,
                 "tokens": daily_tokens.get(ds, 0),
                 "cost": daily_cost.get(ds, 0),
+                "inputTokens": daily_input_tokens.get(ds, 0),
+                "outputTokens": daily_output_tokens.get(ds, 0),
+                "cacheReadTokens": daily_cache_read_tokens.get(ds, 0),
+                "cacheWriteTokens": daily_cache_write_tokens.get(ds, 0),
             }
         )
 
@@ -1066,4 +1074,159 @@ def api_token_velocity():
         'velocity_2min':    total_tokens_2min,
         'cost_per_min':     cost_per_min,
         'flagged_sessions': flagged,
+    })
+
+
+@bp_usage.route('/api/token-attribution')
+def api_token_attribution():
+    """Per-message cost attribution with cache token breakdown.
+
+    Returns granular token/cost breakdown per message type (input, output, cache-read, cache-write)
+    for the specified session or across recent sessions.
+    """
+    import dashboard as _d
+
+    wanted_sid = request.args.get('session_id', '').strip()
+    try:
+        limit = max(1, min(int(request.args.get('limit', '100')), 1000))
+    except ValueError:
+        limit = 100
+
+    sessions_dir = _d._get_sessions_dir()
+    if not os.path.isdir(sessions_dir):
+        return jsonify({"messages": [], "totals": {}, "note": "sessions dir not found"})
+
+    try:
+        all_files = [
+            f for f in os.listdir(sessions_dir)
+            if f.endswith('.jsonl') and '.deleted.' not in f and '.reset.' not in f
+        ]
+    except OSError:
+        all_files = []
+
+    if wanted_sid:
+        files = [f for f in all_files if f.startswith(wanted_sid)]
+    else:
+        files = sorted(
+            all_files,
+            key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+            reverse=True
+        )[:50]
+
+    messages = []
+    totals = {
+        'input_tokens': 0,
+        'output_tokens': 0,
+        'cache_read_tokens': 0,
+        'cache_write_tokens': 0,
+        'total_tokens': 0,
+        'input_cost': 0.0,
+        'output_cost': 0.0,
+        'cache_read_cost': 0.0,
+        'cache_write_cost': 0.0,
+        'total_cost': 0.0,
+    }
+
+    for fname in files:
+        fpath = os.path.join(sessions_dir, fname)
+        sid = fname[:-6] if fname.endswith('.jsonl') else fname
+
+        try:
+            with open(fpath, 'r', errors='replace') as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+
+                    if ev.get('type') != 'message':
+                        continue
+
+                    msg = ev.get('message', {}) or {}
+                    if not isinstance(msg, dict):
+                        continue
+
+                    usage = msg.get('usage', {}) or {}
+                    if not isinstance(usage, dict) or not usage:
+                        continue
+
+                    # Get token breakdown
+                    input_tok = int(usage.get('input', usage.get('input_tokens', 0)) or 0)
+                    output_tok = int(usage.get('output', usage.get('output_tokens', 0)) or 0)
+                    cache_read = int(usage.get('cacheRead', usage.get('cache_read_tokens', 0)) or 0)
+                    cache_write = int(usage.get('cacheWrite', usage.get('cache_write_tokens', 0)) or 0)
+
+                    # Get cost breakdown
+                    cost_obj = usage.get('cost', {}) or {}
+                    if isinstance(cost_obj, dict):
+                        input_cost = float(cost_obj.get('input', 0) or 0)
+                        output_cost = float(cost_obj.get('output', 0) or 0)
+                        cache_read_cost = float(cost_obj.get('cacheRead', 0) or 0)
+                        cache_write_cost = float(cost_obj.get('cacheWrite', 0) or 0)
+                        total_cost = float(cost_obj.get('total', cost_obj.get('usd', 0)) or 0)
+                    else:
+                        input_cost = output_cost = cache_read_cost = cache_write_cost = total_cost = 0.0
+
+                    total_tok = input_tok + output_tok + cache_read + cache_write
+
+                    if total_tok == 0:
+                        continue
+
+                    msg_data = {
+                        'session_id': sid,
+                        'timestamp': ev.get('timestamp') or ev.get('time') or ev.get('created_at'),
+                        'model': msg.get('model', 'unknown'),
+                        'role': msg.get('role', 'unknown'),
+                        'tokens': {
+                            'input': input_tok,
+                            'output': output_tok,
+                            'cache_read': cache_read,
+                            'cache_write': cache_write,
+                            'total': total_tok,
+                        },
+                        'cost': {
+                            'input': round(input_cost, 8),
+                            'output': round(output_cost, 8),
+                            'cache_read': round(cache_read_cost, 8),
+                            'cache_write': round(cache_write_cost, 8),
+                            'total': round(total_cost, 8),
+                        },
+                        'cache_hit_ratio': round(cache_read / (input_tok + cache_read) * 100, 1) if (input_tok + cache_read) > 0 else 0.0,
+                    }
+
+                    messages.append(msg_data)
+
+                    # Update totals
+                    totals['input_tokens'] += input_tok
+                    totals['output_tokens'] += output_tok
+                    totals['cache_read_tokens'] += cache_read
+                    totals['cache_write_tokens'] += cache_write
+                    totals['total_tokens'] += total_tok
+                    totals['input_cost'] += input_cost
+                    totals['output_cost'] += output_cost
+                    totals['cache_read_cost'] += cache_read_cost
+                    totals['cache_write_cost'] += cache_write_cost
+                    totals['total_cost'] += total_cost
+        except Exception:
+            continue
+
+    # Round totals
+    for k in ['input_cost', 'output_cost', 'cache_read_cost', 'cache_write_cost', 'total_cost']:
+        totals[k] = round(totals[k], 6)
+
+    # Sort by timestamp descending and apply limit
+    messages.sort(key=lambda m: m.get('timestamp', ''), reverse=True)
+    messages = messages[:limit]
+
+    # Calculate cache hit ratio
+    input_plus_cache = totals['input_tokens'] + totals['cache_read_tokens']
+    totals['cache_hit_ratio_pct'] = round(totals['cache_read_tokens'] / input_plus_cache * 100, 1) if input_plus_cache else 0.0
+
+    return jsonify({
+        'messages': messages,
+        'totals': totals,
+        'session_id': wanted_sid if wanted_sid else None,
     })
