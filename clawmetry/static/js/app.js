@@ -527,6 +527,7 @@ function switchTab(name) {
   if (name === 'context') loadContextInspector();
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
+  if (name === 'selfevolve') loadSelfEvolvePage();
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
@@ -2790,22 +2791,41 @@ function selfevolveRenderFindings(payload) {
     status.textContent = meta.join(' · ');
   }
 }
+// Self-Evolve is intentionally NOT in the top nav (option C: discoverable via
+// a contextual link on the Brain tab + deep-link). The probe's job here is
+// twofold: (1) reveal the contextual link inside the Advisor card when auth
+// is available, and (2) on direct visits to #selfevolve, render the cached
+// payload or show the appropriate empty/no-auth state.
 async function selfevolveProbe() {
   try {
     var s = await fetchJsonWithTimeout('/api/selfevolve/status', 3000);
-    if (!s || !s.available) return;
-    var btn = document.getElementById('selfevolve-run-btn');
-    if (btn) btn.style.display = '';
+    var hint = document.getElementById('advisor-selfevolve-hint');
+    var noauth = document.getElementById('selfevolve-noauth');
+    var empty = document.getElementById('selfevolve-empty');
+    var runBtn = document.getElementById('selfevolve-run-btn');
+    if (!s || !s.available) {
+      if (hint) hint.style.display = 'none';
+      if (noauth) noauth.style.display = '';
+      if (runBtn) runBtn.disabled = true;
+      return;
+    }
+    if (hint) hint.style.display = '';
+    if (noauth) noauth.style.display = 'none';
     if (s.has_cached) {
       try {
         var cached = await fetchJsonWithTimeout('/api/selfevolve/latest', 3000);
         if (cached && (cached.findings || []).length) {
           selfevolveRenderFindings(cached);
-          if (btn) btn.textContent = '🔄 Re-analyze';
+          if (runBtn) runBtn.textContent = 'Re-analyze';
+          return;
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) { /* fall through to empty state */ }
     }
-  } catch (e) { /* keep hidden */ }
+    if (empty) empty.style.display = '';
+  } catch (e) { /* silent */ }
+}
+async function loadSelfEvolvePage() {
+  return selfevolveProbe();
 }
 window.selfevolveRun = async function () {
   var btn = document.getElementById('selfevolve-run-btn');

@@ -8585,6 +8585,9 @@ DASHBOARD_HTML = r"""
 <!-- BRAIN -->
 {% include 'tabs/brain.html' %}
 
+<!-- SELF-EVOLVE -->
+{% include 'tabs/selfevolve.html' %}
+
 <!-- CONTEXT INSPECTOR -->
 {% include 'tabs/context.html' %}
 
