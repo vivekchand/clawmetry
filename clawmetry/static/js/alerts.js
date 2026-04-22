@@ -23,6 +23,27 @@
     editorType: 'node_offline',
   };
 
+  // Canned example rules shown to OSS-only / no-cloud users. Users can edit
+  // these (change threshold, channels, name) before being asked to sign up --
+  // investing in configuration first improves conversion.
+  const EXAMPLE_RULES = [
+    { id: 'example_cost',  alert_type: 'daily_spend',  name: 'Daily spend > $50',
+      threshold_value: 50, threshold_unit: 'USD',
+      _exampleChannels: '💬 Slack · ✉️ Email' },
+    { id: 'example_agent', alert_type: 'node_offline', name: 'Agent offline > 10 min',
+      threshold_value: 10, threshold_unit: 'min',
+      _exampleChannels: '📟 PagerDuty' },
+    { id: 'example_session', alert_type: 'session_cost', name: 'Session cost > $5',
+      threshold_value: 5, threshold_unit: 'USD',
+      _exampleChannels: '✉️ Email' },
+    { id: 'example_cron', alert_type: 'cron_failure', name: 'Cron failed 3× in a row',
+      threshold_value: 3, threshold_unit: 'fails',
+      _exampleChannels: '💬 Slack · ✈️ Telegram' },
+    { id: 'example_tool', alert_type: 'error_rate', name: 'Tool failures > 5/hr',
+      threshold_value: 5, threshold_unit: '%',
+      _exampleChannels: '✉️ Email' },
+  ];
+
   // ── Tier resolution ───────────────────────────────────────────────────────
 
   async function resolveTier() {
@@ -142,27 +163,20 @@
   }
 
   function renderCannedExamples() {
-    const examples = [
-      { type: 'daily_spend', name: 'Daily spend > $50', threshold: 50, unit: 'USD', channels: '💬 Slack · ✉️ Email' },
-      { type: 'node_offline', name: 'Agent offline > 10 min', threshold: 10, unit: 'min', channels: '📟 PagerDuty' },
-      { type: 'session_cost', name: 'Session tokens > 1M', threshold: 1000000, unit: 'tokens', channels: '✉️ Email' },
-      { type: 'cron_failure', name: 'Cron failed 3× in a row', threshold: 3, unit: 'fails', channels: '💬 Slack · ✈️ Telegram' },
-      { type: 'error_rate', name: 'Tool failures > 5/hr', threshold: 5, unit: '/hr', channels: '✉️ Email' },
-    ];
     const wrap = document.getElementById('alerts-rules-list');
-    wrap.innerHTML = examples.map(ex => {
-      const meta = RULE_TYPE_LABELS[ex.type];
+    wrap.innerHTML = EXAMPLE_RULES.map(ex => {
+      const meta = RULE_TYPE_LABELS[ex.alert_type];
       return `
-        <div class="alerts-rule-row alerts-rule-example" onclick="alertsHandleNewRule()">
+        <div class="alerts-rule-row alerts-rule-example" onclick="alertsHandleEdit('${ex.id}')">
           <div class="alerts-rule-dot off"></div>
           <div class="alerts-rule-main">
             <div class="alerts-rule-title">${meta.icon} ${escape(ex.name)}
               <span class="alerts-rule-example-badge">example</span>
             </div>
-            <div class="alerts-rule-meta">Tap to enable — requires Cloud Pro</div>
+            <div class="alerts-rule-meta">Tap to customize — saves require Cloud Pro</div>
           </div>
-          <div class="alerts-rule-chan"><span class="alerts-chan-pill off">${ex.channels}</span></div>
-          <button class="alerts-btn-ghost" onclick="event.stopPropagation();alertsHandleNewRule()">Enable</button>
+          <div class="alerts-rule-chan"><span class="alerts-chan-pill off">${ex._exampleChannels}</span></div>
+          <button class="alerts-btn-ghost" onclick="event.stopPropagation();alertsHandleEdit('${ex.id}')">Edit</button>
         </div>
       `;
     }).join('');
@@ -206,25 +220,23 @@
   // ── Action handlers (paywall-aware) ───────────────────────────────────────
 
   window.alertsHandleNewRule = function () {
-    if (alertsState.tier === 'pro' || alertsState.tier === 'trial') {
-      alertsState.editorRule = null;
-      alertsState.editorType = 'node_offline';
-      openEditor();
-    } else {
-      openPaywall();
-    }
+    // Open editor for everyone -- Free/OSS users can configure first; the
+    // paywall fires on Save (better conversion than gating at click time).
+    alertsState.editorRule = null;
+    alertsState.editorType = 'node_offline';
+    openEditor();
   };
 
   window.alertsHandleEdit = function (ruleId) {
-    if (alertsState.tier === 'pro' || alertsState.tier === 'trial') {
-      const rule = alertsState.rules.find(r => r.id === ruleId);
-      if (!rule) return;
-      alertsState.editorRule = rule;
-      alertsState.editorType = rule.alert_type;
-      openEditor();
-    } else {
-      openPaywall();
+    // Look up either a real rule (Pro tier) or a canned example (Free/OSS).
+    let rule = alertsState.rules.find(r => r.id === ruleId);
+    if (!rule) {
+      rule = EXAMPLE_RULES.find(r => r.id === ruleId);
     }
+    if (!rule) return;
+    alertsState.editorRule = rule;
+    alertsState.editorType = rule.alert_type;
+    openEditor();
   };
 
   window.alertsHandleManageChannels = function () {
@@ -380,6 +392,16 @@
     const channelIds = [...document.querySelectorAll('#alerts-editor-channels input:checked')]
       .map(i => i.dataset.channelId);
     const policy = document.querySelector('input[name="alerts-re"]:checked')?.value || 'once';
+
+    // Editing a canned example or saving on a non-Pro tier: fire the paywall
+    // here, AFTER the user has configured the rule. They're more invested by
+    // this point -- better conversion than gating on first click.
+    const editingExample = alertsState.editorRule
+      && String(alertsState.editorRule.id || '').startsWith('example_');
+    if (editingExample || (alertsState.tier !== 'pro' && alertsState.tier !== 'trial')) {
+      window.alertsCloseEditor();
+      return openPaywall();
+    }
 
     const body = {
       alert_type: alertsState.editorType,
