@@ -1057,6 +1057,158 @@ def sync_sessions_recent(
     return total
 
 
+# ── Sync: claude-cli backend transcripts ──────────────────────────────────────
+# OpenClaw routes most chat (TUI, Telegram, etc.) through the agent/cli-backend
+# plugin, which delegates to the Claude Code CLI. Claude CLI writes the actual
+# transcript to ~/.claude/projects/<workspace-slug>/<cli-session-id>.jsonl --
+# NOT to OpenClaw's own session jsonl. Without this adapter the cloud Brain
+# feed stays frozen at the last bootstrap event and misses every real message.
+
+
+def _claude_projects_root() -> Path:
+    """Return Claude Code's projects directory."""
+    custom = os.environ.get("CLAUDE_CONFIG_DIR")
+    if custom:
+        return Path(os.path.expanduser(custom)) / "projects"
+    return Path(os.path.expanduser("~/.claude/projects"))
+
+
+def _claude_project_slug(workspace_path: str) -> str:
+    """Encode a workspace path the same way Claude Code does.
+
+    Claude Code replaces every '/' and '.' in the absolute workspace path with
+    '-'. Example: '/Users/vivek/.openclaw/workspace' becomes
+    '-Users-vivek--openclaw-workspace'.
+    """
+    import re
+    return re.sub(r"[/.]", "-", workspace_path)
+
+
+def _translate_claude_cli_event(obj: dict) -> dict:
+    """Map claude-cli jsonl event keys onto OpenClaw event keys.
+
+    The cloud Brain parser keys off 'id', 'parentId', 'type', 'timestamp',
+    and 'message'. Claude CLI uses 'uuid' / 'parentUuid' for the first two;
+    everything else lines up. We rename in-place and pass the rest through
+    so cost/usage/tool fields survive without per-version translation.
+    """
+    out = dict(obj)
+    if "uuid" in out and "id" not in out:
+        out["id"] = out.pop("uuid")
+    if "parentUuid" in out and "parentId" not in out:
+        out["parentId"] = out.pop("parentUuid")
+    return out
+
+
+def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
+    """Tail claude-cli transcripts and push them under the OpenClaw session_file.
+
+    For each entry in `agents/main/sessions/sessions.json` that carries a
+    `claudeCliSessionId`, locate the matching jsonl in
+    `~/.claude/projects/<workspace-slug>/`, tail new lines, translate them,
+    and push via `_flush_session_batch` using the OpenClaw session_file
+    basename. The cloud correlates events to the existing session row by
+    that basename, so no cloud-side change is required.
+    """
+    sessions_dir = paths.get("sessions_dir") or ""
+    workspace = paths.get("workspace") or ""
+    if not sessions_dir or not workspace:
+        return 0
+
+    api_key = config["api_key"]
+    enc_key = config.get("encryption_key")
+    node_id = config["node_id"]
+
+    index_path = os.path.join(sessions_dir, "sessions.json")
+    if not os.path.isfile(index_path):
+        return 0
+    try:
+        with open(index_path) as fi:
+            idx = json.load(fi)
+    except Exception:
+        return 0
+
+    project_dir = _claude_projects_root() / _claude_project_slug(workspace)
+    if not project_dir.is_dir():
+        return 0
+
+    targets: list[tuple[str, str]] = []  # (claude_jsonl_path, openclaw_basename)
+    for sess_key, meta in idx.items():
+        if not isinstance(meta, dict):
+            continue
+        cli_id = meta.get("claudeCliSessionId") or (
+            meta.get("cliSessionIds", {}) or {}
+        ).get("claude-cli")
+        if not cli_id:
+            continue
+        cli_path = project_dir / f"{cli_id}.jsonl"
+        if not cli_path.is_file():
+            continue
+        oc_sf = meta.get("sessionFile", "")
+        # Fall back to <openclaw_session_id>.jsonl when sessionFile is absent
+        # (e.g. Telegram session metadata exists but the OpenClaw jsonl was
+        # never written). Cloud will create the session row from these events.
+        oc_basename = (
+            os.path.basename(oc_sf)
+            if oc_sf
+            else f"{meta.get('sessionId', cli_id)}.jsonl"
+        )
+        targets.append((str(cli_path), oc_basename))
+
+    if not targets:
+        return 0
+
+    # Separate offset namespace so it can't collide with OpenClaw jsonl offsets.
+    cli_offsets: dict = state.setdefault("last_event_ids_cli", {})
+    total = 0
+
+    for cli_path, oc_basename in targets:
+        if total >= MAX_EVENTS_PER_CYCLE:
+            break
+
+        offset_key = os.path.basename(cli_path)
+        last_line = cli_offsets.get(offset_key, 0)
+        batch: list[dict] = []
+
+        try:
+            with open(cli_path, "r", errors="replace") as f:
+                new_lines = list(islice(f, last_line, None))
+
+            line_cursor = last_line
+            for i, raw in enumerate(new_lines, start=last_line):
+                raw = raw.strip()
+                if not raw:
+                    line_cursor = i + 1
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except Exception:
+                    line_cursor = i + 1
+                    continue
+                batch.append(_translate_claude_cli_event(obj))
+                line_cursor = i + 1
+                if len(batch) >= BATCH_SIZE:
+                    _flush_session_batch(
+                        batch, oc_basename, api_key, enc_key, node_id
+                    )
+                    total += len(batch)
+                    batch = []
+                    cli_offsets[offset_key] = line_cursor
+                    if total >= MAX_EVENTS_PER_CYCLE:
+                        break
+
+            if batch:
+                _flush_session_batch(batch, oc_basename, api_key, enc_key, node_id)
+                total += len(batch)
+
+            cli_offsets[offset_key] = line_cursor
+
+        except Exception as e:
+            log.warning(f"claude-cli sync error ({offset_key}): {e}")
+
+    return total
+
+
 # ── Sync: logs (full lines, encrypted) ────────────────────────────────────────
 
 
@@ -3126,6 +3278,7 @@ def run_daemon() -> None:
                 snap = sync_system_snapshot(config, state, paths)  # subagents + flow
                 last_snapshot = now_snap
             ev = sync_sessions(config, state, paths)
+            ev += sync_claude_cli_sessions(config, state, paths)
             sm = sync_session_metadata(config, state)
             crons = sync_crons(config, state, paths)
 
@@ -3554,6 +3707,7 @@ def run_daemon() -> None:
         try:
             sync_session_metadata(config, state)
             sync_sessions(config, state, paths)
+            sync_claude_cli_sessions(config, state, paths)
             sync_logs(config, state, paths)
             sync_crons(config, state, paths)
             sync_memory(config, state, paths)
