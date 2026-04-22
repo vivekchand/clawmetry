@@ -2794,12 +2794,15 @@ async function selfevolveProbe() {
   try {
     var s = await fetchJsonWithTimeout('/api/selfevolve/status', 3000);
     if (!s || !s.available) return;
-    var card = document.getElementById('selfevolve-card');
-    if (card) card.style.display = '';
+    var btn = document.getElementById('selfevolve-run-btn');
+    if (btn) btn.style.display = '';
     if (s.has_cached) {
       try {
         var cached = await fetchJsonWithTimeout('/api/selfevolve/latest', 3000);
-        if (cached && (cached.findings || []).length) selfevolveRenderFindings(cached);
+        if (cached && (cached.findings || []).length) {
+          selfevolveRenderFindings(cached);
+          if (btn) btn.textContent = '🔄 Re-analyze';
+        }
       } catch (e) { /* ignore */ }
     }
   } catch (e) { /* keep hidden */ }
@@ -2807,6 +2810,7 @@ async function selfevolveProbe() {
 window.selfevolveRun = async function () {
   var btn = document.getElementById('selfevolve-run-btn');
   var status = document.getElementById('selfevolve-status');
+  var origText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; btn.style.opacity = '0.6'; }
   if (status) status.textContent = 'Reviewing recent activity — this takes ~15 seconds…';
   try {
@@ -2820,7 +2824,7 @@ window.selfevolveRun = async function () {
   } catch (e) {
     if (status) status.textContent = 'Network error: ' + e.message;
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Re-analyze'; btn.style.opacity = ''; }
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Re-analyze'; btn.style.opacity = ''; }
   }
 };
 
