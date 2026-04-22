@@ -2734,9 +2734,99 @@ window.advisorAsk = async function () {
   }
 };
 
+// ── Self-Evolve: LLM-backed standing review of the agent's trajectory ─────
+function selfevolveSeverityColor(sev) {
+  if (sev === 'high') return { bg: 'rgba(239,68,68,0.12)', border: '#ef4444', text: '#fca5a5' };
+  if (sev === 'low')  return { bg: 'rgba(16,185,129,0.1)', border: '#10b981', text: '#6ee7b7' };
+  return { bg: 'rgba(234,179,8,0.12)', border: '#eab308', text: '#fde68a' };
+}
+function selfevolveCategoryIcon(cat) {
+  return ({
+    cost: '💰', reliability: '⚠️', latency: '🐢',
+    prompt: '📝', model: '🎛️', loop: '🔁',
+  })[cat] || '•';
+}
+function selfevolveRenderFindings(payload) {
+  var container = document.getElementById('selfevolve-findings');
+  var status = document.getElementById('selfevolve-status');
+  if (!container) return;
+  container.innerHTML = '';
+  var findings = (payload && payload.findings) || [];
+  if (payload && payload.insufficient) {
+    container.innerHTML = '<div style="padding:10px 12px;color:var(--text-muted);font-size:12px;">' +
+      'Not enough data yet — ' + (payload.reason || 'keep the agent running for a while') + '</div>';
+  } else if (!findings.length) {
+    container.innerHTML = '<div style="padding:10px 12px;color:var(--text-muted);font-size:12px;">' +
+      'No findings yet. Click Analyze to review recent activity.</div>';
+  } else {
+    findings.forEach(function (f) {
+      var col = selfevolveSeverityColor(f.severity);
+      var card = document.createElement('div');
+      card.style.cssText =
+        'padding:10px 12px;background:' + col.bg + ';border:1px solid ' + col.border + ';' +
+        'border-left-width:3px;border-radius:6px;';
+      card.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">' +
+          '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' +
+            selfevolveCategoryIcon(f.category) + ' ' + (f.title || '(untitled)') +
+          '</div>' +
+          '<span style="font-size:10px;font-weight:700;text-transform:uppercase;color:' + col.text +
+            ';padding:2px 8px;border-radius:10px;border:1px solid ' + col.border + ';">' +
+            (f.severity || 'medium') +
+          '</span>' +
+        '</div>' +
+        (f.evidence ? '<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;line-height:1.5;">' +
+          '<strong style="color:var(--text-secondary);">Evidence:</strong> ' + escapeHtml(f.evidence) + '</div>' : '') +
+        (f.suggestion ? '<div style="font-size:12px;color:var(--text-primary);line-height:1.5;">' +
+          '<strong style="color:#60a5fa;">Try:</strong> ' + escapeHtml(f.suggestion) + '</div>' : '');
+      container.appendChild(card);
+    });
+  }
+  if (status) {
+    var meta = [];
+    if (payload.generated_at) meta.push('analyzed ' + new Date(payload.generated_at * 1000).toLocaleTimeString());
+    if (payload.events_considered) meta.push(payload.events_considered + ' events');
+    if (payload.model) meta.push(payload.model);
+    status.textContent = meta.join(' · ');
+  }
+}
+async function selfevolveProbe() {
+  try {
+    var s = await fetchJsonWithTimeout('/api/selfevolve/status', 3000);
+    if (!s || !s.available) return;
+    var card = document.getElementById('selfevolve-card');
+    if (card) card.style.display = '';
+    if (s.has_cached) {
+      try {
+        var cached = await fetchJsonWithTimeout('/api/selfevolve/latest', 3000);
+        if (cached && (cached.findings || []).length) selfevolveRenderFindings(cached);
+      } catch (e) { /* ignore */ }
+    }
+  } catch (e) { /* keep hidden */ }
+}
+window.selfevolveRun = async function () {
+  var btn = document.getElementById('selfevolve-run-btn');
+  var status = document.getElementById('selfevolve-status');
+  if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; btn.style.opacity = '0.6'; }
+  if (status) status.textContent = 'Reviewing recent activity — this takes ~15 seconds…';
+  try {
+    var resp = await fetch('/api/selfevolve/analyze', { method: 'POST' });
+    var d = await resp.json();
+    if (!resp.ok) {
+      if (status) status.textContent = (d && d.message) || (d && d.detail) || ('Error ' + resp.status);
+      return;
+    }
+    selfevolveRenderFindings(d);
+  } catch (e) {
+    if (status) status.textContent = 'Network error: ' + e.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Re-analyze'; btn.style.opacity = ''; }
+  }
+};
+
 async function loadBrainPage(silent) {
   if (window.CLOUD_MODE) return;
-  if (!silent) advisorProbe();
+  if (!silent) { advisorProbe(); selfevolveProbe(); }
   try {
     var data = await fetchJsonWithTimeout('/api/brain-history', 8000);
     var events = (data.events || []).slice().sort(function(a,b){
