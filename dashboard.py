@@ -67,6 +67,7 @@ from flask import (
 # truth for module-level helpers — see routes/sessions.py for the pattern.
 from routes.sessions import bp_sessions
 from routes.brain import bp_brain
+from routes.advisor import bp_advisor
 
 # Module-level helpers extracted to helpers/*.py (Phase 6 modularisation).
 # Re-exported here so existing `_d.<name>` references in routes/*.py keep
@@ -8267,6 +8268,7 @@ def detect_config(args=None):
         USER_NAME = "You"
 
     # ── Register blueprints (Phase 4) ───────────────────────────────────────
+    app.register_blueprint(bp_advisor)
     app.register_blueprint(bp_alerts)
     app.register_blueprint(bp_autonomy)
     app.register_blueprint(bp_auth)

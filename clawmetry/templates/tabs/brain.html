@@ -8,6 +8,49 @@
         gap:8px;
         "><span id="brain-live-indicator"></span><button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button></div>
     </div>
+    <!-- Advisor: ask questions about your agent's activity -->
+    <div id="advisor-card" style="
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:10px 14px;
+      margin-bottom:12px;
+      display:none;
+      ">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span style="font-size:13px;font-weight:600;color:var(--text-primary);">✨ Advisor</span>
+        <span style="font-size:11px;color:var(--text-muted);">ask anything about this agent's activity</span>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <input id="advisor-q" type="text"
+          placeholder="e.g. why did my last run cost so much?"
+          onkeydown="if(event.key==='Enter')advisorAsk()"
+          style="flex:1;padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border);
+                 border-radius:6px;color:var(--text-primary);font-size:13px;" />
+        <button onclick="advisorAsk()"
+          style="padding:8px 14px;background:#a855f7;color:#fff;border:none;border-radius:6px;
+                 font-size:12px;font-weight:600;cursor:pointer;">Ask</button>
+      </div>
+      <div id="advisor-suggestions" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+        <button class="advisor-sugg" onclick="advisorPrefill('Why did my last run cost so much?')"
+          style="font-size:11px;padding:3px 8px;border-radius:10px;background:var(--bg-hover);
+                 border:1px solid var(--border-secondary);color:var(--text-secondary);cursor:pointer;">
+          Why did my last run cost so much?</button>
+        <button class="advisor-sugg" onclick="advisorPrefill('Which tool is failing most often?')"
+          style="font-size:11px;padding:3px 8px;border-radius:10px;background:var(--bg-hover);
+                 border:1px solid var(--border-secondary);color:var(--text-secondary);cursor:pointer;">
+          Which tool is failing most often?</button>
+        <button class="advisor-sugg" onclick="advisorPrefill('Is my agent looping?')"
+          style="font-size:11px;padding:3px 8px;border-radius:10px;background:var(--bg-hover);
+                 border:1px solid var(--border-secondary);color:var(--text-secondary);cursor:pointer;">
+          Is my agent looping?</button>
+      </div>
+      <div id="advisor-answer" style="
+        display:none;margin-top:10px;padding:10px 12px;background:var(--bg-primary);
+        border-left:3px solid #a855f7;border-radius:4px;font-size:13px;line-height:1.5;
+        color:var(--text-primary);white-space:pre-wrap;"></div>
+    </div>
+
     <!-- Activity density chart -->
     <div style="
       background:var(--bg-secondary);

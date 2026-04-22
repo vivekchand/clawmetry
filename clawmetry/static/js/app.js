@@ -2662,8 +2662,51 @@ function _fmtTokens(n) {
   return String(n);
 }
 
+// ── Advisor: natural-language Q&A over the agent's recent activity ─────────
+async function advisorProbe() {
+  try {
+    var s = await fetchJsonWithTimeout('/api/advisor/status', 3000);
+    if (s && s.available) {
+      var card = document.getElementById('advisor-card');
+      if (card) card.style.display = '';
+    }
+  } catch (e) { /* keep hidden */ }
+}
+window.advisorPrefill = function (q) {
+  var el = document.getElementById('advisor-q');
+  if (el) { el.value = q; el.focus(); }
+};
+window.advisorAsk = async function () {
+  var input = document.getElementById('advisor-q');
+  var out = document.getElementById('advisor-answer');
+  var q = (input && input.value || '').trim();
+  if (!q || !out) return;
+  out.style.display = '';
+  out.textContent = 'Thinking…';
+  try {
+    var resp = await fetch('/api/advisor/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q }),
+    });
+    var d = await resp.json();
+    if (!resp.ok) {
+      out.textContent = (d && d.message) || (d && d.detail) || ('Error ' + resp.status);
+      return;
+    }
+    var meta = d.input_tokens + d.output_tokens
+      ? '\n\n— ' + d.model + ' · ' + (d.input_tokens + d.output_tokens) + ' tokens · '
+        + d.events_in_context + ' events in context'
+      : '';
+    out.textContent = (d.answer || '(empty answer)') + meta;
+  } catch (e) {
+    out.textContent = 'Network error: ' + e.message;
+  }
+};
+
 async function loadBrainPage(silent) {
   if (window.CLOUD_MODE) return;
+  if (!silent) advisorProbe();
   try {
     var data = await fetchJsonWithTimeout('/api/brain-history', 8000);
     var events = (data.events || []).slice().sort(function(a,b){
