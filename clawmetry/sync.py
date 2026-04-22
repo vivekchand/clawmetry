@@ -805,6 +805,40 @@ def detect_paths() -> dict:
 # ── Sync: session events (full content, encrypted) ────────────────────────────
 
 
+def _list_session_jsonls(sessions_dir) -> list[str]:
+    """Return all session transcript paths in sessions_dir.
+
+    Includes both live `*.jsonl` and archived `*.jsonl.reset.<ts>` files.
+    OpenClaw renames a session jsonl with a `.reset.<iso-ts>` suffix when
+    the session is reset; the archive still holds real token usage and
+    transcript content. Filtering by `endswith('.jsonl')` alone (the old
+    behaviour) silently dropped every archived day's data from cloud,
+    making the per-day Tokens chart pile every session onto today.
+    """
+    sessions_dir = str(sessions_dir)
+    out: list[str] = []
+    try:
+        for fname in os.listdir(sessions_dir):
+            if fname.endswith(".jsonl") or ".jsonl.reset." in fname:
+                out.append(os.path.join(sessions_dir, fname))
+    except OSError:
+        pass
+    return out
+
+
+def _canonical_session_file(name: str) -> str:
+    """Return the canonical `<session_id>.jsonl` form for a session path.
+
+    `name` may be a basename (`<uuid>.jsonl` or `<uuid>.jsonl.reset.<ts>`)
+    or a full path. Cloud keys session rows on this string -- for an
+    archived reset, we want events to land under the same session_id as
+    the original live session, not a per-archive ghost row.
+    """
+    base = os.path.basename(name)
+    sid = base.split(".jsonl", 1)[0]
+    return sid + ".jsonl"
+
+
 def sync_sessions(config: dict, state: dict, paths: dict) -> int:
     sessions_dir = paths["sessions_dir"]
     api_key = config["api_key"]
@@ -833,7 +867,7 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
         except Exception:
             pass
 
-    jsonl_files = glob.glob(os.path.join(sessions_dir, "*.jsonl"))
+    jsonl_files = _list_session_jsonls(sessions_dir)
     # Sort newest-first so recent sessions sync before old ones
     jsonl_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
 
@@ -842,9 +876,13 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
             break  # continue next cycle; progress is saved per-file
 
         fname = os.path.basename(fpath)
+        # Cloud keys session rows on the canonical `<uuid>.jsonl`. For an
+        # archived `<uuid>.jsonl.reset.<ts>` we want events to land under
+        # the same session row, not spawn a per-archive ghost.
+        cloud_fname = _canonical_session_file(fname)
         last_line = last_ids.get(fname, 0)
         batch: list[dict] = []
-        subagent_id = file_to_subagent_id.get(fname)  # None for main session
+        subagent_id = file_to_subagent_id.get(cloud_fname) or file_to_subagent_id.get(fname)
 
         try:
             with open(fpath, "r", errors="replace") as f:
@@ -868,7 +906,7 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
 
                 if len(batch) >= BATCH_SIZE:
                     _flush_session_batch(
-                        batch, fname, api_key, enc_key, node_id, subagent_id
+                        batch, cloud_fname, api_key, enc_key, node_id, subagent_id
                     )
                     total += len(batch)
                     batch = []
@@ -879,7 +917,7 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
 
             if batch:
                 _flush_session_batch(
-                    batch, fname, api_key, enc_key, node_id, subagent_id
+                    batch, cloud_fname, api_key, enc_key, node_id, subagent_id
                 )
                 total += len(batch)
 
@@ -974,7 +1012,7 @@ def sync_sessions_recent(
         except Exception:
             pass
 
-    jsonl_files = glob.glob(os.path.join(sessions_dir, "*.jsonl"))
+    jsonl_files = _list_session_jsonls(sessions_dir)
     jsonl_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
 
     for fpath in jsonl_files:
@@ -982,7 +1020,8 @@ def sync_sessions_recent(
             break
 
         fname = os.path.basename(fpath)
-        subagent_id = file_to_subagent_id.get(fname)
+        cloud_fname = _canonical_session_file(fname)
+        subagent_id = file_to_subagent_id.get(cloud_fname) or file_to_subagent_id.get(fname)
 
         try:
             with open(fpath, "r", errors="replace") as f:
@@ -1032,7 +1071,7 @@ def sync_sessions_recent(
                 batch.append(obj)
                 if len(batch) >= BATCH_SIZE:
                     _flush_session_batch(
-                        batch, fname, api_key, enc_key, node_id, subagent_id
+                        batch, cloud_fname, api_key, enc_key, node_id, subagent_id
                     )
                     total += len(batch)
                     batch = []
@@ -1041,7 +1080,7 @@ def sync_sessions_recent(
 
             if batch:
                 _flush_session_batch(
-                    batch, fname, api_key, enc_key, node_id, subagent_id
+                    batch, cloud_fname, api_key, enc_key, node_id, subagent_id
                 )
                 total += len(batch)
 
@@ -1572,7 +1611,8 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
         # gave a non-deterministic sample of files and silently dropped
         # the rest. mtime-skip below keeps subsequent syncs cheap.
         jsonl_files = []
-        for fpath in sessions_dir.glob("*.jsonl"):
+        for fpath_str in _list_session_jsonls(sessions_dir):
+            fpath = Path(fpath_str)
             try:
                 jsonl_files.append((fpath, fpath.stat().st_mtime))
             except OSError:
@@ -1630,7 +1670,12 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
             if last_mtimes.get(fpath.name) == current_mtime:
                 continue
             try:
-                sid = fpath.stem  # UUID filename = session_id
+                # `<uuid>.jsonl` -> stem is `<uuid>`. For an archived
+                # `<uuid>.jsonl.reset.<ts>` Path.stem only strips the last
+                # extension (.<ts>), leaving `<uuid>.jsonl.reset`. Split on
+                # the first `.jsonl` instead so live and reset archives
+                # both map to the same canonical session_id.
+                sid = fpath.name.split(".jsonl", 1)[0]
                 started_at = ""
                 updated_at = ""
                 total_tokens = 0
@@ -3008,7 +3053,7 @@ def start_event_streamer(config: dict, state: dict, paths: dict) -> threading.Th
         if not os.path.isdir(sessions_dir):
             return 0
         total_pushed = 0
-        jsonl_files = glob.glob(os.path.join(sessions_dir, "*.jsonl"))
+        jsonl_files = _list_session_jsonls(sessions_dir)
         # Only check recently modified files (last 2 hours) to avoid scanning stale ones
         cutoff = time.time() - 7200
         active = [f for f in jsonl_files if os.path.getmtime(f) > cutoff]
@@ -3063,9 +3108,10 @@ def start_event_streamer(config: dict, state: dict, paths: dict) -> threading.Th
                 continue
 
             if batch:
-                subagent_id = file_to_subagent.get(fname)
+                cloud_fname = _canonical_session_file(fname)
+                subagent_id = file_to_subagent.get(cloud_fname) or file_to_subagent.get(fname)
                 try:
-                    _flush_session_batch(batch, fname, api_key, enc_key, node_id, subagent_id)
+                    _flush_session_batch(batch, cloud_fname, api_key, enc_key, node_id, subagent_id)
                     total_pushed += len(batch)
                     _file_offsets[fname] = new_offset
                     # Update shared state so main loop doesn't re-push
@@ -3081,7 +3127,7 @@ def start_event_streamer(config: dict, state: dict, paths: dict) -> threading.Th
         log.info(f"Event streamer started — watching {sessions_dir}")
         # Initialize sizes so we don't re-push old data
         if os.path.isdir(sessions_dir):
-            for f in glob.glob(os.path.join(sessions_dir, "*.jsonl")):
+            for f in _list_session_jsonls(sessions_dir):
                 fname = os.path.basename(f)
                 _file_sizes[fname] = os.path.getsize(f)
                 _file_offsets[fname] = state.get("last_event_ids", {}).get(fname, 0)
