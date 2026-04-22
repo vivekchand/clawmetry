@@ -13,42 +13,54 @@
       background:var(--bg-secondary);
       border:1px solid var(--border);
       border-radius:8px;
-      padding:10px 14px;
+      padding:14px 16px;
       margin-bottom:12px;
       display:none;
       ">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <span style="font-size:13px;font-weight:600;color:var(--text-primary);">✨ Advisor</span>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <span style="font-size:14px;font-weight:700;color:#c4b5fd;">✨ Advisor</span>
         <span style="font-size:11px;color:var(--text-muted);">ask anything about this agent's activity</span>
       </div>
-      <div style="display:flex;gap:6px;">
+      <div style="display:flex;gap:8px;">
         <input id="advisor-q" type="text"
           placeholder="e.g. why did my last run cost so much?"
           onkeydown="if(event.key==='Enter')advisorAsk()"
-          style="flex:1;padding:8px 10px;background:var(--bg-primary);border:1px solid var(--border);
-                 border-radius:6px;color:var(--text-primary);font-size:13px;" />
+          style="flex:1;padding:10px 12px;background:var(--bg-primary);border:1px solid var(--border);
+                 border-radius:8px;color:var(--text-primary);font-size:13px;outline:none;" />
         <button onclick="advisorAsk()"
-          style="padding:8px 14px;background:#a855f7;color:#fff;border:none;border-radius:6px;
-                 font-size:12px;font-weight:600;cursor:pointer;">Ask</button>
+          style="padding:10px 18px;background:#a855f7;color:#fff;border:none;border-radius:8px;
+                 font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(168,85,247,0.3);">Ask</button>
       </div>
-      <div id="advisor-suggestions" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+      <div id="advisor-suggestions" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;">
         <button class="advisor-sugg" onclick="advisorPrefill('Why did my last run cost so much?')"
-          style="font-size:11px;padding:3px 8px;border-radius:10px;background:var(--bg-hover);
-                 border:1px solid var(--border-secondary);color:var(--text-secondary);cursor:pointer;">
+          style="font-size:11px;padding:4px 10px;border-radius:12px;background:rgba(168,85,247,0.1);
+                 border:1px solid rgba(168,85,247,0.2);color:#c4b5fd;cursor:pointer;">
           Why did my last run cost so much?</button>
         <button class="advisor-sugg" onclick="advisorPrefill('Which tool is failing most often?')"
-          style="font-size:11px;padding:3px 8px;border-radius:10px;background:var(--bg-hover);
-                 border:1px solid var(--border-secondary);color:var(--text-secondary);cursor:pointer;">
+          style="font-size:11px;padding:4px 10px;border-radius:12px;background:rgba(168,85,247,0.1);
+                 border:1px solid rgba(168,85,247,0.2);color:#c4b5fd;cursor:pointer;">
           Which tool is failing most often?</button>
         <button class="advisor-sugg" onclick="advisorPrefill('Is my agent looping?')"
-          style="font-size:11px;padding:3px 8px;border-radius:10px;background:var(--bg-hover);
-                 border:1px solid var(--border-secondary);color:var(--text-secondary);cursor:pointer;">
+          style="font-size:11px;padding:4px 10px;border-radius:12px;background:rgba(168,85,247,0.1);
+                 border:1px solid rgba(168,85,247,0.2);color:#c4b5fd;cursor:pointer;">
           Is my agent looping?</button>
       </div>
-      <div id="advisor-answer" style="
-        display:none;margin-top:10px;padding:10px 12px;background:var(--bg-primary);
-        border-left:3px solid #a855f7;border-radius:4px;font-size:13px;line-height:1.5;
-        color:var(--text-primary);white-space:pre-wrap;"></div>
+      <div id="advisor-answer-wrap" style="display:none;margin-top:12px;">
+        <div id="advisor-answer-q" style="
+          font-size:12px;color:var(--text-muted);margin-bottom:6px;font-style:italic;"></div>
+        <div id="advisor-answer" style="
+          padding:14px 16px;
+          background:var(--bg-primary);
+          border:1px solid var(--border);
+          border-left:3px solid #a855f7;
+          border-radius:8px;
+          font-size:14px;line-height:1.65;
+          color:var(--text-primary);
+          max-width:880px;
+          "></div>
+        <div id="advisor-answer-meta" style="
+          font-size:11px;color:var(--text-muted);margin-top:6px;font-family:monospace;"></div>
+      </div>
     </div>
 
     <!-- Activity density chart -->
