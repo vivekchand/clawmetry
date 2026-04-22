@@ -19,7 +19,7 @@ import json
 import os
 import time
 
-from flask import Blueprint, Response, jsonify
+from flask import Blueprint, Response, jsonify, request
 
 bp_brain = Blueprint('brain', __name__)
 
@@ -537,7 +537,42 @@ def api_brain_history():
         _d._ext_emit("brain.event", {"count": len(events)})
     except Exception:
         pass
-    return jsonify({"events": events, "total": len(events), "sources": sources_seen, "channels": channel_counts})
+    # Collect prompt errors as an alerts stream
+    prompt_errors = []
+    try:
+        session_files = sorted(glob.glob(os.path.join(session_dir, "*.jsonl")))
+        for sf in session_files:
+            try:
+                with open(sf, "r", errors="replace") as fh:
+                    for raw in fh:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            obj = json.loads(raw)
+                        except Exception:
+                            continue
+                        if obj.get("type") == "custom" and obj.get("customType") == "openclaw:prompt-error":
+                            data = obj.get("data", {})
+                            ts = data.get("timestamp") or obj.get("timestamp")
+                            if ts:
+                                prompt_errors.append({
+                                    "time": ts,
+                                    "provider": data.get("provider", ""),
+                                    "model": data.get("model", ""),
+                                    "error": data.get("error", ""),
+                                    "sessionId": data.get("sessionId", ""),
+                                })
+            except Exception:
+                pass
+        # Sort by time descending
+        prompt_errors.sort(key=lambda e: e.get("time", "") or "", reverse=True)
+        # Keep only last 50
+        prompt_errors = prompt_errors[:50]
+    except Exception:
+        pass
+
+    return jsonify({"events": events, "total": len(events), "sources": sources_seen, "channels": channel_counts, "promptErrors": prompt_errors})
 
 
 @bp_brain.route("/api/brain-stream")
@@ -802,7 +837,7 @@ def api_brain_stream():
                     except Exception:
                         pass
 
-                # Tail session JSONL files for sub-agent events
+                # Tail session JSONL files for sub-agent events + prompt errors
                 for jf in list(jsonl_positions.keys()):
                     try:
                         with open(jf, "rb") as f:
@@ -832,6 +867,21 @@ def api_brain_stream():
                                 ev = _parse_jsonl_event(obj, fname, source_label, color)
                                 if ev:
                                     events.append(ev)
+                                # Also detect prompt errors in streaming
+                                if obj.get("type") == "custom" and obj.get("customType") == "openclaw:prompt-error":
+                                    data_err = obj.get("data", {})
+                                    ts = data_err.get("timestamp") or obj.get("timestamp")
+                                    if ts:
+                                        events.append({
+                                            "time": ts,
+                                            "source": fname,
+                                            "sourceLabel": source_label,
+                                            "type": "PROMPT_ERROR",
+                                            "detail": data_err.get("error", "")[:200],
+                                            "color": "#ef4444",
+                                            "provider": data_err.get("provider", ""),
+                                            "model": data_err.get("model", ""),
+                                        })
                             except Exception:
                                 pass
                     except Exception:
@@ -874,3 +924,69 @@ def api_brain_stream():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@bp_brain.route("/api/prompt-errors")
+def api_prompt_errors():
+    """Return recent openclaw:prompt-error events for the alerts stream.
+    
+    Reads from session JSONL files to find custom events with customType
+    'openclaw:prompt-error'. Returns errors from last 24h by default.
+    
+    Query param: ?since=ISO8601 — return errors since this timestamp
+    """
+    import dashboard as _d
+    since = request.args.get("since")
+    since_ms = 0
+    if since:
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(since.replace('Z', '+00:00'))
+            since_ms = int(dt.timestamp() * 1000)
+        except Exception:
+            pass
+    
+    session_dir = _d.SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
+    prompt_errors = []
+    
+    try:
+        session_files = sorted(glob.glob(os.path.join(session_dir, "*.jsonl")))
+        for sf in session_files[-20:]:  # Check last 20 session files
+            try:
+                with open(sf, "r", errors="replace") as fh:
+                    for raw in fh:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            obj = json.loads(raw)
+                        except Exception:
+                            continue
+                        if obj.get("type") == "custom" and obj.get("customType") == "openclaw:prompt-error":
+                            data = obj.get("data", {})
+                            ts = data.get("timestamp")
+                            if ts and ts >= since_ms:
+                                prompt_errors.append({
+                                    "time": ts,
+                                    "provider": data.get("provider", ""),
+                                    "model": data.get("model", ""),
+                                    "error": data.get("error", ""),
+                                    "sessionId": data.get("sessionId", ""),
+                                    "runId": data.get("runId", ""),
+                                    "api": data.get("api", ""),
+                                })
+            except Exception:
+                pass
+        
+        # Sort by time descending
+        prompt_errors.sort(key=lambda e: e.get("time", 0), reverse=True)
+        # Keep only last 100
+        prompt_errors = prompt_errors[:100]
+    except Exception:
+        pass
+    
+    return jsonify({
+        "errors": prompt_errors,
+        "count": len(prompt_errors),
+        "since": since
+    })

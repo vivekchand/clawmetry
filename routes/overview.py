@@ -317,7 +317,6 @@ def api_overview():
     except Exception:
         infra["storage"] = "Disk"
 
-    model_name = main.get("model") or "unknown"
     return jsonify(
         {
             "model": model_name,
@@ -335,8 +334,54 @@ def api_overview():
             "memorySize": total_size,
             "system": system,
             "infra": infra,
+            "promptErrorsLast24h": _count_recent_prompt_errors(),
         }
     )
+
+
+def _count_recent_prompt_errors():
+    """Count prompt errors from last 24h in session JSONL files."""
+    import glob
+    from datetime import datetime, timedelta
+    
+    session_dir = os.path.expanduser("~/.openclaw/agents/main/sessions")
+    cutoff_ms = int((datetime.now() - timedelta(hours=24)).timestamp() * 1000)
+    error_count = 0
+    recent_errors = []
+    
+    try:
+        session_files = sorted(glob.glob(os.path.join(session_dir, "*.jsonl")))
+        for sf in session_files[-30:]:  # Check last 30 sessions
+            try:
+                with open(sf, "r", errors="replace") as fh:
+                    for raw in fh:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            obj = json.loads(raw)
+                        except Exception:
+                            continue
+                        if obj.get("type") == "custom" and obj.get("customType") == "openclaw:prompt-error":
+                            data = obj.get("data", {})
+                            ts = data.get("timestamp", 0)
+                            if ts >= cutoff_ms:
+                                error_count += 1
+                                recent_errors.append({
+                                    "time": ts,
+                                    "provider": data.get("provider", ""),
+                                    "model": data.get("model", ""),
+                                    "error": data.get("error", "")[:100],
+                                })
+            except Exception:
+                pass
+    except Exception:
+        pass
+    
+    return {
+        "count": error_count,
+        "recent": recent_errors[:5]  # Keep only 5 most recent
+    }
 
 
 @bp_overview.route("/api/main-activity")
@@ -639,3 +684,59 @@ def cloud_cta_verify_otp():
         except Exception:
             _eb = {}
         return jsonify({"ok": False, "error": _eb.get("error", "Invalid code")}), 502
+
+
+@bp_overview.route("/api/prompt-errors/alert")
+def prompt_errors_alert():
+    """Return prompt errors summary for banner display.
+    
+    Returns:
+        - count: number of errors in last 24h
+        - recent: list of recent error summaries
+        - hasErrors: boolean for quick check
+    """
+    import glob
+    from datetime import datetime, timedelta
+    
+    session_dir = os.path.expanduser("~/.openclaw/agents/main/sessions")
+    cutoff_ms = int((datetime.now() - timedelta(hours=24)).timestamp() * 1000)
+    error_count = 0
+    recent_errors = []
+    
+    try:
+        session_files = sorted(glob.glob(os.path.join(session_dir, "*.jsonl")))
+        for sf in session_files[-50:]:  # Check last 50 sessions
+            try:
+                with open(sf, "r", errors="replace") as fh:
+                    for raw in fh:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            obj = json.loads(raw)
+                        except Exception:
+                            continue
+                        if obj.get("type") == "custom" and obj.get("customType") == "openclaw:prompt-error":
+                            data = obj.get("data", {})
+                            ts = data.get("timestamp", 0)
+                            if ts >= cutoff_ms:
+                                error_count += 1
+                                if len(recent_errors) < 3:
+                                    recent_errors.append({
+                                        "time": ts,
+                                        "provider": data.get("provider", ""),
+                                        "model": data.get("model", ""),
+                                        "error": data.get("error", "")[:150],
+                                        "sessionId": data.get("sessionId", "")[:8],
+                                    })
+            except Exception:
+                pass
+    except Exception:
+        pass
+    
+    return jsonify({
+        "hasErrors": error_count > 0,
+        "count": error_count,
+        "recent": recent_errors,
+        "cutoff": cutoff_ms,
+    })
