@@ -13097,6 +13097,27 @@ def _get_crons_from_files():
     return []
 
 
+def _normalize_next_run_at_ms(state):
+    """Ensure nextRunAtMs is a number (ms timestamp) or null (closes #685)."""
+    if not isinstance(state, dict):
+        return None
+    val = state.get("nextRunAtMs")
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+    if isinstance(val, str):
+        try:
+            # ISO timestamp or numeric string
+            if "T" in val:
+                from dateutil import parser as _dtp
+                return int(_dtp.parse(val).timestamp() * 1000)
+            return int(float(val))
+        except Exception:
+            return None
+    return None
+
+
 def _get_memory_files():
     """List workspace memory files."""
     result = []
