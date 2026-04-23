@@ -52,10 +52,8 @@
     <!-- Status line -->
     <div id="notifications-status" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;font-family:ui-monospace,Menlo,monospace;"></div>
 
-    <!-- Channel pills — horizontal flex row that wraps. Using flexbox (not
-         grid) because something in the iframe parent CSS was collapsing the
-         grid to a single column; flex+wrap is rock-solid. -->
-    <div id="notifications-grid" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+    <!-- Channel grid -->
+    <div id="notifications-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;"></div>
 
     <!-- Setup modal (rendered into this overlay on Connect click) -->
     <div id="notifications-setup-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;"></div>
@@ -124,29 +122,17 @@
     state.rows.forEach(function(c) { (byType[c.channel_type] = byType[c.channel_type] || []).push(c); });
 
     grid.innerHTML = CHANNELS.map(function(ch) {
-      var existing = (byType[ch.key] || [])[0];
+      var existing = (byType[ch.key] || [])[0];   // show the first connected of this type
       var connected = !!(existing && existing.enabled);
-      var id = existing ? existing.id : '';
-      // Compact pill: icon + name + (dot if connected). inline-flex with a
-      // hard-coded background colour so it can't disappear if a parent
-      // stylesheet steamrolls the CSS variables.
-      var bg     = connected ? ch.color + '22' : 'rgba(255,255,255,0.04)';
-      var border = connected ? ch.color + '88' : 'rgba(255,255,255,0.10)';
-      var fg     = connected ? ch.color         : '#cbd5e1';
       return ''
-        + '<button type="button"'
-        + '  onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + id + '\')"'
-        + '  title="' + (connected ? 'Edit ' : 'Connect ') + _esc(ch.name) + '"'
-        + '  style="display:inline-flex;align-items:center;gap:8px;padding:8px 14px;'
-        + '         background:' + bg + ';border:1px solid ' + border + ';color:' + fg + ';'
-        + '         border-radius:999px;font:inherit;font-size:12px;font-weight:600;'
-        + '         cursor:pointer;transition:transform .1s ease,background .15s ease;"'
-        + '  onmouseover="this.style.transform=\'translateY(-1px)\'"'
-        + '  onmouseout="this.style.transform=\'\'">'
-        + '<span style="font-size:14px;line-height:1;">' + ch.icon + '</span>'
-        + '<span>' + ch.name + '</span>'
-        + (connected ? '<span style="width:6px;height:6px;border-radius:50%;background:' + ch.color + ';"></span>' : '')
-        + '</button>';
+        + '<div style="background:var(--bg-secondary);border:1px solid ' + (connected ? ch.color + '55' : 'var(--border)') + ';border-radius:10px;padding:16px;text-align:center;transition:border-color 0.2s;">'
+        + '  <div style="font-size:24px;margin-bottom:8px;">' + ch.icon + '</div>'
+        + '  <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">' + ch.name + '</div>'
+        + '  <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;line-height:1.5;min-height:30px;">' + _esc(ch.desc) + '</div>'
+        + (connected
+            ? '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + (existing ? existing.id : '') + '\')" style="width:100%;padding:9px;border:1px solid ' + ch.color + '55;background:' + ch.color + '20;color:' + ch.color + ';border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">✓ Connected — Edit</button>'
+            : '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'\')" style="width:100%;padding:9px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Connect</button>')
+        + '</div>';
     }).join('');
 
     // Free-tier reminder banner (shown only when user is on Free)

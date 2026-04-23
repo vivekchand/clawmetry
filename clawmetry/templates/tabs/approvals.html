@@ -85,7 +85,7 @@
   <!-- ═══ SECTION 3: Notification Channels ═══ -->
   <div style="margin-bottom:16px;">
     <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Get Notified</div>
-    <div id="approvals-integrations" style="display:flex;flex-wrap:wrap;gap:8px;">
+    <div id="approvals-integrations" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
     </div>
   </div>
 
@@ -277,30 +277,18 @@
     if (!el) return;
     _savedIntegrations = {};
     (savedIntegrations || []).forEach(function(i) { _savedIntegrations[i.channel] = i; });
-    // Compact pills, same design as the Notifications tab. Channels are
-    // shared between Approvals and Alerts, so the visual treatment should
-    // match — and a horizontal flex row stays compact even on narrow
-    // sidebars where the previous grid card layout dominated the page.
     el.innerHTML = CHANNELS.map(function(ch) {
-      var s  = _savedIntegrations[ch.key];
+      var s = _savedIntegrations[ch.key];
       var on = s && s.enabled;
-      var bg     = on ? ch.color + '22' : 'rgba(255,255,255,0.04)';
-      var border = on ? ch.color + '88' : 'rgba(255,255,255,0.10)';
-      var fg     = on ? ch.color         : '#cbd5e1';
-      return ''
-        + '<button type="button"'
-        + '  onclick="openIntegrationSetup(\'' + ch.key + '\')"'
-        + '  title="' + (on ? 'Edit ' : 'Connect ') + escHtml(ch.name) + '"'
-        + '  style="display:inline-flex;align-items:center;gap:8px;padding:8px 14px;'
-        + '         background:' + bg + ';border:1px solid ' + border + ';color:' + fg + ';'
-        + '         border-radius:999px;font:inherit;font-size:12px;font-weight:600;'
-        + '         cursor:pointer;transition:transform .1s ease,background .15s ease;"'
-        + '  onmouseover="this.style.transform=\'translateY(-1px)\'"'
-        + '  onmouseout="this.style.transform=\'\'">'
-        + '<span style="font-size:14px;line-height:1;">' + ch.icon + '</span>'
-        + '<span>' + ch.name + '</span>'
-        + (on ? '<span style="width:6px;height:6px;border-radius:50%;background:' + ch.color + ';"></span>' : '')
-        + '</button>';
+      return '<div style="background:var(--bg-secondary);border:1px solid ' + (on ? ch.color + '44' : 'var(--border)') + ';border-radius:10px;padding:14px;text-align:center;">'
+        + '<div style="font-size:20px;margin-bottom:6px;">' + ch.icon + '</div>'
+        + '<div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">' + ch.name + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">' + escHtml(ch.desc) + '</div>'
+        + (on
+          ? '<button onclick="openIntegrationSetup(\'' + ch.key + '\')" style="width:100%;padding:8px;border:1px solid ' + ch.color + '44;background:' + ch.color + '15;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Connected</button>'
+          : '<button onclick="openIntegrationSetup(\'' + ch.key + '\')" style="width:100%;padding:8px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Connect</button>'
+        )
+        + '</div>';
     }).join('');
   }
 
