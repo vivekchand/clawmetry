@@ -2,7 +2,7 @@
 routes/overview.py — Main-dashboard endpoints.
 
 Extracted from dashboard.py as Phase 5.8 of the incremental modularisation.
-Owns the 7 routes registered on ``bp_overview``:
+Owns the 8 routes registered on ``bp_overview``:
 
   GET  /api/channels              — active input channels for Flow diagram
   GET  /api/overview              — top-bar live data (polled every 10s)
@@ -11,6 +11,7 @@ Owns the 7 routes registered on ``bp_overview``:
   GET  /api/cloud-cta/status      — cloud-sync CTA connected status
   POST /api/cloud-cta/send-otp    — cloud-sync CTA: send email OTP
   POST /api/cloud-cta/verify-otp  — cloud-sync CTA: verify code + store token
+  GET  /api/prompt-errors         — openclaw:prompt-error events from sessions (GH#601)
 
 Module-level helpers (``_gw_invoke``, ``_get_sessions``, ``_get_crons``,
 ``_get_memory_files``, ``_find_log_file``, ``_infer_provider_from_model``,
@@ -639,3 +640,99 @@ def cloud_cta_verify_otp():
         except Exception:
             _eb = {}
         return jsonify({"ok": False, "error": _eb.get("error", "Invalid code")}), 502
+
+
+@bp_overview.route("/api/prompt-errors")
+def api_prompt_errors():
+    """Return openclaw:prompt-error events from session JSONL files.
+
+    Query params:
+        since (int): Unix timestamp (ms) — only return errors newer than this
+        limit (int): Max errors to return (default 20)
+
+    Returns JSON array of prompt errors:
+        {
+            "timestamp": "2026-04-23T10:31:17.336Z",
+            "runId": "...",
+            "sessionId": "...",
+            "provider": "ollama",
+            "model": "kimi-k2.5:cloud",
+            "api": "ollama",
+            "error": "aborted"
+        }
+    """
+    import dashboard as _d
+
+    since = request.args.get("since", "0")
+    try:
+        since_ms = int(since)
+    except Exception:
+        since_ms = 0
+
+    limit = request.args.get("limit", "20")
+    try:
+        limit = int(limit)
+    except Exception:
+        limit = 20
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    errors = []
+
+    if not os.path.isdir(sessions_dir):
+        return jsonify({"errors": []})
+
+    # Scan session JSONL files for prompt-error events
+    for fname in os.listdir(sessions_dir):
+        if not fname.endswith(".jsonl"):
+            continue
+        fp = os.path.join(sessions_dir, fname)
+        try:
+            with open(fp, "rb") as fh:
+                # Read last chunk to avoid loading huge files
+                fh.seek(0, 2)
+                size = fh.tell()
+                chunk_size = min(size, 512000)  # Last 512KB
+                fh.seek(max(0, size - chunk_size))
+                data = fh.read().decode("utf-8", errors="replace")
+
+            for line in data.strip().split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+
+                # Check for prompt-error custom events
+                if obj.get("type") != "custom":
+                    continue
+                if obj.get("customType") != "openclaw:prompt-error":
+                    continue
+
+                pdata = obj.get("data", {})
+                ts = pdata.get("timestamp", 0)
+
+                # Filter by since
+                if since_ms and ts <= since_ms:
+                    continue
+
+                errors.append({
+                    "timestamp": obj.get("timestamp", ""),
+                    "runId": pdata.get("runId", ""),
+                    "sessionId": pdata.get("sessionId", ""),
+                    "provider": pdata.get("provider", ""),
+                    "model": pdata.get("model", ""),
+                    "api": pdata.get("api", ""),
+                    "error": pdata.get("error", ""),
+                })
+        except Exception:
+            continue
+
+    # Sort by timestamp descending and limit
+    errors.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    errors = errors[:limit]
+
+    return jsonify({"errors": errors})

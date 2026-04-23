@@ -4910,6 +4910,7 @@ function switchTab(name) {
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
+  if (name === 'overview') { if (typeof _promptErrorPollTimer !== 'undefined' && _promptErrorPollTimer) clearInterval(_promptErrorPollTimer); if (typeof loadPromptErrors === 'function') _promptErrorPollTimer = setInterval(loadPromptErrors, 30000); }
   if (name === 'usage') loadUsage();
   if (name === 'skills') loadSkills();
   if (name === 'crons') loadCrons();
@@ -5329,6 +5330,7 @@ function setFlowTextAll(idSuffix, text, maxLen) {
 
 
 var _velocityPollTimer = null;
+var _promptErrorPollTimer = null;
 
 async function loadTokenVelocity() {
   try {
@@ -5385,6 +5387,60 @@ async function killSession(sessionId) {
     if (resp.ok) { alert('Session stopped.'); loadTokenVelocity(); }
     else alert('Failed to stop session: ' + resp.status);
   } catch(e) { alert('Error: ' + e.message); }
+}
+
+// ---------------------------------------------------------------------------
+// Prompt Error loader (#601)
+// ---------------------------------------------------------------------------
+var _promptErrorLastTs = 0;
+
+async function loadPromptErrors() {
+  try {
+    var url = '/api/prompt-errors?limit=10';
+    if (_promptErrorLastTs > 0) url += '&since=' + _promptErrorLastTs;
+    var d = await fetchJsonWithTimeout(url, 5000);
+    var banner = document.getElementById('prompt-error-banner');
+    var listEl = document.getElementById('prompt-error-list');
+    var msgEl  = document.getElementById('prompt-error-msg');
+    if (!banner) return;
+
+    var errors = d.errors || [];
+    if (errors.length === 0) {
+      banner.style.display = 'none';
+      return;
+    }
+
+    // Track last seen timestamp
+    errors.forEach(function(err) {
+      var ts = new Date(err.timestamp).getTime();
+      if (ts > _promptErrorLastTs) _promptErrorLastTs = ts;
+    });
+
+    // Update message
+    var errCount = errors.length;
+    msgEl.textContent = errCount + ' provider error' + (errCount === 1 ? '' : 's') + ' detected';
+
+    // Render error list
+    if (listEl) {
+      listEl.innerHTML = errors.map(function(err) {
+        var timeStr = new Date(err.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+        var provider = err.provider || 'unknown';
+        var model = err.model || 'unknown';
+        var errorType = err.error || 'unknown';
+        var api = err.api || '';
+        return '<div style="display:flex;align-items:center;gap:10px;background:rgba(0,0,0,0.2);border-radius:6px;padding:6px 10px;font-size:12px;font-weight:400;">' +
+          '<span style="opacity:0.8;min-width:60px;">' + timeStr + '</span>' +
+          '<span style="background:rgba(255,255,255,0.15);border-radius:4px;padding:2px 6px;font-size:11px;">' + provider + '</span>' +
+          '<code style="font-size:11px;color:inherit;opacity:0.9;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + model + '">' + model + '</code>' +
+          '<span style="opacity:0.8;background:rgba(255,255,255,0.1);border-radius:4px;padding:2px 6px;font-size:10px;">' + errorType + '</span>' +
+          '</div>';
+      }).join('');
+    }
+
+    banner.style.display = 'block';
+  } catch(e) {
+    console.warn('prompt errors check failed', e);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -5525,6 +5581,7 @@ async function loadAll() {
     if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadPromptErrors === 'function') loadPromptErrors().catch(function(e){console.warn('prompt errors check failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
