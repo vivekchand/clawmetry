@@ -52,10 +52,10 @@
     <!-- Status line -->
     <div id="notifications-status" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;font-family:ui-monospace,Menlo,monospace;"></div>
 
-    <!-- Channel grid — 3 compact tiles per row, click-anywhere to connect/edit.
-         max-width keeps tiles small on wide monitors instead of stretching to
-         fill the whole viewport. -->
-    <div id="notifications-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-width:560px;"></div>
+    <!-- Channel pills — horizontal flex row that wraps. Using flexbox (not
+         grid) because something in the iframe parent CSS was collapsing the
+         grid to a single column; flex+wrap is rock-solid. -->
+    <div id="notifications-grid" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
 
     <!-- Setup modal (rendered into this overlay on Connect click) -->
     <div id="notifications-setup-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;"></div>
@@ -124,22 +124,29 @@
     state.rows.forEach(function(c) { (byType[c.channel_type] = byType[c.channel_type] || []).push(c); });
 
     grid.innerHTML = CHANNELS.map(function(ch) {
-      var existing = (byType[ch.key] || [])[0];   // show the first connected of this type
+      var existing = (byType[ch.key] || [])[0];
       var connected = !!(existing && existing.enabled);
       var id = existing ? existing.id : '';
-      // Whole tile is the click target — removes the visual weight of a
-      // full-width button and keeps each card to ~icon + label + status dot.
+      // Compact pill: icon + name + (dot if connected). inline-flex with a
+      // hard-coded background colour so it can't disappear if a parent
+      // stylesheet steamrolls the CSS variables.
+      var bg     = connected ? ch.color + '22' : 'rgba(255,255,255,0.04)';
+      var border = connected ? ch.color + '88' : 'rgba(255,255,255,0.10)';
+      var fg     = connected ? ch.color         : '#cbd5e1';
       return ''
-        + '<div role="button" tabindex="0"'
-        + '     onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + id + '\')"'
-        + '     onkeydown="if(event.key===\'Enter\'||event.key===\' \'){notifyOpenSetup(\'' + ch.key + '\',\'' + id + '\')}"'
-        + '     style="position:relative;background:var(--bg-secondary);border:1px solid ' + (connected ? ch.color + '66' : 'var(--border)') + ';border-radius:10px;padding:10px 8px;text-align:center;cursor:pointer;transition:transform .12s ease,border-color .12s ease;"'
-        + '     onmouseover="this.style.transform=\'translateY(-1px)\';this.style.borderColor=\'' + ch.color + '\'"'
-        + '     onmouseout="this.style.transform=\'\';this.style.borderColor=\'' + (connected ? ch.color + '66' : 'var(--border)') + '\'">'
-        + (connected ? '<span title="Connected" style="position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;background:' + ch.color + ';box-shadow:0 0 0 2px ' + ch.color + '33;"></span>' : '')
-        + '  <div style="font-size:18px;line-height:1;margin-bottom:4px;">' + ch.icon + '</div>'
-        + '  <div style="font-size:11px;font-weight:600;color:var(--text-primary);">' + ch.name + '</div>'
-        + '</div>';
+        + '<button type="button"'
+        + '  onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + id + '\')"'
+        + '  title="' + (connected ? 'Edit ' : 'Connect ') + _esc(ch.name) + '"'
+        + '  style="display:inline-flex;align-items:center;gap:8px;padding:8px 14px;'
+        + '         background:' + bg + ';border:1px solid ' + border + ';color:' + fg + ';'
+        + '         border-radius:999px;font:inherit;font-size:12px;font-weight:600;'
+        + '         cursor:pointer;transition:transform .1s ease,background .15s ease;"'
+        + '  onmouseover="this.style.transform=\'translateY(-1px)\'"'
+        + '  onmouseout="this.style.transform=\'\'">'
+        + '<span style="font-size:14px;line-height:1;">' + ch.icon + '</span>'
+        + '<span>' + ch.name + '</span>'
+        + (connected ? '<span style="width:6px;height:6px;border-radius:50%;background:' + ch.color + ';"></span>' : '')
+        + '</button>';
     }).join('');
 
     // Free-tier reminder banner (shown only when user is on Free)
