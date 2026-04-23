@@ -168,8 +168,8 @@
       + '<div style="background:var(--bg-secondary,#131929);border:1px solid ' + ch.color + '44;border-radius:14px;padding:24px 28px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);">'
       + '  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">'
       + '    <span style="font-size:22px;">' + ch.icon + '</span>'
-      + '    <span style="font-size:15px;font-weight:700;color:var(--text-primary);">'+(existing ? 'Edit' : 'Connect')+' ' + ch.name + '</span>'
-      + '    <span style="margin-left:auto;cursor:pointer;color:var(--text-muted);font-size:20px;line-height:1;" onclick="notifyCloseSetup()">×</span>'
+      + '    <span style="font-size:15px;font-weight:700;color:var(--text-primary,#e2e8f0);">'+(existing ? 'Edit' : 'Connect')+' ' + ch.name + '</span>'
+      + '    <span style="margin-left:auto;cursor:pointer;color:var(--text-muted,#94a3b8);font-size:20px;line-height:1;" onclick="notifyCloseSetup()">×</span>'
       + '  </div>';
     if (ch.howTo) {
       html += '<div style="background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.15);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text-secondary);line-height:1.7;">'
