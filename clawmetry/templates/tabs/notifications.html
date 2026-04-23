@@ -52,8 +52,10 @@
     <!-- Status line -->
     <div id="notifications-status" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;font-family:ui-monospace,Menlo,monospace;"></div>
 
-    <!-- Channel grid -->
-    <div id="notifications-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;"></div>
+    <!-- Channel grid — align-items:start stops the grid from stretching cards
+         to match the tallest neighbour, which otherwise creates the empty
+         vertical gaps visible in the screenshot. -->
+    <div id="notifications-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;align-items:start;"></div>
 
     <!-- Setup modal (rendered into this overlay on Connect click) -->
     <div id="notifications-setup-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;"></div>
@@ -125,13 +127,13 @@
       var existing = (byType[ch.key] || [])[0];   // show the first connected of this type
       var connected = !!(existing && existing.enabled);
       return ''
-        + '<div style="background:var(--bg-secondary);border:1px solid ' + (connected ? ch.color + '55' : 'var(--border)') + ';border-radius:10px;padding:16px;text-align:center;transition:border-color 0.2s;">'
-        + '  <div style="font-size:24px;margin-bottom:8px;">' + ch.icon + '</div>'
-        + '  <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">' + ch.name + '</div>'
-        + '  <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;line-height:1.5;min-height:30px;">' + _esc(ch.desc) + '</div>'
+        + '<div style="background:var(--bg-secondary);border:1px solid ' + (connected ? ch.color + '55' : 'var(--border)') + ';border-radius:10px;padding:14px;text-align:center;transition:border-color 0.2s;">'
+        + '  <div style="font-size:20px;margin-bottom:6px;">' + ch.icon + '</div>'
+        + '  <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">' + ch.name + '</div>'
+        + '  <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.4;">' + _esc(ch.desc) + '</div>'
         + (connected
-            ? '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + (existing ? existing.id : '') + '\')" style="width:100%;padding:9px;border:1px solid ' + ch.color + '55;background:' + ch.color + '20;color:' + ch.color + ';border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">✓ Connected — Edit</button>'
-            : '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'\')" style="width:100%;padding:9px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Connect</button>')
+            ? '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + (existing ? existing.id : '') + '\')" style="width:100%;padding:8px;border:1px solid ' + ch.color + '55;background:' + ch.color + '20;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">✓ Connected — Edit</button>'
+            : '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'\')" style="width:100%;padding:8px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Connect</button>')
         + '</div>';
     }).join('');
 

@@ -73,15 +73,9 @@
     const t = await resolveTier();
     alertsState.tier = t.tier;
     alertsState.trialDaysLeft = t.trialDaysLeft || null;
-
-    if (t.tier === 'trial' && t.trialDaysLeft != null) {
-      const banner = document.getElementById('alerts-trial-banner');
-      banner.style.display = '';
-      document.getElementById('alerts-trial-days-left').textContent =
-        ' · ' + t.trialDaysLeft + ' day' + (t.trialDaysLeft === 1 ? '' : 's') + ' left';
-    } else {
-      document.getElementById('alerts-trial-banner').style.display = 'none';
-    }
+    // Trial banner removed in PR #791 — paywall fires on action (click
+    // + New alert rule / Enable) for Free users instead. Trial/Pro users
+    // have full access and see no upgrade prompt unless they hit a cap.
 
     // For all tiers: try to load rules. If unauthenticated, fall back to
     // canned examples so the user still sees the value.
@@ -224,8 +218,13 @@
   // ── Action handlers (paywall-aware) ───────────────────────────────────────
 
   window.alertsHandleNewRule = function () {
-    // Open editor for everyone -- Free/OSS users can configure first; the
-    // paywall fires on Save (better conversion than gating at click time).
+    // Gate on click (not on Save): the banner that used to explain the trial
+    // is gone, so Free / no-cloud users need an explicit prompt that this is
+    // a Pro feature before they start filling out a form they can't save.
+    // Trial + Pro users skip the paywall and get the editor directly.
+    if (alertsState.tier !== 'pro' && alertsState.tier !== 'trial') {
+      return openPaywall();
+    }
     alertsState.editorRule = null;
     alertsState.editorType = 'node_offline';
     openEditor();
