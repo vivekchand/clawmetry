@@ -21,14 +21,10 @@
     <button class="alerts-btn-primary" onclick="alertsHandleNewRule()">+ New alert rule</button>
   </div>
 
-  <div id="alerts-trial-banner" class="alerts-trial-banner" style="display:none;">
-    <div class="msg">
-      <b>You're on a 7-day Pro trial</b> — unlock multi-channel delivery to
-      Slack, PagerDuty, Telegram, and Email.
-      <span id="alerts-trial-days-left" style="color:var(--text-muted);"></span>
-    </div>
-    <button class="alerts-btn-pro" onclick="alertsHandleUpgrade()">Upgrade to Pro</button>
-  </div>
+  <!-- Trial banner removed — trial users have full access, so the "Upgrade
+       to Pro" banner was just clutter. Free users still hit the
+       openPaywall() modal when they try to enable a second rule or click
+       + New alert rule (see alerts.js alertsCreateRule / alertsToggleRule). -->
 
   <div id="alerts-rules-list" class="alerts-list">
     <div class="alerts-loading">Loading alerts…</div>
