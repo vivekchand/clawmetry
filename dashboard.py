@@ -110,6 +110,7 @@ from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
+from routes.update_check import bp_update_check, start_update_check_thread
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -4898,6 +4899,39 @@ async function testTelegram() {
   }
 }
 
+// === Update Check Functions ===
+async function checkUpdateStatus() {
+  try {
+    var data = await fetch('/api/update-check/status').then(function(r){return r.json();});
+    var banner = document.getElementById('update-banner');
+    var msg = document.getElementById('update-banner-msg');
+    if (data.show_banner && banner && msg) {
+      var latest = data.latest_check && data.latest_check.latest || 'newer';
+      msg.innerHTML = 'Update available: v' + escHtml(latest) + ' is now available. You are running v' + escHtml(data.latest_check.current) + '.';
+      banner.style.display = 'flex';
+    }
+  } catch(e) {}
+}
+
+async function dismissUpdateBanner() {
+  try {
+    var data = await fetch('/api/update-check/status').then(function(r){return r.json();});
+    if (data.latest_check && data.latest_check.latest) {
+      await fetch('/api/update-check/dismiss', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({version: data.latest_check.latest})
+      });
+    }
+    var banner = document.getElementById('update-banner');
+    if (banner) banner.style.display = 'none';
+  } catch(e) {}
+}
+
+// Check for updates periodically
+setInterval(checkUpdateStatus, 3600000); // Check every hour
+setTimeout(checkUpdateStatus, 5000); // Check 5s after load
+
 function switchTab(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
@@ -8300,6 +8334,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_openapi)
+    app.register_blueprint(bp_update_check)
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
     # Approvals tab renders cleanly without cloud sync.
@@ -14676,6 +14711,7 @@ def _run_server(args):
     _detect_heartbeat_interval()
     _start_fleet_maintenance_thread()
     _start_budget_monitor_thread()
+    start_update_check_thread()
 
     try:
         print(BANNER.format(version=__version__))
