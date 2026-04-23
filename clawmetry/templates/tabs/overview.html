@@ -42,6 +42,28 @@
     <div id="velocity-flagged-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;"></div>
   </div>
 
+  <!-- Prompt Error Alert Banner (GH #601) -->
+  <div id="prompt-error-banner" style="
+    display:none;
+    margin-bottom:8px;
+    border-radius:8px;
+    padding:10px 16px;
+    font-size:13px;
+    font-weight:600;
+    background:linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    color:white;
+    box-shadow:0 2px 8px rgba(220,38,38,0.3);
+    ">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;">⚠️</span>
+        <span id="prompt-error-msg">Provider errors detected</span>
+      </div>
+      <span style="font-size:11px;font-weight:400;color:inherit;opacity:0.9;">auto-refreshes every 30s</span>
+    </div>
+    <div id="prompt-error-list" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;max-height:120px;overflow-y:auto;"></div>
+  </div>
+
   <!-- Stats Bar (top) -->
   <div class="stats-footer">
     <div class="stats-footer-item">
