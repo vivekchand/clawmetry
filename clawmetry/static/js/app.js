@@ -528,6 +528,7 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'brain') loadBrainPage();
   if (name === 'selfevolve') loadSelfEvolvePage();
+  if (name === 'notifications') { if (typeof loadNotificationsPage === 'function') loadNotificationsPage(); }
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
