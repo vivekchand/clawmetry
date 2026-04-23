@@ -1,0 +1,288 @@
+<!--
+  Notifications tab — Cloud-Pro feature for managing delivery channels.
+
+  Why a dedicated tab:
+    Channels (Email / Phone / Slack / PagerDuty / Telegram) are shared across
+    Alerts and Approvals. Burying them inside the Approvals tab made it
+    unclear that the same channel powers both. Pulling them out into their
+    own page lets the operator manage all delivery destinations once.
+
+  Tier behaviour mirrors the Alerts tab (see project_alerts_pro_feature):
+    - OSS-only / no token   -> "Sign up for Cloud" CTA
+    - Cloud Free            -> 1 channel allowed; subsequent Connect clicks
+                               pop the "Upgrade to Pro" paywall
+    - Cloud Pro / Trial     -> unlimited
+
+  Backend endpoints (already shipped, see clawmetry-cloud routes/channels.py
+  and the /api/cloud-proxy/api/channels shim added in PR #542):
+    GET    /api/cloud-proxy/api/channels         list
+    POST   /api/cloud-proxy/api/channels         create
+    PATCH  /api/cloud-proxy/api/channels/<id>    update (name/enabled/config)
+    DELETE /api/cloud-proxy/api/channels/<id>    delete
+-->
+
+<div class="page" id="page-notifications">
+  <div style="padding:12px 0 8px 0;">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div>
+        <span style="font-size:15px;font-weight:700;color:var(--text-primary);">📬 Notifications</span>
+        <span style="background:rgba(59,130,246,0.15);color:#60a5fa;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-left:6px;">Pro</span>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+          One place to manage every delivery destination — used by Alerts and Approvals.
+        </div>
+      </div>
+      <button class="refresh-btn" onclick="loadNotificationsPage()">↻ Refresh</button>
+    </div>
+
+    <!-- No-auth (OSS without cloud account) -->
+    <div id="notifications-noauth" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">
+      <div style="font-size:24px;margin-bottom:8px;">🔒</div>
+      <div style="margin-bottom:6px;">Notifications need a ClawMetry Cloud account to deliver Slack / PagerDuty / Telegram / Email messages.</div>
+      <a href="https://clawmetry.com/connect?next=app" target="_blank" style="display:inline-block;margin-top:10px;padding:8px 18px;background:#3b82f6;color:#fff;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;">Sign up for Cloud</a>
+      <div style="font-size:11px;color:var(--text-faint);margin-top:8px;">Free trial · no credit card required</div>
+    </div>
+
+    <!-- Free-tier banner (1 channel cap reminder) -->
+    <div id="notifications-free-banner" style="display:none;margin-bottom:14px;background:linear-gradient(135deg,rgba(59,130,246,0.08),rgba(99,102,241,0.04));border:1px solid rgba(59,130,246,0.25);border-radius:8px;padding:12px 16px;font-size:13px;color:var(--text-secondary);">
+      ⚡ Free plan: 1 channel. <a href="https://app.clawmetry.com/pricing" target="_blank" style="color:#60a5fa;font-weight:600;text-decoration:none;">Upgrade to Pro</a> for unlimited channels and multi-recipient delivery.
+    </div>
+
+    <!-- Status line -->
+    <div id="notifications-status" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;font-family:ui-monospace,Menlo,monospace;"></div>
+
+    <!-- Channel grid -->
+    <div id="notifications-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;"></div>
+
+    <!-- Setup modal (rendered into this overlay on Connect click) -->
+    <div id="notifications-setup-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;"></div>
+
+  </div>
+</div><!-- end page-notifications -->
+
+<script>
+(function(){
+  /* ── Channel catalog (matches the cards we used to render inside Approvals) ── */
+  var CHANNELS = [
+    { key: 'email',     name: 'Email',      icon: '✉️',
+      desc: 'Notifications to your account email',  color: '#3b82f6',
+      fields: [{ key: 'email_address', label: 'Email address', placeholder: 'you@example.com' }],
+      howTo: 'Alerts and approvals will be sent to this address. Defaults to your signup email.' },
+    { key: 'phone',     name: 'Phone Call', icon: '📞',
+      desc: 'Get a call, press 1 to approve',       color: '#10b981',
+      fields: [{ key: 'phone_number', label: 'Phone number', placeholder: '+1 (555) 123-4567' }],
+      howTo: 'When something fires, you get a phone call: <b>"Press 1 to approve. Press 2 to deny."</b> Works on any phone, no app required.' },
+    { key: 'slack',     name: 'Slack',      icon: '💬',
+      desc: 'Post to a Slack channel',              color: '#4A154B',
+      fields: [{ key: 'webhook_url', label: 'Incoming webhook URL', placeholder: 'https://hooks.slack.com/services/T.../B.../xxx' }],
+      howTo: '1. <b>api.slack.com/apps</b> → Create New App → From scratch.<br>2. Toggle <b>Incoming Webhooks</b> on, click <b>Add New Webhook to Workspace</b>, pick a channel.<br>3. Copy the webhook URL and paste it below.' },
+    { key: 'pagerduty', name: 'PagerDuty',  icon: '📟',
+      desc: 'Trigger PagerDuty incidents',          color: '#06AC38',
+      fields: [{ key: 'routing_key', label: 'Integration key', placeholder: 'R03F...' }],
+      howTo: '1. PagerDuty → Services → pick your service → Integrations.<br>2. Add Integration → <b>Events API v2</b>.<br>3. Copy the Integration Key.' },
+    { key: 'telegram',  name: 'Telegram',   icon: '✈️',
+      desc: 'Send alerts to a Telegram chat',       color: '#2AABEE',
+      fields: [
+        { key: 'bot_token', label: 'Bot token',  placeholder: '123456:ABC-DEF...' },
+        { key: 'chat_id',   label: 'Chat ID',    placeholder: '-1001234567890' }
+      ],
+      howTo: '1. In Telegram, message <b>@BotFather</b> → <b>/newbot</b>.<br>2. Copy the bot token.<br>3. Add the bot to your group/chat.<br>4. Get the chat ID from <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code>.' }
+  ];
+
+  /* In-memory state — refreshed on every loadNotificationsPage() */
+  var state = {
+    tier:    'unknown',           // 'none' | 'free' | 'trial' | 'pro'
+    saved:   {},                  // channel_type+config-fingerprint -> server row
+    rows:    []                   // raw GET response
+  };
+
+  function _esc(s) { var d = document.createElement('div'); d.textContent = String(s == null ? '' : s); return d.innerHTML; }
+
+  /* ── Tier resolution (mirrors alerts.js so a Free user is gated identically) ── */
+  async function _resolveTier() {
+    try {
+      var status = await fetch('/api/cloud-cta/status').then(function(r){return r.json();});
+      if (!status || !status.connected) return 'none';
+      var acct = await fetch('/api/cloud-proxy/api/cloud/account').then(function(r){return r.json();});
+      var plan = (acct.plan || 'free').toLowerCase();
+      if (plan === 'cloud_pro' || plan === 'pro') return 'pro';
+      if (plan === 'trial') return 'trial';
+      return 'free';
+    } catch (e) { return 'none'; }
+  }
+
+  function _isPro() { return state.tier === 'pro' || state.tier === 'trial'; }
+
+  /* ── Render the card grid ── */
+  function _render() {
+    var grid = document.getElementById('notifications-grid');
+    if (!grid) return;
+    var byType = {};
+    state.rows.forEach(function(c) { (byType[c.channel_type] = byType[c.channel_type] || []).push(c); });
+
+    grid.innerHTML = CHANNELS.map(function(ch) {
+      var existing = (byType[ch.key] || [])[0];   // show the first connected of this type
+      var connected = !!(existing && existing.enabled);
+      return ''
+        + '<div style="background:var(--bg-secondary);border:1px solid ' + (connected ? ch.color + '55' : 'var(--border)') + ';border-radius:10px;padding:16px;text-align:center;transition:border-color 0.2s;">'
+        + '  <div style="font-size:24px;margin-bottom:8px;">' + ch.icon + '</div>'
+        + '  <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">' + ch.name + '</div>'
+        + '  <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;line-height:1.5;min-height:30px;">' + _esc(ch.desc) + '</div>'
+        + (connected
+            ? '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + (existing ? existing.id : '') + '\')" style="width:100%;padding:9px;border:1px solid ' + ch.color + '55;background:' + ch.color + '20;color:' + ch.color + ';border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">✓ Connected — Edit</button>'
+            : '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'\')" style="width:100%;padding:9px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Connect</button>')
+        + '</div>';
+    }).join('');
+
+    // Free-tier reminder banner (shown only when user is on Free)
+    var banner = document.getElementById('notifications-free-banner');
+    if (banner) banner.style.display = (state.tier === 'free') ? 'block' : 'none';
+
+    // Status line
+    var status = document.getElementById('notifications-status');
+    if (status) {
+      var n = state.rows.length;
+      status.textContent = (n ? n + ' channel' + (n === 1 ? '' : 's') + ' configured' : 'No channels configured yet.')
+        + ' · plan: ' + state.tier;
+    }
+  }
+
+  /* ── Setup modal (Connect / Edit) ── */
+  window.notifyOpenSetup = function(key, channelId) {
+    if (state.tier === 'none') {
+      // OSS user without cloud — bounce to signup
+      window.open('https://clawmetry.com/connect?next=app', '_blank');
+      return;
+    }
+    var ch = CHANNELS.find(function(c){return c.key === key;});
+    if (!ch) return;
+    var existing = state.rows.find(function(r){return r.id === channelId;});
+
+    // Free-tier cap: at most 1 enabled channel total (server enforces too).
+    if (!existing && state.tier === 'free' && state.rows.length >= 1) {
+      return notifyHandleUpgrade();
+    }
+
+    var html = ''
+      + '<div style="background:var(--bg-secondary,#131929);border:1px solid ' + ch.color + '44;border-radius:14px;padding:24px 28px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5);">'
+      + '  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">'
+      + '    <span style="font-size:22px;">' + ch.icon + '</span>'
+      + '    <span style="font-size:15px;font-weight:700;color:var(--text-primary);">'+(existing ? 'Edit' : 'Connect')+' ' + ch.name + '</span>'
+      + '    <span style="margin-left:auto;cursor:pointer;color:var(--text-muted);font-size:20px;line-height:1;" onclick="notifyCloseSetup()">×</span>'
+      + '  </div>';
+    if (ch.howTo) {
+      html += '<div style="background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.15);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text-secondary);line-height:1.7;">'
+            + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:6px;">How to set up</div>'
+            + ch.howTo
+            + '</div>';
+    }
+    var existingCfg = (existing && existing.config) || {};
+    ch.fields.forEach(function(f) {
+      var val = existingCfg[f.key] || '';
+      html += '<label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">' + _esc(f.label) + '</label>'
+            + '<input type="text" id="notify-fld-' + f.key + '" value="' + _esc(val) + '" placeholder="' + _esc(f.placeholder) + '" '
+            + 'style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:13px;margin-bottom:10px;">';
+    });
+    html += '<div style="display:flex;gap:8px;margin-top:8px;">'
+          + '  <button onclick="notifySaveSetup(\'' + ch.key + '\',\'' + (channelId || '') + '\')" style="flex:1;padding:10px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">' + (existing ? 'Update' : 'Connect') + '</button>'
+          + (existing ? '  <button onclick="notifyDelete(\'' + channelId + '\')" style="padding:10px 16px;border:1px solid #ef444466;background:transparent;color:#ef4444;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Disconnect</button>' : '')
+          + '</div>'
+          + '</div>';
+    var ov = document.getElementById('notifications-setup-overlay');
+    ov.innerHTML = html;
+    ov.style.display = 'flex';
+    ov.onclick = function(e){ if (e.target === ov) notifyCloseSetup(); };
+  };
+
+  window.notifyCloseSetup = function() {
+    var ov = document.getElementById('notifications-setup-overlay');
+    if (ov) { ov.style.display = 'none'; ov.innerHTML = ''; }
+  };
+
+  window.notifySaveSetup = async function(key, channelId) {
+    var ch = CHANNELS.find(function(c){return c.key === key;});
+    if (!ch) return;
+    var config = {};
+    ch.fields.forEach(function(f) {
+      var el = document.getElementById('notify-fld-' + f.key);
+      if (el) config[f.key] = (el.value || '').trim();
+    });
+    var missing = ch.fields.find(function(f){return !config[f.key];});
+    if (missing) { alert('Please fill in: ' + missing.label); return; }
+
+    var url = channelId
+      ? '/api/cloud-proxy/api/channels/' + encodeURIComponent(channelId)
+      : '/api/cloud-proxy/api/channels';
+    var method = channelId ? 'PATCH' : 'POST';
+    var body = channelId
+      ? { config: config }
+      : { channel_type: ch.key, name: ch.name, enabled: true, config: config };
+
+    try {
+      var resp = await fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (resp.status === 402) { return notifyHandleUpgrade(); }
+      if (!resp.ok) {
+        var d = await resp.json().catch(function(){return{};});
+        alert((d && (d.message || d.error)) || ('Save failed: HTTP ' + resp.status));
+        return;
+      }
+      notifyCloseSetup();
+      loadNotificationsPage();
+    } catch (e) {
+      alert('Network error: ' + e.message);
+    }
+  };
+
+  window.notifyDelete = async function(channelId) {
+    if (!channelId) return;
+    if (!confirm('Disconnect this channel? Alert rules using it will fall back to other channels.')) return;
+    try {
+      var resp = await fetch('/api/cloud-proxy/api/channels/' + encodeURIComponent(channelId), { method: 'DELETE' });
+      if (!resp.ok) {
+        var d = await resp.json().catch(function(){return{};});
+        alert((d && (d.message || d.error)) || ('Delete failed: HTTP ' + resp.status));
+        return;
+      }
+      notifyCloseSetup();
+      loadNotificationsPage();
+    } catch (e) {
+      alert('Network error: ' + e.message);
+    }
+  };
+
+  window.notifyHandleUpgrade = function() {
+    // Server-side /pricing redirect (cloud) figures out Stripe Checkout vs marketing site.
+    window.open('https://app.clawmetry.com/pricing', '_blank');
+  };
+
+  /* ── Public entry point — switchTab('notifications') calls this ── */
+  window.loadNotificationsPage = async function() {
+    state.tier = await _resolveTier();
+    var noauth = document.getElementById('notifications-noauth');
+    var grid   = document.getElementById('notifications-grid');
+    if (state.tier === 'none') {
+      if (noauth) noauth.style.display = '';
+      if (grid)   grid.style.display = 'none';
+      var status = document.getElementById('notifications-status');
+      if (status) status.textContent = '';
+      return;
+    }
+    if (noauth) noauth.style.display = 'none';
+    if (grid)   grid.style.display = '';
+
+    try {
+      var data = await fetch('/api/cloud-proxy/api/channels').then(function(r){return r.json();});
+      state.rows = (data && data.channels) || [];
+    } catch (e) {
+      state.rows = [];
+    }
+    _render();
+  };
+
+})();
+</script>
