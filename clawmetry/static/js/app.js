@@ -2054,7 +2054,7 @@ async function loadActivityStream() {
             var time = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
             
             if (content.includes('searching') || content.includes('search')) {
-              activity = time + ' [check] Searching web for information';
+              activity = time + ' 🔍 Searching web for information';
             } else if (content.includes('reading') || content.includes('file')) {
               activity = time + ' 📖 Reading files';
             } else if (content.includes('writing') || content.includes('edit')) {
@@ -5415,7 +5415,7 @@ function displayCostWarnings(warnings) {
   
   var html = '';
   warnings.forEach(function(w) {
-    var icon = w.level === 'error' ? '🚨' : '[warn]';
+    var icon = w.level === 'error' ? '🚨' : '⚠️';
     html += '<div class="cost-warning ' + w.level + '">';
     html += '<div class="cost-warning-icon">' + icon + '</div>';
     html += '<div class="cost-warning-message">' + escHtml(w.message) + '</div>';
@@ -7426,7 +7426,7 @@ var COMP_MAP = {
   'node-session': {type:'tool', name:'Sessions', icon:'📋'},
   'node-exec': {type:'tool', name:'Exec', icon:'⚡'},
   'node-browser': {type:'tool', name:'Web', icon:'🌍'},
-  'node-search': {type:'tool', name:'Search', icon:'[check]'},
+  'node-search': {type:'tool', name:'Search', icon:'🔍'},
   'node-cron': {type:'tool', name:'Cron', icon:'⏰'},
   'node-tts': {type:'tool', name:'TTS', icon:'🔊'},
   'node-memory': {type:'tool', name:'Memory', icon:'💾'},
@@ -8471,7 +8471,7 @@ function loadBrainData(isRefresh) {
       html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No LLM calls found today</div>';
     } else {
       html += '<div style="display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto;">';
-      var TOOL_ICONS = {read:'📄',write:'✏️',edit:'🔧',exec:'⚡',process:'⚙️',browser:'🌐',web_search:'[check]',web_fetch:'🌍',message:'💬',tts:'🔊',image:'🖼️',canvas:'🎨',nodes:'📱'};
+      var TOOL_ICONS = {read:'📄',write:'✏️',edit:'🔧',exec:'⚡',process:'⚙️',browser:'🌐',web_search:'🔍',web_fetch:'🌍',message:'💬',tts:'🔊',image:'🖼️',canvas:'🎨',nodes:'📱'};
       var TOOL_COLORS = {exec:'#f59e0b',browser:'#3b82f6',web_search:'#8b5cf6',web_fetch:'#06b6d4',message:'#ec4899',read:'#6b7280',write:'#22c55e',edit:'#f97316',tts:'#a855f7',image:'#ef4444',canvas:'#14b8a6',nodes:'#6366f1',process:'#64748b'};
       calls.forEach(function(c) {
         var ts = c.timestamp ? new Date(c.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
@@ -8560,7 +8560,7 @@ function loadCostOptimizerData(isRefresh) {
     if (sys.cores) html += '<span class="hw-card-chip">' + sys.cores + ' cores</span>';
     if (sys.backend) html += '<span class="hw-card-chip green">' + sys.backend + '</span>';
     html += '</div>';
-    html += '<div class="hw-metal-notice">[warn] llmfit doesn\'t detect Apple Metal -- actual performance will be <strong>3-5x faster</strong> with Ollama\'s Metal backend</div>';
+    html += '<div class="hw-metal-notice">⚠️ llmfit doesn\'t detect Apple Metal -- actual performance will be <strong>3-5x faster</strong> with Ollama\'s Metal backend</div>';
 
     // ══ SECTION 3: Recommended Local Models ══════════════════════
     html += '<div class="co-section">';
@@ -8568,7 +8568,7 @@ function loadCostOptimizerData(isRefresh) {
 
     if (!data.ollamaInstalled) {
       html += '<div class="co-ollama-prompt">';
-      html += '<div style="font-size:13px;color:#a78bfa;font-weight:600;">[warn] Ollama not installed -- install to run models locally (free!)</div>';
+      html += '<div style="font-size:13px;color:#a78bfa;font-weight:600;">⚠️ Ollama not installed -- install to run models locally (free!)</div>';
       html += '<div class="co-ollama-cmd">brew install ollama</div>';
       html += '<button class="co-action-btn" onclick="navigator.clipboard.writeText(\'brew install ollama\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'📋 Copy Install Command\',2000);">📋 Copy Install Command</button>';
       html += '</div>';
@@ -8630,7 +8630,7 @@ function loadCostOptimizerData(isRefresh) {
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
     html += '<button class="co-action-btn" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'brew install ollama\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'📋 Install Ollama\',2000);">📋 Install Ollama</button>';
     html += '<button class="co-action-btn secondary" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'ollama serve\');this.textContent=\'[ok] Copied!\';setTimeout(()=>this.textContent=\'📋 ollama serve\',2000);">📋 ollama serve</button>';
-    html += '<a class="co-action-btn secondary" style="width:auto;padding:6px 14px;text-decoration:none;display:inline-block;" href="https://ollama.com/search" target="_blank">[check] Browse Models</a>';
+    html += '<a class="co-action-btn secondary" style="width:auto;padding:6px 14px;text-decoration:none;display:inline-block;" href="https://ollama.com/search" target="_blank">🔍 Browse Models</a>';
     html += '</div>';
     html += '</div>';
 
@@ -8790,7 +8790,7 @@ function loadAutomationAdvisorDataWithTime() {
     html += '<div style="text-align:center;margin-bottom:30px;"><div style="font-size:48px;margin-bottom:12px;">🧠</div><h2 style="margin:0;font-size:20px;">Automation Advisor</h2><p style="color:var(--text-muted);margin:8px 0 0 0;">Analyzing patterns to suggest new automations</p></div>';
     
     if (data.patterns && data.patterns.length > 0) {
-      html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">[check] Detected Patterns</h3>';
+      html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">🔍 Detected Patterns</h3>';
       data.patterns.forEach(function(pattern) {
         var priorityColor = pattern.priority === 'high' ? '#f44336' : pattern.priority === 'medium' ? '#ff9800' : '#4caf50';
         html += '<div style="background:var(--bg-hover);border-radius:8px;padding:16px;margin-bottom:16px;border-left:4px solid ' + priorityColor + ';">';
@@ -8828,7 +8828,7 @@ function loadAutomationAdvisorDataWithTime() {
     html += '</div>';
     body.innerHTML = html;
   }).catch(function(e) {
-    body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><div style="font-size:48px;margin-bottom:16px;">[warn]</div><h3>Analysis Unavailable</h3><p>Unable to load automation analysis: ' + e.message + '</p></div>';
+    body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);"><div style="font-size:48px;margin-bottom:16px;">⚠️</div><h3>Analysis Unavailable</h3><p>Unable to load automation analysis: ' + e.message + '</p></div>';
   });
 }
 
@@ -9146,7 +9146,7 @@ function loadToolData(toolKey, comp, isRefresh) {
           var ts = _fmtToolTs(evt.timestamp);
           html += '<div style="padding:10px 12px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);">';
           html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;">';
-          html += '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">[check] ' + escapeHtml(evt.detail || '') + '</div>';
+          html += '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">🔍 ' + escapeHtml(evt.detail || '') + '</div>';
           html += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + ts + '</span>';
           html += '</div>';
           if (evt.result_count !== undefined) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + evt.result_count + ' results returned</div>';
@@ -9737,7 +9737,7 @@ function renderModalNarrative(el) {
     } else if (evt.type === 'tool') {
       icon = '🔧'; text = 'Called tool: <code>' + escHtml(evt.toolName||'') + '</code>';
     } else if (evt.type === 'result') {
-      icon = '[check]'; text = 'Got result (' + (evt.text||'').length + ' chars)';
+      icon = '✅'; text = 'Got result (' + (evt.text||'').length + ' chars)';
     } else return;
     html += '<div class="narrative-item"><span class="narr-icon">' + icon + '</span>' + text + '</div>';
   });
@@ -9777,7 +9777,7 @@ function renderEvtItem(evt, idx) {
     summary = '<strong>' + escHtml(evt.toolName||'tool') + '</strong> - ' + escHtml((evt.args||'').substring(0, 100));
     body = evt.args || '';
   } else if (evt.type === 'result') {
-    icon = '[check]'; typeClass = 'type-result';
+    icon = '✅'; typeClass = 'type-result';
     summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
     body = evt.text || '';
   } else {
