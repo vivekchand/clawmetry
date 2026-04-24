@@ -1099,9 +1099,10 @@ def sync_sessions_recent(
 # ── Sync: claude-cli backend transcripts ──────────────────────────────────────
 # OpenClaw routes most chat (TUI, Telegram, etc.) through the agent/cli-backend
 # plugin, which delegates to the Claude Code CLI. Claude CLI writes the actual
-# transcript to ~/.claude/projects/<workspace-slug>/<cli-session-id>.jsonl --
-# NOT to OpenClaw's own session jsonl. Without this adapter the cloud Brain
-# feed stays frozen at the last bootstrap event and misses every real message.
+# transcript to ~/.claude/projects/<cwd-slug>/<cli-session-id>.jsonl -- keyed on
+# the agent process CWD, which is usually *not* the OpenClaw workspace. Without
+# this adapter the cloud Brain feed stays frozen at the last bootstrap event
+# and misses every real message.
 
 
 def _claude_projects_root() -> Path:
@@ -1110,17 +1111,6 @@ def _claude_projects_root() -> Path:
     if custom:
         return Path(os.path.expanduser(custom)) / "projects"
     return Path(os.path.expanduser("~/.claude/projects"))
-
-
-def _claude_project_slug(workspace_path: str) -> str:
-    """Encode a workspace path the same way Claude Code does.
-
-    Claude Code replaces every '/' and '.' in the absolute workspace path with
-    '-'. Example: '/Users/vivek/.openclaw/workspace' becomes
-    '-Users-vivek--openclaw-workspace'.
-    """
-    import re
-    return re.sub(r"[/.]", "-", workspace_path)
 
 
 def _translate_claude_cli_event(obj: dict) -> dict:
@@ -1143,15 +1133,15 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
     """Tail claude-cli transcripts and push them under the OpenClaw session_file.
 
     For each entry in `agents/main/sessions/sessions.json` that carries a
-    `claudeCliSessionId`, locate the matching jsonl in
-    `~/.claude/projects/<workspace-slug>/`, tail new lines, translate them,
-    and push via `_flush_session_batch` using the OpenClaw session_file
-    basename. The cloud correlates events to the existing session row by
-    that basename, so no cloud-side change is required.
+    `claudeCliSessionId`, locate the matching jsonl under
+    `~/.claude/projects/*/` (scanning all project dirs, since Claude Code
+    derives the slug from the agent's CWD rather than the OpenClaw workspace),
+    tail new lines, translate them, and push via `_flush_session_batch` using
+    the OpenClaw session_file basename. The cloud correlates events to the
+    existing session row by that basename, so no cloud-side change is required.
     """
     sessions_dir = paths.get("sessions_dir") or ""
-    workspace = paths.get("workspace") or ""
-    if not sessions_dir or not workspace:
+    if not sessions_dir:
         return 0
 
     api_key = config["api_key"]
@@ -1167,8 +1157,22 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
     except Exception:
         return 0
 
-    project_dir = _claude_projects_root() / _claude_project_slug(workspace)
-    if not project_dir.is_dir():
+    # Claude Code derives the project slug from the *agent process CWD*, not the
+    # OpenClaw workspace — a Telegram session spawned from ~/clawd writes to
+    # `-home-vivek-clawd/`, even though OpenClaw's workspace is
+    # ~/.openclaw/workspace. Scan every project dir and index transcripts by
+    # their session-id filename so we find the right file regardless of CWD.
+    projects_root = _claude_projects_root()
+    if not projects_root.is_dir():
+        return 0
+    cli_id_to_path: dict[str, Path] = {}
+    try:
+        for proj_dir in projects_root.iterdir():
+            if not proj_dir.is_dir():
+                continue
+            for jp in proj_dir.glob("*.jsonl"):
+                cli_id_to_path[jp.stem] = jp
+    except OSError:
         return 0
 
     targets: list[tuple[str, str]] = []  # (claude_jsonl_path, openclaw_basename)
@@ -1180,8 +1184,8 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
         ).get("claude-cli")
         if not cli_id:
             continue
-        cli_path = project_dir / f"{cli_id}.jsonl"
-        if not cli_path.is_file():
+        cli_path = cli_id_to_path.get(cli_id)
+        if cli_path is None:
             continue
         oc_sf = meta.get("sessionFile", "")
         # Fall back to <openclaw_session_id>.jsonl when sessionFile is absent
