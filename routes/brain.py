@@ -35,10 +35,76 @@ def api_brain_history():
     index_path = os.path.join(session_dir, "sessions.json")
     sid_to_label = {}
     sid_to_channel = {}  # sessionId → {channel, chatType, subject}
+    sid_to_meta = {}  # sessionId → {category, icon, human_label, last_ts, provider}
+
+    # Channel-provider → emoji map. Mirrors dashboard.py's CHANNEL_ICONS;
+    # inlined here so the route is self-contained for wheel imports.
+    _CHANNEL_ICON = {
+        "telegram": "📱", "signal": "📡", "whatsapp": "💬", "discord": "🎮",
+        "slack": "💼", "imessage": "🍎", "webchat": "🌐", "matrix": "🔢",
+        "msteams": "🏢", "irc": "📡", "googlechat": "🔵", "mattermost": "⚡",
+        "line": "💚", "nostr": "🟣", "twitch": "💜", "bluebubbles": "💙",
+        "cli": "⌨️", "tui": "⌨️",
+    }
+
+    def _classify(sess_key, meta):
+        # Order matters: ":cron:" and ":subagent:" appear before channel infix.
+        if ":cron:" in sess_key:
+            return "cron"
+        if ":subagent:" in sess_key:
+            return "subagent"
+        parts = sess_key.split(":")
+        # agent:<id>:main  → main agent session
+        if len(parts) >= 3 and parts[2] == "main":
+            return "main"
+        # agent:<id>:<provider>:…  → channel session
+        if len(parts) >= 3 and parts[2] not in ("main", "subagent", "cron"):
+            return "channel"
+        return "other"
+
+    def _icon_for(category, provider):
+        if category == "main":
+            return "🧠"
+        if category == "cron":
+            return "📅"
+        if category == "subagent":
+            return "🤖"
+        if category == "channel":
+            return _CHANNEL_ICON.get((provider or "").lower(), "💬")
+        return "•"
+
+    def _human_label(sess_key, meta, fallback_sid):
+        # Channel: origin.label > displayName
+        origin = meta.get("origin") or {}
+        if isinstance(origin, dict) and origin.get("label"):
+            return str(origin["label"])[:60]
+        lbl = meta.get("displayName") or meta.get("label") or ""
+        if lbl:
+            return str(lbl)[:60]
+        # Cron: sess_key pattern agent:main:cron:<id>[:run:<tail>]
+        if ":cron:" in sess_key:
+            parts = sess_key.split(":")
+            try:
+                cron_id = parts[parts.index("cron") + 1]
+                return "cron:" + cron_id[:8]
+            except (ValueError, IndexError):
+                pass
+        # Subagent: use task if present
+        task = meta.get("task") or ""
+        if task:
+            return str(task)[:40]
+        # Fall-through: preserve old `agent:<hex8>` behaviour
+        import re as _re_fb
+        if _re_fb.match(r"[0-9a-f-]{36}$", fallback_sid):
+            return "agent:" + fallback_sid[:8]
+        return fallback_sid[:40]
+
     try:
         with open(index_path, "r") as f:
             index = json.load(f)
         for key, meta in index.items():
+            if not isinstance(meta, dict):
+                continue
             sid = meta.get("sessionId", "")
             label = meta.get("displayName") or meta.get("label") or ""
             if sid and label:
@@ -58,8 +124,23 @@ def api_brain_history():
                         channel = "cli"
                 if channel:
                     sid_to_channel[sid] = {"channel": channel, "chatType": chat_type, "subject": subject}
+
+                cat = _classify(key, meta)
+                sid_to_meta[sid] = {
+                    "category":    cat,
+                    "provider":    channel or (meta.get("origin") or {}).get("provider") or "",
+                    "icon":        _icon_for(cat, channel or (meta.get("origin") or {}).get("provider") or ""),
+                    "human_label": _human_label(key, meta, sid),
+                    "last_ts":     meta.get("updatedAt") or 0,
+                }
     except Exception:
         pass
+
+    # Main-agent source has no sessions.json row; synthesize one.
+    sid_to_meta.setdefault("main", {
+        "category": "main", "provider": "cli", "icon": "🧠",
+        "human_label": "Main", "last_ts": 0,
+    })
 
     # Color assignment
     color_palette = [
@@ -500,11 +581,19 @@ def api_brain_history():
         s = ev["source"]
         if s not in seen_set:
             seen_set.add(s)
+            extra = sid_to_meta.get(s, {})
+            # Prefer the richer human label built from sessions.json. Fall
+            # back to whatever the event carried (sourceLabel → sid).
+            label = extra.get("human_label") or ev.get("sourceLabel") or s
             sources_seen.append(
                 {
-                    "id": s,
-                    "label": ev.get("sourceLabel", s),
-                    "color": ev.get("color", "#888"),
+                    "id":       s,
+                    "label":    label,
+                    "color":    ev.get("color", "#888"),
+                    "category": extra.get("category", "other"),
+                    "icon":     extra.get("icon", "•"),
+                    "provider": extra.get("provider", ""),
+                    "last_ts":  extra.get("last_ts", 0),
                 }
             )
     # Enrich events with channel info from session index
