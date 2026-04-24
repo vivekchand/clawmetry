@@ -82,10 +82,20 @@
     </div>
   </div>
 
-  <!-- ═══ SECTION 3: Notification Channels ═══ -->
+  <!-- ═══ SECTION 3: Notification Channels ═══
+       Channels are managed in the dedicated Notifications tab now —
+       duplicating the cards here just made the same decision live in two
+       places. One short link keeps the affordance discoverable. -->
   <div style="margin-bottom:16px;">
     <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Get Notified</div>
-    <div id="approvals-integrations" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--bg-secondary,#131929);border:1px solid var(--border,#1e293b);border-radius:10px;padding:12px 14px;">
+      <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);">
+        Approvals are delivered via your Notifications channels (Email, Slack, Phone, PagerDuty, Telegram).
+      </div>
+      <button onclick="if(typeof switchTab==='function')switchTab('notifications')"
+        style="flex-shrink:0;padding:7px 14px;border:1px solid #3b82f6;background:transparent;color:#60a5fa;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">
+        Configure notifications →
+      </button>
     </div>
   </div>
 
