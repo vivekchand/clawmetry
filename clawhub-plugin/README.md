@@ -1,49 +1,116 @@
 # ClawMetry — OpenClaw Observability Plugin
 
-**ClawMetry** is a real-time observability dashboard for OpenClaw AI agents. Install it as a ClawHub plugin to get instant visibility into your agent's token usage, API costs, memory consumption, tool calls, and session timelines — all in a beautiful local dashboard at `http://localhost:8900`. Zero configuration required: ClawMetry auto-detects your OpenClaw setup and starts streaming live data from your `~/.openclaw/` session files the moment it starts.
+**ClawMetry** is the observability dashboard for OpenClaw AI agents. It gives you real-time visibility into token usage, API costs, tool calls, session timelines, memory, and cron jobs — all in a local dashboard at `http://localhost:8900`.
 
-## Install via ClawHub
+Zero configuration required. ClawMetry auto-detects your OpenClaw setup and starts streaming live telemetry the moment it starts.
 
-```
+## Install
+
+### Via ClawHub (recommended)
+
+```bash
 openclaw plugins install clawmetry
 ```
 
-## Manual Install
+### Via curl
 
 ```bash
 curl -fsSL https://clawmetry.com/install.sh | bash
 ```
 
+### Via pip (standalone)
+
+```bash
+pip install clawmetry && clawmetry
+```
+
+## How it works
+
+When installed as an OpenClaw plugin, ClawMetry:
+
+1. **Subscribes to diagnostic events** — model usage, tool calls, session lifecycle, message flow
+2. **Manages the dashboard process** — auto-starts with OpenClaw, auto-stops on shutdown
+3. **Buffers and forwards telemetry** — batched HTTP delivery to the local dashboard
+4. **Ships a bundled skill** — teaches agents to be cost-aware and reference the dashboard
+
+### Plugin hooks used
+
+| Hook | Purpose |
+|---|---|
+| `onDiagnosticEvent` | Token usage, costs, session state, heartbeats |
+| `registerLogTransport` | Gateway log forwarding to dashboard log viewer |
+
+### Dashboard features
+
+- **Overview** — active sessions, total costs, token usage, system health
+- **Sessions** — per-session breakdown with transcript viewer
+- **Brain** — live feed of every LLM call (model, tokens, latency)
+- **Flow** — animated architecture diagram showing real-time data flow
+- **Memory** — workspace memory file viewer
+- **Crons** — scheduled job status and history
+- **Usage** — per-model cost tracking over time
+- **Alerts** — budget alerts and anomaly detection
+
 ## Configuration
 
-In your OpenClaw config, you can optionally set:
+In your OpenClaw config (`~/.openclaw/openclaw.json`):
 
-```json5
+```json
 {
   "plugins": {
+    "allow": ["clawmetry"],
     "entries": {
       "clawmetry": {
+        "enabled": true,
         "port": 8900,
         "host": "127.0.0.1",
-        "autoStart": true
+        "autoStart": true,
+        "cloudSync": false,
+        "apiKey": "cm-..."
       }
     }
   }
 }
 ```
 
-## Zero-Config HTTP Interceptor
+### Options
 
-To auto-track LLM costs without any code changes, add one line to your project:
+| Option | Default | Description |
+|---|---|---|
+| `port` | `8900` | Dashboard port |
+| `host` | `127.0.0.1` | Bind address (`0.0.0.0` for LAN access) |
+| `autoStart` | `true` | Start dashboard with OpenClaw |
+| `cloudSync` | `false` | Enable encrypted sync to clawmetry.com |
+| `apiKey` | — | ClawMetry Cloud API key (optional) |
 
-```python
-import clawmetry.interceptor  # patches httpx + requests automatically
+## Cloud Sync
+
+Optional E2E encrypted sync to [clawmetry.com](https://clawmetry.com) for remote monitoring:
+
+```bash
+clawmetry connect
 ```
 
-Or set `CLAWMETRY_INTERCEPT=1` in your environment to activate globally.
+Your encryption key never leaves your machine. Data is AES-256-GCM encrypted before transmission.
+
+## Standalone usage
+
+ClawMetry also works without the plugin — as a standalone `pip install`:
+
+```bash
+pip install clawmetry
+clawmetry
+```
+
+In standalone mode, it reads OpenClaw's JSONL session files and logs directly from the filesystem. The plugin mode adds real-time diagnostic event streaming for richer telemetry.
 
 ## Links
 
-- **Homepage:** https://clawmetry.com
-- **GitHub:** https://github.com/vivekchand/clawmetry
-- **npm:** (ClawHub registry listing pending)
+- **Homepage:** [clawmetry.com](https://clawmetry.com)
+- **GitHub:** [github.com/vivekchand/clawmetry](https://github.com/vivekchand/clawmetry)
+- **PyPI:** [pypi.org/project/clawmetry](https://pypi.org/project/clawmetry/)
+- **ClawHub:** `openclaw plugins install clawmetry`
+
+## License
+
+MIT

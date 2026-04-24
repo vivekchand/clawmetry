@@ -1,9 +1,7 @@
 {
   "id": "clawmetry",
   "name": "ClawMetry",
-  "description": "Real-time observability dashboard for OpenClaw AI agents. Tracks token usage, costs, memory, and tool calls. Zero config — auto-detects your OpenClaw setup.",
-  "version": "0.12.96",
-  "kind": "observability",
+  "description": "Real-time observability dashboard for OpenClaw agents. Token usage, costs, tool calls, sessions, memory — zero config.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -11,20 +9,30 @@
       "port": {
         "type": "integer",
         "default": 8900,
-        "description": "Port for the ClawMetry dashboard (default: 8900)"
+        "description": "Dashboard port (default: 8900)"
       },
       "host": {
         "type": "string",
         "default": "127.0.0.1",
-        "description": "Host/bind address for the dashboard (use 0.0.0.0 for LAN access)"
+        "description": "Bind address (use 0.0.0.0 for LAN access)"
       },
       "autoStart": {
         "type": "boolean",
         "default": true,
-        "description": "Automatically start the dashboard when OpenClaw starts"
+        "description": "Start dashboard automatically with OpenClaw"
+      },
+      "cloudSync": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable encrypted cloud sync to clawmetry.com"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "ClawMetry Cloud API key (optional, for cloud sync)"
       }
     }
   },
+  "skills": ["./skills"],
   "uiHints": {
     "port": {
       "label": "Dashboard Port",
@@ -36,6 +44,14 @@
     },
     "autoStart": {
       "label": "Auto-start with OpenClaw"
+    },
+    "cloudSync": {
+      "label": "Enable Cloud Sync"
+    },
+    "apiKey": {
+      "label": "ClawMetry Cloud API Key",
+      "placeholder": "cm-...",
+      "sensitive": true
     }
   }
 }
