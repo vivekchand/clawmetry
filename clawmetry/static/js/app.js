@@ -2197,15 +2197,81 @@ function scrollBrainToTop() {
   if (pill) pill.style.display = 'none';
 }
 
+var _brainFilterExpanded = false;
+window.toggleBrainFilterExpanded = function() {
+  _brainFilterExpanded = !_brainFilterExpanded;
+  renderBrainFilterChips(window._brainSourcesCache || []);
+};
+
+function _brainChipHtml(s) {
+  var isActive = _brainFilter === s.id;
+  var icon = s.icon || (s.id === 'main' ? '🧠' : '🤖');
+  return '<button class="brain-chip' + (isActive ? ' active' : '') + '" data-source="' +
+    escHtml(s.id) + '" title="' + escHtml(s.id) +
+    '" onclick="setBrainFilter(this.dataset.source,this)" style="padding:3px 10px;border-radius:12px;border:1px solid ' +
+    s.color + ';background:' + (isActive ? 'rgba(100,100,100,0.2)' : 'transparent') +
+    ';color:' + s.color + ';font-size:11px;cursor:pointer;font-weight:' +
+    (isActive ? '600' : '400') + ';">' + icon + ' ' + escHtml(s.label || s.id) + '</button>';
+}
+
 function renderBrainFilterChips(sources) {
   var container = document.getElementById('brain-filter-chips');
   if (!container || !sources) return;
-  var html = '<button class="brain-chip' + (_brainFilter === 'all' ? ' active' : '') + '" data-source="all" onclick="setBrainFilter(\'all\',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:' + (_brainFilter === 'all' ? 'rgba(168,85,247,0.2)' : 'transparent') + ';color:#a855f7;font-size:11px;cursor:pointer;font-weight:' + (_brainFilter === 'all' ? '600' : '400') + ';">All</button>';
-  sources.forEach(function(s) {
-    var isActive = _brainFilter === s.id;
-    var emoji = s.id === 'main' ? '🧠' : '🤖';
-    html += '<button class="brain-chip' + (isActive ? ' active' : '') + '" data-source="' + escHtml(s.id) + '" onclick="setBrainFilter(this.dataset.source,this)" style="padding:3px 10px;border-radius:12px;border:1px solid ' + s.color + ';background:' + (isActive ? 'rgba(100,100,100,0.2)' : 'transparent') + ';color:' + s.color + ';font-size:11px;cursor:pointer;font-weight:' + (isActive ? '600' : '400') + ';">' + emoji + ' ' + escHtml(s.label) + '</button>';
+  // Cache for the expand/collapse toggle re-render
+  window._brainSourcesCache = sources;
+
+  // "All" chip — always first, always visible
+  var allActive = _brainFilter === 'all';
+  var html = '<button class="brain-chip' + (allActive ? ' active' : '') +
+    '" data-source="all" onclick="setBrainFilter(\'all\',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:' +
+    (allActive ? 'rgba(168,85,247,0.2)' : 'transparent') +
+    ';color:#a855f7;font-size:11px;cursor:pointer;font-weight:' +
+    (allActive ? '600' : '400') + ';">All</button>';
+
+  // Sort: main first, then by last_ts desc
+  var sorted = sources.slice().sort(function(a, b) {
+    if ((a.category === 'main') !== (b.category === 'main'))
+      return a.category === 'main' ? -1 : 1;
+    return (b.last_ts || 0) - (a.last_ts || 0);
   });
+
+  var TOP_N = 5;
+  var alwaysShow = [];
+  var overflow = [];
+  sorted.forEach(function(s) {
+    if (alwaysShow.length < TOP_N + 1 && (s.category === 'main' || alwaysShow.length < TOP_N + (sorted[0].category === 'main' ? 1 : 0)))
+      alwaysShow.push(s);
+    else
+      overflow.push(s);
+  });
+  // Fallback when <= 6 total: just show everything.
+  if (sorted.length <= TOP_N + 1) {
+    alwaysShow = sorted;
+    overflow = [];
+  }
+
+  alwaysShow.forEach(function(s) { html += _brainChipHtml(s); });
+
+  if (overflow.length > 0) {
+    if (!_brainFilterExpanded) {
+      html += '<button class="brain-chip" onclick="toggleBrainFilterExpanded()" style="padding:3px 10px;border-radius:12px;border:1px dashed #888;background:transparent;color:#888;font-size:11px;cursor:pointer;font-weight:400;">+ ' +
+        overflow.length + ' more ▾</button>';
+    } else {
+      // Group overflow by category; render one small label row per group
+      var groups = {channel: [], subagent: [], cron: [], other: []};
+      overflow.forEach(function(s) {
+        var g = groups[s.category] !== undefined ? s.category : 'other';
+        groups[g].push(s);
+      });
+      var groupLabels = {channel: 'Channels', subagent: 'Subagents', cron: 'Crons', other: 'Other'};
+      ['channel', 'subagent', 'cron', 'other'].forEach(function(g) {
+        if (!groups[g].length) return;
+        html += '<span class="brain-chip-group-label">' + groupLabels[g] + '</span>';
+        groups[g].forEach(function(s) { html += _brainChipHtml(s); });
+      });
+      html += '<button class="brain-chip" onclick="toggleBrainFilterExpanded()" style="padding:3px 10px;border-radius:12px;border:1px dashed #888;background:transparent;color:#888;font-size:11px;cursor:pointer;font-weight:400;">− collapse ▴</button>';
+    }
+  }
   container.innerHTML = html;
 }
 
