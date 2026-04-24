@@ -133,7 +133,10 @@
         + '  <div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);margin-bottom:3px;">' + ch.name + '</div>'
         + '  <div style="font-size:10px;color:var(--text-muted,#94a3b8);margin-bottom:10px;line-height:1.4;min-height:28px;">' + _esc(ch.desc) + '</div>'
         + (connected
-            ? '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + (existing ? existing.id : '') + '\')" style="width:100%;padding:7px;border:1px solid ' + ch.color + '66;background:' + ch.color + '22;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">✓ Edit</button>'
+            ? '  <div style="display:flex;gap:6px;">'
+            + '    <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'' + (existing ? existing.id : '') + '\')" style="flex:1;padding:7px;border:1px solid ' + ch.color + '66;background:' + ch.color + '22;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">✓ Edit</button>'
+            + '    <button onclick="notifySendTest(\'' + (existing ? existing.id : '') + '\',this)" title="Send a test to verify the channel works" style="flex:0 0 auto;padding:7px 10px;border:1px solid ' + ch.color + '44;background:transparent;color:' + ch.color + ';border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Test</button>'
+            + '  </div>'
             : '  <button onclick="notifyOpenSetup(\'' + ch.key + '\',\'\')" style="width:100%;padding:7px;border:0;background:' + ch.color + ';color:#fff;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">Connect</button>')
         + '</div>';
     }).join('');
@@ -237,6 +240,28 @@
       notifyCloseSetup();
       loadNotificationsPage();
     } catch (e) {
+      alert('Network error: ' + e.message);
+    }
+  };
+
+  window.notifySendTest = async function(channelId, btn) {
+    if (!channelId) return;
+    var orig = btn ? btn.textContent : '';
+    if (btn) { btn.textContent = '…'; btn.disabled = true; }
+    try {
+      var resp = await fetch('/api/cloud-proxy/api/channels/' + encodeURIComponent(channelId) + '/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      var d = await resp.json().catch(function(){return{};});
+      if (resp.ok) {
+        if (btn) { btn.textContent = '✓ Sent'; setTimeout(function(){ btn.textContent = orig; btn.disabled = false; }, 2500); }
+      } else {
+        if (btn) { btn.textContent = '✕'; setTimeout(function(){ btn.textContent = orig; btn.disabled = false; }, 2500); }
+        alert((d && (d.message || d.error)) || ('Test failed: HTTP ' + resp.status));
+      }
+    } catch (e) {
+      if (btn) { btn.textContent = orig; btn.disabled = false; }
       alert('Network error: ' + e.message);
     }
   };
