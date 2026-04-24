@@ -1,5 +1,5 @@
 {
-  "name": "@clawmetry/openclaw-plugin",
+  "name": "clawmetry-plugin",
   "version": "1.0.0",
   "description": "ClawMetry observability plugin for OpenClaw — real-time dashboard for token usage, costs, tool calls, sessions, and memory",
   "type": "module",
