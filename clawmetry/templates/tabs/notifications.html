@@ -259,8 +259,37 @@
   };
 
   window.notifyHandleUpgrade = function() {
-    // Server-side /pricing redirect (cloud) figures out Stripe Checkout vs marketing site.
-    window.open('https://app.clawmetry.com/pricing', '_blank');
+    // Prefer the parent dashboard's existing in-page Pro upsell modal so the
+    // user gets the consistent "This feature requires ClawMetry Pro" → "Start
+    // 7-Day Free Trial" flow instead of a /pricing redirect to Stripe.
+    try {
+      var p = window.parent;
+      if (p && p !== window && typeof p.showProUpsell === 'function') {
+        p.showProUpsell('Unlimited delivery channels and multi-recipient routing.');
+        return;
+      }
+    } catch (e) { /* cross-origin or no parent — fall through */ }
+
+    // Inline fallback: render the same Pro modal inside the iframe.
+    var ov = document.getElementById('notifications-paywall');
+    if (!ov) {
+      ov = document.createElement('div');
+      ov.id = 'notifications-paywall';
+      ov.style.cssText = 'position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+      ov.onclick = function(e){ if (e.target === ov) ov.style.display = 'none'; };
+      ov.innerHTML = '<div style="background:#111827;border:1px solid #1e293b;border-radius:16px;padding:32px;max-width:400px;width:90%;text-align:center;">'
+        + '<div style="font-size:32px;margin-bottom:12px;">🔒</div>'
+        + '<h3 style="color:#fff;font-size:18px;font-weight:700;margin:0 0 8px;">This feature requires ClawMetry Pro</h3>'
+        + '<p style="color:#94a3b8;font-size:13px;line-height:1.6;margin:0 0 20px;">Unlock unlimited channels and multi-recipient delivery.</p>'
+        + '<button onclick="window.open(\'https://app.clawmetry.com/pricing\',\'_blank\')" '
+        + '  style="background:#E5443A;color:#fff;border:none;border-radius:10px;padding:14px 28px;font-size:15px;font-weight:700;cursor:pointer;width:100%;margin-bottom:8px;">Start 7-Day Free Trial</button>'
+        + '<div style="font-size:11px;color:#64748b;margin-top:4px;">No credit card required</div>'
+        + '<a href="#" onclick="document.getElementById(\'notifications-paywall\').style.display=\'none\';return false;" '
+        + '  style="display:block;margin-top:16px;color:#64748b;font-size:12px;text-decoration:none;">Maybe later</a>'
+        + '</div>';
+      document.body.appendChild(ov);
+    }
+    ov.style.display = 'flex';
   };
 
   /* ── Public entry point — switchTab('notifications') calls this ── */
