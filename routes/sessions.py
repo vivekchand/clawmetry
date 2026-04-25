@@ -29,11 +29,40 @@ bp_sessions = Blueprint('sessions', __name__)
 
 @bp_sessions.route("/api/sessions")
 def api_sessions():
+    """Return sessions with sessionType classification and optional type filter.
+
+    Query params:
+      type (optional): filter by session type — main | heartbeat | user | sub-agent
+        "all" or omitted returns every session.
+    """
     import dashboard as _d
+    type_filter = (request.args.get("type", "") or "").strip().lower()
+
     gw_data = _d._gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
-        return jsonify({"sessions": _d._augment_sessions_with_burn(gw_data["sessions"])})
-    return jsonify({"sessions": _d._augment_sessions_with_burn(_d._get_sessions())})
+        sessions = _d._augment_sessions_with_burn(gw_data["sessions"])
+    else:
+        sessions = _d._augment_sessions_with_burn(_d._get_sessions())
+
+    # Build per-type summary before filtering
+    type_counts: dict = {}
+    type_cost: dict = {}
+    for s in sessions:
+        t = s.get("sessionType", "main")
+        type_counts[t] = type_counts.get(t, 0) + 1
+        cost = float(s.get("burnRateUsd", 0) or s.get("totalCostUsd", 0) or 0)
+        type_cost[t] = round(type_cost.get(t, 0.0) + cost, 6)
+
+    summary = {
+        t: {"count": type_counts.get(t, 0), "total_cost_usd": type_cost.get(t, 0.0)}
+        for t in ("main", "heartbeat", "user", "sub-agent")
+    }
+    summary["total"] = len(sessions)
+
+    if type_filter and type_filter != "all":
+        sessions = [s for s in sessions if s.get("sessionType", "main") == type_filter]
+
+    return jsonify({"sessions": sessions, "summary": summary})
 
 
 @bp_sessions.route("/api/compactions")
