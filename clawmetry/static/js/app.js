@@ -3720,6 +3720,25 @@ var _cronJobs = [];
 var _cronExpanded = {};
 var _cronAutoRefreshTimer = null;
 var _cronActionsAvailable = false;
+var _cronView = 'active'; // 'active' | 'paused' | 'calendar'
+
+function setCronView(view) {
+  _cronView = view;
+  document.querySelectorAll('.cron-view-tab').forEach(function(b) {
+    if (b.dataset.view === view) b.classList.add('active'); else b.classList.remove('active');
+  });
+  renderCrons();
+}
+
+function _cronStatus(j) {
+  // Honest status: distinguish 'no run history yet' from 'pending'.
+  var s = (j.state && j.state.lastStatus) || j.lastStatus || '';
+  if (s) return s;
+  var lastMs = (j.state && j.state.lastRunAtMs) || (j.lastRun ? Date.parse(j.lastRun) : 0);
+  if (!lastMs) return 'no-data';
+  if (Date.now() - lastMs > 6 * 3600 * 1000) return 'stale';
+  return 'ok';
+}
 
 function toggleCronAutoRefresh() {
   var cb = document.getElementById('cron-auto-refresh');
@@ -3879,21 +3898,52 @@ async function loadCronsMultiNode() {
 }
 
 function renderCrons() {
+  var active = _cronJobs.filter(function(j){ return j.enabled !== false; });
+  var paused = _cronJobs.filter(function(j){ return j.enabled === false; });
+  var ca = document.getElementById('crons-count-active');
+  var cp = document.getElementById('crons-count-paused');
+  if (ca) ca.textContent = active.length ? '(' + active.length + ')' : '';
+  if (cp) cp.textContent = paused.length ? '(' + paused.length + ')' : '';
+
+  var listEl = document.getElementById('crons-list');
+  if (!listEl) return;
+
+  if (_cronView === 'calendar') {
+    renderCronCalendar(active);
+    return;
+  }
+
+  var jobs = _cronView === 'paused' ? paused : active;
+  if (jobs.length === 0) {
+    var msg = _cronView === 'paused'
+      ? 'No paused jobs. Disable any active job to see it here.'
+      : 'No active cron jobs yet. Click "+ New Job" to create one.';
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:24px;text-align:center;font-size:13px;">' + msg + '</div>';
+    return;
+  }
+
+  renderCronList(jobs);
+}
+
+function renderCronList(jobs) {
   var html = '';
-  _cronJobs.forEach(function(j) {
-    var status = j.state && j.state.lastStatus ? j.state.lastStatus : 'pending';
+  jobs.forEach(function(j) {
+    var status = _cronStatus(j);
     var isEnabled = j.enabled !== false;
     var disabledClass = isEnabled ? '' : ' cron-disabled';
     var expanded = _cronExpanded[j.id];
 
-    // Status badge -- show disabled if not enabled
-    var badgeLabel = isEnabled ? status : 'disabled';
+    var labelMap = {'no-data':'no data','stale':'stale','ok':'ok','error':'error','pending':'pending'};
+    var badgeLabel = isEnabled ? (labelMap[status] || status) : 'disabled';
     var badgeClass = isEnabled ? status : 'pending';
+    var badgeTitle = '';
+    if (status === 'no-data') badgeTitle = 'No run history yet — ClawMetry has not received any runs from your agent for this job. The schedule may still be firing on the agent side.';
+    else if (status === 'stale') badgeTitle = 'Last run was over 6h ago — job may have stopped firing.';
 
     html += '<div class="cron-item' + disabledClass + '" onclick="toggleCronExpand(\'' + escHtml(j.id) + '\')">';
     html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
     html += '<div class="cron-name">' + escHtml(j.name || j.id) + '</div>';
-    html += '<span class="cron-status ' + badgeClass + '">' + badgeLabel + '</span>';
+    html += '<span class="cron-status ' + badgeClass + '" title="' + escHtml(badgeTitle) + '">' + badgeLabel + '</span>';
     if (status === 'error') {
       var errMsg = (j.state && j.state.lastError) ? escHtml(j.state.lastError) : 'Unknown error';
       var errTime = (j.state && j.state.lastRunAtMs) ? new Date(j.state.lastRunAtMs).toLocaleString() : 'Unknown';
@@ -3953,12 +4003,125 @@ function renderCrons() {
 
     html += '</div>';
   });
-  document.getElementById('crons-list').innerHTML = html || 'No cron jobs';
+  document.getElementById('crons-list').innerHTML = html;
 
   // Load run history for expanded items
   Object.keys(_cronExpanded).forEach(function(id) {
     if (_cronExpanded[id]) loadCronRuns(id);
   });
+}
+
+function _cronDayLabel(key) {
+  var dayMs = 86400000;
+  var today = new Date(); today.setHours(0,0,0,0);
+  var d = new Date(key + 'T00:00:00');
+  var diff = Math.round((d - today) / dayMs);
+  var dayName = d.toLocaleDateString('en-US', {weekday:'long', month:'short', day:'numeric'});
+  if (diff === 0) return 'Today &middot; ' + dayName;
+  if (diff === 1) return 'Tomorrow &middot; ' + dayName;
+  if (diff === -1) return 'Yesterday &middot; ' + dayName;
+  if (diff > 0) return 'In ' + diff + ' days &middot; ' + dayName;
+  return Math.abs(diff) + ' days ago &middot; ' + dayName;
+}
+function _cronTimeStr(ts) {
+  return new Date(ts).toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit',hour12:false});
+}
+function _cronGroupByDay(items) {
+  var groups = {};
+  items.forEach(function(it) {
+    var key = new Date(it.ts).toISOString().slice(0,10);
+    (groups[key] = groups[key] || []).push(it);
+  });
+  return groups;
+}
+
+function renderCronCalendar(jobs) {
+  var listEl = document.getElementById('crons-list');
+  if (!listEl) return;
+  var now = Date.now();
+  var dayMs = 86400000;
+  var future = now + 7 * dayMs;
+  var past = now - 7 * dayMs;
+
+  var upcoming = [];
+  var recent = [];
+  jobs.forEach(function(j) {
+    var nextMs = j.state && j.state.nextRunAtMs;
+    if (nextMs && nextMs >= now && nextMs <= future) upcoming.push({ts: nextMs, job: j});
+    var lastMs = j.state && j.state.lastRunAtMs;
+    if (lastMs && lastMs >= past && lastMs <= now) {
+      recent.push({ts: lastMs, job: j, status: j.state.lastStatus || 'unknown'});
+    }
+  });
+  upcoming.sort(function(a,b){return a.ts - b.ts;});
+  recent.sort(function(a,b){return b.ts - a.ts;});
+
+  var html = '<div style="padding:12px;">';
+
+  // Summary tiles
+  html += '<div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">';
+  [
+    {label:'Coming up (7d)', val: upcoming.length},
+    {label:'Ran (last 7d)',   val: recent.length},
+    {label:'Active jobs',     val: jobs.length},
+  ].forEach(function(t) {
+    html += '<div style="background:var(--bg-secondary);border-radius:8px;padding:10px 16px;flex:1;min-width:130px;">';
+    html += '<div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">' + t.label + '</div>';
+    html += '<div style="font-size:22px;font-weight:700;color:var(--text-primary);margin-top:2px;">' + t.val + '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  if (upcoming.length === 0 && recent.length === 0) {
+    html += '<div style="background:var(--bg-secondary);border-radius:8px;padding:24px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.6;">';
+    html += '<div style="font-size:30px;margin-bottom:8px;">&#x1F4C5;</div>';
+    html += '<div><strong style="color:var(--text-primary);">No schedule data available yet.</strong></div>';
+    html += '<div style="margin-top:6px;max-width:480px;margin-left:auto;margin-right:auto;">ClawMetry shows runs once your agent reports them. If your jobs are scheduled but not running here, check the agent’s gateway connection or wait for the next scheduled fire.</div>';
+    html += '</div></div>';
+    listEl.innerHTML = html;
+    return;
+  }
+
+  if (upcoming.length > 0) {
+    html += '<div class="cron-cal-section">&#x1F552; Coming up</div>';
+    var upGroups = _cronGroupByDay(upcoming);
+    Object.keys(upGroups).sort().forEach(function(k) {
+      html += '<div class="cron-cal-day">';
+      html += '<div class="cron-cal-daylabel">' + _cronDayLabel(k) + '</div>';
+      upGroups[k].forEach(function(it) {
+        html += '<div class="cron-cal-row">';
+        html += '<div class="cron-cal-time">' + _cronTimeStr(it.ts) + '</div>';
+        html += '<div class="cron-cal-status" style="color:var(--text-muted);">&#x231B;</div>';
+        html += '<div class="cron-cal-name">' + escHtml(it.job.name || it.job.id) + '</div>';
+        html += '<div class="cron-cal-sched">' + escHtml(formatSchedule(it.job.schedule)) + '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    });
+  }
+
+  if (recent.length > 0) {
+    html += '<div class="cron-cal-section" style="margin-top:18px;">&#x2714;&#xFE0F; Recently ran</div>';
+    var pastGroups = _cronGroupByDay(recent);
+    Object.keys(pastGroups).sort().reverse().forEach(function(k) {
+      html += '<div class="cron-cal-day">';
+      html += '<div class="cron-cal-daylabel">' + _cronDayLabel(k) + '</div>';
+      pastGroups[k].forEach(function(it) {
+        var color = it.status === 'error' ? '#ef4444' : (it.status === 'ok' ? '#22c55e' : '#9ca3af');
+        var icon  = it.status === 'error' ? '&#x274C;' : (it.status === 'ok' ? '&#x2705;' : '&#x25CF;');
+        html += '<div class="cron-cal-row">';
+        html += '<div class="cron-cal-time">' + _cronTimeStr(it.ts) + '</div>';
+        html += '<div class="cron-cal-status" style="color:' + color + ';">' + icon + '</div>';
+        html += '<div class="cron-cal-name">' + escHtml(it.job.name || it.job.id) + '</div>';
+        html += '<div class="cron-cal-sched">' + escHtml(formatSchedule(it.job.schedule)) + '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    });
+  }
+
+  html += '</div>';
+  listEl.innerHTML = html;
 }
 
 function toggleCronExpand(jobId) {
