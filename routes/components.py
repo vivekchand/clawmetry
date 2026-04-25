@@ -524,6 +524,159 @@ def api_component_machine():
     return jsonify({"items": items})
 
 
+@bp_components.route("/api/component/storage")
+def api_component_storage():
+    """Disk usage per mount point. Same items shape as runtime/machine.
+
+    Replaces the "Live view coming soon" stub on the Flow → Storage modal —
+    every inch of the app needs to be 100% accurate per product mandate.
+    """
+    items = []
+    try:
+        # `df -h` excluding pseudo / overlay filesystems
+        df_out = subprocess.check_output(
+            ["df", "-h", "--output=source,target,used,size,pcent",
+             "-x", "tmpfs", "-x", "devtmpfs", "-x", "squashfs",
+             "-x", "overlay", "-x", "proc", "-x", "sysfs"],
+            stderr=subprocess.DEVNULL, timeout=5,
+        ).decode().strip().split("\n")[1:]  # skip header
+        for line in df_out:
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            src, mount, used, size, pcent = parts[0], parts[1], parts[2], parts[3], parts[4]
+            try:
+                pct_int = int(pcent.rstrip("%"))
+            except ValueError:
+                pct_int = 0
+            status = "critical" if pct_int > 90 else "warning" if pct_int > 80 else "ok"
+            items.append({
+                "label": f"📁 {mount}",
+                "value": f"{used} / {size} ({pcent} used)",
+                "status": status,
+            })
+    except Exception:
+        # macOS df doesn't support --output / -x in the same way; fall back
+        try:
+            df_out = subprocess.check_output(
+                ["df", "-h"], stderr=subprocess.DEVNULL, timeout=5,
+            ).decode().strip().split("\n")[1:]
+            for line in df_out:
+                parts = line.split()
+                if len(parts) < 6 or parts[5] in ("/dev", "/sys", "/proc"):
+                    continue
+                items.append({
+                    "label": f"📁 {parts[5]}",
+                    "value": f"{parts[2]} / {parts[1]} ({parts[4]} used)",
+                    "status": "ok",
+                })
+        except Exception:
+            items.append({
+                "label": "Disk",
+                "value": "Unable to read filesystem",
+                "status": "warning",
+            })
+    if not items:
+        items.append({
+            "label": "Disk",
+            "value": "No mounted filesystems detected",
+            "status": "warning",
+        })
+    return jsonify({"items": items})
+
+
+@bp_components.route("/api/component/network")
+def api_component_network():
+    """Network interfaces + connectivity check. Same items shape."""
+    import dashboard as _d
+    items = []
+    # Hostname + primary IP from existing helper (also used by Machine modal)
+    try:
+        items.append({
+            "label": "Hostname",
+            "value": _d.platform.node() if hasattr(_d, "platform") else __import__("platform").node(),
+            "status": "ok",
+        })
+    except Exception:
+        pass
+    try:
+        ip = _d.get_local_ip() if hasattr(_d, "get_local_ip") else ""
+        if ip:
+            items.append({"label": "Primary IP", "value": ip, "status": "ok"})
+    except Exception:
+        pass
+    # Interface list (Linux: /proc/net/dev; macOS: ifconfig fallback)
+    try:
+        with open("/proc/net/dev") as f:
+            lines = f.read().strip().split("\n")[2:]
+        for line in lines:
+            parts = line.split(":")
+            if len(parts) < 2:
+                continue
+            name = parts[0].strip()
+            if name == "lo":
+                continue
+            stats = parts[1].split()
+            try:
+                rx_bytes = int(stats[0])
+                tx_bytes = int(stats[8])
+                def _h(n):
+                    if n >= 1e9: return f"{n/1e9:.1f}G"
+                    if n >= 1e6: return f"{n/1e6:.1f}M"
+                    if n >= 1e3: return f"{n/1e3:.1f}K"
+                    return f"{n}B"
+                items.append({
+                    "label": f"⇄ {name}",
+                    "value": f"↓ {_h(rx_bytes)}  ↑ {_h(tx_bytes)}",
+                    "status": "ok",
+                })
+            except Exception:
+                continue
+    except Exception:
+        # macOS fallback — just list interfaces
+        try:
+            ifs = subprocess.check_output(
+                ["ifconfig", "-l"], stderr=subprocess.DEVNULL, timeout=3,
+            ).decode().strip().split()
+            for name in ifs:
+                if name == "lo0":
+                    continue
+                items.append({
+                    "label": f"⇄ {name}",
+                    "value": "active",
+                    "status": "ok",
+                })
+        except Exception:
+            pass
+    # Connectivity check — quick HEAD to a known host
+    try:
+        out = subprocess.check_output(
+            ["ping", "-c", "1", "-W", "1", "1.1.1.1"],
+            stderr=subprocess.DEVNULL, timeout=3,
+        ).decode()
+        import re as _re_ping
+        m = _re_ping.search(r"time=([\d.]+)\s*ms", out)
+        if m:
+            items.append({
+                "label": "🌐 Internet",
+                "value": f"Reachable ({m.group(1)} ms)",
+                "status": "ok",
+            })
+    except Exception:
+        items.append({
+            "label": "🌐 Internet",
+            "value": "Unreachable",
+            "status": "warning",
+        })
+    if not items:
+        items.append({
+            "label": "Network",
+            "value": "Unable to read interface info",
+            "status": "warning",
+        })
+    return jsonify({"items": items})
+
+
 @bp_components.route("/api/component/gateway")
 def api_component_gateway():
     """Parse gateway routing events from today's log file.

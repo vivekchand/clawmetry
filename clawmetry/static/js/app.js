@@ -7705,7 +7705,25 @@ function openCompModal(nodeId) {
     return;
   }
 
-  if (nodeId === 'node-runtime' || nodeId === 'node-machine') {
+  // Hook the existing Automation Advisor live view (backend already exists at
+  // /api/automation-analysis); was falling through to the "Live view coming
+  // soon" stub previously.
+  if (nodeId === 'node-automation-advisor') {
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Analyzing your patterns...</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    if (typeof loadAutomationAdvisorDataWithTime === 'function') {
+      try { loadAutomationAdvisorDataWithTime(); } catch (e) {
+        document.getElementById('comp-modal-body').innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load: ' + e.message + '</div>';
+      }
+    }
+    return;
+  }
+
+  // Same items-shape modal fits Storage and Network too (both have real
+  // backend endpoints now: api_component_storage, api_component_network).
+  // Replaces the "Live view coming soon" stub.
+  if (nodeId === 'node-runtime' || nodeId === 'node-machine' ||
+      nodeId === 'node-storage' || nodeId === 'node-network') {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading ' + c.name + ' info...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     fetch('/api/component/' + nodeId.replace('node-', '')).then(function(r){return r.json();}).then(function(data) {
