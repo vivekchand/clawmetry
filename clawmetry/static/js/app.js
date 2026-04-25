@@ -4131,12 +4131,14 @@ function toggleCronExpand(jobId) {
 
 async function loadCronRuns(jobId) {
   try {
-    var data = await fetch('/api/cron/' + encodeURIComponent(jobId) + '/runs').then(r => r.json());
+    var resp = await fetch('/api/cron/' + encodeURIComponent(jobId) + '/runs');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var data = await resp.json();
     var el = document.getElementById('cron-runs-' + jobId);
     if (!el) return;
-    var runs = data.runs || [];
+    var runs = (data && data.runs) || [];
     if (runs.length === 0) {
-      el.innerHTML = '<div style="color:var(--text-muted);">No run history available</div>';
+      el.innerHTML = '<div style="color:var(--text-muted);">No run history yet — your agent has not reported any runs for this job.</div>';
       return;
     }
     // Build calendar heatmap (last 30 days)
@@ -4178,7 +4180,7 @@ async function loadCronRuns(jobId) {
     el.innerHTML = h;
   } catch(e) {
     var el = document.getElementById('cron-runs-' + jobId);
-    if (el) el.innerHTML = '<div style="color:var(--text-error);">Failed to load runs</div>';
+    if (el) el.innerHTML = '<div style="color:var(--text-error);">Could not load run history (' + escHtml(String(e.message||e)) + '). The endpoint may be unreachable or your gateway is offline.</div>';
   }
 }
 
@@ -8695,8 +8697,14 @@ function loadBrainData(isRefresh) {
     html += '<div style="text-align:center;margin-bottom:14px;"><span style="background:linear-gradient(135deg,#FFD54F,#FF9800);color:#1a1a2e;padding:4px 14px;border-radius:20px;font-size:12px;font-weight:700;letter-spacing:0.5px;">' + escapeHtml(s.model||'unknown') + '</span></div>';
 
     // Stats cards 2x2
+    // Honest count + per-call avg so users can sanity-check the ratio. A "low"
+    // call count with high tokens is normal (cached context + long output);
+    // showing tokens-per-call inline avoids the "only 3 calls?" trust panic.
+    var avgTokPerCall = (s.today_calls||0) > 0 ? Math.round(totalTok / s.today_calls) : 0;
+    var avgTokFmt = avgTokPerCall >= 1e6 ? (avgTokPerCall/1e6).toFixed(1)+'M' : avgTokPerCall >= 1e3 ? (avgTokPerCall/1e3).toFixed(1)+'K' : avgTokPerCall;
+    var callsTooltip = 'API round-trips today (one HTTP request to the LLM provider per call). Cached context tokens are reused across calls and counted as cache_read, not as separate calls. Counts only what your agent has uploaded — sessions still open or pending sync may not be reflected yet.';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">';
-    html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px 14px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + (s.today_calls||0) + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">Today\'s Calls</div></div>';
+    html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px 14px;text-align:center;cursor:help;" title="' + callsTooltip + '"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + (s.today_calls||0) + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">API Calls Today</div>' + (avgTokPerCall ? '<div style="font-size:10px;color:var(--text-tertiary);margin-top:2px;">~' + avgTokFmt + ' tok/call avg</div>' : '') + '</div>';
     html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px 14px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + fmtTok + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">Tokens</div></div>';
     var costColor = parseFloat((s.today_cost||'$0').replace('$','')) > 50 ? '#f59e0b' : parseFloat((s.today_cost||'$0').replace('$','')) > 100 ? '#ef4444' : '#22c55e';
     html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px 14px;text-align:center;"><div style="font-size:24px;font-weight:700;color:' + costColor + ';">' + (s.today_cost||'$0.00') + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">Cost</div></div>';
@@ -8768,7 +8776,7 @@ function loadBrainData(isRefresh) {
     }
 
     body.innerHTML = html;
-    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' LLM calls today';
+    document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + (data.total||0) + ' API call' + ((data.total||0) === 1 ? '' : 's') + ' synced today (each = one HTTP round-trip to the LLM provider)';
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     var msg = String((e && e.message) || 'Unknown error');
@@ -10282,16 +10290,6 @@ async function bootDashboard() {
   (async function backgroundPrefetch() {
     try { await _withTimeout(loadCrons(), 5000, 'crons'); } catch (e) {}
     try { await _withTimeout(loadMemory(), 5000, 'memory'); } catch (e) {}
-    try {
-      var cronData = await _withTimeout(
-        fetch('/api/crons').then(function(r){return r.json();}),
-        3000,
-        'crons-tab-check'
-      );
-      if (cronData && cronData.jobs && cronData.jobs.length > 0) {
-        document.querySelectorAll('#crons-tab').forEach(function(t){ t.style.display = ''; });
-      }
-    } catch(e) {}
   })();
 
   startSystemHealthRefresh();
