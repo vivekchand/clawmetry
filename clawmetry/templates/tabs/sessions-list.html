@@ -1,0 +1,84 @@
+<div class="page" id="page-sessions-list">
+  <div class="refresh-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#128172; Sessions</h2>
+    <button class="refresh-btn" onclick="loadSessionsList()">&#8635; Refresh</button>
+  </div>
+
+  <!-- Per-type summary cards -->
+  <div id="sessions-type-cards" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;"></div>
+
+  <!-- Type filter chips -->
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;" id="sessions-type-filters">
+    <button class="session-type-chip active" data-type="all" onclick="filterSessionsByType('all',this)">All</button>
+    <button class="session-type-chip" data-type="main" onclick="filterSessionsByType('main',this)">&#9679; Main</button>
+    <button class="session-type-chip" data-type="heartbeat" onclick="filterSessionsByType('heartbeat',this)">&#128149; Heartbeat</button>
+    <button class="session-type-chip" data-type="user" onclick="filterSessionsByType('user',this)">&#128100; User</button>
+    <button class="session-type-chip" data-type="sub-agent" onclick="filterSessionsByType('sub-agent',this)">&#127795; Sub-Agent</button>
+  </div>
+
+  <!-- Sessions list -->
+  <div id="sessions-list-container">
+    <div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>
+  </div>
+</div>
+
+<style>
+  .session-type-chip {
+    padding: 5px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--border-secondary);
+    background: var(--button-bg);
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .session-type-chip:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .session-type-chip.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+
+  .session-type-card {
+    flex: 1;
+    min-width: 140px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-primary);
+    border-radius: 10px;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .session-type-card:hover { border-color: #6366f1; background: var(--bg-hover); }
+  .session-type-card.active { border-color: #6366f1; background: rgba(99,102,241,0.08); }
+  .session-type-card-icon { font-size: 18px; margin-bottom: 4px; }
+  .session-type-card-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; margin-bottom: 4px; }
+  .session-type-card-count { font-size: 22px; font-weight: 700; color: var(--text-primary); line-height: 1; }
+  .session-type-card-cost { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+  .session-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border-secondary);
+    transition: background 0.1s;
+    cursor: default;
+  }
+  .session-row:last-child { border-bottom: none; }
+  .session-row:hover { background: var(--bg-hover); }
+
+  .session-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .session-type-badge.badge-main      { background: rgba(99,102,241,0.15); color: #818cf8; border: 1px solid rgba(99,102,241,0.3); }
+  .session-type-badge.badge-heartbeat { background: rgba(236,72,153,0.12); color: #f472b6; border: 1px solid rgba(236,72,153,0.3); }
+  .session-type-badge.badge-user      { background: rgba(16,185,129,0.12); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+  .session-type-badge.badge-subagent  { background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+</style>
