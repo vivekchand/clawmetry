@@ -7514,8 +7514,29 @@ function openCompModal(nodeId) {
   // Track current component for time travel
   window._currentComponentId = nodeId;
   
-  document.getElementById('comp-modal-title').textContent = c.icon + ' ' + c.name;
-  
+  // Channel modals: surface a status badge in the title so users can tell
+  // "configured & quiet" from "never set up" (otherwise both render as 0).
+  var titleSuffix = '';
+  if (c.type === 'channel' && c.chKey) {
+    if (window._cmConfiguredChannels) {
+      titleSuffix = window._cmConfiguredChannels.has(c.chKey)
+        ? ' <span style="font-size:13px;color:#22c55e;font-weight:500;margin-left:8px;">🟢 Connected</span>'
+        : ' <span style="font-size:13px;color:#94a3b8;font-weight:500;margin-left:8px;">⚪ Not configured</span>';
+    } else {
+      // Fetch + cache, update the title async
+      fetch('/api/channels').then(function(r){return r.json();}).then(function(d){
+        window._cmConfiguredChannels = new Set(d.channels || []);
+        var t2 = document.getElementById('comp-modal-title');
+        if (!t2 || window._currentComponentId !== nodeId) return;
+        var conn = window._cmConfiguredChannels.has(c.chKey);
+        t2.innerHTML = (c.icon || '') + ' ' + escapeHtml(c.name) +
+          (conn ? ' <span style="font-size:13px;color:#22c55e;font-weight:500;margin-left:8px;">🟢 Connected</span>'
+                : ' <span style="font-size:13px;color:#94a3b8;font-weight:500;margin-left:8px;">⚪ Not configured</span>');
+      }).catch(function(){});
+    }
+  }
+  document.getElementById('comp-modal-title').innerHTML = (c.icon || '') + ' ' + escapeHtml(c.name) + titleSuffix;
+
   // Reset time travel state when opening new component
   _timeTravelMode = false;
   _currentTimeContext = null;
@@ -8882,6 +8903,29 @@ function loadGatewayData(isRefresh) {
     var body = document.getElementById('comp-modal-body');
     var s = data.stats || {};
     var cfg = s.config || {};
+    var routes = data.routes || [];
+
+    // Honesty: when everything is zero AND no routing events, the gateway
+    // hasn't synced any data yet (cloud user with bridge not running, or
+    // freshly installed node). Showing a row of misleading "0"s makes users
+    // think the gateway is broken; show a clear awaiting-data state instead.
+    var _allZero = !(s.today_messages||0) && !(s.today_heartbeats||0) &&
+                   !(s.today_crons||0) && !(s.today_errors||0) &&
+                   !(s.active_sessions||0) && routes.length === 0;
+    if (_allZero) {
+      var html0 = '<div style="text-align:center;padding:32px 24px;">';
+      html0 += '<div style="font-size:36px;margin-bottom:10px;opacity:0.6;">🌐</div>';
+      html0 += '<div style="font-size:15px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">Gateway not yet synced</div>';
+      html0 += '<div style="font-size:12px;color:var(--text-muted);max-width:380px;margin:0 auto;line-height:1.5;">No routing events have been ingested yet. The gateway will appear here once your agent starts handling messages, heartbeats, or cron triggers.</div>';
+      if (s.uptime || s.last_seen_at) {
+        html0 += '<div style="margin-top:12px;font-size:11px;color:var(--text-muted);">⏱️ Last seen: ' + escapeHtml(s.uptime || s.last_seen_at) + '</div>';
+      }
+      html0 += '</div>';
+      document.getElementById('comp-modal-body').innerHTML = html0;
+      document.getElementById('comp-modal-footer').textContent =
+        'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - awaiting data';
+      return;
+    }
 
     // Top stats row
     var html = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">';
@@ -8909,7 +8953,6 @@ function loadGatewayData(isRefresh) {
       html += '</div>';
     }
 
-    var routes = data.routes || [];
     if (routes.length === 0) {
       html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No routing events found today</div>';
     } else {
