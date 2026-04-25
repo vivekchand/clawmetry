@@ -2332,6 +2332,25 @@ DASHBOARD_HTML = r"""
   .cron-status.ok { background: var(--bg-success); color: var(--text-success); }
   .cron-status.error { background: var(--bg-error); color: var(--text-error); }
   .cron-status.pending { background: var(--bg-warning); color: var(--text-warning); }
+  .cron-status.no-data { background: rgba(107,114,128,0.18); color: #9ca3af; cursor: help; }
+  .cron-status.stale { background: rgba(245,158,11,0.18); color: #f59e0b; cursor: help; }
+
+  /* Cron view tabs (Active / Paused / Calendar) */
+  .cron-view-tabs { display: flex; gap: 4px; margin-bottom: 10px; padding: 4px; background: var(--bg-secondary); border-radius: 10px; width: fit-content; }
+  .cron-view-tab { background: transparent; border: none; color: var(--text-muted); padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; }
+  .cron-view-tab:hover { color: var(--text-primary); }
+  .cron-view-tab.active { background: var(--bg-tertiary); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  .cron-view-count { font-weight: 500; color: var(--text-muted); margin-left: 4px; font-size: 11px; }
+  .cron-view-tab.active .cron-view-count { color: var(--text-secondary); }
+  .cron-cal-section { font-size: 13px; font-weight: 700; color: var(--text-primary); margin: 8px 0 8px; display: flex; align-items: center; gap: 6px; }
+  .cron-cal-day { background: var(--bg-secondary); border-radius: 8px; margin-bottom: 8px; padding: 8px 12px; }
+  .cron-cal-daylabel { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 600; }
+  .cron-cal-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-top: 1px solid rgba(255,255,255,0.04); font-size: 13px; }
+  .cron-cal-row:nth-child(2) { border-top: none; }
+  .cron-cal-time { font-family: 'SF Mono','Fira Code',monospace; color: var(--text-accent); font-size: 12px; min-width: 56px; }
+  .cron-cal-status { width: 18px; text-align: center; }
+  .cron-cal-name { color: var(--text-primary); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cron-cal-sched { font-size: 11px; color: var(--text-muted); font-family: 'SF Mono','Fira Code',monospace; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Cron error info & fix */
   .cron-error-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; vertical-align: middle; }
@@ -3762,6 +3781,11 @@ function clawmetryLogout(){
   </div>
   <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
+  <div class="cron-view-tabs" role="tablist">
+    <button class="cron-view-tab active" data-view="active" onclick="setCronView('active')">Active <span class="cron-view-count" id="crons-count-active"></span></button>
+    <button class="cron-view-tab" data-view="paused" onclick="setCronView('paused')">Paused <span class="cron-view-count" id="crons-count-paused"></span></button>
+    <button class="cron-view-tab" data-view="calendar" onclick="setCronView('calendar')">&#x1F4C5; Calendar</button>
+  </div>
   <div class="card" id="crons-list">Loading...</div>
   <!-- Cron Health Monitor (GH #302) -->
   <div id="cron-health-anomaly-banner" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;color:#ef4444;font-size:13px;font-weight:600;">&#x26A0;&#xFE0F; Anomalies detected in cron jobs — review health table below</div>
