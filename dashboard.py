@@ -9716,9 +9716,28 @@ def _extract_usage_metrics(obj):
     elif isinstance(cost_data, (int, float)):
         cost = float(cost_data)
 
+    # Per-type cost attribution (GH#604)
+    cost_input = 0.0
+    cost_output = 0.0
+    cost_cache_read = 0.0
+    cost_cache_write = 0.0
+    if isinstance(cost_data, dict):
+        cost_input = float(cost_data.get("input", 0) or 0)
+        cost_output = float(cost_data.get("output", 0) or 0)
+        cost_cache_read = float(cost_data.get("cacheRead", cost_data.get("cache_read", 0)) or 0)
+        cost_cache_write = float(cost_data.get("cacheWrite", cost_data.get("cache_write", 0)) or 0)
+
     return {
         "tokens": int(total or 0),
         "cost": float(cost or 0.0),
+        "input_tokens": int(in_toks or 0),
+        "output_tokens": int(out_toks or 0),
+        "cache_read_tokens": int(cache_read or 0),
+        "cache_write_tokens": int(cache_write or 0),
+        "cost_input": cost_input,
+        "cost_output": cost_output,
+        "cost_cache_read": cost_cache_read,
+        "cost_cache_write": cost_cache_write,
     }
 
 
@@ -10044,9 +10063,28 @@ def _extract_usage_metrics(obj):
     elif isinstance(cost_data, (int, float)):
         cost = float(cost_data)
 
+    # Per-type cost attribution (GH#604)
+    cost_input = 0.0
+    cost_output = 0.0
+    cost_cache_read = 0.0
+    cost_cache_write = 0.0
+    if isinstance(cost_data, dict):
+        cost_input = float(cost_data.get("input", 0) or 0)
+        cost_output = float(cost_data.get("output", 0) or 0)
+        cost_cache_read = float(cost_data.get("cacheRead", cost_data.get("cache_read", 0)) or 0)
+        cost_cache_write = float(cost_data.get("cacheWrite", cost_data.get("cache_write", 0)) or 0)
+
     return {
         "tokens": int(total or 0),
         "cost": float(cost or 0.0),
+        "input_tokens": int(in_toks or 0),
+        "output_tokens": int(out_toks or 0),
+        "cache_read_tokens": int(cache_read or 0),
+        "cache_write_tokens": int(cache_write or 0),
+        "cost_input": cost_input,
+        "cost_output": cost_output,
+        "cost_cache_read": cost_cache_read,
+        "cost_cache_write": cost_cache_write,
     }
 
 

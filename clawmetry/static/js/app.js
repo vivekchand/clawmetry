@@ -5603,22 +5603,84 @@ function loadAllSkills() {
 }
 
 // ===== Transcripts =====
+window._allTranscripts = [];
+window._sessionTypeFilter = 'all';
+
+function filterSessionType(type) {
+  window._sessionTypeFilter = type;
+  // Update chip styling
+  document.querySelectorAll('.session-type-chip').forEach(function(btn) {
+    if (btn.dataset.type === type) {
+      btn.style.background = '#6366f1';
+      btn.style.color = '#fff';
+      btn.classList.add('active-type-chip');
+    } else {
+      btn.style.background = 'var(--button-bg)';
+      btn.style.color = 'var(--text-secondary)';
+      btn.classList.remove('active-type-chip');
+    }
+  });
+  _renderTranscriptList();
+}
+
+function _renderTranscriptList() {
+  var filtered = window._allTranscripts;
+  if (window._sessionTypeFilter !== 'all') {
+    filtered = filtered.filter(function(t) { return t.sessionType === window._sessionTypeFilter; });
+  }
+  var html = '';
+  filtered.forEach(function(t) {
+    var icon = t.sessionTypeIcon || '';
+    html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(t.id) + '\')">';
+    html += '<div><div class="transcript-name">';
+    if (icon) html += '<span style="margin-right:6px;" title="' + escHtml(t.sessionType || '') + '">' + icon + '</span>';
+    html += escHtml(t.name) + '</div>';
+    html += '<div class="transcript-meta-row">';
+    html += '<span>' + t.messages + ' messages</span>';
+    html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
+    html += '<span>' + timeAgo(t.modified) + '</span>';
+    if (t.sessionType) html += '<span style="opacity:0.6;font-size:11px;">' + escHtml(t.sessionType) + '</span>';
+    html += '</div></div>';
+    html += '<span style="color:#444;font-size:18px;">▸</span>';
+    html += '</div>';
+  });
+  document.getElementById('transcript-list').innerHTML = html || '<div style="padding:16px;color:#666;">No sessions match this filter</div>';
+}
+
+function _updateTypeCounts(transcripts) {
+  var counts = { main: 0, heartbeat: 0, subagent: 0, user: 0 };
+  transcripts.forEach(function(t) {
+    var st = t.sessionType || 'main';
+    if (counts[st] !== undefined) counts[st]++;
+  });
+  ['main', 'heartbeat', 'subagent', 'user'].forEach(function(type) {
+    var el = document.getElementById('type-count-' + type);
+    if (el) el.textContent = counts[type] > 0 ? '(' + counts[type] + ')' : '';
+  });
+  // Summary cards
+  var summaryEl = document.getElementById('session-type-summary');
+  if (summaryEl) {
+    var typeLabels = { main: '🖥️ Main', heartbeat: '💓 Heartbeat', subagent: '🤖 Sub-agent', user: '💬 User' };
+    var typeColors = { main: '#a855f7', heartbeat: '#ef4444', subagent: '#3b82f6', user: '#10b981' };
+    var cards = '';
+    ['main', 'heartbeat', 'subagent', 'user'].forEach(function(type) {
+      if (counts[type] > 0) {
+        cards += '<div style="background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:10px;padding:10px 14px;border-left:3px solid ' + typeColors[type] + ';">';
+        cards += '<div style="font-size:11px;color:var(--text-muted);">' + typeLabels[type] + '</div>';
+        cards += '<div style="font-size:20px;font-weight:700;color:var(--text-primary);">' + counts[type] + '</div>';
+        cards += '</div>';
+      }
+    });
+    summaryEl.innerHTML = cards;
+  }
+}
+
 async function loadTranscripts() {
   try {
     var data = await fetch('/api/transcripts').then(r => r.json());
-    var html = '';
-    data.transcripts.forEach(function(t) {
-      html += '<div class="transcript-item" onclick="viewTranscript(\'' + escHtml(t.id) + '\')">';
-      html += '<div><div class="transcript-name">' + escHtml(t.name) + '</div>';
-      html += '<div class="transcript-meta-row">';
-      html += '<span>' + t.messages + ' messages</span>';
-      html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
-      html += '<span>' + timeAgo(t.modified) + '</span>';
-      html += '</div></div>';
-      html += '<span style="color:#444;font-size:18px;">▸</span>';
-      html += '</div>';
-    });
-    document.getElementById('transcript-list').innerHTML = html || '<div style="padding:16px;color:#666;">No transcript files found</div>';
+    window._allTranscripts = data.transcripts || [];
+    _updateTypeCounts(window._allTranscripts);
+    _renderTranscriptList();
     document.getElementById('transcript-list').style.display = '';
     document.getElementById('transcript-viewer').style.display = 'none';
     document.getElementById('transcript-back-btn').style.display = 'none';

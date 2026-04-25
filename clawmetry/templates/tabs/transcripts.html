@@ -3,6 +3,31 @@
     <button class="refresh-btn" onclick="loadTranscripts()">↻ Refresh</button>
     <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← Back to list</button>
   </div>
+  <!-- Session type filter chips -->
+  <div id="session-type-filters" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+    <button class="session-type-chip active-type-chip" data-type="all" onclick="filterSessionType('all')" style="
+      padding:5px 14px;border-radius:20px;border:1px solid var(--border-secondary);
+      background:#6366f1;color:#fff;font-size:12px;cursor:pointer;font-weight:600;
+      ">All</button>
+    <button class="session-type-chip" data-type="main" onclick="filterSessionType('main')" style="
+      padding:5px 14px;border-radius:20px;border:1px solid var(--border-secondary);
+      background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;
+      ">🖥️ Main <span class="type-count" id="type-count-main"></span></button>
+    <button class="session-type-chip" data-type="heartbeat" onclick="filterSessionType('heartbeat')" style="
+      padding:5px 14px;border-radius:20px;border:1px solid var(--border-secondary);
+      background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;
+      ">💓 Heartbeat <span class="type-count" id="type-count-heartbeat"></span></button>
+    <button class="session-type-chip" data-type="subagent" onclick="filterSessionType('subagent')" style="
+      padding:5px 14px;border-radius:20px;border:1px solid var(--border-secondary);
+      background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;
+      ">🤖 Sub-agent <span class="type-count" id="type-count-subagent"></span></button>
+    <button class="session-type-chip" data-type="user" onclick="filterSessionType('user')" style="
+      padding:5px 14px;border-radius:20px;border:1px solid var(--border-secondary);
+      background:var(--button-bg);color:var(--text-secondary);font-size:12px;cursor:pointer;
+      ">💬 User <span class="type-count" id="type-count-user"></span></button>
+  </div>
+  <!-- Per-type summary cards -->
+  <div id="session-type-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;"></div>
   <div class="card" id="transcript-list">Loading...</div>
   <div id="transcript-viewer" style="display:none">
     <div class="transcript-viewer-meta" id="transcript-meta"></div>

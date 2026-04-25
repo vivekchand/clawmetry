@@ -27,13 +27,68 @@ from flask import Blueprint, jsonify, request
 bp_sessions = Blueprint('sessions', __name__)
 
 
+def _classify_session_type(session):
+    """Infer session type from metadata: main, heartbeat, subagent, or user.
+
+    Detection heuristics (applied in priority order):
+    - heartbeat: displayName/key contains 'heartbeat'
+    - subagent: key contains 'subagent' or kind is 'subagent'/'sub-agent'
+    - main: key contains ':session:' but not 'subagent', or displayName is 'main'
+    - user: everything else (connector-initiated sessions)
+    """
+    key = (session.get("sessionId") or session.get("key") or "").lower()
+    display = (session.get("displayName") or "").lower()
+    kind = (session.get("kind") or "").lower()
+    channel = (session.get("channel") or "").lower()
+
+    if "heartbeat" in display or "heartbeat" in key:
+        return "heartbeat"
+    if "subagent" in key or kind in ("subagent", "sub-agent"):
+        return "subagent"
+    if display == "main" or (":session:" in key and "subagent" not in key):
+        return "main"
+    if channel not in ("", "unknown", "direct"):
+        return "user"
+    return "main"
+
+
+_SESSION_TYPE_ICONS = {
+    "main": "🖥️",
+    "heartbeat": "💓",
+    "subagent": "🤖",
+    "user": "💬",
+}
+
+
+def _add_session_types(sessions):
+    """Tag each session dict with sessionType and sessionTypeIcon."""
+    for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        st = _classify_session_type(s)
+        s["sessionType"] = st
+        s["sessionTypeIcon"] = _SESSION_TYPE_ICONS.get(st, "")
+    return sessions
+
+
 @bp_sessions.route("/api/sessions")
 def api_sessions():
     import dashboard as _d
     gw_data = _d._gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
-        return jsonify({"sessions": _d._augment_sessions_with_burn(gw_data["sessions"])})
-    return jsonify({"sessions": _d._augment_sessions_with_burn(_d._get_sessions())})
+        sessions = _d._augment_sessions_with_burn(gw_data["sessions"])
+    else:
+        sessions = _d._augment_sessions_with_burn(_d._get_sessions())
+    _add_session_types(sessions)
+    # Compute per-type summary counts
+    type_counts = {}
+    for s in sessions:
+        st = s.get("sessionType", "main")
+        if st not in type_counts:
+            type_counts[st] = {"count": 0, "totalTokens": 0}
+        type_counts[st]["count"] += 1
+        type_counts[st]["totalTokens"] += int(s.get("totalTokens") or 0)
+    return jsonify({"sessions": sessions, "typeCounts": type_counts})
 
 
 @bp_sessions.route("/api/compactions")
@@ -1205,18 +1260,44 @@ def api_transcripts():
             fpath = os.path.join(sessions_dir, fname)
             try:
                 msg_count = 0
+                session_key = ""
+                display_name = ""
+                channel = ""
                 with open(fpath) as f:
-                    for _ in f:
+                    for line_raw in f:
                         msg_count += 1
-                transcripts.append(
-                    {
-                        "id": fname.replace(".jsonl", ""),
-                        "name": fname.replace(".jsonl", "")[:40],
-                        "messages": msg_count,
-                        "size": os.path.getsize(fpath),
-                        "modified": int(os.path.getmtime(fpath) * 1000),
-                    }
-                )
+                        # Read first few lines for session metadata
+                        if msg_count <= 5 and not session_key:
+                            try:
+                                ev = json.loads(line_raw.strip())
+                                if ev.get("type") == "system" and ev.get("sessionKey"):
+                                    session_key = ev["sessionKey"]
+                                elif ev.get("sessionKey"):
+                                    session_key = ev["sessionKey"]
+                                if ev.get("displayName"):
+                                    display_name = ev["displayName"]
+                                if ev.get("channel"):
+                                    channel = ev["channel"]
+                            except Exception:
+                                pass
+                sid = fname.replace(".jsonl", "")
+                entry = {
+                    "id": sid,
+                    "name": sid[:40],
+                    "messages": msg_count,
+                    "size": os.path.getsize(fpath),
+                    "modified": int(os.path.getmtime(fpath) * 1000),
+                }
+                # Classify session type using available metadata
+                meta = {
+                    "sessionId": session_key or sid,
+                    "displayName": display_name or sid[:20],
+                    "channel": channel,
+                }
+                st = _classify_session_type(meta)
+                entry["sessionType"] = st
+                entry["sessionTypeIcon"] = _SESSION_TYPE_ICONS.get(st, "")
+                transcripts.append(entry)
             except Exception:
                 pass
     return jsonify({"transcripts": transcripts[:50]})
