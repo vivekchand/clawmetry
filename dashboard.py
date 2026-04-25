@@ -8564,6 +8564,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
+    <div class="nav-tab" onclick="switchTab('sessions-list')" title="Sessions by type: main / heartbeat / user / sub-agent">Sessions</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -8638,6 +8639,9 @@ DASHBOARD_HTML = r"""
 
 <!-- SUB-AGENT TREE (theme 2) -->
 {% include 'tabs/subagents.html' %}
+
+<!-- SESSIONS LIST with type taxonomy (#691) -->
+{% include 'tabs/sessions-list.html' %}
 
 <!-- SKILLS FIDELITY (#687) -->
 {% include 'tabs/skills.html' %}
@@ -13049,6 +13053,33 @@ def _session_burn_stats(session_id):
     }
 
 
+def _classify_session_type(key="", name="", display_name=""):
+    """Classify a session into main / heartbeat / user / sub-agent type.
+
+    Rules (evaluated in order):
+      1. heartbeat  — name/key/display contains "heartbeat" or "hb-"
+      2. sub-agent  — key has ":subagent:" segment, or name contains "subagent",
+                      "sub-agent", or "acp"
+      3. user       — name/key/display matches a known connector channel prefix
+                      (telegram, discord, whatsapp, …)
+      4. main       — everything else (including bare "main" sessions)
+    """
+    k = (key or "").lower()
+    n = (name or "").lower()
+    d = (display_name or "").lower()
+    combined = f"{k} {n} {d}"
+    if "heartbeat" in combined or "hb-" in combined:
+        return "heartbeat"
+    if ":subagent:" in k or "subagent" in combined or "sub-agent" in combined or "acp" in n:
+        return "sub-agent"
+    # User sessions come from connectors — check for channel prefixes
+    for ch in ("telegram", "discord", "whatsapp", "signal", "slack", "webchat",
+               "imessage", "matrix", "irc", "gmail", "msteams", "line", "nostr"):
+        if ch in combined:
+            return "user"
+    return "main"
+
+
 def _augment_sessions_with_burn(sessions):
     out = []
     for s in sessions or []:
@@ -13059,6 +13090,10 @@ def _augment_sessions_with_burn(sessions):
         sid = row.get("sessionId") or row.get("id") or row.get("key") or ""
         row["sessionId"] = sid
         row.update(_session_burn_stats(sid))
+        key = row.get("key") or sid
+        name = row.get("name") or row.get("label") or ""
+        display_name = row.get("displayName") or ""
+        row["sessionType"] = _classify_session_type(key=key, name=name, display_name=display_name)
         out.append(row)
     return out
 
