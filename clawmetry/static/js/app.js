@@ -4131,12 +4131,14 @@ function toggleCronExpand(jobId) {
 
 async function loadCronRuns(jobId) {
   try {
-    var data = await fetch('/api/cron/' + encodeURIComponent(jobId) + '/runs').then(r => r.json());
+    var resp = await fetch('/api/cron/' + encodeURIComponent(jobId) + '/runs');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var data = await resp.json();
     var el = document.getElementById('cron-runs-' + jobId);
     if (!el) return;
-    var runs = data.runs || [];
+    var runs = (data && data.runs) || [];
     if (runs.length === 0) {
-      el.innerHTML = '<div style="color:var(--text-muted);">No run history available</div>';
+      el.innerHTML = '<div style="color:var(--text-muted);">No run history yet — your agent has not reported any runs for this job.</div>';
       return;
     }
     // Build calendar heatmap (last 30 days)
@@ -4178,7 +4180,7 @@ async function loadCronRuns(jobId) {
     el.innerHTML = h;
   } catch(e) {
     var el = document.getElementById('cron-runs-' + jobId);
-    if (el) el.innerHTML = '<div style="color:var(--text-error);">Failed to load runs</div>';
+    if (el) el.innerHTML = '<div style="color:var(--text-error);">Could not load run history (' + escHtml(String(e.message||e)) + '). The endpoint may be unreachable or your gateway is offline.</div>';
   }
 }
 
@@ -10282,16 +10284,6 @@ async function bootDashboard() {
   (async function backgroundPrefetch() {
     try { await _withTimeout(loadCrons(), 5000, 'crons'); } catch (e) {}
     try { await _withTimeout(loadMemory(), 5000, 'memory'); } catch (e) {}
-    try {
-      var cronData = await _withTimeout(
-        fetch('/api/crons').then(function(r){return r.json();}),
-        3000,
-        'crons-tab-check'
-      );
-      if (cronData && cronData.jobs && cronData.jobs.length > 0) {
-        document.querySelectorAll('#crons-tab').forEach(function(t){ t.style.display = ''; });
-      }
-    } catch(e) {}
   })();
 
   startSystemHealthRefresh();

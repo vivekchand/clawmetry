@@ -3292,7 +3292,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
-    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
@@ -8560,7 +8560,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
-    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
