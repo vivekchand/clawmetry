@@ -9242,7 +9242,16 @@ function loadToolData(toolKey, comp, isRefresh) {
           html += '<span style="padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;background:' + (isErr ? 'var(--bg-error);color:#ef4444' : 'var(--bg-success);color:#22c55e') + ';">' + (isErr ? 'ERROR' : 'OK') + '</span>';
           html += '</div>';
           var exprStr = typeof j.expr === 'object' ? (j.expr.expr || j.expr.at || ('every ' + Math.round((j.expr.everyMs||0)/60000) + 'm') || JSON.stringify(j.expr)) : (j.expr || j.schedule || '');
-          html += '<div style="font-family:monospace;font-size:11px;color:var(--text-accent);margin-top:4px;">' + escapeHtml(exprStr) + '</div>';
+          // Show human-readable schedule if we can parse the cron expression,
+          // with the raw spec underneath in muted monospace for power users.
+          // Non-tech users can't parse "0 */6 * * *" — they need "every 6 hours".
+          var human = (typeof cronToHuman === 'function' && /\d/.test(exprStr || '')) ? cronToHuman(exprStr) : '';
+          if (human) {
+            html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;"><strong>Runs:</strong> ' + escapeHtml(human) + '</div>';
+            html += '<div style="font-family:monospace;font-size:10px;color:var(--text-muted);margin-top:2px;opacity:0.7;">' + escapeHtml(exprStr) + '</div>';
+          } else {
+            html += '<div style="font-family:monospace;font-size:11px;color:var(--text-accent);margin-top:4px;">' + escapeHtml(exprStr) + '</div>';
+          }
           var meta = [];
           if (j.lastRun) meta.push('Last: ' + _fmtToolDate(j.lastRun));
           if (j.nextRun) meta.push('Next: ' + _fmtToolDate(j.nextRun));
