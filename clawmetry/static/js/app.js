@@ -539,6 +539,7 @@ function switchTab(name) {
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
+  if (name === 'sessions-list') loadSessionsList();
 }
 
 function exportUsageData() {
@@ -6199,6 +6200,132 @@ async function loadSubagents() {
 function _saToggle(sid) {
   _subagentsExpanded[sid] = (_subagentsExpanded[sid] === false) ? true : false;
   loadSubagents();
+}
+
+// ── Session Type Taxonomy (#691) ──────────────────────────────────────────────
+
+var _sessionsListActiveType = 'all';
+var _sessionsListData = null;
+
+var _SESSION_TYPE_META = {
+  'main':      { icon: '&#9679;',  label: 'Main',      cssClass: 'badge-main',      cardColor: '#818cf8' },
+  'heartbeat': { icon: '&#128149;', label: 'Heartbeat', cssClass: 'badge-heartbeat', cardColor: '#f472b6' },
+  'user':      { icon: '&#128100;', label: 'User',      cssClass: 'badge-user',      cardColor: '#34d399' },
+  'sub-agent': { icon: '&#127795;', label: 'Sub-Agent', cssClass: 'badge-subagent',  cardColor: '#fbbf24' },
+};
+
+async function loadSessionsList() {
+  var cardsEl = document.getElementById('sessions-type-cards');
+  var listEl  = document.getElementById('sessions-list-container');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
+  try {
+    var data = await fetch('/api/sessions').then(function(r) { return r.json(); });
+    _sessionsListData = data.sessions || [];
+    var summary = data.summary || {};
+
+    // Render per-type summary cards
+    if (cardsEl) {
+      var cardsHtml = '';
+      ['main', 'heartbeat', 'user', 'sub-agent'].forEach(function(t) {
+        var meta  = _SESSION_TYPE_META[t] || { icon: '&#9679;', label: t, cssClass: '', cardColor: '#888' };
+        var s     = summary[t] || { count: 0, total_cost_usd: 0 };
+        var isActive = (_sessionsListActiveType === t) ? ' active' : '';
+        var costStr  = s.total_cost_usd > 0 ? ('$' + s.total_cost_usd.toFixed(4)) : '—';
+        cardsHtml += '<div class="session-type-card' + isActive + '" onclick="filterSessionsByType(' + JSON.stringify(t) + ',null)">';
+        cardsHtml += '<div class="session-type-card-icon">' + meta.icon + '</div>';
+        cardsHtml += '<div class="session-type-card-label">' + escHtml(meta.label) + '</div>';
+        cardsHtml += '<div class="session-type-card-count" style="color:' + meta.cardColor + ';">' + s.count + '</div>';
+        cardsHtml += '<div class="session-type-card-cost">' + costStr + ' cost</div>';
+        cardsHtml += '</div>';
+      });
+      // All card
+      var allActive = (_sessionsListActiveType === 'all') ? ' active' : '';
+      cardsHtml = '<div class="session-type-card' + allActive + '" onclick="filterSessionsByType(\'all\',null)">' +
+        '<div class="session-type-card-icon">&#128172;</div>' +
+        '<div class="session-type-card-label">All</div>' +
+        '<div class="session-type-card-count" style="color:var(--text-primary);">' + (summary.total || 0) + '</div>' +
+        '<div class="session-type-card-cost">&nbsp;</div>' +
+        '</div>' + cardsHtml;
+      cardsEl.innerHTML = cardsHtml;
+    }
+
+    _renderSessionsList();
+  } catch(e) {
+    if (listEl) listEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">Failed to load sessions: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+function filterSessionsByType(type, chipEl) {
+  _sessionsListActiveType = type;
+
+  // Update chip active state
+  document.querySelectorAll('.session-type-chip').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.type === type);
+  });
+  // Update card active state
+  document.querySelectorAll('.session-type-card').forEach(function(card) {
+    var cardType = card.getAttribute('onclick') || '';
+    var matched = cardType.indexOf(JSON.stringify(type)) !== -1;
+    card.classList.toggle('active', matched);
+  });
+
+  _renderSessionsList();
+}
+
+function _renderSessionsList() {
+  var listEl = document.getElementById('sessions-list-container');
+  if (!listEl || !_sessionsListData) return;
+
+  var sessions = _sessionsListData;
+  if (_sessionsListActiveType && _sessionsListActiveType !== 'all') {
+    sessions = sessions.filter(function(s) { return s.sessionType === _sessionsListActiveType; });
+  }
+
+  if (sessions.length === 0) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">No sessions of this type found.</div>';
+    return;
+  }
+
+  var now = Date.now();
+  var html = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">';
+  sessions.forEach(function(s) {
+    var stype  = s.sessionType || 'main';
+    var meta   = _SESSION_TYPE_META[stype] || { icon: '&#9679;', label: stype, cssClass: 'badge-main', cardColor: '#888' };
+    var name   = escHtml(s.displayName || s.label || (s.sessionId || '').substring(0, 20) || '—');
+    var model  = escHtml(s.model || '—');
+    var tokens = s.totalTokens >= 1000 ? (s.totalTokens / 1000).toFixed(1) + 'K' : (s.totalTokens || 0);
+    var ageMs  = now - (s.updatedAt || s.lastActiveMs || 0);
+    var ageSec = Math.floor(ageMs / 1000);
+    var ageStr = ageSec < 60 ? ageSec + 's'
+               : ageSec < 3600 ? Math.floor(ageSec / 60) + 'm'
+               : Math.floor(ageSec / 3600) + 'h ' + Math.floor((ageSec % 3600) / 60) + 'm';
+    var isActive = ageMs < 120000;
+    var statusDot = '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' +
+      (isActive ? '#16a34a' : '#6b7280') + ';' +
+      (isActive ? 'box-shadow:0 0 5px rgba(22,163,74,0.6);' : '') +
+      'flex-shrink:0;"></span>';
+
+    // Heartbeat gets a pulse animation indicator
+    var extraIndicator = '';
+    if (stype === 'heartbeat') {
+      extraIndicator = '<span title="Heartbeat session" style="font-size:11px;color:#f472b6;animation:none;">&#128149;</span>';
+    } else if (stype === 'sub-agent') {
+      extraIndicator = '<span title="Sub-agent (spawned via ACP)" style="font-size:11px;color:#fbbf24;">&#127795;</span>';
+    }
+
+    html += '<div class="session-row">';
+    html += statusDot;
+    html += '<span style="font-weight:600;font-size:13px;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + name + '">' + name + '</span>';
+    if (extraIndicator) html += extraIndicator;
+    html += '<span class="session-type-badge ' + meta.cssClass + '">' + meta.icon + ' ' + escHtml(meta.label) + '</span>';
+    html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:4px;">' + model + '</span>';
+    html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + tokens + ' tok</span>';
+    html += '<span style="font-size:11px;color:var(--text-faint);white-space:nowrap;margin-left:8px;">' + ageStr + ' ago</span>';
+    html += '</div>';
+  });
+  html += '</div>';
+  listEl.innerHTML = html;
 }
 
 // ── Upgrade Impact Panel ───────────────────────────────────────────────────
