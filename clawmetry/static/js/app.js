@@ -2098,6 +2098,21 @@ var _brainRefreshTimer = null;
 var _brainSourceColors = {};
 var _brainColorPalette = ['#2dd4bf','#f97316','#eab308','#ec4899','#3b82f6','#a78bfa','#f43f5e','#10b981'];
 var _brainColorIdx = 0;
+// Persistent expand state across the 5s auto-refresh re-renders. Without
+// this, tapping a brain event "auto-collapses" within ~5s simply because
+// the next refresh wipes the .expanded class. Keyed by stable event id.
+var _brainExpandedKeys = {};
+
+function _brainEvKey(ev) {
+  return (ev.time || '') + '|' + (ev.type || '') + '|' + (ev.source || '');
+}
+
+function _toggleBrainEvent(el, key) {
+  _brainExpandedKeys[key] = !_brainExpandedKeys[key];
+  el.classList.toggle('expanded', !!_brainExpandedKeys[key]);
+  var td = el.querySelector('.brain-turn-detail');
+  if (td) td.style.display = _brainExpandedKeys[key] ? '' : 'none';
+}
 
 function brainSourceColor(source) {
   if (source === 'main') return '#a855f7';
@@ -2402,8 +2417,11 @@ function renderBrainStream(events) {
         if (subagentCount > 0) turnTimeline += '<span style="background:rgba(236,72,153,0.15);color:#ec4899;padding:1px 6px;border-radius:3px;">&#129302; ' + subagentCount + ' sub-agent' + (subagentCount > 1 ? 's' : '') + '</span>';
         if (turnDuration !== '?' && parseFloat(turnDuration) > 0) turnTimeline += '<span style="background:rgba(16,185,129,0.15);color:#10b981;padding:1px 6px;border-radius:3px;">&#9202; ' + turnDuration + 's</span>';
         turnTimeline += '</div>';
-        // Expandable timeline detail
-        turnTimeline += '<div class="brain-turn-detail" style="display:none;margin-top:6px;padding:6px 0 2px 16px;border-left:2px solid rgba(139,92,246,0.3);">';
+        // Expandable timeline detail. Initial display reflects the persisted
+        // expanded state so a 5s auto-refresh re-render preserves the user's
+        // tap; otherwise the row would appear to auto-collapse.
+        var _isExp = !!_brainExpandedKeys[_brainEvKey(ev)];
+        turnTimeline += '<div class="brain-turn-detail" style="display:' + (_isExp ? '' : 'none') + ';margin-top:6px;padding:6px 0 2px 16px;border-left:2px solid rgba(139,92,246,0.3);">';
         var currentSubagent = null;
         turnEvents.forEach(function(te) {
           var teIcon = _brainTypeIcons[te.type] || '&#128295;';
@@ -2438,7 +2456,9 @@ function renderBrainStream(events) {
         turnTimeline += '</div>';
       }
     }
-    html += '<div class="brain-event" onclick="this.classList.toggle(\'expanded\');var td=this.querySelector(\'.brain-turn-detail\');if(td)td.style.display=td.style.display===\'none\'?\'\':\'none\';">';
+    var _evKey = _brainEvKey(ev);
+    var _evExpCls = _brainExpandedKeys[_evKey] ? ' expanded' : '';
+    html += '<div class="brain-event' + _evExpCls + '" data-evkey="' + escHtml(_evKey) + '" onclick="_toggleBrainEvent(this, this.dataset.evkey)">';
     html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
     html += '<span class="brain-type" style="background:rgba(100,100,100,0.15);color:' + color + ';padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;min-width:70px;text-align:center;display:inline-block;white-space:nowrap;">' + icon + ' ' + escHtml(evType) + '</span>';
