@@ -8685,7 +8685,13 @@ function loadCostOptimizerData(isRefresh) {
       html += '<div class="co-ollama-prompt">';
       html += '<div style="font-size:13px;color:#a78bfa;font-weight:600;">⚠️ Ollama not installed -- install to run models locally (free!)</div>';
       html += '<div class="co-ollama-cmd">' + escapeHtml(_ollamaInstall) + '</div>';
-      html += '<button class="co-action-btn" onclick="navigator.clipboard.writeText(' + JSON.stringify(_ollamaInstall) + ');this.textContent=\'✅ Copied!\';setTimeout(()=>this.textContent=\'📋 Copy Install Command\',2000);">📋 Copy Install Command</button>';
+      // JSON.stringify(_ollamaInstall) produces "..." with literal " which
+      // collides with the onclick="..." double-quoted attribute and breaks
+      // out of the attribute scope (rendering raw JS inside the button).
+      // Encode " as &quot; so the HTML parser treats it as a literal quote
+      // inside the attribute, then the JS still sees a proper string.
+      var _esc1 = JSON.stringify(_ollamaInstall).replace(/"/g, '&quot;');
+      html += '<button class="co-action-btn" onclick="navigator.clipboard.writeText(' + _esc1 + ');this.textContent=\'✅ Copied!\';setTimeout(()=>this.textContent=\'📋 Copy Install Command\',2000);">📋 Copy Install Command</button>';
       html += '</div>';
     }
 
@@ -8744,7 +8750,8 @@ function loadCostOptimizerData(isRefresh) {
     html += '<div class="co-section">';
     html += '<h3>⚙️ Quick Actions</h3>';
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
-    html += '<button class="co-action-btn" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(' + JSON.stringify(_ollamaInstall) + ');this.textContent=\'✅ Copied!\';setTimeout(()=>this.textContent=\'📋 Install Ollama\',2000);">📋 Install Ollama</button>';
+    var _esc2 = JSON.stringify(_ollamaInstall).replace(/"/g, '&quot;');
+    html += '<button class="co-action-btn" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(' + _esc2 + ');this.textContent=\'✅ Copied!\';setTimeout(()=>this.textContent=\'📋 Install Ollama\',2000);">📋 Install Ollama</button>';
     html += '<button class="co-action-btn secondary" style="width:auto;padding:6px 14px;" onclick="navigator.clipboard.writeText(\'ollama serve\');this.textContent=\'✅ Copied!\';setTimeout(()=>this.textContent=\'📋 ollama serve\',2000);">📋 ollama serve</button>';
     html += '<a class="co-action-btn secondary" style="width:auto;padding:6px 14px;text-decoration:none;display:inline-block;" href="https://ollama.com/search" target="_blank">🔍 Browse Models</a>';
     html += '</div>';
@@ -9750,7 +9757,13 @@ async function _renderModalBrainEvents(match) {
   try {
     var parentUuid = (match.parent || '').split(':').pop() || '';
     var childUuid  = (match.key || '').split(':').pop() || '';
-    var candidates = [parentUuid, childUuid, match.sessionId].filter(Boolean);
+    // Brain events emit `source` as the on-disk session-file UUID, NOT the
+    // subagent_id. They differ for sub-agents (sessionId + sessionFile are
+    // distinct fields). Without including the file-UUID variant the
+    // spawn-detail "Brain Events" tab said "No Brain events found in window"
+    // even when the sub-agent was actively running.
+    var fileUuid = (match.sessionFile || '').replace(/\.jsonl$/i, '');
+    var candidates = [parentUuid, childUuid, match.sessionId, fileUuid].filter(Boolean);
     if (!candidates.length) return;
 
     var startedMs = match.startedAt || Date.now();
