@@ -1828,7 +1828,7 @@ async function loadSubAgents() {
       var activeFirst = subagents.filter(function(a){return a.status==='active';}).concat(subagents.filter(function(a){return a.status!=='active';}));
       var topAgents = activeFirst.slice(0, 3);
       topAgents.forEach(function(agent) {
-        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '[ok]' : '⬜';
+        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
         var name = cleanTaskName(agent.displayName);
         if (name.length > 40) name = name.substring(0, 37) + '…';
         previewHtml += '<div class="subagent-item">';
@@ -4510,7 +4510,7 @@ async function loadMCTasks() {
       {key:'in_progress', label:'In Progress', color:'#16a34a', bg:'#16a34a20', icon:'🔄', tasks:[]},
       {key:'review', label:'Review', color:'#d97706', bg:'#d9770620', icon:'👀', tasks:[]},
       {key:'blocked', label:'Blocked', color:'#dc2626', bg:'#dc262620', icon:'🚫', tasks:[]},
-      {key:'done', label:'Done', color:'#6b7280', bg:'#6b728020', icon:'[ok]', tasks:[]}
+      {key:'done', label:'Done', color:'#6b7280', bg:'#6b728020', icon:'✅', tasks:[]}
     ];
     tasks.forEach(function(t) {
       var col = t.column || 'inbox';
@@ -7089,7 +7089,7 @@ function processFlowEvent(line) {
   if (msg.includes('embedded run agent end') || msg.includes('embedded run prompt end')) {
     if (now - (flowThrottles['run-end']||0) < 1000) return;
     flowThrottles['run-end'] = now;
-    addFlowFeedItem('[ok] AI processing complete', '#50e080', 'ai');
+    addFlowFeedItem('✅ AI processing complete', '#50e080', 'ai');
     return;
   }
   if (msg.includes('session state') && msg.includes('new=processing')) {
@@ -7296,7 +7296,7 @@ function _ovRenderCard(agent, idx) {
   h += '</div>';
   h += '</div>';
   // Status badge top-right
-  h += '<span class="task-card-badge ' + sc + '" style="flex-shrink:0;">' + (sc === 'running' ? '🔄' : sc === 'failed' ? '❌' : '[ok]') + '</span>';
+  h += '<span class="task-card-badge ' + sc + '" style="flex-shrink:0;">' + (sc === 'running' ? '🔄' : sc === 'failed' ? '❌' : '✅') + '</span>';
   h += '</div>';
   // Row 3: Show details toggle
   h += '<button class="ov-toggle-btn" onclick="event.stopPropagation();var d=document.getElementById(\'' + detailId + '\');var o=d.classList.toggle(\'open\');this.textContent=o?\'▼ Hide details\':\'▶ Show details\';if(o){window._ovExpandedSet=window._ovExpandedSet||{};window._ovExpandedSet[\'' + escHtml(agent.sessionId) + '\']=true;}else{delete window._ovExpandedSet[\'' + escHtml(agent.sessionId) + '\'];}">' + (isOpen ? '▼ Hide details' : '▶ Show details') + '</button>';
@@ -7369,7 +7369,7 @@ async function loadOverviewTasks() {
       running.forEach(function(a) { html += _ovRenderCard(a, cardIdx++); });
     }
     if (done.length > 0) {
-      html += '<div class="task-group-header">[ok] Recently Completed (' + done.length + ')</div>';
+      html += '<div class="task-group-header">✅ Recently Completed (' + done.length + ')</div>';
       done.forEach(function(a) { html += _ovRenderCard(a, cardIdx++); });
     }
     if (failed.length > 0) {
@@ -8705,7 +8705,7 @@ function loadCostOptimizerData(isRefresh) {
         html += '<div class="model-card-stat"><span class="model-card-stat-label">RAM</span><span class="model-card-stat-value">' + (m.ramRequired || (m.memoryRequiredGb ? m.memoryRequiredGb + 'GB' : '--')) + '</span></div>';
         if (m.savingsEstimate) html += '<div class="model-card-stat"><span class="model-card-stat-label">Savings est.</span><span class="model-card-stat-value" style="color:#4ade80;">' + m.savingsEstimate + '</span></div>';
         html += '</div>';
-        html += '<div class="model-install-cmd" onclick="navigator.clipboard.writeText(\'' + ollamaCmd + '\');this.querySelector(\'span.cmd-text\').textContent=\'[ok] Copied!\';setTimeout(()=>this.querySelector(\'span.cmd-text\').textContent=\'' + ollamaCmd + '\',2000);">';
+        html += '<div class="model-install-cmd" onclick="navigator.clipboard.writeText(\'' + ollamaCmd + '\');this.querySelector(\'span.cmd-text\').textContent=\'✅ Copied!\';setTimeout(()=>this.querySelector(\'span.cmd-text\').textContent=\'' + ollamaCmd + '\',2000);">';
         html += '<span class="cmd-text">' + ollamaCmd + '</span>';
         html += '<span style="color:#4ade80;font-size:10px;flex-shrink:0;">📥 Copy</span>';
         html += '</div>';
@@ -8916,7 +8916,7 @@ function loadAutomationAdvisorDataWithTime() {
     }
     
     if (data.suggestions && data.suggestions.length > 0) {
-      html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">[tip] Automation Suggestions</h3>';
+      html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">💡 Automation Suggestions</h3>';
       data.suggestions.forEach(function(suggestion) {
         var typeIcon = suggestion.type === 'cron' ? '⏰' : suggestion.type === 'skill' ? '[dev]' : '🔧';
         html += '<div style="background:var(--bg-hover);border-radius:8px;padding:16px;margin-bottom:16px;">';
@@ -9059,7 +9059,7 @@ function loadGatewayData(isRefresh) {
         else if (r.from === 'telegram') { badge = '📱'; badgeColor = '#3b82f6'; }
         else if (r.from === 'whatsapp') { badge = '📲'; badgeColor = '#22c55e'; }
 
-        var status = r.status === 'error' ? '❌' : '[ok]';
+        var status = r.status === 'error' ? '❌' : '✅';
         var ts = r.timestamp ? new Date(r.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
         var model = r.to || '';
         if (model.length > 20) model = model.substring(0, 18) + '…';
