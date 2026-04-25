@@ -7435,7 +7435,8 @@ var COMP_MAP = {
   'node-runtime': {type:'infra', name:'Runtime', icon:'⚙️'},
   'node-machine': {type:'infra', name:'Machine', icon:'🖥️'},
   'node-storage': {type:'infra', name:'Storage', icon:'💿'},
-  'node-network': {type:'infra', name:'Network', icon:'🔗'}
+  'node-network': {type:'infra', name:'Network', icon:'🔗'},
+  'node-skills': {type:'skills', name:'Skills', icon:'🧬'}
 };
 function initCompClickHandlers() {
   Object.keys(COMP_MAP).forEach(function(id) {
@@ -7702,6 +7703,62 @@ function openCompModal(nodeId) {
       loadToolData(toolKey, c, false);
     }
     _toolRefreshTimer = setInterval(function() { loadToolData(toolKey, c, true); }, 10000);
+    return;
+  }
+
+  // Skills modal — was a legend label only; now a proper clickable node
+  // that surfaces per-skill cost/usage attribution from /api/skill-attribution
+  // (backend already exists at routes/usage.py:813+).
+  if (nodeId === 'node-skills') {
+    var sBody = document.getElementById('comp-modal-body');
+    sBody.innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading skills…</div>';
+    document.getElementById('comp-modal-overlay').classList.add('open');
+    fetch('/api/skill-attribution').then(function(r){return r.json();}).then(function(data) {
+      if (!isCompModalActive('node-skills')) return;
+      var skills = data.skills || [];
+      var totalCost = data.total_cost || 0;
+      var html = '<div style="text-align:center;margin-bottom:16px;font-size:36px;">🧬</div>';
+      html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;">';
+      html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + skills.length + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Skills detected</div></div>';
+      html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">$' + (typeof totalCost === 'number' ? totalCost.toFixed(2) : totalCost) + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Total Cost (Month)</div></div>';
+      html += '</div>';
+      if (skills.length === 0) {
+        html += '<div style="text-align:center;padding:30px 20px;color:var(--text-muted);">';
+        html += '<div style="font-size:14px;font-weight:600;margin-bottom:8px;">No skills detected yet</div>';
+        html += '<div style="font-size:12px;">' + escapeHtml(data.note || 'Skills are detected from /skills/ paths in tool-call details. Once your agent invokes a skill, it will appear here with cost attribution.') + '</div>';
+        html += '</div>';
+      } else {
+        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Top Skills by Cost</div>';
+        html += '<div style="display:flex;flex-direction:column;gap:6px;max-height:55vh;overflow-y:auto;">';
+        skills.slice(0, 20).forEach(function(s) {
+          html += '<div style="padding:10px 12px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);">';
+          html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+          html += '<span style="font-weight:600;font-size:13px;color:var(--text-primary);">🧬 ' + escapeHtml(s.name) + '</span>';
+          html += '<span style="font-size:13px;font-weight:700;color:#22c55e;">$' + (typeof s.total_cost === 'number' ? s.total_cost.toFixed(4) : s.total_cost) + '</span>';
+          html += '</div>';
+          var meta = [];
+          if (s.invocations) meta.push(s.invocations + ' invocation' + (s.invocations === 1 ? '' : 's'));
+          if (s.avg_cost) meta.push('avg $' + Number(s.avg_cost).toFixed(4));
+          if (s.last_used) {
+            try { meta.push('last used ' + _timeAgo(s.last_used)); } catch (e) {}
+          }
+          if (meta.length) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + escapeHtml(meta.join(' · ')) + '</div>';
+          if (s.clawhub_url) {
+            html += '<div style="margin-top:6px;"><a href="' + escapeHtml(s.clawhub_url) + '" target="_blank" style="font-size:10px;color:var(--text-link,#60a5fa);text-decoration:none;">🔗 View on ClawHub</a></div>';
+          }
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+      if (data.note) {
+        html += '<div style="margin-top:12px;font-size:10px;color:var(--text-muted);font-style:italic;text-align:center;">' + escapeHtml(data.note) + '</div>';
+      }
+      sBody.innerHTML = html;
+      document.getElementById('comp-modal-footer').textContent = 'Auto-refreshing - Last updated: ' + new Date().toLocaleTimeString() + ' - ' + skills.length + ' skills';
+    }).catch(function(e) {
+      if (!isCompModalActive('node-skills')) return;
+      sBody.innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load skills: ' + escapeHtml(e.message) + '</div>';
+    });
     return;
   }
 
