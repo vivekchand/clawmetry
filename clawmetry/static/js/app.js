@@ -7750,7 +7750,9 @@ function openCompModal(nodeId) {
         });
         html += '</div>';
       }
-      if (data.note) {
+      // Only show the trailing note when we DO have skills — empty-state
+      // already renders the note inline above. Otherwise we'd show it twice.
+      if (data.note && skills.length > 0) {
         html += '<div style="margin-top:12px;font-size:10px;color:var(--text-muted);font-style:italic;text-align:center;">' + escapeHtml(data.note) + '</div>';
       }
       sBody.innerHTML = html;
