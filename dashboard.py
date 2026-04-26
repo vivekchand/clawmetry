@@ -110,6 +110,7 @@ from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
+from routes.plugins import bp_plugins
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -3295,6 +3296,7 @@ function clawmetryLogout(){
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('plugins')">Plugins</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
@@ -4540,6 +4542,19 @@ function clawmetryLogout(){
   <div id="skills-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
 </div><!-- end page-skills -->
 
+<div class="page" id="page-plugins">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">&#128268; Plugins</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">All installed OpenClaw plugins — connectors, providers, tools, and observability.</div>
+    </div>
+    <button class="refresh-btn" onclick="loadPlugins()">&#8635; Refresh</button>
+  </div>
+  <div id="plugins-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;"></div>
+  <div id="plugins-filter" style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;"></div>
+  <div id="plugins-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
+</div><!-- end page-plugins -->
+
 
 <script>
 
@@ -4958,6 +4973,7 @@ function switchTab(name) {
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
   if (name === 'selfconfig') loadSelfConfig();
+  if (name === 'plugins') loadPlugins();
 }
 
 function exportUsageData() {
@@ -5032,6 +5048,76 @@ async function loadSkills() {
   } catch(e) {
     if (listEl) listEl.innerHTML = '<div style="color:#ef4444;font-size:13px;padding:16px;">Failed to load skills: ' + e + '</div>';
   }
+}
+
+// ═══ PLUGINS REGISTRY ════════════════════════════════════════════════════════
+
+async function loadPlugins() {
+  var res = await fetch('/api/plugins');
+  var data = await res.json();
+  var plugins = data.plugins || [];
+  var summary = data.summary || {};
+
+  // Summary cards
+  var types = [
+    {key:'connector', icon:'&#128268;', label:'Connectors'},
+    {key:'provider', icon:'&#129504;', label:'Providers'},
+    {key:'tool', icon:'&#128295;', label:'Tools'},
+    {key:'observability', icon:'&#128202;', label:'Observability'}
+  ];
+  var summaryHtml = '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+  summaryHtml += '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;"><span style="font-size:20px;font-weight:700;">' + (summary.total||0) + '</span> total <span style="color:var(--text-muted);">(' + (summary.enabled||0) + ' enabled)</span></div>';
+  types.forEach(function(t) {
+    var count = (summary.byType||{})[t.key] || 0;
+    summaryHtml += '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;cursor:pointer;" onclick="filterPlugins(\'' + t.key + '\')">' + t.icon + ' ' + count + ' ' + t.label + '</div>';
+  });
+  summaryHtml += '</div>';
+  document.getElementById('plugins-summary').innerHTML = summaryHtml;
+
+  // Filter buttons
+  var filterHtml = '<button class="refresh-btn plugins-filter-btn active" onclick="filterPlugins(\'all\')">All</button>';
+  types.forEach(function(t) { filterHtml += '<button class="refresh-btn plugins-filter-btn" onclick="filterPlugins(\'' + t.key + '\')">' + t.icon + ' ' + t.label + '</button>'; });
+  filterHtml += '<button class="refresh-btn plugins-filter-btn" onclick="filterPlugins(\'disabled\')">Disabled</button>';
+  document.getElementById('plugins-filter').innerHTML = filterHtml;
+
+  // Plugin cards
+  window._pluginsData = plugins;
+  renderPluginsList(plugins);
+}
+
+function filterPlugins(type) {
+  document.querySelectorAll('.plugins-filter-btn').forEach(function(b){b.classList.remove('active');});
+  if (event && event.target) event.target.classList.add('active');
+  var filtered = window._pluginsData || [];
+  if (type === 'disabled') filtered = filtered.filter(function(p){return !p.enabled;});
+  else if (type !== 'all') filtered = filtered.filter(function(p){return p.type === type;});
+  renderPluginsList(filtered);
+}
+
+function renderPluginsList(plugins) {
+  if (!plugins.length) { document.getElementById('plugins-list').innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center;">No plugins found matching filter.</div>'; return; }
+  var typeColors = {connector:'#6366f1', provider:'#10b981', tool:'#f59e0b', observability:'#3b82f6'};
+  var typeIcons = {connector:'&#128268;', provider:'&#129504;', tool:'&#128295;', observability:'&#128202;'};
+  var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;">';
+  plugins.forEach(function(p) {
+    var color = typeColors[p.type] || '#6b7280';
+    var icon = typeIcons[p.type] || '&#128230;';
+    var statusDot = p.enabled ? '<span style="color:#10b981;">&#9679;</span>' : '<span style="color:#6b7280;">&#9679;</span>';
+    html += '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:14px 16px;transition:border-color 0.2s;" onmouseenter="this.style.borderColor=\'' + color + '\'" onmouseleave="this.style.borderColor=\'var(--border)\'">';
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
+    html += '<span style="font-size:18px;">' + icon + '</span>';
+    html += '<span style="font-weight:600;font-size:14px;color:var(--text-primary);">' + p.name + '</span>';
+    html += '<span style="margin-left:auto;">' + statusDot + '</span>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:6px;align-items:center;">';
+    html += '<span style="background:' + color + '22;color:' + color + ';font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;">' + p.type + '</span>';
+    if (!p.enabled) html += '<span style="background:#6b728022;color:#6b7280;font-size:11px;padding:2px 8px;border-radius:4px;">disabled</span>';
+    if (p.hasConfig) html += '<span style="color:var(--text-muted);font-size:11px;">&#9881;&#65039; configured</span>';
+    html += '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  document.getElementById('plugins-list').innerHTML = html;
 }
 
 // ═══ SELF-CONFIG DIFF VIEWER ═════════════════════════════════════════════════
@@ -8327,6 +8413,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
+    app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_openapi)
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
@@ -8563,6 +8650,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('plugins')">Plugins</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
