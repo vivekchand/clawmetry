@@ -1,0 +1,194 @@
+<div class="page" id="page-flows">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text-primary);">&#128260; Flow Runs</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">TaskFlow orchestration runs from registry.sqlite</div>
+    </div>
+    <button class="refresh-btn" onclick="loadFlows()">&#8635; Refresh</button>
+  </div>
+  <div style="margin-top:8px;display:flex;gap:12px;flex-wrap:wrap;" id="flows-stats"></div>
+  <div class="card" id="flows-list" style="margin-top:12px;">
+    <div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>
+  </div>
+</div>
+
+<script>
+function _flowDuration(ms) {
+  if (ms == null || ms <= 0) return '—';
+  var s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60); s = s % 60;
+  if (m < 60) return m + 'm ' + s + 's';
+  var h = Math.floor(m / 60); m = m % 60;
+  return h + 'h ' + m + 'm';
+}
+
+function _flowStatusBadge(status) {
+  var colors = {
+    'succeeded': 'background:#16a34a;color:#fff;',
+    'failed':    'background:#dc2626;color:#fff;',
+    'lost':      'background:#d97706;color:#fff;'
+  };
+  var style = colors[status] || 'background:var(--bg-tertiary);color:var(--text-muted);';
+  return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;' + style + '">' + escHtml(status) + '</span>';
+}
+
+function _flowTimeAgo(epochMs) {
+  if (!epochMs) return '—';
+  var sec = Math.floor((Date.now() - epochMs) / 1000);
+  if (sec < 60) return sec + 's ago';
+  var m = Math.floor(sec / 60);
+  if (m < 60) return m + 'm ago';
+  var h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  var d = Math.floor(h / 24);
+  return d + 'd ago';
+}
+
+var _flowsExpandedId = null;
+
+async function loadFlows() {
+  var statsEl = document.getElementById('flows-stats');
+  var listEl = document.getElementById('flows-list');
+  try {
+    var resp = await fetch('/api/flows');
+    var data = await resp.json();
+    var flows = data.flows || [];
+
+    // Stats
+    var total = flows.length;
+    var succeeded = flows.filter(function(f){return f.status==='succeeded';}).length;
+    var failed = flows.filter(function(f){return f.status==='failed';}).length;
+    var lost = flows.filter(function(f){return f.status==='lost';}).length;
+    var other = total - succeeded - failed - lost;
+
+    statsEl.innerHTML =
+      '<div class="card" style="padding:10px 16px;min-width:100px;text-align:center;">' +
+        '<div style="font-size:22px;font-weight:700;color:var(--text-primary);">' + total + '</div>' +
+        '<div style="font-size:11px;color:var(--text-muted);">Total</div></div>' +
+      '<div class="card" style="padding:10px 16px;min-width:100px;text-align:center;">' +
+        '<div style="font-size:22px;font-weight:700;color:#16a34a;">' + succeeded + '</div>' +
+        '<div style="font-size:11px;color:var(--text-muted);">Succeeded</div></div>' +
+      '<div class="card" style="padding:10px 16px;min-width:100px;text-align:center;">' +
+        '<div style="font-size:22px;font-weight:700;color:#dc2626;">' + failed + '</div>' +
+        '<div style="font-size:11px;color:var(--text-muted);">Failed</div></div>' +
+      '<div class="card" style="padding:10px 16px;min-width:100px;text-align:center;">' +
+        '<div style="font-size:22px;font-weight:700;color:#d97706;">' + lost + '</div>' +
+        '<div style="font-size:11px;color:var(--text-muted);">Lost</div></div>' +
+      (other > 0 ? '<div class="card" style="padding:10px 16px;min-width:100px;text-align:center;">' +
+        '<div style="font-size:22px;font-weight:700;color:var(--text-muted);">' + other + '</div>' +
+        '<div style="font-size:11px;color:var(--text-muted);">Other</div></div>' : '');
+
+    if (flows.length === 0) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No flow runs found. Flows appear here once TaskFlow orchestration runs are recorded.</div>';
+      return;
+    }
+
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+    html += '<thead><tr style="text-align:left;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em;">' +
+      '<th style="padding:8px 12px;">Goal</th>' +
+      '<th style="padding:8px 12px;">Status</th>' +
+      '<th style="padding:8px 12px;">Current Step</th>' +
+      '<th style="padding:8px 12px;">Duration</th>' +
+      '<th style="padding:8px 12px;">Created</th>' +
+      '</tr></thead><tbody>';
+
+    flows.forEach(function(f) {
+      var goalText = f.goal || f.id;
+      if (goalText.length > 80) goalText = goalText.substring(0, 77) + '...';
+      html += '<tr onclick="toggleFlowDetail(\'' + escHtml(f.id) + '\', this)" style="cursor:pointer;border-top:1px solid var(--border);" onmouseover="this.style.background=\'var(--bg-secondary)\'" onmouseout="this.style.background=\'\'">' +
+        '<td style="padding:8px 12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(f.goal) + '">' + escHtml(goalText) + '</td>' +
+        '<td style="padding:8px 12px;">' + _flowStatusBadge(f.status) + '</td>' +
+        '<td style="padding:8px 12px;color:var(--text-muted);">' + escHtml(f.current_step || '—') + '</td>' +
+        '<td style="padding:8px 12px;color:var(--text-muted);">' + _flowDuration(f.duration_ms) + '</td>' +
+        '<td style="padding:8px 12px;color:var(--text-muted);">' + _flowTimeAgo(f.created_at) + '</td>' +
+        '</tr>';
+      html += '<tr id="flow-detail-' + escHtml(f.id) + '" style="display:none;"><td colspan="5" style="padding:0;"></td></tr>';
+    });
+
+    html += '</tbody></table>';
+    listEl.innerHTML = html;
+  } catch(e) {
+    listEl.innerHTML = '<div style="color:var(--text-error);font-size:13px;padding:16px;">Failed to load flows: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+async function toggleFlowDetail(flowId, rowEl) {
+  var detailRow = document.getElementById('flow-detail-' + flowId);
+  if (!detailRow) return;
+
+  // Collapse if already expanded
+  if (_flowsExpandedId === flowId) {
+    detailRow.style.display = 'none';
+    _flowsExpandedId = null;
+    return;
+  }
+
+  // Collapse previous
+  if (_flowsExpandedId) {
+    var prev = document.getElementById('flow-detail-' + _flowsExpandedId);
+    if (prev) prev.style.display = 'none';
+  }
+  _flowsExpandedId = flowId;
+
+  var cell = detailRow.querySelector('td');
+  cell.innerHTML = '<div style="padding:12px 16px;color:var(--text-muted);font-size:12px;">Loading tasks...</div>';
+  detailRow.style.display = '';
+
+  try {
+    var resp = await fetch('/api/flows/' + encodeURIComponent(flowId));
+    var data = await resp.json();
+    var flow = data.flow || {};
+    var tasks = data.tasks || [];
+
+    var html = '<div style="padding:12px 16px;background:var(--bg-secondary);border-top:1px solid var(--border);">';
+
+    // Flow metadata
+    html += '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text-muted);margin-bottom:10px;">';
+    if (flow.shape) html += '<span><strong>Shape:</strong> ' + escHtml(flow.shape) + '</span>';
+    if (flow.sync_mode) html += '<span><strong>Sync:</strong> ' + escHtml(flow.sync_mode) + '</span>';
+    if (flow.revision != null) html += '<span><strong>Rev:</strong> ' + flow.revision + '</span>';
+    if (flow.blocked_summary) html += '<span style="color:#d97706;"><strong>Blocked:</strong> ' + escHtml(flow.blocked_summary) + '</span>';
+    html += '</div>';
+
+    // Linked tasks
+    if (tasks.length === 0) {
+      html += '<div style="font-size:12px;color:var(--text-muted);">No linked tasks found.</div>';
+    } else {
+      html += '<div style="font-size:11px;font-weight:600;color:var(--text-primary);margin-bottom:6px;">Linked Tasks (' + tasks.length + ')</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+      html += '<thead><tr style="color:var(--text-muted);font-size:10px;text-transform:uppercase;">' +
+        '<th style="padding:4px 8px;text-align:left;">Label</th>' +
+        '<th style="padding:4px 8px;text-align:left;">Runtime</th>' +
+        '<th style="padding:4px 8px;text-align:left;">Status</th>' +
+        '<th style="padding:4px 8px;text-align:left;">Outcome</th>' +
+        '<th style="padding:4px 8px;text-align:left;">Duration</th>' +
+        '<th style="padding:4px 8px;text-align:left;">Summary</th>' +
+        '</tr></thead><tbody>';
+      tasks.forEach(function(t) {
+        var tStatus = t.status || 'unknown';
+        var tColor = tStatus === 'succeeded' ? '#16a34a' : tStatus === 'failed' ? '#dc2626' : 'var(--text-muted)';
+        var summary = t.terminal_summary || t.progress_summary || '';
+        if (summary.length > 100) summary = summary.substring(0, 97) + '...';
+        html += '<tr style="border-top:1px solid var(--border);">' +
+          '<td style="padding:4px 8px;">' + escHtml(t.label || t.task_id) + '</td>' +
+          '<td style="padding:4px 8px;color:var(--text-muted);">' + escHtml(t.runtime) + '</td>' +
+          '<td style="padding:4px 8px;color:' + tColor + ';font-weight:600;">' + escHtml(tStatus) + '</td>' +
+          '<td style="padding:4px 8px;color:var(--text-muted);">' + escHtml(t.terminal_outcome || '—') + '</td>' +
+          '<td style="padding:4px 8px;color:var(--text-muted);">' + _flowDuration(t.duration_ms) + '</td>' +
+          '<td style="padding:4px 8px;color:var(--text-muted);" title="' + escHtml(t.terminal_summary || t.progress_summary || '') + '">' + escHtml(summary) + '</td>' +
+          '</tr>';
+        if (t.error) {
+          html += '<tr><td colspan="6" style="padding:2px 8px 6px 8px;color:#dc2626;font-size:11px;word-break:break-all;">' + escHtml(t.error) + '</td></tr>';
+        }
+      });
+      html += '</tbody></table>';
+    }
+
+    html += '</div>';
+    cell.innerHTML = html;
+  } catch(e) {
+    cell.innerHTML = '<div style="padding:12px 16px;color:var(--text-error);font-size:12px;">Failed to load detail: ' + escHtml(e.message) + '</div>';
+  }
+}
+</script>
