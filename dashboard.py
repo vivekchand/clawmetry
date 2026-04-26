@@ -110,6 +110,7 @@ from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
+from routes.flows import bp_flows
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -3296,6 +3297,7 @@ function clawmetryLogout(){
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
+    <div class="nav-tab" onclick="switchTab('flows')" title="TaskFlow orchestration runs">Flows</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
@@ -4959,6 +4961,7 @@ function switchTab(name) {
   if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
   if (name === 'selfconfig') loadSelfConfig();
+  if (name === 'flows') loadFlows();
 }
 
 function exportUsageData() {
@@ -8328,6 +8331,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
+    app.register_blueprint(bp_flows)
     app.register_blueprint(bp_openapi)
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
@@ -8642,6 +8646,9 @@ DASHBOARD_HTML = r"""
 
 <!-- SKILLS FIDELITY (#687) -->
 {% include 'tabs/skills.html' %}
+
+<!-- FLOW RUNS DASHBOARD (#611) -->
+{% include 'tabs/flows.html' %}
 
 {% include 'tabs/logs.html' %}
 
