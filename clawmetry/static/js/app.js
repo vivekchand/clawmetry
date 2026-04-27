@@ -1503,7 +1503,7 @@ function toggleTheme() {
 }
 
 function initTheme() {
-  const savedTheme = 'dark'; localStorage.setItem('openclaw-theme', 'dark');
+  const savedTheme = localStorage.getItem('openclaw-theme') || 'light';
   const body = document.body;
   const toggle = document.getElementById('theme-toggle-btn');
   
