@@ -1,7 +1,7 @@
 flask>=2.0,<4
 
 # Testing dependencies
-pytest>=8.0
+pytest>=8.4.2
 pytest-playwright>=0.5
 requests>=2.28
 
