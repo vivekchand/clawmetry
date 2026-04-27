@@ -3751,13 +3751,136 @@ function setCronView(view) {
 }
 
 function _cronStatus(j) {
-  // Honest status: distinguish 'no run history yet' from 'pending'.
+  // Honest status. We surface four states:
+  //   ok        - last run reported success
+  //   error     - last run reported failure
+  //   stale     - we have a lastRun but it's older than 6h
+  //   scheduled - never ran (or no history) BUT we can compute the next fire
+  //               from the schedule, so the cron is wired up and waiting
+  //   no-data   - we can't even predict the next fire (no schedule)
   var s = (j.state && j.state.lastStatus) || j.lastStatus || '';
   if (s) return s;
   var lastMs = (j.state && j.state.lastRunAtMs) || (j.lastRun ? Date.parse(j.lastRun) : 0);
-  if (!lastMs) return 'no-data';
-  if (Date.now() - lastMs > 6 * 3600 * 1000) return 'stale';
-  return 'ok';
+  if (lastMs) {
+    if (Date.now() - lastMs > 6 * 3600 * 1000) return 'stale';
+    return 'ok';
+  }
+  var nextMs = _cronComputeNextFireMs(j.schedule, Date.now());
+  if (nextMs) return 'scheduled';
+  return 'no-data';
+}
+
+// ── Client-side cron next-fire predictor ────────────────────────────────────
+// The agent uploads cron definitions but doesn't always populate the
+// `state.nextRunAtMs` field (only after a real run lands). Without this we'd
+// show "no data" for every freshly-defined job and an empty Calendar even
+// when the schedule clearly fires multiple times a day. We compute a
+// best-effort next fire client-side from the schedule shape.
+//
+// Handles:
+//   { kind:'cron', expr:'<5-field cron>' }   - common patterns only
+//   { kind:'every', everyMs:N }              - interval since now
+//   { kind:'at', atMs:N }                    - one-shot
+// Falls back to 0 when the expression is too complex (e.g. ranges/lists in
+// multiple fields) - rather than show a wrong time, we omit the prediction.
+
+function _cronParseField(field, min, max) {
+  // Returns sorted array of valid values for this single field, or null on
+  // anything we don't handle.
+  if (field === '*') {
+    var out = [];
+    for (var i = min; i <= max; i++) out.push(i);
+    return out;
+  }
+  // step: */N  or   M-N/S  or   */N over the whole range
+  var stepM = field.match(/^\*\/(\d+)$/);
+  if (stepM) {
+    var step = parseInt(stepM[1], 10);
+    if (!step || step < 1) return null;
+    var arr = [];
+    for (var v = min; v <= max; v += step) arr.push(v);
+    return arr;
+  }
+  // Comma-separated list of single ints
+  if (/^\d+(,\d+)*$/.test(field)) {
+    return field.split(',').map(function(x){ return parseInt(x, 10); })
+      .filter(function(x){ return x >= min && x <= max; })
+      .sort(function(a,b){ return a - b; });
+  }
+  // Single integer
+  if (/^\d+$/.test(field)) {
+    var n = parseInt(field, 10);
+    if (n < min || n > max) return null;
+    return [n];
+  }
+  // Range  M-N
+  var rangeM = field.match(/^(\d+)-(\d+)$/);
+  if (rangeM) {
+    var lo = parseInt(rangeM[1], 10), hi = parseInt(rangeM[2], 10);
+    if (lo > hi || lo < min || hi > max) return null;
+    var rng = [];
+    for (var k = lo; k <= hi; k++) rng.push(k);
+    return rng;
+  }
+  return null;
+}
+
+function _cronComputeNextFireMs(schedule, fromMs) {
+  if (!schedule || typeof schedule !== 'object') return 0;
+  var now = fromMs || Date.now();
+
+  if (schedule.kind === 'every' && schedule.everyMs > 0) {
+    // For interval schedules without a recorded last run, the next fire is
+    // "everyMs from now" - the best we can say without persisted state.
+    return now + schedule.everyMs;
+  }
+
+  if (schedule.kind === 'at' && schedule.atMs > now) {
+    return schedule.atMs;
+  }
+
+  if (schedule.kind === 'cron' && schedule.expr) {
+    var parts = schedule.expr.trim().split(/\s+/);
+    if (parts.length < 5) return 0;
+    var minSet = _cronParseField(parts[0], 0, 59);
+    var hrSet  = _cronParseField(parts[1], 0, 23);
+    var domSet = _cronParseField(parts[2], 1, 31);
+    var monSet = _cronParseField(parts[3], 1, 12);
+    var dowSet = _cronParseField(parts[4], 0, 6);
+    if (!minSet || !hrSet || !domSet || !monSet || !dowSet) return 0;
+
+    // Walk forward minute by minute from `now+1min` until we find a match,
+    // capped at 366 days so a malformed schedule can't infinite-loop.
+    var cap = now + 366 * 86400000;
+    var t = new Date(now + 60000);
+    t.setSeconds(0, 0);
+    while (t.getTime() < cap) {
+      var mo = t.getMonth() + 1;
+      var dom = t.getDate();
+      var dow = t.getDay();
+      var hr = t.getHours();
+      var mi = t.getMinutes();
+      // Cron's day match: if BOTH dom and dow are restricted, OR them.
+      // If only one is restricted (other is "*"), AND them.
+      var domStar = parts[2] === '*';
+      var dowStar = parts[4] === '*';
+      var domOk = domSet.indexOf(dom) >= 0;
+      var dowOk = dowSet.indexOf(dow) >= 0;
+      var dayMatch = (domStar && dowStar) ? true
+                   : (domStar) ? dowOk
+                   : (dowStar) ? domOk
+                   : (domOk || dowOk);
+      if (monSet.indexOf(mo) >= 0
+          && hrSet.indexOf(hr) >= 0
+          && minSet.indexOf(mi) >= 0
+          && dayMatch) {
+        return t.getTime();
+      }
+      t = new Date(t.getTime() + 60000);
+    }
+    return 0;
+  }
+  return 0;
 }
 
 function toggleCronAutoRefresh() {
@@ -3953,12 +4076,13 @@ function renderCronList(jobs) {
     var disabledClass = isEnabled ? '' : ' cron-disabled';
     var expanded = _cronExpanded[j.id];
 
-    var labelMap = {'no-data':'no data','stale':'stale','ok':'ok','error':'error','pending':'pending'};
+    var labelMap = {'no-data':'no data','stale':'stale','ok':'ok','error':'error','pending':'pending','scheduled':'scheduled'};
     var badgeLabel = isEnabled ? (labelMap[status] || status) : 'disabled';
     var badgeClass = isEnabled ? status : 'pending';
     var badgeTitle = '';
-    if (status === 'no-data') badgeTitle = 'No run history yet — ClawMetry has not received any runs from your agent for this job. The schedule may still be firing on the agent side.';
+    if (status === 'no-data') badgeTitle = 'No run history yet AND no schedule that we can predict. Check the agent side.';
     else if (status === 'stale') badgeTitle = 'Last run was over 6h ago — job may have stopped firing.';
+    else if (status === 'scheduled') badgeTitle = 'Job is wired up and waiting for its next fire. Once a real run lands, this will switch to ok / error with run history.';
 
     html += '<div class="cron-item' + disabledClass + '" onclick="toggleCronExpand(\'' + escHtml(j.id) + '\')">';
     html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
@@ -3977,7 +4101,11 @@ function renderCronList(jobs) {
     html += '<div class="cron-schedule">' + formatSchedule(j.schedule) + '</div>';
     html += '<div class="cron-meta">';
     if (j.state && j.state.lastRunAtMs) html += 'Last: ' + timeAgo(j.state.lastRunAtMs);
-    if (j.state && j.state.nextRunAtMs) html += ' &middot; Next: ' + formatTime(j.state.nextRunAtMs);
+    // Prefer the agent's reported next-run time; fall back to a client-side
+    // prediction from the schedule expression so newly-defined jobs (no run
+    // history yet) still surface a useful "Next: ..." line.
+    var _nextMs = (j.state && j.state.nextRunAtMs) || _cronComputeNextFireMs(j.schedule, Date.now());
+    if (_nextMs) html += ' &middot; Next: ' + formatTime(_nextMs);
     if (j.state && j.state.lastDurationMs) html += ' &middot; Took: ' + (j.state.lastDurationMs/1000).toFixed(1) + 's';
     if (j.lastRunTokens) html += ' &middot; ' + j.lastRunTokens.toLocaleString() + ' tok';
     if (j.lastRunCostUsd) html += ' &middot; $' + j.lastRunCostUsd.toFixed(4);
@@ -4065,9 +4193,22 @@ function renderCronCalendar(jobs) {
 
   var upcoming = [];
   var recent = [];
+  var predictedCount = 0;
   jobs.forEach(function(j) {
     var nextMs = j.state && j.state.nextRunAtMs;
-    if (nextMs && nextMs >= now && nextMs <= future) upcoming.push({ts: nextMs, job: j});
+    var predicted = false;
+    if (!nextMs) {
+      // No agent-reported next run -- compute it from the schedule so the
+      // Calendar populates immediately for jobs that have never landed a
+      // run record yet. This is the difference between "Coming up: 0" and
+      // showing all 17 actively-scheduled jobs grouped by day.
+      var pred = _cronComputeNextFireMs(j.schedule, now);
+      if (pred) { nextMs = pred; predicted = true; }
+    }
+    if (nextMs && nextMs >= now && nextMs <= future) {
+      upcoming.push({ts: nextMs, job: j, predicted: predicted});
+      if (predicted) predictedCount++;
+    }
     var lastMs = j.state && j.state.lastRunAtMs;
     if (lastMs && lastMs >= past && lastMs <= now) {
       recent.push({ts: lastMs, job: j, status: j.state.lastStatus || 'unknown'});
@@ -4104,14 +4245,29 @@ function renderCronCalendar(jobs) {
 
   if (upcoming.length > 0) {
     html += '<div class="cron-cal-section">&#x1F552; Coming up</div>';
+    if (predictedCount > 0 && recent.length === 0) {
+      // We populated this calendar entirely from client-side predictions
+      // because the agent has not reported any run state yet. Be honest:
+      // the dots and times below are best-effort, not confirmed acks.
+      html += '<div style="background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);'
+            + 'border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:11px;color:var(--text-muted);'
+            + 'line-height:1.5;">'
+            + '&#x1F4A1; ClawMetry has not received any run state from your agent yet, so these times are '
+            + 'computed from each schedule. They will be replaced with confirmed run times once the first '
+            + 'real run lands.</div>';
+    }
     var upGroups = _cronGroupByDay(upcoming);
     Object.keys(upGroups).sort().forEach(function(k) {
       html += '<div class="cron-cal-day">';
       html += '<div class="cron-cal-daylabel">' + _cronDayLabel(k) + '</div>';
       upGroups[k].forEach(function(it) {
+        var icon = it.predicted ? '&#x231B;' : '&#x231B;';
+        var iconTitle = it.predicted ? 'Predicted from schedule (not yet confirmed by agent)'
+                                     : 'Reported by the agent as the next scheduled run';
+        var iconColor = it.predicted ? 'rgba(148,163,184,0.6)' : 'var(--text-muted)';
         html += '<div class="cron-cal-row">';
         html += '<div class="cron-cal-time">' + _cronTimeStr(it.ts) + '</div>';
-        html += '<div class="cron-cal-status" style="color:var(--text-muted);">&#x231B;</div>';
+        html += '<div class="cron-cal-status" style="color:' + iconColor + ';" title="' + iconTitle + '">' + icon + '</div>';
         html += '<div class="cron-cal-name">' + escHtml(it.job.name || it.job.id) + '</div>';
         html += '<div class="cron-cal-sched">' + escHtml(formatSchedule(it.job.schedule)) + '</div>';
         html += '</div>';

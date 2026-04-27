@@ -2334,6 +2334,7 @@ DASHBOARD_HTML = r"""
   .cron-status.pending { background: var(--bg-warning); color: var(--text-warning); }
   .cron-status.no-data { background: rgba(107,114,128,0.18); color: #9ca3af; cursor: help; }
   .cron-status.stale { background: rgba(245,158,11,0.18); color: #f59e0b; cursor: help; }
+  .cron-status.scheduled { background: rgba(96,165,250,0.18); color: #60a5fa; cursor: help; }
 
   /* Cron view tabs (Active / Paused / Calendar) */
   .cron-view-tabs { display: flex; gap: 4px; margin-bottom: 10px; padding: 4px; background: var(--bg-secondary); border-radius: 10px; width: fit-content; }
