@@ -9723,7 +9723,13 @@ def _extract_usage_metrics(obj):
     if not isinstance(usage, dict):
         usage = obj.get("tokens_used")
     if not isinstance(usage, dict):
-        return {"tokens": 0, "cost": 0.0}
+        return {
+            "tokens": 0, "cost": 0.0,
+            "input_tokens": 0, "output_tokens": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0,
+            "input_cost": 0.0, "output_cost": 0.0,
+            "cache_read_cost": 0.0, "cache_write_cost": 0.0,
+        }
 
     in_toks = usage.get("input", usage.get("input_tokens", 0)) or 0
     out_toks = usage.get("output", usage.get("output_tokens", 0)) or 0
@@ -9734,6 +9740,10 @@ def _extract_usage_metrics(obj):
         total = in_toks + out_toks + cache_read + cache_write
 
     cost = 0.0
+    cost_input = 0.0
+    cost_output = 0.0
+    cost_cache_read = 0.0
+    cost_cache_write = 0.0
     cost_data = usage.get("cost", {})
     if isinstance(cost_data, dict):
         raw = cost_data.get("total", cost_data.get("usd", 0))
@@ -9741,12 +9751,25 @@ def _extract_usage_metrics(obj):
             cost = float(raw or 0)
         except Exception:
             cost = 0.0
+        # Extract granular cost breakdown if available
+        cost_input = float(cost_data.get("input", 0) or 0)
+        cost_output = float(cost_data.get("output", 0) or 0)
+        cost_cache_read = float(cost_data.get("cacheRead", 0) or 0)
+        cost_cache_write = float(cost_data.get("cacheWrite", 0) or 0)
     elif isinstance(cost_data, (int, float)):
         cost = float(cost_data)
 
     return {
         "tokens": int(total or 0),
         "cost": float(cost or 0.0),
+        "input_tokens": int(in_toks or 0),
+        "output_tokens": int(out_toks or 0),
+        "cache_read_tokens": int(cache_read or 0),
+        "cache_write_tokens": int(cache_write or 0),
+        "input_cost": float(cost_input),
+        "output_cost": float(cost_output),
+        "cache_read_cost": float(cost_cache_read),
+        "cache_write_cost": float(cost_cache_write),
     }
 
 
@@ -9872,6 +9895,10 @@ def _compute_transcript_analytics():
     plugin_stats = defaultdict(lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0})
     daily_tokens = {}
     daily_cost = {}
+    daily_input_tokens = {}
+    daily_output_tokens = {}
+    daily_cache_read_tokens = {}
+    daily_cache_write_tokens = {}
     model_usage = {}
 
     if os.path.isdir(sessions_dir):
@@ -9930,6 +9957,10 @@ def _compute_transcript_analytics():
                         usage_metrics = _extract_usage_metrics(obj)
                         tokens = usage_metrics["tokens"]
                         cost = usage_metrics["cost"]
+                        input_tokens = usage_metrics.get("input_tokens", 0)
+                        output_tokens = usage_metrics.get("output_tokens", 0)
+                        cache_read_tokens = usage_metrics.get("cache_read_tokens", 0)
+                        cache_write_tokens = usage_metrics.get("cache_write_tokens", 0)
 
                         if tokens > 0:
                             s_tokens += tokens
@@ -9943,6 +9974,10 @@ def _compute_transcript_analytics():
                             _ev_date = (ts or fallback_dt).strftime("%Y-%m-%d")
                             daily_tokens[_ev_date] = daily_tokens.get(_ev_date, 0) + tokens
                             daily_cost[_ev_date] = daily_cost.get(_ev_date, 0.0) + cost
+                            daily_input_tokens[_ev_date] = daily_input_tokens.get(_ev_date, 0) + input_tokens
+                            daily_output_tokens[_ev_date] = daily_output_tokens.get(_ev_date, 0) + output_tokens
+                            daily_cache_read_tokens[_ev_date] = daily_cache_read_tokens.get(_ev_date, 0) + cache_read_tokens
+                            daily_cache_write_tokens[_ev_date] = daily_cache_write_tokens.get(_ev_date, 0) + cache_write_tokens
 
                             plugins = _extract_tool_plugins(obj)
                             if plugins:
@@ -10010,6 +10045,10 @@ def _compute_transcript_analytics():
         "plugin_stats": plugin_stats,
         "daily_tokens": daily_tokens,
         "daily_cost": daily_cost,
+        "daily_input_tokens": daily_input_tokens,
+        "daily_output_tokens": daily_output_tokens,
+        "daily_cache_read_tokens": daily_cache_read_tokens,
+        "daily_cache_write_tokens": daily_cache_write_tokens,
         "model_usage": model_usage,
     }
     _transcript_analytics_cache["data"] = result
@@ -10051,7 +10090,13 @@ def _extract_usage_metrics(obj):
     if not isinstance(usage, dict):
         usage = obj.get("tokens_used")
     if not isinstance(usage, dict):
-        return {"tokens": 0, "cost": 0.0}
+        return {
+            "tokens": 0, "cost": 0.0,
+            "input_tokens": 0, "output_tokens": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0,
+            "input_cost": 0.0, "output_cost": 0.0,
+            "cache_read_cost": 0.0, "cache_write_cost": 0.0,
+        }
 
     in_toks = usage.get("input", usage.get("input_tokens", 0)) or 0
     out_toks = usage.get("output", usage.get("output_tokens", 0)) or 0
@@ -10062,6 +10107,10 @@ def _extract_usage_metrics(obj):
         total = in_toks + out_toks + cache_read + cache_write
 
     cost = 0.0
+    cost_input = 0.0
+    cost_output = 0.0
+    cost_cache_read = 0.0
+    cost_cache_write = 0.0
     cost_data = usage.get("cost", {})
     if isinstance(cost_data, dict):
         raw = cost_data.get("total", cost_data.get("usd", 0))
@@ -10069,12 +10118,25 @@ def _extract_usage_metrics(obj):
             cost = float(raw or 0)
         except Exception:
             cost = 0.0
+        # Extract granular cost breakdown if available
+        cost_input = float(cost_data.get("input", 0) or 0)
+        cost_output = float(cost_data.get("output", 0) or 0)
+        cost_cache_read = float(cost_data.get("cacheRead", 0) or 0)
+        cost_cache_write = float(cost_data.get("cacheWrite", 0) or 0)
     elif isinstance(cost_data, (int, float)):
         cost = float(cost_data)
 
     return {
         "tokens": int(total or 0),
         "cost": float(cost or 0.0),
+        "input_tokens": int(in_toks or 0),
+        "output_tokens": int(out_toks or 0),
+        "cache_read_tokens": int(cache_read or 0),
+        "cache_write_tokens": int(cache_write or 0),
+        "input_cost": float(cost_input),
+        "output_cost": float(cost_output),
+        "cache_read_cost": float(cost_cache_read),
+        "cache_write_cost": float(cost_cache_write),
     }
 
 
