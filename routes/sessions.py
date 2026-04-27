@@ -1383,6 +1383,25 @@ def api_transcript_events(session_id):
                             pass
 
                 obj_type = obj.get("type", "")
+
+                # Emit model_change and thinking_level_change as timeline
+                # annotation events so the frontend can render visual dividers.
+                if obj_type == "model_change":
+                    events.append({
+                        "type": "model_change",
+                        "modelId": obj.get("modelId") or obj.get("model") or "",
+                        "provider": obj.get("provider") or "",
+                        "timestamp": ts_val,
+                    })
+                    continue
+                if obj_type == "thinking_level_change":
+                    events.append({
+                        "type": "thinking_level_change",
+                        "thinkingLevel": obj.get("thinkingLevel") or obj.get("level") or "",
+                        "timestamp": ts_val,
+                    })
+                    continue
+
                 if obj_type == "message":
                     msg = obj.get("message", {})
                     role = msg.get("role", "")
@@ -1520,3 +1539,165 @@ def api_transcript_events(session_id):
     return jsonify(
         {"events": events[-500:], "messageCount": msg_count, "totalEvents": len(events)}
     )
+
+
+@bp_sessions.route("/api/session-model-journey/<session_id>")
+def api_session_model_journey(session_id):
+    """Return the ordered model journey for a session.
+
+    Walks the session JSONL and tracks every model_change and
+    thinking_level_change event.  For each segment (period between two
+    consecutive model changes) it computes: duration, tokens consumed,
+    and estimated cost.  The result powers the "Model Journey" side panel
+    in the session detail modal.
+    """
+    import dashboard as _d
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.join(sessions_dir, session_id + ".jsonl")
+    fpath = os.path.normpath(fpath)
+    if not fpath.startswith(os.path.normpath(sessions_dir)):
+        return jsonify({"error": "Access denied"}), 403
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Transcript not found"}), 404
+
+    def _parse_ts(ts):
+        if not ts:
+            return 0
+        if isinstance(ts, (int, float)):
+            return int(ts * 1000) if ts < 1e12 else int(ts)
+        try:
+            return int(
+                datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp() * 1000
+            )
+        except Exception:
+            return 0
+
+    # Segments: list of {modelId, provider, start_ms, end_ms, tokens, cost}
+    segments = []
+    thinking_changes = []
+    current_model = ""
+    current_provider = ""
+    seg_start_ms = 0
+    seg_tokens = 0
+    seg_cost = 0.0
+    first_ts = 0
+    last_ts = 0
+
+    try:
+        with open(fpath, "r", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except Exception:
+                    continue
+                ts_ms = _parse_ts(ev.get("timestamp") or ev.get("time") or "")
+                if ts_ms and not first_ts:
+                    first_ts = ts_ms
+                if ts_ms:
+                    last_ts = ts_ms
+
+                etype = ev.get("type", "")
+
+                if etype == "model_change":
+                    new_model = ev.get("modelId") or ev.get("model") or ""
+                    new_provider = ev.get("provider") or ""
+                    if not new_model:
+                        continue
+                    # Close the previous segment if we had one
+                    if current_model:
+                        segments.append({
+                            "modelId": current_model,
+                            "provider": current_provider,
+                            "start_ms": seg_start_ms,
+                            "end_ms": ts_ms or last_ts,
+                            "duration_ms": max(0, (ts_ms or last_ts) - seg_start_ms) if seg_start_ms else 0,
+                            "tokens": seg_tokens,
+                            "cost_usd": round(seg_cost, 6),
+                        })
+                    current_model = new_model
+                    current_provider = new_provider
+                    seg_start_ms = ts_ms
+                    seg_tokens = 0
+                    seg_cost = 0.0
+                    continue
+
+                if etype == "thinking_level_change":
+                    thinking_changes.append({
+                        "thinkingLevel": ev.get("thinkingLevel") or ev.get("level") or "",
+                        "timestamp_ms": ts_ms,
+                    })
+                    continue
+
+                if etype == "message":
+                    msg = ev.get("message", {}) or {}
+                    if not isinstance(msg, dict):
+                        continue
+                    # Track model from message if we haven't seen a model_change
+                    msg_model = msg.get("model") or ""
+                    if msg_model and not current_model:
+                        current_model = msg_model
+                        current_provider = msg.get("provider") or ""
+                        seg_start_ms = ts_ms or first_ts
+                    elif msg_model and msg_model != current_model:
+                        # Implicit model change from message metadata
+                        if current_model:
+                            segments.append({
+                                "modelId": current_model,
+                                "provider": current_provider,
+                                "start_ms": seg_start_ms,
+                                "end_ms": ts_ms or last_ts,
+                                "duration_ms": max(0, (ts_ms or last_ts) - seg_start_ms) if seg_start_ms else 0,
+                                "tokens": seg_tokens,
+                                "cost_usd": round(seg_cost, 6),
+                            })
+                        current_model = msg_model
+                        current_provider = msg.get("provider") or ""
+                        seg_start_ms = ts_ms
+                        seg_tokens = 0
+                        seg_cost = 0.0
+
+                    usage = msg.get("usage", {}) or {}
+                    if isinstance(usage, dict) and usage:
+                        seg_tokens += int(usage.get("totalTokens", 0) or 0)
+                        cost_obj = usage.get("cost", {}) or {}
+                        if isinstance(cost_obj, dict):
+                            seg_cost += float(cost_obj.get("total", 0) or 0)
+    except Exception as e:
+        return jsonify({"error": "parse error: " + str(e)}), 500
+
+    # Close the last open segment
+    if current_model:
+        segments.append({
+            "modelId": current_model,
+            "provider": current_provider,
+            "start_ms": seg_start_ms,
+            "end_ms": last_ts,
+            "duration_ms": max(0, last_ts - seg_start_ms) if seg_start_ms else 0,
+            "tokens": seg_tokens,
+            "cost_usd": round(seg_cost, 6),
+        })
+
+    # Summary stats
+    total_tokens = sum(s["tokens"] for s in segments)
+    total_cost = sum(s["cost_usd"] for s in segments)
+    total_duration = max(0, last_ts - first_ts) if first_ts and last_ts else 0
+
+    return jsonify({
+        "session_id": session_id,
+        "segments": segments,
+        "thinking_changes": thinking_changes,
+        "stats": {
+            "total_models_used": len(set(s["modelId"] for s in segments)),
+            "total_segments": len(segments),
+            "total_tokens": total_tokens,
+            "total_cost_usd": round(total_cost, 6),
+            "total_duration_ms": total_duration,
+            "first_ts": first_ts,
+            "last_ts": last_ts,
+        },
+    })
