@@ -3742,11 +3742,51 @@ var _cronAutoRefreshTimer = null;
 var _cronActionsAvailable = false;
 var _cronView = 'active'; // 'active' | 'paused' | 'calendar'
 
+// Cache of recent runs per job, populated lazily when Calendar is opened.
+// Keyed by job_id -> [{ts, status}]. Used to render confirmed past-7d
+// activity in the Calendar's "Recently ran" section, including failures.
+var _cronRecentRunsCache = {};
+var _cronRecentRunsLoaded = false;
+
 function setCronView(view) {
   _cronView = view;
   document.querySelectorAll('.cron-view-tab').forEach(function(b) {
     if (b.dataset.view === view) b.classList.add('active'); else b.classList.remove('active');
   });
+  if (view === 'calendar' && !_cronRecentRunsLoaded) {
+    _loadAllCronRecentRuns();
+  } else {
+    renderCrons();
+  }
+}
+
+async function _loadAllCronRecentRuns() {
+  // One-shot bulk-load of recent runs for every ACTIVE job so the Calendar's
+  // "Recently ran" section can render real, agent-confirmed history (with
+  // failure status) rather than "Coming up" only. Skipped if any job has
+  // already supplied state.lastRunAtMs (we'd be duplicating).
+  _cronRecentRunsLoaded = true;
+  try {
+    var active = (_cronJobs || []).filter(function(j) { return j.enabled !== false; });
+    var sevenDaysAgo = Date.now() - 7 * 86400000;
+    var results = await Promise.all(active.map(function(j) {
+      return fetch('/api/cron/' + encodeURIComponent(j.id) + '/runs')
+        .then(function(r) { return r.ok ? r.json() : {runs:[]}; })
+        .catch(function() { return {runs:[]}; });
+    }));
+    active.forEach(function(j, i) {
+      var runs = ((results[i] || {}).runs || [])
+        .map(function(r) {
+          var ts = r.startedAt ? Date.parse(r.startedAt)
+                 : r.timestamp || r.ts || 0;
+          return { ts: ts, status: r.status || 'unknown' };
+        })
+        .filter(function(r) { return r.ts >= sevenDaysAgo && r.ts <= Date.now(); });
+      _cronRecentRunsCache[j.id] = runs;
+    });
+  } catch (e) {
+    // non-fatal: Calendar still renders predictions, just no past runs
+  }
   renderCrons();
 }
 
@@ -3830,8 +3870,19 @@ function _cronComputeNextFireMs(schedule, fromMs) {
   var now = fromMs || Date.now();
 
   if (schedule.kind === 'every' && schedule.everyMs > 0) {
-    // For interval schedules without a recorded last run, the next fire is
-    // "everyMs from now" - the best we can say without persisted state.
+    // The agent stores `anchorMs` -- the wall-clock origin from which all
+    // fires are scheduled (typically job creation time + optional stagger).
+    // With that anchor, the next fire is deterministic:
+    //     next = anchor + ceil((now - anchor) / everyMs) * everyMs
+    // and the prediction is 100% accurate (matches the agent's scheduler
+    // exactly). Without an anchor, fall back to "now + everyMs" which is the
+    // worst-case upper bound (true next fire is somewhere in [now, now+N]).
+    if (typeof schedule.anchorMs === 'number' && schedule.anchorMs > 0) {
+      var elapsed = now - schedule.anchorMs;
+      if (elapsed <= 0) return schedule.anchorMs; // agent hasn't started yet
+      var n = Math.ceil(elapsed / schedule.everyMs);
+      return schedule.anchorMs + n * schedule.everyMs;
+    }
     return now + schedule.everyMs;
   }
 
@@ -4213,6 +4264,15 @@ function renderCronCalendar(jobs) {
     if (lastMs && lastMs >= past && lastMs <= now) {
       recent.push({ts: lastMs, job: j, status: j.state.lastStatus || 'unknown'});
     }
+    // Also pull every confirmed run from the per-job /runs cache (loaded
+    // lazily when Calendar tab opens). This is how past failures land in
+    // "Recently ran" with a red icon, even if state.lastStatus is missing.
+    var cached = _cronRecentRunsCache[j.id] || [];
+    cached.forEach(function(r) {
+      if (r.ts >= past && r.ts <= now && r.ts !== lastMs) {
+        recent.push({ts: r.ts, job: j, status: r.status});
+      }
+    });
   });
   upcoming.sort(function(a,b){return a.ts - b.ts;});
   recent.sort(function(a,b){return b.ts - a.ts;});
