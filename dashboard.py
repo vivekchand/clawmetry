@@ -109,6 +109,7 @@ from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
+from routes.cache_analytics import bp_cache_analytics
 from routes.selfconfig import bp_selfconfig
 from helpers.openapi import bp_openapi
 
@@ -8303,6 +8304,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_selfevolve)
     app.register_blueprint(bp_alerts)
     app.register_blueprint(bp_autonomy)
+    app.register_blueprint(bp_cache_analytics)
     app.register_blueprint(bp_auth)
     app.register_blueprint(bp_brain)
     app.register_blueprint(bp_budget)

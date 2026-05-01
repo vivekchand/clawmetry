@@ -986,6 +986,65 @@ class TestAutonomy:
 
 
 # ---------------------------------------------------------------------------
+# Cache Analytics (#851)
+# ---------------------------------------------------------------------------
+
+
+class TestCacheAnalytics:
+    def test_cache_analytics_endpoint_ok(self, api, base_url):
+        r = api.get(f"{base_url}/api/cache-analytics")
+        assert r.status_code == 200
+        d = r.json()
+        assert "cache_hit_ratio" in d
+        assert "estimated_savings_usd" in d
+
+    def test_cache_analytics_structure(self, api, base_url):
+        """Response always has all expected keys."""
+        d = assert_ok(get(api, base_url, "/api/cache-analytics"))
+        assert_keys(
+            d,
+            "cache_hit_ratio",
+            "total_cache_read_tokens",
+            "total_cache_write_tokens",
+            "total_input_tokens",
+            "estimated_savings_usd",
+            "series_daily",
+            "per_model",
+            "per_session",
+        )
+
+    def test_cache_analytics_series_daily_is_list(self, api, base_url):
+        """series_daily is always a list."""
+        d = assert_ok(get(api, base_url, "/api/cache-analytics"))
+        assert isinstance(d["series_daily"], list), "series_daily must be a list"
+
+    def test_cache_analytics_per_model_is_list(self, api, base_url):
+        """per_model is always a list."""
+        d = assert_ok(get(api, base_url, "/api/cache-analytics"))
+        assert isinstance(d["per_model"], list), "per_model must be a list"
+
+    def test_cache_analytics_per_session_is_list(self, api, base_url):
+        """per_session is always a list."""
+        d = assert_ok(get(api, base_url, "/api/cache-analytics"))
+        assert isinstance(d["per_session"], list), "per_session must be a list"
+
+    def test_cache_analytics_hit_ratio_range(self, api, base_url):
+        """If cache_hit_ratio is not null it must be in [0, 1]."""
+        d = assert_ok(get(api, base_url, "/api/cache-analytics"))
+        if d["cache_hit_ratio"] is not None:
+            assert 0.0 <= d["cache_hit_ratio"] <= 1.0, (
+                f"cache_hit_ratio out of range: {d['cache_hit_ratio']}"
+            )
+
+    def test_cache_analytics_savings_non_negative(self, api, base_url):
+        """estimated_savings_usd must be >= 0."""
+        d = assert_ok(get(api, base_url, "/api/cache-analytics"))
+        assert d["estimated_savings_usd"] >= 0, (
+            f"savings should be non-negative: {d['estimated_savings_usd']}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Self-Configuration Diff Viewer (#689)
 # ---------------------------------------------------------------------------
 
