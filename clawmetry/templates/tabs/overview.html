@@ -19,6 +19,25 @@
     </div>
   </div>
 
+  <!-- Prompt Cache Hit Rate Analytics (#851) -->
+  <div id="cache-analytics-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;" title="Prompt cache hit rate and estimated savings.">
+    <div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">&#128230; Prompt Cache Analytics</div>
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+        <span id="cache-hit-rate" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-primary);">--</span>
+        <span id="cache-savings-badge" style="font-size:12px;font-weight:600;padding:3px 8px;border-radius:20px;"></span>
+      </div>
+      <div id="cache-summary-text" style="font-size:13px;color:var(--text-muted);margin-top:8px;">--</div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-align:right;">Last 7 days</div>
+      <svg id="cache-sparkline" width="160" height="48" viewBox="0 0 160 48" style="overflow:visible;">
+        <text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">No data yet</text>
+      </svg>
+      <div id="cache-total-tokens" style="font-size:10px;color:var(--text-muted);margin-top:4px;text-align:right;"></div>
+    </div>
+  </div>
+
   <div class="refresh-bar" style="margin-bottom:6px;">
     <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
     <span class="pulse"></span>
