@@ -256,7 +256,15 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
     for attempt in range(2):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read())
+                resp_body = json.loads(resp.read())
+            # Cloud heartbeat (and any other endpoint) may attach the user's
+            # plan / sync_allowed / trial_days_left / upgrade_url. We mirror
+            # those into _TRIAL_STATE so subsequent uploads can self-throttle
+            # before paying the network round-trip. Best-effort: missing
+            # fields leave the cache untouched.
+            if isinstance(resp_body, dict) and "sync_allowed" in resp_body:
+                _update_trial_state(resp_body)
+            return resp_body
         except urllib.error.HTTPError as e:
             code = e.code
             msg = e.read().decode()[:200]
@@ -265,8 +273,74 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
             if code in (401, 503) and attempt == 0:
                 time.sleep(2)
                 continue
+            # Server-side throttle — surface a friendly "upgrade to resume"
+            # message and remember we're paused so next call short-circuits.
+            if code == 429:
+                try:
+                    plan = json.loads(msg).get("plan", "")
+                except Exception:
+                    plan = ""
+                _update_trial_state({
+                    "sync_allowed": False,
+                    "plan": plan or "trial_expired",
+                    "upgrade_url": "https://app.clawmetry.com/cloud",
+                })
             raise last_err
     raise last_err
+
+
+# ── Client-side trial gating ────────────────────────────────────────────────
+# Cloud /ingest/heartbeat returns {plan, sync_allowed, trial_days_left,
+# upgrade_url} on every beat. We cache it here so:
+#   - Large blob uploads (events / snapshots / memory / sessions / logs /
+#     autonomy) skip themselves when sync_allowed=False, saving bandwidth.
+#   - Heartbeats and approvals/alerts polls KEEP firing so the daemon
+#     detects the moment the user upgrades (sync_allowed flips True →
+#     uploads resume automatically, no daemon restart needed).
+#   - A clear "upgrade to resume" log line prints once per UTC day so the
+#     user knows why their dashboard stopped updating.
+
+_TRIAL_STATE = {
+    "sync_allowed": True,    # default: assume allowed until cloud says otherwise
+    "plan": None,
+    "trial_days_left": None,
+    "upgrade_url": "https://app.clawmetry.com/cloud",
+    "last_log_day": "",     # YYYY-MM-DD of the last "sync paused" log
+}
+
+
+def _update_trial_state(resp: dict) -> None:
+    """Mirror plan info from a cloud response into the local cache + log
+    a one-line "upgrade to resume" message once per UTC day on transition."""
+    prev_allowed = _TRIAL_STATE["sync_allowed"]
+    new_allowed = bool(resp.get("sync_allowed", True))
+    _TRIAL_STATE["sync_allowed"] = new_allowed
+    if "plan" in resp:
+        _TRIAL_STATE["plan"] = resp.get("plan")
+    if "trial_days_left" in resp:
+        _TRIAL_STATE["trial_days_left"] = resp.get("trial_days_left")
+    if resp.get("upgrade_url"):
+        _TRIAL_STATE["upgrade_url"] = resp["upgrade_url"]
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if not new_allowed and _TRIAL_STATE["last_log_day"] != today:
+        _TRIAL_STATE["last_log_day"] = today
+        log.warning(
+            "⚠ Trial expired (plan=%s). Cloud sync paused — heartbeats "
+            "continue so we detect the moment you upgrade. Upgrade to Pro at "
+            "%s to resume event/session/memory sync.",
+            _TRIAL_STATE["plan"], _TRIAL_STATE["upgrade_url"],
+        )
+    elif new_allowed and not prev_allowed:
+        log.info(
+            "✓ Pro plan detected (plan=%s). Cloud sync resumed.",
+            _TRIAL_STATE["plan"],
+        )
+
+
+def _sync_allowed() -> bool:
+    """Gate for large blob uploads. Heartbeats + approvals/alerts polls
+    bypass this — they MUST keep firing so we detect the upgrade."""
+    return _TRIAL_STATE.get("sync_allowed", True)
 
 
 def get_machine_id() -> str:
@@ -840,6 +914,11 @@ def _canonical_session_file(name: str) -> str:
 
 
 def sync_sessions(config: dict, state: dict, paths: dict) -> int:
+    # Skipped when sync is paused (expired trial). The state dict still
+    # tracks last_event_ids so when the user upgrades, we resume from
+    # exactly where we paused -- no event loss, no double-send.
+    if not _sync_allowed():
+        return 0
     sessions_dir = paths["sessions_dir"]
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
@@ -1256,6 +1335,10 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
 
 
 def sync_logs(config: dict, state: dict, paths: dict) -> int:
+    # Skipped when sync is paused (expired trial). Offsets persist so
+    # nothing is lost on resume.
+    if not _sync_allowed():
+        return 0
     log_dir = paths["log_dir"]
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
@@ -1479,12 +1562,17 @@ CRON_STATE_HEARTBEAT_SEC = 300  # 5 minutes
 def sync_crons(config: dict, state: dict, paths: dict) -> int:
     """Sync cron job definitions to cloud.
 
+    Skipped when the cloud has flagged this account's sync as paused (e.g.
+    expired trial). Heartbeats keep firing so we detect upgrade.
+
     Dedup strategy (issue #599): emit a cron_state event per job only when the
     per-job state hash differs from the last emission, OR when the heartbeat
     interval (CRON_STATE_HEARTBEAT_SEC) has elapsed since the last emission
     for that job. Dedup tracking is persisted in the sync state dict so it
     survives daemon restarts.
     """
+    if not _sync_allowed():
+        return 0
     api_key = config["api_key"]
     node_id = config["node_id"]
     last_hash = state.get("cron_hash", "")
@@ -1589,10 +1677,15 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
 def sync_session_metadata(config: dict, state: dict = None) -> int:
     """Sync OpenClaw session metadata rows to cloud sessions table.
 
+    Skipped when the cloud has flagged sync as paused (expired trial).
+    Heartbeats continue so the daemon detects the moment the user upgrades.
+
     Uses mtime tracking to only re-parse files that changed since last sync.
     Reads JSONL session files directly (HTTP API returns HTML, not JSON).
     Extracts session_id, model, timestamps from the event stream.
     """
+    if not _sync_allowed():
+        return 0
     api_key = config["api_key"]
     node_id = config["node_id"]
     if state is None:
@@ -1777,7 +1870,11 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
 
 
 def sync_memory(config: dict, state: dict, paths: dict) -> int:
-    """Sync memory files (MEMORY.md + memory/*.md) to cloud."""
+    """Sync memory files (MEMORY.md + memory/*.md) to cloud.
+
+    Skipped when sync is paused (expired trial)."""
+    if not _sync_allowed():
+        return 0
     workspace = paths.get("workspace", "")
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
@@ -2631,7 +2728,11 @@ def _build_cron_jobs(paths):
 
 
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
-    """Push system info + subagent data as encrypted snapshot."""
+    """Push system info + subagent data as encrypted snapshot.
+
+    Skipped when sync is paused (expired trial)."""
+    if not _sync_allowed():
+        return 0
     import subprocess, platform, json as _json
 
     api_key = config["api_key"]
@@ -3650,7 +3751,11 @@ def sync_autonomy(config, state, paths):
     ``state['autonomy_last_day']`` and skip until that rolls over. On first
     run, pushes up to 90 days of history. Each subsequent run pushes
     whatever has changed.
+
+    Skipped when sync is paused (expired trial).
     """
+    if not _sync_allowed():
+        return 0
     api_key = config.get("api_key") or ""
     if not api_key:
         return 0
