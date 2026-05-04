@@ -2221,12 +2221,17 @@ window.toggleBrainFilterExpanded = function() {
 function _brainChipHtml(s) {
   var isActive = _brainFilter === s.id;
   var icon = s.icon || (s.id === 'main' ? '🧠' : '🤖');
+  // Add 🧠 badge if this source has any THINK events (reasoning sessions)
+  var hasReasoning = (_brainAllEvents || []).some(function(ev) {
+    return ev.source === s.id && ev.type === 'THINK';
+  });
+  var reasoningBadge = hasReasoning ? ' <span title="Has reasoning chains" style="font-size:9px;">&#129504;</span>' : '';
   return '<button class="brain-chip' + (isActive ? ' active' : '') + '" data-source="' +
     escHtml(s.id) + '" title="' + escHtml(s.id) +
     '" onclick="setBrainFilter(this.dataset.source,this)" style="padding:3px 10px;border-radius:12px;border:1px solid ' +
     s.color + ';background:' + (isActive ? 'rgba(100,100,100,0.2)' : 'transparent') +
     ';color:' + s.color + ';font-size:11px;cursor:pointer;font-weight:' +
-    (isActive ? '600' : '400') + ';">' + icon + ' ' + escHtml(s.label || s.id) + '</button>';
+    (isActive ? '600' : '400') + ';">' + icon + ' ' + escHtml(s.label || s.id) + reasoningBadge + '</button>';
 }
 
 function renderBrainFilterChips(sources) {
@@ -2450,7 +2455,15 @@ function renderBrainStream(events) {
           turnTimeline += '<span style="color:var(--text-faint);min-width:50px;flex-shrink:0;">' + teTime + '</span>';
           turnTimeline += '<span style="color:' + teCol + ';min-width:55px;font-weight:600;flex-shrink:0;">' + teIcon + ' ' + te.type + '</span>';
           turnTimeline += '<span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(teDetail) + '</span>';
-          turnTimeline += '</div>';
+          if (te.type === 'THINK') {
+            var _rcSid = te.source || 'main';
+            var _rcContainerId = 'rc-' + _rcSid.slice(0, 8) + '-' + (te.time || '').replace(/[^0-9]/g, '').slice(-6);
+            turnTimeline += '<button onclick="event.stopPropagation();loadReasoningChain(\'' + escHtml(_rcSid) + '\',\'' + escHtml(_rcContainerId) + '\')" style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #6366f1;background:transparent;color:#818cf8;font-size:10px;cursor:pointer;white-space:nowrap;">&#129504; View chain</button>';
+            turnTimeline += '</div>';
+            turnTimeline += '<div id="' + escHtml(_rcContainerId) + '" style="margin:2px 0 4px 56px;"></div>';
+          } else {
+            turnTimeline += '</div>';
+          }
         });
         if (currentSubagent) turnTimeline += '</div>'; // close last sub-agent group
         turnTimeline += '</div>';
@@ -2471,6 +2484,78 @@ function renderBrainStream(events) {
     html += '</div>';
   });
   el.innerHTML = html;
+}
+
+// Reasoning Chain Viewer (GH #565)
+// Step type → badge color
+var _rcStepColors = {
+  premise: '#3b82f6',
+  hypothesis: '#f59e0b',
+  constraint: '#f97316',
+  conclusion: '#10b981',
+  analysis: '#6b7280'
+};
+
+function loadReasoningChain(sessionId, containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  // Toggle: if already loaded, clear it
+  if (container.dataset.loaded === '1') {
+    container.innerHTML = '';
+    container.dataset.loaded = '0';
+    return;
+  }
+  container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">Loading\u2026</span>';
+  fetch('/api/reasoning?session=' + encodeURIComponent(sessionId))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      container.dataset.loaded = '1';
+      var chains = data.chains || [];
+      var summary = data.summary || {};
+      if (!chains.length) {
+        container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">No reasoning chains found.</span>';
+        return;
+      }
+      var html = '';
+      // Summary bar
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;font-size:10px;color:var(--text-muted);margin-bottom:4px;">';
+      html += '<span style="color:#818cf8;">&#129504; ' + summary.total_thinking_tokens + ' thinking tokens</span>';
+      var totalSteps = chains.reduce(function(acc, c) { return acc + (c.steps || []).length; }, 0);
+      html += '<span>&#128295; ' + totalSteps + ' steps</span>';
+      if (summary.avg_efficiency > 0) {
+        html += '<span>&#9889; Efficiency: ' + summary.avg_efficiency + ':1</span>';
+      }
+      html += '<span>' + chains.length + ' chain' + (chains.length > 1 ? 's' : '') + '</span>';
+      html += '</div>';
+      // Render each chain
+      chains.forEach(function(chain, ci) {
+        html += '<div style="padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;">';
+        if (chains.length > 1) {
+          html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;">Chain ' + (ci + 1) + ' &mdash; ' + chain.thinking_tokens + ' tokens</div>';
+        }
+        (chain.steps || []).forEach(function(step) {
+          var col = _rcStepColors[step.type] || '#6b7280';
+          var preview = (step.content || '').slice(0, 80);
+          var hasMore = (step.content || '').length > 80;
+          var stepId = 'rcs-' + containerId + '-' + ci + '-' + Math.random().toString(36).slice(2,7);
+          html += '<div style="display:flex;gap:6px;align-items:flex-start;padding:2px 0;font-size:10px;">';
+          html += '<span style="flex-shrink:0;padding:0 5px;border-radius:8px;background:' + col + '22;color:' + col + ';font-weight:700;font-size:9px;line-height:16px;">' + escHtml(step.type) + '</span>';
+          html += '<span id="' + stepId + '" style="color:var(--text-secondary);flex:1;">' + escHtml(preview);
+          if (hasMore) {
+            html += '<span id="' + stepId + '-more" style="display:none;">' + escHtml((step.content || '').slice(80)) + '</span>';
+            html += '<span onclick="(function(el){var m=document.getElementById(\'' + stepId + '-more\');if(m){m.style.display=m.style.display===\'none\'?\'inline\':\'none\';el.textContent=m.style.display===\'none\'?\' \u2026more\':\'  \u2212less\';};})(this)" style="color:var(--text-muted);cursor:pointer;"> \u2026more</span>';
+          }
+          html += '</span>';
+          html += '<span style="flex-shrink:0;color:var(--text-faint);font-size:9px;">' + step.word_count + 'w</span>';
+          html += '</div>';
+        });
+        html += '</div>';
+      });
+      container.innerHTML = html;
+    })
+    .catch(function(err) {
+      container.innerHTML = '<span style="color:#ef4444;font-size:10px;">Error loading reasoning chain.</span>';
+    });
 }
 
 function renderBrainChart(events) {
