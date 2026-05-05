@@ -9006,7 +9006,7 @@ def _auto_discover_gateway(token):
                         "instanceId": "clawmetry-discover",
                     },
                     "role": "operator",
-                    "scopes": ["operator.admin"],
+                    "scopes": ["operator.read", "operator.admin"],
                     "auth": {"token": token},
                 },
             }
