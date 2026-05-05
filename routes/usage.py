@@ -33,6 +33,9 @@ from flask import Blueprint, jsonify, make_response, request
 
 bp_usage = Blueprint('usage', __name__)
 
+_CLUSTER_CACHE = {"ts": 0.0, "key": None, "data": None}
+_CLUSTER_CACHE_TTL_SECONDS = 120
+
 
 @bp_usage.route("/api/usage")
 def api_usage():
@@ -342,6 +345,10 @@ def api_sessions_clusters():
         days = int(request.args.get("days", 30))
     except (ValueError, TypeError):
         days = 30
+    cache_key = f"days:{days}"
+    cached = _CLUSTER_CACHE.get("data")
+    if cached is not None and _CLUSTER_CACHE.get("key") == cache_key and (now_ts - float(_CLUSTER_CACHE.get("ts") or 0)) < _CLUSTER_CACHE_TTL_SECONDS:
+        return jsonify(cached)
     cutoff_ts = now_ts - (days * 86400)
 
     sessions_dir = _d._get_sessions_dir()
@@ -360,6 +367,8 @@ def api_sessions_clusters():
 
     for fname in os.listdir(sessions_dir):
         if not fname.endswith(".jsonl"):
+            continue
+        if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
             continue
         fpath = os.path.join(sessions_dir, fname)
         try:
@@ -579,14 +588,16 @@ def api_sessions_clusters():
 
     clusters_out.sort(key=lambda x: x["session_count"], reverse=True)
 
-    return jsonify(
-        {
-            "clusters": clusters_out,
-            "total_sessions": len(session_profiles),
-            "days": days,
-            "generated_at": int(now_ts * 1000),
-        }
-    )
+    payload = {
+        "clusters": clusters_out,
+        "total_sessions": len(session_profiles),
+        "days": days,
+        "generated_at": int(now_ts * 1000),
+    }
+    _CLUSTER_CACHE["data"] = payload
+    _CLUSTER_CACHE["key"] = cache_key
+    _CLUSTER_CACHE["ts"] = time.time()
+    return jsonify(payload)
 
 
 @bp_usage.route("/api/usage/cost-comparison")
