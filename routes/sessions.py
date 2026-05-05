@@ -26,11 +26,16 @@ from flask import Blueprint, jsonify, request
 
 bp_sessions = Blueprint('sessions', __name__)
 
+_SUBAGENTS_CACHE = {"ts": 0.0, "data": None}
+_SUBAGENTS_CACHE_TTL_SECONDS = 10
+_SUBAGENTS_SCAN_MAX_FILES = int(os.environ.get("CLAWMETRY_SUBAGENTS_SCAN_MAX_FILES", "120"))
+_SUBAGENTS_SCAN_TAIL_BYTES = int(os.environ.get("CLAWMETRY_SUBAGENTS_SCAN_TAIL_BYTES", str(512 * 1024)))
+
 
 @bp_sessions.route("/api/sessions")
 def api_sessions():
     import dashboard as _d
-    gw_data = _d._gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
+    gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
         return jsonify({"sessions": _d._augment_sessions_with_burn(gw_data["sessions"])})
     return jsonify({"sessions": _d._augment_sessions_with_burn(_d._get_sessions())})
@@ -523,7 +528,7 @@ def api_task_runs():
     })
 
 
-def _scan_spawn_events_from_jsonl(sessions_dir):
+def _scan_spawn_events_from_jsonl(sessions_dir, max_files=None, tail_bytes=None):
     """Walk every session JSONL and pair SPAWN toolCall/toolResult rows.
 
     OpenClaw's subagent lifecycle is:
@@ -558,7 +563,15 @@ def _scan_spawn_events_from_jsonl(sessions_dir):
     _task_name_re = _re.compile(r"^task:\s*(.+)$", _re.MULTILINE)
     _status_re = _re.compile(r"^status:\s*(.+)$", _re.MULTILINE)
 
-    for fpath in _glob.glob(os.path.join(sessions_dir, "*.jsonl")):
+    files = _glob.glob(os.path.join(sessions_dir, "*.jsonl"))
+    try:
+        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    except Exception:
+        pass
+    if max_files and max_files > 0:
+        files = files[:max_files]
+
+    for fpath in files:
         if ".deleted." in fpath:
             continue
         # Skip checkpoints - their content is duplicated into the main file
@@ -571,6 +584,14 @@ def _scan_spawn_events_from_jsonl(sessions_dir):
         completions = {} # childSessionKey → {task, status, result, stats, ts}
         try:
             with open(fpath, "r", errors="replace") as fh:
+                if tail_bytes and tail_bytes > 0:
+                    try:
+                        size = os.path.getsize(fpath)
+                        if size > tail_bytes:
+                            fh.seek(max(0, size - tail_bytes))
+                            fh.readline()  # drop partial line after seek
+                    except Exception:
+                        pass
                 for raw in fh:
                     raw = raw.strip()
                     if not raw:
@@ -722,6 +743,11 @@ def api_subagents():
     """
     import dashboard as _d
     now_ms = time.time() * 1000
+    full_scan = request.args.get("full", "").strip().lower() in ("1", "true", "yes")
+    if not full_scan:
+        cached = _SUBAGENTS_CACHE.get("data")
+        if cached is not None and (time.time() - float(_SUBAGENTS_CACHE.get("ts") or 0)) < _SUBAGENTS_CACHE_TTL_SECONDS:
+            return jsonify(cached)
 
     # Source 1: canonical subagent registry
     reg_active = []
@@ -740,7 +766,7 @@ def api_subagents():
     # value would append registry + spawn entries to the cache itself, so
     # every subsequent /api/subagents call inherits the previous call's
     # appends — subagents get duplicated exponentially (6x, 8x, 10x...).
-    gw_data = _d._gw_invoke("sessions_list", {"limit": 100, "messageLimit": 0})
+    gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
         all_sessions = list(gw_data["sessions"])
     else:
@@ -779,7 +805,11 @@ def api_subagents():
         "~/.openclaw/agents/main/sessions"
     )
     try:
-        spawn_events = _scan_spawn_events_from_jsonl(sessions_dir)
+        spawn_events = _scan_spawn_events_from_jsonl(
+            sessions_dir,
+            max_files=None if full_scan else _SUBAGENTS_SCAN_MAX_FILES,
+            tail_bytes=None if full_scan else _SUBAGENTS_SCAN_TAIL_BYTES,
+        )
     except Exception:
         spawn_events = []
     # Build a lookup by childKey so we can enrich entries from sources 1/2
@@ -913,7 +943,11 @@ def api_subagents():
 
     _status_rank = {"active": 0, "idle": 1, "stale": 2, "failed": 3}
     subagents.sort(key=lambda x: (_status_rank.get(x["status"], 9), x["depth"]))
-    return jsonify({"subagents": subagents, "counts": counts})
+    payload = {"subagents": subagents, "counts": counts}
+    if not full_scan:
+        _SUBAGENTS_CACHE["data"] = payload
+        _SUBAGENTS_CACHE["ts"] = time.time()
+    return jsonify(payload)
 
 
 @bp_sessions.route("/api/delegation-tree")

@@ -207,7 +207,7 @@ def api_overview():
     import dashboard as _d
 
     # Try gateway API for sessions
-    gw_sessions = _d._gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
+    gw_sessions = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_sessions and "sessions" in gw_sessions:
         sessions = gw_sessions["sessions"]
     else:
