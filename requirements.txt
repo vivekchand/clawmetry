@@ -3,7 +3,7 @@ flask>=2.0,<4
 # Testing dependencies
 pytest>=8.0
 pytest-playwright>=0.5
-requests>=2.28
+requests>=2.32.5
 
 # Optional: enables real-time OTLP metrics from OpenClaw
 # Install with: pip install clawmetry[otel]
