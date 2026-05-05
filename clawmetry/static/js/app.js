@@ -1659,17 +1659,18 @@ async function loadAll() {
     // Render overview quickly; do not block on heavy usage aggregation.
     var overview = await fetchJsonWithTimeout('/api/overview', 3000);
 
-    // Start secondary panels immediately.
-    startActiveTasksRefresh();
+    // Start only critical secondary panels immediately. Expensive/non-critical
+    // cards are staggered below so the initial widget load does not stampede
+    // the backend and queue behind transcript analytics.
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
-    if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
-    if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
-    if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadReliabilityCard === 'function') setTimeout(function(){ loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)}); }, 1200);
+    if (typeof loadTokenVelocity === 'function') setTimeout(function(){ loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)}); }, 1600);
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
-    if (typeof loadAutonomy === 'function') loadAutonomy().catch(function(e){console.warn('autonomy failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
+    if (typeof loadAutonomy === 'function') setTimeout(function(){ loadAutonomy().catch(function(e){console.warn('autonomy failed',e)}); }, 2600);
+    if (typeof loadAnomalyPanel === 'function') setTimeout(function(){ loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)}); }, 3600);
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -2544,7 +2545,10 @@ function _startBrainSSE() {
 
   try {
     var url = '/api/brain-stream';
-    var token = localStorage.getItem('gw_token');
+    var token =
+      localStorage.getItem('clawmetry-token') ||
+      localStorage.getItem('gw_token') ||
+      localStorage.getItem('cm-token');
     if (token) url += '?token=' + encodeURIComponent(token);
     var es = new EventSource(url);
     _brainSSE = es;
@@ -2630,7 +2634,7 @@ async function loadContextInspector() {
     // Fetch overview for model + token info
     var ov = await fetch('/api/overview').then(function(r){return r.json();}).catch(function(){return {};});
     // Fetch brain history for compaction events + turn count
-    var brain = await fetch('/api/brain-history').then(function(r){return r.json();}).catch(function(){return {events:[]};});
+    var brain = await fetch('/api/brain-history?limit=300').then(function(r){return r.json();}).catch(function(){return {events:[]};});
     // Fetch skills for header token count
     var skills = await fetch('/api/skills').then(function(r){return r.json();}).catch(function(){return {skills:[],summary:{}};});
 
@@ -2939,7 +2943,7 @@ async function loadBrainPage(silent) {
   if (window.CLOUD_MODE) return;
   if (!silent) { advisorProbe(); selfevolveProbe(); }
   try {
-    var data = await fetchJsonWithTimeout('/api/brain-history', 8000);
+    var data = await fetchJsonWithTimeout('/api/brain-history?limit=300', 20000);
     var events = (data.events || []).slice().sort(function(a,b){
       var ta = a.time ? new Date(a.time).getTime() : 0;
       var tb = b.time ? new Date(b.time).getTime() : 0;
@@ -5027,7 +5031,7 @@ function startHealthStream() {
 // ===== System Health Panel =====
 async function loadSystemHealth() {
   try {
-    var d = await fetchJsonWithTimeout('/api/system-health', 4000);
+    var d = await fetchJsonWithTimeout('/api/system-health', 18000);
     var services = Array.isArray(d.services) ? d.services : [];
     var channels = Array.isArray(d.channels) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];
@@ -5117,7 +5121,7 @@ async function loadSystemHealth() {
 
     // Delegation chain panel (AgentWeave-inspired provenance view)
     try {
-      var chainData = await fetch('/api/delegation-tree').then(function(r){return r.json();}).catch(function(){return {chains:[]};});
+      var chainData = await fetchJsonWithTimeout('/api/delegation-tree', 4000).catch(function(){return {chains:[]};});
       var chains = (chainData && chainData.chains) || [];
       var chainsEl = document.getElementById('delegation-chains-panel');
       if (chainsEl) {
@@ -5167,7 +5171,7 @@ async function loadSystemHealth() {
 
     // Heartbeat status in system health
     try {
-      var hbData = await fetch('/api/heartbeat-status').then(function(r){return r.json();});
+      var hbData = await fetchJsonWithTimeout('/api/heartbeat-status', 3000);
       var hbEl = document.getElementById('sh-heartbeat');
       if (hbEl) {
         var hbStatus = hbData.status || 'unknown';
@@ -5249,7 +5253,7 @@ async function _loadReliabilityWidget() {
   var el = document.getElementById('sh-reliability');
   if (!wrap || !el) return;
   try {
-    var r = await fetch('/api/reliability').then(function(r) { return r.json(); });
+    var r = await fetchJsonWithTimeout('/api/reliability', 4000);
     if (r.direction === 'insufficient_data' || r.error) {
       wrap.style.display = 'none';
       return;
@@ -5293,6 +5297,67 @@ function startSystemHealthRefresh() {
   loadSystemHealth();
   if (window._sysHealthTimer) clearInterval(window._sysHealthTimer);
   window._sysHealthTimer = setInterval(loadSystemHealth, 30000);
+}
+
+async function loadDiagnostics() {
+  var el = document.getElementById('sh-diagnostics');
+  if (!el) return false;
+  try {
+    var d = await fetchJsonWithTimeout('/api/diagnostics', 6000).catch(function() {
+      return fetchJsonWithTimeout('/api/config-diagnostics', 6000);
+    });
+    var warnings = Array.isArray(d.warnings) ? d.warnings : [];
+    var flags = d.openclaw_flags && typeof d.openclaw_flags === 'object' ? d.openclaw_flags : {};
+    var flagKeys = Object.keys(flags);
+    var html = '';
+    function row(label, value, color) {
+      html += '<div><span style="color:var(--text-muted);">' + escHtml(label) + ':</span> '
+        + '<span style="color:' + (color || 'var(--text-primary)') + ';">' + escHtml(value == null || value === '' ? '—' : value) + '</span></div>';
+    }
+    row('Gateway', d.gateway_url || ('port ' + (d.gateway_port || '—')));
+    row('Workspace', d.workspace_path || '—');
+    row('Auth token', d.auth_token_status || 'unknown', d.auth_token_status === 'present' ? 'var(--text-success,#22c55e)' : 'var(--text-error,#dc2626)');
+    if (flagKeys.length) {
+      row('OpenClaw flags', flagKeys.map(function(k){ return k + '=' + flags[k]; }).join(', '));
+    }
+    if (warnings.length) {
+      html += '<div style="margin-top:6px;color:#f59e0b;">' + warnings.map(function(w){return '⚠️ ' + escHtml(w);}).join('<br>') + '</div>';
+    } else {
+      html += '<div style="margin-top:6px;color:var(--text-success,#22c55e);">✅ No diagnostics warnings</div>';
+    }
+    el.innerHTML = html;
+    return true;
+  } catch (e) {
+    console.warn('diagnostics load failed', e);
+    el.innerHTML = '<div style="color:var(--text-muted);">Unable to load diagnostics right now</div>';
+    return false;
+  }
+}
+
+function copyDiagnostics() {
+  var el = document.getElementById('sh-diagnostics');
+  var btn = document.getElementById('sh-diagnostics-copy');
+  var text = el ? (el.innerText || el.textContent || '') : '';
+  if (!text) return;
+  function done() {
+    if (!btn) return;
+    var old = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(function(){ btn.textContent = old || '📋 Copy'; }, 1200);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(function(){});
+  } else {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch(e) {}
+  }
 }
 
 // ===== Sandbox Status (dedicated endpoint) =====
@@ -6652,7 +6717,7 @@ function startOverviewRefresh() {
 // instead of the previous "last tool call only" summary.
 async function loadMainActivity() {
   try {
-    var data = await fetchJsonWithTimeout('/api/brain-history?limit=40', 6000);
+    var data = await fetchJsonWithTimeout('/api/brain-history?limit=40', 12000);
     var el = document.getElementById('main-activity-list');
     var dot = document.getElementById('main-activity-dot');
     var label = document.getElementById('main-activity-label');
@@ -7728,9 +7793,6 @@ async function loadOverviewTasks() {
     var countBadge = document.getElementById('overview-tasks-count-badge');
     if (!el) return true;
     var agents = data.subagents || [];
-
-    // Also load into hidden active-tasks-grid for compatibility
-    loadActiveTasks();
 
     if (agents.length === 0) {
       if (countBadge) countBadge.textContent = '';
@@ -10504,7 +10566,7 @@ async function bootDashboard() {
   var results = await Promise.allSettled([
     _withTimeout(Promise.resolve().then(loadAll), 5000, 'overview'),
     _withTimeout(Promise.resolve().then(loadOverviewTasks), 5000, 'tasks'),
-    _withTimeout(Promise.resolve().then(loadSystemHealth), 5000, 'health'),
+    _withTimeout(Promise.resolve().then(loadSystemHealth), 12000, 'health'),
   ]);
   var okOverview = results[0].status === 'fulfilled' && results[0].value !== false;
   var okTasks    = results[1].status === 'fulfilled' && results[1].value !== false;
@@ -10531,7 +10593,6 @@ async function bootDashboard() {
   startSystemHealthRefresh();
   startOverviewRefresh();
   startOverviewTasksRefresh();
-  startActiveTasksRefresh();
 
   var sub = document.getElementById('boot-sub');
   if (sub) sub.textContent = 'Dashboard ready';

@@ -557,6 +557,7 @@ def api_health():
     return jsonify({"checks": checks})
 
 
+@bp_health.route("/api/config-diagnostics")
 @bp_health.route("/api/diagnostics")
 def api_diagnostics():
     """Surface detected configuration for the Diagnostics panel (GH#28).

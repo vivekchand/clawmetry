@@ -9880,6 +9880,12 @@ def _compute_transcript_analytics():
             # Accept both live `.jsonl` and archived `.jsonl.reset.<ts>` files.
             if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
                 continue
+            # Runtime trajectory/checkpoint files duplicate session content and
+            # can dwarf real transcripts (hundreds of MB). They make usage
+            # widgets crawl on first load, so keep analytics on canonical
+            # session/reset transcripts only.
+            if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
+                continue
             sid = fname.split(".jsonl", 1)[0]
             fpath = os.path.join(sessions_dir, fname)
             fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
@@ -10211,6 +10217,12 @@ def _compute_transcript_analytics():
             # days; skipping them was making the 14-day chart pile every
             # past-day total onto today.
             if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
+                continue
+            # Runtime trajectory/checkpoint files duplicate session content and
+            # can dwarf real transcripts (hundreds of MB). They make usage
+            # widgets crawl on first load, so keep analytics on canonical
+            # session/reset transcripts only.
+            if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
                 continue
             sid = fname.split(".jsonl", 1)[0]
             fpath = os.path.join(sessions_dir, fname)
