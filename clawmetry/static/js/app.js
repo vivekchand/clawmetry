@@ -709,6 +709,97 @@ async function loadAutonomy() {
   }
 }
 
+// ── Cache Analytics (#851) ──────────────────────────────────────────────────
+async function loadCacheAnalytics() {
+  var rateEl = document.getElementById('cache-hit-rate');
+  var badgeEl = document.getElementById('cache-savings-badge');
+  var summaryEl = document.getElementById('cache-summary-text');
+  var svgEl = document.getElementById('cache-sparkline');
+  var tokensEl = document.getElementById('cache-total-tokens');
+  if (!rateEl) return;
+
+  try {
+    var d = await (typeof fetchJsonWithTimeout === 'function'
+      ? fetchJsonWithTimeout('/api/cache-analytics', 5000)
+      : fetch('/api/cache-analytics').then(function(r){return r.json();}));
+
+    if (d.cache_hit_ratio == null) {
+      rateEl.textContent = 'No cache data yet';
+      rateEl.style.color = 'var(--text-muted)';
+      rateEl.style.fontSize = '16px';
+      if (summaryEl) summaryEl.textContent = 'Run some sessions and cache stats will appear here.';
+      if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; badgeEl.style.border = ''; }
+      if (tokensEl) tokensEl.textContent = '';
+      return;
+    }
+
+    var pct = Math.round(d.cache_hit_ratio * 100);
+    rateEl.textContent = pct + '%';
+    rateEl.style.color = pct >= 60 ? '#22c55e' : pct >= 30 ? '#f59e0b' : '#94a3b8';
+
+    if (badgeEl && d.estimated_savings_usd != null) {
+      var savings = d.estimated_savings_usd.toFixed(2);
+      badgeEl.textContent = 'saved ~$' + savings;
+      badgeEl.style.background = 'rgba(34,197,94,0.15)';
+      badgeEl.style.color = '#22c55e';
+      badgeEl.style.border = '1px solid rgba(34,197,94,0.4)';
+    }
+
+    if (summaryEl) {
+      summaryEl.textContent = pct + '% of LLM calls used prompt caching, saving ~$' + d.estimated_savings_usd.toFixed(2);
+    }
+
+    if (tokensEl) {
+      var readM = (d.total_cache_read_tokens / 1e6).toFixed(1);
+      tokensEl.textContent = readM + 'M cached tokens read';
+    }
+
+    // Sparkline
+    if (svgEl && d.series_daily && d.series_daily.length > 0) {
+      var ratios = d.series_daily.map(function(e){ return e.hit_ratio; });
+      var valid = ratios.filter(function(v){ return v != null; });
+      if (valid.length >= 2) {
+        var W = 160, H = 48, pad = 4;
+        var n = ratios.length;
+        var step = (W - pad * 2) / Math.max(n - 1, 1);
+        var pts = ratios.map(function(v, i) {
+          var x = pad + i * step;
+          var y = v == null ? null : H - pad - v * (H - pad * 2);
+          return {x: x, y: y};
+        });
+        var pathD = '';
+        pts.forEach(function(p, i) {
+          if (p.y == null) return;
+          if (!pathD || pts.slice(0, i).every(function(q){ return q.y == null; })) {
+            pathD += 'M' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+          } else {
+            pathD += ' L' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+          }
+        });
+        var svgContent = '';
+        var firstP = pts.find(function(p){ return p.y != null; });
+        var lastP = null; pts.forEach(function(p){ if(p.y != null) lastP = p; });
+        if (firstP && lastP && pathD) {
+          var fillD = pathD + ' L' + lastP.x.toFixed(1) + ',' + (H - pad) + ' L' + firstP.x.toFixed(1) + ',' + (H - pad) + ' Z';
+          svgContent += '<path d="' + fillD + '" fill="rgba(16,185,129,0.15)" stroke="none"/>';
+          svgContent += '<path d="' + pathD + '" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+        }
+        pts.forEach(function(p) {
+          if (p.y == null) return;
+          svgContent += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="2.5" fill="#10b981"/>';
+        });
+        svgEl.innerHTML = svgContent;
+      } else {
+        svgEl.innerHTML = '<text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">Not enough data yet</text>';
+      }
+    }
+  } catch(e) {
+    console.warn('cache analytics load failed', e);
+    if (rateEl) rateEl.textContent = '\u2014';
+    if (summaryEl) summaryEl.textContent = 'Couldn\u2019t load right now.';
+  }
+}
+
 // ── Heartbeat: is your agent alive? ──────────────────────────────────────────
 async function loadHeartbeat() {
   try {
@@ -1669,6 +1760,7 @@ async function loadAll() {
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     if (typeof loadAutonomy === 'function') loadAutonomy().catch(function(e){console.warn('autonomy failed',e)});
+    if (typeof loadCacheAnalytics === 'function') loadCacheAnalytics().catch(function(e){console.warn('cache analytics failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
