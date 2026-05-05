@@ -28,7 +28,7 @@ clawmetry --help
 ```
 
 ### 4. **Make Changes & Test**
-- Edit `dashboard.py` (single file architecture)
+- Edit `dashboard.py` or the relevant `routes/<feature>.py` Blueprint module
 - Restart dashboard to see changes
 - Test auto-detection: `cd /tmp && python3 /path/to/dashboard.py`
 
@@ -38,7 +38,9 @@ clawmetry --help
 
 ```
 clawmetry/
-├── dashboard.py          # 🎯 Main application (single file)
+├── dashboard.py          # 🎯 Main app — blueprint registration, shared helpers, embedded HTML/JS
+├── routes/               # 📡 Per-feature Blueprint modules (sessions, health, usage, brain, …)
+├── clawmetry/            # 📦 CLI, sync daemon, interceptor, proxy
 ├── README.md             # 📖 Documentation
 ├── setup.py              # 📦 Package configuration
 ├── requirements.txt      # 🔧 Dependencies
@@ -47,7 +49,7 @@ clawmetry/
 └── CONTRIBUTING.md       # 📝 This file
 ```
 
-**Philosophy**: Keep it simple. The entire dashboard is one Python file (`dashboard.py`) with minimal dependencies. This makes it easy to understand, modify, and deploy.
+**Philosophy**: Keep it simple. HTTP endpoints live in per-feature Blueprint modules under `routes/`; shared helpers and the embedded frontend stay in `dashboard.py`. Minimal dependencies throughout.
 
 ---
 
@@ -62,7 +64,7 @@ clawmetry/
 
 ### **What to Avoid**
 - ❌ **Complex dependencies** - no heavy frameworks, ML libraries, or databases
-- ❌ **Breaking the single-file architecture** - keep everything in `dashboard.py`
+- ❌ **Dumping new endpoints into `dashboard.py`** — new routes belong in the relevant `routes/<feature>.py` Blueprint module
 - ❌ **Enterprise features** - this is for personal AI agents, not teams
 - ❌ **Major architectural changes** - discuss large changes in Issues first
 
@@ -109,8 +111,8 @@ Before submitting, test these scenarios:
 If you want to add a new tab or major feature:
 
 1. **Open an Issue first** - describe what you want to build and why
-2. **Keep it lightweight** - remember this is a single-file app
-3. **Follow the existing pattern** - look at how other tabs are implemented
+2. **Keep it lightweight** - minimal dependencies, no heavy frameworks
+3. **Follow the existing pattern** - look at how other tabs are implemented in `routes/`
 4. **Update the README** - document your new feature in the features table
 
 ---
