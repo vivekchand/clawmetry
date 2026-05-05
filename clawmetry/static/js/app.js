@@ -9950,7 +9950,7 @@ function toggleModalAutoRefresh() {
 
 function switchModalTab(tab) {
   _modalTab = tab;
-  document.querySelectorAll('.modal-tab').forEach(function(t){ t.classList.toggle('active', t.textContent.toLowerCase().indexOf(tab) >= 0 || (tab==='full' && t.textContent==='Full Logs')); });
+  document.querySelectorAll('.modal-tab').forEach(function(t){ t.classList.toggle('active', t.textContent.toLowerCase().indexOf(tab) >= 0 || (tab==='full' && t.textContent==='Full Logs') || (tab==='models' && t.textContent==='Model Journey')); });
   renderModalContent();
 }
 
@@ -10255,6 +10255,7 @@ function renderModalContent() {
   }
   if (_modalTab === 'summary') renderModalSummary(el);
   else if (_modalTab === 'narrative') renderModalNarrative(el);
+  else if (_modalTab === 'models') renderModalModelJourney(el);
   else renderModalFull(el);
 }
 
@@ -10305,6 +10306,10 @@ function renderModalNarrative(el) {
       icon = '🔧'; text = 'Called tool: <code>' + escHtml(evt.toolName||'') + '</code>';
     } else if (evt.type === 'result') {
       icon = '✅'; text = 'Got result (' + (evt.text||'').length + ' chars)';
+    } else if (evt.type === 'model_change') {
+      icon = '🔄'; text = 'Switched to model: <strong>' + escHtml(evt.modelId||'') + '</strong>' + (evt.provider ? ' (' + escHtml(evt.provider) + ')' : '');
+    } else if (evt.type === 'thinking_level_change') {
+      icon = '🧠'; text = 'Thinking level changed to: <strong>' + escHtml(evt.thinkingLevel||'') + '</strong>';
     } else return;
     html += '<div class="narrative-item"><span class="narr-icon">' + icon + '</span>' + text + '</div>';
   });
@@ -10347,6 +10352,26 @@ function renderEvtItem(evt, idx) {
     icon = '✅'; typeClass = 'type-result';
     summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
     body = evt.text || '';
+  } else if (evt.type === 'model_change') {
+    // Render as a visual divider row, not a collapsible event
+    var mcTs = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+    var mcLabel = escHtml(evt.modelId || 'unknown');
+    var mcProv = evt.provider ? ' <span style="opacity:0.7;">(' + escHtml(evt.provider) + ')</span>' : '';
+    return '<div class="evt-annotation evt-model-change">'
+      + '<span class="evt-annotation-line"></span>'
+      + '<span class="evt-annotation-badge">🔄 Model → ' + mcLabel + mcProv + '</span>'
+      + '<span class="evt-annotation-ts">' + escHtml(mcTs) + '</span>'
+      + '<span class="evt-annotation-line"></span>'
+      + '</div>';
+  } else if (evt.type === 'thinking_level_change') {
+    var tlTs = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+    var tlLabel = escHtml(evt.thinkingLevel || 'unknown');
+    return '<div class="evt-annotation evt-thinking-change">'
+      + '<span class="evt-annotation-line"></span>'
+      + '<span class="evt-annotation-badge">🧠 Thinking → ' + tlLabel + '</span>'
+      + '<span class="evt-annotation-ts">' + escHtml(tlTs) + '</span>'
+      + '<span class="evt-annotation-line"></span>'
+      + '</div>';
   } else {
     summary = '<strong>' + escHtml(evt.type) + '</strong>';
     body = JSON.stringify(evt, null, 2);
@@ -10406,6 +10431,100 @@ function renderModalFull(el) {
     }
   }
   el.innerHTML = html || '<div style="padding:20px;color:var(--text-muted);">No events yet</div>';
+}
+
+async function renderModalModelJourney(el) {
+  if (!_modalSessionId) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No session ID available</div>';
+    return;
+  }
+  el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Loading model journey...</div>';
+  try {
+    var r = await fetch('/api/session-model-journey/' + encodeURIComponent(_modalSessionId));
+    var data = await r.json();
+    if (data.error) {
+      el.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + escHtml(data.error) + '</div>';
+      return;
+    }
+    var segments = data.segments || [];
+    var thinkingChanges = data.thinking_changes || [];
+    var stats = data.stats || {};
+    if (!segments.length && !thinkingChanges.length) {
+      el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No model changes detected in this session.</div>';
+      return;
+    }
+    var html = '';
+
+    // Stats summary
+    html += '<div class="model-journey-stats">';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + (stats.total_models_used || 1) + '</span><span class="mj-stat-label">Models Used</span></div>';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + (stats.total_segments || 0) + '</span><span class="mj-stat-label">Segments</span></div>';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + (stats.total_tokens || 0).toLocaleString() + '</span><span class="mj-stat-label">Total Tokens</span></div>';
+    html += '<div class="mj-stat"><span class="mj-stat-val">$' + (stats.total_cost_usd || 0).toFixed(4) + '</span><span class="mj-stat-label">Total Cost</span></div>';
+    var durMs = stats.total_duration_ms || 0;
+    var durStr = durMs < 60000 ? Math.round(durMs/1000) + 's' : durMs < 3600000 ? Math.round(durMs/60000) + 'm' : (durMs/3600000).toFixed(1) + 'h';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + durStr + '</span><span class="mj-stat-label">Duration</span></div>';
+    html += '</div>';
+
+    // Segments timeline
+    html += '<div class="model-journey-title">Model Segments</div>';
+    html += '<div class="model-journey-segments">';
+    var totalTokens = stats.total_tokens || 1;
+    for (var i = 0; i < segments.length; i++) {
+      var seg = segments[i];
+      var pct = totalTokens > 0 ? Math.round(seg.tokens / totalTokens * 100) : 0;
+      var segDurMs = seg.duration_ms || 0;
+      var segDur = segDurMs < 60000 ? Math.round(segDurMs/1000) + 's' : segDurMs < 3600000 ? Math.round(segDurMs/60000) + 'm' : (segDurMs/3600000).toFixed(1) + 'h';
+      var startTime = seg.start_ms ? new Date(seg.start_ms).toLocaleTimeString() : '--';
+      var endTime = seg.end_ms ? new Date(seg.end_ms).toLocaleTimeString() : '--';
+      // Color coding by model family
+      var modelLower = (seg.modelId || '').toLowerCase();
+      var barColor = modelLower.indexOf('opus') >= 0 ? '#a855f7'
+        : modelLower.indexOf('sonnet') >= 0 ? '#3b82f6'
+        : modelLower.indexOf('haiku') >= 0 ? '#22c55e'
+        : modelLower.indexOf('gpt-4') >= 0 ? '#10b981'
+        : modelLower.indexOf('gpt-3') >= 0 ? '#6b7280'
+        : modelLower.indexOf('o1') >= 0 || modelLower.indexOf('o3') >= 0 || modelLower.indexOf('o4') >= 0 ? '#f59e0b'
+        : modelLower.indexOf('gemini') >= 0 ? '#ef4444'
+        : '#64748b';
+
+      html += '<div class="mj-segment">';
+      html += '<div class="mj-segment-header">';
+      html += '<span class="mj-segment-num">#' + (i + 1) + '</span>';
+      html += '<span class="mj-segment-model" style="color:' + barColor + ';">' + escHtml(seg.modelId || 'unknown') + '</span>';
+      if (seg.provider) html += '<span class="mj-segment-provider">' + escHtml(seg.provider) + '</span>';
+      html += '<span class="mj-segment-time">' + escHtml(startTime) + ' - ' + escHtml(endTime) + '</span>';
+      html += '</div>';
+      html += '<div class="mj-segment-bar-track"><div class="mj-segment-bar-fill" style="width:' + Math.max(2, pct) + '%;background:' + barColor + ';"></div></div>';
+      html += '<div class="mj-segment-details">';
+      html += '<span>' + seg.tokens.toLocaleString() + ' tokens (' + pct + '%)</span>';
+      html += '<span>$' + (seg.cost_usd || 0).toFixed(4) + '</span>';
+      html += '<span>' + segDur + '</span>';
+      html += '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Thinking level changes
+    if (thinkingChanges.length) {
+      html += '<div class="model-journey-title" style="margin-top:16px;">Thinking Level Changes</div>';
+      html += '<div class="model-journey-thinking">';
+      for (var j = 0; j < thinkingChanges.length; j++) {
+        var tc = thinkingChanges[j];
+        var tcTime = tc.timestamp_ms ? new Date(tc.timestamp_ms).toLocaleTimeString() : '--';
+        html += '<div class="mj-thinking-item">';
+        html += '<span class="mj-thinking-icon">🧠</span>';
+        html += '<span class="mj-thinking-level">' + escHtml(tc.thinkingLevel || 'unknown') + '</span>';
+        html += '<span class="mj-thinking-time">' + escHtml(tcTime) + '</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load model journey: ' + escHtml(e.message || String(e)) + '</div>';
+  }
 }
 
 function toggleEvtBody(bodyId, idx) {
