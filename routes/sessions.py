@@ -22,7 +22,8 @@ import sys
 import time
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request
+import csv
+from flask import Blueprint, jsonify, request, Response
 
 bp_sessions = Blueprint('sessions', __name__)
 
@@ -1520,3 +1521,248 @@ def api_transcript_events(session_id):
     return jsonify(
         {"events": events[-500:], "messageCount": msg_count, "totalEvents": len(events)}
     )
+
+
+@bp_sessions.route("/api/sessions/<session_id>/export")
+def api_session_export(session_id):
+    """Export session data as JSON or CSV for external analysis."""
+    import dashboard as _d
+    
+    export_format = request.args.get("format", "json").lower()
+    if export_format not in ("json", "csv"):
+        return jsonify({"error": "Invalid format. Use 'json' or 'csv'"}), 400
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.join(sessions_dir, session_id + ".jsonl")
+    fpath = os.path.normpath(fpath)
+    if not fpath.startswith(os.path.normpath(sessions_dir)):
+        return jsonify({"error": "Access denied"}), 403
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Session not found"}), 404
+
+    # Parse the session file
+    session_data = {
+        "session_id": session_id,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "messages": [],
+        "tool_calls": [],
+        "cost_data": {
+            "total_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "total_cost_usd": 0.0,
+        },
+        "metadata": {
+            "start_time": None,
+            "end_time": None,
+            "model": None,
+            "message_count": 0,
+            "tool_call_count": 0,
+        },
+    }
+
+    messages = []
+    tool_calls = []
+    model = None
+    start_time = None
+    end_time = None
+
+    def _parse_ts(ts):
+        if not ts:
+            return None
+        if isinstance(ts, (int, float)):
+            return int(ts * 1000) if ts < 1e12 else int(ts)
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            return int(dt.timestamp() * 1000)
+        except Exception:
+            return None
+
+    try:
+        with open(fpath, "r", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                ev_type = obj.get("type", "")
+                ts = _parse_ts(obj.get("timestamp"))
+
+                if ev_type == "session":
+                    session_data["metadata"]["start_time"] = obj.get("timestamp")
+                elif ev_type == "model_change":
+                    if obj.get("modelId"):
+                        model = obj.get("modelId")
+                        session_data["metadata"]["model"] = model
+                elif ev_type == "message":
+                    msg = obj.get("message", {})
+                    role = msg.get("role", "")
+                    content = msg.get("content", [])
+                    usage = msg.get("usage", {}) or {}
+
+                    # Extract text content
+                    text_parts = []
+                    tool_calls_in_msg = []
+                    
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict):
+                                btype = block.get("type", "")
+                                if btype == "text":
+                                    text_parts.append(block.get("text", ""))
+                                elif btype == "thinking":
+                                    text_parts.append(f"[THINKING] {block.get('thinking', '')}")
+                                elif btype in ("toolCall", "tool_use"):
+                                    tool_calls_in_msg.append({
+                                        "id": block.get("id", ""),
+                                        "name": block.get("name", ""),
+                                        "arguments": block.get("arguments", {}),
+                                    })
+                    elif isinstance(content, str):
+                        text_parts.append(content)
+
+                    msg_entry = {
+                        "timestamp": obj.get("timestamp"),
+                        "role": role,
+                        "content": "\n".join(text_parts) if text_parts else None,
+                        "model": msg.get("model") or model,
+                    }
+
+                    # Add usage data
+                    if usage:
+                        msg_entry["tokens"] = {
+                            "input": usage.get("input", 0),
+                            "output": usage.get("output", 0),
+                            "cache_read": usage.get("cacheRead", 0),
+                            "cache_write": usage.get("cacheWrite", 0),
+                            "total": usage.get("totalTokens", usage.get("input", 0) + usage.get("output", 0)),
+                        }
+                        cost_obj = usage.get("cost", {})
+                        if isinstance(cost_obj, dict):
+                            msg_entry["cost_usd"] = cost_obj.get("total", 0.0)
+                            # Accumulate session cost data
+                            session_data["cost_data"]["total_cost_usd"] += float(cost_obj.get("total", 0) or 0)
+                            session_data["cost_data"]["input_tokens"] += int(usage.get("input", 0) or 0)
+                            session_data["cost_data"]["output_tokens"] += int(usage.get("output", 0) or 0)
+                            session_data["cost_data"]["cache_read_tokens"] += int(usage.get("cacheRead", 0) or 0)
+                            session_data["cost_data"]["cache_write_tokens"] += int(usage.get("cacheWrite", 0) or 0)
+                            session_data["cost_data"]["total_tokens"] += (
+                                int(usage.get("input", 0) or 0) +
+                                int(usage.get("output", 0) or 0) +
+                                int(usage.get("cacheRead", 0) or 0) +
+                                int(usage.get("cacheWrite", 0) or 0)
+                            )
+
+                    messages.append(msg_entry)
+                    session_data["metadata"]["message_count"] += 1
+
+                    if tool_calls_in_msg:
+                        for tc in tool_calls_in_msg:
+                            tool_call_entry = {
+                                "timestamp": obj.get("timestamp"),
+                                "tool_call_id": tc.get("id"),
+                                "tool_name": tc.get("name"),
+                                "arguments": tc.get("arguments"),
+                                "model": msg.get("model") or model,
+                            }
+                            tool_calls.append(tool_call_entry)
+                            session_data["metadata"]["tool_call_count"] += 1
+
+                elif ev_type == "compaction":
+                    session_data["compaction"] = {
+                        "timestamp": obj.get("timestamp"),
+                        "tokens_before": obj.get("tokensBefore"),
+                        "summary": obj.get("summary", "")[:500],
+                    }
+
+                # Track start/end times
+                if ts:
+                    if start_time is None or ts < start_time:
+                        start_time = ts
+                    if end_time is None or ts > end_time:
+                        end_time = ts
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to parse session: {str(e)}"}), 500
+
+    session_data["messages"] = messages
+    session_data["tool_calls"] = tool_calls
+    session_data["metadata"]["start_time_ms"] = start_time
+    session_data["metadata"]["end_time_ms"] = end_time
+
+    if export_format == "json":
+        return Response(
+            json.dumps(session_data, indent=2, default=str),
+            mimetype="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="{session_id}.json"'
+            }
+        )
+
+    elif export_format == "csv":
+        # Flatten data for CSV
+        output = []
+        
+        # Add metadata row
+        output.append(["# Session Export", session_id])
+        output.append(["# Exported At", session_data["exported_at"]])
+        output.append(["# Total Messages", session_data["metadata"]["message_count"]])
+        output.append(["# Total Tool Calls", session_data["metadata"]["tool_call_count"]])
+        output.append(["# Total Tokens", session_data["cost_data"]["total_tokens"]])
+        output.append(["# Total Cost USD", round(session_data["cost_data"]["total_cost_usd"], 6)])
+        output.append([])
+
+        # Messages section
+        if messages:
+            output.append(["## MESSAGES"])
+            output.append(["Timestamp", "Role", "Model", "Content", "Input Tokens", "Output Tokens", "Total Tokens", "Cost USD"])
+            for msg in messages:
+                tokens = msg.get("tokens", {})
+                output.append([
+                    msg.get("timestamp", ""),
+                    msg.get("role", ""),
+                    msg.get("model", ""),
+                    (msg.get("content", "") or "")[:500],  # Truncate long content
+                    tokens.get("input", 0),
+                    tokens.get("output", 0),
+                    tokens.get("total", 0),
+                    msg.get("cost_usd", 0.0),
+                ])
+            output.append([])
+
+        # Tool calls section
+        if tool_calls:
+            output.append(["## TOOL CALLS"])
+            output.append(["Timestamp", "Tool Call ID", "Tool Name", "Model", "Arguments"])
+            for tc in tool_calls:
+                args_str = json.dumps(tc.get("arguments", {}))[:500] if tc.get("arguments") else ""
+                output.append([
+                    tc.get("timestamp", ""),
+                    tc.get("tool_call_id", ""),
+                    tc.get("tool_name", ""),
+                    tc.get("model", ""),
+                    args_str,
+                ])
+
+        # Generate CSV
+        import io
+        csv_buffer = io.StringIO()
+        writer = csv.writer(csv_buffer)
+        writer.writerows(output)
+        csv_data = csv_buffer.getvalue()
+
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="{session_id}.csv"'
+            }
+        )
