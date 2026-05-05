@@ -2,8 +2,9 @@
 routes/health.py — Health / reliability / diagnostics / rate-limits endpoints.
 
 Extracted from dashboard.py as Phase 5.5 of the incremental modularisation.
-Owns the 11 routes registered on bp_health:
+Owns the 12 routes registered on bp_health:
 
+  GET  /healthz                   — liveness probe (Cloud Run / Kubernetes)
   GET  /api/reliability           — cross-session behavioral reliability trend
   GET  /api/heatmap               — activity heatmap (events per hour, N days)
   GET  /api/system-health         — comprehensive system health (services, disks, crons)
@@ -916,3 +917,10 @@ def api_sandbox_status():
             security = sec_fields
 
     return jsonify({"sandbox": sandbox, "inference": inference, "security": security})
+
+
+@bp_health.route("/healthz")
+def healthz():
+    """Liveness probe for Cloud Run / Kubernetes health checks."""
+    import dashboard as _d
+    return jsonify({"status": "ok", "version": _d.__version__})
