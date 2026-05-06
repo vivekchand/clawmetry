@@ -18,10 +18,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code and necessary files for setup
 COPY dashboard.py .
+COPY history.py .
 COPY setup.py .
+COPY README.md . 
 COPY clawmetry/ ./clawmetry/
+COPY helpers/ ./helpers/
+COPY routes/ ./routes/
 
 # Install clawmetry
 RUN pip install --no-cache-dir -e .
