@@ -519,6 +519,171 @@ def api_timeline():
     return jsonify({"days": days, "today": now.strftime("%Y-%m-%d")})
 
 
+def _compute_autonomy_data(sessions_dir, cutoff_ts=None):
+    """Scan JSONL session files and compute autonomy metrics.
+
+    Autonomy is measured by how far apart human nudges are (user-role messages
+    after the opening turn) and whether that interval is growing over time.
+
+    Args:
+        sessions_dir: path to the sessions directory containing *.jsonl files.
+        cutoff_ts: unix timestamp before which files are ignored (default: 7 days ago).
+
+    Returns dict with keys:
+        median_seconds_between_nudges  — overall median inter-nudge gap (seconds)
+        zero_nudge_ratio               — fraction of sessions with ≤1 user message
+        trend_slope_7d                 — linear slope of daily median gaps (positive = improving)
+        sessions_analyzed              — total sessions included
+        zero_nudge_sessions            — count of zero-nudge sessions
+        daily_medians                  — list of {day_offset, median_gap_seconds} for sparklines
+    """
+    import statistics
+
+    if cutoff_ts is None:
+        cutoff_ts = time.time() - 7 * 86400
+
+    empty = {
+        "median_seconds_between_nudges": 0,
+        "zero_nudge_ratio": 0.0,
+        "trend_slope_7d": 0.0,
+        "sessions_analyzed": 0,
+        "zero_nudge_sessions": 0,
+        "daily_medians": [],
+    }
+
+    if not os.path.isdir(sessions_dir):
+        return empty
+
+    try:
+        all_files = [
+            f for f in os.listdir(sessions_dir)
+            if f.endswith(".jsonl") and ".deleted." not in f and ".reset." not in f
+        ]
+    except OSError:
+        return empty
+
+    now_ts = time.time()
+    per_session_medians = []   # median gap per session (seconds)
+    zero_nudge_count = 0
+    total_sessions = 0
+    daily_buckets = {}  # day_offset (0=today … 6=six days ago) -> list[float]
+
+    for fname in all_files:
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            mtime = os.path.getmtime(fpath)
+        except OSError:
+            continue
+        if mtime < cutoff_ts:
+            continue
+
+        user_ts_list = []
+        try:
+            with open(fpath, errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    role = ev.get("role") or ev.get("type", "")
+                    if role != "user":
+                        continue
+                    ts_raw = ev.get("timestamp") or ev.get("time") or ev.get("created_at")
+                    if not ts_raw:
+                        continue
+                    if isinstance(ts_raw, (int, float)):
+                        ts_sec = float(ts_raw) if ts_raw < 1e10 else float(ts_raw) / 1000.0
+                    else:
+                        try:
+                            ts_sec = datetime.fromisoformat(
+                                str(ts_raw).replace("Z", "+00:00")
+                            ).timestamp()
+                        except Exception:
+                            continue
+                    if ts_sec >= cutoff_ts:
+                        user_ts_list.append(ts_sec)
+        except Exception:
+            continue
+
+        if not user_ts_list:
+            continue
+
+        total_sessions += 1
+        user_ts_list.sort()
+
+        if len(user_ts_list) <= 1:
+            zero_nudge_count += 1
+            continue
+
+        gaps = [
+            user_ts_list[i + 1] - user_ts_list[i]
+            for i in range(len(user_ts_list) - 1)
+        ]
+        median_gap = statistics.median(gaps)
+        per_session_medians.append(median_gap)
+
+        day_offset = min(int((now_ts - mtime) / 86400), 6)
+        daily_buckets.setdefault(day_offset, []).append(median_gap)
+
+    overall_median = statistics.median(per_session_medians) if per_session_medians else 0.0
+    zero_nudge_ratio = round(zero_nudge_count / total_sessions, 3) if total_sessions else 0.0
+
+    # Linear trend: x = chronological day index (0 = 6 days ago, 6 = today)
+    # Positive slope means nudge interval is growing → agent is becoming more autonomous.
+    trend_slope_7d = 0.0
+    if len(daily_buckets) >= 2:
+        pts = [(6 - day, statistics.median(vals)) for day, vals in daily_buckets.items()]
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        n = len(xs)
+        x_mean = sum(xs) / n
+        y_mean = sum(ys) / n
+        num = sum((xs[i] - x_mean) * (ys[i] - y_mean) for i in range(n))
+        den = sum((xs[i] - x_mean) ** 2 for i in range(n))
+        if den:
+            trend_slope_7d = round(num / den, 2)
+
+    daily_medians = sorted(
+        [
+            {
+                "day_offset": day,
+                "median_gap_seconds": round(statistics.median(vals), 1),
+            }
+            for day, vals in daily_buckets.items()
+        ],
+        key=lambda r: r["day_offset"],
+        reverse=True,
+    )
+
+    return {
+        "median_seconds_between_nudges": round(overall_median, 1),
+        "zero_nudge_ratio": zero_nudge_ratio,
+        "trend_slope_7d": trend_slope_7d,
+        "sessions_analyzed": total_sessions,
+        "zero_nudge_sessions": zero_nudge_count,
+        "daily_medians": daily_medians,
+    }
+
+
+@bp_overview.route("/api/autonomy-score")
+def api_autonomy_score():
+    """Autonomy score — human-nudge spacing as north-star metric (closes #688).
+
+    Computes how far apart human interventions are across recent sessions and
+    whether that interval is growing. A rising trend means the agent is handling
+    more work between human check-ins — the primary signal of improving autonomy.
+    """
+    import dashboard as _d
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    return jsonify(_compute_autonomy_data(sessions_dir))
+
+
 @bp_overview.route("/api/cloud-cta/status")
 def cloud_cta_status():
     import dashboard as _d
