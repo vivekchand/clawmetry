@@ -355,7 +355,9 @@ def _update_trial_state(resp: dict) -> None:
 
 def _sync_allowed() -> bool:
     """Gate for large blob uploads. Heartbeats + approvals/alerts polls
-    bypass this — they MUST keep firing so we detect the upgrade."""
+    bypass this — they MUST keep firing so we detect the upgrade (or, for
+    KiloClaw-provisioned accounts, the moment the user clicks "View
+    Observability" and the cloud flips reason='intent_pending' off)."""
     return _TRIAL_STATE.get("sync_allowed", True)
 
 
