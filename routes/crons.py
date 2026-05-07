@@ -210,19 +210,26 @@ def api_cron_create():
 def api_cron_runs(job_id):
     """Return run history for a specific cron job.
 
-    Tries gateway RPC first; falls back to parsing JSONL session transcripts
-    for cron candidate sessions attributed to this job.
+    Priority order:
+      1. Gateway RPC (authoritative, live data)
+      2. ~/.openclaw/cron/runs/{jobId}.jsonl (rich on-disk run logs)
+      3. Session transcript analytics (synthetic, always available)
     Returns enriched list with p50/p95 duration stats.
     """
     import dashboard as _d
-    # Try gateway API first
+    # 1. Try gateway API first
     result = _d._gw_invoke("cron", {"action": "runs", "jobId": job_id, "limit": 50})
     if result is not None:
         runs = result.get("runs", result) if isinstance(result, dict) else result
         if isinstance(runs, list) and runs:
             return jsonify(_d._enrich_cron_runs(job_id, runs))
 
-    # Fallback: derive runs from transcript analytics
+    # 2. Fallback: read dedicated JSONL run logs from disk
+    runs = _d._cron_runs_from_jsonl(job_id)
+    if runs:
+        return jsonify(_d._enrich_cron_runs(job_id, runs))
+
+    # 3. Final fallback: derive runs from transcript analytics
     runs = _d._cron_runs_from_transcripts(job_id)
     return jsonify(_d._enrich_cron_runs(job_id, runs))
 

@@ -9192,10 +9192,19 @@ def _cron_runs_from_transcripts(job_id):
         start_ts = sess.get("start_ts", 0)
         end_ts = sess.get("end_ts", 0)
         dur_ms = int((end_ts - start_ts) * 1000) if end_ts > start_ts else 0
+        session_id = sess.get("session_id", "")
+        started_at = (
+            datetime.utcfromtimestamp(start_ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if start_ts
+            else None
+        )
         runs.append(
             {
-                "sessionId": sess.get("session_id", ""),
+                "sessionId": session_id,
+                "sessionFile": session_id + ".jsonl" if session_id else "",
                 "timestamp": int(start_ts * 1000) if start_ts else 0,
+                "startedAt": started_at,
+                "ts": started_at,
                 "status": "ok",
                 "durationMs": dur_ms,
                 "costUsd": round(float(sess.get("cost_usd", 0.0) or 0.0), 6),
@@ -9205,6 +9214,40 @@ def _cron_runs_from_transcripts(job_id):
 
     # Most-recent first
     runs.sort(key=lambda r: r.get("timestamp", 0), reverse=True)
+    return runs[:50]
+
+
+def _cron_runs_from_jsonl(job_id):
+    """Read per-run cron logs from ~/.openclaw/cron/runs/{jobId}.jsonl.
+
+    Returns a list of run dicts (newest-first, capped at 50) with the fields
+    that loadCronRuns() in app.js expects: startedAt, ts, status, durationMs,
+    costUsd, tokens, sessionFile, error.  Returns [] when the file is absent.
+    """
+    import json as _json
+
+    safe_id = os.path.basename(job_id)  # prevent path traversal
+    path = os.path.join(_get_openclaw_dir(), "cron", "runs", safe_id + ".jsonl")
+    if not os.path.exists(path):
+        return []
+    runs = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    runs.append(_json.loads(line))
+                except _json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+
+    def _sort_key(r):
+        return r.get("startedAt") or r.get("ts") or r.get("timestamp") or ""
+
+    runs.sort(key=_sort_key, reverse=True)
     return runs[:50]
 
 
