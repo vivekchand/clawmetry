@@ -80,7 +80,7 @@ def _gw_ws_connect(url=None, token=None):
                     "instanceId": f"clawmetry-{_d._uuid.uuid4().hex[:8]}",
                 },
                 "role": "operator",
-                "scopes": ["operator.admin"],
+                "scopes": ["operator.admin", "operator.read"],
                 "auth": {"token": tok},
             },
         }
