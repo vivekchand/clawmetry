@@ -6906,6 +6906,7 @@ function startLogStream() {
     appendLogLine('ov-logs', data.line);
     appendLogLine('logs-full', data.line);
     processFlowEvent(data.line);
+    processStuckEvent(data.line);
     document.getElementById('refresh-time').textContent = 'Live \u2022 ' + new Date().toLocaleTimeString();
   };
   logStream.onerror = function() {
@@ -6913,6 +6914,68 @@ function startLogStream() {
     if (s) { s.textContent = '\u25cf Reconnecting\u2026'; s.style.color = '#f59e0b'; }
     setTimeout(startLogStream, 5000);
   };
+}
+
+var _stuckSessions = {};
+
+function processStuckEvent(line) {
+  try {
+    var obj = JSON.parse(line);
+    var event = obj.event || obj.type || obj.name || '';
+    var sessionId = obj.sessionId || obj.session_id || obj.key || '';
+    if (!sessionId) return;
+    if (event === 'session.stuck') {
+      var ageMs = obj.ageMs || obj.age_ms || obj.duration || 0;
+      _stuckSessions[sessionId] = {id: sessionId, ageMs: ageMs};
+      _updateStuckBanner();
+    } else if (event === 'session.state') {
+      var terminalStates = ['completed', 'error', 'failed', 'cancelled', 'terminated'];
+      var state = (obj.state || obj.status || '').toLowerCase();
+      if (terminalStates.indexOf(state) !== -1 && _stuckSessions[sessionId]) {
+        delete _stuckSessions[sessionId];
+        _updateStuckBanner();
+      }
+    }
+  } catch(e) {
+    if (line.indexOf('session.stuck') !== -1) {
+      var m = line.match(/session[._](?:id|key)["\s:=]+([^",\s}]+)/);
+      var sid = m ? m[1] : 'unknown';
+      _stuckSessions[sid] = {id: sid, ageMs: 0};
+      _updateStuckBanner();
+    }
+  }
+}
+
+function _updateStuckBanner() {
+  var banner = document.getElementById('stuck-banner');
+  var msgEl = document.getElementById('stuck-banner-msg');
+  var keys = Object.keys(_stuckSessions);
+  var count = keys.length;
+  _updateStuckBadge(count);
+  if (count === 0) {
+    if (banner) banner.style.display = 'none';
+    return;
+  }
+  if (!banner || !msgEl) return;
+  var ids = keys.slice(0, 3).map(function(id) {
+    return id.length > 14 ? id.slice(0, 14) + '…' : id;
+  }).join(', ');
+  msgEl.textContent = count === 1
+    ? '⏱ Session stuck: ' + ids
+    : '⏱ ' + count + ' sessions stuck: ' + ids;
+  banner.style.display = 'flex';
+}
+
+function _updateStuckBadge(count) {
+  var badge = document.getElementById('nav-stuck-badge');
+  if (!badge) return;
+  badge.textContent = count;
+  badge.style.display = count > 0 ? 'inline' : 'none';
+}
+
+function dismissStuckBanner() {
+  var banner = document.getElementById('stuck-banner');
+  if (banner) banner.style.display = 'none';
 }
 
 function parseLogLine(line) {

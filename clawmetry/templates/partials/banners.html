@@ -148,3 +148,38 @@
     font-weight:600;
     ">Dismiss</button>
 </div>
+
+<!-- Stuck Session Banner -->
+<div id="stuck-banner" style="
+  display:none;
+  padding:10px 16px;
+  border-bottom:2px solid #a855f7;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:10px;
+  background:#3b0764;
+  color:#e9d5ff;
+  ">
+  <span style="font-size:18px;">&#9201;</span>
+  <span id="stuck-banner-msg" style="flex:1;"></span>
+  <button onclick="switchTab('overview')" style="
+    background:#7e22ce;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    ">View Sessions</button>
+  <button onclick="dismissStuckBanner()" style="
+    background:transparent;
+    color:#e9d5ff;
+    border:1px solid #7e22ce80;
+    border-radius:6px;
+    padding:4px 10px;
+    font-size:11px;
+    cursor:pointer;
+    ">Dismiss</button>
+</div>

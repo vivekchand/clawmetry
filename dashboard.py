@@ -3303,7 +3303,7 @@ function clawmetryLogout(){
   <div class="nav-tabs">
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
-    <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
+    <div class="nav-tab active" onclick="switchTab('overview')">Overview <span id="nav-stuck-badge" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts</div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
@@ -8588,7 +8588,7 @@ DASHBOARD_HTML = r"""
   <div class="nav-tabs">
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
-    <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
+    <div class="nav-tab active" onclick="switchTab('overview')">Overview <span id="nav-stuck-badge" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts</div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
