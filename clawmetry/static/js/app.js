@@ -5411,6 +5411,15 @@ async function loadDiagnostics() {
       html += '<div style="margin-top:6px;color:var(--text-success,#22c55e);">✅ No diagnostics warnings</div>';
     }
     el.innerHTML = html;
+    // Show OAuth migration banner if Anthropic is configured without an API key
+    var oauthBanner = document.getElementById('oauth-migration-banner');
+    if (oauthBanner) {
+      var dismissed = false;
+      try { dismissed = !!localStorage.getItem('cm_oauth_migration_dismissed'); } catch(e){}
+      if (d.anthropic_oauth_warning && !dismissed) {
+        oauthBanner.style.display = 'flex';
+      }
+    }
     return true;
   } catch (e) {
     console.warn('diagnostics load failed', e);
@@ -6439,6 +6448,31 @@ function toggleMsg(idx) {
   }
 }
 
+
+// ── Anthropic OAuth Migration Banner (GH#556) ──────────────────────────────
+function dismissOauthMigrationBanner() {
+  var el = document.getElementById('oauth-migration-banner');
+  if (el) el.style.display = 'none';
+  try { localStorage.setItem('cm_oauth_migration_dismissed', '1'); } catch(e){}
+}
+function copyOauthMigrationCmd(btn) {
+  var cmd = 'openclaw onboard --anthropic-api-key';
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cmd).then(function() {
+      if (btn) { var t = btn.textContent; btn.textContent = 'Copied!'; setTimeout(function(){ btn.textContent = t; }, 1400); }
+    }).catch(function(){});
+  } else {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = cmd;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (btn) { var t2 = btn.textContent; btn.textContent = 'Copied!'; setTimeout(function(){ btn.textContent = t2; }, 1400); }
+    } catch(e) {}
+  }
+}
 
 // ── Upgrade Banner (on overview page) ──────────────────────────────────────
 function dismissUpgradeBanner() {

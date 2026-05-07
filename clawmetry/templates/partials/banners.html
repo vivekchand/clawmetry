@@ -123,6 +123,47 @@
     ">Dismiss</button>
 </div>
 
+<!-- Anthropic OAuth Migration Banner (GH#556) -->
+<div id="oauth-migration-banner" style="
+  display:none;
+  padding:10px 16px;
+  border-bottom:2px solid #f59e0b;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:10px;
+  background:#451a03;
+  color:#fbbf24;
+  ">
+  <span style="font-size:18px;">&#9888;&#65039;</span>
+  <span style="flex:1;">
+    Your Anthropic OAuth token no longer covers usage via OpenClaw (billing change Apr&nbsp;4&nbsp;2026).
+    Switch to an API key:
+    <button onclick="copyOauthMigrationCmd(this)" style="
+      margin-left:6px;
+      background:#92400e;
+      color:#fef3c7;
+      border:none;
+      border-radius:4px;
+      padding:2px 8px;
+      font-size:12px;
+      cursor:pointer;
+      font-family:monospace;
+      font-weight:700;
+      ">openclaw onboard --anthropic-api-key</button>
+  </span>
+  <button onclick="dismissOauthMigrationBanner()" style="
+    background:#92400e;
+    color:#fef3c7;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    ">Dismiss</button>
+</div>
+
 <!-- Budget Cap Banner -->
 <div id="budget-cap-banner" style="
   display:none;

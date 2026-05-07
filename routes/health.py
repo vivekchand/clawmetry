@@ -614,6 +614,20 @@ def api_diagnostics():
     except Exception:
         warnings_list = []
 
+    # Detect Anthropic OAuth (legacy token) vs API key — warn users after Apr 4 billing change
+    anthropic_oauth_warning = False
+    try:
+        if not _d._provider_has_api_key("anthropic"):
+            cfg = _d._load_openclaw_config_cached()
+            auth_section = cfg.get("auth", {}) if isinstance(cfg, dict) else {}
+            profiles = auth_section.get("profiles", {}) if isinstance(auth_section, dict) else {}
+            for p in (profiles.values() if isinstance(profiles, dict) else []):
+                if isinstance(p, dict) and str(p.get("provider", "")).lower() == "anthropic":
+                    anthropic_oauth_warning = True
+                    break
+    except Exception:
+        pass
+
     return jsonify(
         {
             "gateway_url": gw_url,
@@ -623,6 +637,7 @@ def api_diagnostics():
             "openclaw_flags": openclaw_flags,
             "warnings": warnings_list,
             "auto_detected": auto_detected,
+            "anthropic_oauth_warning": anthropic_oauth_warning,
         }
     )
 
