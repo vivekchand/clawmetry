@@ -321,20 +321,36 @@ def _update_trial_state(resp: dict) -> None:
         _TRIAL_STATE["trial_days_left"] = resp.get("trial_days_left")
     if resp.get("upgrade_url"):
         _TRIAL_STATE["upgrade_url"] = resp["upgrade_url"]
+    reason = (resp.get("reason") or "").strip()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if not new_allowed and _TRIAL_STATE["last_log_day"] != today:
         _TRIAL_STATE["last_log_day"] = today
-        log.warning(
-            "⚠ Trial expired (plan=%s). Cloud sync paused — heartbeats "
-            "continue so we detect the moment you upgrade. Upgrade to Pro at "
-            "%s to resume event/session/memory sync.",
-            _TRIAL_STATE["plan"], _TRIAL_STATE["upgrade_url"],
-        )
+        if reason == "intent_pending":
+            # KiloClaw / similar auto-provisioned flows. The user hasn't
+            # asked to view their dashboard yet, so we heartbeat (so the
+            # cloud knows we're alive) but upload nothing else. The moment
+            # they click "View Observability", the heartbeat response
+            # flips and uploads resume — no daemon restart needed.
+            log.info(
+                "Cloud sync deferred — waiting for the user to open their "
+                "dashboard. Heartbeats continue; no sessions / events / "
+                "logs / memory will leave this machine until then."
+            )
+        else:
+            log.warning(
+                "⚠ Trial expired (plan=%s). Cloud sync paused — heartbeats "
+                "continue so we detect the moment you upgrade. Upgrade to Pro at "
+                "%s to resume event/session/memory sync.",
+                _TRIAL_STATE["plan"], _TRIAL_STATE["upgrade_url"],
+            )
     elif new_allowed and not prev_allowed:
-        log.info(
-            "✓ Pro plan detected (plan=%s). Cloud sync resumed.",
-            _TRIAL_STATE["plan"],
-        )
+        if reason == "intent_started" or _TRIAL_STATE.get("plan") in (None, "free", "trial"):
+            log.info("✓ Cloud sync activated — uploads resumed.")
+        else:
+            log.info(
+                "✓ Pro plan detected (plan=%s). Cloud sync resumed.",
+                _TRIAL_STATE["plan"],
+            )
 
 
 def _sync_allowed() -> bool:
@@ -1058,6 +1074,8 @@ def sync_sessions_recent(
       3. Advance ``last_event_ids`` so the normal loop skips already-synced
          recent lines and continues backfilling from where it left off.
     """
+    if not _sync_allowed():
+        return 0
     from datetime import timedelta
 
     sessions_dir = paths["sessions_dir"]
@@ -1219,6 +1237,8 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
     the OpenClaw session_file basename. The cloud correlates events to the
     existing session row by that basename, so no cloud-side change is required.
     """
+    if not _sync_allowed():
+        return 0
     sessions_dir = paths.get("sessions_dir") or ""
     if not sessions_dir:
         return 0
