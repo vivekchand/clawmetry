@@ -1239,9 +1239,31 @@ def api_transcripts():
             fpath = os.path.join(sessions_dir, fname)
             try:
                 msg_count = 0
-                with open(fpath) as f:
-                    for _ in f:
+                total_cost_usd = 0.0
+                tok = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+                with open(fpath, errors="replace") as f:
+                    for raw in f:
                         msg_count += 1
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            ev = json.loads(raw)
+                        except Exception:
+                            continue
+                        if ev.get("type") != "message":
+                            continue
+                        msg = ev.get("message", {}) or {}
+                        if not isinstance(msg, dict):
+                            continue
+                        usage = msg.get("usage", {}) or {}
+                        if not isinstance(usage, dict):
+                            continue
+                        for k in tok:
+                            tok[k] += int(usage.get(k, 0) or 0)
+                        cost_obj = usage.get("cost", {}) or {}
+                        if isinstance(cost_obj, dict):
+                            total_cost_usd += float(cost_obj.get("total", 0) or 0)
                 transcripts.append(
                     {
                         "id": fname.replace(".jsonl", ""),
@@ -1249,6 +1271,12 @@ def api_transcripts():
                         "messages": msg_count,
                         "size": os.path.getsize(fpath),
                         "modified": int(os.path.getmtime(fpath) * 1000),
+                        "total_cost_usd": round(total_cost_usd, 6),
+                        "input_tokens": tok["input"],
+                        "output_tokens": tok["output"],
+                        "cache_read_tokens": tok["cacheRead"],
+                        "cache_write_tokens": tok["cacheWrite"],
+                        "total_tokens": sum(tok.values()),
                     }
                 )
             except Exception:

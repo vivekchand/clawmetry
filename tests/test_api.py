@@ -245,6 +245,31 @@ class TestTranscripts:
         d = assert_ok(get(api, base_url, "/api/transcripts"))
         assert isinstance(d, (list, dict))
 
+    def test_transcript_entries_have_cost_fields(self, api, base_url):
+        """Every transcript entry carries cost + token fields (GH #68)."""
+        d = assert_ok(get(api, base_url, "/api/transcripts"))
+        transcripts = d.get("transcripts", d) if isinstance(d, dict) else d
+        if not isinstance(transcripts, list) or len(transcripts) == 0:
+            return  # empty workspace — nothing to assert
+        for t in transcripts:
+            assert "total_cost_usd" in t, f"missing total_cost_usd in {t}"
+            assert "total_tokens" in t, f"missing total_tokens in {t}"
+            assert isinstance(t["total_cost_usd"], float), "total_cost_usd must be float"
+            assert isinstance(t["total_tokens"], int), "total_tokens must be int"
+            assert t["total_cost_usd"] >= 0, "total_cost_usd must be non-negative"
+            assert t["total_tokens"] >= 0, "total_tokens must be non-negative"
+
+    def test_transcript_token_breakdown_fields(self, api, base_url):
+        """Transcript entries include the four-way token split (GH #68)."""
+        d = assert_ok(get(api, base_url, "/api/transcripts"))
+        transcripts = d.get("transcripts", d) if isinstance(d, dict) else d
+        if not isinstance(transcripts, list) or len(transcripts) == 0:
+            return
+        for t in transcripts:
+            for field in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
+                assert field in t, f"missing {field} in transcript entry"
+                assert isinstance(t[field], int) and t[field] >= 0
+
 
 class TestSkills:
     """Tests for /api/skills — skills fidelity telemetry (GH #687)."""

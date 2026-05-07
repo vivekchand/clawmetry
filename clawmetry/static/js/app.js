@@ -6164,6 +6164,8 @@ async function loadTranscripts() {
       html += '<div class="transcript-meta-row">';
       html += '<span>' + t.messages + ' messages</span>';
       html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
+      if (t.total_tokens > 0) html += '<span>' + (t.total_tokens >= 1000 ? (t.total_tokens/1000).toFixed(1) + 'K' : t.total_tokens) + ' tok</span>';
+      if (t.total_cost_usd > 0) html += '<span style="color:var(--accent-green,#22c55e);font-weight:600;">$' + t.total_cost_usd.toFixed(4) + '</span>';
       html += '<span>' + timeAgo(t.modified) + '</span>';
       html += '</div></div>';
       html += '<span style="color:#444;font-size:18px;">▸</span>';
