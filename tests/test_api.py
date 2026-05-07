@@ -1076,3 +1076,49 @@ class TestSelfConfig:
         assert isinstance(d["summary"], str)
         assert "added_lines" in d
         assert "removed_lines" in d
+
+
+class TestAlertRulesTokenSpike:
+    """Tests for token_spike custom alert rule type."""
+
+    def test_token_spike_rule_accepted(self, api, base_url):
+        """POST /api/alerts/rules accepts a token_spike rule."""
+        body = {
+            "type": "token_spike",
+            "threshold": 25000,
+            "channels": ["banner"],
+            "cooldown_min": 30,
+            "enabled": True,
+        }
+        r = api.post(f"{base_url}/api/alerts/rules", json=body, timeout=10)
+        if r.status_code in (401, 403):
+            return  # auth not available in this env
+        assert r.status_code == 200, (
+            f"Expected 200 for token_spike rule create, got {r.status_code}: {r.text[:200]}"
+        )
+        d = r.json()
+        assert d.get("ok") is True
+        rule_id = d.get("id")
+        assert rule_id, "Response must include rule id"
+
+        try:
+            list_r = api.get(f"{base_url}/api/alerts/rules", timeout=10)
+            assert list_r.status_code == 200
+            rules = list_r.json().get("rules", [])
+            ours = [r for r in rules if r.get("id") == rule_id]
+            assert ours, f"Created rule {rule_id} should appear in list"
+            assert ours[0]["type"] == "token_spike"
+            assert ours[0]["threshold"] == 25000
+        finally:
+            api.delete(f"{base_url}/api/alerts/rules/{rule_id}", timeout=10)
+
+    def test_invalid_rule_type_rejected(self, api, base_url):
+        """POST /api/alerts/rules rejects an unknown rule type."""
+        body = {"type": "definitely_not_a_real_type", "threshold": 1.0}
+        r = api.post(f"{base_url}/api/alerts/rules", json=body, timeout=10)
+        if r.status_code in (401, 403):
+            return
+        assert r.status_code == 400, (
+            f"Expected 400 for invalid rule type, got {r.status_code}: {r.text[:200]}"
+        )
+
