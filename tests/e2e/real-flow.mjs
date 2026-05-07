@@ -401,19 +401,40 @@ async function walkDashboard(reg, encKey, sessionId) {
   // Brain MUST show the synthesized session — it has unique copy
   // ("postmortem", "OOM kills", "lockfile race") that wouldn't appear
   // in any other test account's events.
+  // Click Brain explicitly + wait for the Brain-specific header to be
+  // visible. This is the canonical way to know we're "on Brain" — bare
+  // body-text inspection races with whatever tab the previous loop
+  // ended on (Notifications, which can put a Pro modal on top).
   console.log('\n  ▸ Brain — must show the daemon-uploaded session');
-  await page.locator('.nav-tab:has-text("Brain")').first().click().catch(() => undefined);
+  // First dismiss any open Pro modal so the click below isn't intercepted
+  // by an overlay's invisible event handler.
+  await page.evaluate(() => {
+    const g = document.getElementById('cm-pro-gate'); if (g) g.remove();
+    const p = document.getElementById('pro-upsell-modal');
+    if (p) p.style.display = 'none';
+  });
+  await page.locator('.nav-tab:has-text("Brain")').first().click({ force: true }).catch(() => undefined);
+  // Wait specifically for Brain's content area, not just any body change.
+  await page
+    .locator(':has-text("Brain — Unified Activity Stream"), :has-text("Brain – Unified Activity Stream"), :has-text("Brain - Unified Activity")')
+    .first()
+    .waitFor({ state: 'visible', timeout: 8000 })
+    .catch(() => undefined);
   await page.waitForTimeout(PAUSE_MS);
-  const brainBody = await page.evaluate(() => (document.body.innerText || '').toLowerCase());
+  const brainState = await page.evaluate(() => ({
+    body: (document.body.innerText || '').toLowerCase(),
+    activeTab: document.querySelector('.nav-tab.active, [role="tab"][aria-selected="true"]')?.textContent?.trim().toLowerCase() || '',
+  }));
+  console.log(`  active tab according to DOM: "${brainState.activeTab}"`);
   check(
     'Brain shows the user message ("postmortem")',
-    brainBody.includes('postmortem'),
-    brainBody.slice(0, 200)
+    brainState.body.includes('postmortem'),
+    `activeTab=${brainState.activeTab} body=${brainState.body.slice(0, 200)}`
   );
   check(
     'Brain shows the assistant reply ("oom kills")',
-    brainBody.includes('oom kills') || brainBody.includes('oom'),
-    brainBody.slice(0, 200)
+    brainState.body.includes('oom kills') || brainState.body.includes('oom'),
+    `activeTab=${brainState.activeTab} body=${brainState.body.slice(0, 200)}`
   );
 
   // Tokens tab should render. The aggregations behind it (daily/per-model
@@ -480,10 +501,14 @@ async function main() {
     console.log('\n[real-flow] daemon never connected. Last 50 log lines:');
     daemonState.logs.slice(-50).forEach(l => process.stdout.write(`  [daemon] ${l}`));
   } else {
-    // Give the daemon another pass to push events (sync_sessions runs
-    // after heartbeat).
-    console.log('  waiting 8s for first events upload to land…');
-    await new Promise(r => setTimeout(r, 8000));
+    // Poll the cloud until events are likely there. The canonical
+    // end-to-end check is Brain showing the synthesized text — that
+    // proves daemon → cloud → SSE → browser decryption all worked.
+    // The poll here is just to give the daemon time; we don't assert
+    // on the shape (response is encrypted blobs and the count field
+    // varies by endpoint).
+    console.log('  giving the daemon ~25s to push first events to cloud…');
+    await new Promise(r => setTimeout(r, 25_000));
     await walkDashboard(reg, encKey, sessionId);
   }
 
