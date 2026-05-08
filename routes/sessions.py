@@ -1392,6 +1392,8 @@ def api_transcript_events(session_id):
 
     events = []
     msg_count = 0
+    model_journey: list = []  # [{model, provider, ts_ms}]
+    _last_model = ""
     try:
         with open(fpath) as f:
             for line in f:
@@ -1417,6 +1419,31 @@ def api_transcript_events(session_id):
                             pass
 
                 obj_type = obj.get("type", "")
+                if obj_type == "model_change":
+                    model = obj.get("modelId") or obj.get("model") or ""
+                    provider = obj.get("provider") or ""
+                    if model and model != _last_model:
+                        _last_model = model
+                        events.append({
+                            "type": "model_change",
+                            "model": model,
+                            "provider": provider,
+                            "timestamp": ts_val,
+                        })
+                        model_journey.append({
+                            "model": model,
+                            "provider": provider,
+                            "ts_ms": ts_val,
+                        })
+                    continue
+                if obj_type == "thinking_level_change":
+                    level = obj.get("level") or obj.get("thinkingLevel") or obj.get("thinking_level") or ""
+                    events.append({
+                        "type": "thinking_level_change",
+                        "level": str(level),
+                        "timestamp": ts_val,
+                    })
+                    continue
                 if obj_type == "message":
                     msg = obj.get("message", {})
                     role = msg.get("role", "")
@@ -1551,6 +1578,9 @@ def api_transcript_events(session_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    return jsonify(
-        {"events": events[-500:], "messageCount": msg_count, "totalEvents": len(events)}
-    )
+    return jsonify({
+        "events": events[-500:],
+        "messageCount": msg_count,
+        "totalEvents": len(events),
+        "modelJourney": model_journey,
+    })

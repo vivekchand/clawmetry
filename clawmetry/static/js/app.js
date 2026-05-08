@@ -10114,6 +10114,7 @@ async function loadModalTranscript() {
       var data = await r.json();
       if (!data.error && data.events && data.events.length) {
         _modalEvents = data.events;
+        window._modalModelJourney = data.modelJourney || [];
         var ec = document.getElementById('modal-event-count');
         if (ec) ec.textContent = '📊 ' + _modalEvents.length + ' events';
         var mc = document.getElementById('modal-msg-count');
@@ -10430,6 +10431,27 @@ function renderModalSummary(el) {
   html += '<div class="summary-text md-rendered">' + renderMd(desc || 'No description found') + '</div></div>';
   html += '<div class="summary-section"><div class="summary-label">Final Result / Output</div>';
   html += '<div class="summary-text md-rendered">' + renderMd(result || 'No result yet...') + '</div></div>';
+  // Model journey panel
+  var journey = window._modalModelJourney || [];
+  if (journey.length > 0) {
+    html += '<div class="summary-section"><div class="summary-label">Model Journey</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:4px;margin-top:4px;">';
+    journey.forEach(function(step, idx) {
+      var nextTs = journey[idx + 1] ? journey[idx + 1].ts_ms : null;
+      var durStr = '';
+      if (step.ts_ms && nextTs) {
+        var sec = Math.round((nextTs - step.ts_ms) / 1000);
+        durStr = sec >= 60 ? Math.round(sec / 60) + 'm' : sec + 's';
+      }
+      html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 8px;background:var(--bg-secondary,#1a1a2e);border-radius:4px;font-size:12px;">';
+      html += '<span style="font-size:14px;">🔄</span>';
+      html += '<span style="flex:1;font-weight:600;">' + escHtml(step.model || '?') + '</span>';
+      if (step.provider) html += '<span style="color:var(--text-muted,#888);font-size:11px;">' + escHtml(step.provider) + '</span>';
+      if (durStr) html += '<span style="color:var(--text-muted,#888);font-size:11px;margin-left:auto;">' + durStr + '</span>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+  }
   el.innerHTML = html;
 }
 
@@ -10452,6 +10474,10 @@ function renderModalNarrative(el) {
       icon = '🔧'; text = 'Called tool: <code>' + escHtml(evt.toolName||'') + '</code>';
     } else if (evt.type === 'result') {
       icon = '✅'; text = 'Got result (' + (evt.text||'').length + ' chars)';
+    } else if (evt.type === 'model_change') {
+      icon = '🔄'; text = 'Switched model to <code>' + escHtml(evt.model||'?') + '</code>' + (evt.provider ? ' (' + escHtml(evt.provider) + ')' : '');
+    } else if (evt.type === 'thinking_level_change') {
+      icon = '🧠'; text = 'Thinking level changed to <code>' + escHtml(evt.level||'?') + '</code>';
     } else return;
     html += '<div class="narrative-item"><span class="narr-icon">' + icon + '</span>' + text + '</div>';
   });
@@ -10494,6 +10520,16 @@ function renderEvtItem(evt, idx) {
     icon = '✅'; typeClass = 'type-result';
     summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
     body = evt.text || '';
+  } else if (evt.type === 'model_change') {
+    icon = '🔄'; typeClass = 'type-model-change';
+    var mc_label = escHtml(evt.model || '?');
+    if (evt.provider) mc_label += ' <span style="opacity:.6;font-size:11px;">(' + escHtml(evt.provider) + ')</span>';
+    summary = '<strong>Model switched to</strong> ' + mc_label;
+    body = 'Model: ' + (evt.model || '') + (evt.provider ? '\nProvider: ' + evt.provider : '');
+  } else if (evt.type === 'thinking_level_change') {
+    icon = '🧠'; typeClass = 'type-thinking-level';
+    summary = '<strong>Thinking level →</strong> ' + escHtml(evt.level || '?');
+    body = 'Thinking level: ' + (evt.level || '');
   } else {
     summary = '<strong>' + escHtml(evt.type) + '</strong>';
     body = JSON.stringify(evt, null, 2);
