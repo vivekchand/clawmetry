@@ -3521,6 +3521,15 @@ function clawmetryLogout(){
     <div id="velocity-flagged-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;"></div>
   </div>
 
+  <!-- Prompt-Error Banner (GH #601) -->
+  <div id="prompt-error-banner" style="display:none;margin-bottom:8px;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;background:rgba(220,38,38,0.15);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <span id="prompt-error-msg"></span>
+      <button onclick="document.getElementById('prompt-error-banner').style.display='none'" style="background:none;border:none;color:inherit;opacity:0.7;cursor:pointer;font-size:18px;line-height:1;padding:0;">&times;</button>
+    </div>
+    <div id="prompt-error-list" style="margin-top:8px;display:flex;flex-direction:column;gap:4px;font-weight:400;font-size:12px;"></div>
+  </div>
+
   <!-- Stats Bar (top) -->
   <div class="stats-footer">
     <div class="stats-footer-item">
@@ -5424,6 +5433,34 @@ async function loadTokenVelocity() {
   }
 }
 
+async function loadPromptErrors() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/prompt-errors', 5000);
+    var banner = document.getElementById('prompt-error-banner');
+    var msgEl  = document.getElementById('prompt-error-msg');
+    var listEl = document.getElementById('prompt-error-list');
+    if (!banner) return;
+    if (!d.errors || d.errors.length === 0) { banner.style.display = 'none'; return; }
+
+    msgEl.textContent = '⚠️ ' + d.count + ' prompt error' + (d.count === 1 ? '' : 's') + ' detected';
+
+    if (listEl) {
+      listEl.innerHTML = d.errors.slice(0, 5).map(function(e) {
+        var when = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+        var who = [e.provider, e.model].filter(Boolean).join('/') || 'unknown provider';
+        var msg = e.error ? String(e.error).slice(0, 120) : 'unknown error';
+        return '<div style="background:rgba(0,0,0,0.25);border-radius:5px;padding:4px 8px;">'
+          + (when ? '<span style="opacity:0.6;">' + when + '</span> ' : '')
+          + '<span style="opacity:0.8;">' + who + '</span>'
+          + ' — ' + msg
+          + '</div>';
+      }).join('');
+    }
+
+    banner.style.display = 'block';
+  } catch(e) { /* non-critical */ }
+}
+
 async function killSession(sessionId) {
   if (!confirm('Stop session ' + sessionId + '?')) return;
   try {
@@ -5571,6 +5608,7 @@ async function loadAll() {
     if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadPromptErrors === 'function') loadPromptErrors().catch(function(e){console.warn('prompt errors failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
