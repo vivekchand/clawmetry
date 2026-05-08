@@ -94,20 +94,29 @@ async function registerOrSkip(payload) {
 }
 
 async function heartbeat(reg, machineId, { expectDeferred = false } = {}) {
-  // Cloud Run replica routing can race with the INSERT in /api/register
-  // — when we expect deferred mode, retry once on the legacy {ok:true}
-  // response shape. A real bug persists past a short wait; a propagation
-  // race resolves on the second call.
+  // Cloud Run replica routing can race with the INSERT in /api/register —
+  // when we expect deferred mode, retry on the legacy {ok:true} response
+  // shape. A real bug persists past a short wait; propagation races and
+  // cold-start auth-cache misses resolve within 2-3 retries.
   const call = async () => {
-    const res = await postJson(
-      '/ingest/heartbeat',
-      { node_id: reg.node_id, hostname: machineId, platform: 'Linux', version: 'cloud-contract' },
-      reg.api_key
-    );
-    if (!res.ok) {
-      throw new Error(`/ingest/heartbeat returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      const res = await postJson(
+        '/ingest/heartbeat',
+        { node_id: reg.node_id, hostname: machineId, platform: 'Linux', version: 'cloud-contract' },
+        reg.api_key
+      );
+      if (res.ok) return res.json();
+      const text = (await res.text()).slice(0, 200);
+      if (attempt < 4 && (res.status === 401 || res.status >= 500)) {
+        // Cold-start: token validate cache might be empty on this
+        // instance; the cm_ key was just minted milliseconds ago.
+        console.log(`  hb attempt ${attempt} failed: ${res.status} ${text.slice(0, 80)} — retrying`);
+        await new Promise(r => setTimeout(r, 1500 * attempt));
+        continue;
+      }
+      throw new Error(`/ingest/heartbeat returned ${res.status}: ${text}`);
     }
-    return res.json();
+    throw new Error('/ingest/heartbeat failed after 4 retries');
   };
   let body = await call();
   if (expectDeferred && body.sync_allowed !== false) {
@@ -118,11 +127,21 @@ async function heartbeat(reg, machineId, { expectDeferred = false } = {}) {
 }
 
 async function intentStart(reg) {
-  const res = await postJson('/api/cloud/intent-start', {}, reg.api_key);
-  if (!res.ok) {
-    throw new Error(`/api/cloud/intent-start returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  // Same cold-start pattern as register: a freshly-spawned candidate
+  // revision may not have the new cm_ token in its validate cache yet.
+  // Retry on 401/5xx with exponential backoff.
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const res = await postJson('/api/cloud/intent-start', {}, reg.api_key);
+    if (res.ok) return res.json();
+    const text = (await res.text()).slice(0, 200);
+    if (attempt < 4 && (res.status === 401 || res.status >= 500)) {
+      console.log(`  intent-start attempt ${attempt} failed: ${res.status} ${text.slice(0, 80)} — retrying`);
+      await new Promise(r => setTimeout(r, 1500 * attempt));
+      continue;
+    }
+    throw new Error(`/api/cloud/intent-start returned ${res.status}: ${text}`);
   }
-  return res.json();
+  throw new Error('/api/cloud/intent-start failed after 4 retries');
 }
 
 function dashboardUrl(reg, encKey) {
