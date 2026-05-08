@@ -110,6 +110,7 @@ from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
+from routes.reasoning import bp_reasoning
 from routes.agents import bp_agents
 from helpers.openapi import bp_openapi
 
@@ -138,7 +139,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.143"
+__version__ = "0.12.163"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -1298,6 +1299,21 @@ def _budget_monitor_loop():
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
+                elif rtype == "token_spike":
+                    try:
+                        vel = _compute_velocity_status()
+                    except Exception:
+                        vel = None
+                    if vel:
+                        tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
+                        if tokens_per_min >= threshold:
+                            sid = vel.get("triggeringSession") or ""
+                            sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                            msg = (
+                                f"Token spike: {int(tokens_per_min):,} tokens/min "
+                                f"(threshold: {int(threshold):,}/min){sid_hint}"
+                            )
+                            fired = True
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
@@ -2219,10 +2235,14 @@ DASHBOARD_HTML = r"""
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
-  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
+  /* Wrap by default so the turn-summary badges (steps/LLM/tools/duration)
+     live on their own row below the detail, instead of squeezing the
+     detail to ~40% of viewport. */
+  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:wrap; cursor:pointer; transition:background 0.15s; }
   .brain-event:hover { background:rgba(255,255,255,0.02); }
   .brain-event.expanded { flex-wrap:wrap; }
   .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; }
+  .brain-event > .brain-turn-summary { flex-basis: 100%; width: 100%; margin-left: 80px; margin-top: 4px; }
   .brain-meta { display:contents; } /* Desktop: render children directly in brain-event flex row */
   .brain-time { color:var(--text-muted); min-width:70px; }
   .brain-source { min-width:120px; max-width:200px; font-weight:600; word-break:break-all; flex-shrink:0; }
@@ -2329,6 +2349,26 @@ DASHBOARD_HTML = r"""
   .cron-status.ok { background: var(--bg-success); color: var(--text-success); }
   .cron-status.error { background: var(--bg-error); color: var(--text-error); }
   .cron-status.pending { background: var(--bg-warning); color: var(--text-warning); }
+  .cron-status.no-data { background: rgba(107,114,128,0.18); color: #9ca3af; cursor: help; }
+  .cron-status.stale { background: rgba(245,158,11,0.18); color: #f59e0b; cursor: help; }
+  .cron-status.scheduled { background: rgba(96,165,250,0.18); color: #60a5fa; cursor: help; }
+
+  /* Cron view tabs (Active / Paused / Calendar) */
+  .cron-view-tabs { display: flex; gap: 4px; margin-bottom: 10px; padding: 4px; background: var(--bg-secondary); border-radius: 10px; width: fit-content; }
+  .cron-view-tab { background: transparent; border: none; color: var(--text-muted); padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; }
+  .cron-view-tab:hover { color: var(--text-primary); }
+  .cron-view-tab.active { background: var(--bg-tertiary); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  .cron-view-count { font-weight: 500; color: var(--text-muted); margin-left: 4px; font-size: 11px; }
+  .cron-view-tab.active .cron-view-count { color: var(--text-secondary); }
+  .cron-cal-section { font-size: 13px; font-weight: 700; color: var(--text-primary); margin: 8px 0 8px; display: flex; align-items: center; gap: 6px; }
+  .cron-cal-day { background: var(--bg-secondary); border-radius: 8px; margin-bottom: 8px; padding: 8px 12px; }
+  .cron-cal-daylabel { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 600; }
+  .cron-cal-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-top: 1px solid rgba(255,255,255,0.04); font-size: 13px; }
+  .cron-cal-row:nth-child(2) { border-top: none; }
+  .cron-cal-time { font-family: 'SF Mono','Fira Code',monospace; color: var(--text-accent); font-size: 12px; min-width: 56px; }
+  .cron-cal-status { width: 18px; text-align: center; }
+  .cron-cal-name { color: var(--text-primary); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cron-cal-sched { font-size: 11px; color: var(--text-muted); font-family: 'SF Mono','Fira Code',monospace; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Cron error info & fix */
   .cron-error-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; vertical-align: middle; }
@@ -3266,11 +3306,11 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong (Pro)">Alerts <span class="pro-chip">Pro</span></div>
+    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts</div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
-    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
@@ -3348,6 +3388,7 @@ function clawmetryLogout(){
           <select id="alert-type" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
             <option value="threshold">Threshold (daily $ amount)</option>
             <option value="spike">Spike (hourly rate multiplier)</option>
+            <option value="token_spike">Token spike (tokens/min)</option>
           </select>
           <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -3759,6 +3800,11 @@ function clawmetryLogout(){
   </div>
   <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
+  <div class="cron-view-tabs" role="tablist">
+    <button class="cron-view-tab active" data-view="active" onclick="setCronView('active')">Active <span class="cron-view-count" id="crons-count-active"></span></button>
+    <button class="cron-view-tab" data-view="paused" onclick="setCronView('paused')">Paused <span class="cron-view-count" id="crons-count-paused"></span></button>
+    <button class="cron-view-tab" data-view="calendar" onclick="setCronView('calendar')">&#x1F4C5; Calendar</button>
+  </div>
   <div class="card" id="crons-list">Loading...</div>
   <!-- Cron Health Monitor (GH #302) -->
   <div id="cron-health-anomaly-banner" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;color:#ef4444;font-size:13px;font-weight:600;">&#x26A0;&#xFE0F; Anomalies detected in cron jobs — review health table below</div>
@@ -4713,7 +4759,7 @@ async function loadAlertRules() {
       try { channels = JSON.parse(r.channels); } catch(e) { channels = [r.channels]; }
       html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;">';
       html += '<span style="font-weight:600;">' + escHtml(r.type) + '</span>';
-      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : '$'+r.threshold) + '</span>';
+      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : (r.type==='token_spike' ? r.threshold.toLocaleString()+' tok/min' : '$'+r.threshold)) + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + channels.join(', ') + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + r.cooldown_min + 'min cooldown</span>';
       html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-error);font-size:16px;" data-rule-id="'+r.id+'" onclick="deleteAlertRule(this.dataset.ruleId)" title="Delete">&#x1f5d1;</span>';
@@ -7677,6 +7723,21 @@ def _budget_monitor_loop():
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
+                elif rtype == "token_spike":
+                    try:
+                        vel = _compute_velocity_status()
+                    except Exception:
+                        vel = None
+                    if vel:
+                        tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
+                        if tokens_per_min >= threshold:
+                            sid = vel.get("triggeringSession") or ""
+                            sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                            msg = (
+                                f"Token spike: {int(tokens_per_min):,} tokens/min "
+                                f"(threshold: {int(threshold):,}/min){sid_hint}"
+                            )
+                            fired = True
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
@@ -8300,6 +8361,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
+    app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_agents)
     app.register_blueprint(bp_openapi)
 
@@ -8536,11 +8598,11 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong (Pro)">Alerts <span class="pro-chip">Pro</span></div>
+    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts</div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
-    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
@@ -8985,7 +9047,7 @@ def _auto_discover_gateway(token):
                         "instanceId": "clawmetry-discover",
                     },
                     "role": "operator",
-                    "scopes": ["operator.admin"],
+                    "scopes": ["operator.admin", "operator.read"],
                     "auth": {"token": token},
                 },
             }
@@ -9859,6 +9921,12 @@ def _compute_transcript_analytics():
             # Accept both live `.jsonl` and archived `.jsonl.reset.<ts>` files.
             if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
                 continue
+            # Runtime trajectory/checkpoint files duplicate session content and
+            # can dwarf real transcripts (hundreds of MB). They make usage
+            # widgets crawl on first load, so keep analytics on canonical
+            # session/reset transcripts only.
+            if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
+                continue
             sid = fname.split(".jsonl", 1)[0]
             fpath = os.path.join(sessions_dir, fname)
             fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
@@ -10190,6 +10258,12 @@ def _compute_transcript_analytics():
             # days; skipping them was making the 14-day chart pile every
             # past-day total onto today.
             if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
+                continue
+            # Runtime trajectory/checkpoint files duplicate session content and
+            # can dwarf real transcripts (hundreds of MB). They make usage
+            # widgets crawl on first load, so keep analytics on canonical
+            # session/reset transcripts only.
+            if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
                 continue
             sid = fname.split(".jsonl", 1)[0]
             fpath = os.path.join(sessions_dir, fname)
