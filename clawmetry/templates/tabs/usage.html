@@ -136,4 +136,23 @@
   <div class="card" id="skill-leaderboard-card">
     <div id="skill-leaderboard-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
   </div>
+  <div class="section-title">💾 Prompt Cache Analytics <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">hit rate &amp; savings from prompt caching</span></div>
+  <div class="card" id="cache-analytics-card">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:14px;">
+      <div style="text-align:center;min-width:80px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;">Hit Rate</div>
+        <div style="font-size:26px;font-weight:700;color:var(--text-accent);" id="cache-hit-rate">--</div>
+      </div>
+      <div style="text-align:center;min-width:80px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;">Est. Savings</div>
+        <div style="font-size:26px;font-weight:700;color:#22c55e;" id="cache-savings">--</div>
+      </div>
+      <div style="text-align:center;min-width:80px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;">Sessions</div>
+        <div style="font-size:26px;font-weight:700;color:var(--text-primary);" id="cache-session-count">--</div>
+      </div>
+    </div>
+    <div id="cache-daily-chart" class="usage-chart" style="margin-bottom:10px;">Loading...</div>
+    <div id="cache-recommendation" style="font-size:12px;padding:8px 10px;background:var(--bg-secondary);border-radius:6px;color:var(--text-muted);line-height:1.5;"></div>
+  </div>
 </div>

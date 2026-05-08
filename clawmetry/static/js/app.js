@@ -5652,8 +5652,47 @@ async function loadUsage() {
     loadCostComparison();
     // Load activity heatmap
     loadHeatmap();
+    // Load prompt cache analytics (GH#851)
+    loadCacheAnalytics();
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
+  }
+}
+
+async function loadCacheAnalytics() {
+  var hitEl = document.getElementById('cache-hit-rate');
+  if (!hitEl) return;
+  try {
+    var data = await fetch('/api/usage/cache-analytics').then(function(r) { return r.json(); });
+    var savEl = document.getElementById('cache-savings');
+    var cntEl = document.getElementById('cache-session-count');
+    var chartEl = document.getElementById('cache-daily-chart');
+    var recEl = document.getElementById('cache-recommendation');
+    hitEl.textContent = data.hit_ratio_pct > 0 ? data.hit_ratio_pct + '%' : '--';
+    if (savEl) savEl.textContent = data.est_savings_usd > 0 ? '$' + data.est_savings_usd.toFixed(2) : '$0.00';
+    if (cntEl) cntEl.textContent = String(data.session_count || 0);
+    if (chartEl && data.daily && data.daily.length > 0) {
+      var maxRatio = Math.max.apply(null, data.daily.map(function(d) { return d.hit_ratio_pct || 0; })) || 1;
+      var chartHtml = '';
+      data.daily.forEach(function(d) {
+        var pct = maxRatio > 0 ? Math.max(1, (d.hit_ratio_pct / maxRatio) * 100) : 0;
+        var label = d.date.substring(5);
+        var val = d.hit_ratio_pct > 0 ? d.hit_ratio_pct + '%' : '';
+        chartHtml += '<div class="usage-bar-wrap">' +
+          '<div class="usage-bar" style="height:' + pct + '%;background:#22c55e;">' +
+            '<div class="usage-bar-value">' + val + '</div>' +
+          '</div>' +
+          '<div class="usage-bar-label">' + label + '</div>' +
+        '</div>';
+      });
+      chartEl.innerHTML = chartHtml;
+    } else if (chartEl) {
+      chartEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No cache data in the last 14 days</span>';
+    }
+    if (recEl && data.recommendation) recEl.textContent = data.recommendation;
+  } catch(e) {
+    var chartEl2 = document.getElementById('cache-daily-chart');
+    if (chartEl2) chartEl2.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">Cache analytics unavailable</span>';
   }
 }
 

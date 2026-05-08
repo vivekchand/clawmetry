@@ -13,6 +13,7 @@ Owns the 12 routes registered on bp_usage:
   GET  /api/sessions/clusters             — behavioural session clustering
   GET  /api/usage/cost-comparison         — alt-model savings estimate
   GET  /api/usage/export                  — CSV export of usage
+  GET  /api/usage/cache-analytics         — prompt cache hit rate + savings (GH #851)
   GET  /api/model-attribution             — per-model turn/session split
   GET  /api/skill-attribution             — per-skill cost attribution
   GET  /api/token-velocity                — runaway-loop detection
@@ -1077,4 +1078,141 @@ def api_token_velocity():
         'velocity_2min':    total_tokens_2min,
         'cost_per_min':     cost_per_min,
         'flagged_sessions': flagged,
+    })
+
+
+@bp_usage.route("/api/usage/cache-analytics")
+def api_usage_cache_analytics():
+    """Prompt cache hit rate and savings analytics (GH #851)."""
+    import dashboard as _d
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
+    if not os.path.isdir(sessions_dir):
+        return jsonify({
+            "hit_ratio_pct": 0, "est_savings_usd": 0, "daily": [],
+            "session_count": 0, "total_cache_read_tokens": 0,
+            "total_input_tokens": 0, "recommendation": "",
+        })
+
+    today = datetime.now()
+    daily_buckets = {}
+    for i in range(13, -1, -1):
+        d = today - timedelta(days=i)
+        daily_buckets[d.strftime("%Y-%m-%d")] = {"cache_read": 0, "input": 0, "cache_read_cost": 0.0}
+
+    total_cache_read = 0
+    total_input = 0
+    total_cache_read_cost = 0.0
+    session_count = 0
+
+    try:
+        fnames = [
+            f for f in os.listdir(sessions_dir)
+            if f.endswith(".jsonl") and ".deleted." not in f and ".reset." not in f
+        ]
+    except OSError:
+        fnames = []
+
+    for fname in fnames:
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            fdate = datetime.fromtimestamp(os.path.getmtime(fpath)).strftime("%Y-%m-%d")
+        except OSError:
+            continue
+
+        s_cache_read = 0
+        s_input = 0
+        s_cache_read_cost = 0.0
+
+        try:
+            with open(fpath, "r", errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    if ev.get("type") != "message":
+                        continue
+                    msg = ev.get("message", {}) or {}
+                    if not isinstance(msg, dict):
+                        continue
+                    usage = msg.get("usage", {}) or {}
+                    if not isinstance(usage, dict) or not usage:
+                        continue
+                    s_cache_read += int(usage.get("cacheRead", 0) or 0)
+                    s_input += int(usage.get("input", 0) or 0)
+                    cost_obj = usage.get("cost", {}) or {}
+                    if isinstance(cost_obj, dict):
+                        s_cache_read_cost += float(cost_obj.get("cacheRead", 0) or 0)
+        except Exception:
+            continue
+
+        if s_cache_read + s_input == 0:
+            continue
+
+        session_count += 1
+        total_cache_read += s_cache_read
+        total_input += s_input
+        total_cache_read_cost += s_cache_read_cost
+
+        if fdate in daily_buckets:
+            b = daily_buckets[fdate]
+            b["cache_read"] += s_cache_read
+            b["input"] += s_input
+            b["cache_read_cost"] += s_cache_read_cost
+
+    total_in_plus_cache = total_input + total_cache_read
+    hit_ratio_pct = (
+        round(total_cache_read / total_in_plus_cache * 100, 1)
+        if total_in_plus_cache else 0.0
+    )
+
+    # Savings: cached tokens cost ~10x less than fresh input
+    est_fresh_cost = total_cache_read_cost * 10.0
+    est_savings_usd = round(max(0.0, est_fresh_cost - total_cache_read_cost), 4)
+
+    daily = []
+    for ds in sorted(daily_buckets):
+        b = daily_buckets[ds]
+        ip_c = b["input"] + b["cache_read"]
+        ratio = round(b["cache_read"] / ip_c * 100, 1) if ip_c else 0.0
+        daily.append({
+            "date": ds,
+            "hit_ratio_pct": ratio,
+            "cache_read_tokens": b["cache_read"],
+            "input_tokens": b["input"],
+        })
+
+    if hit_ratio_pct >= 50:
+        recommendation = (
+            f"Excellent cache utilization at {hit_ratio_pct}%. "
+            "Stable system prompts are working well."
+        )
+    elif hit_ratio_pct >= 25:
+        recommendation = (
+            f"Moderate cache hit rate ({hit_ratio_pct}%). "
+            "Use consistent system prompts across sessions to improve caching."
+        )
+    elif hit_ratio_pct > 0:
+        recommendation = (
+            f"Low cache hit rate ({hit_ratio_pct}%). "
+            "Consider using identical system prompts across calls and avoid frequent context changes."
+        )
+    else:
+        recommendation = (
+            "No cache hits detected. Enable prompt caching in your OpenClaw config "
+            "or use Anthropic/OpenAI models that support it."
+        )
+
+    return jsonify({
+        "hit_ratio_pct": hit_ratio_pct,
+        "total_cache_read_tokens": total_cache_read,
+        "total_input_tokens": total_input,
+        "est_savings_usd": est_savings_usd,
+        "session_count": session_count,
+        "daily": daily,
+        "recommendation": recommendation,
     })
