@@ -1142,7 +1142,12 @@ async function _selfconfigRenderReader(filename, ts) {
       } else if (!d.content || !d.content.trim()) {
         bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file is empty.</div>';
       } else {
-        bodyEl.innerHTML = '<div class="mem-prose">' + _renderMarkdown(d.content) + '</div>';
+        // Show raw markdown source, not rendered HTML — these files ARE the
+        // agent's source-of-truth and editing them has agent-behaviour
+        // consequences, so rendering bullets/headers obscures the actual
+        // bytes the agent reads. Same monospace style as the Edit textarea
+        // so Preview ↔ Edit looks consistent.
+        bodyEl.innerHTML = '<pre style="margin:0;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--text-primary);">' + escHtml(d.content) + '</pre>';
       }
     }
     _selfconfigUpdateStatusBar(filename, ts, d);
