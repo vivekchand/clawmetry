@@ -9,6 +9,7 @@ Owns the 11 routes registered on bp_health:
   GET  /api/system-health         — comprehensive system health (services, disks, crons)
   GET  /api/health                — health check panel (gateway/disk/memory/uptime/otel)
   GET  /api/diagnostics           — detected configuration snapshot
+  GET  /api/gateway-health        — gateway process memory, uptime, port status
   GET  /api/service-status        — compact service_status for fleet heartbeat
   GET  /api/heartbeat-status      — heartbeat gap alerting status
   POST /api/heartbeat-ping        — record a heartbeat from frontend
@@ -623,6 +624,133 @@ def api_diagnostics():
             "openclaw_flags": openclaw_flags,
             "warnings": warnings_list,
             "auto_detected": auto_detected,
+        }
+    )
+
+
+@bp_health.route("/api/gateway-health")
+def api_gateway_health():
+    """Focused gateway process health: memory, uptime, and port reachability.
+
+    Surfaces the memory-bloat pattern (600 MB → 945 MB, issue #63526) by
+    reading the gateway process RSS directly from /proc on Linux or via ``ps``
+    on macOS.  No new imports — subprocess, socket, sys, os are all already
+    imported in this module.
+
+    Returns::
+
+        {
+          "status":          "running" | "stopped",
+          "pid":             <int | null>,
+          "port":            <int>,
+          "port_responding": <bool>,
+          "memory_mb":       <int | null>,
+          "memory_status":   "ok" | "warn" | "critical" | null,
+          "uptime_seconds":  <int | null>
+        }
+
+    ``memory_status`` thresholds: warn ≥ 600 MB, critical ≥ 800 MB.
+    """
+    import dashboard as _d
+
+    gw_port = _d._detect_gateway_port()
+
+    # ── PID detection ────────────────────────────────────────────────────────
+    pid = None
+    if sys.platform != "win32":
+        try:
+            res = subprocess.run(
+                ["pgrep", "-f", "moltbot"], capture_output=True, text=True, timeout=2
+            )
+            if res.returncode == 0:
+                pid = int(res.stdout.strip().split()[0])
+        except Exception:
+            pass
+
+    # ── Port reachability ────────────────────────────────────────────────────
+    port_responding = False
+    try:
+        _s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _s.settimeout(2)
+        port_responding = _s.connect_ex(("127.0.0.1", gw_port)) == 0
+        _s.close()
+    except Exception:
+        pass
+
+    if pid is None and not port_responding:
+        return jsonify(
+            {
+                "status": "stopped",
+                "pid": None,
+                "port": gw_port,
+                "port_responding": False,
+                "memory_mb": None,
+                "memory_status": None,
+                "uptime_seconds": None,
+            }
+        )
+
+    # ── Memory (RSS) ─────────────────────────────────────────────────────────
+    memory_mb = None
+    if pid is not None:
+        try:
+            if sys.platform == "linux":
+                with open(f"/proc/{pid}/status") as _fh:
+                    for line in _fh:
+                        if line.startswith("VmRSS:"):
+                            memory_mb = int(line.split()[1]) // 1024  # kB → MB
+                            break
+            elif sys.platform == "darwin":
+                _pr = subprocess.run(
+                    ["ps", "-p", str(pid), "-o", "rss="],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                if _pr.returncode == 0 and _pr.stdout.strip():
+                    memory_mb = int(_pr.stdout.strip()) // 1024  # kB → MB
+        except Exception:
+            pass
+
+    # ── Uptime (Linux /proc only) ─────────────────────────────────────────────
+    uptime_seconds = None
+    if pid is not None and sys.platform == "linux":
+        try:
+            with open(f"/proc/{pid}/stat") as _fh:
+                stat_raw = _fh.read()
+            # comm field is wrapped in parens and may contain spaces; parse past it
+            rpar = stat_raw.rfind(")")
+            fields_after_comm = stat_raw[rpar + 2 :].split()
+            # index 19 after comm = starttime (clock ticks since boot)
+            proc_start_ticks = int(fields_after_comm[19])
+            clk_tck = os.sysconf("SC_CLK_TCK")
+            with open("/proc/uptime") as _fh:
+                sys_uptime_sec = float(_fh.read().split()[0])
+            proc_uptime_sec = sys_uptime_sec - (proc_start_ticks / clk_tck)
+            if proc_uptime_sec >= 0:
+                uptime_seconds = int(proc_uptime_sec)
+        except Exception:
+            pass
+
+    # ── Memory health classification ──────────────────────────────────────────
+    memory_status = None
+    if memory_mb is not None:
+        if memory_mb >= 800:
+            memory_status = "critical"
+        elif memory_mb >= 600:
+            memory_status = "warn"
+        else:
+            memory_status = "ok"
+
+    return jsonify(
+        {
+            "status": "running" if (pid is not None or port_responding) else "stopped",
+            "pid": pid,
+            "port": gw_port,
+            "port_responding": port_responding,
+            "memory_mb": memory_mb,
+            "memory_status": memory_status,
+            "uptime_seconds": uptime_seconds,
         }
     )
 
