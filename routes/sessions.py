@@ -31,14 +31,82 @@ _SUBAGENTS_CACHE_TTL_SECONDS = 10
 _SUBAGENTS_SCAN_MAX_FILES = int(os.environ.get("CLAWMETRY_SUBAGENTS_SCAN_MAX_FILES", "120"))
 _SUBAGENTS_SCAN_TAIL_BYTES = int(os.environ.get("CLAWMETRY_SUBAGENTS_SCAN_TAIL_BYTES", str(512 * 1024)))
 
+# Channels that don't identify a user-initiated session (generic/internal)
+_GENERIC_CHANNELS = frozenset({"unknown", "direct", "", "main", "internal"})
+
+
+def _infer_session_type(session):
+    """Classify a session into one of: main / heartbeat / user / sub-agent.
+
+    Priority:
+      1. display name / session id contains "heartbeat"  → heartbeat
+      2. gateway kind == "subagent" or name contains it  → sub-agent
+      3. channel is set and non-generic                  → user
+      4. fallback                                        → main
+    """
+    name = (session.get("displayName") or session.get("sessionId") or "").lower()
+    kind = (session.get("kind") or "").lower()
+    channel = (session.get("channel") or "").lower().strip()
+
+    if "heartbeat" in name:
+        return "heartbeat"
+    if kind == "subagent" or "subagent" in name:
+        return "sub-agent"
+    if channel and channel not in _GENERIC_CHANNELS:
+        return "user"
+    return "main"
+
 
 @bp_sessions.route("/api/sessions")
 def api_sessions():
     import dashboard as _d
     gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
-        return jsonify({"sessions": _d._augment_sessions_with_burn(gw_data["sessions"])})
-    return jsonify({"sessions": _d._augment_sessions_with_burn(_d._get_sessions())})
+        sessions = _d._augment_sessions_with_burn(gw_data["sessions"])
+    else:
+        sessions = _d._augment_sessions_with_burn(_d._get_sessions())
+    for s in sessions:
+        if "session_type" not in s:
+            s["session_type"] = _infer_session_type(s)
+    return jsonify({"sessions": sessions})
+
+
+@bp_sessions.route("/api/sessions/by-type")
+def api_sessions_by_type():
+    """Return sessions grouped by type with per-type counts.
+
+    Response:
+      {
+        "counts": {"main": N, "heartbeat": N, "user": N, "sub-agent": N, "total": N},
+        "sessions": [<session objects with session_type field>]
+      }
+
+    Optional query param ?type=<heartbeat|user|sub-agent|main> to filter the
+    returned session list (counts always cover all sessions).
+    """
+    import dashboard as _d
+    gw_data = _d._gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
+    if gw_data and "sessions" in gw_data:
+        sessions = _d._augment_sessions_with_burn(gw_data["sessions"])
+    else:
+        sessions = _d._augment_sessions_with_burn(_d._get_sessions())
+
+    for s in sessions:
+        if "session_type" not in s:
+            s["session_type"] = _infer_session_type(s)
+
+    counts = {"main": 0, "heartbeat": 0, "user": 0, "sub-agent": 0}
+    for s in sessions:
+        t = s.get("session_type", "main")
+        counts[t] = counts.get(t, 0) + 1
+    counts["total"] = len(sessions)
+
+    type_filter = request.args.get("type", "").strip()
+    filtered = [
+        s for s in sessions
+        if not type_filter or s.get("session_type") == type_filter
+    ]
+    return jsonify({"counts": counts, "sessions": filtered})
 
 
 @bp_sessions.route("/api/compactions")
