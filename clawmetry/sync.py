@@ -237,6 +237,45 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
+# ── Initial-sync progress (vivekchand/clawmetry#748) ─────────────────────────
+# Tracks per-phase progress to ~/.clawmetry/sync_progress.json so the local
+# dashboard can show a "syncing…" banner on fresh installs instead of empty
+# tabs. Written atomically (tmp + rename) because the dashboard reads this
+# file on every banner poll.
+SYNC_PROGRESS_FILE = CONFIG_DIR / "sync_progress.json"
+_sync_progress_started_at: str | None = None
+
+
+def _record_sync_progress(
+    phase: str, done: int, total: int = 0, status: str = "running"
+) -> None:
+    global _sync_progress_started_at
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).isoformat()
+        if _sync_progress_started_at is None:
+            _sync_progress_started_at = now
+        try:
+            cfg = load_config()
+            node_id = cfg.get("node_id", "")
+        except Exception:
+            node_id = ""
+        payload = {
+            "node_id": node_id,
+            "phase": phase,
+            "done": int(done),
+            "total": int(total),
+            "status": status,
+            "started_at": _sync_progress_started_at,
+            "updated_at": now,
+        }
+        tmp = SYNC_PROGRESS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, SYNC_PROGRESS_FILE)
+    except Exception as e:
+        log.debug(f"Could not record sync progress ({phase}): {e}")
+
+
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
 
@@ -937,6 +976,7 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
     # exactly where we paused -- no event loss, no double-send.
     if not _sync_allowed():
         return 0
+    _record_sync_progress("sessions", 0)
     sessions_dir = paths["sessions_dir"]
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
@@ -1030,6 +1070,7 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
         except Exception as e:
             log.warning(f"Session sync error ({fname}): {e}")
 
+    _record_sync_progress("sessions", total, total)
     return total
 
 
@@ -1078,6 +1119,7 @@ def sync_sessions_recent(
     """
     if not _sync_allowed():
         return 0
+    _record_sync_progress("sessions_recent", 0)
     from datetime import timedelta
 
     sessions_dir = paths["sessions_dir"]
@@ -1192,6 +1234,7 @@ def sync_sessions_recent(
         except Exception as e:
             log.warning(f"Recent sync error ({fname}): {e}")
 
+    _record_sync_progress("sessions_recent", total, total)
     return total
 
 
@@ -1595,6 +1638,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
     """
     if not _sync_allowed():
         return 0
+    _record_sync_progress("crons", 0)
     api_key = config["api_key"]
     node_id = config["node_id"]
     last_hash = state.get("cron_hash", "")
@@ -1686,6 +1730,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
             for job_id, job_hash in emitted_job_ids:
                 job_dedup[job_id] = [job_hash, now_ts]
             state["cron_hash"] = h
+            _record_sync_progress("crons", len(events), len(events))
             return len(events)
         elif not file_unchanged:
             # File mtime/content changed but every job was deduped — still
@@ -1693,6 +1738,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
             state["cron_hash"] = h
     except Exception as e:
         log.warning(f"Cron sync error: {e}")
+    _record_sync_progress("crons", 0, 0)
     return 0
 
 
@@ -1708,6 +1754,7 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
     """
     if not _sync_allowed():
         return 0
+    _record_sync_progress("session_metadata", 0)
     api_key = config["api_key"]
     node_id = config["node_id"]
     if state is None:
@@ -1885,9 +1932,11 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 log.debug(f"Session parse error ({fpath.name}): {e}")
 
         total_uploaded += _flush(batch)
+        _record_sync_progress("session_metadata", total_uploaded, total_uploaded)
         return total_uploaded
     except Exception as e:
         log.warning(f"Session metadata sync failed: {e}")
+        _record_sync_progress("session_metadata", 0, 0)
         return 0
 
 
@@ -1897,6 +1946,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     Skipped when sync is paused (expired trial)."""
     if not _sync_allowed():
         return 0
+    _record_sync_progress("memory", 0)
     workspace = paths.get("workspace", "")
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
@@ -1925,6 +1975,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
                 memory_files.append((f"memory/{f}", os.path.join(mem_dir, f)))
 
     if not memory_files:
+        _record_sync_progress("memory", 0, 0)
         return 0
 
     # Check for changes via content hash; always send all file contents so the
@@ -1954,6 +2005,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
             log.debug(f"Memory file read error ({name}): {e}")
 
     if not changed_files:
+        _record_sync_progress("memory", len(memory_files), len(memory_files))
         return 0
 
     # Push memory files as encrypted blob (like session events).
@@ -1985,6 +2037,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     except Exception as e:
         log.warning(f"Memory sync error: {e}")
 
+    _record_sync_progress("memory", synced, len(memory_files))
     return synced
 
     # ── Real-time log streaming ────────────────────────────────────────────────────
@@ -3343,6 +3396,7 @@ def run_daemon() -> None:
     state["last_sync"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
     send_heartbeat(config)
+    _record_sync_progress("complete", 0, 0, status="complete")
     log.info("Recent sync complete — Brain feed should show current activity")
 
     # Validate stored log offsets on startup — prevents silent gaps
