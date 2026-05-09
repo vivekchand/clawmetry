@@ -463,6 +463,150 @@ def api_cron_kill_all():
     )
 
 
+@bp_crons.route("/api/agent-intentions")
+def api_agent_intentions():
+    """Cron jobs reframed as the agent's planned future actions.
+
+    Returns the same job data as ``/api/crons`` projected onto a calendar
+    timeline: every firing the agent has scheduled in the next ``days``
+    window, plus a ``recently_added`` callout for jobs the agent created
+    in the last 24 hours.
+
+    Query params:
+      days (int, default=7, max=30): timeline window in days from now.
+      include_disabled (bool, default=false): also project disabled jobs.
+      max_events (int, default=200, max=1000): cap on projected firings.
+
+    Interval jobs (``schedule.kind`` ∈ {``every``, ``interval``}) are
+    projected forward by repeatedly adding ``everyMs`` to ``nextRunAtMs``.
+    Cron-expression jobs are surfaced with only their gateway-provided
+    ``nextRunAtMs`` (full cron parsing is intentionally out of scope —
+    needs a dependency we don't ship today).
+    """
+    import dashboard as _d
+
+    try:
+        days = max(1, min(int(request.args.get("days", "7")), 30))
+    except ValueError:
+        days = 7
+    include_disabled = str(request.args.get("include_disabled", "")).lower() in (
+        "1", "true", "yes"
+    )
+    try:
+        max_events = max(10, min(int(request.args.get("max_events", "200")), 1000))
+    except ValueError:
+        max_events = 200
+
+    gw_data = _d._gw_invoke("cron", {"action": "list", "includeDisabled": True}) or {}
+    jobs = gw_data.get("jobs", []) or _d._get_crons()
+    if not isinstance(jobs, list):
+        jobs = []
+
+    now_ms = int(datetime.now().timestamp() * 1000)
+    window_end_ms = now_ms + days * 24 * 3600 * 1000
+    recent_threshold_ms = now_ms - 24 * 3600 * 1000
+
+    intentions: list = []
+    recently_added: list = []
+
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        enabled = bool(job.get("enabled", True))
+        if not enabled and not include_disabled:
+            continue
+
+        job_id = job.get("id", "")
+        job_name = job.get("name", job_id)
+        sched = job.get("schedule") or {}
+        state = job.get("state") or {}
+
+        created_at_ms = job.get("createdAtMs") or 0
+        if isinstance(created_at_ms, str):
+            try:
+                from dateutil import parser as _dtp
+                created_at_ms = int(_dtp.parse(created_at_ms).timestamp() * 1000)
+            except Exception:
+                created_at_ms = 0
+        is_recently_added = bool(created_at_ms and created_at_ms >= recent_threshold_ms)
+        if is_recently_added:
+            recently_added.append({
+                "jobId": job_id,
+                "name": job_name,
+                "createdAtMs": created_at_ms,
+                "schedule": sched,
+                "enabled": enabled,
+            })
+
+        last_status = state.get("lastStatus", "pending")
+        last_run_ms = state.get("lastRunAtMs") or 0
+        if isinstance(last_run_ms, str):
+            try:
+                from dateutil import parser as _dtp
+                last_run_ms = int(_dtp.parse(last_run_ms).timestamp() * 1000)
+            except Exception:
+                last_run_ms = 0
+        next_run_ms = state.get("nextRunAtMs") or 0
+
+        sched_kind = (sched.get("kind") or "").lower() if isinstance(sched, dict) else ""
+        every_ms = sched.get("everyMs") if isinstance(sched, dict) else None
+        try:
+            every_ms = int(every_ms) if every_ms else 0
+        except (TypeError, ValueError):
+            every_ms = 0
+
+        firings: list = []
+        if sched_kind in ("every", "interval") and every_ms > 0:
+            # Walk forward by everyMs from the gateway's nextRunAtMs.
+            # If nextRunAtMs is unset, the gateway hasn't scheduled it yet —
+            # assume the first firing is one interval out.
+            t = int(next_run_ms) if next_run_ms else now_ms + every_ms
+            # If next_run is already in the past, advance to the first future tick
+            if t < now_ms:
+                gap = now_ms - t
+                t += ((gap // every_ms) + 1) * every_ms
+            while t <= window_end_ms and len(firings) < 100:
+                firings.append(t)
+                t += every_ms
+        elif next_run_ms and now_ms <= next_run_ms <= window_end_ms:
+            # Cron-expression / one-shot: only the immediate next firing
+            firings.append(int(next_run_ms))
+
+        for ts in firings:
+            intentions.append({
+                "jobId": job_id,
+                "name": job_name,
+                "scheduledForMs": ts,
+                "scheduleKind": sched_kind or "unknown",
+                "lastStatus": last_status,
+                "lastRunAtMs": last_run_ms,
+                "isRecentlyAdded": is_recently_added,
+                "enabled": enabled,
+            })
+            if len(intentions) >= max_events:
+                break
+        if len(intentions) >= max_events:
+            break
+
+    intentions.sort(key=lambda r: r.get("scheduledForMs", 0))
+    recently_added.sort(key=lambda r: -(r.get("createdAtMs") or 0))
+
+    return jsonify({
+        "intentions": intentions,
+        "recently_added": recently_added,
+        "window": {
+            "startMs": now_ms,
+            "endMs": window_end_ms,
+            "days": days,
+        },
+        "stats": {
+            "total_intentions": len(intentions),
+            "recently_added_count": len(recently_added),
+            "truncated": len(intentions) >= max_events,
+        },
+    })
+
+
 @bp_crons.route("/api/cron-health")
 def api_cron_health():
     """Cron health monitor — run history, success rate, cost per run (GH #306).
