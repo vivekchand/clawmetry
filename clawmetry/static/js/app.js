@@ -1670,6 +1670,7 @@ async function loadAll() {
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     if (typeof loadAutonomy === 'function') loadAutonomy().catch(function(e){console.warn('autonomy failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
+    if (typeof loadActivityHeatmap === 'function') loadActivityHeatmap().catch(function(e){console.warn('activity heatmap failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -5405,6 +5406,40 @@ async function loadHeatmap(days) {
   } catch(e) {
     var grid2 = document.getElementById('heatmap-grid');
     if (grid2) grid2.innerHTML = '<span style="color:#555">No activity data</span>';
+  }
+}
+
+// ===== 30-day Session Activity Heatmap (GH#875) =====
+async function loadActivityHeatmap() {
+  var grid = document.getElementById('activity-heatmap-grid');
+  if (!grid) return;
+  try {
+    var data = await fetch('/api/activity-heatmap').then(function(r) { return r.json(); });
+    if (!data || !data.days || !data.days.length) {
+      grid.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">No session data yet</span>';
+      return;
+    }
+    var maxSessions = Math.max(1, Math.max.apply(null, data.days.map(function(d) { return d.sessions; })));
+    var html = '';
+    data.days.forEach(function(day) {
+      var intensity = day.sessions / maxSessions;
+      var color;
+      if (day.sessions === 0) color = '#12122a';
+      else if (intensity < 0.25) color = '#1a3a2a';
+      else if (intensity < 0.5) color = '#2a6a3a';
+      else if (intensity < 0.75) color = '#4a9a2a';
+      else color = '#6adb3a';
+      var fmtTok = day.tokens >= 1000000 ? (day.tokens/1000000).toFixed(1)+'M' : day.tokens >= 1000 ? (day.tokens/1000).toFixed(0)+'K' : String(day.tokens);
+      var fmtCost = day.cost > 0 ? '$'+day.cost.toFixed(2) : '$0.00';
+      var tip = day.label + ': ' + day.sessions + ' session' + (day.sessions !== 1 ? 's' : '') + ', ' + fmtTok + ' tokens, ' + fmtCost;
+      html += '<div class="heatmap-cell" style="background:' + color + ';min-height:20px;" title="' + tip + '"></div>';
+    });
+    grid.innerHTML = html;
+    grid.style.display = 'grid';
+    var legend = document.getElementById('activity-heatmap-legend');
+    if (legend) legend.innerHTML = 'Less <div class="heatmap-legend-cell" style="background:#12122a"></div><div class="heatmap-legend-cell" style="background:#1a3a2a"></div><div class="heatmap-legend-cell" style="background:#2a6a3a"></div><div class="heatmap-legend-cell" style="background:#4a9a2a"></div><div class="heatmap-legend-cell" style="background:#6adb3a"></div> More (sessions per day)';
+  } catch(e) {
+    if (grid) grid.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">No activity data</span>';
   }
 }
 

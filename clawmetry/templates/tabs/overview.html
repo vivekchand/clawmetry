@@ -380,4 +380,13 @@
       @keyframes hb-pulse-missed { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(239,68,68,.4)} 70%{opacity:.8;box-shadow:0 0 0 8px rgba(239,68,68,0)} }
     </style>
   </div>
+
+  <!-- 30-day Activity Heatmap (GH#875) -->
+  <div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:18px 22px;margin-top:14px;">
+    <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;">📅 30-day Activity</div>
+    <div id="activity-heatmap-grid" class="heatmap-wrap" style="display:grid;grid-template-columns:repeat(30,1fr);gap:3px;">
+      <span style="color:var(--text-muted);font-size:12px;">Loading...</span>
+    </div>
+    <div id="activity-heatmap-legend" class="heatmap-legend" style="margin-top:8px;"></div>
+  </div>
 </div>

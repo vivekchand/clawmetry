@@ -519,6 +519,47 @@ def api_timeline():
     return jsonify({"days": days, "today": now.strftime("%Y-%m-%d")})
 
 
+@bp_overview.route("/api/activity-heatmap")
+def api_activity_heatmap():
+    """30-day session activity heatmap — sessions/tokens/cost per calendar day.
+
+    Returns {"days": [{date, label, sessions, tokens, cost}, ...]} for the
+    last 30 days, oldest first.  Re-uses the cached _compute_transcript_analytics
+    result so this endpoint adds no extra I/O when /api/usage was already hit.
+    """
+    import dashboard as _d
+
+    n_days = 30
+    now = datetime.now()
+
+    day_keys = []
+    day_map = {}
+    for i in range(n_days - 1, -1, -1):
+        d = now - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        day_keys.append(ds)
+        day_map[ds] = {"date": ds, "label": d.strftime("%b %-d"), "sessions": 0, "tokens": 0, "cost": 0.0}
+
+    try:
+        analytics = _d._compute_transcript_analytics()
+        daily_tokens = analytics.get("daily_tokens", {})
+        daily_cost = analytics.get("daily_cost", {})
+        sessions = analytics.get("sessions", [])
+
+        for ds in day_keys:
+            day_map[ds]["tokens"] = int(daily_tokens.get(ds, 0))
+            day_map[ds]["cost"] = round(float(daily_cost.get(ds, 0.0)), 4)
+
+        for s in sessions:
+            day = s.get("day") or ""
+            if day in day_map:
+                day_map[day]["sessions"] += 1
+    except Exception:
+        pass
+
+    return jsonify({"days": [day_map[d] for d in day_keys]})
+
+
 @bp_overview.route("/api/cloud-cta/status")
 def cloud_cta_status():
     import dashboard as _d
