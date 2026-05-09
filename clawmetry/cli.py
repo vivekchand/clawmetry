@@ -522,8 +522,17 @@ def _cmd_connect(args) -> None:
         print()
         return
 
-    # Start daemon
-    _start_daemon(config, args)
+    # Default: defer the sync daemon until the user runs `clawmetry sync`.
+    # --start-sync-now restores the historical auto-spawn behavior.
+    _start_now = getattr(args, "start_sync_now", False)
+
+    if _start_now:
+        _start_daemon(config, args)
+    else:
+        print("  Sync is paused. Start it whenever you're ready:")
+        print("    clawmetry sync")
+        print("  (or run `clawmetry connect --start-sync-now` to keep today's auto-start)")
+        print()
 
     # Open browser with encryption key in URL fragment (never sent to server)
     # The #key=... fragment stays client-side — true E2E encryption
@@ -561,6 +570,31 @@ def _start_daemon(config: dict, args) -> None:
     else:
         # Windows / fallback: subprocess
         _start_subprocess()
+
+
+def _cmd_sync(args) -> None:
+    """clawmetry sync — start the deferred sync daemon for an already-connected node."""
+    import json
+    from clawmetry.sync import CONFIG_FILE
+
+    if not CONFIG_FILE.exists():
+        print("❌  No clawmetry config found. Run `clawmetry connect` first.")
+        sys.exit(1)
+
+    try:
+        config = json.loads(CONFIG_FILE.read_text())
+    except Exception as e:
+        print(f"❌  Could not read {CONFIG_FILE}: {e}")
+        sys.exit(1)
+
+    if not config.get("api_key"):
+        print("❌  Config has no api_key. Run `clawmetry connect` first.")
+        sys.exit(1)
+
+    print(f"  Starting sync daemon for {config.get('node_id', '<unknown>')}…")
+    _start_daemon(config, args)
+    if not getattr(args, "foreground", False):
+        print("  ✅  Sync daemon started.")
 
 
 def _register_nemoclaw_sandbox_daemons() -> None:
@@ -2117,6 +2151,12 @@ def main() -> None:
         help="Connect but do not start daemon (daemon managed externally, e.g. supervisord)",
     )
     p_connect.add_argument(
+        "--start-sync-now",
+        action="store_true",
+        dest="start_sync_now",
+        help="Start the sync daemon immediately after connect (default: defer until `clawmetry sync`)",
+    )
+    p_connect.add_argument(
         "--foreground", action="store_true", help="Run daemon in foreground"
     )
     p_connect.add_argument(
@@ -2152,6 +2192,14 @@ def main() -> None:
 
     # disconnect
     sub.add_parser("disconnect", help="Stop cloud sync and remove key")
+
+    # sync — start the deferred sync daemon (for nodes connected with default deferred-sync behavior)
+    p_sync = sub.add_parser(
+        "sync", help="Start the sync daemon (after `clawmetry connect`)"
+    )
+    p_sync.add_argument(
+        "--foreground", action="store_true", help="Run daemon in foreground"
+    )
 
     # status
     p_status = sub.add_parser("status", help="Show local + cloud sync status")
@@ -2223,6 +2271,7 @@ def main() -> None:
         "account",
         "connect",
         "disconnect",
+        "sync",
         "status",
         "proxy",
         "update",
@@ -2243,6 +2292,8 @@ def main() -> None:
             _cmd_connect(args)
         elif args.cmd == "disconnect":
             _cmd_disconnect(args)
+        elif args.cmd == "sync":
+            _cmd_sync(args)
         elif args.cmd == "status":
             _cmd_status(args)
         elif args.cmd == "proxy":
