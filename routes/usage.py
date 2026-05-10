@@ -2,7 +2,7 @@
 routes/usage.py — Usage / analytics / anomaly / attribution endpoints.
 
 Extracted from dashboard.py as Phase 5.3 of the incremental modularisation.
-Owns the 12 routes registered on bp_usage:
+Owns the 14 routes registered on bp_usage:
 
   GET  /api/usage                         — headline token/cost tracker
   GET  /api/usage/anomalies               — cost anomaly summary
@@ -13,10 +13,11 @@ Owns the 12 routes registered on bp_usage:
   GET  /api/sessions/clusters             — behavioural session clustering
   GET  /api/usage/cost-comparison         — alt-model savings estimate
   GET  /api/usage/export                  — CSV export of usage
-  GET  /api/usage/cache-analytics         — prompt cache hit rate + savings (GH #851)
   GET  /api/model-attribution             — per-model turn/session split
   GET  /api/skill-attribution             — per-skill cost attribution
   GET  /api/token-velocity                — runaway-loop detection
+  GET  /api/usage/cache-trends            — prompt-cache hit-rate analytics
+  GET  /api/usage/cache-analytics         — prompt cache hit rate + savings (GH #851)
 
 Module-level helpers (``_usage_cache``, ``_compute_transcript_analytics``,
 ``_detect_and_store_anomalies``, ``_get_anomaly_db``, ``SESSIONS_DIR`` etc.)
@@ -463,7 +464,7 @@ def api_sessions_clusters():
         except Exception:
             continue
 
-    # ── Clustering logic ────────────────────────────────────────────────────────
+    # ── Clustering logic ────────────────────────────────────────────────────────────────────────
     # Cluster key = (dominant_tool_category, cost_tier, error_presence, model_family)
 
     def _model_family(model_str):
@@ -527,7 +528,7 @@ def api_sessions_clusters():
             c["has_errors"] = has_errors == "errors"
             c["model_family"] = mf
 
-    # ── Build response ──────────────────────────────────────────────────────────
+    # ── Build response ──────────────────────────────────────────────────────────────────────────
     clusters_out = []
     for key, c in clusters_map.items():
         n = len(c["sessions"])
@@ -1078,6 +1079,273 @@ def api_token_velocity():
         'velocity_2min':    total_tokens_2min,
         'cost_per_min':     cost_per_min,
         'flagged_sessions': flagged,
+    })
+
+
+# ── Prompt-cache analytics (GH #851) ───────────────────────────────────────
+
+
+def _empty_cache_bucket():
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.0,
+    }
+
+
+def _summarise_cache_bucket(label, b, key):
+    in_plus_cache = b["input_tokens"] + b["cache_read_tokens"]
+    cache_hit_pct = (
+        round(b["cache_read_tokens"] / in_plus_cache * 100, 1)
+        if in_plus_cache
+        else 0.0
+    )
+    # Anthropic prompt-cache reads cost ~10% of fresh input tokens, so the
+    # "saved" amount is the difference between what those tokens would have
+    # cost as fresh input vs. what they actually cost as cache reads.
+    est_fresh_input_cost = b["cache_read_cost"] * 10.0
+    est_savings = max(0.0, est_fresh_input_cost - b["cache_read_cost"])
+    est_savings_pct = (
+        round(est_savings / (b["input_cost"] + est_fresh_input_cost) * 100, 1)
+        if (b["input_cost"] + est_fresh_input_cost)
+        else 0.0
+    )
+    return {
+        key: label,
+        "input_tokens": b["input_tokens"],
+        "output_tokens": b["output_tokens"],
+        "cache_read_tokens": b["cache_read_tokens"],
+        "cache_write_tokens": b["cache_write_tokens"],
+        "input_cost_usd": round(b["input_cost"], 6),
+        "output_cost_usd": round(b["output_cost"], 6),
+        "cache_read_cost_usd": round(b["cache_read_cost"], 6),
+        "cache_write_cost_usd": round(b["cache_write_cost"], 6),
+        "total_cost_usd": round(b["total_cost"], 6),
+        "cache_hit_ratio_pct": cache_hit_pct,
+        "est_savings_usd": round(est_savings, 6),
+        "est_savings_pct": est_savings_pct,
+    }
+
+
+def _cache_recommendations(totals, by_model):
+    tips = []
+    hit = totals.get("cache_hit_ratio_pct", 0.0)
+    if totals.get("input_tokens", 0) + totals.get("cache_read_tokens", 0) == 0:
+        tips.append(
+            "No cache-eligible traffic in window. Connect a recent agent run to see "
+            "cache analytics."
+        )
+        return tips
+    if hit < 30.0:
+        tips.append(
+            f"Cache hit ratio is low ({hit}%). Stabilise your system prompt and "
+            "front-load static context — Anthropic charges ~10% for cache reads vs. "
+            "fresh input."
+        )
+    elif hit < 60.0:
+        tips.append(
+            f"Cache hit ratio is moderate ({hit}%). Look for prompt suffixes that "
+            "rotate per turn (timestamps, RNG nonces) — they invalidate the cache "
+            "block above them."
+        )
+    else:
+        tips.append(
+            f"Cache hit ratio is healthy ({hit}%). Most repeat prompts are landing "
+            "in the cache."
+        )
+
+    cw = totals.get("cache_write_tokens", 0)
+    cr = totals.get("cache_read_tokens", 0)
+    if cw and cr and cw > cr:
+        tips.append(
+            "Cache writes outweigh reads — sessions are short-lived or your prompt "
+            "block is changing often. A longer-lived session prefix would amortise "
+            "the write cost."
+        )
+
+    poor_models = [
+        m for m in by_model
+        if (m.get("input_tokens", 0) + m.get("cache_read_tokens", 0)) >= 5000
+        and m.get("cache_hit_ratio_pct", 0.0) < 20.0
+    ]
+    if poor_models:
+        names = ", ".join(sorted({m["model"] for m in poor_models})[:3])
+        tips.append(
+            f"Models with notably low cache utilisation: {names}. Check whether "
+            "their system prompt is wrapped in a cache_control breakpoint."
+        )
+    return tips
+
+
+@bp_usage.route("/api/usage/cache-trends")
+def api_usage_cache_trends():
+    """Daily + per-model prompt-cache hit ratio and estimated savings (GH #851).
+
+    Query params:
+      days  — window size in days (default 14, max 90)
+
+    Returns:
+      {
+        days:    int,
+        daily:   [{date, input_tokens, output_tokens, cache_read_tokens,
+                    cache_write_tokens, *cost_usd, cache_hit_ratio_pct,
+                    est_savings_usd, est_savings_pct}],
+        by_model:[same shape, keyed by `model`],
+        totals:  same shape, keyed by `label`,
+        recommendations: [str],
+      }
+    """
+    import dashboard as _d
+
+    try:
+        days = max(1, min(int(request.args.get("days", "14")), 90))
+    except ValueError:
+        days = 14
+
+    sessions_dir = _d._get_sessions_dir()
+    cutoff_ts = time.time() - (days * 86400)
+
+    daily: dict = {}
+    by_model: dict = {}
+
+    if os.path.isdir(sessions_dir):
+        for fname in os.listdir(sessions_dir):
+            if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
+                continue
+            if (
+                ".trajectory." in fname
+                or ".checkpoint." in fname
+                or ".deleted." in fname
+            ):
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            try:
+                fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
+            except OSError:
+                continue
+            # Skip files whose mtime is older than the window AND whose name
+            # doesn't include a reset suffix — saves IO on stale archives.
+            if fallback_dt.timestamp() < cutoff_ts and ".jsonl.reset." not in fname:
+                continue
+            last_seen_model = ""
+            try:
+                with open(fpath, "r", errors="replace") as fh:
+                    for raw in fh:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            ev = json.loads(raw)
+                        except Exception:
+                            continue
+                        t = ev.get("type", "")
+                        if t == "model_change":
+                            m = ev.get("modelId") or ev.get("model") or ""
+                            if m:
+                                last_seen_model = m
+                            continue
+                        msg = ev.get("message", {}) or {}
+                        if not isinstance(msg, dict):
+                            continue
+                        usage = msg.get("usage", {}) or {}
+                        if not isinstance(usage, dict) or not usage:
+                            continue
+                        msg_model = msg.get("model") or last_seen_model or "unknown"
+                        if msg_model:
+                            last_seen_model = msg_model
+
+                        ts = _d._parse_event_timestamp(
+                            ev.get("timestamp")
+                            or ev.get("time")
+                            or ev.get("created_at"),
+                            fallback_dt,
+                        )
+                        if not ts:
+                            ts = fallback_dt
+                        if ts.timestamp() < cutoff_ts:
+                            continue
+                        date_str = ts.strftime("%Y-%m-%d")
+
+                        in_toks = int(
+                            usage.get("input", usage.get("input_tokens", 0)) or 0
+                        )
+                        out_toks = int(
+                            usage.get("output", usage.get("output_tokens", 0)) or 0
+                        )
+                        cr_toks = int(
+                            usage.get(
+                                "cacheRead", usage.get("cache_read_tokens", 0)
+                            )
+                            or 0
+                        )
+                        cw_toks = int(
+                            usage.get(
+                                "cacheWrite", usage.get("cache_write_tokens", 0)
+                            )
+                            or 0
+                        )
+                        cost_obj = usage.get("cost", {}) or {}
+                        if not isinstance(cost_obj, dict):
+                            cost_obj = {}
+                        in_cost = float(cost_obj.get("input", 0) or 0)
+                        out_cost = float(cost_obj.get("output", 0) or 0)
+                        cr_cost = float(cost_obj.get("cacheRead", 0) or 0)
+                        cw_cost = float(cost_obj.get("cacheWrite", 0) or 0)
+                        total_cost = float(
+                            cost_obj.get(
+                                "total", in_cost + out_cost + cr_cost + cw_cost
+                            )
+                            or 0
+                        )
+
+                        for bucket in (
+                            daily.setdefault(date_str, _empty_cache_bucket()),
+                            by_model.setdefault(msg_model, _empty_cache_bucket()),
+                        ):
+                            bucket["input_tokens"] += in_toks
+                            bucket["output_tokens"] += out_toks
+                            bucket["cache_read_tokens"] += cr_toks
+                            bucket["cache_write_tokens"] += cw_toks
+                            bucket["input_cost"] += in_cost
+                            bucket["output_cost"] += out_cost
+                            bucket["cache_read_cost"] += cr_cost
+                            bucket["cache_write_cost"] += cw_cost
+                            bucket["total_cost"] += total_cost
+            except Exception:
+                continue
+
+    today = datetime.now()
+    daily_out = []
+    for i in range(days - 1, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        daily_out.append(
+            _summarise_cache_bucket(ds, daily.get(ds, _empty_cache_bucket()), key="date")
+        )
+
+    by_model_out = [
+        _summarise_cache_bucket(m, b, key="model")
+        for m, b in sorted(by_model.items(), key=lambda kv: -kv[1]["total_cost"])
+    ]
+
+    totals_bucket = _empty_cache_bucket()
+    for b in daily.values():
+        for k in totals_bucket:
+            totals_bucket[k] += b[k]
+    totals_out = _summarise_cache_bucket("totals", totals_bucket, key="label")
+
+    return jsonify({
+        "days": days,
+        "daily": daily_out,
+        "by_model": by_model_out,
+        "totals": totals_out,
+        "recommendations": _cache_recommendations(totals_out, by_model_out),
     })
 
 
