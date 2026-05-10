@@ -10402,6 +10402,7 @@ function renderModalContent() {
   }
   if (_modalTab === 'summary') renderModalSummary(el);
   else if (_modalTab === 'narrative') renderModalNarrative(el);
+  else if (_modalTab === 'tools') renderModalTools(el);
   else renderModalFull(el);
 }
 
@@ -10553,6 +10554,89 @@ function renderModalFull(el) {
     }
   }
   el.innerHTML = html || '<div style="padding:20px;color:var(--text-muted);">No events yet</div>';
+}
+
+async function renderModalTools(el) {
+  if (!_modalSessionId) {
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No session loaded.</div>';
+    return;
+  }
+  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading tool timeline…</div>';
+  var data;
+  try {
+    var r = await fetch('/api/session-tools?session_id=' + encodeURIComponent(_modalSessionId) + '&args_chars=200&result_chars=200&include_unpaired=1');
+    data = await r.json();
+  } catch(e) {
+    el.innerHTML = '<div style="padding:24px;color:#ef5350">Failed to load tool timeline.</div>';
+    return;
+  }
+  var tools = data.tools || [];
+  if (!tools.length) {
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No tool calls recorded for this session.</div>';
+    return;
+  }
+  var stats = data.stats || {};
+  var span = stats.span_ms || 1;
+  var t0 = stats.first_start_ms || 0;
+  var html = '<div style="padding:16px 20px;overflow-y:auto;">';
+  html += '<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">';
+  html += _statChip('Calls', tools.length);
+  if (stats.error_calls) html += _statChip('Errors', stats.error_calls, '#ef5350');
+  if (stats.distinct_tools) html += _statChip('Distinct tools', stats.distinct_tools);
+  if (span > 0) html += _statChip('Span', _fmtDur(span));
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;font-size:10px;color:var(--text-muted);">';
+  html += '<div style="flex:0 0 150px"></div><div style="flex:1">0</div>';
+  html += '<div style="text-align:right">' + escHtml(_fmtDur(span)) + '</div></div>';
+  tools.forEach(function(tool) {
+    var st = (tool.start_ms || t0) - t0;
+    var en = (tool.end_ms && tool.paired ? tool.end_ms : tool.start_ms || t0) - t0;
+    if (en < st) en = st;
+    var startPct = (st / span * 100).toFixed(2);
+    var widthPct = Math.max((en - st) / span * 100, 0.4).toFixed(2);
+    var barColor = tool.is_error ? '#ef5350' : '#4caf50';
+    var name = escHtml((tool.tool_name || 'unknown').replace(/^mcp__[^_]+__/, '').substring(0, 26));
+    var durLabel = tool.paired ? escHtml(_fmtDur(tool.duration_ms)) : '&ndash;';
+    var tip = escHtml((tool.tool_name || '') + (tool.result_preview ? ' → ' + (tool.result_preview || '').substring(0, 80) : ''));
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;" title="' + tip + '">';
+    html += '<div style="flex:0 0 150px;font-size:11px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + name + '</div>';
+    html += '<div style="flex:1;position:relative;height:14px;background:var(--bg-secondary);border-radius:3px;">';
+    html += '<div style="position:absolute;left:' + startPct + '%;width:' + widthPct + '%;height:100%;background:' + barColor + ';border-radius:3px;opacity:0.8;"></div>';
+    html += '</div>';
+    html += '<div style="flex:0 0 44px;font-size:10px;color:var(--text-muted);text-align:right;">' + durLabel + '</div>';
+    html += '</div>';
+  });
+  var byTool = data.by_tool || [];
+  if (byTool.length) {
+    html += '<div style="margin-top:20px;">';
+    html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:8px;">By tool</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;">';
+    byTool.forEach(function(bt) {
+      var avg = (bt.total_duration_ms && bt.calls) ? _fmtDur(Math.round(bt.total_duration_ms / bt.calls)) : null;
+      html += '<div style="background:var(--bg-secondary);padding:8px 10px;border-radius:8px;">';
+      html += '<div style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(bt.tool_name||'') + '">';
+      html += escHtml((bt.tool_name||'').replace(/^mcp__[^_]+__/,'').substring(0,22)) + '</div>';
+      html += '<div style="font-size:13px;font-weight:600;">' + (bt.calls||0) + 'x';
+      if (avg) html += ' <span style="font-size:10px;font-weight:400;color:var(--text-muted)">avg ' + escHtml(avg) + '</span>';
+      if (bt.errors) html += ' <span style="font-size:10px;color:#ef5350">' + bt.errors + ' err</span>';
+      html += '</div></div>';
+    });
+    html += '</div></div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function _statChip(label, value, color) {
+  return '<div style="background:var(--bg-secondary);padding:6px 12px;border-radius:8px;font-size:12px;">'
+    + '<span style="color:var(--text-muted)">' + escHtml(String(label)) + '</span><br>'
+    + '<strong' + (color ? ' style="color:' + color + '"' : '') + '>' + escHtml(String(value)) + '</strong></div>';
+}
+
+function _fmtDur(ms) {
+  if (ms == null || ms < 0) return '?';
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(1) + 's';
 }
 
 function toggleEvtBody(bodyId, idx) {
