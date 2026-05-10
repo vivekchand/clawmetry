@@ -35,7 +35,7 @@ For the deeper architecture — vertical disaggregation, the `batchEngine` SLA-a
 
 ## What ClawMetry shows you about OpenInfer-routed inference
 
-ClawMetry is the open-source observability layer for OpenClaw agents (`pip install clawmetry`, ~120K installs across 100+ countries). Because it observes at the agent layer — not the inference layer — it correctly attributes every token, dollar, and second back to the *session*, *sub-agent*, and *tool call* that caused it, regardless of which processor OpenInfer routed it to.
+ClawMetry is the open-source observability layer for OpenClaw agents (`pip install clawmetry`, 150K+ installs across 100+ countries). Because it observes at the agent layer — not the inference layer — it correctly attributes every token, dollar, and second back to the *session*, *sub-agent*, and *tool call* that caused it, regardless of which processor OpenInfer routed it to.
 
 For a user running both products, the integration is zero-touch. ClawMetry's HTTP interceptor (a small monkey-patch on the OpenClaw process's HTTPX/Requests stack) sees every inference call as it goes out, captures provider, model, token counts, and end-to-end latency, and stitches them into the existing dashboard surfaces:
 
