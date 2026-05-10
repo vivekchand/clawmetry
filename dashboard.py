@@ -4258,6 +4258,15 @@ function clawmetryLogout(){
       <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
       <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
     </div>
+    <!-- Context Window Anatomy (#566) -->
+    <div id="ctx-anatomy-wrap" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:none;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Context window anatomy</span>
+        <span id="ctx-pct-label" style="font-size:11px;color:var(--text-muted);">--</span>
+      </div>
+      <div id="ctx-bar" style="display:flex;height:10px;border-radius:4px;overflow:hidden;background:var(--bg-primary);width:100%;margin-bottom:6px;"></div>
+      <div id="ctx-legend" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+    </div>
     <!-- Activity density chart -->
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
       <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Activity density -- last 60 min (30s buckets)</div>
@@ -4966,7 +4975,7 @@ function switchTab(name) {
   if (name === 'limits') loadRateLimits();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
-  if (name === 'brain') loadBrainPage();
+  if (name === 'brain') { if (typeof loadBrainPage === 'function') loadBrainPage(); loadContextAnatomy(); }
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'actions') loadQAHistory();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
@@ -5718,6 +5727,35 @@ async function loadHeartbeat() {
       sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">no beats yet</span>';
     }
   } catch(e) { console.warn('heartbeat panel load failed', e); }
+}
+
+async function loadContextAnatomy() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/context-anatomy', 4000);
+    if (!d || !d.buckets || !d.buckets.length) return;
+    var wrap = document.getElementById('ctx-anatomy-wrap');
+    if (!wrap) return;
+    wrap.style.display = '';
+    var pct = document.getElementById('ctx-pct-label');
+    if (pct) pct.textContent = (d.pct_used || 0) + '% of ' + Math.round((d.context_limit || 200000) / 1000) + 'K window';
+    var total = d.total_estimated || 1;
+    var bar = document.getElementById('ctx-bar');
+    if (bar) {
+      bar.innerHTML = d.buckets.map(function(b) {
+        var w = Math.max(0.5, b.tokens / total * 100).toFixed(1);
+        return '<div title="' + b.label + ': ~' + b.tokens.toLocaleString() + ' tok" style="width:' + w + '%;background:' + b.color + ';"></div>';
+      }).join('');
+    }
+    var legend = document.getElementById('ctx-legend');
+    if (legend) {
+      legend.innerHTML = d.buckets.map(function(b) {
+        var tok = b.tokens > 999 ? Math.round(b.tokens / 1000) + 'K' : b.tokens;
+        return '<span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--text-secondary);">' +
+          '<span style="width:8px;height:8px;border-radius:2px;flex-shrink:0;background:' + b.color + ';"></span>' +
+          b.label + ' ~' + tok + '</span>';
+      }).join('');
+    }
+  } catch(e) { /* silent — panel stays hidden when data unavailable */ }
 }
 
 async function loadMiniWidgets(overview, usage) {
