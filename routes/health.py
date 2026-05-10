@@ -15,6 +15,7 @@ Owns the 11 routes registered on bp_health:
   GET  /api/rate-limits           — rolling 1m/1h API rate-limit utilisation
   GET  /api/health-stream         — SSE auto-refresh of health checks (30s)
   GET  /api/sandbox-status        — sandbox / inference / security posture
+  GET  /api/loop-detection        — scan recent sessions for repeated tool-call loops (#849)
 
 Module-level helpers (``_history_db``, ``AgentReliabilityScorer``,
 ``_find_log_file``, ``SESSIONS_DIR``, ``_load_gw_config``, ``_detect_gateway_port``,
@@ -31,6 +32,7 @@ Module-level helpers (``_history_db``, ``AgentReliabilityScorer``,
 ``import dashboard as _d``. Pure mechanical move — zero behaviour change.
 """
 
+import hashlib
 import json
 import os
 import socket
@@ -917,3 +919,157 @@ def api_sandbox_status():
             security = sec_fields
 
     return jsonify({"sandbox": sandbox, "inference": inference, "security": security})
+
+
+# ---------------------------------------------------------------------------
+# Loop / drift detection (#849)
+# ---------------------------------------------------------------------------
+
+
+def _detect_loops_in_sessions(sessions_dir, max_sessions=20, window=10, min_repeats=3):
+    """Scan recent session JSONLs for repeated tool-call patterns.
+
+    A "loop" is: the same (tool_name, args_fingerprint) pair appearing
+    *min_repeats* or more times within a sliding window of *window* consecutive
+    tool calls in a single session.  Returns (loops, checked) where *loops* is a
+    deduplicated list of hits and *checked* is the number of files scanned.
+    """
+    try:
+        all_names = [
+            f for f in os.listdir(sessions_dir)
+            if f.endswith(".jsonl")
+            and ".deleted." not in f
+            and ".reset." not in f
+        ]
+    except OSError:
+        return [], 0
+
+    paths = sorted(
+        [os.path.join(sessions_dir, n) for n in all_names],
+        key=lambda p: os.path.getmtime(p),
+        reverse=True,
+    )[:max_sessions]
+
+    loops = []
+
+    for fpath in paths:
+        session_id = os.path.splitext(os.path.basename(fpath))[0]
+        tool_seq = []  # list of (tool_name, args_fp, ts_str)
+
+        try:
+            with open(fpath, errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+                    if ev.get("type") != "message":
+                        continue
+                    msg = ev.get("message") or {}
+                    if msg.get("role") != "assistant":
+                        continue
+                    content = msg.get("content") or []
+                    if not isinstance(content, list):
+                        continue
+                    ts = ev.get("timestamp", "")
+                    for blk in content:
+                        if not isinstance(blk, dict):
+                            continue
+                        if blk.get("type") != "toolCall":
+                            continue
+                        name = (blk.get("name") or "").strip()
+                        if not name:
+                            continue
+                        inp = blk.get("input") or {}
+                        raw_args = json.dumps(inp, sort_keys=True, default=str)[:500]
+                        fp = hashlib.md5(raw_args.encode()).hexdigest()[:8]
+                        tool_seq.append((name, fp, ts))
+        except Exception:
+            continue
+
+        if len(tool_seq) < min_repeats:
+            continue
+
+        seen_combos = set()
+        for i in range(max(1, len(tool_seq) - window + 1)):
+            chunk = tool_seq[i : i + window]
+            counts = {}
+            for name, fp, _ts in chunk:
+                combo = (name, fp)
+                counts[combo] = counts.get(combo, 0) + 1
+            for combo, count in counts.items():
+                if count >= min_repeats and combo not in seen_combos:
+                    seen_combos.add(combo)
+                    first_ts = next(
+                        ts for n, f, ts in tool_seq if (n, f) == combo
+                    )
+                    loops.append({
+                        "session_id": session_id,
+                        "tool_name": combo[0],
+                        "repeat_count": count,
+                        "first_seen_ts": first_ts,
+                    })
+
+    return loops, len(paths)
+
+
+@bp_health.route("/api/loop-detection")
+def api_loop_detection():
+    """Scan recent sessions for agent loop/drift patterns.
+
+    Query params (all optional):
+      max_sessions  — JSONL files to scan (default 20, max 50)
+      window        — sliding window in tool calls (default 10, max 20)
+      min_repeats   — repetitions needed to flag (default 3, max 10)
+
+    Response:
+      {
+        "checked":    <int>,
+        "loop_count": <int>,
+        "loops": [
+          {"session_id": str, "tool_name": str,
+           "repeat_count": int, "first_seen_ts": str}
+        ]
+      }
+    """
+    import dashboard as _d
+
+    try:
+        max_sessions = max(1, min(50, int(request.args.get("max_sessions", 20))))
+    except (TypeError, ValueError):
+        max_sessions = 20
+    try:
+        window = max(3, min(20, int(request.args.get("window", 10))))
+    except (TypeError, ValueError):
+        window = 10
+    try:
+        min_repeats = max(2, min(10, int(request.args.get("min_repeats", 3))))
+    except (TypeError, ValueError):
+        min_repeats = 3
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+
+    loops = []
+    checked = 0
+
+    if os.path.isdir(sessions_dir):
+        try:
+            loops, checked = _detect_loops_in_sessions(
+                sessions_dir,
+                max_sessions=max_sessions,
+                window=window,
+                min_repeats=min_repeats,
+            )
+        except Exception:
+            pass
+
+    return jsonify({
+        "checked": checked,
+        "loop_count": len(loops),
+        "loops": loops,
+    })
