@@ -3567,6 +3567,7 @@ function clawmetryLogout(){
       <div>
         <div class="stats-footer-label">Sessions</div>
         <div class="stats-footer-value" id="hot-sessions-count">--</div>
+        <div id="hot-sessions-sub" style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.3;"></div>
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
     </div>
@@ -5890,6 +5891,15 @@ async function loadMiniWidgets(overview, usage) {
     var sl = sd.sessions || sd || [];
     if (!Array.isArray(sl)) sl = [];
     document.getElementById('hot-sessions-count').textContent = sl.length;
+    // Build session-type breakdown subtitle (heartbeat / user / sub-agent)
+    var typeCounts = {};
+    sl.forEach(function(s) { var t = s.session_type || 'main'; typeCounts[t] = (typeCounts[t] || 0) + 1; });
+    var parts = [];
+    ['heartbeat', 'user', 'sub-agent'].forEach(function(t) {
+      if (typeCounts[t]) parts.push(typeCounts[t] + ' ' + t);
+    });
+    var sub = document.getElementById('hot-sessions-sub');
+    if (sub) sub.textContent = parts.length ? parts.join(' · ') : '';
   }).catch(function() {
     document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
   });
