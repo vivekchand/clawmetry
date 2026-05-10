@@ -8429,6 +8429,21 @@ def detect_config(args=None):
             return _jsonify({"error": "Connect to ClawMetry Cloud to save "
                              "integrations.", "note": _oss_note}), 402
         return _jsonify({"integrations": [], "count": 0, "note": _oss_note})
+
+    # vivekchand/clawmetry#748 — Initial-sync progress for the dashboard
+    # banner. The sync daemon writes ~/.clawmetry/sync_progress.json after
+    # each phase; we just stream it through. Local-only, no auth.
+    @app.route("/api/sync-progress", endpoint="sync_progress")
+    def _sync_progress():
+        from flask import jsonify as _jsonify
+        progress_path = os.path.expanduser("~/.clawmetry/sync_progress.json")
+        if not os.path.isfile(progress_path):
+            return _jsonify({"error": "no sync progress yet"}), 404
+        try:
+            with open(progress_path) as _f:
+                return _jsonify(json.load(_f))
+        except Exception as _e:
+            return _jsonify({"error": f"unreadable: {_e}"}), 500
     # ────────────────────────────────────────────────────────────────────────
 
 
