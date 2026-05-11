@@ -36,6 +36,9 @@
     { id: 'example_session', alert_type: 'session_cost', name: 'Session cost > $5',
       threshold_value: 5, threshold_unit: 'USD',
       _exampleChannels: '✉️ Email' },
+    { id: 'example_velocity', alert_type: 'token_velocity', name: 'Token velocity > 10k/min',
+      threshold_value: 10000, threshold_unit: 'tokens/min',
+      _exampleChannels: '✈️ Telegram · ✉️ Email' },
     { id: 'example_cron', alert_type: 'cron_failure', name: 'Cron failed 3× in a row',
       threshold_value: 3, threshold_unit: 'fails',
       _exampleChannels: '💬 Slack · ✈️ Telegram' },
@@ -345,11 +348,12 @@
     const t = alertsState.editorType;
     const r = alertsState.editorRule || {};
     const presets = {
-      daily_spend:  { unit: 'USD',    placeholder: 50, label: 'Daily spend exceeds', name: 'Daily spend cap' },
-      session_cost: { unit: 'USD',    placeholder: 5,  label: 'Single session cost exceeds', name: 'Session cost cap' },
-      node_offline: { unit: 'min',    placeholder: 10, label: 'Agent has been offline for more than', name: 'Agent offline' },
-      cron_failure: { unit: 'fails',  placeholder: 3,  label: 'Cron has failed in a row at least', name: 'Cron failure streak' },
-      error_rate:   { unit: '%',      placeholder: 20, label: 'Tool failure rate exceeds', name: 'Tool failures' },
+      daily_spend:    { unit: 'USD',         placeholder: 50,    label: 'Daily spend exceeds', name: 'Daily spend cap' },
+      session_cost:   { unit: 'USD',         placeholder: 5,     label: 'Single session cost exceeds', name: 'Session cost cap' },
+      node_offline:   { unit: 'min',         placeholder: 10,    label: 'Agent has been offline for more than', name: 'Agent offline' },
+      token_velocity: { unit: 'tokens/min',  placeholder: 10000, label: 'Token velocity exceeds', name: 'Runaway session' },
+      cron_failure:   { unit: 'fails',       placeholder: 3,     label: 'Cron has failed in a row at least', name: 'Cron failure streak' },
+      error_rate:     { unit: '%',           placeholder: 20,    label: 'Tool failure rate exceeds', name: 'Tool failures' },
     };
     const p = presets[t] || { unit: '', placeholder: 0, label: 'Threshold', name: 'Custom alert' };
     const val = r.threshold_value ?? p.placeholder;

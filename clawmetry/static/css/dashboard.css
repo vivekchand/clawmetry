@@ -79,9 +79,16 @@
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
-  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
+  /* Always allow the row to wrap so the turn-summary badges go BELOW the
+     detail text instead of competing with it for horizontal space — the
+     detail was getting compressed to ~40% of viewport with massive
+     whitespace to the right. */
+  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:wrap; cursor:pointer; transition:background 0.15s; }
   .brain-event:hover { background:rgba(255,255,255,0.02); }
   .brain-event.expanded { flex-wrap:wrap; }
+  /* Force the per-turn summary onto its own row, full-width, indented past
+     the time column so it visually attaches to the event above. */
+  .brain-event > .brain-turn-summary { flex-basis: 100%; width: 100%; margin-left: 80px; margin-top: 4px; }
   .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; }
   .brain-meta { display:contents; } /* Desktop: render children directly in brain-event flex row */
   .brain-time { color:var(--text-muted); min-width:70px; }
@@ -188,6 +195,28 @@
   .cron-status.ok { background: var(--bg-success); color: var(--text-success); }
   .cron-status.error { background: var(--bg-error); color: var(--text-error); }
   .cron-status.pending { background: var(--bg-warning); color: var(--text-warning); }
+  .cron-status.no-data { background: rgba(107,114,128,0.18); color: #9ca3af; cursor: help; }
+  .cron-status.stale { background: rgba(245,158,11,0.18); color: #f59e0b; cursor: help; }
+  .cron-status.scheduled { background: rgba(96,165,250,0.18); color: #60a5fa; cursor: help; }
+
+  /* Cron view tabs (Active / Paused / Calendar) */
+  .cron-view-tabs { display: flex; gap: 4px; margin-bottom: 10px; padding: 4px; background: var(--bg-secondary); border-radius: 10px; width: fit-content; }
+  .cron-view-tab { background: transparent; border: none; color: var(--text-muted); padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; }
+  .cron-view-tab:hover { color: var(--text-primary); }
+  .cron-view-tab.active { background: var(--bg-tertiary); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  .cron-view-count { font-weight: 500; color: var(--text-muted); margin-left: 4px; font-size: 11px; }
+  .cron-view-tab.active .cron-view-count { color: var(--text-secondary); }
+
+  /* Calendar agenda */
+  .cron-cal-section { font-size: 13px; font-weight: 700; color: var(--text-primary); margin: 8px 0 8px; display: flex; align-items: center; gap: 6px; }
+  .cron-cal-day { background: var(--bg-secondary); border-radius: 8px; margin-bottom: 8px; padding: 8px 12px; }
+  .cron-cal-daylabel { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 600; }
+  .cron-cal-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-top: 1px solid rgba(255,255,255,0.04); font-size: 13px; }
+  .cron-cal-row:nth-child(2) { border-top: none; }
+  .cron-cal-time { font-family: 'SF Mono','Fira Code',monospace; color: var(--text-accent); font-size: 12px; min-width: 56px; }
+  .cron-cal-status { width: 18px; text-align: center; }
+  .cron-cal-name { color: var(--text-primary); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cron-cal-sched { font-size: 11px; color: var(--text-muted); font-family: 'SF Mono','Fira Code',monospace; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Cron error info & fix */
   .cron-error-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; vertical-align: middle; }
@@ -659,6 +688,36 @@
   .thinking-group-body.open { display: block; }
   .thinking-group-body .evt-item { border-left: none; border-top: 1px solid var(--border-secondary); border-radius: 0; margin: 0; }
   .thinking-group-body .evt-item:first-child { border-top: none; }
+  /* Model/thinking change annotation dividers */
+  .evt-annotation { display: flex; align-items: center; gap: 8px; margin: 12px 0; padding: 0 4px; }
+  .evt-annotation-line { flex: 1; height: 1px; }
+  .evt-model-change .evt-annotation-line { background: linear-gradient(90deg, transparent, #a855f7, transparent); }
+  .evt-thinking-change .evt-annotation-line { background: linear-gradient(90deg, transparent, #f59e0b, transparent); }
+  .evt-annotation-badge { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 12px; white-space: nowrap; }
+  .evt-model-change .evt-annotation-badge { background: rgba(168,85,247,0.15); color: #c084fc; border: 1px solid rgba(168,85,247,0.3); }
+  .evt-thinking-change .evt-annotation-badge { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+  .evt-annotation-ts { flex-shrink: 0; font-size: 10px; color: var(--text-muted); font-family: monospace; }
+  /* Model Journey panel */
+  .model-journey-stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .mj-stat { background: var(--bg-secondary); border: 1px solid var(--border-secondary); border-radius: 10px; padding: 12px 16px; display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; min-width: 90px; }
+  .mj-stat-val { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+  .mj-stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .model-journey-title { font-size: 13px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+  .model-journey-segments { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .mj-segment { background: var(--bg-secondary); border: 1px solid var(--border-secondary); border-radius: 10px; padding: 12px 14px; }
+  .mj-segment-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .mj-segment-num { font-size: 11px; font-weight: 700; color: var(--text-muted); background: var(--bg-tertiary); padding: 1px 6px; border-radius: 6px; }
+  .mj-segment-model { font-size: 14px; font-weight: 700; flex: 1; }
+  .mj-segment-provider { font-size: 11px; color: var(--text-muted); background: var(--bg-tertiary); padding: 1px 6px; border-radius: 6px; }
+  .mj-segment-time { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+  .mj-segment-bar-track { height: 6px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+  .mj-segment-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+  .mj-segment-details { display: flex; gap: 16px; font-size: 12px; color: var(--text-muted); }
+  .model-journey-thinking { display: flex; flex-direction: column; gap: 6px; }
+  .mj-thinking-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-secondary); border: 1px solid var(--border-secondary); border-radius: 8px; border-left: 3px solid #f59e0b; }
+  .mj-thinking-icon { font-size: 16px; }
+  .mj-thinking-level { font-size: 13px; font-weight: 600; color: #fbbf24; flex: 1; }
+  .mj-thinking-time { font-size: 11px; color: var(--text-muted); font-family: monospace; }
   /* === Component Detail Modal === */
   .comp-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1100; justify-content: center; align-items: center; }
   .comp-modal-overlay.open { display: flex; }

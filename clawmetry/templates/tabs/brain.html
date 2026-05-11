@@ -6,8 +6,25 @@
         display:flex;
         align-items:center;
         gap:8px;
-        "><span id="brain-live-indicator"></span><button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button></div>
+        "><span id="brain-live-indicator"></span><button id="brain-focus-btn" class="refresh-btn" onclick="toggleBrainFocus()" title="Focus mode: hide everything except the event stream">⛶ Focus</button><button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button></div>
     </div>
+    <style>
+      /* Focus mode: hide chrome, expand event stream to viewport */
+      body.brain-focus .nav-tabs,
+      body.brain-focus #page-brain #advisor-card,
+      body.brain-focus #page-brain .brain-density-wrap,
+      body.brain-focus #page-brain #brain-filter-chips,
+      body.brain-focus #page-brain #brain-type-chips,
+      body.brain-focus #page-brain #brain-channel-chips { display: none !important; }
+      body.brain-focus #page-brain #brain-stream { max-height: calc(100vh - 80px) !important; }
+    </style>
+    <script>
+      window.toggleBrainFocus = function() {
+        var on = document.body.classList.toggle('brain-focus');
+        var btn = document.getElementById('brain-focus-btn');
+        if (btn) btn.textContent = on ? '✕ Exit focus' : '⛶ Focus';
+      };
+    </script>
     <!-- Advisor: ask questions about your agent's activity -->
     <div id="advisor-card" style="
       background:var(--bg-secondary);
@@ -74,7 +91,7 @@
     </div>
 
     <!-- Activity density chart -->
-    <div style="
+    <div class="brain-density-wrap" style="
       background:var(--bg-secondary);
       border:1px solid var(--border);
       border-radius:8px;

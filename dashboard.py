@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 ClawMetry - See your agent think 🦞
 
@@ -110,6 +109,10 @@ from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
+from routes.agents import bp_agents
+from routes.reasoning import bp_reasoning
+from routes.plugins import bp_plugins
+from routes.local_query import bp_local_query
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -137,7 +140,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.143"
+__version__ = "0.12.166"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -1297,6 +1300,21 @@ def _budget_monitor_loop():
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
+                elif rtype == "token_spike":
+                    try:
+                        vel = _compute_velocity_status()
+                    except Exception:
+                        vel = None
+                    if vel:
+                        tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
+                        if tokens_per_min >= threshold:
+                            sid = vel.get("triggeringSession") or ""
+                            sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                            msg = (
+                                f"Token spike: {int(tokens_per_min):,} tokens/min "
+                                f"(threshold: {int(threshold):,}/min){sid_hint}"
+                            )
+                            fired = True
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
@@ -2218,10 +2236,14 @@ DASHBOARD_HTML = r"""
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
-  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
+  /* Wrap by default so the turn-summary badges (steps/LLM/tools/duration)
+     live on their own row below the detail, instead of squeezing the
+     detail to ~40% of viewport. */
+  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:wrap; cursor:pointer; transition:background 0.15s; }
   .brain-event:hover { background:rgba(255,255,255,0.02); }
   .brain-event.expanded { flex-wrap:wrap; }
   .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; }
+  .brain-event > .brain-turn-summary { flex-basis: 100%; width: 100%; margin-left: 80px; margin-top: 4px; }
   .brain-meta { display:contents; } /* Desktop: render children directly in brain-event flex row */
   .brain-time { color:var(--text-muted); min-width:70px; }
   .brain-source { min-width:120px; max-width:200px; font-weight:600; word-break:break-all; flex-shrink:0; }
@@ -2328,6 +2350,26 @@ DASHBOARD_HTML = r"""
   .cron-status.ok { background: var(--bg-success); color: var(--text-success); }
   .cron-status.error { background: var(--bg-error); color: var(--text-error); }
   .cron-status.pending { background: var(--bg-warning); color: var(--text-warning); }
+  .cron-status.no-data { background: rgba(107,114,128,0.18); color: #9ca3af; cursor: help; }
+  .cron-status.stale { background: rgba(245,158,11,0.18); color: #f59e0b; cursor: help; }
+  .cron-status.scheduled { background: rgba(96,165,250,0.18); color: #60a5fa; cursor: help; }
+
+  /* Cron view tabs (Active / Paused / Calendar) */
+  .cron-view-tabs { display: flex; gap: 4px; margin-bottom: 10px; padding: 4px; background: var(--bg-secondary); border-radius: 10px; width: fit-content; }
+  .cron-view-tab { background: transparent; border: none; color: var(--text-muted); padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; }
+  .cron-view-tab:hover { color: var(--text-primary); }
+  .cron-view-tab.active { background: var(--bg-tertiary); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  .cron-view-count { font-weight: 500; color: var(--text-muted); margin-left: 4px; font-size: 11px; }
+  .cron-view-tab.active .cron-view-count { color: var(--text-secondary); }
+  .cron-cal-section { font-size: 13px; font-weight: 700; color: var(--text-primary); margin: 8px 0 8px; display: flex; align-items: center; gap: 6px; }
+  .cron-cal-day { background: var(--bg-secondary); border-radius: 8px; margin-bottom: 8px; padding: 8px 12px; }
+  .cron-cal-daylabel { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 600; }
+  .cron-cal-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-top: 1px solid rgba(255,255,255,0.04); font-size: 13px; }
+  .cron-cal-row:nth-child(2) { border-top: none; }
+  .cron-cal-time { font-family: 'SF Mono','Fira Code',monospace; color: var(--text-accent); font-size: 12px; min-width: 56px; }
+  .cron-cal-status { width: 18px; text-align: center; }
+  .cron-cal-name { color: var(--text-primary); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cron-cal-sched { font-size: 11px; color: var(--text-muted); font-family: 'SF Mono','Fira Code',monospace; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Cron error info & fix */
   .cron-error-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; vertical-align: middle; }
@@ -3265,11 +3307,11 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong (Pro)">Alerts <span class="pro-chip">Pro</span></div>
+    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts</div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
-    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
@@ -3347,6 +3389,7 @@ function clawmetryLogout(){
           <select id="alert-type" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
             <option value="threshold">Threshold (daily $ amount)</option>
             <option value="spike">Spike (hourly rate multiplier)</option>
+            <option value="token_spike">Token spike (tokens/min)</option>
           </select>
           <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -3480,6 +3523,15 @@ function clawmetryLogout(){
     <div id="velocity-flagged-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;"></div>
   </div>
 
+  <!-- Prompt-Error Banner (GH #601) -->
+  <div id="prompt-error-banner" style="display:none;margin-bottom:8px;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;background:rgba(220,38,38,0.15);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <span id="prompt-error-msg"></span>
+      <button onclick="document.getElementById('prompt-error-banner').style.display='none'" style="background:none;border:none;color:inherit;opacity:0.7;cursor:pointer;font-size:18px;line-height:1;padding:0;">&times;</button>
+    </div>
+    <div id="prompt-error-list" style="margin-top:8px;display:flex;flex-direction:column;gap:4px;font-weight:400;font-size:12px;"></div>
+  </div>
+
   <!-- Stats Bar (top) -->
   <div class="stats-footer">
     <div class="stats-footer-item">
@@ -3516,6 +3568,7 @@ function clawmetryLogout(){
       <div>
         <div class="stats-footer-label">Sessions</div>
         <div class="stats-footer-value" id="hot-sessions-count">--</div>
+        <div id="hot-sessions-sub" style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.3;"></div>
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
     </div>
@@ -3566,6 +3619,8 @@ function clawmetryLogout(){
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
         <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
+        <div id="sh-mcp-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔌 MCP Tool Activity</div>
+        <div id="sh-mcp" style="margin-bottom:14px;"></div></div>
         <!-- 🔍 Diagnostics Panel (GH#28) -->
         <div id="sh-diagnostics-wrap">
           <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
@@ -3758,6 +3813,11 @@ function clawmetryLogout(){
   </div>
   <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
+  <div class="cron-view-tabs" role="tablist">
+    <button class="cron-view-tab active" data-view="active" onclick="setCronView('active')">Active <span class="cron-view-count" id="crons-count-active"></span></button>
+    <button class="cron-view-tab" data-view="paused" onclick="setCronView('paused')">Paused <span class="cron-view-count" id="crons-count-paused"></span></button>
+    <button class="cron-view-tab" data-view="calendar" onclick="setCronView('calendar')">&#x1F4C5; Calendar</button>
+  </div>
   <div class="card" id="crons-list">Loading...</div>
   <!-- Cron Health Monitor (GH #302) -->
   <div id="cron-health-anomaly-banner" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;color:#ef4444;font-size:13px;font-weight:600;">&#x26A0;&#xFE0F; Anomalies detected in cron jobs — review health table below</div>
@@ -4211,6 +4271,15 @@ function clawmetryLogout(){
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
       <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+    </div>
+    <!-- Context Window Anatomy (#566) -->
+    <div id="ctx-anatomy-wrap" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:none;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Context window anatomy</span>
+        <span id="ctx-pct-label" style="font-size:11px;color:var(--text-muted);">--</span>
+      </div>
+      <div id="ctx-bar" style="display:flex;height:10px;border-radius:4px;overflow:hidden;background:var(--bg-primary);width:100%;margin-bottom:6px;"></div>
+      <div id="ctx-legend" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
     </div>
     <!-- Activity density chart -->
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
@@ -4712,7 +4781,7 @@ async function loadAlertRules() {
       try { channels = JSON.parse(r.channels); } catch(e) { channels = [r.channels]; }
       html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;">';
       html += '<span style="font-weight:600;">' + escHtml(r.type) + '</span>';
-      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : '$'+r.threshold) + '</span>';
+      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : (r.type==='token_spike' ? r.threshold.toLocaleString()+' tok/min' : '$'+r.threshold)) + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + channels.join(', ') + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + r.cooldown_min + 'min cooldown</span>';
       html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-error);font-size:16px;" data-rule-id="'+r.id+'" onclick="deleteAlertRule(this.dataset.ruleId)" title="Delete">&#x1f5d1;</span>';
@@ -4920,7 +4989,7 @@ function switchTab(name) {
   if (name === 'limits') loadRateLimits();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
-  if (name === 'brain') loadBrainPage();
+  if (name === 'brain') { if (typeof loadBrainPage === 'function') loadBrainPage(); loadContextAnatomy(); }
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'actions') loadQAHistory();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
@@ -5378,6 +5447,34 @@ async function loadTokenVelocity() {
   }
 }
 
+async function loadPromptErrors() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/prompt-errors', 5000);
+    var banner = document.getElementById('prompt-error-banner');
+    var msgEl  = document.getElementById('prompt-error-msg');
+    var listEl = document.getElementById('prompt-error-list');
+    if (!banner) return;
+    if (!d.errors || d.errors.length === 0) { banner.style.display = 'none'; return; }
+
+    msgEl.textContent = '⚠️ ' + d.count + ' prompt error' + (d.count === 1 ? '' : 's') + ' detected';
+
+    if (listEl) {
+      listEl.innerHTML = d.errors.slice(0, 5).map(function(e) {
+        var when = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+        var who = [e.provider, e.model].filter(Boolean).join('/') || 'unknown provider';
+        var msg = e.error ? String(e.error).slice(0, 120) : 'unknown error';
+        return '<div style="background:rgba(0,0,0,0.25);border-radius:5px;padding:4px 8px;">'
+          + (when ? '<span style="opacity:0.6;">' + when + '</span> ' : '')
+          + '<span style="opacity:0.8;">' + who + '</span>'
+          + ' — ' + msg
+          + '</div>';
+      }).join('');
+    }
+
+    banner.style.display = 'block';
+  } catch(e) { /* non-critical */ }
+}
+
 async function killSession(sessionId) {
   if (!confirm('Stop session ' + sessionId + '?')) return;
   try {
@@ -5525,8 +5622,10 @@ async function loadAll() {
     if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadPromptErrors === 'function') loadPromptErrors().catch(function(e){console.warn('prompt errors failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
+    if (typeof loadMcpStats === 'function') loadMcpStats().catch(function(e){console.warn('mcp stats failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -5584,6 +5683,46 @@ async function loadReliabilityCard() {
     el = document.getElementById('reliability-detail-lt');
     if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
   } catch(e) { console.warn('reliability card load failed', e); }
+}
+
+async function loadMcpStats() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/mcp-stats', 8000);
+    var wrap = document.getElementById('sh-mcp-wrap');
+    var el = document.getElementById('sh-mcp');
+    if (!wrap || !el) return;
+    if (!d.tools || d.tools.length === 0) {
+      wrap.style.display = 'block';
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No MCP tool calls detected in recent sessions.</div>';
+      return;
+    }
+    var rows = d.tools.map(function(t) {
+      var errCell = t.errors > 0
+        ? '<span style="color:#e05;">' + t.errors + ' (' + t.error_rate_pct + '%)</span>'
+        : '<span style="color:var(--text-muted);">0</span>';
+      var latCell = t.avg_latency_ms != null
+        ? (t.avg_latency_ms >= 1000
+            ? (t.avg_latency_ms / 1000).toFixed(1) + 's'
+            : t.avg_latency_ms + 'ms')
+        : '<span style="color:var(--text-faint);">—</span>';
+      return '<tr style="border-top:1px solid var(--border-secondary);">'
+        + '<td style="padding:4px 6px 4px 0;font-size:12px;font-family:\'JetBrains Mono\',monospace;color:var(--text-primary);">' + t.name + '</td>'
+        + '<td style="padding:4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + t.calls + '</td>'
+        + '<td style="padding:4px 6px;font-size:12px;text-align:right;">' + errCell + '</td>'
+        + '<td style="padding:4px 0 4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + latCell + '</td>'
+        + '</tr>';
+    }).join('');
+    el.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr>'
+      + '<th style="padding:0 6px 4px 0;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:left;font-weight:500;">Tool</th>'
+      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Calls</th>'
+      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Errors</th>'
+      + '<th style="padding:0 0 4px 6px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Avg Latency</th>'
+      + '</tr></thead>'
+      + '<tbody>' + rows + '</tbody>'
+      + '</table>';
+    wrap.style.display = 'block';
+  } catch(e) { console.warn('mcp stats failed', e); }
 }
 
 async function loadHeartbeat() {
@@ -5672,6 +5811,35 @@ async function loadHeartbeat() {
       sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">no beats yet</span>';
     }
   } catch(e) { console.warn('heartbeat panel load failed', e); }
+}
+
+async function loadContextAnatomy() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/context-anatomy', 4000);
+    if (!d || !d.buckets || !d.buckets.length) return;
+    var wrap = document.getElementById('ctx-anatomy-wrap');
+    if (!wrap) return;
+    wrap.style.display = '';
+    var pct = document.getElementById('ctx-pct-label');
+    if (pct) pct.textContent = (d.pct_used || 0) + '% of ' + Math.round((d.context_limit || 200000) / 1000) + 'K window';
+    var total = d.total_estimated || 1;
+    var bar = document.getElementById('ctx-bar');
+    if (bar) {
+      bar.innerHTML = d.buckets.map(function(b) {
+        var w = Math.max(0.5, b.tokens / total * 100).toFixed(1);
+        return '<div title="' + b.label + ': ~' + b.tokens.toLocaleString() + ' tok" style="width:' + w + '%;background:' + b.color + ';"></div>';
+      }).join('');
+    }
+    var legend = document.getElementById('ctx-legend');
+    if (legend) {
+      legend.innerHTML = d.buckets.map(function(b) {
+        var tok = b.tokens > 999 ? Math.round(b.tokens / 1000) + 'K' : b.tokens;
+        return '<span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--text-secondary);">' +
+          '<span style="width:8px;height:8px;border-radius:2px;flex-shrink:0;background:' + b.color + ';"></span>' +
+          b.label + ' ~' + tok + '</span>';
+      }).join('');
+    }
+  } catch(e) { /* silent — panel stays hidden when data unavailable */ }
 }
 
 async function loadMiniWidgets(overview, usage) {
@@ -5767,6 +5935,15 @@ async function loadMiniWidgets(overview, usage) {
     var sl = sd.sessions || sd || [];
     if (!Array.isArray(sl)) sl = [];
     document.getElementById('hot-sessions-count').textContent = sl.length;
+    // Build session-type breakdown subtitle (heartbeat / user / sub-agent)
+    var typeCounts = {};
+    sl.forEach(function(s) { var t = s.session_type || 'main'; typeCounts[t] = (typeCounts[t] || 0) + 1; });
+    var parts = [];
+    ['heartbeat', 'user', 'sub-agent'].forEach(function(t) {
+      if (typeCounts[t]) parts.push(typeCounts[t] + ' ' + t);
+    });
+    var sub = document.getElementById('hot-sessions-sub');
+    if (sub) sub.textContent = parts.length ? parts.join(' · ') : '';
   }).catch(function() {
     document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
   });
@@ -7676,6 +7853,21 @@ def _budget_monitor_loop():
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
+                elif rtype == "token_spike":
+                    try:
+                        vel = _compute_velocity_status()
+                    except Exception:
+                        vel = None
+                    if vel:
+                        tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
+                        if tokens_per_min >= threshold:
+                            sid = vel.get("triggeringSession") or ""
+                            sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                            msg = (
+                                f"Token spike: {int(tokens_per_min):,} tokens/min "
+                                f"(threshold: {int(threshold):,}/min){sid_hint}"
+                            )
+                            fired = True
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
@@ -8299,7 +8491,25 @@ def detect_config(args=None):
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
+    app.register_blueprint(bp_agents)
+    app.register_blueprint(bp_reasoning)
+    app.register_blueprint(bp_plugins)
+    app.register_blueprint(bp_local_query)
+
+    # Register built-in agent adapters. External plugins can register more
+    # via clawmetry.extensions entry points — see clawmetry/adapters/.
+    from clawmetry.adapters import registry as _adapter_registry
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    _adapter_registry.register(OpenClawAdapter())
     app.register_blueprint(bp_openapi)
+
+    # Register built-in agent adapters. External plugins can register more
+    # via clawmetry.extensions entry points — see clawmetry/adapters/.
+    from clawmetry.adapters import registry as _adapter_registry
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    from clawmetry.adapters.hermes import HermesAdapter
+    _adapter_registry.register(OpenClawAdapter())
+    _adapter_registry.register(HermesAdapter())
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
     # Approvals tab renders cleanly without cloud sync.
@@ -8327,6 +8537,52 @@ def detect_config(args=None):
             return _jsonify({"error": "Connect to ClawMetry Cloud to save "
                              "integrations.", "note": _oss_note}), 402
         return _jsonify({"integrations": [], "count": 0, "note": _oss_note})
+
+    # vivekchand/clawmetry#748 — Initial-sync progress for the dashboard
+    # banner. The sync daemon writes ~/.clawmetry/sync_progress.json after
+    # each phase; we just stream it through. Local-only, no auth.
+    @app.route("/api/sync-progress", endpoint="sync_progress")
+    def _sync_progress():
+        from flask import jsonify as _jsonify
+        progress_path = os.path.expanduser("~/.clawmetry/sync_progress.json")
+        if not os.path.isfile(progress_path):
+            return _jsonify({"error": "no sync progress yet"}), 404
+        try:
+            with open(progress_path) as _f:
+                return _jsonify(json.load(_f))
+        except Exception as _e:
+            return _jsonify({"error": f"unreadable: {_e}"}), 500
+
+    # Local SQLite event store (epic #964 / phase 1) — proves the daemon is
+    # writing through to ~/.clawmetry/events.db. The dashboard's main read
+    # paths are migrating to this store progressively; in the meantime this
+    # endpoint exposes the store's own metrics so we can verify the
+    # write-through is working in prod and start the cutover safely.
+    @app.route("/api/local-store/health", endpoint="local_store_health")
+    def _local_store_health():
+        from flask import jsonify as _jsonify
+        try:
+            from clawmetry import local_store
+            return _jsonify(local_store.get_store().health())
+        except Exception as _e:
+            return _jsonify({"error": str(_e)[:300]}), 503
+
+    @app.route("/api/local-store/events", endpoint="local_store_events")
+    def _local_store_events():
+        from flask import jsonify as _jsonify, request as _req
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store()
+            rows = store.query_events(
+                session_id=_req.args.get("session_id"),
+                event_type=_req.args.get("event_type"),
+                since=_req.args.get("since"),
+                until=_req.args.get("until"),
+                limit=int(_req.args.get("limit", "200")),
+            )
+            return _jsonify({"events": rows, "count": len(rows)})
+        except Exception as _e:
+            return _jsonify({"error": str(_e)[:300]}), 500
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -8528,11 +8784,11 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong (Pro)">Alerts <span class="pro-chip">Pro</span></div>
+    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts</div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
-    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
@@ -8664,6 +8920,8 @@ DASHBOARD_HTML = r"""
       <div class="modal-tab active" onclick="switchModalTab('summary')">Summary</div>
       <div class="modal-tab" onclick="switchModalTab('narrative')">Narrative</div>
       <div class="modal-tab" onclick="switchModalTab('full')">Full Logs</div>
+      <div class="modal-tab" onclick="switchModalTab('tools')">Tools</div>
+      <div class="modal-tab" onclick="switchModalTab('models')">Model Journey</div>
     </div>
     <div class="modal-content" id="modal-content">Loading...</div>
     <div class="modal-footer">
@@ -8977,7 +9235,7 @@ def _auto_discover_gateway(token):
                         "instanceId": "clawmetry-discover",
                     },
                     "role": "operator",
-                    "scopes": ["operator.admin"],
+                    "scopes": ["operator.admin", "operator.read"],
                     "auth": {"token": token},
                 },
             }
@@ -9851,6 +10109,12 @@ def _compute_transcript_analytics():
             # Accept both live `.jsonl` and archived `.jsonl.reset.<ts>` files.
             if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
                 continue
+            # Runtime trajectory/checkpoint files duplicate session content and
+            # can dwarf real transcripts (hundreds of MB). They make usage
+            # widgets crawl on first load, so keep analytics on canonical
+            # session/reset transcripts only.
+            if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
+                continue
             sid = fname.split(".jsonl", 1)[0]
             fpath = os.path.join(sessions_dir, fname)
             fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
@@ -10183,6 +10447,12 @@ def _compute_transcript_analytics():
             # past-day total onto today.
             if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
                 continue
+            # Runtime trajectory/checkpoint files duplicate session content and
+            # can dwarf real transcripts (hundreds of MB). They make usage
+            # widgets crawl on first load, so keep analytics on canonical
+            # session/reset transcripts only.
+            if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
+                continue
             sid = fname.split(".jsonl", 1)[0]
             fpath = os.path.join(sessions_dir, fname)
             fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
@@ -10430,6 +10700,48 @@ def _get_anomaly_db():
         return _anomaly_db_conn
 
 
+def _fire_token_spike_alerts(new_anomalies):
+    """Fire configured token_spike alert rules for freshly inserted anomalies.
+
+    Called from _detect_and_store_anomalies() with only the anomalies that
+    were actually new (not deduped-out re-detections).  Matches each token_spike
+    anomaly against enabled token_spike rules; fires _fire_alert() when the
+    anomaly ratio meets or exceeds the rule's threshold multiplier.
+    """
+    if not new_anomalies:
+        return
+    token_spikes = [a for a in new_anomalies if a.get("metric") == "token_spike"]
+    if not token_spikes:
+        return
+    rules = [
+        r for r in _get_alert_rules()
+        if r.get("type") == "token_spike" and r.get("enabled")
+    ]
+    if not rules:
+        return
+    for anomaly in token_spikes:
+        ratio = float(anomaly.get("ratio", 0.0))
+        session_key = str(anomaly.get("session_key", "unknown"))
+        value = int(anomaly.get("value", 0))
+        baseline = float(anomaly.get("baseline", 0.0))
+        severity = str(anomaly.get("severity", "warning"))
+        for rule in rules:
+            threshold = float(rule.get("threshold", 2.0))
+            if ratio < threshold:
+                continue
+            rule_id = rule.get("id", "")
+            cooldown_key = f"token_spike_{rule_id}_{session_key}"
+            try:
+                channels = json.loads(rule.get("channels") or '["banner"]')
+            except Exception:
+                channels = ["banner"]
+            msg = (
+                f"Token spike: session {session_key} used {value:,} tokens "
+                f"({ratio:.1f}× the {baseline:.0f}-token baseline)"
+            )
+            _fire_alert(cooldown_key, "token_spike", msg, channels, severity)
+
+
 def _detect_and_store_anomalies():
     """Compute rolling-baseline anomalies and persist new ones to SQLite.
 
@@ -10573,6 +10885,7 @@ def _detect_and_store_anomalies():
             )
 
     # ── Persist new anomalies (deduplicate by session_key + metric within 24h) ──
+    truly_new_anomalies = []
     try:
         db = _get_anomaly_db()
         with _anomaly_db_lock:
@@ -10594,9 +10907,12 @@ def _detect_and_store_anomalies():
                             a["severity"],
                         ),
                     )
+                    truly_new_anomalies.append(a)
             db.commit()
     except Exception as _e:
         pass  # Non-critical — continue with in-memory results
+
+    _fire_token_spike_alerts(truly_new_anomalies)
 
     # ── Return stored anomalies from last 48h ──────────────────────────────
     try:
@@ -13067,6 +13383,27 @@ def _get_crons_from_files():
         except Exception:
             pass
     return []
+
+
+def _normalize_next_run_at_ms(state):
+    """Ensure nextRunAtMs is a number (ms timestamp) or null (closes #685)."""
+    if not isinstance(state, dict):
+        return None
+    val = state.get("nextRunAtMs")
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+    if isinstance(val, str):
+        try:
+            # ISO timestamp or numeric string
+            if "T" in val:
+                from dateutil import parser as _dtp
+                return int(_dtp.parse(val).timestamp() * 1000)
+            return int(float(val))
+        except Exception:
+            return None
+    return None
 
 
 def _get_memory_files():
