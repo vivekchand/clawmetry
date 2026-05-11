@@ -33,6 +33,64 @@ def _brain_history_bool_arg(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "all"}
 
 
+def _try_local_store_brain(limit: int, include_artifacts: bool):
+    """Epic #964 phase 1b fast path. Returns a brain-history-shaped dict
+    when CLAWMETRY_LOCAL_STORE_READ=1 AND the local DuckDB store has
+    enough events to be useful. Returns ``None`` to defer to the JSONL
+    parser so the caller can fall through cleanly.
+
+    The shape returned is intentionally a SUBSET of the JSONL parser's
+    rich UI metadata — channel icons, source labels, etc. are not yet
+    enriched here. The full read-path migration is a follow-up; this
+    is a measurable proof that the local store is the right answer for
+    the simple list-of-events case.
+    """
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return None
+    try:
+        store = local_store.get_store()
+        rows = store.query_events(limit=limit)
+    except Exception:
+        return None
+    if not rows:
+        # Empty store → fall through to JSONL parser so a fresh install
+        # without a populated local DB still gets a useful brain feed.
+        return None
+    # Translate the local-store row shape (id/node_id/agent_id/session_id/
+    # event_type/ts/data/cost_usd/...) into the brain-history event shape
+    # the dashboard JS expects (time/type/detail/src/sessionId/...).
+    out = []
+    for r in rows:
+        data = r.get("data") if isinstance(r, dict) else None
+        # `data` from query_events is already JSON-parsed when valid, or a
+        # str/None otherwise — see local_store.query_events.
+        detail = ""
+        if isinstance(data, dict):
+            detail = (data.get("input") or data.get("summary")
+                      or data.get("text") or data.get("name") or "")
+        elif isinstance(data, str):
+            detail = data
+        out.append({
+            "time":       r.get("ts", ""),
+            "type":       (r.get("event_type") or "").upper(),
+            "detail":     str(detail)[:200],
+            "src":        (r.get("session_id") or r.get("agent_id") or "")[:32],
+            "sessionId":  r.get("session_id") or "",
+            "agentId":    r.get("agent_id") or "main",
+            "tokens":     r.get("token_count") or 0,
+            "cost":       float(r.get("cost_usd") or 0.0),
+            "model":      r.get("model") or "",
+        })
+    return {
+        "events":  out,
+        "count":   len(out),
+        "_source": "local_store",
+        "_shape":  "brain_history",
+    }
+
+
 def _brain_history_is_artifact(path):
     name = os.path.basename(path)
     return name.endswith(".trajectory.jsonl") or ".checkpoint." in name
@@ -76,6 +134,14 @@ def api_brain_history():
     include_artifacts = _brain_history_bool_arg(
         request.args.get("include_artifacts") or request.args.get("artifacts")
     )
+    # Epic #964 phase 1b: opt-in local-store fast path. Skip the JSONL
+    # parser entirely when CLAWMETRY_LOCAL_STORE_READ=1 AND the store
+    # has data. Falls through to the full parser otherwise (so a fresh
+    # install with an empty store still gets the rich brain feed).
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_brain(limit, include_artifacts)
+        if fast is not None:
+            return jsonify(fast)
     cache_key = (limit, include_artifacts)
     cached = _BRAIN_HISTORY_CACHE.get(cache_key)
     now_cache = time.time()

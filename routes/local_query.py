@@ -1,0 +1,193 @@
+"""routes/local_query.py — coherent local query API over the DuckDB store.
+
+Implements phase 1A of issue #960 (epic #964). Adds an `/api/local/*` HTTP
+surface over `clawmetry.local_store`. Two transports will share these
+shapes:
+
+* **Local HTTP** — what's in this file. Bound to `127.0.0.1:8900` by the
+  OSS dashboard. Used by the OSS local-only browser experience and by any
+  CLI/tooling that wants to introspect the local store.
+* **WebSocket relay** (follow-up PR) — the daemon opens a long-lived WS to
+  `wss://app.clawmetry.com/api/node/relay`; cloud-side dashboards send
+  `{type:"query", shape:"events", args:{...}}` frames; the daemon dispatches
+  to the same in-process functions exposed here, returns chunked rows over
+  the WS. By keeping the dispatch in `_dispatch()`, both transports stay in
+  sync — fix the SQL once, both surfaces benefit.
+
+Response shapes mirror the cloud `/api/cloud/*` JSON so the dashboard can
+swap backends with no client edits — see PRD #964 for the design.
+
+Auth: none. Bound to localhost. Cloud sync of these endpoints — when it
+happens — goes through the WS relay, which has its own auth (cm_ token +
+node_id ownership check).
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from flask import Blueprint, jsonify, request
+
+bp_local_query = Blueprint("local_query", __name__)
+
+
+# ── Allowlist of query shapes (used by both HTTP + future WS relay) ────────
+
+# A "shape" is a named query the relay is allowed to dispatch. Keeping it
+# explicit (not raw SQL pass-through) means the cloud relay can never run
+# arbitrary SELECT against the user's local DuckDB — only what we've
+# whitelisted here.
+_SHAPES = {
+    "events":     "query_events",
+    "sessions":   "query_sessions",
+    "aggregates": "query_aggregates",
+    "health":     None,                 # special: no args
+    "transcript": "query_events",       # alias with session_id required
+}
+
+
+def _store():
+    """Lazy-import. Avoids paying duckdb's import cost on Flask boot when
+    the user never hits these endpoints."""
+    from clawmetry import local_store
+    return local_store.get_store()
+
+
+def _coerce_args(shape: str, raw: dict) -> dict:
+    """Strict per-shape arg coercion. Drops anything not in the per-shape
+    allowed-keys set, casts limit/since/until to safe types."""
+    if shape == "events":
+        return {
+            "session_id": raw.get("session_id"),
+            "agent_id":   raw.get("agent_id"),
+            "event_type": raw.get("event_type"),
+            "since":      raw.get("since"),
+            "until":      raw.get("until"),
+            "limit":      _safe_int(raw.get("limit"), default=200, lo=1, hi=5000),
+        }
+    if shape == "sessions":
+        return {
+            "agent_id": raw.get("agent_id"),
+            "since":    raw.get("since"),
+            "until":    raw.get("until"),
+            "limit":    _safe_int(raw.get("limit"), default=100, lo=1, hi=2000),
+        }
+    if shape == "aggregates":
+        return {
+            "agent_id": raw.get("agent_id"),
+            "since":    raw.get("since"),
+            "until":    raw.get("until"),
+        }
+    if shape == "transcript":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("transcript shape requires session_id")
+        return {
+            "session_id": sid,
+            "limit":      _safe_int(raw.get("limit"), default=500, lo=1, hi=5000),
+        }
+    if shape == "health":
+        return {}
+    raise ValueError(f"unknown shape: {shape}")
+
+
+def _safe_int(v: Any, *, default: int, lo: int, hi: int) -> int:
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _dispatch(shape: str, args: dict) -> dict:
+    """Single-source-of-truth shape→method bridge. Both the HTTP and (future)
+    WS transports call this. Returns a JSON-friendly dict ready to ship."""
+    started = time.monotonic()
+    store = _store()
+    if shape == "health":
+        body = store.health()
+    else:
+        method_name = _SHAPES[shape]
+        rows = getattr(store, method_name)(**args)
+        body = {"rows": rows, "count": len(rows)}
+    body["_shape"] = shape
+    body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    return body
+
+
+# ── HTTP routes ────────────────────────────────────────────────────────────
+
+
+@bp_local_query.route("/api/local/health", methods=["GET"])
+def http_health():
+    try:
+        return jsonify(_dispatch("health", {}))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 503
+
+
+@bp_local_query.route("/api/local/events", methods=["GET"])
+def http_events():
+    try:
+        args = _coerce_args("events", request.args.to_dict())
+        return jsonify(_dispatch("events", args))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@bp_local_query.route("/api/local/sessions", methods=["GET"])
+def http_sessions():
+    try:
+        args = _coerce_args("sessions", request.args.to_dict())
+        return jsonify(_dispatch("sessions", args))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@bp_local_query.route("/api/local/aggregates", methods=["GET"])
+def http_aggregates():
+    try:
+        args = _coerce_args("aggregates", request.args.to_dict())
+        return jsonify(_dispatch("aggregates", args))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@bp_local_query.route("/api/local/transcript/<session_id>", methods=["GET"])
+def http_transcript(session_id: str):
+    try:
+        args = _coerce_args("transcript", {"session_id": session_id, **request.args.to_dict()})
+        return jsonify(_dispatch("transcript", args))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+@bp_local_query.route("/api/local/query", methods=["POST"])
+def http_query():
+    """Generic shape-dispatched endpoint. Mirrors the WS relay frame format,
+    so the same JSON body works over either transport.
+    POST /api/local/query  {"shape": "events", "args": {...}}
+    """
+    body = request.get_json(silent=True) or {}
+    shape = body.get("shape")
+    if shape not in _SHAPES:
+        return jsonify({"error": f"unknown shape: {shape!r}",
+                        "allowed_shapes": sorted(_SHAPES.keys())}), 400
+    try:
+        args = _coerce_args(shape, body.get("args") or {})
+        return jsonify(_dispatch(shape, args))
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+# ── Public hook for the future WS relay (#960 phase B) ─────────────────────
+
+def relay_dispatch(shape: str, args: dict) -> dict:
+    """Same-process entry point the WS relay client will call when it
+    receives a `{type:"query"}` frame from the cloud. Importing this from
+    the relay module keeps the SQL/coercion logic in one place."""
+    if shape not in _SHAPES:
+        return {"error": f"unknown shape: {shape!r}"}
+    args = _coerce_args(shape, args or {})
+    return _dispatch(shape, args)

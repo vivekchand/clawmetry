@@ -208,14 +208,16 @@ Secured with `CLAWMETRY_FLEET_KEY` — nodes must provide the API key to registe
 
 ## Technical Details
 
-### Single-File Architecture
-ClawMetry is intentionally a **single Python file** (`dashboard.py`, ~11,600 lines). This makes it:
+### Modular Blueprint Architecture
+ClawMetry is a Flask app organised as a small core (`dashboard.py`, ~15,000 lines) plus a `routes/` package of feature-scoped Blueprints (sessions, channels, components, usage, health, brain, infra, overview, crons, meta, alerts, fleet_history, nemoclaw). Shared helpers and the embedded HTML/CSS/JS templates still live in `dashboard.py`; route handlers reach them via a late `import dashboard as _d`.
+
+This layout keeps the install story simple while letting each feature evolve in its own module:
 - Easy to install (`pip install clawmetry`)
-- Easy to audit (one file to read)
-- Easy to deploy (no build step)
+- Easy to audit (one Blueprint per feature, see `CLAUDE.md` for the full table)
+- Easy to deploy (pure-Python, no build step)
 - Portable (runs on a Raspberry Pi)
 
-The HTML/CSS/JS dashboard is embedded as template strings inside the Python file.
+The HTML/CSS/JS dashboard is embedded as template strings inside `dashboard.py`.
 
 ### Dependencies
 Minimal by design:
@@ -226,7 +228,7 @@ Minimal by design:
 
 ### History Module (`history.py`)
 An optional companion that adds persistent time-series:
-- Stores snapshots every 5 minutes in SQLite
+- Stores snapshots every 60 seconds in SQLite
 - Enables historical charts (token usage over days/weeks)
 - Session history with cost trends
 - Cron execution history

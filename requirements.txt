@@ -1,8 +1,9 @@
-flask>=2.0,<4
+flask>=3.1.3,<4
+duckdb>=0.10  # local event store (epic #964 phase 1)
 
 # Testing dependencies
 pytest>=8.4.2
-pytest-playwright>=0.5
+pytest-playwright>=0.7.1
 requests>=2.32.5
 
 # Optional: enables real-time OTLP metrics from OpenClaw
