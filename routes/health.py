@@ -1073,3 +1073,180 @@ def api_loop_detection():
         "loop_count": len(loops),
         "loops": loops,
     })
+
+
+# ---------------------------------------------------------------------------
+# MCP tool call observability (#850)
+# ---------------------------------------------------------------------------
+
+_BUILTIN_TOOLS = frozenset({
+    "exec", "Exec",
+    "Read", "Edit", "Write", "MultiEdit",
+    "Glob", "Grep", "Bash",
+    "web_search", "WebSearch", "web_fetch", "WebFetch",
+    "browser", "Browser",
+    "message", "tts", "image", "canvas",
+    "nodes", "process",
+    "sessions_spawn", "sessions_send", "session_status",
+    "cron", "gateway",
+    "TodoWrite", "TodoRead",
+    "NotebookRead", "NotebookEdit",
+    "computer", "Agent",
+})
+
+
+def _parse_ts_ms(val):
+    """Return milliseconds-since-epoch for a timestamp value, or None."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        v = float(val)
+        return v * 1000.0 if v < 1e10 else v
+    try:
+        s = str(val).strip().rstrip("Z")
+        # Handle optional fractional seconds and timezone offset
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+        ):
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.strptime(s[:26], fmt)
+                return dt.replace(tzinfo=timezone.utc).timestamp() * 1000.0
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def _collect_mcp_stats(sessions_dir, max_sessions=20):
+    """Scan recent session JSONLs for external (non-builtin) tool call stats.
+
+    Returns (stats_list, files_checked) where stats_list is a list of dicts:
+      {name, calls, errors, error_rate_pct, avg_latency_ms}
+    sorted by call count descending.
+    """
+    try:
+        all_names = [
+            f for f in os.listdir(sessions_dir)
+            if f.endswith(".jsonl")
+            and ".deleted." not in f
+            and ".reset." not in f
+        ]
+    except OSError:
+        return [], 0
+
+    paths = sorted(
+        [os.path.join(sessions_dir, n) for n in all_names],
+        key=lambda p: os.path.getmtime(p),
+        reverse=True,
+    )[:max_sessions]
+
+    # {tool_name: {calls, errors, latencies_ms}}
+    tool_stats: dict = {}
+
+    for fpath in paths:
+        # Map toolCall id -> (name, start_ms) within this file
+        pending: dict = {}
+
+        try:
+            with open(fpath, errors="replace") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+
+                    ev_ts_ms = _parse_ts_ms(ev.get("timestamp"))
+                    msg = ev.get("message") or {}
+                    role = msg.get("role", "")
+
+                    if role == "assistant":
+                        content = msg.get("content") or []
+                        if not isinstance(content, list):
+                            continue
+                        for blk in content:
+                            if not isinstance(blk, dict):
+                                continue
+                            if blk.get("type") != "toolCall":
+                                continue
+                            name = (blk.get("name") or "").strip()
+                            if not name or name in _BUILTIN_TOOLS:
+                                continue
+                            if name not in tool_stats:
+                                tool_stats[name] = {"calls": 0, "errors": 0, "latencies_ms": []}
+                            tool_stats[name]["calls"] += 1
+                            tc_id = blk.get("id", "")
+                            if tc_id:
+                                pending[tc_id] = (name, ev_ts_ms)
+
+                    elif role == "toolResult":
+                        tc_id = msg.get("toolCallId", "")
+                        if not tc_id or tc_id not in pending:
+                            continue
+                        name, start_ms = pending.pop(tc_id)
+                        if msg.get("isError"):
+                            tool_stats[name]["errors"] += 1
+                        if start_ms and ev_ts_ms and ev_ts_ms > start_ms:
+                            latency = ev_ts_ms - start_ms
+                            if latency < 300_000:  # ignore pairs > 5 min apart
+                                tool_stats[name]["latencies_ms"].append(latency)
+        except Exception:
+            continue
+
+    result = []
+    for name, s in tool_stats.items():
+        calls = s["calls"]
+        errors = s["errors"]
+        lats = s["latencies_ms"]
+        result.append({
+            "name": name,
+            "calls": calls,
+            "errors": errors,
+            "error_rate_pct": round(errors * 100.0 / calls, 1) if calls else 0.0,
+            "avg_latency_ms": round(sum(lats) / len(lats)) if lats else None,
+        })
+
+    result.sort(key=lambda x: x["calls"], reverse=True)
+    return result, len(paths)
+
+
+@bp_health.route("/api/mcp-stats")
+def api_mcp_stats():
+    """Per-tool stats for non-builtin (MCP / external) tool calls.
+
+    Scans the 20 most-recently-modified session JSONLs and returns call
+    counts, error rates, and average latency for every tool whose name is
+    not in the standard OpenClaw built-in set.
+
+    Response:
+      {
+        "checked": <int>,
+        "tools": [
+          {"name": str, "calls": int, "errors": int,
+           "error_rate_pct": float, "avg_latency_ms": int|null}
+        ]
+      }
+    """
+    import dashboard as _d
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+
+    tools: list = []
+    checked = 0
+
+    if os.path.isdir(sessions_dir):
+        try:
+            tools, checked = _collect_mcp_stats(sessions_dir)
+        except Exception:
+            pass
+
+    return jsonify({"checked": checked, "tools": tools})

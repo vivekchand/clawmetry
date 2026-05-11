@@ -17,9 +17,9 @@ import pytest
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     """Fresh isolated store per test. We rebind the module-level paths/knobs
-    before importing so a) every test gets its own SQLite file and b) the
+    before importing so a) every test gets its own DuckDB file and b) the
     flusher is fast enough that ingest→assert doesn't sleep all day."""
-    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.db"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "5")
     # Force a fresh import so the env vars take effect AND so module-level
@@ -267,7 +267,7 @@ def test_health_reports_size_and_count(store):
     h = store.health()
     assert h["event_count"] == 10
     assert h["size_bytes"] > 0
-    assert h["schema_version"] == 1
+    assert h["schema_version"] == 2
     assert h["ring_depth"] == 0
     assert h["ring_dropped_total"] == 0
 
@@ -307,7 +307,7 @@ def test_vacuum_prunes_oldest_when_over_cap(store):
 
 def test_data_survives_restart(tmp_path, monkeypatch):
     """Stop the store, re-open it, verify data is still there."""
-    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.db"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "5")
     import clawmetry.local_store as ls
@@ -316,7 +316,8 @@ def test_data_survives_restart(tmp_path, monkeypatch):
     s1.start()
     s1.ingest(_ev(id="persist-1"))
     s1.stop(flush=True)
-    # New instance, same path
+    # New instance, same path — DuckDB needs the previous connection closed
+    # (single-writer per file) which stop() handles.
     s2 = ls.LocalStore()
     s2.start()
     rows = s2.query_events(session_id="sess-1")

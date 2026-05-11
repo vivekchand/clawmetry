@@ -2070,6 +2070,21 @@ def main() -> None:
     import argparse
     from dashboard import main as dashboard_main
 
+    # Anonymous, opt-out, once-per-install ping. See clawmetry/telemetry.py
+    # for the privacy contract. Fires on a daemon thread so a network
+    # failure can't slow CLI startup; honours CLAWMETRY_NO_TELEMETRY=1
+    # and ~/.clawmetry/notelemetry.
+    try:
+        from clawmetry import telemetry as _telemetry
+        try:
+            from dashboard import __version__ as _ver
+        except Exception:
+            _ver = "unknown"
+        _telemetry.maybe_ping(_ver)
+    except Exception:
+        # Never let telemetry plumbing break startup.
+        pass
+
     # Windows: protect against closed/detached stdout/stderr before any library
     # (argparse colour detection, click._winconsole) calls fileno() on them.
     #

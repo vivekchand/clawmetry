@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 ClawMetry - See your agent think 🦞
 
@@ -110,8 +109,10 @@ from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
+from routes.agents import bp_agents
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
+from routes.local_query import bp_local_query
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -139,7 +140,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.163"
+__version__ = "0.12.166"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -3618,6 +3619,8 @@ function clawmetryLogout(){
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
         <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
+        <div id="sh-mcp-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔌 MCP Tool Activity</div>
+        <div id="sh-mcp" style="margin-bottom:14px;"></div></div>
         <!-- 🔍 Diagnostics Panel (GH#28) -->
         <div id="sh-diagnostics-wrap">
           <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
@@ -5622,6 +5625,7 @@ async function loadAll() {
     if (typeof loadPromptErrors === 'function') loadPromptErrors().catch(function(e){console.warn('prompt errors failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
+    if (typeof loadMcpStats === 'function') loadMcpStats().catch(function(e){console.warn('mcp stats failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -5679,6 +5683,46 @@ async function loadReliabilityCard() {
     el = document.getElementById('reliability-detail-lt');
     if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
   } catch(e) { console.warn('reliability card load failed', e); }
+}
+
+async function loadMcpStats() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/mcp-stats', 8000);
+    var wrap = document.getElementById('sh-mcp-wrap');
+    var el = document.getElementById('sh-mcp');
+    if (!wrap || !el) return;
+    if (!d.tools || d.tools.length === 0) {
+      wrap.style.display = 'block';
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No MCP tool calls detected in recent sessions.</div>';
+      return;
+    }
+    var rows = d.tools.map(function(t) {
+      var errCell = t.errors > 0
+        ? '<span style="color:#e05;">' + t.errors + ' (' + t.error_rate_pct + '%)</span>'
+        : '<span style="color:var(--text-muted);">0</span>';
+      var latCell = t.avg_latency_ms != null
+        ? (t.avg_latency_ms >= 1000
+            ? (t.avg_latency_ms / 1000).toFixed(1) + 's'
+            : t.avg_latency_ms + 'ms')
+        : '<span style="color:var(--text-faint);">—</span>';
+      return '<tr style="border-top:1px solid var(--border-secondary);">'
+        + '<td style="padding:4px 6px 4px 0;font-size:12px;font-family:\'JetBrains Mono\',monospace;color:var(--text-primary);">' + t.name + '</td>'
+        + '<td style="padding:4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + t.calls + '</td>'
+        + '<td style="padding:4px 6px;font-size:12px;text-align:right;">' + errCell + '</td>'
+        + '<td style="padding:4px 0 4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + latCell + '</td>'
+        + '</tr>';
+    }).join('');
+    el.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr>'
+      + '<th style="padding:0 6px 4px 0;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:left;font-weight:500;">Tool</th>'
+      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Calls</th>'
+      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Errors</th>'
+      + '<th style="padding:0 0 4px 6px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Avg Latency</th>'
+      + '</tr></thead>'
+      + '<tbody>' + rows + '</tbody>'
+      + '</table>';
+    wrap.style.display = 'block';
+  } catch(e) { console.warn('mcp stats failed', e); }
 }
 
 async function loadHeartbeat() {
@@ -8447,9 +8491,25 @@ def detect_config(args=None):
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
+    app.register_blueprint(bp_agents)
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
+    app.register_blueprint(bp_local_query)
+
+    # Register built-in agent adapters. External plugins can register more
+    # via clawmetry.extensions entry points — see clawmetry/adapters/.
+    from clawmetry.adapters import registry as _adapter_registry
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    _adapter_registry.register(OpenClawAdapter())
     app.register_blueprint(bp_openapi)
+
+    # Register built-in agent adapters. External plugins can register more
+    # via clawmetry.extensions entry points — see clawmetry/adapters/.
+    from clawmetry.adapters import registry as _adapter_registry
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    from clawmetry.adapters.hermes import HermesAdapter
+    _adapter_registry.register(OpenClawAdapter())
+    _adapter_registry.register(HermesAdapter())
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
     # Approvals tab renders cleanly without cloud sync.
@@ -8492,6 +8552,37 @@ def detect_config(args=None):
                 return _jsonify(json.load(_f))
         except Exception as _e:
             return _jsonify({"error": f"unreadable: {_e}"}), 500
+
+    # Local SQLite event store (epic #964 / phase 1) — proves the daemon is
+    # writing through to ~/.clawmetry/events.db. The dashboard's main read
+    # paths are migrating to this store progressively; in the meantime this
+    # endpoint exposes the store's own metrics so we can verify the
+    # write-through is working in prod and start the cutover safely.
+    @app.route("/api/local-store/health", endpoint="local_store_health")
+    def _local_store_health():
+        from flask import jsonify as _jsonify
+        try:
+            from clawmetry import local_store
+            return _jsonify(local_store.get_store().health())
+        except Exception as _e:
+            return _jsonify({"error": str(_e)[:300]}), 503
+
+    @app.route("/api/local-store/events", endpoint="local_store_events")
+    def _local_store_events():
+        from flask import jsonify as _jsonify, request as _req
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store()
+            rows = store.query_events(
+                session_id=_req.args.get("session_id"),
+                event_type=_req.args.get("event_type"),
+                since=_req.args.get("since"),
+                until=_req.args.get("until"),
+                limit=int(_req.args.get("limit", "200")),
+            )
+            return _jsonify({"events": rows, "count": len(rows)})
+        except Exception as _e:
+            return _jsonify({"error": str(_e)[:300]}), 500
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -8830,6 +8921,7 @@ DASHBOARD_HTML = r"""
       <div class="modal-tab" onclick="switchModalTab('narrative')">Narrative</div>
       <div class="modal-tab" onclick="switchModalTab('full')">Full Logs</div>
       <div class="modal-tab" onclick="switchModalTab('tools')">Tools</div>
+      <div class="modal-tab" onclick="switchModalTab('models')">Model Journey</div>
     </div>
     <div class="modal-content" id="modal-content">Loading...</div>
     <div class="modal-footer">
@@ -10608,6 +10700,48 @@ def _get_anomaly_db():
         return _anomaly_db_conn
 
 
+def _fire_token_spike_alerts(new_anomalies):
+    """Fire configured token_spike alert rules for freshly inserted anomalies.
+
+    Called from _detect_and_store_anomalies() with only the anomalies that
+    were actually new (not deduped-out re-detections).  Matches each token_spike
+    anomaly against enabled token_spike rules; fires _fire_alert() when the
+    anomaly ratio meets or exceeds the rule's threshold multiplier.
+    """
+    if not new_anomalies:
+        return
+    token_spikes = [a for a in new_anomalies if a.get("metric") == "token_spike"]
+    if not token_spikes:
+        return
+    rules = [
+        r for r in _get_alert_rules()
+        if r.get("type") == "token_spike" and r.get("enabled")
+    ]
+    if not rules:
+        return
+    for anomaly in token_spikes:
+        ratio = float(anomaly.get("ratio", 0.0))
+        session_key = str(anomaly.get("session_key", "unknown"))
+        value = int(anomaly.get("value", 0))
+        baseline = float(anomaly.get("baseline", 0.0))
+        severity = str(anomaly.get("severity", "warning"))
+        for rule in rules:
+            threshold = float(rule.get("threshold", 2.0))
+            if ratio < threshold:
+                continue
+            rule_id = rule.get("id", "")
+            cooldown_key = f"token_spike_{rule_id}_{session_key}"
+            try:
+                channels = json.loads(rule.get("channels") or '["banner"]')
+            except Exception:
+                channels = ["banner"]
+            msg = (
+                f"Token spike: session {session_key} used {value:,} tokens "
+                f"({ratio:.1f}× the {baseline:.0f}-token baseline)"
+            )
+            _fire_alert(cooldown_key, "token_spike", msg, channels, severity)
+
+
 def _detect_and_store_anomalies():
     """Compute rolling-baseline anomalies and persist new ones to SQLite.
 
@@ -10751,6 +10885,7 @@ def _detect_and_store_anomalies():
             )
 
     # ── Persist new anomalies (deduplicate by session_key + metric within 24h) ──
+    truly_new_anomalies = []
     try:
         db = _get_anomaly_db()
         with _anomaly_db_lock:
@@ -10772,9 +10907,12 @@ def _detect_and_store_anomalies():
                             a["severity"],
                         ),
                     )
+                    truly_new_anomalies.append(a)
             db.commit()
     except Exception as _e:
         pass  # Non-critical — continue with in-memory results
+
+    _fire_token_spike_alerts(truly_new_anomalies)
 
     # ── Return stored anomalies from last 48h ──────────────────────────────
     try:
@@ -13245,6 +13383,27 @@ def _get_crons_from_files():
         except Exception:
             pass
     return []
+
+
+def _normalize_next_run_at_ms(state):
+    """Ensure nextRunAtMs is a number (ms timestamp) or null (closes #685)."""
+    if not isinstance(state, dict):
+        return None
+    val = state.get("nextRunAtMs")
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+    if isinstance(val, str):
+        try:
+            # ISO timestamp or numeric string
+            if "T" in val:
+                from dateutil import parser as _dtp
+                return int(_dtp.parse(val).timestamp() * 1000)
+            return int(float(val))
+        except Exception:
+            return None
+    return None
 
 
 def _get_memory_files():
