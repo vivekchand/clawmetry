@@ -26,14 +26,149 @@ from flask import Blueprint, jsonify, request
 
 bp_sessions = Blueprint('sessions', __name__)
 
+_SUBAGENTS_CACHE = {"ts": 0.0, "data": None}
+_SUBAGENTS_CACHE_TTL_SECONDS = 10
+_SUBAGENTS_SCAN_MAX_FILES = int(os.environ.get("CLAWMETRY_SUBAGENTS_SCAN_MAX_FILES", "120"))
+_SUBAGENTS_SCAN_TAIL_BYTES = int(os.environ.get("CLAWMETRY_SUBAGENTS_SCAN_TAIL_BYTES", str(512 * 1024)))
+
+# Channels that don't identify a user-initiated session (generic/internal)
+_GENERIC_CHANNELS = frozenset({"unknown", "direct", "", "main", "internal"})
+
+
+def _infer_session_type(session):
+    """Classify a session into one of: main / heartbeat / user / sub-agent.
+
+    Priority:
+      1. display name / session id contains "heartbeat"  → heartbeat
+      2. gateway kind == "subagent" or name contains it  → sub-agent
+      3. channel is set and non-generic                  → user
+      4. fallback                                        → main
+    """
+    name = (session.get("displayName") or session.get("sessionId") or "").lower()
+    kind = (session.get("kind") or "").lower()
+    channel = (session.get("channel") or "").lower().strip()
+
+    if "heartbeat" in name:
+        return "heartbeat"
+    if kind == "subagent" or "subagent" in name:
+        return "sub-agent"
+    if channel and channel not in _GENERIC_CHANNELS:
+        return "user"
+    return "main"
+
 
 @bp_sessions.route("/api/sessions")
 def api_sessions():
     import dashboard as _d
+    # Epic #964 PR 3: opt-in local-store fast path. When
+    # CLAWMETRY_LOCAL_STORE_READ=1 AND the local sessions table has rows,
+    # serve directly from DuckDB. Falls through to gateway/JSONL otherwise
+    # (so a fresh install with no local store, or a non-OpenClaw user, sees
+    # the same data as before — zero-change default).
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_sessions()
+        if fast is not None:
+            return jsonify(fast)
+    gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
+    if gw_data and "sessions" in gw_data:
+        sessions = _d._augment_sessions_with_burn(gw_data["sessions"])
+    else:
+        sessions = _d._augment_sessions_with_burn(_d._get_sessions())
+    for s in sessions:
+        if "session_type" not in s:
+            s["session_type"] = _infer_session_type(s)
+    return jsonify({"sessions": sessions})
+
+
+def _try_local_store_sessions():
+    """Read sessions directly from the local DuckDB. Returns the same
+    response shape as the legacy gateway-backed endpoint (`{"sessions":
+    [...]}`). Returns ``None`` to defer to the JSONL/gateway fallback if:
+      - the local_store module isn't importable
+      - the sessions table is empty
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        rows = store._fetch("""
+            SELECT agent_type, session_id, agent_id, title, started_at,
+                   last_active_at, ended_at, status, total_tokens, cost_usd,
+                   message_count, metadata
+            FROM sessions
+            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+            LIMIT 200
+        """, [])
+    except Exception:
+        return None
+    if not rows:
+        return None
+    out = []
+    for r in rows:
+        meta = {}
+        if r[11]:
+            try:
+                import json as _j
+                meta = _j.loads(bytes(r[11]).decode("utf-8"))
+            except Exception:
+                pass
+        out.append({
+            "agent_type":     r[0],
+            "session_id":     r[1],
+            "agent_id":       r[2],
+            "title":          r[3] or "",
+            "started_at":     r[4] or "",
+            "updated_at":     r[5] or "",
+            "ended_at":       r[6] or "",
+            "status":         r[7] or "",
+            "total_tokens":   int(r[8] or 0),
+            "total_cost":     float(r[9] or 0.0),
+            "message_count":  int(r[10] or 0),
+            "channel":        meta.get("channel", ""),
+            "chat_type":      meta.get("chat_type", ""),
+            "subject":        r[3] or meta.get("subject", ""),
+            "session_type":   meta.get("session_type", "main"),
+            "_source":        "local_store",
+        })
+    return {"sessions": out, "_source": "local_store"}
+
+
+@bp_sessions.route("/api/sessions/by-type")
+def api_sessions_by_type():
+    """Return sessions grouped by type with per-type counts.
+
+    Response:
+      {
+        "counts": {"main": N, "heartbeat": N, "user": N, "sub-agent": N, "total": N},
+        "sessions": [<session objects with session_type field>]
+      }
+
+    Optional query param ?type=<heartbeat|user|sub-agent|main> to filter the
+    returned session list (counts always cover all sessions).
+    """
+    import dashboard as _d
     gw_data = _d._gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
-        return jsonify({"sessions": _d._augment_sessions_with_burn(gw_data["sessions"])})
-    return jsonify({"sessions": _d._augment_sessions_with_burn(_d._get_sessions())})
+        sessions = _d._augment_sessions_with_burn(gw_data["sessions"])
+    else:
+        sessions = _d._augment_sessions_with_burn(_d._get_sessions())
+
+    for s in sessions:
+        if "session_type" not in s:
+            s["session_type"] = _infer_session_type(s)
+
+    counts = {"main": 0, "heartbeat": 0, "user": 0, "sub-agent": 0}
+    for s in sessions:
+        t = s.get("session_type", "main")
+        counts[t] = counts.get(t, 0) + 1
+    counts["total"] = len(sessions)
+
+    type_filter = request.args.get("type", "").strip()
+    filtered = [
+        s for s in sessions
+        if not type_filter or s.get("session_type") == type_filter
+    ]
+    return jsonify({"counts": counts, "sessions": filtered})
 
 
 @bp_sessions.route("/api/compactions")
@@ -523,7 +658,7 @@ def api_task_runs():
     })
 
 
-def _scan_spawn_events_from_jsonl(sessions_dir):
+def _scan_spawn_events_from_jsonl(sessions_dir, max_files=None, tail_bytes=None):
     """Walk every session JSONL and pair SPAWN toolCall/toolResult rows.
 
     OpenClaw's subagent lifecycle is:
@@ -558,7 +693,15 @@ def _scan_spawn_events_from_jsonl(sessions_dir):
     _task_name_re = _re.compile(r"^task:\s*(.+)$", _re.MULTILINE)
     _status_re = _re.compile(r"^status:\s*(.+)$", _re.MULTILINE)
 
-    for fpath in _glob.glob(os.path.join(sessions_dir, "*.jsonl")):
+    files = _glob.glob(os.path.join(sessions_dir, "*.jsonl"))
+    try:
+        files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    except Exception:
+        pass
+    if max_files and max_files > 0:
+        files = files[:max_files]
+
+    for fpath in files:
         if ".deleted." in fpath:
             continue
         # Skip checkpoints - their content is duplicated into the main file
@@ -571,6 +714,14 @@ def _scan_spawn_events_from_jsonl(sessions_dir):
         completions = {} # childSessionKey → {task, status, result, stats, ts}
         try:
             with open(fpath, "r", errors="replace") as fh:
+                if tail_bytes and tail_bytes > 0:
+                    try:
+                        size = os.path.getsize(fpath)
+                        if size > tail_bytes:
+                            fh.seek(max(0, size - tail_bytes))
+                            fh.readline()  # drop partial line after seek
+                    except Exception:
+                        pass
                 for raw in fh:
                     raw = raw.strip()
                     if not raw:
@@ -722,6 +873,11 @@ def api_subagents():
     """
     import dashboard as _d
     now_ms = time.time() * 1000
+    full_scan = request.args.get("full", "").strip().lower() in ("1", "true", "yes")
+    if not full_scan:
+        cached = _SUBAGENTS_CACHE.get("data")
+        if cached is not None and (time.time() - float(_SUBAGENTS_CACHE.get("ts") or 0)) < _SUBAGENTS_CACHE_TTL_SECONDS:
+            return jsonify(cached)
 
     # Source 1: canonical subagent registry
     reg_active = []
@@ -740,7 +896,7 @@ def api_subagents():
     # value would append registry + spawn entries to the cache itself, so
     # every subsequent /api/subagents call inherits the previous call's
     # appends — subagents get duplicated exponentially (6x, 8x, 10x...).
-    gw_data = _d._gw_invoke("sessions_list", {"limit": 100, "messageLimit": 0})
+    gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
         all_sessions = list(gw_data["sessions"])
     else:
@@ -779,7 +935,11 @@ def api_subagents():
         "~/.openclaw/agents/main/sessions"
     )
     try:
-        spawn_events = _scan_spawn_events_from_jsonl(sessions_dir)
+        spawn_events = _scan_spawn_events_from_jsonl(
+            sessions_dir,
+            max_files=None if full_scan else _SUBAGENTS_SCAN_MAX_FILES,
+            tail_bytes=None if full_scan else _SUBAGENTS_SCAN_TAIL_BYTES,
+        )
     except Exception:
         spawn_events = []
     # Build a lookup by childKey so we can enrich entries from sources 1/2
@@ -913,7 +1073,11 @@ def api_subagents():
 
     _status_rank = {"active": 0, "idle": 1, "stale": 2, "failed": 3}
     subagents.sort(key=lambda x: (_status_rank.get(x["status"], 9), x["depth"]))
-    return jsonify({"subagents": subagents, "counts": counts})
+    payload = {"subagents": subagents, "counts": counts}
+    if not full_scan:
+        _SUBAGENTS_CACHE["data"] = payload
+        _SUBAGENTS_CACHE["ts"] = time.time()
+    return jsonify(payload)
 
 
 @bp_sessions.route("/api/delegation-tree")
@@ -1383,6 +1547,25 @@ def api_transcript_events(session_id):
                             pass
 
                 obj_type = obj.get("type", "")
+
+                # Emit model_change and thinking_level_change as timeline
+                # annotation events so the frontend can render visual dividers.
+                if obj_type == "model_change":
+                    events.append({
+                        "type": "model_change",
+                        "modelId": obj.get("modelId") or obj.get("model") or "",
+                        "provider": obj.get("provider") or "",
+                        "timestamp": ts_val,
+                    })
+                    continue
+                if obj_type == "thinking_level_change":
+                    events.append({
+                        "type": "thinking_level_change",
+                        "thinkingLevel": obj.get("thinkingLevel") or obj.get("level") or "",
+                        "timestamp": ts_val,
+                    })
+                    continue
+
                 if obj_type == "message":
                     msg = obj.get("message", {})
                     role = msg.get("role", "")
@@ -1520,3 +1703,291 @@ def api_transcript_events(session_id):
     return jsonify(
         {"events": events[-500:], "messageCount": msg_count, "totalEvents": len(events)}
     )
+
+
+@bp_sessions.route("/api/session-model-journey/<session_id>")
+def api_session_model_journey(session_id):
+    """Return the ordered model journey for a session.
+
+    Walks the session JSONL and tracks every model_change and
+    thinking_level_change event.  For each segment (period between two
+    consecutive model changes) it computes: duration, tokens consumed,
+    and estimated cost.  The result powers the "Model Journey" side panel
+    in the session detail modal.
+    """
+    import dashboard as _d
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.join(sessions_dir, session_id + ".jsonl")
+    fpath = os.path.normpath(fpath)
+    if not fpath.startswith(os.path.normpath(sessions_dir)):
+        return jsonify({"error": "Access denied"}), 403
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Transcript not found"}), 404
+
+    def _parse_ts(ts):
+        if not ts:
+            return 0
+        if isinstance(ts, (int, float)):
+            return int(ts * 1000) if ts < 1e12 else int(ts)
+        try:
+            return int(
+                datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp() * 1000
+            )
+        except Exception:
+            return 0
+
+    segments = []
+    thinking_changes = []
+    current_model = ""
+    current_provider = ""
+    seg_start_ms = 0
+    seg_tokens = 0
+    seg_cost = 0.0
+    first_ts = 0
+    last_ts = 0
+
+    try:
+        with open(fpath, "r", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except Exception:
+                    continue
+                ts_ms = _parse_ts(ev.get("timestamp") or ev.get("time") or "")
+                if ts_ms and not first_ts:
+                    first_ts = ts_ms
+                if ts_ms:
+                    last_ts = ts_ms
+
+                etype = ev.get("type", "")
+
+                if etype == "model_change":
+                    new_model = ev.get("modelId") or ev.get("model") or ""
+                    new_provider = ev.get("provider") or ""
+                    if not new_model:
+                        continue
+                    if current_model:
+                        segments.append({
+                            "modelId": current_model,
+                            "provider": current_provider,
+                            "start_ms": seg_start_ms,
+                            "end_ms": ts_ms or last_ts,
+                            "duration_ms": max(0, (ts_ms or last_ts) - seg_start_ms) if seg_start_ms else 0,
+                            "tokens": seg_tokens,
+                            "cost_usd": round(seg_cost, 6),
+                        })
+                    current_model = new_model
+                    current_provider = new_provider
+                    seg_start_ms = ts_ms
+                    seg_tokens = 0
+                    seg_cost = 0.0
+                    continue
+
+                if etype == "thinking_level_change":
+                    thinking_changes.append({
+                        "thinkingLevel": ev.get("thinkingLevel") or ev.get("level") or "",
+                        "timestamp_ms": ts_ms,
+                    })
+                    continue
+
+                if etype == "message":
+                    msg = ev.get("message", {}) or {}
+                    if not isinstance(msg, dict):
+                        continue
+                    msg_model = msg.get("model") or ""
+                    if msg_model and not current_model:
+                        current_model = msg_model
+                        current_provider = msg.get("provider") or ""
+                        seg_start_ms = ts_ms or first_ts
+                    elif msg_model and msg_model != current_model:
+                        if current_model:
+                            segments.append({
+                                "modelId": current_model,
+                                "provider": current_provider,
+                                "start_ms": seg_start_ms,
+                                "end_ms": ts_ms or last_ts,
+                                "duration_ms": max(0, (ts_ms or last_ts) - seg_start_ms) if seg_start_ms else 0,
+                                "tokens": seg_tokens,
+                                "cost_usd": round(seg_cost, 6),
+                            })
+                        current_model = msg_model
+                        current_provider = msg.get("provider") or ""
+                        seg_start_ms = ts_ms
+                        seg_tokens = 0
+                        seg_cost = 0.0
+
+                    usage = msg.get("usage", {}) or {}
+                    if isinstance(usage, dict) and usage:
+                        seg_tokens += int(usage.get("totalTokens", 0) or 0)
+                        cost_obj = usage.get("cost", {}) or {}
+                        if isinstance(cost_obj, dict):
+                            seg_cost += float(cost_obj.get("total", 0) or 0)
+    except Exception as e:
+        return jsonify({"error": "parse error: " + str(e)}), 500
+
+    if current_model:
+        segments.append({
+            "modelId": current_model,
+            "provider": current_provider,
+            "start_ms": seg_start_ms,
+            "end_ms": last_ts,
+            "duration_ms": max(0, last_ts - seg_start_ms) if seg_start_ms else 0,
+            "tokens": seg_tokens,
+            "cost_usd": round(seg_cost, 6),
+        })
+
+    total_tokens = sum(s["tokens"] for s in segments)
+    total_cost = sum(s["cost_usd"] for s in segments)
+    total_duration = max(0, last_ts - first_ts) if first_ts and last_ts else 0
+
+    return jsonify({
+        "session_id": session_id,
+        "segments": segments,
+        "thinking_changes": thinking_changes,
+        "stats": {
+            "total_models_used": len(set(s["modelId"] for s in segments)),
+            "total_segments": len(segments),
+            "total_tokens": total_tokens,
+            "total_cost_usd": round(total_cost, 6),
+            "total_duration_ms": total_duration,
+            "first_ts": first_ts,
+            "last_ts": last_ts,
+        },
+    })
+
+
+@bp_sessions.route("/api/sessions/<session_id>/cost-breakdown")
+def api_session_cost_breakdown(session_id):
+    """Per-turn token + cost breakdown for a single session (GH #604)."""
+    import dashboard as _d
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    fpath = os.path.join(sessions_dir, session_id + ".jsonl")
+    fpath = os.path.normpath(fpath)
+    if not fpath.startswith(os.path.normpath(sessions_dir)):
+        return jsonify({"error": "Access denied"}), 403
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Session not found"}), 404
+
+    turns = []
+    last_seen_model = ""
+    turn_index = 0
+
+    try:
+        with open(fpath, "r", errors="replace") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    ev = json.loads(raw)
+                except Exception:
+                    continue
+
+                ev_type = ev.get("type", "")
+                if ev_type == "model_change":
+                    m = ev.get("modelId") or ev.get("model") or ""
+                    if m:
+                        last_seen_model = m
+                    continue
+                if ev_type != "message":
+                    continue
+
+                msg = ev.get("message", {}) or {}
+                if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                    continue
+
+                usage = msg.get("usage", {}) or {}
+                if not isinstance(usage, dict):
+                    continue
+
+                turn_index += 1
+                msg_model = msg.get("model") or last_seen_model or "unknown"
+                if msg_model:
+                    last_seen_model = msg_model
+
+                in_tok = int(usage.get("input", 0) or 0)
+                out_tok = int(usage.get("output", 0) or 0)
+                cr_tok = int(usage.get("cacheRead", 0) or 0)
+                cw_tok = int(usage.get("cacheWrite", 0) or 0)
+                cost_obj = usage.get("cost", {}) or {}
+                if isinstance(cost_obj, dict):
+                    in_cost = float(cost_obj.get("input", 0) or 0)
+                    out_cost = float(cost_obj.get("output", 0) or 0)
+                    cr_cost = float(cost_obj.get("cacheRead", 0) or 0)
+                    cw_cost = float(cost_obj.get("cacheWrite", 0) or 0)
+                    tot_cost = float(cost_obj.get("total", 0) or 0)
+                else:
+                    in_cost = out_cost = cr_cost = cw_cost = tot_cost = 0.0
+                if tot_cost == 0.0 and (in_cost + out_cost + cr_cost + cw_cost) > 0:
+                    tot_cost = in_cost + out_cost + cr_cost + cw_cost
+
+                ts_raw = ev.get("timestamp") or ev.get("time") or None
+                turns.append({
+                    "turn_index": turn_index,
+                    "model": msg_model,
+                    "timestamp": ts_raw if isinstance(ts_raw, str) else None,
+                    "input_tokens": in_tok,
+                    "output_tokens": out_tok,
+                    "cache_read_tokens": cr_tok,
+                    "cache_write_tokens": cw_tok,
+                    "input_cost_usd": round(in_cost, 8),
+                    "output_cost_usd": round(out_cost, 8),
+                    "cache_read_cost_usd": round(cr_cost, 8),
+                    "cache_write_cost_usd": round(cw_cost, 8),
+                    "total_cost_usd": round(tot_cost, 8),
+                })
+    except Exception as e:
+        return jsonify({"error": "parse error: " + str(e)}), 500
+
+    def _s(field):
+        return sum(t[field] for t in turns)
+
+    tot_in = _s("input_tokens")
+    tot_out = _s("output_tokens")
+    tot_cr = _s("cache_read_tokens")
+    tot_cw = _s("cache_write_tokens")
+    tot_in_cost = _s("input_cost_usd")
+    tot_out_cost = _s("output_cost_usd")
+    tot_cr_cost = _s("cache_read_cost_usd")
+    tot_cw_cost = _s("cache_write_cost_usd")
+    tot_cost = _s("total_cost_usd")
+
+    in_plus_cache = tot_in + tot_cr
+    cache_hit_pct = round(tot_cr / in_plus_cache * 100, 1) if in_plus_cache > 0 else 0.0
+
+    est_fresh_cost = tot_cr_cost * 10.0
+    est_savings = max(0.0, est_fresh_cost - tot_cr_cost)
+    est_savings_pct = (
+        round(est_savings / (tot_in_cost + est_fresh_cost) * 100, 1)
+        if (tot_in_cost + est_fresh_cost) > 0
+        else 0.0
+    )
+
+    return jsonify({
+        "session_id": session_id,
+        "turns": turns,
+        "totals": {
+            "input_tokens": tot_in,
+            "output_tokens": tot_out,
+            "cache_read_tokens": tot_cr,
+            "cache_write_tokens": tot_cw,
+            "total_tokens": tot_in + tot_out + tot_cr + tot_cw,
+            "input_cost_usd": round(tot_in_cost, 6),
+            "output_cost_usd": round(tot_out_cost, 6),
+            "cache_read_cost_usd": round(tot_cr_cost, 6),
+            "cache_write_cost_usd": round(tot_cw_cost, 6),
+            "total_cost_usd": round(tot_cost, 6),
+        },
+        "cache_hit_ratio_pct": cache_hit_pct,
+        "est_cache_savings_usd": round(est_savings, 6),
+        "est_cache_savings_pct": est_savings_pct,
+        "turn_count": len(turns),
+    })

@@ -166,7 +166,7 @@ def api_alert_rules():
         channels = data.get("channels", ["banner"])
         cooldown = data.get("cooldown_min", 30)
         enabled = data.get("enabled", True)
-        if rtype not in ("threshold", "spike", "anomaly", "agent_down"):
+        if rtype not in ("threshold", "spike", "token_spike", "anomaly", "agent_down"):
             return jsonify({"error": "Invalid alert type"}), 400
         if not isinstance(threshold, (int, float)) or threshold <= 0:
             return jsonify({"error": "Threshold must be a positive number"}), 400

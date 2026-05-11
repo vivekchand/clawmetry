@@ -1,12 +1,14 @@
 {
-  "name": "@clawmetry/openclaw-plugin",
-  "version": "1.0.0",
-  "description": "ClawMetry observability plugin for OpenClaw — real-time dashboard for token usage, costs, tool calls, sessions, and memory",
+  "name": "clawmetry-plugin",
+  "version": "1.2.0",
+  "description": "ClawMetry observability plugin for OpenClaw — real-time dashboard for token usage, costs, tool calls, sessions, and memory. Local + optional E2E encrypted cloud sync.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "index.ts",
+    "src/service.ts",
     "skills",
     "install.sh",
     "uninstall.sh",
@@ -35,11 +37,10 @@
     "url": "https://github.com/vivekchand/clawmetry.git"
   },
   "homepage": "https://clawmetry.com",
-  "dependencies": {
-    "node-fetch": "^3.3.0"
+  "peerDependencies": {
+    "openclaw": ">=2026.4.20"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "*",
     "typescript": "^5.4.0"
   },
   "openclaw": {
@@ -50,10 +51,12 @@
       "./dist/index.js"
     ],
     "compat": {
-      "pluginApi": ">=2026.4.20"
+      "pluginApi": ">=2026.4.20",
+      "minGatewayVersion": "2026.4.20"
     },
     "build": {
-      "openclawVersion": "2026.4.20"
+      "openclawVersion": "2026.4.20",
+      "pluginSdkVersion": "2026.4.20"
     },
     "release": {
       "publishToClawHub": true,

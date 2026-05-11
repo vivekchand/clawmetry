@@ -1142,7 +1142,12 @@ async function _selfconfigRenderReader(filename, ts) {
       } else if (!d.content || !d.content.trim()) {
         bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file is empty.</div>';
       } else {
-        bodyEl.innerHTML = '<div class="mem-prose">' + _renderMarkdown(d.content) + '</div>';
+        // Show raw markdown source, not rendered HTML — these files ARE the
+        // agent's source-of-truth and editing them has agent-behaviour
+        // consequences, so rendering bullets/headers obscures the actual
+        // bytes the agent reads. Same monospace style as the Edit textarea
+        // so Preview ↔ Edit looks consistent.
+        bodyEl.innerHTML = '<pre style="margin:0;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--text-primary);">' + escHtml(d.content) + '</pre>';
       }
     }
     _selfconfigUpdateStatusBar(filename, ts, d);
@@ -1659,17 +1664,18 @@ async function loadAll() {
     // Render overview quickly; do not block on heavy usage aggregation.
     var overview = await fetchJsonWithTimeout('/api/overview', 3000);
 
-    // Start secondary panels immediately.
-    startActiveTasksRefresh();
+    // Start only critical secondary panels immediately. Expensive/non-critical
+    // cards are staggered below so the initial widget load does not stampede
+    // the backend and queue behind transcript analytics.
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
     loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
-    if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
-    if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
-    if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadReliabilityCard === 'function') setTimeout(function(){ loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)}); }, 1200);
+    if (typeof loadTokenVelocity === 'function') setTimeout(function(){ loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)}); }, 1600);
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
-    if (typeof loadAutonomy === 'function') loadAutonomy().catch(function(e){console.warn('autonomy failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
+    if (typeof loadAutonomy === 'function') setTimeout(function(){ loadAutonomy().catch(function(e){console.warn('autonomy failed',e)}); }, 2600);
+    if (typeof loadAnomalyPanel === 'function') setTimeout(function(){ loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)}); }, 3600);
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -2221,12 +2227,17 @@ window.toggleBrainFilterExpanded = function() {
 function _brainChipHtml(s) {
   var isActive = _brainFilter === s.id;
   var icon = s.icon || (s.id === 'main' ? '🧠' : '🤖');
+  // Add 🧠 badge if this source has any THINK events (reasoning sessions)
+  var hasReasoning = (_brainAllEvents || []).some(function(ev) {
+    return ev.source === s.id && ev.type === 'THINK';
+  });
+  var reasoningBadge = hasReasoning ? ' <span title="Has reasoning chains" style="font-size:9px;">&#129504;</span>' : '';
   return '<button class="brain-chip' + (isActive ? ' active' : '') + '" data-source="' +
     escHtml(s.id) + '" title="' + escHtml(s.id) +
     '" onclick="setBrainFilter(this.dataset.source,this)" style="padding:3px 10px;border-radius:12px;border:1px solid ' +
     s.color + ';background:' + (isActive ? 'rgba(100,100,100,0.2)' : 'transparent') +
     ';color:' + s.color + ';font-size:11px;cursor:pointer;font-weight:' +
-    (isActive ? '600' : '400') + ';">' + icon + ' ' + escHtml(s.label || s.id) + '</button>';
+    (isActive ? '600' : '400') + ';">' + icon + ' ' + escHtml(s.label || s.id) + reasoningBadge + '</button>';
 }
 
 function renderBrainFilterChips(sources) {
@@ -2450,7 +2461,15 @@ function renderBrainStream(events) {
           turnTimeline += '<span style="color:var(--text-faint);min-width:50px;flex-shrink:0;">' + teTime + '</span>';
           turnTimeline += '<span style="color:' + teCol + ';min-width:55px;font-weight:600;flex-shrink:0;">' + teIcon + ' ' + te.type + '</span>';
           turnTimeline += '<span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(teDetail) + '</span>';
-          turnTimeline += '</div>';
+          if (te.type === 'THINK') {
+            var _rcSid = te.source || 'main';
+            var _rcContainerId = 'rc-' + _rcSid.slice(0, 8) + '-' + (te.time || '').replace(/[^0-9]/g, '').slice(-6);
+            turnTimeline += '<button onclick="event.stopPropagation();loadReasoningChain(\'' + escHtml(_rcSid) + '\',\'' + escHtml(_rcContainerId) + '\')" style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #6366f1;background:transparent;color:#818cf8;font-size:10px;cursor:pointer;white-space:nowrap;">&#129504; View chain</button>';
+            turnTimeline += '</div>';
+            turnTimeline += '<div id="' + escHtml(_rcContainerId) + '" style="margin:2px 0 4px 56px;"></div>';
+          } else {
+            turnTimeline += '</div>';
+          }
         });
         if (currentSubagent) turnTimeline += '</div>'; // close last sub-agent group
         turnTimeline += '</div>';
@@ -2471,6 +2490,78 @@ function renderBrainStream(events) {
     html += '</div>';
   });
   el.innerHTML = html;
+}
+
+// Reasoning Chain Viewer (GH #565)
+// Step type → badge color
+var _rcStepColors = {
+  premise: '#3b82f6',
+  hypothesis: '#f59e0b',
+  constraint: '#f97316',
+  conclusion: '#10b981',
+  analysis: '#6b7280'
+};
+
+function loadReasoningChain(sessionId, containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  // Toggle: if already loaded, clear it
+  if (container.dataset.loaded === '1') {
+    container.innerHTML = '';
+    container.dataset.loaded = '0';
+    return;
+  }
+  container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">Loading\u2026</span>';
+  fetch('/api/reasoning?session=' + encodeURIComponent(sessionId))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      container.dataset.loaded = '1';
+      var chains = data.chains || [];
+      var summary = data.summary || {};
+      if (!chains.length) {
+        container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">No reasoning chains found.</span>';
+        return;
+      }
+      var html = '';
+      // Summary bar
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;font-size:10px;color:var(--text-muted);margin-bottom:4px;">';
+      html += '<span style="color:#818cf8;">&#129504; ' + summary.total_thinking_tokens + ' thinking tokens</span>';
+      var totalSteps = chains.reduce(function(acc, c) { return acc + (c.steps || []).length; }, 0);
+      html += '<span>&#128295; ' + totalSteps + ' steps</span>';
+      if (summary.avg_efficiency > 0) {
+        html += '<span>&#9889; Efficiency: ' + summary.avg_efficiency + ':1</span>';
+      }
+      html += '<span>' + chains.length + ' chain' + (chains.length > 1 ? 's' : '') + '</span>';
+      html += '</div>';
+      // Render each chain
+      chains.forEach(function(chain, ci) {
+        html += '<div style="padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;">';
+        if (chains.length > 1) {
+          html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;">Chain ' + (ci + 1) + ' &mdash; ' + chain.thinking_tokens + ' tokens</div>';
+        }
+        (chain.steps || []).forEach(function(step) {
+          var col = _rcStepColors[step.type] || '#6b7280';
+          var preview = (step.content || '').slice(0, 80);
+          var hasMore = (step.content || '').length > 80;
+          var stepId = 'rcs-' + containerId + '-' + ci + '-' + Math.random().toString(36).slice(2,7);
+          html += '<div style="display:flex;gap:6px;align-items:flex-start;padding:2px 0;font-size:10px;">';
+          html += '<span style="flex-shrink:0;padding:0 5px;border-radius:8px;background:' + col + '22;color:' + col + ';font-weight:700;font-size:9px;line-height:16px;">' + escHtml(step.type) + '</span>';
+          html += '<span id="' + stepId + '" style="color:var(--text-secondary);flex:1;">' + escHtml(preview);
+          if (hasMore) {
+            html += '<span id="' + stepId + '-more" style="display:none;">' + escHtml((step.content || '').slice(80)) + '</span>';
+            html += '<span onclick="(function(el){var m=document.getElementById(\'' + stepId + '-more\');if(m){m.style.display=m.style.display===\'none\'?\'inline\':\'none\';el.textContent=m.style.display===\'none\'?\' \u2026more\':\'  \u2212less\';};})(this)" style="color:var(--text-muted);cursor:pointer;"> \u2026more</span>';
+          }
+          html += '</span>';
+          html += '<span style="flex-shrink:0;color:var(--text-faint);font-size:9px;">' + step.word_count + 'w</span>';
+          html += '</div>';
+        });
+        html += '</div>';
+      });
+      container.innerHTML = html;
+    })
+    .catch(function(err) {
+      container.innerHTML = '<span style="color:#ef4444;font-size:10px;">Error loading reasoning chain.</span>';
+    });
 }
 
 function renderBrainChart(events) {
@@ -2544,7 +2635,10 @@ function _startBrainSSE() {
 
   try {
     var url = '/api/brain-stream';
-    var token = localStorage.getItem('gw_token');
+    var token =
+      localStorage.getItem('clawmetry-token') ||
+      localStorage.getItem('gw_token') ||
+      localStorage.getItem('cm-token');
     if (token) url += '?token=' + encodeURIComponent(token);
     var es = new EventSource(url);
     _brainSSE = es;
@@ -2630,7 +2724,7 @@ async function loadContextInspector() {
     // Fetch overview for model + token info
     var ov = await fetch('/api/overview').then(function(r){return r.json();}).catch(function(){return {};});
     // Fetch brain history for compaction events + turn count
-    var brain = await fetch('/api/brain-history').then(function(r){return r.json();}).catch(function(){return {events:[]};});
+    var brain = await fetch('/api/brain-history?limit=300').then(function(r){return r.json();}).catch(function(){return {events:[]};});
     // Fetch skills for header token count
     var skills = await fetch('/api/skills').then(function(r){return r.json();}).catch(function(){return {skills:[],summary:{}};});
 
@@ -2939,7 +3033,7 @@ async function loadBrainPage(silent) {
   if (window.CLOUD_MODE) return;
   if (!silent) { advisorProbe(); selfevolveProbe(); }
   try {
-    var data = await fetchJsonWithTimeout('/api/brain-history', 8000);
+    var data = await fetchJsonWithTimeout('/api/brain-history?limit=300', 20000);
     var events = (data.events || []).slice().sort(function(a,b){
       var ta = a.time ? new Date(a.time).getTime() : 0;
       var tb = b.time ? new Date(b.time).getTime() : 0;
@@ -3742,22 +3836,196 @@ var _cronAutoRefreshTimer = null;
 var _cronActionsAvailable = false;
 var _cronView = 'active'; // 'active' | 'paused' | 'calendar'
 
+// Cache of recent runs per job, populated lazily when Calendar is opened.
+// Keyed by job_id -> [{ts, status}]. Used to render confirmed past-7d
+// activity in the Calendar's "Recently ran" section, including failures.
+var _cronRecentRunsCache = {};
+var _cronRecentRunsLoaded = false;
+
 function setCronView(view) {
   _cronView = view;
   document.querySelectorAll('.cron-view-tab').forEach(function(b) {
     if (b.dataset.view === view) b.classList.add('active'); else b.classList.remove('active');
   });
+  if (view === 'calendar' && !_cronRecentRunsLoaded) {
+    _loadAllCronRecentRuns();
+  } else {
+    renderCrons();
+  }
+}
+
+async function _loadAllCronRecentRuns() {
+  // One-shot bulk-load of recent runs for every ACTIVE job so the Calendar's
+  // "Recently ran" section can render real, agent-confirmed history (with
+  // failure status) rather than "Coming up" only. Skipped if any job has
+  // already supplied state.lastRunAtMs (we'd be duplicating).
+  _cronRecentRunsLoaded = true;
+  try {
+    var active = (_cronJobs || []).filter(function(j) { return j.enabled !== false; });
+    var sevenDaysAgo = Date.now() - 7 * 86400000;
+    var results = await Promise.all(active.map(function(j) {
+      return fetch('/api/cron/' + encodeURIComponent(j.id) + '/runs')
+        .then(function(r) { return r.ok ? r.json() : {runs:[]}; })
+        .catch(function() { return {runs:[]}; });
+    }));
+    active.forEach(function(j, i) {
+      var runs = ((results[i] || {}).runs || [])
+        .map(function(r) {
+          var ts = r.startedAt ? Date.parse(r.startedAt)
+                 : r.timestamp || r.ts || 0;
+          return { ts: ts, status: r.status || 'unknown' };
+        })
+        .filter(function(r) { return r.ts >= sevenDaysAgo && r.ts <= Date.now(); });
+      _cronRecentRunsCache[j.id] = runs;
+    });
+  } catch (e) {
+    // non-fatal: Calendar still renders predictions, just no past runs
+  }
   renderCrons();
 }
 
 function _cronStatus(j) {
-  // Honest status: distinguish 'no run history yet' from 'pending'.
+  // Honest status. We surface four states:
+  //   ok        - last run reported success
+  //   error     - last run reported failure
+  //   stale     - we have a lastRun but it's older than 6h
+  //   scheduled - never ran (or no history) BUT we can compute the next fire
+  //               from the schedule, so the cron is wired up and waiting
+  //   no-data   - we can't even predict the next fire (no schedule)
   var s = (j.state && j.state.lastStatus) || j.lastStatus || '';
   if (s) return s;
   var lastMs = (j.state && j.state.lastRunAtMs) || (j.lastRun ? Date.parse(j.lastRun) : 0);
-  if (!lastMs) return 'no-data';
-  if (Date.now() - lastMs > 6 * 3600 * 1000) return 'stale';
-  return 'ok';
+  if (lastMs) {
+    if (Date.now() - lastMs > 6 * 3600 * 1000) return 'stale';
+    return 'ok';
+  }
+  var nextMs = _cronComputeNextFireMs(j.schedule, Date.now());
+  if (nextMs) return 'scheduled';
+  return 'no-data';
+}
+
+// ── Client-side cron next-fire predictor ────────────────────────────────────
+// The agent uploads cron definitions but doesn't always populate the
+// `state.nextRunAtMs` field (only after a real run lands). Without this we'd
+// show "no data" for every freshly-defined job and an empty Calendar even
+// when the schedule clearly fires multiple times a day. We compute a
+// best-effort next fire client-side from the schedule shape.
+//
+// Handles:
+//   { kind:'cron', expr:'<5-field cron>' }   - common patterns only
+//   { kind:'every', everyMs:N }              - interval since now
+//   { kind:'at', atMs:N }                    - one-shot
+// Falls back to 0 when the expression is too complex (e.g. ranges/lists in
+// multiple fields) - rather than show a wrong time, we omit the prediction.
+
+function _cronParseField(field, min, max) {
+  // Returns sorted array of valid values for this single field, or null on
+  // anything we don't handle.
+  if (field === '*') {
+    var out = [];
+    for (var i = min; i <= max; i++) out.push(i);
+    return out;
+  }
+  // step: */N  or   M-N/S  or   */N over the whole range
+  var stepM = field.match(/^\*\/(\d+)$/);
+  if (stepM) {
+    var step = parseInt(stepM[1], 10);
+    if (!step || step < 1) return null;
+    var arr = [];
+    for (var v = min; v <= max; v += step) arr.push(v);
+    return arr;
+  }
+  // Comma-separated list of single ints
+  if (/^\d+(,\d+)*$/.test(field)) {
+    return field.split(',').map(function(x){ return parseInt(x, 10); })
+      .filter(function(x){ return x >= min && x <= max; })
+      .sort(function(a,b){ return a - b; });
+  }
+  // Single integer
+  if (/^\d+$/.test(field)) {
+    var n = parseInt(field, 10);
+    if (n < min || n > max) return null;
+    return [n];
+  }
+  // Range  M-N
+  var rangeM = field.match(/^(\d+)-(\d+)$/);
+  if (rangeM) {
+    var lo = parseInt(rangeM[1], 10), hi = parseInt(rangeM[2], 10);
+    if (lo > hi || lo < min || hi > max) return null;
+    var rng = [];
+    for (var k = lo; k <= hi; k++) rng.push(k);
+    return rng;
+  }
+  return null;
+}
+
+function _cronComputeNextFireMs(schedule, fromMs) {
+  if (!schedule || typeof schedule !== 'object') return 0;
+  var now = fromMs || Date.now();
+
+  if (schedule.kind === 'every' && schedule.everyMs > 0) {
+    // The agent stores `anchorMs` -- the wall-clock origin from which all
+    // fires are scheduled (typically job creation time + optional stagger).
+    // With that anchor, the next fire is deterministic:
+    //     next = anchor + ceil((now - anchor) / everyMs) * everyMs
+    // and the prediction is 100% accurate (matches the agent's scheduler
+    // exactly). Without an anchor, fall back to "now + everyMs" which is the
+    // worst-case upper bound (true next fire is somewhere in [now, now+N]).
+    if (typeof schedule.anchorMs === 'number' && schedule.anchorMs > 0) {
+      var elapsed = now - schedule.anchorMs;
+      if (elapsed <= 0) return schedule.anchorMs; // agent hasn't started yet
+      var n = Math.ceil(elapsed / schedule.everyMs);
+      return schedule.anchorMs + n * schedule.everyMs;
+    }
+    return now + schedule.everyMs;
+  }
+
+  if (schedule.kind === 'at' && schedule.atMs > now) {
+    return schedule.atMs;
+  }
+
+  if (schedule.kind === 'cron' && schedule.expr) {
+    var parts = schedule.expr.trim().split(/\s+/);
+    if (parts.length < 5) return 0;
+    var minSet = _cronParseField(parts[0], 0, 59);
+    var hrSet  = _cronParseField(parts[1], 0, 23);
+    var domSet = _cronParseField(parts[2], 1, 31);
+    var monSet = _cronParseField(parts[3], 1, 12);
+    var dowSet = _cronParseField(parts[4], 0, 6);
+    if (!minSet || !hrSet || !domSet || !monSet || !dowSet) return 0;
+
+    // Walk forward minute by minute from `now+1min` until we find a match,
+    // capped at 366 days so a malformed schedule can't infinite-loop.
+    var cap = now + 366 * 86400000;
+    var t = new Date(now + 60000);
+    t.setSeconds(0, 0);
+    while (t.getTime() < cap) {
+      var mo = t.getMonth() + 1;
+      var dom = t.getDate();
+      var dow = t.getDay();
+      var hr = t.getHours();
+      var mi = t.getMinutes();
+      // Cron's day match: if BOTH dom and dow are restricted, OR them.
+      // If only one is restricted (other is "*"), AND them.
+      var domStar = parts[2] === '*';
+      var dowStar = parts[4] === '*';
+      var domOk = domSet.indexOf(dom) >= 0;
+      var dowOk = dowSet.indexOf(dow) >= 0;
+      var dayMatch = (domStar && dowStar) ? true
+                   : (domStar) ? dowOk
+                   : (dowStar) ? domOk
+                   : (domOk || dowOk);
+      if (monSet.indexOf(mo) >= 0
+          && hrSet.indexOf(hr) >= 0
+          && minSet.indexOf(mi) >= 0
+          && dayMatch) {
+        return t.getTime();
+      }
+      t = new Date(t.getTime() + 60000);
+    }
+    return 0;
+  }
+  return 0;
 }
 
 function toggleCronAutoRefresh() {
@@ -3953,12 +4221,13 @@ function renderCronList(jobs) {
     var disabledClass = isEnabled ? '' : ' cron-disabled';
     var expanded = _cronExpanded[j.id];
 
-    var labelMap = {'no-data':'no data','stale':'stale','ok':'ok','error':'error','pending':'pending'};
+    var labelMap = {'no-data':'no data','stale':'stale','ok':'ok','error':'error','pending':'pending','scheduled':'scheduled'};
     var badgeLabel = isEnabled ? (labelMap[status] || status) : 'disabled';
     var badgeClass = isEnabled ? status : 'pending';
     var badgeTitle = '';
-    if (status === 'no-data') badgeTitle = 'No run history yet — ClawMetry has not received any runs from your agent for this job. The schedule may still be firing on the agent side.';
+    if (status === 'no-data') badgeTitle = 'No run history yet AND no schedule that we can predict. Check the agent side.';
     else if (status === 'stale') badgeTitle = 'Last run was over 6h ago — job may have stopped firing.';
+    else if (status === 'scheduled') badgeTitle = 'Job is wired up and waiting for its next fire. Once a real run lands, this will switch to ok / error with run history.';
 
     html += '<div class="cron-item' + disabledClass + '" onclick="toggleCronExpand(\'' + escHtml(j.id) + '\')">';
     html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
@@ -3977,7 +4246,11 @@ function renderCronList(jobs) {
     html += '<div class="cron-schedule">' + formatSchedule(j.schedule) + '</div>';
     html += '<div class="cron-meta">';
     if (j.state && j.state.lastRunAtMs) html += 'Last: ' + timeAgo(j.state.lastRunAtMs);
-    if (j.state && j.state.nextRunAtMs) html += ' &middot; Next: ' + formatTime(j.state.nextRunAtMs);
+    // Prefer the agent's reported next-run time; fall back to a client-side
+    // prediction from the schedule expression so newly-defined jobs (no run
+    // history yet) still surface a useful "Next: ..." line.
+    var _nextMs = (j.state && j.state.nextRunAtMs) || _cronComputeNextFireMs(j.schedule, Date.now());
+    if (_nextMs) html += ' &middot; Next: ' + formatTime(_nextMs);
     if (j.state && j.state.lastDurationMs) html += ' &middot; Took: ' + (j.state.lastDurationMs/1000).toFixed(1) + 's';
     if (j.lastRunTokens) html += ' &middot; ' + j.lastRunTokens.toLocaleString() + ' tok';
     if (j.lastRunCostUsd) html += ' &middot; $' + j.lastRunCostUsd.toFixed(4);
@@ -4065,13 +4338,35 @@ function renderCronCalendar(jobs) {
 
   var upcoming = [];
   var recent = [];
+  var predictedCount = 0;
   jobs.forEach(function(j) {
     var nextMs = j.state && j.state.nextRunAtMs;
-    if (nextMs && nextMs >= now && nextMs <= future) upcoming.push({ts: nextMs, job: j});
+    var predicted = false;
+    if (!nextMs) {
+      // No agent-reported next run -- compute it from the schedule so the
+      // Calendar populates immediately for jobs that have never landed a
+      // run record yet. This is the difference between "Coming up: 0" and
+      // showing all 17 actively-scheduled jobs grouped by day.
+      var pred = _cronComputeNextFireMs(j.schedule, now);
+      if (pred) { nextMs = pred; predicted = true; }
+    }
+    if (nextMs && nextMs >= now && nextMs <= future) {
+      upcoming.push({ts: nextMs, job: j, predicted: predicted});
+      if (predicted) predictedCount++;
+    }
     var lastMs = j.state && j.state.lastRunAtMs;
     if (lastMs && lastMs >= past && lastMs <= now) {
       recent.push({ts: lastMs, job: j, status: j.state.lastStatus || 'unknown'});
     }
+    // Also pull every confirmed run from the per-job /runs cache (loaded
+    // lazily when Calendar tab opens). This is how past failures land in
+    // "Recently ran" with a red icon, even if state.lastStatus is missing.
+    var cached = _cronRecentRunsCache[j.id] || [];
+    cached.forEach(function(r) {
+      if (r.ts >= past && r.ts <= now && r.ts !== lastMs) {
+        recent.push({ts: r.ts, job: j, status: r.status});
+      }
+    });
   });
   upcoming.sort(function(a,b){return a.ts - b.ts;});
   recent.sort(function(a,b){return b.ts - a.ts;});
@@ -4104,14 +4399,29 @@ function renderCronCalendar(jobs) {
 
   if (upcoming.length > 0) {
     html += '<div class="cron-cal-section">&#x1F552; Coming up</div>';
+    if (predictedCount > 0 && recent.length === 0) {
+      // We populated this calendar entirely from client-side predictions
+      // because the agent has not reported any run state yet. Be honest:
+      // the dots and times below are best-effort, not confirmed acks.
+      html += '<div style="background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.2);'
+            + 'border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:11px;color:var(--text-muted);'
+            + 'line-height:1.5;">'
+            + '&#x1F4A1; ClawMetry has not received any run state from your agent yet, so these times are '
+            + 'computed from each schedule. They will be replaced with confirmed run times once the first '
+            + 'real run lands.</div>';
+    }
     var upGroups = _cronGroupByDay(upcoming);
     Object.keys(upGroups).sort().forEach(function(k) {
       html += '<div class="cron-cal-day">';
       html += '<div class="cron-cal-daylabel">' + _cronDayLabel(k) + '</div>';
       upGroups[k].forEach(function(it) {
+        var icon = it.predicted ? '&#x231B;' : '&#x231B;';
+        var iconTitle = it.predicted ? 'Predicted from schedule (not yet confirmed by agent)'
+                                     : 'Reported by the agent as the next scheduled run';
+        var iconColor = it.predicted ? 'rgba(148,163,184,0.6)' : 'var(--text-muted)';
         html += '<div class="cron-cal-row">';
         html += '<div class="cron-cal-time">' + _cronTimeStr(it.ts) + '</div>';
-        html += '<div class="cron-cal-status" style="color:var(--text-muted);">&#x231B;</div>';
+        html += '<div class="cron-cal-status" style="color:' + iconColor + ';" title="' + iconTitle + '">' + icon + '</div>';
         html += '<div class="cron-cal-name">' + escHtml(it.job.name || it.job.id) + '</div>';
         html += '<div class="cron-cal-sched">' + escHtml(formatSchedule(it.job.schedule)) + '</div>';
         html += '</div>';
@@ -4811,7 +5121,7 @@ function startHealthStream() {
 // ===== System Health Panel =====
 async function loadSystemHealth() {
   try {
-    var d = await fetchJsonWithTimeout('/api/system-health', 4000);
+    var d = await fetchJsonWithTimeout('/api/system-health', 18000);
     var services = Array.isArray(d.services) ? d.services : [];
     var channels = Array.isArray(d.channels) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];
@@ -4901,7 +5211,7 @@ async function loadSystemHealth() {
 
     // Delegation chain panel (AgentWeave-inspired provenance view)
     try {
-      var chainData = await fetch('/api/delegation-tree').then(function(r){return r.json();}).catch(function(){return {chains:[]};});
+      var chainData = await fetchJsonWithTimeout('/api/delegation-tree', 4000).catch(function(){return {chains:[]};});
       var chains = (chainData && chainData.chains) || [];
       var chainsEl = document.getElementById('delegation-chains-panel');
       if (chainsEl) {
@@ -4951,7 +5261,7 @@ async function loadSystemHealth() {
 
     // Heartbeat status in system health
     try {
-      var hbData = await fetch('/api/heartbeat-status').then(function(r){return r.json();});
+      var hbData = await fetchJsonWithTimeout('/api/heartbeat-status', 3000);
       var hbEl = document.getElementById('sh-heartbeat');
       if (hbEl) {
         var hbStatus = hbData.status || 'unknown';
@@ -5033,7 +5343,7 @@ async function _loadReliabilityWidget() {
   var el = document.getElementById('sh-reliability');
   if (!wrap || !el) return;
   try {
-    var r = await fetch('/api/reliability').then(function(r) { return r.json(); });
+    var r = await fetchJsonWithTimeout('/api/reliability', 4000);
     if (r.direction === 'insufficient_data' || r.error) {
       wrap.style.display = 'none';
       return;
@@ -5077,6 +5387,67 @@ function startSystemHealthRefresh() {
   loadSystemHealth();
   if (window._sysHealthTimer) clearInterval(window._sysHealthTimer);
   window._sysHealthTimer = setInterval(loadSystemHealth, 30000);
+}
+
+async function loadDiagnostics() {
+  var el = document.getElementById('sh-diagnostics');
+  if (!el) return false;
+  try {
+    var d = await fetchJsonWithTimeout('/api/diagnostics', 6000).catch(function() {
+      return fetchJsonWithTimeout('/api/config-diagnostics', 6000);
+    });
+    var warnings = Array.isArray(d.warnings) ? d.warnings : [];
+    var flags = d.openclaw_flags && typeof d.openclaw_flags === 'object' ? d.openclaw_flags : {};
+    var flagKeys = Object.keys(flags);
+    var html = '';
+    function row(label, value, color) {
+      html += '<div><span style="color:var(--text-muted);">' + escHtml(label) + ':</span> '
+        + '<span style="color:' + (color || 'var(--text-primary)') + ';">' + escHtml(value == null || value === '' ? '—' : value) + '</span></div>';
+    }
+    row('Gateway', d.gateway_url || ('port ' + (d.gateway_port || '—')));
+    row('Workspace', d.workspace_path || '—');
+    row('Auth token', d.auth_token_status || 'unknown', d.auth_token_status === 'present' ? 'var(--text-success,#22c55e)' : 'var(--text-error,#dc2626)');
+    if (flagKeys.length) {
+      row('OpenClaw flags', flagKeys.map(function(k){ return k + '=' + flags[k]; }).join(', '));
+    }
+    if (warnings.length) {
+      html += '<div style="margin-top:6px;color:#f59e0b;">' + warnings.map(function(w){return '⚠️ ' + escHtml(w);}).join('<br>') + '</div>';
+    } else {
+      html += '<div style="margin-top:6px;color:var(--text-success,#22c55e);">✅ No diagnostics warnings</div>';
+    }
+    el.innerHTML = html;
+    return true;
+  } catch (e) {
+    console.warn('diagnostics load failed', e);
+    el.innerHTML = '<div style="color:var(--text-muted);">Unable to load diagnostics right now</div>';
+    return false;
+  }
+}
+
+function copyDiagnostics() {
+  var el = document.getElementById('sh-diagnostics');
+  var btn = document.getElementById('sh-diagnostics-copy');
+  var text = el ? (el.innerText || el.textContent || '') : '';
+  if (!text) return;
+  function done() {
+    if (!btn) return;
+    var old = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(function(){ btn.textContent = old || '📋 Copy'; }, 1200);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(function(){});
+  } else {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch(e) {}
+  }
 }
 
 // ===== Sandbox Status (dedicated endpoint) =====
@@ -6436,7 +6807,7 @@ function startOverviewRefresh() {
 // instead of the previous "last tool call only" summary.
 async function loadMainActivity() {
   try {
-    var data = await fetchJsonWithTimeout('/api/brain-history?limit=40', 6000);
+    var data = await fetchJsonWithTimeout('/api/brain-history?limit=40', 12000);
     var el = document.getElementById('main-activity-list');
     var dot = document.getElementById('main-activity-dot');
     var label = document.getElementById('main-activity-label');
@@ -7512,9 +7883,6 @@ async function loadOverviewTasks() {
     var countBadge = document.getElementById('overview-tasks-count-badge');
     if (!el) return true;
     var agents = data.subagents || [];
-
-    // Also load into hidden active-tasks-grid for compatibility
-    loadActiveTasks();
 
     if (agents.length === 0) {
       if (countBadge) countBadge.textContent = '';
@@ -9734,7 +10102,7 @@ function toggleModalAutoRefresh() {
 
 function switchModalTab(tab) {
   _modalTab = tab;
-  document.querySelectorAll('.modal-tab').forEach(function(t){ t.classList.toggle('active', t.textContent.toLowerCase().indexOf(tab) >= 0 || (tab==='full' && t.textContent==='Full Logs')); });
+  document.querySelectorAll('.modal-tab').forEach(function(t){ t.classList.toggle('active', t.textContent.toLowerCase().indexOf(tab) >= 0 || (tab==='full' && t.textContent==='Full Logs') || (tab==='models' && t.textContent==='Model Journey')); });
   renderModalContent();
 }
 
@@ -10039,6 +10407,8 @@ function renderModalContent() {
   }
   if (_modalTab === 'summary') renderModalSummary(el);
   else if (_modalTab === 'narrative') renderModalNarrative(el);
+  else if (_modalTab === 'tools') renderModalTools(el);
+  else if (_modalTab === 'models') renderModalModelJourney(el);
   else renderModalFull(el);
 }
 
@@ -10089,6 +10459,10 @@ function renderModalNarrative(el) {
       icon = '🔧'; text = 'Called tool: <code>' + escHtml(evt.toolName||'') + '</code>';
     } else if (evt.type === 'result') {
       icon = '✅'; text = 'Got result (' + (evt.text||'').length + ' chars)';
+    } else if (evt.type === 'model_change') {
+      icon = '🔄'; text = 'Switched to model: <strong>' + escHtml(evt.modelId||'') + '</strong>' + (evt.provider ? ' (' + escHtml(evt.provider) + ')' : '');
+    } else if (evt.type === 'thinking_level_change') {
+      icon = '🧠'; text = 'Thinking level changed to: <strong>' + escHtml(evt.thinkingLevel||'') + '</strong>';
     } else return;
     html += '<div class="narrative-item"><span class="narr-icon">' + icon + '</span>' + text + '</div>';
   });
@@ -10131,6 +10505,26 @@ function renderEvtItem(evt, idx) {
     icon = '✅'; typeClass = 'type-result';
     summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
     body = evt.text || '';
+  } else if (evt.type === 'model_change') {
+    // Render as a visual divider row, not a collapsible event
+    var mcTs = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+    var mcLabel = escHtml(evt.modelId || 'unknown');
+    var mcProv = evt.provider ? ' <span style="opacity:0.7;">(' + escHtml(evt.provider) + ')</span>' : '';
+    return '<div class="evt-annotation evt-model-change">'
+      + '<span class="evt-annotation-line"></span>'
+      + '<span class="evt-annotation-badge">🔄 Model → ' + mcLabel + mcProv + '</span>'
+      + '<span class="evt-annotation-ts">' + escHtml(mcTs) + '</span>'
+      + '<span class="evt-annotation-line"></span>'
+      + '</div>';
+  } else if (evt.type === 'thinking_level_change') {
+    var tlTs = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+    var tlLabel = escHtml(evt.thinkingLevel || 'unknown');
+    return '<div class="evt-annotation evt-thinking-change">'
+      + '<span class="evt-annotation-line"></span>'
+      + '<span class="evt-annotation-badge">🧠 Thinking → ' + tlLabel + '</span>'
+      + '<span class="evt-annotation-ts">' + escHtml(tlTs) + '</span>'
+      + '<span class="evt-annotation-line"></span>'
+      + '</div>';
   } else {
     summary = '<strong>' + escHtml(evt.type) + '</strong>';
     body = JSON.stringify(evt, null, 2);
@@ -10190,6 +10584,181 @@ function renderModalFull(el) {
     }
   }
   el.innerHTML = html || '<div style="padding:20px;color:var(--text-muted);">No events yet</div>';
+}
+
+async function renderModalTools(el) {
+  if (!_modalSessionId) {
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No session loaded.</div>';
+    return;
+  }
+  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading tool timeline…</div>';
+  var data;
+  try {
+    var r = await fetch('/api/session-tools?session_id=' + encodeURIComponent(_modalSessionId) + '&args_chars=200&result_chars=200&include_unpaired=1');
+    data = await r.json();
+  } catch(e) {
+    el.innerHTML = '<div style="padding:24px;color:#ef5350">Failed to load tool timeline.</div>';
+    return;
+  }
+  var tools = data.tools || [];
+  if (!tools.length) {
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No tool calls recorded for this session.</div>';
+    return;
+  }
+  var stats = data.stats || {};
+  var span = stats.span_ms || 1;
+  var t0 = stats.first_start_ms || 0;
+  var html = '<div style="padding:16px 20px;overflow-y:auto;">';
+  html += '<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">';
+  html += _statChip('Calls', tools.length);
+  if (stats.error_calls) html += _statChip('Errors', stats.error_calls, '#ef5350');
+  if (stats.distinct_tools) html += _statChip('Distinct tools', stats.distinct_tools);
+  if (span > 0) html += _statChip('Span', _fmtDur(span));
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;font-size:10px;color:var(--text-muted);">';
+  html += '<div style="flex:0 0 150px"></div><div style="flex:1">0</div>';
+  html += '<div style="text-align:right">' + escHtml(_fmtDur(span)) + '</div></div>';
+  tools.forEach(function(tool) {
+    var st = (tool.start_ms || t0) - t0;
+    var en = (tool.end_ms && tool.paired ? tool.end_ms : tool.start_ms || t0) - t0;
+    if (en < st) en = st;
+    var startPct = (st / span * 100).toFixed(2);
+    var widthPct = Math.max((en - st) / span * 100, 0.4).toFixed(2);
+    var barColor = tool.is_error ? '#ef5350' : '#4caf50';
+    var name = escHtml((tool.tool_name || 'unknown').replace(/^mcp__[^_]+__/, '').substring(0, 26));
+    var durLabel = tool.paired ? escHtml(_fmtDur(tool.duration_ms)) : '&ndash;';
+    var tip = escHtml((tool.tool_name || '') + (tool.result_preview ? ' → ' + (tool.result_preview || '').substring(0, 80) : ''));
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;" title="' + tip + '">';
+    html += '<div style="flex:0 0 150px;font-size:11px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + name + '</div>';
+    html += '<div style="flex:1;position:relative;height:14px;background:var(--bg-secondary);border-radius:3px;">';
+    html += '<div style="position:absolute;left:' + startPct + '%;width:' + widthPct + '%;height:100%;background:' + barColor + ';border-radius:3px;opacity:0.8;"></div>';
+    html += '</div>';
+    html += '<div style="flex:0 0 44px;font-size:10px;color:var(--text-muted);text-align:right;">' + durLabel + '</div>';
+    html += '</div>';
+  });
+  var byTool = data.by_tool || [];
+  if (byTool.length) {
+    html += '<div style="margin-top:20px;">';
+    html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:8px;">By tool</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;">';
+    byTool.forEach(function(bt) {
+      var avg = (bt.total_duration_ms && bt.calls) ? _fmtDur(Math.round(bt.total_duration_ms / bt.calls)) : null;
+      html += '<div style="background:var(--bg-secondary);padding:8px 10px;border-radius:8px;">';
+      html += '<div style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(bt.tool_name||'') + '">';
+      html += escHtml((bt.tool_name||'').replace(/^mcp__[^_]+__/,'').substring(0,22)) + '</div>';
+      html += '<div style="font-size:13px;font-weight:600;">' + (bt.calls||0) + 'x';
+      if (avg) html += ' <span style="font-size:10px;font-weight:400;color:var(--text-muted)">avg ' + escHtml(avg) + '</span>';
+      if (bt.errors) html += ' <span style="font-size:10px;color:#ef5350">' + bt.errors + ' err</span>';
+      html += '</div></div>';
+    });
+    html += '</div></div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function _statChip(label, value, color) {
+  return '<div style="background:var(--bg-secondary);padding:6px 12px;border-radius:8px;font-size:12px;">'
+    + '<span style="color:var(--text-muted)">' + escHtml(String(label)) + '</span><br>'
+    + '<strong' + (color ? ' style="color:' + color + '"' : '') + '>' + escHtml(String(value)) + '</strong></div>';
+}
+
+function _fmtDur(ms) {
+  if (ms == null || ms < 0) return '?';
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(1) + 's';
+async function renderModalModelJourney(el) {
+  if (!_modalSessionId) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No session ID available</div>';
+    return;
+  }
+  el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Loading model journey...</div>';
+  try {
+    var r = await fetch('/api/session-model-journey/' + encodeURIComponent(_modalSessionId));
+    var data = await r.json();
+    if (data.error) {
+      el.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + escHtml(data.error) + '</div>';
+      return;
+    }
+    var segments = data.segments || [];
+    var thinkingChanges = data.thinking_changes || [];
+    var stats = data.stats || {};
+    if (!segments.length && !thinkingChanges.length) {
+      el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No model changes detected in this session.</div>';
+      return;
+    }
+    var html = '';
+
+    // Stats summary
+    html += '<div class="model-journey-stats">';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + (stats.total_models_used || 1) + '</span><span class="mj-stat-label">Models Used</span></div>';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + (stats.total_segments || 0) + '</span><span class="mj-stat-label">Segments</span></div>';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + (stats.total_tokens || 0).toLocaleString() + '</span><span class="mj-stat-label">Total Tokens</span></div>';
+    html += '<div class="mj-stat"><span class="mj-stat-val">$' + (stats.total_cost_usd || 0).toFixed(4) + '</span><span class="mj-stat-label">Total Cost</span></div>';
+    var durMs = stats.total_duration_ms || 0;
+    var durStr = durMs < 60000 ? Math.round(durMs/1000) + 's' : durMs < 3600000 ? Math.round(durMs/60000) + 'm' : (durMs/3600000).toFixed(1) + 'h';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + durStr + '</span><span class="mj-stat-label">Duration</span></div>';
+    html += '</div>';
+
+    // Segments timeline
+    html += '<div class="model-journey-title">Model Segments</div>';
+    html += '<div class="model-journey-segments">';
+    var totalTokens = stats.total_tokens || 1;
+    for (var i = 0; i < segments.length; i++) {
+      var seg = segments[i];
+      var pct = totalTokens > 0 ? Math.round(seg.tokens / totalTokens * 100) : 0;
+      var segDurMs = seg.duration_ms || 0;
+      var segDur = segDurMs < 60000 ? Math.round(segDurMs/1000) + 's' : segDurMs < 3600000 ? Math.round(segDurMs/60000) + 'm' : (segDurMs/3600000).toFixed(1) + 'h';
+      var startTime = seg.start_ms ? new Date(seg.start_ms).toLocaleTimeString() : '--';
+      var endTime = seg.end_ms ? new Date(seg.end_ms).toLocaleTimeString() : '--';
+      // Color coding by model family
+      var modelLower = (seg.modelId || '').toLowerCase();
+      var barColor = modelLower.indexOf('opus') >= 0 ? '#a855f7'
+        : modelLower.indexOf('sonnet') >= 0 ? '#3b82f6'
+        : modelLower.indexOf('haiku') >= 0 ? '#22c55e'
+        : modelLower.indexOf('gpt-4') >= 0 ? '#10b981'
+        : modelLower.indexOf('gpt-3') >= 0 ? '#6b7280'
+        : modelLower.indexOf('o1') >= 0 || modelLower.indexOf('o3') >= 0 || modelLower.indexOf('o4') >= 0 ? '#f59e0b'
+        : modelLower.indexOf('gemini') >= 0 ? '#ef4444'
+        : '#64748b';
+
+      html += '<div class="mj-segment">';
+      html += '<div class="mj-segment-header">';
+      html += '<span class="mj-segment-num">#' + (i + 1) + '</span>';
+      html += '<span class="mj-segment-model" style="color:' + barColor + ';">' + escHtml(seg.modelId || 'unknown') + '</span>';
+      if (seg.provider) html += '<span class="mj-segment-provider">' + escHtml(seg.provider) + '</span>';
+      html += '<span class="mj-segment-time">' + escHtml(startTime) + ' - ' + escHtml(endTime) + '</span>';
+      html += '</div>';
+      html += '<div class="mj-segment-bar-track"><div class="mj-segment-bar-fill" style="width:' + Math.max(2, pct) + '%;background:' + barColor + ';"></div></div>';
+      html += '<div class="mj-segment-details">';
+      html += '<span>' + seg.tokens.toLocaleString() + ' tokens (' + pct + '%)</span>';
+      html += '<span>$' + (seg.cost_usd || 0).toFixed(4) + '</span>';
+      html += '<span>' + segDur + '</span>';
+      html += '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Thinking level changes
+    if (thinkingChanges.length) {
+      html += '<div class="model-journey-title" style="margin-top:16px;">Thinking Level Changes</div>';
+      html += '<div class="model-journey-thinking">';
+      for (var j = 0; j < thinkingChanges.length; j++) {
+        var tc = thinkingChanges[j];
+        var tcTime = tc.timestamp_ms ? new Date(tc.timestamp_ms).toLocaleTimeString() : '--';
+        html += '<div class="mj-thinking-item">';
+        html += '<span class="mj-thinking-icon">🧠</span>';
+        html += '<span class="mj-thinking-level">' + escHtml(tc.thinkingLevel || 'unknown') + '</span>';
+        html += '<span class="mj-thinking-time">' + escHtml(tcTime) + '</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load model journey: ' + escHtml(e.message || String(e)) + '</div>';
+  }
 }
 
 function toggleEvtBody(bodyId, idx) {
@@ -10288,7 +10857,7 @@ async function bootDashboard() {
   var results = await Promise.allSettled([
     _withTimeout(Promise.resolve().then(loadAll), 5000, 'overview'),
     _withTimeout(Promise.resolve().then(loadOverviewTasks), 5000, 'tasks'),
-    _withTimeout(Promise.resolve().then(loadSystemHealth), 5000, 'health'),
+    _withTimeout(Promise.resolve().then(loadSystemHealth), 12000, 'health'),
   ]);
   var okOverview = results[0].status === 'fulfilled' && results[0].value !== false;
   var okTasks    = results[1].status === 'fulfilled' && results[1].value !== false;
@@ -10315,7 +10884,6 @@ async function bootDashboard() {
   startSystemHealthRefresh();
   startOverviewRefresh();
   startOverviewTasksRefresh();
-  startActiveTasksRefresh();
 
   var sub = document.getElementById('boot-sub');
   if (sub) sub.textContent = 'Dashboard ready';

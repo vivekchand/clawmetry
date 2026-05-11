@@ -20,6 +20,9 @@ from flask import Blueprint, jsonify
 
 bp_autonomy = Blueprint("autonomy", __name__)
 
+_AUTONOMY_CACHE = {"ts": 0.0, "data": None}
+_AUTONOMY_CACHE_TTL_SECONDS = 60
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -90,7 +93,11 @@ def _compute_autonomy(sessions_dir: str) -> dict:
     try:
         files = [
             f for f in os.listdir(sessions_dir)
-            if f.endswith(".jsonl") and ".deleted." not in f and ".reset." not in f
+            if f.endswith(".jsonl")
+            and ".deleted." not in f
+            and ".reset." not in f
+            and ".trajectory." not in f
+            and ".checkpoint." not in f
         ]
     except OSError:
         return _empty_response()
@@ -272,6 +279,10 @@ def _empty_response() -> dict:
 @bp_autonomy.route("/api/autonomy")
 def api_autonomy():
     import dashboard as _d
+    now = datetime.now(tz=timezone.utc).timestamp()
+    cached = _AUTONOMY_CACHE.get("data")
+    if cached is not None and (now - float(_AUTONOMY_CACHE.get("ts") or 0)) < _AUTONOMY_CACHE_TTL_SECONDS:
+        return jsonify(cached)
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
@@ -279,4 +290,6 @@ def api_autonomy():
         result = _compute_autonomy(sessions_dir)
     except Exception:
         result = _empty_response()
+    _AUTONOMY_CACHE["data"] = result
+    _AUTONOMY_CACHE["ts"] = now
     return jsonify(result)
