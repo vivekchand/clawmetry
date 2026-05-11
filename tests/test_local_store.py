@@ -267,7 +267,7 @@ def test_health_reports_size_and_count(store):
     h = store.health()
     assert h["event_count"] == 10
     assert h["size_bytes"] > 0
-    assert h["schema_version"] == 1
+    assert h["schema_version"] == 2
     assert h["ring_depth"] == 0
     assert h["ring_dropped_total"] == 0
 
