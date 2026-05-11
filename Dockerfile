@@ -31,7 +31,7 @@ COPY routes/ ./routes/
 RUN pip install --no-cache-dir -e .
 
 # Create directories for OpenClaw integration
-RUN mkdir -p /root/.openclaw /tmp/moltbot
+RUN mkdir -p /root/.openclaw /tmp/moltbot /app/.clawmetry
 
 # Expose port
 EXPOSE 8900

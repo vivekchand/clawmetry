@@ -1,5 +1,68 @@
 ## [Unreleased]
 
+### Local store: multi-agent foundation + naming (epic #964)
+- **Local DB renamed** `events.duckdb` → `clawmetry.duckdb`. The DB now
+  holds events, sessions, memory blobs, heartbeats, system snapshots
+  (and soon spans for tracing) — `events.duckdb` was outgrowing its name.
+  **Auto-migrates** an existing `events.duckdb` (and its `.wal` sibling)
+  on next start. Lossless, no schema change. Skipped if you've set
+  `CLAWMETRY_LOCAL_STORE_PATH` to a custom location.
+- **Multi-agent schema** (SCHEMA_VERSION 1 → 2). New tables: `sessions`,
+  `memory_blobs`, `heartbeats`, `system_snapshots`, `crons`, `subagents`,
+  `openclaw_channels`. `agent_type` discriminator added to `events` and
+  `daily_aggregates` so OpenClaw / Claude Code / Hermes / Cursor / Codex /
+  Aider all coexist in one store. v1 stores auto-upgraded with `ALTER
+  TABLE ADD COLUMN agent_type DEFAULT 'openclaw'` — legacy rows preserved.
+- **Daemon write-through for sessions / memory / heartbeats**. Each cloud
+  sync (`/ingest/sessions`, `/ingest/memory`, `/ingest/heartbeat`) now also
+  persists locally before shipping to cloud. Best-effort; local failures
+  never block cloud sync.
+- **Dashboard reads sessions from local DB** under
+  `CLAWMETRY_LOCAL_STORE_READ=1` (opt-in, falls through to gateway/JSONL
+  when unset OR store is empty).
+
+### Cloud cold-data relay (epic #964 phases 3b + 4)
+- **WebSocket relay client** (`clawmetry/relay.py`) — long-lived WS to
+  `wss://app.clawmetry.com/api/node/relay`. Listens for `{type:"query"}`
+  frames from the cloud, dispatches via the same `relay_dispatch()` the
+  local HTTP API uses, returns chunked responses. Reconnect with
+  exponential backoff (2s → 60s cap). Cloud dashboard can now ask the
+  user's machine for data older than the 24h hot window without us paying
+  for permanent cloud storage.
+- **`websocket-client` is now a base install dep** (was previously
+  `extras_require["relay"]`). The opt-in caused cloud users to silently
+  miss the relay. `pip install clawmetry && clawmetry connect` "just works"
+  again. The `[relay]` extra is kept as a no-op for backwards compat with
+  old install scripts.
+- Cloud-side broker shipped in `clawmetry-cloud#705` + `#711` + `#712`
+  (gunicorn + gevent-websocket migration so flask-sock can do WS upgrades
+  in production).
+
+### Heartbeat
+- **`local_store_size_mb`** + `local_store` health block on every
+  heartbeat. Cloud-side rollout playbook will gate phase 2 (cloud
+  retention slim) on ≥80% of nodes reporting healthy local stores.
+
+### Brain history
+- **Opt-in fast path** under `CLAWMETRY_LOCAL_STORE_READ=1` —
+  `/api/brain-history` returns directly from the local DuckDB (tagged
+  `_source: "local_store"`) instead of re-parsing JSONL. Falls through to
+  the legacy parser when the env var is unset OR the store is empty.
+
+### Tests
+- 70+ new tests covering: relay dispatch, chunking, error frames,
+  capability drift, brain fast-path, sessions fast-path, schema
+  migration v1→v2, ingest_session/memory_blob/heartbeat helpers, daemon
+  write-through, the events.duckdb→clawmetry.duckdb rename + WAL move,
+  env-override skip, no-clobber when both files exist.
+
+### Local-first foundation (epic #964 phase 1) — first shipped in 0.12.164
+- **Local DuckDB event store** at `~/.clawmetry/events.duckdb` — durable record of every telemetry event the daemon parses. Switched from SQLite to DuckDB (decision in clawmetry-cloud meta-PRD): columnar storage makes the dashboard's GROUP BY / time-window analytics 10–100× faster, and unlocks future Parquet export. Adds `duckdb>=0.10` as a dependency.
+- **Daemon writes through to local store** at parse time — local is now the source of truth, cloud is a hot cache. Failures in the local path never block cloud sync.
+- **Two new diagnostic endpoints** — `/api/local-store/health` and `/api/local-store/events` for verification + test harnesses
+- 27 passing tests cover ingest validation, idempotency, batch flush, query filters, restart persistence, ring overflow, and the full sync→store wire-through
+- Note: 0.12.164's SQLite `events.db` file is left in place but no longer read; safe to delete after upgrade.
+
 ---
 
 ## v0.12.120

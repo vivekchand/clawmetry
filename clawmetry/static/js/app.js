@@ -1142,7 +1142,12 @@ async function _selfconfigRenderReader(filename, ts) {
       } else if (!d.content || !d.content.trim()) {
         bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">This file is empty.</div>';
       } else {
-        bodyEl.innerHTML = '<div class="mem-prose">' + _renderMarkdown(d.content) + '</div>';
+        // Show raw markdown source, not rendered HTML — these files ARE the
+        // agent's source-of-truth and editing them has agent-behaviour
+        // consequences, so rendering bullets/headers obscures the actual
+        // bytes the agent reads. Same monospace style as the Edit textarea
+        // so Preview ↔ Edit looks consistent.
+        bodyEl.innerHTML = '<pre style="margin:0;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--text-primary);">' + escHtml(d.content) + '</pre>';
       }
     }
     _selfconfigUpdateStatusBar(filename, ts, d);
@@ -10160,7 +10165,7 @@ function toggleModalAutoRefresh() {
 
 function switchModalTab(tab) {
   _modalTab = tab;
-  document.querySelectorAll('.modal-tab').forEach(function(t){ t.classList.toggle('active', t.textContent.toLowerCase().indexOf(tab) >= 0 || (tab==='full' && t.textContent==='Full Logs')); });
+  document.querySelectorAll('.modal-tab').forEach(function(t){ t.classList.toggle('active', t.textContent.toLowerCase().indexOf(tab) >= 0 || (tab==='full' && t.textContent==='Full Logs') || (tab==='models' && t.textContent==='Model Journey')); });
   renderModalContent();
 }
 
@@ -10465,6 +10470,8 @@ function renderModalContent() {
   }
   if (_modalTab === 'summary') renderModalSummary(el);
   else if (_modalTab === 'narrative') renderModalNarrative(el);
+  else if (_modalTab === 'tools') renderModalTools(el);
+  else if (_modalTab === 'models') renderModalModelJourney(el);
   else renderModalFull(el);
 }
 
@@ -10515,6 +10522,10 @@ function renderModalNarrative(el) {
       icon = '🔧'; text = 'Called tool: <code>' + escHtml(evt.toolName||'') + '</code>';
     } else if (evt.type === 'result') {
       icon = '✅'; text = 'Got result (' + (evt.text||'').length + ' chars)';
+    } else if (evt.type === 'model_change') {
+      icon = '🔄'; text = 'Switched to model: <strong>' + escHtml(evt.modelId||'') + '</strong>' + (evt.provider ? ' (' + escHtml(evt.provider) + ')' : '');
+    } else if (evt.type === 'thinking_level_change') {
+      icon = '🧠'; text = 'Thinking level changed to: <strong>' + escHtml(evt.thinkingLevel||'') + '</strong>';
     } else return;
     html += '<div class="narrative-item"><span class="narr-icon">' + icon + '</span>' + text + '</div>';
   });
@@ -10557,6 +10568,26 @@ function renderEvtItem(evt, idx) {
     icon = '✅'; typeClass = 'type-result';
     summary = '<strong>Result</strong> - ' + escHtml((evt.text||'').substring(0, 120));
     body = evt.text || '';
+  } else if (evt.type === 'model_change') {
+    // Render as a visual divider row, not a collapsible event
+    var mcTs = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+    var mcLabel = escHtml(evt.modelId || 'unknown');
+    var mcProv = evt.provider ? ' <span style="opacity:0.7;">(' + escHtml(evt.provider) + ')</span>' : '';
+    return '<div class="evt-annotation evt-model-change">'
+      + '<span class="evt-annotation-line"></span>'
+      + '<span class="evt-annotation-badge">🔄 Model → ' + mcLabel + mcProv + '</span>'
+      + '<span class="evt-annotation-ts">' + escHtml(mcTs) + '</span>'
+      + '<span class="evt-annotation-line"></span>'
+      + '</div>';
+  } else if (evt.type === 'thinking_level_change') {
+    var tlTs = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+    var tlLabel = escHtml(evt.thinkingLevel || 'unknown');
+    return '<div class="evt-annotation evt-thinking-change">'
+      + '<span class="evt-annotation-line"></span>'
+      + '<span class="evt-annotation-badge">🧠 Thinking → ' + tlLabel + '</span>'
+      + '<span class="evt-annotation-ts">' + escHtml(tlTs) + '</span>'
+      + '<span class="evt-annotation-line"></span>'
+      + '</div>';
   } else {
     summary = '<strong>' + escHtml(evt.type) + '</strong>';
     body = JSON.stringify(evt, null, 2);
@@ -10616,6 +10647,181 @@ function renderModalFull(el) {
     }
   }
   el.innerHTML = html || '<div style="padding:20px;color:var(--text-muted);">No events yet</div>';
+}
+
+async function renderModalTools(el) {
+  if (!_modalSessionId) {
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No session loaded.</div>';
+    return;
+  }
+  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading tool timeline…</div>';
+  var data;
+  try {
+    var r = await fetch('/api/session-tools?session_id=' + encodeURIComponent(_modalSessionId) + '&args_chars=200&result_chars=200&include_unpaired=1');
+    data = await r.json();
+  } catch(e) {
+    el.innerHTML = '<div style="padding:24px;color:#ef5350">Failed to load tool timeline.</div>';
+    return;
+  }
+  var tools = data.tools || [];
+  if (!tools.length) {
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted)">No tool calls recorded for this session.</div>';
+    return;
+  }
+  var stats = data.stats || {};
+  var span = stats.span_ms || 1;
+  var t0 = stats.first_start_ms || 0;
+  var html = '<div style="padding:16px 20px;overflow-y:auto;">';
+  html += '<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">';
+  html += _statChip('Calls', tools.length);
+  if (stats.error_calls) html += _statChip('Errors', stats.error_calls, '#ef5350');
+  if (stats.distinct_tools) html += _statChip('Distinct tools', stats.distinct_tools);
+  if (span > 0) html += _statChip('Span', _fmtDur(span));
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;font-size:10px;color:var(--text-muted);">';
+  html += '<div style="flex:0 0 150px"></div><div style="flex:1">0</div>';
+  html += '<div style="text-align:right">' + escHtml(_fmtDur(span)) + '</div></div>';
+  tools.forEach(function(tool) {
+    var st = (tool.start_ms || t0) - t0;
+    var en = (tool.end_ms && tool.paired ? tool.end_ms : tool.start_ms || t0) - t0;
+    if (en < st) en = st;
+    var startPct = (st / span * 100).toFixed(2);
+    var widthPct = Math.max((en - st) / span * 100, 0.4).toFixed(2);
+    var barColor = tool.is_error ? '#ef5350' : '#4caf50';
+    var name = escHtml((tool.tool_name || 'unknown').replace(/^mcp__[^_]+__/, '').substring(0, 26));
+    var durLabel = tool.paired ? escHtml(_fmtDur(tool.duration_ms)) : '&ndash;';
+    var tip = escHtml((tool.tool_name || '') + (tool.result_preview ? ' → ' + (tool.result_preview || '').substring(0, 80) : ''));
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;" title="' + tip + '">';
+    html += '<div style="flex:0 0 150px;font-size:11px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + name + '</div>';
+    html += '<div style="flex:1;position:relative;height:14px;background:var(--bg-secondary);border-radius:3px;">';
+    html += '<div style="position:absolute;left:' + startPct + '%;width:' + widthPct + '%;height:100%;background:' + barColor + ';border-radius:3px;opacity:0.8;"></div>';
+    html += '</div>';
+    html += '<div style="flex:0 0 44px;font-size:10px;color:var(--text-muted);text-align:right;">' + durLabel + '</div>';
+    html += '</div>';
+  });
+  var byTool = data.by_tool || [];
+  if (byTool.length) {
+    html += '<div style="margin-top:20px;">';
+    html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:8px;">By tool</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;">';
+    byTool.forEach(function(bt) {
+      var avg = (bt.total_duration_ms && bt.calls) ? _fmtDur(Math.round(bt.total_duration_ms / bt.calls)) : null;
+      html += '<div style="background:var(--bg-secondary);padding:8px 10px;border-radius:8px;">';
+      html += '<div style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(bt.tool_name||'') + '">';
+      html += escHtml((bt.tool_name||'').replace(/^mcp__[^_]+__/,'').substring(0,22)) + '</div>';
+      html += '<div style="font-size:13px;font-weight:600;">' + (bt.calls||0) + 'x';
+      if (avg) html += ' <span style="font-size:10px;font-weight:400;color:var(--text-muted)">avg ' + escHtml(avg) + '</span>';
+      if (bt.errors) html += ' <span style="font-size:10px;color:#ef5350">' + bt.errors + ' err</span>';
+      html += '</div></div>';
+    });
+    html += '</div></div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function _statChip(label, value, color) {
+  return '<div style="background:var(--bg-secondary);padding:6px 12px;border-radius:8px;font-size:12px;">'
+    + '<span style="color:var(--text-muted)">' + escHtml(String(label)) + '</span><br>'
+    + '<strong' + (color ? ' style="color:' + color + '"' : '') + '>' + escHtml(String(value)) + '</strong></div>';
+}
+
+function _fmtDur(ms) {
+  if (ms == null || ms < 0) return '?';
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(1) + 's';
+async function renderModalModelJourney(el) {
+  if (!_modalSessionId) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No session ID available</div>';
+    return;
+  }
+  el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">Loading model journey...</div>';
+  try {
+    var r = await fetch('/api/session-model-journey/' + encodeURIComponent(_modalSessionId));
+    var data = await r.json();
+    if (data.error) {
+      el.innerHTML = '<div style="padding:20px;color:var(--text-error);">' + escHtml(data.error) + '</div>';
+      return;
+    }
+    var segments = data.segments || [];
+    var thinkingChanges = data.thinking_changes || [];
+    var stats = data.stats || {};
+    if (!segments.length && !thinkingChanges.length) {
+      el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No model changes detected in this session.</div>';
+      return;
+    }
+    var html = '';
+
+    // Stats summary
+    html += '<div class="model-journey-stats">';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + (stats.total_models_used || 1) + '</span><span class="mj-stat-label">Models Used</span></div>';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + (stats.total_segments || 0) + '</span><span class="mj-stat-label">Segments</span></div>';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + (stats.total_tokens || 0).toLocaleString() + '</span><span class="mj-stat-label">Total Tokens</span></div>';
+    html += '<div class="mj-stat"><span class="mj-stat-val">$' + (stats.total_cost_usd || 0).toFixed(4) + '</span><span class="mj-stat-label">Total Cost</span></div>';
+    var durMs = stats.total_duration_ms || 0;
+    var durStr = durMs < 60000 ? Math.round(durMs/1000) + 's' : durMs < 3600000 ? Math.round(durMs/60000) + 'm' : (durMs/3600000).toFixed(1) + 'h';
+    html += '<div class="mj-stat"><span class="mj-stat-val">' + durStr + '</span><span class="mj-stat-label">Duration</span></div>';
+    html += '</div>';
+
+    // Segments timeline
+    html += '<div class="model-journey-title">Model Segments</div>';
+    html += '<div class="model-journey-segments">';
+    var totalTokens = stats.total_tokens || 1;
+    for (var i = 0; i < segments.length; i++) {
+      var seg = segments[i];
+      var pct = totalTokens > 0 ? Math.round(seg.tokens / totalTokens * 100) : 0;
+      var segDurMs = seg.duration_ms || 0;
+      var segDur = segDurMs < 60000 ? Math.round(segDurMs/1000) + 's' : segDurMs < 3600000 ? Math.round(segDurMs/60000) + 'm' : (segDurMs/3600000).toFixed(1) + 'h';
+      var startTime = seg.start_ms ? new Date(seg.start_ms).toLocaleTimeString() : '--';
+      var endTime = seg.end_ms ? new Date(seg.end_ms).toLocaleTimeString() : '--';
+      // Color coding by model family
+      var modelLower = (seg.modelId || '').toLowerCase();
+      var barColor = modelLower.indexOf('opus') >= 0 ? '#a855f7'
+        : modelLower.indexOf('sonnet') >= 0 ? '#3b82f6'
+        : modelLower.indexOf('haiku') >= 0 ? '#22c55e'
+        : modelLower.indexOf('gpt-4') >= 0 ? '#10b981'
+        : modelLower.indexOf('gpt-3') >= 0 ? '#6b7280'
+        : modelLower.indexOf('o1') >= 0 || modelLower.indexOf('o3') >= 0 || modelLower.indexOf('o4') >= 0 ? '#f59e0b'
+        : modelLower.indexOf('gemini') >= 0 ? '#ef4444'
+        : '#64748b';
+
+      html += '<div class="mj-segment">';
+      html += '<div class="mj-segment-header">';
+      html += '<span class="mj-segment-num">#' + (i + 1) + '</span>';
+      html += '<span class="mj-segment-model" style="color:' + barColor + ';">' + escHtml(seg.modelId || 'unknown') + '</span>';
+      if (seg.provider) html += '<span class="mj-segment-provider">' + escHtml(seg.provider) + '</span>';
+      html += '<span class="mj-segment-time">' + escHtml(startTime) + ' - ' + escHtml(endTime) + '</span>';
+      html += '</div>';
+      html += '<div class="mj-segment-bar-track"><div class="mj-segment-bar-fill" style="width:' + Math.max(2, pct) + '%;background:' + barColor + ';"></div></div>';
+      html += '<div class="mj-segment-details">';
+      html += '<span>' + seg.tokens.toLocaleString() + ' tokens (' + pct + '%)</span>';
+      html += '<span>$' + (seg.cost_usd || 0).toFixed(4) + '</span>';
+      html += '<span>' + segDur + '</span>';
+      html += '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Thinking level changes
+    if (thinkingChanges.length) {
+      html += '<div class="model-journey-title" style="margin-top:16px;">Thinking Level Changes</div>';
+      html += '<div class="model-journey-thinking">';
+      for (var j = 0; j < thinkingChanges.length; j++) {
+        var tc = thinkingChanges[j];
+        var tcTime = tc.timestamp_ms ? new Date(tc.timestamp_ms).toLocaleTimeString() : '--';
+        html += '<div class="mj-thinking-item">';
+        html += '<span class="mj-thinking-icon">🧠</span>';
+        html += '<span class="mj-thinking-level">' + escHtml(tc.thinkingLevel || 'unknown') + '</span>';
+        html += '<span class="mj-thinking-time">' + escHtml(tcTime) + '</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load model journey: ' + escHtml(e.message || String(e)) + '</div>';
+  }
 }
 
 function toggleEvtBody(bodyId, idx) {
