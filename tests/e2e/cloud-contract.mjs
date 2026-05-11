@@ -258,7 +258,15 @@ async function testNormalUser() {
       // Dockerfile pin is bumped, every page load throws this error
       // — and that's the very thing release-on-merge needs to ship.
       // See PR #1019 postmortem; revert tracked in #1021 follow-up.
-      !/Unexpected end of input/.test(e)
+      !/Unexpected end of input/.test(e) &&
+      // /api/diagnostics is `cloud-disabled` in the route policy
+      // (returns 410 Gone — it inspects local processes/files which
+      // don't exist on Cloud Run). Dashboard JS calls it anyway and
+      // the console.error is harmless. /api/config-diagnostics same
+      // shape: new OSS endpoint, returns 404 on cloud. Filtering
+      // them here matches the existing /api/skills 410 pattern.
+      !(/\/api\/diagnostics/.test(e) && /\b410\b/.test(e)) &&
+      !(/\/api\/config-diagnostics/.test(e) && /\b404\b/.test(e))
   );
   check('zero unexpected JS errors', real.length === 0, real.slice(0, 5).join('\n      '));
 
