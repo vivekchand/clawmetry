@@ -19,6 +19,11 @@
   </div>
   <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
+  <div class="cron-view-tabs" role="tablist">
+    <button class="cron-view-tab active" data-view="active" onclick="setCronView('active')">Active <span class="cron-view-count" id="crons-count-active"></span></button>
+    <button class="cron-view-tab" data-view="paused" onclick="setCronView('paused')">Paused <span class="cron-view-count" id="crons-count-paused"></span></button>
+    <button class="cron-view-tab" data-view="calendar" onclick="setCronView('calendar')">&#x1F4C5; Calendar</button>
+  </div>
   <div class="card" id="crons-list">Loading...</div>
   <!-- Cron Health Monitor (GH #302) -->
   <div id="cron-health-anomaly-banner" style="

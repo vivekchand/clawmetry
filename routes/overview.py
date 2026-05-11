@@ -207,7 +207,7 @@ def api_overview():
     import dashboard as _d
 
     # Try gateway API for sessions
-    gw_sessions = _d._gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
+    gw_sessions = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_sessions and "sessions" in gw_sessions:
         sessions = gw_sessions["sessions"]
     else:
@@ -517,6 +517,92 @@ def api_timeline():
                 }
             )
     return jsonify({"days": days, "today": now.strftime("%Y-%m-%d")})
+
+
+@bp_overview.route("/api/prompt-errors")
+def api_prompt_errors():
+    """Return recent openclaw:prompt-error events from session JSONL files.
+
+    Scans the 20 most-recently-modified session files so the response stays
+    fast regardless of how many sessions exist.  Supports ?since=<ISO8601>
+    for incremental polling by the client.
+    """
+    import dashboard as _d
+
+    since_raw = request.args.get("since")
+    since_ts = None
+    if since_raw:
+        try:
+            since_ts = datetime.fromisoformat(since_raw.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    session_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    if not os.path.isdir(session_dir):
+        return jsonify({"errors": [], "count": 0})
+
+    try:
+        all_files = [
+            f for f in os.listdir(session_dir) if f.endswith(".jsonl")
+        ]
+        # Scan most-recently-modified first so we surface fresh errors quickly.
+        all_files.sort(
+            key=lambda f: os.path.getmtime(os.path.join(session_dir, f)),
+            reverse=True,
+        )
+        files = all_files[:20]
+    except Exception:
+        return jsonify({"errors": [], "count": 0})
+
+    errors = []
+    for fname in files:
+        fpath = os.path.join(session_dir, fname)
+        try:
+            with open(fpath, "r") as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line.strip())
+                    except Exception:
+                        continue
+                    if obj.get("customType") != "openclaw:prompt-error":
+                        continue
+
+                    ts_raw = (
+                        obj.get("timestamp")
+                        or obj.get("time")
+                        or obj.get("created_at")
+                    )
+                    if since_ts and ts_raw:
+                        try:
+                            ev_ts = datetime.fromisoformat(
+                                str(ts_raw).replace("Z", "+00:00")
+                            )
+                            if ev_ts < since_ts:
+                                continue
+                        except Exception:
+                            pass
+
+                    # Fields may be at the top level or nested under "data".
+                    data = obj.get("data") if isinstance(obj.get("data"), dict) else obj
+                    errors.append(
+                        {
+                            "ts": ts_raw,
+                            "runId": data.get("runId") or obj.get("runId"),
+                            "sessionId": data.get("sessionId") or obj.get("sessionId"),
+                            "provider": data.get("provider") or obj.get("provider"),
+                            "model": data.get("model") or obj.get("model"),
+                            "api": data.get("api") or obj.get("api"),
+                            "error": data.get("error") or obj.get("error"),
+                        }
+                    )
+        except Exception:
+            continue
+
+    errors.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    errors = errors[:50]
+    return jsonify({"errors": errors, "count": len(errors)})
 
 
 @bp_overview.route("/api/cloud-cta/status")
