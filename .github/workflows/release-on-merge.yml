@@ -75,7 +75,11 @@ jobs:
           import clawmetry
           from clawmetry import sync, cli, interceptor, providers_pricing
           from clawmetry.sync import _sync_allowed, _post, send_heartbeat, validate_key
-          from clawmetry.config import Config
+          from clawmetry.config import ClawMetryConfig
+          # Smoke that the local store loads (epic #964 phase 1, ships in 0.12.165+)
+          from clawmetry import local_store
+          ls_health = local_store.get_store().health()
+          assert ls_health['engine'] == 'duckdb', f"local_store engine wrong: {ls_health}"
           print('  imports OK')
           "
           echo "▸ Wheel ships runtime assets (templates, static)"
