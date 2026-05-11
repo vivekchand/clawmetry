@@ -236,6 +236,42 @@ This project is tested with BrowserStack.
 
 [![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
 
+## Telemetry
+
+ClawMetry sends a single anonymous "first run" ping to
+`https://app.clawmetry.com/api/install` the first time you run the
+`clawmetry` CLI on a new machine. We use this to count installs (the
+only marketing metric we have for an OSS project) and to learn which
+agent frameworks our users have installed.
+
+**Exactly one POST per install**, containing:
+
+| Field | Example | Why |
+|---|---|---|
+| `install_id` | random UUID stored at `~/.clawmetry/install_id` | dedup; not linked to your email or api_key |
+| `version` | `0.12.167` | what versions are in the wild |
+| `os` / `os_version` | `Darwin` / `25.3.0` | platform support priorities |
+| `python` | `3.11.15` | Python version support matrix |
+| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | which agents we should integrate with next |
+| `is_ci` / `ci_provider` | `true` / `github_actions` | separate human installs from CI noise |
+
+**What we do NOT send**: IP (cloud derives the country code server-side
+from the request, then discards the IP), hostname, username, workspace
+path, file contents, your api_key, your email, anything PII or
+workspace-specific. The wire payload is auditable in
+[`clawmetry/telemetry.py`](clawmetry/telemetry.py).
+
+**Opt out** (any one of these disables it permanently):
+
+```bash
+export CLAWMETRY_NO_TELEMETRY=1                # per-shell
+export DO_NOT_TRACK=1                          # W3C cross-tool standard
+touch ~/.clawmetry/notelemetry                 # persistent file marker
+```
+
+A network failure here never blocks `clawmetry` from running — the
+ping is fire-and-forget on a daemon thread with a 3 s timeout.
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=vivekchand%2Fclawmetry&type=date&legend=top-left">

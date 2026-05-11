@@ -1462,11 +1462,38 @@ def _instant_register(BOLD, GREEN, DIM):
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            result = _json.loads(resp.read())
-    except Exception as e:
-        print(f"  {DIM(f'Could not reach cloud: {e}')}")
+    # Cloud Run scales `ingest.clawmetry.com` to zero between traffic bursts.
+    # A cold start (container boot + DB pool warm-up) can exceed 15s on the
+    # first hit, which used to drop fresh installs into "local mode" silently.
+    # Match the cold-start-retry pattern we use for the daemon heartbeat
+    # (OSS PR #135): 3 attempts, longer per-attempt timeout, exponential
+    # backoff on timeout / 5xx / connection reset.
+    import time as _t_reg
+    _attempts = 3
+    _per_attempt_timeout = 30
+    _last_err = None
+    for _i in range(_attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=_per_attempt_timeout) as resp:
+                result = _json.loads(resp.read())
+                break
+        except urllib.error.HTTPError as e:
+            # Retry only on transient 5xx (502/503/504 = cold start / LB).
+            if e.code in (502, 503, 504) and _i < _attempts - 1:
+                _last_err = e
+                _t_reg.sleep(2 * (_i + 1))
+                continue
+            print(f"  {DIM(f'Could not reach cloud: {e}')}")
+            return None
+        except Exception as e:
+            _last_err = e
+            if _i < _attempts - 1:
+                _t_reg.sleep(2 * (_i + 1))
+                continue
+            print(f"  {DIM(f'Could not reach cloud: {e}')}")
+            return None
+    else:
+        print(f"  {DIM(f'Could not reach cloud after {_attempts} attempts: {_last_err}')}")
         return None
 
     if not result.get("ok"):
@@ -2076,6 +2103,21 @@ def _cmd_update() -> None:
 def main() -> None:
     import argparse
     from dashboard import main as dashboard_main
+
+    # Anonymous, opt-out, once-per-install ping. See clawmetry/telemetry.py
+    # for the privacy contract. Fires on a daemon thread so a network
+    # failure can't slow CLI startup; honours CLAWMETRY_NO_TELEMETRY=1
+    # and ~/.clawmetry/notelemetry.
+    try:
+        from clawmetry import telemetry as _telemetry
+        try:
+            from dashboard import __version__ as _ver
+        except Exception:
+            _ver = "unknown"
+        _telemetry.maybe_ping(_ver)
+    except Exception:
+        # Never let telemetry plumbing break startup.
+        pass
 
     # Windows: protect against closed/detached stdout/stderr before any library
     # (argparse colour detection, click._winconsole) calls fileno() on them.

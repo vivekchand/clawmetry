@@ -75,7 +75,11 @@ jobs:
           import clawmetry
           from clawmetry import sync, cli, interceptor, providers_pricing
           from clawmetry.sync import _sync_allowed, _post, send_heartbeat, validate_key
-          from clawmetry.config import Config
+          from clawmetry.config import ClawMetryConfig
+          # Smoke that the local store loads (epic #964 phase 1, ships in 0.12.165+)
+          from clawmetry import local_store
+          ls_health = local_store.get_store().health()
+          assert ls_health['engine'] == 'duckdb', f"local_store engine wrong: {ls_health}"
           print('  imports OK')
           "
           echo "▸ Wheel ships runtime assets (templates, static)"
@@ -128,7 +132,13 @@ jobs:
               'connected_at': '2026-05-07T00:00:00Z',
           }, open(os.path.expanduser('~/.clawmetry/config.json'), 'w'))
           "
-          echo "▸ Spawning wheel-installed daemon for 15s"
+          # Give the daemon an empty but valid OpenClaw workspace so its
+          # auto-detection doesn't fall back to /root/.openclaw (which
+          # CI may not have permission to stat).
+          export OPENCLAW_HOME="$HOME/.openclaw-e2e-fixture"
+          mkdir -p "$OPENCLAW_HOME/agents/main/sessions" "$OPENCLAW_HOME/memory" "$OPENCLAW_HOME/logs"
+          echo "{}" > "$OPENCLAW_HOME/agents/main/sessions/sessions.json"
+          echo "▸ Spawning wheel-installed daemon for 15s (OPENCLAW_HOME=$OPENCLAW_HOME)"
           timeout 15 /tmp/smoke-venv/bin/python -m clawmetry.sync > /tmp/daemon.log 2>&1 || true
           if grep -q "Initial heartbeat sent" /tmp/daemon.log; then
             echo "✅ Daemon sent initial heartbeat — wheel + cloud handshake OK"
@@ -177,18 +187,31 @@ jobs:
         run: |
           set -e
           NEW='${{ steps.bump.outputs.new }}'
-          # PyPI's CDN is fast but not instantaneous. Poll up to 90s for
-          # the new version to appear in the JSON metadata before giving
-          # up — most upload→discoverable times are <30s.
+          python3 -m venv /tmp/postpub-venv
+          # PyPI's CDN is fast but not instantaneous, and the JSON metadata
+          # endpoint and the simple index (which pip uses) propagate
+          # independently — JSON can be visible while pip install still
+          # 404s. Poll the actual install path up to 90s before giving up.
+          # Seen in run 25677216433 (2026-05-11): JSON visible at attempt 1,
+          # pip install failed 4s later because /simple/ hadn't propagated,
+          # which aborted the workflow before the version-bump PR step.
+          INSTALL_OK=0
           for i in 1 2 3 4 5 6 7 8 9; do
-            if curl -sf "https://pypi.org/pypi/clawmetry/$NEW/json" > /dev/null; then
-              echo "▸ PyPI metadata for $NEW visible (attempt $i)"
+            if /tmp/postpub-venv/bin/pip install --quiet --no-cache-dir "clawmetry==$NEW" 2>/dev/null; then
+              echo "▸ PyPI install of $NEW succeeded (attempt $i)"
+              INSTALL_OK=1
               break
             fi
             sleep 10
           done
-          python3 -m venv /tmp/postpub-venv
-          /tmp/postpub-venv/bin/pip install --quiet --no-cache-dir "clawmetry==$NEW"
+          if [ "$INSTALL_OK" != "1" ]; then
+            echo "❌ PyPI install of $NEW failed after 90s of retries"
+            echo ""
+            echo "TO YANK $NEW (mark unavailable to new installs while keeping it in history):"
+            echo "  https://pypi.org/manage/project/clawmetry/release/$NEW/  → 'Yank'"
+            echo "Or run a follow-up [RELEASE] PR to publish $NEW patch+1 with the previous code."
+            exit 1
+          fi
           ACTUAL=$(/tmp/postpub-venv/bin/clawmetry --version | tr -d '[:space:]')
           echo "$ACTUAL" | grep -qF "$NEW" || {
             echo "❌ PyPI install reports version $ACTUAL, expected $NEW"
