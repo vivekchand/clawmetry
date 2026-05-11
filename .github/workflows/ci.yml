@@ -35,6 +35,22 @@ jobs:
       - name: Lint (warnings only, don't fail)
         run: ruff check dashboard.py --select E,W --ignore E501,W503 || true
 
+      # v0.12.165 shipped clawmetry/static/js/app.js with a missing `}`
+      # (PR #753). Browsers threw "Unexpected end of input" and the whole
+      # dashboard JS bundle died, stranding every user on the boot
+      # overlay. `node --check` catches this in <1s. Required gate.
+      - name: Setup Node (for JS syntax check)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check JS syntax (all clawmetry/static/js/*.js)
+        run: |
+          set -e
+          for f in clawmetry/static/js/*.js; do
+            node --check "$f" || { echo "❌ JS PARSE FAILED: $f"; exit 1; }
+          done
+          echo "✅ JS Syntax OK"
+
   # ── API tests across all 3 platforms ─────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
