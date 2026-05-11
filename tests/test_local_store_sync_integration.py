@@ -158,3 +158,101 @@ def test_id_synthesised_when_missing(sync_with_isolated_store):
     _wait_for_flush(store)
     rows = store.query_events(session_id="s")
     assert len(rows) == 1
+
+
+# ── PR 2: write-through for sessions / memory / heartbeat ─────────────────
+
+
+def test_local_ingest_sessions_batch_upserts_into_sessions_table(sync_with_isolated_store):
+    sync, ls = sync_with_isolated_store
+    rows = [
+        {
+            "session_id": "sess-1",
+            "model": "claude-opus-4-7",
+            "total_tokens": 12500,
+            "total_cost": 0.42,
+            "started_at": "2026-05-11T10:00:00Z",
+            "updated_at": "2026-05-11T10:30:00Z",
+            "status": "completed",
+            "subject": "Refactoring routes/sessions.py",
+            "channel": "telegram",
+            "chat_type": "private",
+        },
+        {
+            "session_id": "sess-2",
+            "model": "claude-opus-4-7",
+            "total_tokens": 800,
+            "total_cost": 0.03,
+            "status": "active",
+        },
+    ]
+    sync._local_ingest_sessions_batch(rows, node_id="agent+test")
+    store = ls.get_store()
+    out = store._fetch(
+        "SELECT session_id, total_tokens, cost_usd, title, status FROM sessions ORDER BY session_id",
+        [],
+    )
+    assert len(out) == 2
+    assert out[0] == ("sess-1", 12500, 0.42, "Refactoring routes/sessions.py", "completed")
+    assert out[1][0] == "sess-2"
+    assert out[1][4] == "active"
+
+
+def test_local_ingest_sessions_batch_handles_empty_and_id_aliases(sync_with_isolated_store):
+    """Empty list = no-op. Rows missing session_id but with `id` get stored."""
+    sync, ls = sync_with_isolated_store
+    sync._local_ingest_sessions_batch([], node_id="x")  # must not raise
+    sync._local_ingest_sessions_batch(
+        [{"id": "from-id-field", "model": "m", "total_cost": 0.01}],
+        node_id="agent+test",
+    )
+    out = ls.get_store()._fetch("SELECT session_id FROM sessions", [])
+    assert ("from-id-field",) in out
+
+
+def test_local_ingest_memory_files_writes_only_changed(sync_with_isolated_store):
+    sync, ls = sync_with_isolated_store
+    all_files = [
+        ("MEMORY.md", "# All my notes"),
+        ("AGENTS.md", "# Agent roster"),
+        ("memory/notes.md", "# Subnotes"),
+    ]
+    # Only AGENTS.md changed this cycle.
+    sync._local_ingest_memory_files(all_files, ["AGENTS.md"])
+    store = ls.get_store()
+    rows = store._fetch(
+        "SELECT path, blob FROM memory_blobs ORDER BY path", [],
+    )
+    assert len(rows) == 1
+    assert rows[0][0] == "AGENTS.md"
+    assert bytes(rows[0][1]) == b"# Agent roster"
+
+
+def test_local_ingest_memory_files_dedups_on_resync(sync_with_isolated_store):
+    """Same content re-ingested = sha256 dedup, no row update."""
+    sync, ls = sync_with_isolated_store
+    files = [("MEMORY.md", "stable content here")]
+    sync._local_ingest_memory_files(files, ["MEMORY.md"])
+    rows1 = ls.get_store()._fetch(
+        "SELECT updated_at FROM memory_blobs WHERE path='MEMORY.md'", [],
+    )
+    sync._local_ingest_memory_files(files, ["MEMORY.md"])
+    rows2 = ls.get_store()._fetch(
+        "SELECT updated_at FROM memory_blobs WHERE path='MEMORY.md'", [],
+    )
+    assert rows1[0][0] == rows2[0][0]
+
+
+def test_local_ingest_sessions_batch_failure_does_not_break_caller(sync_with_isolated_store):
+    """If the local store throws (e.g. corrupt file), the caller should
+    catch — verified by patching ingest_session to raise."""
+    sync, ls = sync_with_isolated_store
+    store = ls.get_store()
+    with patch.object(store, "ingest_session", side_effect=RuntimeError("disk full")):
+        # The helper itself doesn't catch; the CALLER (sync_session_metadata's
+        # _flush) catches via try/except. Here we just verify the helper
+        # propagates the exception so the caller's try/except sees it.
+        with pytest.raises(RuntimeError, match="disk full"):
+            sync._local_ingest_sessions_batch(
+                [{"session_id": "x"}], node_id="agent+test"
+            )
