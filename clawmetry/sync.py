@@ -1649,6 +1649,23 @@ def send_heartbeat(config: dict) -> bool:
     sec = _collect_security_posture()
     if sec is not None:
         payload["security_posture"] = sec
+    # Local-store health (epic #964 phase 1 → rollout gate for phase 2).
+    # We need ≥80% of active nodes reporting healthy local stores before
+    # slimming cloud retention to 24h. Best-effort; never blocks heartbeat.
+    try:
+        from clawmetry import local_store
+        h = local_store.get_store().health()
+        payload["local_store"] = {
+            "engine":       h.get("engine"),
+            "size_bytes":   h.get("size_bytes", 0),
+            "events_total": h.get("events_total", 0),
+            "ring_depth":   h.get("ring_depth", 0),
+        }
+        # Convenience field the cloud rollout playbook can group/aggregate on.
+        size_mb = (h.get("size_bytes") or 0) / (1024 * 1024)
+        payload["local_store_size_mb"] = round(size_mb, 3)
+    except Exception:
+        pass  # local store optional — never break heartbeat over it
     last_err = None
     for attempt in range(3):
         try:
