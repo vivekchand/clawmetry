@@ -237,6 +237,45 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
+# ── Initial-sync progress (vivekchand/clawmetry#748) ─────────────────────────
+# Tracks per-phase progress to ~/.clawmetry/sync_progress.json so the local
+# dashboard can show a "syncing…" banner on fresh installs instead of empty
+# tabs. Written atomically (tmp + rename) because the dashboard reads this
+# file on every banner poll.
+SYNC_PROGRESS_FILE = CONFIG_DIR / "sync_progress.json"
+_sync_progress_started_at: str | None = None
+
+
+def _record_sync_progress(
+    phase: str, done: int, total: int = 0, status: str = "running"
+) -> None:
+    global _sync_progress_started_at
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).isoformat()
+        if _sync_progress_started_at is None:
+            _sync_progress_started_at = now
+        try:
+            cfg = load_config()
+            node_id = cfg.get("node_id", "")
+        except Exception:
+            node_id = ""
+        payload = {
+            "node_id": node_id,
+            "phase": phase,
+            "done": int(done),
+            "total": int(total),
+            "status": status,
+            "started_at": _sync_progress_started_at,
+            "updated_at": now,
+        }
+        tmp = SYNC_PROGRESS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, SYNC_PROGRESS_FILE)
+    except Exception as e:
+        log.debug(f"Could not record sync progress ({phase}): {e}")
+
+
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
 
@@ -937,6 +976,7 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
     # exactly where we paused -- no event loss, no double-send.
     if not _sync_allowed():
         return 0
+    _record_sync_progress("sessions", 0)
     sessions_dir = paths["sessions_dir"]
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
@@ -1030,6 +1070,7 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
         except Exception as e:
             log.warning(f"Session sync error ({fname}): {e}")
 
+    _record_sync_progress("sessions", total, total)
     return total
 
 
@@ -1041,6 +1082,17 @@ def _flush_session_batch(
     node_id: str,
     subagent_id: str | None = None,
 ) -> None:
+    # Write-through to local SQLite first (epic #964 / phase 1 / issue #958).
+    # Local is the durable store; cloud is a hot cache. If the cloud POST fails
+    # below, the events are still recorded locally and the dashboard's local
+    # read paths will surface them. Failures here never block cloud sync — the
+    # broad except keeps the legacy behaviour intact for users who somehow
+    # land on a corrupt SQLite or a read-only ~/.clawmetry/.
+    try:
+        _local_ingest_session_batch(batch, fname, node_id, subagent_id)
+    except Exception as _e:
+        log.warning("local-store ingest failed (cloud sync continues): %s", _e)
+
     payload = {"session_file": fname, "node_id": node_id, "events": batch}
     # Include subagent_id so the cloud can correlate blobs → sub-agent sessions.
     # The session key UUID (subagent_id) differs from the .jsonl filename UUID.
@@ -1058,6 +1110,56 @@ def _flush_session_batch(
         )
     else:
         _post("/ingest/events", payload, api_key)
+
+
+def _local_ingest_session_batch(
+    batch: list,
+    session_file: str,
+    node_id: str,
+    subagent_id: str | None,
+) -> None:
+    """Translate a batch of raw OpenClaw transcript events into the local
+    store's normalised shape and queue them for write. Idempotent at the
+    store level — INSERT OR IGNORE on event id."""
+    from clawmetry import local_store  # local import: keeps cli/sync importable on Pythons missing sqlite3
+
+    store = local_store.get_store()
+    rows: list[dict] = []
+    # session_file is like '<uuid>.jsonl' — use the uuid as the canonical
+    # session_id so the dashboard's per-session views can correlate.
+    session_id = subagent_id or session_file.split(".jsonl", 1)[0]
+    for obj in batch:
+        if not isinstance(obj, dict):
+            continue
+        # Stable per-event id: prefer an explicit id from the transcript, then
+        # the openclaw eventId, else compose from session_id + timestamp +
+        # message-id-ish hint. INSERT OR IGNORE makes re-delivery harmless.
+        eid = (
+            obj.get("id")
+            or obj.get("eventId")
+            or obj.get("messageId")
+            or f"{session_id}:{obj.get('timestamp','?')}:{obj.get('type','?')}"
+        )
+        ts = obj.get("timestamp") or obj.get("ts") or ""
+        if not ts:
+            # Skip events with no timestamp — the local store's index assumes
+            # ts is set, and filtering them out is safer than synthesising one.
+            continue
+        rows.append({
+            "id": str(eid),
+            "node_id": node_id,
+            "agent_id": "main",  # OpenClaw harness; Claude Code adapter will use 'claude-code'
+            "session_id": session_id,
+            "workspace_id": obj.get("workspace") or obj.get("workspace_id"),
+            "event_type": str(obj.get("type") or obj.get("event_type") or "unknown"),
+            "ts": str(ts),
+            "data": obj,
+            "cost_usd": obj.get("cost_usd") or obj.get("costUsd"),
+            "token_count": obj.get("token_count") or obj.get("tokens"),
+            "model": obj.get("model"),
+        })
+    if rows:
+        store.ingest_many(rows)
 
 
 def sync_sessions_recent(
@@ -1078,6 +1180,7 @@ def sync_sessions_recent(
     """
     if not _sync_allowed():
         return 0
+    _record_sync_progress("sessions_recent", 0)
     from datetime import timedelta
 
     sessions_dir = paths["sessions_dir"]
@@ -1192,6 +1295,7 @@ def sync_sessions_recent(
         except Exception as e:
             log.warning(f"Recent sync error ({fname}): {e}")
 
+    _record_sync_progress("sessions_recent", total, total)
     return total
 
 
@@ -1595,6 +1699,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
     """
     if not _sync_allowed():
         return 0
+    _record_sync_progress("crons", 0)
     api_key = config["api_key"]
     node_id = config["node_id"]
     last_hash = state.get("cron_hash", "")
@@ -1686,6 +1791,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
             for job_id, job_hash in emitted_job_ids:
                 job_dedup[job_id] = [job_hash, now_ts]
             state["cron_hash"] = h
+            _record_sync_progress("crons", len(events), len(events))
             return len(events)
         elif not file_unchanged:
             # File mtime/content changed but every job was deduped — still
@@ -1693,6 +1799,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
             state["cron_hash"] = h
     except Exception as e:
         log.warning(f"Cron sync error: {e}")
+    _record_sync_progress("crons", 0, 0)
     return 0
 
 
@@ -1708,6 +1815,7 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
     """
     if not _sync_allowed():
         return 0
+    _record_sync_progress("session_metadata", 0)
     api_key = config["api_key"]
     node_id = config["node_id"]
     if state is None:
@@ -1885,9 +1993,11 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 log.debug(f"Session parse error ({fpath.name}): {e}")
 
         total_uploaded += _flush(batch)
+        _record_sync_progress("session_metadata", total_uploaded, total_uploaded)
         return total_uploaded
     except Exception as e:
         log.warning(f"Session metadata sync failed: {e}")
+        _record_sync_progress("session_metadata", 0, 0)
         return 0
 
 
@@ -1897,6 +2007,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     Skipped when sync is paused (expired trial)."""
     if not _sync_allowed():
         return 0
+    _record_sync_progress("memory", 0)
     workspace = paths.get("workspace", "")
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
@@ -1925,6 +2036,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
                 memory_files.append((f"memory/{f}", os.path.join(mem_dir, f)))
 
     if not memory_files:
+        _record_sync_progress("memory", 0, 0)
         return 0
 
     # Check for changes via content hash; always send all file contents so the
@@ -1954,6 +2066,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
             log.debug(f"Memory file read error ({name}): {e}")
 
     if not changed_files:
+        _record_sync_progress("memory", len(memory_files), len(memory_files))
         return 0
 
     # Push memory files as encrypted blob (like session events).
@@ -1985,6 +2098,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     except Exception as e:
         log.warning(f"Memory sync error: {e}")
 
+    _record_sync_progress("memory", synced, len(memory_files))
     return synced
 
     # ── Real-time log streaming ────────────────────────────────────────────────────
@@ -3343,6 +3457,7 @@ def run_daemon() -> None:
     state["last_sync"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
     send_heartbeat(config)
+    _record_sync_progress("complete", 0, 0, status="complete")
     log.info("Recent sync complete — Brain feed should show current activity")
 
     # Validate stored log offsets on startup — prevents silent gaps
