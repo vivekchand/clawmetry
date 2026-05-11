@@ -49,7 +49,11 @@ setup(
         "duckdb>=0.10",
     ],
     extras_require={
-        "otel": ["opentelemetry-proto>=1.20.0", "protobuf>=4.21.0"],
+        "otel":  ["opentelemetry-proto>=1.20.0", "protobuf>=4.21.0"],
+        # Cloud cold-data relay tunnel (epic #964 phase 3b). Optional —
+        # if missing, the daemon runs in cloud-ingest-only mode and the
+        # cloud dashboard can't request data older than its 24h window.
+        "relay": ["websocket-client>=1.6"],
     },
     entry_points={
         "console_scripts": [

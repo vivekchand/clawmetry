@@ -3416,6 +3416,18 @@ def run_daemon() -> None:
     send_heartbeat(config)
     log.info("Initial heartbeat sent")
 
+    # ── Cloud cold-data relay (epic #964 phase 3b) ─────────────────────
+    # Long-lived WS to wss://app.clawmetry.com/api/node/relay so the cloud
+    # dashboard can request data older than its 24h hot window without us
+    # paying for permanent storage. No-op if the user hasn't connected to
+    # cloud or the optional `websocket-client` dep is missing — degrades
+    # gracefully to today's cloud-ingest-only behavior.
+    try:
+        from clawmetry import relay as _relay
+        _relay.start_relay_thread(config, version=_get_version())
+    except Exception as _e:
+        log.warning("relay: failed to start (continuing without cold-data relay): %s", _e)
+
     state = load_state()
 
     # Always sync recent events first (last hour) — makes the dashboard
