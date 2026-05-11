@@ -10667,6 +10667,8 @@ function _fmtDur(ms) {
   if (ms == null || ms < 0) return '?';
   if (ms < 1000) return ms + 'ms';
   return (ms / 1000).toFixed(1) + 's';
+}
+
 async function renderModalModelJourney(el) {
   if (!_modalSessionId) {
     el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No session ID available</div>';
