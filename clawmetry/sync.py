@@ -1162,6 +1162,75 @@ def _local_ingest_session_batch(
         store.ingest_many(rows)
 
 
+def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
+    """Mirror a batch of session rows (the same dicts we push to /ingest/sessions)
+    into the local DuckDB ``sessions`` table. One upsert per row; safe to call
+    on a store that already has these sessions (ON CONFLICT DO UPDATE)."""
+    if not rows:
+        return
+    from clawmetry import local_store
+
+    store = local_store.get_store()
+    for s in rows:
+        sid = s.get("session_id") or s.get("session_key") or s.get("id")
+        if not sid:
+            continue
+        # Cost field has been called several things in different code paths
+        # (total_cost, cost_usd, totalCostUsd). Take the first non-None.
+        cost = s.get("cost_usd")
+        if cost is None:
+            cost = s.get("total_cost") or s.get("totalCostUsd") or 0
+        # Channel/chat_type/subject move into a separate metadata blob —
+        # they're OpenClaw-specific and (per the multi-agent design) will get
+        # promoted into the openclaw_channels extension table later.
+        meta_extras = {
+            k: v for k, v in s.items()
+            if k in ("channel", "chat_type", "subject", "recent_model",
+                     "session_key")
+            and v
+        }
+        store.ingest_session({
+            "agent_type": s.get("agent_type") or "openclaw",
+            "session_id": sid,
+            "node_id": node_id,
+            "agent_id": s.get("agent_id") or "main",
+            "title": s.get("subject") or s.get("title"),
+            "started_at": s.get("started_at"),
+            "last_active_at": s.get("updated_at") or s.get("last_active_at"),
+            "ended_at": s.get("ended_at"),
+            "status": s.get("status"),
+            "total_tokens": s.get("total_tokens") or 0,
+            "cost_usd": cost,
+            "message_count": s.get("message_count") or 0,
+            "metadata": meta_extras or None,
+        })
+
+
+def _local_ingest_memory_files(all_files: list, changed_paths: list) -> None:
+    """Persist plaintext memory blobs to local DuckDB. ``all_files`` is the
+    full list of (name, content) tuples; ``changed_paths`` is the subset
+    that changed since last sync. We only write the changed ones — the
+    store's sha256 dedup means it's a no-op anyway, but skipping the
+    encode round-trip is cheaper."""
+    if not changed_paths:
+        return
+    from clawmetry import local_store
+
+    store = local_store.get_store()
+    changed_set = set(changed_paths)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for name, content in all_files:
+        if name not in changed_set:
+            continue
+        store.ingest_memory_blob({
+            "agent_type": "openclaw",  # OpenClaw harness writes these files
+            "agent_id": "main",
+            "path": name,
+            "ts": now_iso,
+            "blob": content,
+        })
+
+
 def sync_sessions_recent(
     config: dict, state: dict, paths: dict, minutes: int = 60
 ) -> int:
@@ -1666,6 +1735,13 @@ def send_heartbeat(config: dict) -> bool:
         payload["local_store_size_mb"] = round(size_mb, 3)
     except Exception:
         pass  # local store optional — never break heartbeat over it
+    # Local-first: persist this heartbeat to local DuckDB so the dashboard
+    # has a per-node liveness history even when offline. Best-effort.
+    try:
+        from clawmetry import local_store
+        local_store.get_store().ingest_heartbeat(payload)
+    except Exception as _le:
+        log.debug("local-store heartbeat ingest failed (continuing): %s", _le)
     last_err = None
     for attempt in range(3):
         try:
@@ -1904,6 +1980,12 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 for s in rows:
                     if not s.get("model"):
                         s["model"] = fallback
+            # Local-first: write through to ~/.clawmetry/events.duckdb FIRST.
+            # Best-effort — never blocks cloud sync on a local-store failure.
+            try:
+                _local_ingest_sessions_batch(rows, node_id)
+            except Exception as _e:
+                log.warning("local-store sessions ingest failed (cloud sync continues): %s", _e)
             _post("/ingest/sessions", {"node_id": node_id, "sessions": rows}, api_key)
             return len(rows)
 
@@ -2097,6 +2179,14 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
         ],
     }
     try:
+        # Local-first: write changed memory files to local DuckDB BEFORE cloud.
+        # The local store gets PLAINTEXT (it's the user's own machine); cloud
+        # gets ciphertext when E2E is on. Best-effort.
+        try:
+            _local_ingest_memory_files(all_file_contents, changed_files)
+        except Exception as _le:
+            log.warning("local-store memory ingest failed (cloud sync continues): %s", _le)
+
         if enc_key:
             from clawmetry.sync import encrypt_payload
 
