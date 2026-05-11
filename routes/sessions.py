@@ -60,6 +60,15 @@ def _infer_session_type(session):
 @bp_sessions.route("/api/sessions")
 def api_sessions():
     import dashboard as _d
+    # Epic #964 PR 3: opt-in local-store fast path. When
+    # CLAWMETRY_LOCAL_STORE_READ=1 AND the local sessions table has rows,
+    # serve directly from DuckDB. Falls through to gateway/JSONL otherwise
+    # (so a fresh install with no local store, or a non-OpenClaw user, sees
+    # the same data as before — zero-change default).
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_sessions()
+        if fast is not None:
+            return jsonify(fast)
     gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
         sessions = _d._augment_sessions_with_burn(gw_data["sessions"])
@@ -69,6 +78,59 @@ def api_sessions():
         if "session_type" not in s:
             s["session_type"] = _infer_session_type(s)
     return jsonify({"sessions": sessions})
+
+
+def _try_local_store_sessions():
+    """Read sessions directly from the local DuckDB. Returns the same
+    response shape as the legacy gateway-backed endpoint (`{"sessions":
+    [...]}`). Returns ``None`` to defer to the JSONL/gateway fallback if:
+      - the local_store module isn't importable
+      - the sessions table is empty
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        rows = store._fetch("""
+            SELECT agent_type, session_id, agent_id, title, started_at,
+                   last_active_at, ended_at, status, total_tokens, cost_usd,
+                   message_count, metadata
+            FROM sessions
+            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+            LIMIT 200
+        """, [])
+    except Exception:
+        return None
+    if not rows:
+        return None
+    out = []
+    for r in rows:
+        meta = {}
+        if r[11]:
+            try:
+                import json as _j
+                meta = _j.loads(bytes(r[11]).decode("utf-8"))
+            except Exception:
+                pass
+        out.append({
+            "agent_type":     r[0],
+            "session_id":     r[1],
+            "agent_id":       r[2],
+            "title":          r[3] or "",
+            "started_at":     r[4] or "",
+            "updated_at":     r[5] or "",
+            "ended_at":       r[6] or "",
+            "status":         r[7] or "",
+            "total_tokens":   int(r[8] or 0),
+            "total_cost":     float(r[9] or 0.0),
+            "message_count":  int(r[10] or 0),
+            "channel":        meta.get("channel", ""),
+            "chat_type":      meta.get("chat_type", ""),
+            "subject":        r[3] or meta.get("subject", ""),
+            "session_type":   meta.get("session_type", "main"),
+            "_source":        "local_store",
+        })
+    return {"sessions": out, "_source": "local_store"}
 
 
 @bp_sessions.route("/api/sessions/by-type")
