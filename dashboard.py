@@ -112,7 +112,6 @@ from routes.selfconfig import bp_selfconfig
 from routes.agents import bp_agents
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
-from routes.agents import bp_agents
 from routes.local_query import bp_local_query
 from helpers.openapi import bp_openapi
 
@@ -8495,7 +8494,6 @@ def detect_config(args=None):
     app.register_blueprint(bp_agents)
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
-    app.register_blueprint(bp_agents)
     app.register_blueprint(bp_local_query)
 
     # Register built-in agent adapters. External plugins can register more

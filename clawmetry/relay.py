@@ -6,9 +6,9 @@ waits for `{type:"query"}` frames from the cloud, dispatches each via
 
 Design notes
 ------------
-- **Optional dependency.** `websocket-client` is in `extras_require["relay"]`,
-  not the base install. If it's missing the relay simply doesn't start; the
-  daemon keeps working in cloud-ingest-only mode.
+- **Base install dep** since 0.12.166. `websocket-client` is ~100 KB pure
+  Python; the previous `extras_require["relay"]` opt-in caused cloud users
+  to silently miss the relay.
 - **Daemon thread.** One thread per process. Reconnects with exponential
   backoff (2s → 60s cap). The sync daemon's main loop is unaware.
 - **Skipped on OSS-local mode.** If `config` has no `api_key` / `node_id`,
@@ -63,9 +63,12 @@ def start_relay_thread(config: dict, version: str = "unknown") -> Optional[threa
     try:
         import websocket  # noqa: F401 — pull dep early to fail fast
     except ImportError:
-        log.info(
-            "relay: websocket-client not installed; cloud cold-data relay disabled. "
-            "Install with `pip install clawmetry[relay]` to enable.")
+        # 0.12.166+ ships websocket-client as a base dep, so this branch
+        # only fires on a corrupt install. Keep the message anyway in case
+        # someone's pinning to an older clawmetry transitively.
+        log.warning(
+            "relay: websocket-client not importable. The base install should "
+            "include it; reinstall with `pip install --force-reinstall clawmetry`.")
         return None
 
     relay_url = os.environ.get("CLAWMETRY_RELAY_URL", RELAY_URL_DEFAULT)
