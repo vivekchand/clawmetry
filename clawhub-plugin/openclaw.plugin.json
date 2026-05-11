@@ -1,7 +1,7 @@
 {
   "id": "clawmetry",
   "name": "ClawMetry",
-  "description": "Real-time observability dashboard for OpenClaw agents. Token usage, costs, tool calls, sessions, memory — zero config.",
+  "description": "Real-time observability for OpenClaw agents — local dashboard + optional E2E encrypted cloud sync. Tracks costs, tokens, sessions, tool calls, memory, crons, alerts, and system health. Access from anywhere via ClawMetry Cloud (clawmetry connect).",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

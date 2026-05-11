@@ -883,3 +883,133 @@ def api_automation_analysis():
             'error': str(e),
             'lastAnalysis': datetime.now(timezone.utc).isoformat()
         })
+
+
+@bp_config.route("/api/context-anatomy")
+def api_context_anatomy():
+    """Estimate context window consumption broken down by source (#566).
+
+    Returns a list of buckets with token estimates derived from:
+      - Workspace file sizes (SOUL.md, AGENTS.md, TOOLS.md, …)
+      - memory/ directory total
+      - A fixed tool-definition estimate (~1,500 tok)
+      - Session history = last observed input_tokens minus known static buckets
+
+    Token counts are approximations (file_bytes / 3.5 chars-per-token).
+    """
+    import dashboard as _d
+
+    CHARS_PER_TOKEN = 3.5
+    CONTEXT_LIMIT = 200_000  # Claude 200K window
+
+    def _file_tokens(path):
+        try:
+            return max(1, int(os.path.getsize(path) / CHARS_PER_TOKEN))
+        except OSError:
+            return 0
+
+    workspace = _d.WORKSPACE or ""
+    sessions_dir = _d.SESSIONS_DIR or ""
+
+    buckets = []
+
+    # Static workspace files — each gets its own bucket if present
+    _SYSTEM_FILES = [
+        ("SOUL.md",      "#a855f7"),
+        ("AGENTS.md",    "#3b82f6"),
+        ("TOOLS.md",     "#06b6d4"),
+        ("HEARTBEAT.md", "#22c55e"),
+        ("IDENTITY.md",  "#ec4899"),
+        ("USER.md",      "#f59e0b"),
+    ]
+    for fname, color in _SYSTEM_FILES:
+        fpath = os.path.join(workspace, fname) if workspace else ""
+        if fpath and os.path.isfile(fpath):
+            buckets.append({
+                "label": fname,
+                "tokens": _file_tokens(fpath),
+                "color": color,
+                "category": "system",
+            })
+
+    # Memory files — summed into one bucket
+    memory_dir = os.path.join(workspace, "memory") if workspace else ""
+    if memory_dir and os.path.isdir(memory_dir):
+        try:
+            mem_tokens = sum(
+                _file_tokens(os.path.join(memory_dir, f))
+                for f in os.listdir(memory_dir)
+                if f.endswith(".md")
+            )
+        except OSError:
+            mem_tokens = 0
+        if mem_tokens > 0:
+            buckets.append({
+                "label": "Memory files",
+                "tokens": mem_tokens,
+                "color": "#059669",
+                "category": "memory",
+            })
+
+    # Tool definitions — fixed estimate (built-ins + common MCPs)
+    TOOL_EST = 1_500
+    buckets.append({
+        "label": "Tool defs (est.)",
+        "tokens": TOOL_EST,
+        "color": "#d97706",
+        "category": "tools",
+    })
+
+    # Session history: total input_tokens from last active session minus known static
+    session_history_tokens = 0
+    if sessions_dir and os.path.isdir(sessions_dir):
+        try:
+            files = sorted(
+                [
+                    f for f in os.listdir(sessions_dir)
+                    if f.endswith(".jsonl")
+                    and ".deleted." not in f
+                    and ".reset." not in f
+                ],
+                key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+                reverse=True,
+            )
+            for fname in files[:5]:
+                last_input = 0
+                try:
+                    with open(os.path.join(sessions_dir, fname), errors="replace") as fh:
+                        for line in fh:
+                            try:
+                                ev = json.loads(line.strip())
+                                u = (ev.get("message") or {}).get("usage") or {}
+                                inp = u.get("input_tokens", 0)
+                                if inp:
+                                    last_input = inp
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                if last_input > 0:
+                    session_history_tokens = last_input
+                    break
+        except Exception:
+            pass
+
+    if session_history_tokens > 0:
+        known_static = sum(b["tokens"] for b in buckets)
+        dynamic = max(0, session_history_tokens - known_static)
+        if dynamic > 0:
+            buckets.append({
+                "label": "Session history",
+                "tokens": dynamic,
+                "color": "#0891b2",
+                "category": "history",
+            })
+
+    total = sum(b["tokens"] for b in buckets)
+    return jsonify({
+        "buckets": buckets,
+        "total_estimated": total,
+        "context_limit": CONTEXT_LIMIT,
+        "pct_used": round(total / CONTEXT_LIMIT * 100, 1) if CONTEXT_LIMIT else 0,
+    })
