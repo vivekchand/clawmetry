@@ -28,7 +28,7 @@ clawmetry --help
 ```
 
 ### 4. **Make Changes & Test**
-- Edit `dashboard.py` (single file architecture)
+- Edit the relevant Blueprint in `routes/` (or `dashboard.py` for shared helpers / embedded templates — see `CLAUDE.md` for the file map)
 - Restart dashboard to see changes
 - Test auto-detection: `cd /tmp && python3 /path/to/dashboard.py`
 
@@ -38,7 +38,11 @@ clawmetry --help
 
 ```
 clawmetry/
-├── dashboard.py          # 🎯 Main application (single file)
+├── dashboard.py          # 🎯 Flask app, blueprint registration, embedded HTML/CSS/JS, shared helpers
+├── routes/               # 🧩 Per-feature Blueprints (sessions, channels, brain, usage, health, …)
+├── clawmetry/            # 📦 Installable package — CLI, sync daemon, proxy, interceptor, providers
+├── history.py            # 📈 Optional time-series collector (SQLite)
+├── dashboard_claudecode.py  # 🪶 Claude Code dashboard variant
 ├── README.md             # 📖 Documentation
 ├── setup.py              # 📦 Package configuration
 ├── requirements.txt      # 🔧 Dependencies
@@ -47,7 +51,9 @@ clawmetry/
 └── CONTRIBUTING.md       # 📝 This file
 ```
 
-**Philosophy**: Keep it simple. The entire dashboard is one Python file (`dashboard.py`) with minimal dependencies. This makes it easy to understand, modify, and deploy.
+See `CLAUDE.md` (`Key Files`) for the full per-module breakdown including line counts and Blueprint names.
+
+**Philosophy**: Keep it simple. The dashboard core is a Flask app in `dashboard.py` (with embedded HTML/CSS/JS) and a small `routes/` package of feature Blueprints — minimal dependencies, easy to understand, modify, and deploy.
 
 ---
 
@@ -62,7 +68,7 @@ clawmetry/
 
 ### **What to Avoid**
 - ❌ **Complex dependencies** - no heavy frameworks, ML libraries, or databases
-- ❌ **Breaking the single-file architecture** - keep everything in `dashboard.py`
+- ❌ **Sprawling new top-level modules** - prefer adding to an existing `routes/` Blueprint, or extending `dashboard.py`'s shared helpers, before introducing a new package
 - ❌ **Enterprise features** - this is for personal AI agents, not teams
 - ❌ **Major architectural changes** - discuss large changes in Issues first
 

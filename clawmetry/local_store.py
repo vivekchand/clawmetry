@@ -1,0 +1,936 @@
+"""Local DuckDB event store — Phase 1 of the local-first refactor (#964).
+
+Switched from SQLite to DuckDB (decision: 2026-05-11). Same public API; the
+durability + concurrency model differs (DuckDB MVCC instead of SQLite WAL),
+but the surface — ``ingest()``, ``query_events()``, ``query_sessions()``,
+``query_aggregates()``, ``health()``, ``vacuum()`` — is unchanged.
+
+Why DuckDB:
+* Columnar storage → analytical queries (GROUP BY, time-window aggregates,
+  per-tool/per-session/per-day rollups) run an order of magnitude faster than
+  on SQLite. The dashboard's Brain/Tokens/Sessions tabs are exactly that
+  shape of workload.
+* Native Parquet and CSV I/O — future cheap archival + ad-hoc export are a
+  one-liner, not a library swap.
+* Time-series-friendly query patterns become first-class.
+* Trade-off: a real wheel dependency (~14 MB) instead of stdlib sqlite3.
+  Considered acceptable: the analytical advantages compound as the local
+  store accrues months of data.
+
+NOT in this module (deliberately):
+* Network — there is no HTTP server here. Adding endpoints is a follow-up
+  blueprint.
+* Encryption — events are stored plaintext locally. Cloud sync continues
+  to do its own E2E encryption pass before POSTing.
+* Cloud sync — independent. Adding the local store does not change what
+  ``sync.py`` ships.
+
+Concurrency model:
+* DuckDB connections are heavyweight; we keep a process-wide singleton
+  connection guarded by a ``threading.Lock`` for writes. Reads are issued
+  via ``.cursor()`` instances which are thread-safe.
+* DuckDB allows only one *writer* process per file; multiple *readers* are
+  allowed. The daemon process owns the writer; future external readers
+  (e.g. a separate dashboard process per #960) will open with
+  ``read_only=True``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+import time
+from collections import deque
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Iterable, Iterator
+
+import duckdb
+
+log = logging.getLogger("clawmetry.local_store")
+
+
+# Public knobs — tuned for the common case (one daemon, one dashboard, ≤1 K
+# events/s sustained on a developer laptop). Adjust via env vars only.
+
+# Naming history:
+#   0.12.164  → events.db    (SQLite — replaced by DuckDB the same release)
+#   0.12.165  → events.duckdb (DuckDB; name implied "only events" but we
+#                              also store sessions, memory_blobs, heartbeats,
+#                              system_snapshots, spans, etc. in this same DB)
+#   0.12.166+ → clawmetry.duckdb (the all-up local store for whatever
+#                                 ClawMetry needs across multi-agent
+#                                 frameworks — past + future tables)
+#
+# Compatibility: if a user has an existing events.duckdb but no
+# clawmetry.duckdb, the next start renames it in place. Lossless,
+# no schema change. See _migrate_legacy_db_path() below.
+DB_PATH = Path(
+    os.environ.get(
+        "CLAWMETRY_LOCAL_STORE_PATH",
+        os.path.expanduser("~/.clawmetry/clawmetry.duckdb"),
+    )
+)
+LEGACY_DB_PATH = Path(os.path.expanduser("~/.clawmetry/events.duckdb"))
+
+
+def _migrate_legacy_db_path() -> None:
+    """If the old events.duckdb exists and the new clawmetry.duckdb doesn't,
+    rename in place. Single os.rename — atomic on POSIX. Safe to call on
+    every start; no-op when there's nothing to migrate.
+
+    We intentionally DON'T touch the legacy file when the new name already
+    exists (would lose data) and DON'T touch CLAWMETRY_LOCAL_STORE_PATH-
+    overridden paths (test fixtures, custom installs)."""
+    if "CLAWMETRY_LOCAL_STORE_PATH" in os.environ:
+        return  # Custom path; user knows what they're doing.
+    if not LEGACY_DB_PATH.exists():
+        return
+    if DB_PATH.exists():
+        # Both files present — keep the new one as live. Don't clobber.
+        log.info("local store: legacy events.duckdb still present alongside "
+                 "clawmetry.duckdb. Keeping clawmetry.duckdb; old file "
+                 "untouched (delete manually if you want to reclaim space).")
+        return
+    try:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LEGACY_DB_PATH.rename(DB_PATH)
+        # Move the WAL too so DuckDB recovers cleanly on first open.
+        legacy_wal = LEGACY_DB_PATH.with_suffix(LEGACY_DB_PATH.suffix + ".wal")
+        new_wal = DB_PATH.with_suffix(DB_PATH.suffix + ".wal")
+        if legacy_wal.exists() and not new_wal.exists():
+            legacy_wal.rename(new_wal)
+        log.info("local store: migrated legacy %s → %s",
+                 LEGACY_DB_PATH.name, DB_PATH.name)
+    except OSError as e:
+        log.warning("local store: failed to migrate legacy %s → %s: %s. "
+                    "Will create a fresh clawmetry.duckdb; old file "
+                    "untouched.", LEGACY_DB_PATH.name, DB_PATH.name, e)
+
+FLUSH_INTERVAL_SECS = float(os.environ.get("CLAWMETRY_LOCAL_FLUSH_SECS", "2.0"))
+FLUSH_BATCH = int(os.environ.get("CLAWMETRY_LOCAL_FLUSH_BATCH", "1000"))
+RING_MAX = int(os.environ.get("CLAWMETRY_LOCAL_RING_MAX", "10000"))
+LOCAL_MAX_BYTES = int(
+    float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
+)
+
+SCHEMA_VERSION = 2
+
+# ── Two-layer schema (multi-agent) ──────────────────────────────────────────
+#
+# Layer 1: shared core. Every agent (OpenClaw, Claude Code, Hermes, Cursor,
+# Codex, Aider, …) writes here. `agent_type` is the discriminator.
+#
+# Layer 2: agent-specific extensions. Only added when a concept is unique to
+# one agent OR shared by 2+. Keeps the columnar tables clean of NULL columns
+# we'd otherwise carry to support every framework's quirks.
+#
+# Discriminator: `agent_type` is the FRAMEWORK (openclaw/claude_code/hermes/
+# cursor/codex/aider). `agent_id` (already on events) is the INSTANCE within
+# that framework (main/subagent/cron). Both coexist.
+
+_DDL = [
+    # ── Layer 1: shared core ─────────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS events (
+        id            VARCHAR PRIMARY KEY,
+        agent_type    VARCHAR NOT NULL DEFAULT 'openclaw',
+        node_id       VARCHAR NOT NULL,
+        agent_id      VARCHAR NOT NULL DEFAULT 'main',
+        session_id    VARCHAR,
+        workspace_id  VARCHAR,
+        event_type    VARCHAR NOT NULL,
+        ts            VARCHAR NOT NULL,
+        data          BLOB,
+        cost_usd      DOUBLE,
+        token_count   INTEGER,
+        model         VARCHAR,
+        created_at    BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_events_session     ON events(session_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_events_agent_ts    ON events(agent_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_events_type_ts     ON events(event_type, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_events_atype_ts    ON events(agent_type, ts)",
+    """
+    CREATE TABLE IF NOT EXISTS sessions (
+        agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
+        session_id      VARCHAR NOT NULL,
+        node_id         VARCHAR,
+        agent_id        VARCHAR DEFAULT 'main',
+        workspace_id    VARCHAR,
+        title           VARCHAR,
+        started_at      VARCHAR,
+        last_active_at  VARCHAR,
+        ended_at        VARCHAR,
+        status          VARCHAR,
+        total_tokens    INTEGER DEFAULT 0,
+        cost_usd        DOUBLE DEFAULT 0,
+        message_count   INTEGER DEFAULT 0,
+        metadata        BLOB,
+        updated_at      BIGINT NOT NULL,
+        PRIMARY KEY (agent_type, session_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sessions_active    ON sessions(agent_type, last_active_at)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_node      ON sessions(node_id, last_active_at)",
+    """
+    CREATE TABLE IF NOT EXISTS daily_aggregates (
+        agent_type    VARCHAR NOT NULL DEFAULT 'openclaw',
+        agent_id      VARCHAR NOT NULL,
+        workspace_id  VARCHAR,
+        day           VARCHAR NOT NULL,
+        cost_usd      DOUBLE DEFAULT 0,
+        token_count   INTEGER DEFAULT 0,
+        event_count   INTEGER DEFAULT 0,
+        error_count   INTEGER DEFAULT 0,
+        PRIMARY KEY (agent_type, agent_id, workspace_id, day)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS memory_blobs (
+        agent_type    VARCHAR NOT NULL,
+        agent_id      VARCHAR NOT NULL DEFAULT 'main',
+        path          VARCHAR NOT NULL,
+        ts            VARCHAR,
+        blob          BLOB,
+        sha256        VARCHAR,
+        size_bytes    INTEGER,
+        updated_at    BIGINT NOT NULL,
+        PRIMARY KEY (agent_type, agent_id, path)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS heartbeats (
+        agent_type        VARCHAR NOT NULL DEFAULT 'openclaw',
+        node_id           VARCHAR NOT NULL,
+        ts                VARCHAR NOT NULL,
+        version           VARCHAR,
+        e2e               BOOLEAN,
+        size_mb           DOUBLE,
+        events_total      INTEGER,
+        data              BLOB,
+        PRIMARY KEY (agent_type, node_id, ts)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_heartbeats_node_ts ON heartbeats(node_id, ts)",
+    """
+    CREATE TABLE IF NOT EXISTS system_snapshots (
+        agent_type    VARCHAR NOT NULL DEFAULT 'openclaw',
+        node_id       VARCHAR NOT NULL,
+        ts            VARCHAR NOT NULL,
+        kind          VARCHAR NOT NULL,
+        data          BLOB,
+        PRIMARY KEY (agent_type, node_id, ts, kind)
+    )
+    """,
+    # ── Layer 2: agent-specific extensions ───────────────────────────────────
+    # OpenClaw-only: channel context (Telegram/Slack/...). Other agents don't
+    # have this; keeping it out of `sessions` avoids 5 NULL columns per row.
+    """
+    CREATE TABLE IF NOT EXISTS openclaw_channels (
+        session_id    VARCHAR PRIMARY KEY,
+        channel       VARCHAR,
+        chat_type     VARCHAR,
+        subject       VARCHAR,
+        origin_label  VARCHAR
+    )
+    """,
+    # Shared by OpenClaw + Hermes (and any future cron-supporting agent).
+    """
+    CREATE TABLE IF NOT EXISTS crons (
+        agent_type     VARCHAR NOT NULL,
+        cron_id        VARCHAR NOT NULL,
+        agent_id       VARCHAR DEFAULT 'main',
+        name           VARCHAR,
+        schedule       VARCHAR,
+        enabled        BOOLEAN,
+        last_run_at    VARCHAR,
+        last_status    VARCHAR,
+        next_run_at    VARCHAR,
+        data           BLOB,
+        updated_at     BIGINT NOT NULL,
+        PRIMARY KEY (agent_type, cron_id)
+    )
+    """,
+    # Shared by OpenClaw subagents + Claude Code Task tool.
+    """
+    CREATE TABLE IF NOT EXISTS subagents (
+        agent_type        VARCHAR NOT NULL,
+        subagent_id       VARCHAR NOT NULL,
+        parent_session_id VARCHAR,
+        spawned_at        VARCHAR,
+        ended_at          VARCHAR,
+        task              VARCHAR,
+        status            VARCHAR,
+        cost_usd          DOUBLE DEFAULT 0,
+        token_count       INTEGER DEFAULT 0,
+        data              BLOB,
+        updated_at        BIGINT NOT NULL,
+        PRIMARY KEY (agent_type, subagent_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS schema_version (
+        version    INTEGER PRIMARY KEY,
+        applied_at BIGINT NOT NULL
+    )
+    """,
+]
+
+
+# ── Schema migrations (v1 → v2) ────────────────────────────────────────────
+#
+# DuckDB doesn't support `ALTER TABLE ADD COLUMN IF NOT EXISTS` cleanly, so
+# we check pg_tables-style introspection and run ALTERs only when needed.
+# Idempotent: safe to call on a v2 store.
+
+_MIGRATIONS_V2 = [
+    # Existing 0.12.164 stores have `events` without agent_type — backfill it
+    # to 'openclaw' (the only agent that wrote anything in v1).
+    ("events", "agent_type", "VARCHAR DEFAULT 'openclaw'"),
+    # daily_aggregates also gains agent_type. The PK change is the tricky part —
+    # DuckDB won't let us alter the PK in place. v1 stores will keep their old
+    # PK (agent_id, workspace_id, day); writes from v2 use ON CONFLICT DO
+    # UPDATE on the PK that exists. New stores get the v2 PK directly.
+    ("daily_aggregates", "agent_type", "VARCHAR DEFAULT 'openclaw'"),
+]
+
+
+def _apply_migrations(conn) -> None:
+    """Add columns missing from a v1 store. Idempotent. Tolerant of
+    tables not existing yet (fresh stores have nothing to migrate)."""
+    # Get the set of tables that currently exist; skip migrations for any
+    # table that doesn't.
+    existing_tables = {
+        row[0] for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+        ).fetchall()
+    }
+    for table, col, decl in _MIGRATIONS_V2:
+        if table not in existing_tables:
+            continue
+        existing_cols = {
+            row[1] for row in conn.execute(
+                f"PRAGMA table_info('{table}')"
+            ).fetchall()
+        }
+        if col not in existing_cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+
+def _to_blob(value: Any) -> bytes | None:
+    """Coerce arbitrary value (dict / list / str / bytes / None) to a BLOB
+    suitable for DuckDB. Used by the non-event ingest helpers (sessions,
+    memory, heartbeats) — events have their own row-builder."""
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="replace")
+    try:
+        return json.dumps(value, separators=(",", ":"), default=str).encode("utf-8")
+    except Exception:
+        return str(value).encode("utf-8", errors="replace")
+
+
+def _open_connection(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
+    """Open a DuckDB connection at DB_PATH, creating the directory if needed."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return duckdb.connect(str(DB_PATH), read_only=read_only)
+
+
+# ── Singleton store ─────────────────────────────────────────────────────────
+
+_store: "LocalStore | None" = None
+_store_lock = threading.Lock()
+
+
+def get_store() -> "LocalStore":
+    """Lazy-init the process-wide singleton. Cheap to call repeatedly."""
+    global _store
+    if _store is not None:
+        return _store
+    with _store_lock:
+        if _store is None:
+            _store = LocalStore()
+            _store.start()
+    return _store
+
+
+def _reset_singleton_for_tests() -> None:
+    """Test-only helper. Drops the cached store so the next get_store() picks
+    up new env vars (DB path, flush knobs)."""
+    global _store
+    with _store_lock:
+        if _store is not None:
+            try:
+                _store.stop(flush=False)
+            except Exception:
+                pass
+        _store = None
+
+
+class LocalStore:
+    """Thread-safe local event store with a background batched flusher."""
+
+    def __init__(self) -> None:
+        self._ring: deque[dict[str, Any]] = deque(maxlen=RING_MAX)
+        self._ring_lock = threading.Lock()
+        # DuckDB connection state isn't safe across concurrent transactions.
+        # All writes go through ``_write_lock``; reads issue cursors which
+        # DuckDB makes thread-safe internally.
+        self._write_lock = threading.Lock()
+        self._dropped = 0
+        self._flusher_stop = threading.Event()
+        self._flusher_thread: threading.Thread | None = None
+        self._last_flush_ts = time.monotonic()
+        # Rename the legacy events.duckdb in place BEFORE opening — once
+        # we hold a connection we can't atomically rename the file out
+        # from under DuckDB.
+        _migrate_legacy_db_path()
+        self._conn = _open_connection(read_only=False)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Bring the store schema up to v2. Order matters:
+          1. v1→v2 column-add migrations (only do anything on legacy stores
+             that pre-date agent_type) — must run BEFORE the DDL because the
+             new `idx_events_atype_ts` index references agent_type.
+          2. Full v2 DDL — CREATE TABLE/INDEX IF NOT EXISTS, no-op on
+             already-migrated tables, creates the new tables on fresh stores.
+          3. Stamp the schema_version row.
+        """
+        with self._write_lock:
+            # Step 1: column-add migrations for legacy v1 stores. Tolerant
+            # of "table doesn't exist" — fresh stores have no v1 tables to
+            # migrate, the DDL below will create them at v2 directly.
+            try:
+                _apply_migrations(self._conn)
+            except Exception:
+                log.exception("local store: column-add migrations failed (continuing)")
+            # Step 2: full v2 DDL. CREATE IF NOT EXISTS makes this idempotent
+            # for both fresh stores (creates everything) and migrated stores
+            # (only creates the new tables that didn't exist).
+            for stmt in _DDL:
+                self._conn.execute(stmt)
+            # Step 3: stamp the version.
+            cur = self._conn.execute("SELECT MAX(version) AS v FROM schema_version")
+            row = cur.fetchone()
+            current = row[0] if row and row[0] is not None else 0
+            if current < SCHEMA_VERSION:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+                    [SCHEMA_VERSION, int(time.time() * 1000)],
+                )
+
+    # ── lifecycle ────────────────────────────────────────────────────────
+
+    def start(self) -> None:
+        """Start the background flusher. Safe to call multiple times."""
+        if self._flusher_thread and self._flusher_thread.is_alive():
+            return
+        self._flusher_stop.clear()
+        t = threading.Thread(
+            target=self._flusher_loop,
+            name="clawmetry-local-store-flusher",
+            daemon=True,
+        )
+        self._flusher_thread = t
+        t.start()
+        log.info("local store: started, db=%s", DB_PATH)
+
+    def stop(self, *, flush: bool = True) -> None:
+        """Stop the flusher. Optionally drain the ring first."""
+        self._flusher_stop.set()
+        if self._flusher_thread:
+            self._flusher_thread.join(timeout=10)
+        if flush:
+            try:
+                self._flush_now()
+            except Exception:
+                log.exception("local store: final flush on stop failed")
+        # Close the underlying connection so a subsequent process can open it.
+        try:
+            with self._write_lock:
+                self._conn.close()
+        except Exception:
+            pass
+
+    # ── ingest ──────────────────────────────────────────────────────────
+
+    def ingest(self, event: dict[str, Any]) -> None:
+        """Queue one event. Returns immediately; the flusher persists in the
+        background. Required keys: ``id``, ``node_id``, ``event_type``, ``ts``.
+        Other columns optional. Re-ingesting the same id is a no-op (INSERT OR
+        IGNORE) so callers don't need their own dedup."""
+        if not event.get("id"):
+            raise ValueError("event must include 'id'")
+        if not event.get("node_id"):
+            raise ValueError("event must include 'node_id'")
+        if not event.get("event_type"):
+            raise ValueError("event must include 'event_type'")
+        if not event.get("ts"):
+            raise ValueError("event must include 'ts'")
+        with self._ring_lock:
+            if len(self._ring) >= RING_MAX:
+                self._dropped += 1
+            self._ring.append(event)
+        if len(self._ring) >= FLUSH_BATCH:
+            self._flush_now()
+
+    def ingest_many(self, events: Iterable[dict[str, Any]]) -> None:
+        for e in events:
+            self.ingest(e)
+
+    # ── ingest helpers for the non-event tables ────────────────────────────
+    #
+    # Sessions/memory/heartbeats are low-volume, low-frequency writes (one
+    # per session-update / per memory-file / per minute). They bypass the
+    # ring buffer and write synchronously — simpler than batching, and the
+    # contention with the flusher is negligible at this rate.
+
+    def ingest_session(self, session: dict[str, Any]) -> None:
+        """Upsert one session row. Required: session_id. Other fields optional."""
+        sid = session.get("session_id")
+        if not sid:
+            raise ValueError("session must include 'session_id'")
+        atype = session.get("agent_type") or "openclaw"
+        meta_blob = _to_blob(session.get("metadata"))
+        now_ms = int(time.time() * 1000)
+        params = [
+            atype, sid,
+            session.get("node_id"),
+            session.get("agent_id") or "main",
+            session.get("workspace_id"),
+            session.get("title"),
+            session.get("started_at"),
+            session.get("last_active_at"),
+            session.get("ended_at"),
+            session.get("status"),
+            int(session.get("total_tokens") or 0),
+            float(session.get("cost_usd") or 0),
+            int(session.get("message_count") or 0),
+            meta_blob,
+            now_ms,
+        ]
+        with self._write_lock:
+            # Upsert: replace if (agent_type, session_id) exists.
+            self._conn.execute("""
+                INSERT INTO sessions (
+                    agent_type, session_id, node_id, agent_id, workspace_id,
+                    title, started_at, last_active_at, ended_at, status,
+                    total_tokens, cost_usd, message_count, metadata, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (agent_type, session_id) DO UPDATE SET
+                    node_id        = excluded.node_id,
+                    agent_id       = excluded.agent_id,
+                    workspace_id   = excluded.workspace_id,
+                    title          = COALESCE(excluded.title, sessions.title),
+                    started_at     = COALESCE(sessions.started_at, excluded.started_at),
+                    last_active_at = excluded.last_active_at,
+                    ended_at       = excluded.ended_at,
+                    status         = excluded.status,
+                    total_tokens   = excluded.total_tokens,
+                    cost_usd       = excluded.cost_usd,
+                    message_count  = excluded.message_count,
+                    metadata       = COALESCE(excluded.metadata, sessions.metadata),
+                    updated_at     = excluded.updated_at
+            """, params)
+
+    def ingest_memory_blob(self, blob_row: dict[str, Any]) -> None:
+        """Upsert one memory blob (e.g. CLAUDE.md, ~/.openclaw/memory/notes.md).
+
+        Required: agent_type, path. Optional: agent_id, blob, sha256, ts.
+        Re-ingesting with the same sha256 is a no-op (cheap dedup)."""
+        atype = blob_row.get("agent_type")
+        path = blob_row.get("path")
+        if not atype or not path:
+            raise ValueError("memory blob must include 'agent_type' and 'path'")
+        agent_id = blob_row.get("agent_id") or "main"
+        blob = blob_row.get("blob")
+        if isinstance(blob, str):
+            blob = blob.encode("utf-8", errors="replace")
+        sha = blob_row.get("sha256")
+        if not sha and blob is not None:
+            import hashlib
+            sha = hashlib.sha256(blob).hexdigest()
+        size = blob_row.get("size_bytes")
+        if size is None and blob is not None:
+            size = len(blob)
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            # Skip the write if the blob hasn't changed (sha256 match).
+            if sha:
+                cur = self._conn.execute(
+                    "SELECT sha256 FROM memory_blobs WHERE agent_type=? AND agent_id=? AND path=?",
+                    [atype, agent_id, path],
+                )
+                row = cur.fetchone()
+                if row and row[0] == sha:
+                    return
+            self._conn.execute("""
+                INSERT INTO memory_blobs (
+                    agent_type, agent_id, path, ts, blob, sha256, size_bytes, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (agent_type, agent_id, path) DO UPDATE SET
+                    ts         = excluded.ts,
+                    blob       = excluded.blob,
+                    sha256     = excluded.sha256,
+                    size_bytes = excluded.size_bytes,
+                    updated_at = excluded.updated_at
+            """, [atype, agent_id, path, blob_row.get("ts"), blob, sha, size, now_ms])
+
+    def ingest_heartbeat(self, hb: dict[str, Any]) -> None:
+        """Insert one heartbeat row. Append-only; (agent_type, node_id, ts) PK
+        means duplicate timestamps are silently ignored (the daemon only sends
+        one heartbeat per interval anyway)."""
+        node_id = hb.get("node_id")
+        ts = hb.get("ts")
+        if not node_id or not ts:
+            raise ValueError("heartbeat must include 'node_id' and 'ts'")
+        atype = hb.get("agent_type") or "openclaw"
+        data_blob = _to_blob({k: v for k, v in hb.items()
+                              if k not in {"node_id", "ts", "agent_type",
+                                           "version", "e2e", "size_mb",
+                                           "events_total"}})
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT OR IGNORE INTO heartbeats (
+                    agent_type, node_id, ts, version, e2e, size_mb,
+                    events_total, data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                atype, node_id, ts,
+                hb.get("version"),
+                bool(hb.get("e2e")),
+                hb.get("local_store_size_mb") or hb.get("size_mb"),
+                (hb.get("local_store") or {}).get("events_total")
+                  if isinstance(hb.get("local_store"), dict) else hb.get("events_total"),
+                data_blob,
+            ])
+
+    # ── flush ───────────────────────────────────────────────────────────
+
+    def _flusher_loop(self) -> None:
+        while not self._flusher_stop.is_set():
+            self._flusher_stop.wait(FLUSH_INTERVAL_SECS)
+            try:
+                self._flush_now()
+            except Exception:
+                log.exception("local store: flush failed (will retry)")
+
+    def _flush_now(self) -> int:
+        """Drain the ring into DuckDB in one transaction. Returns rows written.
+        Snapshot-then-pop pattern: events stay in the ring until the COMMIT
+        succeeds, so a write failure leaves them queued for the next attempt
+        instead of vanishing."""
+        with self._ring_lock:
+            if not self._ring:
+                return 0
+            batch = list(self._ring)
+        rows = [_event_to_row(e) for e in batch]
+        with self._write_lock:
+            with _txn(self._conn):
+                self._conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO events
+                      (id, agent_type, node_id, agent_id, session_id, workspace_id,
+                       event_type, ts, data, cost_usd, token_count, model, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    rows,
+                )
+        with self._ring_lock:
+            for _ in range(len(batch)):
+                if self._ring:
+                    self._ring.popleft()
+        self._last_flush_ts = time.monotonic()
+        return len(rows)
+
+    # ── queries ─────────────────────────────────────────────────────────
+
+    def query_events(
+        self,
+        *,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+        event_type: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Read events. Defaults to most recent first."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
+        if event_type:
+            clauses.append("event_type = ?")
+            params.append(event_type)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        if until:
+            clauses.append("ts <= ?")
+            params.append(until)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, agent_type, node_id, agent_id, session_id, workspace_id,
+                   event_type, ts, data, cost_usd, token_count, model
+            FROM events
+            {where}
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
+
+    def query_sessions(
+        self,
+        *,
+        agent_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """One row per distinct session_id seen, with start/end timestamps,
+        event count, and total cost."""
+        clauses: list[str] = ["session_id IS NOT NULL"]
+        params: list[Any] = []
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        if until:
+            clauses.append("ts <= ?")
+            params.append(until)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT
+              session_id,
+              MIN(agent_id)               AS agent_id,
+              MIN(ts)                     AS started_at,
+              MAX(ts)                     AS updated_at,
+              COUNT(*)                    AS event_count,
+              COALESCE(SUM(cost_usd), 0)  AS cost_usd,
+              COALESCE(SUM(token_count), 0) AS token_count
+            FROM events
+            {where}
+            GROUP BY session_id
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        return [_row_to_dict(r, ["session_id","agent_id","started_at","updated_at",
+                                  "event_count","cost_usd","token_count"])
+                for r in self._fetch(sql, params)]
+
+    def query_aggregates(
+        self,
+        *,
+        agent_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-day rollup. Computed on the fly from events; columnar storage
+        means this is cheap even at hundreds-of-thousands of rows."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        if until:
+            clauses.append("ts <= ?")
+            params.append(until)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT
+              substr(ts, 1, 10)            AS day,
+              agent_id,
+              COUNT(*)                     AS event_count,
+              COALESCE(SUM(cost_usd), 0)   AS cost_usd,
+              COALESCE(SUM(token_count), 0) AS token_count
+            FROM events
+            {where}
+            GROUP BY day, agent_id
+            ORDER BY day DESC
+        """
+        return [_row_to_dict(r, ["day","agent_id","event_count","cost_usd","token_count"])
+                for r in self._fetch(sql, params)]
+
+    # ── ops / maintenance ──────────────────────────────────────────────
+
+    def health(self) -> dict[str, Any]:
+        """Snapshot of store state — for the /local/health endpoint and the
+        dashboard footer."""
+        size_bytes = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        rows = self._fetch(
+            "SELECT COUNT(*) AS n, MIN(ts) AS oldest, MAX(ts) AS newest FROM events",
+            []
+        )
+        n, oldest, newest = (rows[0] if rows else (0, None, None))
+        with self._ring_lock:
+            ring_depth = len(self._ring)
+            dropped = self._dropped
+        return {
+            "db_path": str(DB_PATH),
+            "engine": "duckdb",
+            "size_bytes": int(size_bytes),
+            "size_mb": round(size_bytes / 1024 / 1024, 2),
+            "size_cap_bytes": LOCAL_MAX_BYTES,
+            "event_count": int(n or 0),
+            "oldest_ts": oldest,
+            "newest_ts": newest,
+            "ring_depth": ring_depth,
+            "ring_max": RING_MAX,
+            "ring_dropped_total": dropped,
+            "schema_version": SCHEMA_VERSION,
+            "last_flush_ago_s": round(time.monotonic() - self._last_flush_ts, 2),
+        }
+
+    def vacuum(self, *, prune_to_bytes: int | None = None) -> dict[str, Any]:
+        """Reclaim space. If ``prune_to_bytes`` is set (or the DB has exceeded
+        ``LOCAL_MAX_BYTES``), delete oldest events first until the projected
+        size fits, then run a CHECKPOINT to reclaim file size."""
+        self._flush_now()
+        before_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        cap = prune_to_bytes if prune_to_bytes is not None else LOCAL_MAX_BYTES
+        deleted = 0
+        if before_size > cap:
+            n_rows = (self._fetch("SELECT COUNT(*) FROM events", []) or [(0,)])[0][0]
+            if n_rows > 0 and before_size > 0:
+                bytes_per_row = before_size / n_rows
+                excess_bytes = (before_size - cap) * 1.2
+                rows_to_drop = int(excess_bytes / bytes_per_row) if bytes_per_row else 0
+                if rows_to_drop > 0:
+                    with self._write_lock:
+                        with _txn(self._conn):
+                            cur = self._conn.execute(
+                                """
+                                DELETE FROM events WHERE id IN (
+                                  SELECT id FROM events ORDER BY ts ASC LIMIT ?
+                                )
+                                """,
+                                [rows_to_drop],
+                            )
+                            # DuckDB returns rowcount=-1 for DELETE in some
+                            # versions; if so, trust our planned count.
+                            try:
+                                rc = cur.rowcount
+                            except Exception:
+                                rc = -1
+                            deleted = rc if rc is not None and rc >= 0 else rows_to_drop
+        # CHECKPOINT forces DuckDB to merge WAL → main file, reclaiming space
+        # similarly to SQLite VACUUM. Cheaper than full VACUUM on large DBs.
+        with self._write_lock:
+            try:
+                self._conn.execute("CHECKPOINT")
+            except Exception:
+                log.exception("local store: CHECKPOINT failed")
+        after_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        return {
+            "deleted_rows": int(deleted),
+            "before_bytes": before_size,
+            "after_bytes": after_size,
+            "cap_bytes": cap,
+            "reclaimed_bytes": max(0, before_size - after_size),
+        }
+
+    # ── internals ───────────────────────────────────────────────────────
+
+    def _fetch(self, sql: str, params: list[Any]) -> list[tuple]:
+        """Issue a read, returning raw row tuples. DuckDB's ``.cursor()`` is
+        thread-safe; we don't take the write lock for reads. We do however
+        serialise with the writer through the lock to dodge transaction-state
+        edge cases — DuckDB's reader-vs-writer story within one connection is
+        better with light serialisation. At our scale (hundreds of qps max)
+        this costs nothing."""
+        with self._write_lock:
+            cur = self._conn.execute(sql, params)
+            return cur.fetchall()
+
+
+# ── helpers ────────────────────────────────────────────────────────────────
+
+_EVENT_COLS = [
+    "id", "agent_type", "node_id", "agent_id", "session_id", "workspace_id",
+    "event_type", "ts", "data", "cost_usd", "token_count", "model",
+]
+
+
+def _event_to_row(e: dict[str, Any]) -> tuple:
+    """Coerce an event dict into the column tuple for the events table.
+    Unknown keys are tolerated and dropped — events come from many sources
+    (jsonl parser, gateway, claude-cli adapter) with slightly different
+    shapes, and the store should not be the strict-schema choke point."""
+    data = e.get("data")
+    if data is not None and not isinstance(data, (bytes, bytearray)):
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        else:
+            data = json.dumps(data, separators=(",", ":")).encode("utf-8")
+    return (
+        str(e["id"]),
+        str(e.get("agent_type") or "openclaw"),
+        str(e["node_id"]),
+        str(e.get("agent_id") or "main"),
+        e.get("session_id"),
+        e.get("workspace_id"),
+        str(e["event_type"]),
+        str(e["ts"]),
+        data,
+        float(e["cost_usd"]) if e.get("cost_usd") is not None else None,
+        int(e["token_count"]) if e.get("token_count") is not None else None,
+        e.get("model"),
+        int(time.time() * 1000),
+    )
+
+
+def _row_to_event(row: tuple, cols: list[str]) -> dict[str, Any]:
+    """Inverse of _event_to_row. Decodes ``data`` BLOB back to JSON if valid,
+    else to a UTF-8 string, else leaves as None."""
+    out = dict(zip(cols, row))
+    raw = out.get("data")
+    if raw is not None:
+        try:
+            text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+            try:
+                out["data"] = json.loads(text)
+            except (ValueError, TypeError):
+                out["data"] = text
+        except UnicodeDecodeError:
+            out["data"] = None
+    return out
+
+
+def _row_to_dict(row: tuple, cols: list[str]) -> dict[str, Any]:
+    """Generic tuple-to-dict for non-event rows (sessions, aggregates)."""
+    return dict(zip(cols, row))
+
+
+@contextmanager
+def _txn(conn: duckdb.DuckDBPyConnection) -> Iterator[None]:
+    """Explicit BEGIN/COMMIT around a write block. DuckDB autocommits by
+    default; this contextmanager makes batch atomicity explicit."""
+    conn.execute("BEGIN")
+    try:
+        yield
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    else:
+        conn.execute("COMMIT")
