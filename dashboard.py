@@ -109,6 +109,7 @@ from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
+from routes.agents import bp_agents
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
 from routes.agents import bp_agents
@@ -8491,6 +8492,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
+    app.register_blueprint(bp_agents)
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_agents)
@@ -8502,6 +8504,14 @@ def detect_config(args=None):
     from clawmetry.adapters.openclaw import OpenClawAdapter
     _adapter_registry.register(OpenClawAdapter())
     app.register_blueprint(bp_openapi)
+
+    # Register built-in agent adapters. External plugins can register more
+    # via clawmetry.extensions entry points — see clawmetry/adapters/.
+    from clawmetry.adapters import registry as _adapter_registry
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    from clawmetry.adapters.hermes import HermesAdapter
+    _adapter_registry.register(OpenClawAdapter())
+    _adapter_registry.register(HermesAdapter())
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
     # Approvals tab renders cleanly without cloud sync.
