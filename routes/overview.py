@@ -605,6 +605,188 @@ def api_prompt_errors():
     return jsonify({"errors": errors, "count": len(errors)})
 
 
+_HEARTBEAT_CADENCE_DEFAULT_MINS = 30
+_HEARTBEAT_TAIL_BYTES = 4096
+
+
+def _last_assistant_text(fpath):
+    """Tail-read a session JSONL and return the text of the last assistant message.
+
+    Reads only the final _HEARTBEAT_TAIL_BYTES bytes so heartbeat scanning
+    stays fast regardless of session size.  Returns None if no assistant
+    message is found or the file can't be read.
+    """
+    try:
+        with open(fpath, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - _HEARTBEAT_TAIL_BYTES))
+            raw = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+    last_text = None
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        msg = ev.get("message") or {}
+        if not isinstance(msg, dict):
+            continue
+        role = (msg.get("role") or ev.get("role") or "").lower()
+        if role != "assistant":
+            continue
+        content = msg.get("content") or ev.get("content") or ""
+        if isinstance(content, str) and content.strip():
+            last_text = content.strip()
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    t = (block.get("text") or "").strip()
+                    if t:
+                        last_text = t
+    return last_text
+
+
+@bp_overview.route("/api/heartbeat-liveness")
+def api_heartbeat_liveness():
+    """Return heartbeat-session liveness metrics for the overview panel.
+
+    Response fields:
+      last_heartbeat_at     — ISO timestamp of the most recent heartbeat session
+      gap_mins              — minutes elapsed since that session (None if unknown)
+      expected_cadence_mins — configured heartbeat interval (default 30)
+      status                — "green" / "amber" / "red" / "unknown"
+                              green  = gap < 1.5 × cadence
+                              amber  = gap < 3.0 × cadence
+                              red    = gap >= 3.0 × cadence
+      heartbeat_ok_count    — heartbeats whose last assistant reply was HEARTBEAT_OK
+      heartbeat_total       — total heartbeat sessions scanned for OK check
+      heartbeat_ok_ratio    — 0-100 float, or null if nothing was scanned
+      recent                — last 5 heartbeat sessions [{session_id, ts, heartbeat_ok}]
+    """
+    import dashboard as _d
+
+    expected_cadence_mins = int(
+        os.environ.get(
+            "OPENCLAW_HEARTBEAT_CADENCE_MINS", str(_HEARTBEAT_CADENCE_DEFAULT_MINS)
+        )
+    )
+
+    gw_data = _d._gw_invoke("sessions_list", {"limit": 100, "messageLimit": 0})
+    if gw_data and "sessions" in gw_data:
+        sessions = _d._augment_sessions_with_burn(gw_data["sessions"])
+    else:
+        sessions = _d._augment_sessions_with_burn(_d._get_sessions())
+
+    heartbeat_sessions = [
+        s for s in sessions
+        if "heartbeat" in (s.get("displayName") or s.get("sessionId") or "").lower()
+    ]
+
+    if not heartbeat_sessions:
+        return jsonify({
+            "last_heartbeat_at": None,
+            "gap_mins": None,
+            "expected_cadence_mins": expected_cadence_mins,
+            "status": "unknown",
+            "heartbeat_ok_count": 0,
+            "heartbeat_total": 0,
+            "heartbeat_ok_ratio": None,
+            "recent": [],
+        })
+
+    def _to_epoch(s):
+        raw = s.get("updatedAt") or s.get("lastActiveMs") or s.get("startedAt") or 0
+        if isinstance(raw, (int, float)):
+            return raw / 1000.0 if raw > 1e10 else float(raw)
+        try:
+            return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    heartbeat_sessions.sort(key=_to_epoch, reverse=True)
+
+    now_ts = time.time()
+    last_ts = _to_epoch(heartbeat_sessions[0])
+    last_heartbeat_iso = (
+        datetime.utcfromtimestamp(last_ts).isoformat() + "Z" if last_ts else None
+    )
+    gap_mins = round((now_ts - last_ts) / 60.0, 1) if last_ts else None
+
+    if gap_mins is None:
+        status = "unknown"
+    elif gap_mins < expected_cadence_mins * 1.5:
+        status = "green"
+    elif gap_mins < expected_cadence_mins * 3.0:
+        status = "amber"
+    else:
+        status = "red"
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    scan_limit = min(len(heartbeat_sessions), 20)
+    heartbeat_ok_count = 0
+    scanned = 0
+    recent = []
+
+    for s in heartbeat_sessions[:scan_limit]:
+        sid = (s.get("sessionId") or s.get("key") or "").strip()
+        ts_epoch = _to_epoch(s)
+        ts_iso = (
+            datetime.utcfromtimestamp(ts_epoch).isoformat() + "Z" if ts_epoch else None
+        )
+        is_ok = None
+
+        if sid and os.path.isdir(sessions_dir):
+            try:
+                candidates = [
+                    f for f in os.listdir(sessions_dir)
+                    if f.endswith(".jsonl") and f.startswith(sid)
+                ]
+            except OSError:
+                candidates = []
+            for fname in candidates[:1]:
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    last_text = _last_assistant_text(fpath)
+                    is_ok = last_text is not None and last_text.strip() == "HEARTBEAT_OK"
+                except Exception:
+                    pass
+
+        if is_ok is not None:
+            scanned += 1
+            if is_ok:
+                heartbeat_ok_count += 1
+
+        if len(recent) < 5:
+            recent.append({
+                "session_id": sid,
+                "ts": ts_iso,
+                "heartbeat_ok": is_ok,
+            })
+
+    heartbeat_ok_ratio = (
+        round(heartbeat_ok_count / scanned * 100.0, 1) if scanned else None
+    )
+
+    return jsonify({
+        "last_heartbeat_at": last_heartbeat_iso,
+        "gap_mins": gap_mins,
+        "expected_cadence_mins": expected_cadence_mins,
+        "status": status,
+        "heartbeat_ok_count": heartbeat_ok_count,
+        "heartbeat_total": scanned,
+        "heartbeat_ok_ratio": heartbeat_ok_ratio,
+        "recent": recent,
+    })
+
+
 @bp_overview.route("/api/cloud-cta/status")
 def cloud_cta_status():
     import dashboard as _d

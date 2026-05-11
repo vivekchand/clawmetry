@@ -1122,3 +1122,51 @@ class TestAlertRulesTokenSpike:
             f"Expected 400 for invalid rule type, got {r.status_code}: {r.text[:200]}"
         )
 
+
+class TestHeartbeatLiveness:
+    def test_heartbeat_liveness_endpoint(self, api, base_url):
+        """GET /api/heartbeat-liveness returns 200 with expected keys."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat-liveness"))
+        assert_keys(
+            d,
+            "last_heartbeat_at",
+            "gap_mins",
+            "expected_cadence_mins",
+            "status",
+            "heartbeat_ok_count",
+            "heartbeat_total",
+            "heartbeat_ok_ratio",
+            "recent",
+        )
+
+    def test_heartbeat_liveness_status_values(self, api, base_url):
+        """status is one of the four expected values."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat-liveness"))
+        assert d["status"] in ("green", "amber", "red", "unknown"), (
+            f"Unexpected status: {d['status']}"
+        )
+
+    def test_heartbeat_liveness_cadence_positive(self, api, base_url):
+        """expected_cadence_mins is a positive integer."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat-liveness"))
+        assert d["expected_cadence_mins"] > 0
+
+    def test_heartbeat_liveness_recent_is_list(self, api, base_url):
+        """recent field is a list of at most 5 items."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat-liveness"))
+        assert isinstance(d["recent"], list)
+        assert len(d["recent"]) <= 5
+
+    def test_heartbeat_liveness_gap_consistent_with_status(self, api, base_url):
+        """When gap_mins is present and status is known, thresholds are correct."""
+        d = assert_ok(get(api, base_url, "/api/heartbeat-liveness"))
+        gap = d.get("gap_mins")
+        status = d["status"]
+        cadence = d["expected_cadence_mins"]
+        if gap is None or status == "unknown":
+            return
+        if status == "green":
+            assert gap < cadence * 1.5, f"green status but gap={gap} >= 1.5×{cadence}"
+        elif status == "amber":
+            assert gap < cadence * 3.0, f"amber status but gap={gap} >= 3.0×{cadence}"
+
