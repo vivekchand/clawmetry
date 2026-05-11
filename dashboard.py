@@ -113,6 +113,7 @@ from routes.selfconfig import bp_selfconfig
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
 from routes.flows import bp_flows
+from routes.local_query import bp_local_query
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -140,7 +141,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.163"
+__version__ = "0.12.164"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -3620,6 +3621,8 @@ function clawmetryLogout(){
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
         <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
+        <div id="sh-mcp-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔌 MCP Tool Activity</div>
+        <div id="sh-mcp" style="margin-bottom:14px;"></div></div>
         <!-- 🔍 Diagnostics Panel (GH#28) -->
         <div id="sh-diagnostics-wrap">
           <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
@@ -5625,6 +5628,7 @@ async function loadAll() {
     if (typeof loadPromptErrors === 'function') loadPromptErrors().catch(function(e){console.warn('prompt errors failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
+    if (typeof loadMcpStats === 'function') loadMcpStats().catch(function(e){console.warn('mcp stats failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -5682,6 +5686,46 @@ async function loadReliabilityCard() {
     el = document.getElementById('reliability-detail-lt');
     if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
   } catch(e) { console.warn('reliability card load failed', e); }
+}
+
+async function loadMcpStats() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/mcp-stats', 8000);
+    var wrap = document.getElementById('sh-mcp-wrap');
+    var el = document.getElementById('sh-mcp');
+    if (!wrap || !el) return;
+    if (!d.tools || d.tools.length === 0) {
+      wrap.style.display = 'block';
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No MCP tool calls detected in recent sessions.</div>';
+      return;
+    }
+    var rows = d.tools.map(function(t) {
+      var errCell = t.errors > 0
+        ? '<span style="color:#e05;">' + t.errors + ' (' + t.error_rate_pct + '%)</span>'
+        : '<span style="color:var(--text-muted);">0</span>';
+      var latCell = t.avg_latency_ms != null
+        ? (t.avg_latency_ms >= 1000
+            ? (t.avg_latency_ms / 1000).toFixed(1) + 's'
+            : t.avg_latency_ms + 'ms')
+        : '<span style="color:var(--text-faint);">—</span>';
+      return '<tr style="border-top:1px solid var(--border-secondary);">'
+        + '<td style="padding:4px 6px 4px 0;font-size:12px;font-family:\'JetBrains Mono\',monospace;color:var(--text-primary);">' + t.name + '</td>'
+        + '<td style="padding:4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + t.calls + '</td>'
+        + '<td style="padding:4px 6px;font-size:12px;text-align:right;">' + errCell + '</td>'
+        + '<td style="padding:4px 0 4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + latCell + '</td>'
+        + '</tr>';
+    }).join('');
+    el.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr>'
+      + '<th style="padding:0 6px 4px 0;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:left;font-weight:500;">Tool</th>'
+      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Calls</th>'
+      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Errors</th>'
+      + '<th style="padding:0 0 4px 6px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Avg Latency</th>'
+      + '</tr></thead>'
+      + '<tbody>' + rows + '</tbody>'
+      + '</table>';
+    wrap.style.display = 'block';
+  } catch(e) { console.warn('mcp stats failed', e); }
 }
 
 async function loadHeartbeat() {
@@ -8453,6 +8497,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_flows)
+    app.register_blueprint(bp_local_query)
     app.register_blueprint(bp_openapi)
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
@@ -8496,6 +8541,37 @@ def detect_config(args=None):
                 return _jsonify(json.load(_f))
         except Exception as _e:
             return _jsonify({"error": f"unreadable: {_e}"}), 500
+
+    # Local SQLite event store (epic #964 / phase 1) — proves the daemon is
+    # writing through to ~/.clawmetry/events.db. The dashboard's main read
+    # paths are migrating to this store progressively; in the meantime this
+    # endpoint exposes the store's own metrics so we can verify the
+    # write-through is working in prod and start the cutover safely.
+    @app.route("/api/local-store/health", endpoint="local_store_health")
+    def _local_store_health():
+        from flask import jsonify as _jsonify
+        try:
+            from clawmetry import local_store
+            return _jsonify(local_store.get_store().health())
+        except Exception as _e:
+            return _jsonify({"error": str(_e)[:300]}), 503
+
+    @app.route("/api/local-store/events", endpoint="local_store_events")
+    def _local_store_events():
+        from flask import jsonify as _jsonify, request as _req
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store()
+            rows = store.query_events(
+                session_id=_req.args.get("session_id"),
+                event_type=_req.args.get("event_type"),
+                since=_req.args.get("since"),
+                until=_req.args.get("until"),
+                limit=int(_req.args.get("limit", "200")),
+            )
+            return _jsonify({"events": rows, "count": len(rows)})
+        except Exception as _e:
+            return _jsonify({"error": str(_e)[:300]}), 500
     # ────────────────────────────────────────────────────────────────────────
 
 
