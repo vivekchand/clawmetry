@@ -99,6 +99,63 @@ class TestCronHealthSummary:
             assert job["costUsd"] >= 0
 
 
+class TestAgentIntentions:
+    """Tests for GET /api/agent-intentions (GH #693)."""
+
+    def test_returns_200(self, api, base_url):
+        r = get(api, base_url, "/api/agent-intentions")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
+
+    def test_response_structure(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/agent-intentions"))
+        assert_keys(d, "intentions", "recently_added", "window", "stats")
+
+    def test_window_defaults_to_7_days(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/agent-intentions"))
+        w = d["window"]
+        assert_keys(w, "startMs", "endMs", "days")
+        assert w["days"] == 7
+        assert w["endMs"] > w["startMs"]
+        # endMs should be ~7 days after startMs
+        delta_days = (w["endMs"] - w["startMs"]) / (24 * 3600 * 1000)
+        assert 6.9 < delta_days < 7.1
+
+    def test_days_param_clamped(self, api, base_url):
+        # max=30
+        d = assert_ok(get(api, base_url, "/api/agent-intentions?days=999"))
+        assert d["window"]["days"] == 30
+        # min=1
+        d = assert_ok(get(api, base_url, "/api/agent-intentions?days=0"))
+        assert d["window"]["days"] == 1
+
+    def test_intentions_sorted_chronologically(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/agent-intentions"))
+        intentions = d["intentions"]
+        for i in range(len(intentions) - 1):
+            assert intentions[i]["scheduledForMs"] <= intentions[i + 1]["scheduledForMs"], (
+                "Intentions not sorted by scheduledForMs ascending"
+            )
+
+    def test_intention_fields_if_present(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/agent-intentions"))
+        for it in d["intentions"][:5]:
+            assert_keys(
+                it, "jobId", "name", "scheduledForMs", "scheduleKind",
+                "lastStatus", "isRecentlyAdded", "enabled",
+            )
+            assert isinstance(it["scheduledForMs"], int)
+            assert it["scheduledForMs"] >= d["window"]["startMs"]
+            assert it["scheduledForMs"] <= d["window"]["endMs"]
+
+    def test_stats_consistency(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/agent-intentions"))
+        stats = d["stats"]
+        assert_keys(stats, "total_intentions", "recently_added_count", "truncated")
+        assert stats["total_intentions"] == len(d["intentions"])
+        assert stats["recently_added_count"] == len(d["recently_added"])
+        assert isinstance(stats["truncated"], bool)
+
+
 class TestCronRunHistory:
     """Tests for GET /api/cron/<job_id>/runs (GH #302)."""
 

@@ -43,6 +43,10 @@ setup(
         "flask>=2.0,<4",
         "waitress>=2.0",
         "cryptography>=3.0",
+        # Local event store at ~/.clawmetry/events.duckdb (epic #964 phase 1).
+        # DuckDB chosen over stdlib sqlite3 for its columnar analytical
+        # advantages on the dashboard's GROUP BY / time-window workloads.
+        "duckdb>=0.10",
     ],
     extras_require={
         "otel": ["opentelemetry-proto>=1.20.0", "protobuf>=4.21.0"],

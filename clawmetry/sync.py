@@ -237,6 +237,45 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
+# ── Initial-sync progress (vivekchand/clawmetry#748) ─────────────────────────
+# Tracks per-phase progress to ~/.clawmetry/sync_progress.json so the local
+# dashboard can show a "syncing…" banner on fresh installs instead of empty
+# tabs. Written atomically (tmp + rename) because the dashboard reads this
+# file on every banner poll.
+SYNC_PROGRESS_FILE = CONFIG_DIR / "sync_progress.json"
+_sync_progress_started_at: str | None = None
+
+
+def _record_sync_progress(
+    phase: str, done: int, total: int = 0, status: str = "running"
+) -> None:
+    global _sync_progress_started_at
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).isoformat()
+        if _sync_progress_started_at is None:
+            _sync_progress_started_at = now
+        try:
+            cfg = load_config()
+            node_id = cfg.get("node_id", "")
+        except Exception:
+            node_id = ""
+        payload = {
+            "node_id": node_id,
+            "phase": phase,
+            "done": int(done),
+            "total": int(total),
+            "status": status,
+            "started_at": _sync_progress_started_at,
+            "updated_at": now,
+        }
+        tmp = SYNC_PROGRESS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, SYNC_PROGRESS_FILE)
+    except Exception as e:
+        log.debug(f"Could not record sync progress ({phase}): {e}")
+
+
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
 
@@ -256,7 +295,15 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
     for attempt in range(2):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read())
+                resp_body = json.loads(resp.read())
+            # Cloud heartbeat (and any other endpoint) may attach the user's
+            # plan / sync_allowed / trial_days_left / upgrade_url. We mirror
+            # those into _TRIAL_STATE so subsequent uploads can self-throttle
+            # before paying the network round-trip. Best-effort: missing
+            # fields leave the cache untouched.
+            if isinstance(resp_body, dict) and "sync_allowed" in resp_body:
+                _update_trial_state(resp_body)
+            return resp_body
         except urllib.error.HTTPError as e:
             code = e.code
             msg = e.read().decode()[:200]
@@ -265,8 +312,92 @@ def _post(path: str, payload: dict, api_key: str, timeout: int = 45) -> dict:
             if code in (401, 503) and attempt == 0:
                 time.sleep(2)
                 continue
+            # Server-side throttle — surface a friendly "upgrade to resume"
+            # message and remember we're paused so next call short-circuits.
+            if code == 429:
+                try:
+                    plan = json.loads(msg).get("plan", "")
+                except Exception:
+                    plan = ""
+                _update_trial_state({
+                    "sync_allowed": False,
+                    "plan": plan or "trial_expired",
+                    "upgrade_url": "https://app.clawmetry.com/cloud",
+                })
             raise last_err
     raise last_err
+
+
+# ── Client-side trial gating ────────────────────────────────────────────────
+# Cloud /ingest/heartbeat returns {plan, sync_allowed, trial_days_left,
+# upgrade_url} on every beat. We cache it here so:
+#   - Large blob uploads (events / snapshots / memory / sessions / logs /
+#     autonomy) skip themselves when sync_allowed=False, saving bandwidth.
+#   - Heartbeats and approvals/alerts polls KEEP firing so the daemon
+#     detects the moment the user upgrades (sync_allowed flips True →
+#     uploads resume automatically, no daemon restart needed).
+#   - A clear "upgrade to resume" log line prints once per UTC day so the
+#     user knows why their dashboard stopped updating.
+
+_TRIAL_STATE = {
+    "sync_allowed": True,    # default: assume allowed until cloud says otherwise
+    "plan": None,
+    "trial_days_left": None,
+    "upgrade_url": "https://app.clawmetry.com/cloud",
+    "last_log_day": "",     # YYYY-MM-DD of the last "sync paused" log
+}
+
+
+def _update_trial_state(resp: dict) -> None:
+    """Mirror plan info from a cloud response into the local cache + log
+    a one-line "upgrade to resume" message once per UTC day on transition."""
+    prev_allowed = _TRIAL_STATE["sync_allowed"]
+    new_allowed = bool(resp.get("sync_allowed", True))
+    _TRIAL_STATE["sync_allowed"] = new_allowed
+    if "plan" in resp:
+        _TRIAL_STATE["plan"] = resp.get("plan")
+    if "trial_days_left" in resp:
+        _TRIAL_STATE["trial_days_left"] = resp.get("trial_days_left")
+    if resp.get("upgrade_url"):
+        _TRIAL_STATE["upgrade_url"] = resp["upgrade_url"]
+    reason = (resp.get("reason") or "").strip()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if not new_allowed and _TRIAL_STATE["last_log_day"] != today:
+        _TRIAL_STATE["last_log_day"] = today
+        if reason == "intent_pending":
+            # KiloClaw / similar auto-provisioned flows. The user hasn't
+            # asked to view their dashboard yet, so we heartbeat (so the
+            # cloud knows we're alive) but upload nothing else. The moment
+            # they click "View Observability", the heartbeat response
+            # flips and uploads resume — no daemon restart needed.
+            log.info(
+                "Cloud sync deferred — waiting for the user to open their "
+                "dashboard. Heartbeats continue; no sessions / events / "
+                "logs / memory will leave this machine until then."
+            )
+        else:
+            log.warning(
+                "⚠ Trial expired (plan=%s). Cloud sync paused — heartbeats "
+                "continue so we detect the moment you upgrade. Upgrade to Pro at "
+                "%s to resume event/session/memory sync.",
+                _TRIAL_STATE["plan"], _TRIAL_STATE["upgrade_url"],
+            )
+    elif new_allowed and not prev_allowed:
+        if reason == "intent_started" or _TRIAL_STATE.get("plan") in (None, "free", "trial"):
+            log.info("✓ Cloud sync activated — uploads resumed.")
+        else:
+            log.info(
+                "✓ Pro plan detected (plan=%s). Cloud sync resumed.",
+                _TRIAL_STATE["plan"],
+            )
+
+
+def _sync_allowed() -> bool:
+    """Gate for large blob uploads. Heartbeats + approvals/alerts polls
+    bypass this — they MUST keep firing so we detect the upgrade (or, for
+    KiloClaw-provisioned accounts, the moment the user clicks "View
+    Observability" and the cloud flips reason='intent_pending' off)."""
+    return _TRIAL_STATE.get("sync_allowed", True)
 
 
 def get_machine_id() -> str:
@@ -840,6 +971,12 @@ def _canonical_session_file(name: str) -> str:
 
 
 def sync_sessions(config: dict, state: dict, paths: dict) -> int:
+    # Skipped when sync is paused (expired trial). The state dict still
+    # tracks last_event_ids so when the user upgrades, we resume from
+    # exactly where we paused -- no event loss, no double-send.
+    if not _sync_allowed():
+        return 0
+    _record_sync_progress("sessions", 0)
     sessions_dir = paths["sessions_dir"]
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
@@ -933,6 +1070,7 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
         except Exception as e:
             log.warning(f"Session sync error ({fname}): {e}")
 
+    _record_sync_progress("sessions", total, total)
     return total
 
 
@@ -944,6 +1082,17 @@ def _flush_session_batch(
     node_id: str,
     subagent_id: str | None = None,
 ) -> None:
+    # Write-through to local SQLite first (epic #964 / phase 1 / issue #958).
+    # Local is the durable store; cloud is a hot cache. If the cloud POST fails
+    # below, the events are still recorded locally and the dashboard's local
+    # read paths will surface them. Failures here never block cloud sync — the
+    # broad except keeps the legacy behaviour intact for users who somehow
+    # land on a corrupt SQLite or a read-only ~/.clawmetry/.
+    try:
+        _local_ingest_session_batch(batch, fname, node_id, subagent_id)
+    except Exception as _e:
+        log.warning("local-store ingest failed (cloud sync continues): %s", _e)
+
     payload = {"session_file": fname, "node_id": node_id, "events": batch}
     # Include subagent_id so the cloud can correlate blobs → sub-agent sessions.
     # The session key UUID (subagent_id) differs from the .jsonl filename UUID.
@@ -963,6 +1112,56 @@ def _flush_session_batch(
         _post("/ingest/events", payload, api_key)
 
 
+def _local_ingest_session_batch(
+    batch: list,
+    session_file: str,
+    node_id: str,
+    subagent_id: str | None,
+) -> None:
+    """Translate a batch of raw OpenClaw transcript events into the local
+    store's normalised shape and queue them for write. Idempotent at the
+    store level — INSERT OR IGNORE on event id."""
+    from clawmetry import local_store  # local import: keeps cli/sync importable on Pythons missing sqlite3
+
+    store = local_store.get_store()
+    rows: list[dict] = []
+    # session_file is like '<uuid>.jsonl' — use the uuid as the canonical
+    # session_id so the dashboard's per-session views can correlate.
+    session_id = subagent_id or session_file.split(".jsonl", 1)[0]
+    for obj in batch:
+        if not isinstance(obj, dict):
+            continue
+        # Stable per-event id: prefer an explicit id from the transcript, then
+        # the openclaw eventId, else compose from session_id + timestamp +
+        # message-id-ish hint. INSERT OR IGNORE makes re-delivery harmless.
+        eid = (
+            obj.get("id")
+            or obj.get("eventId")
+            or obj.get("messageId")
+            or f"{session_id}:{obj.get('timestamp','?')}:{obj.get('type','?')}"
+        )
+        ts = obj.get("timestamp") or obj.get("ts") or ""
+        if not ts:
+            # Skip events with no timestamp — the local store's index assumes
+            # ts is set, and filtering them out is safer than synthesising one.
+            continue
+        rows.append({
+            "id": str(eid),
+            "node_id": node_id,
+            "agent_id": "main",  # OpenClaw harness; Claude Code adapter will use 'claude-code'
+            "session_id": session_id,
+            "workspace_id": obj.get("workspace") or obj.get("workspace_id"),
+            "event_type": str(obj.get("type") or obj.get("event_type") or "unknown"),
+            "ts": str(ts),
+            "data": obj,
+            "cost_usd": obj.get("cost_usd") or obj.get("costUsd"),
+            "token_count": obj.get("token_count") or obj.get("tokens"),
+            "model": obj.get("model"),
+        })
+    if rows:
+        store.ingest_many(rows)
+
+
 def sync_sessions_recent(
     config: dict, state: dict, paths: dict, minutes: int = 60
 ) -> int:
@@ -979,6 +1178,9 @@ def sync_sessions_recent(
       3. Advance ``last_event_ids`` so the normal loop skips already-synced
          recent lines and continues backfilling from where it left off.
     """
+    if not _sync_allowed():
+        return 0
+    _record_sync_progress("sessions_recent", 0)
     from datetime import timedelta
 
     sessions_dir = paths["sessions_dir"]
@@ -1093,15 +1295,17 @@ def sync_sessions_recent(
         except Exception as e:
             log.warning(f"Recent sync error ({fname}): {e}")
 
+    _record_sync_progress("sessions_recent", total, total)
     return total
 
 
 # ── Sync: claude-cli backend transcripts ──────────────────────────────────────
 # OpenClaw routes most chat (TUI, Telegram, etc.) through the agent/cli-backend
 # plugin, which delegates to the Claude Code CLI. Claude CLI writes the actual
-# transcript to ~/.claude/projects/<workspace-slug>/<cli-session-id>.jsonl --
-# NOT to OpenClaw's own session jsonl. Without this adapter the cloud Brain
-# feed stays frozen at the last bootstrap event and misses every real message.
+# transcript to ~/.claude/projects/<cwd-slug>/<cli-session-id>.jsonl -- keyed on
+# the agent process CWD, which is usually *not* the OpenClaw workspace. Without
+# this adapter the cloud Brain feed stays frozen at the last bootstrap event
+# and misses every real message.
 
 
 def _claude_projects_root() -> Path:
@@ -1110,17 +1314,6 @@ def _claude_projects_root() -> Path:
     if custom:
         return Path(os.path.expanduser(custom)) / "projects"
     return Path(os.path.expanduser("~/.claude/projects"))
-
-
-def _claude_project_slug(workspace_path: str) -> str:
-    """Encode a workspace path the same way Claude Code does.
-
-    Claude Code replaces every '/' and '.' in the absolute workspace path with
-    '-'. Example: '/Users/vivek/.openclaw/workspace' becomes
-    '-Users-vivek--openclaw-workspace'.
-    """
-    import re
-    return re.sub(r"[/.]", "-", workspace_path)
 
 
 def _translate_claude_cli_event(obj: dict) -> dict:
@@ -1143,15 +1336,17 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
     """Tail claude-cli transcripts and push them under the OpenClaw session_file.
 
     For each entry in `agents/main/sessions/sessions.json` that carries a
-    `claudeCliSessionId`, locate the matching jsonl in
-    `~/.claude/projects/<workspace-slug>/`, tail new lines, translate them,
-    and push via `_flush_session_batch` using the OpenClaw session_file
-    basename. The cloud correlates events to the existing session row by
-    that basename, so no cloud-side change is required.
+    `claudeCliSessionId`, locate the matching jsonl under
+    `~/.claude/projects/*/` (scanning all project dirs, since Claude Code
+    derives the slug from the agent's CWD rather than the OpenClaw workspace),
+    tail new lines, translate them, and push via `_flush_session_batch` using
+    the OpenClaw session_file basename. The cloud correlates events to the
+    existing session row by that basename, so no cloud-side change is required.
     """
+    if not _sync_allowed():
+        return 0
     sessions_dir = paths.get("sessions_dir") or ""
-    workspace = paths.get("workspace") or ""
-    if not sessions_dir or not workspace:
+    if not sessions_dir:
         return 0
 
     api_key = config["api_key"]
@@ -1167,8 +1362,22 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
     except Exception:
         return 0
 
-    project_dir = _claude_projects_root() / _claude_project_slug(workspace)
-    if not project_dir.is_dir():
+    # Claude Code derives the project slug from the *agent process CWD*, not the
+    # OpenClaw workspace — a Telegram session spawned from ~/clawd writes to
+    # `-home-vivek-clawd/`, even though OpenClaw's workspace is
+    # ~/.openclaw/workspace. Scan every project dir and index transcripts by
+    # their session-id filename so we find the right file regardless of CWD.
+    projects_root = _claude_projects_root()
+    if not projects_root.is_dir():
+        return 0
+    cli_id_to_path: dict[str, Path] = {}
+    try:
+        for proj_dir in projects_root.iterdir():
+            if not proj_dir.is_dir():
+                continue
+            for jp in proj_dir.glob("*.jsonl"):
+                cli_id_to_path[jp.stem] = jp
+    except OSError:
         return 0
 
     targets: list[tuple[str, str]] = []  # (claude_jsonl_path, openclaw_basename)
@@ -1180,8 +1389,8 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
         ).get("claude-cli")
         if not cli_id:
             continue
-        cli_path = project_dir / f"{cli_id}.jsonl"
-        if not cli_path.is_file():
+        cli_path = cli_id_to_path.get(cli_id)
+        if cli_path is None:
             continue
         oc_sf = meta.get("sessionFile", "")
         # Fall back to <openclaw_session_id>.jsonl when sessionFile is absent
@@ -1252,6 +1461,10 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
 
 
 def sync_logs(config: dict, state: dict, paths: dict) -> int:
+    # Skipped when sync is paused (expired trial). Offsets persist so
+    # nothing is lost on resume.
+    if not _sync_allowed():
+        return 0
     log_dir = paths["log_dir"]
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
@@ -1475,12 +1688,18 @@ CRON_STATE_HEARTBEAT_SEC = 300  # 5 minutes
 def sync_crons(config: dict, state: dict, paths: dict) -> int:
     """Sync cron job definitions to cloud.
 
+    Skipped when the cloud has flagged this account's sync as paused (e.g.
+    expired trial). Heartbeats keep firing so we detect upgrade.
+
     Dedup strategy (issue #599): emit a cron_state event per job only when the
     per-job state hash differs from the last emission, OR when the heartbeat
     interval (CRON_STATE_HEARTBEAT_SEC) has elapsed since the last emission
     for that job. Dedup tracking is persisted in the sync state dict so it
     survives daemon restarts.
     """
+    if not _sync_allowed():
+        return 0
+    _record_sync_progress("crons", 0)
     api_key = config["api_key"]
     node_id = config["node_id"]
     last_hash = state.get("cron_hash", "")
@@ -1572,6 +1791,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
             for job_id, job_hash in emitted_job_ids:
                 job_dedup[job_id] = [job_hash, now_ts]
             state["cron_hash"] = h
+            _record_sync_progress("crons", len(events), len(events))
             return len(events)
         elif not file_unchanged:
             # File mtime/content changed but every job was deduped — still
@@ -1579,16 +1799,23 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
             state["cron_hash"] = h
     except Exception as e:
         log.warning(f"Cron sync error: {e}")
+    _record_sync_progress("crons", 0, 0)
     return 0
 
 
 def sync_session_metadata(config: dict, state: dict = None) -> int:
     """Sync OpenClaw session metadata rows to cloud sessions table.
 
+    Skipped when the cloud has flagged sync as paused (expired trial).
+    Heartbeats continue so the daemon detects the moment the user upgrades.
+
     Uses mtime tracking to only re-parse files that changed since last sync.
     Reads JSONL session files directly (HTTP API returns HTML, not JSON).
     Extracts session_id, model, timestamps from the event stream.
     """
+    if not _sync_allowed():
+        return 0
+    _record_sync_progress("session_metadata", 0)
     api_key = config["api_key"]
     node_id = config["node_id"]
     if state is None:
@@ -1766,14 +1993,21 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 log.debug(f"Session parse error ({fpath.name}): {e}")
 
         total_uploaded += _flush(batch)
+        _record_sync_progress("session_metadata", total_uploaded, total_uploaded)
         return total_uploaded
     except Exception as e:
         log.warning(f"Session metadata sync failed: {e}")
+        _record_sync_progress("session_metadata", 0, 0)
         return 0
 
 
 def sync_memory(config: dict, state: dict, paths: dict) -> int:
-    """Sync memory files (MEMORY.md + memory/*.md) to cloud."""
+    """Sync memory files (MEMORY.md + memory/*.md) to cloud.
+
+    Skipped when sync is paused (expired trial)."""
+    if not _sync_allowed():
+        return 0
+    _record_sync_progress("memory", 0)
     workspace = paths.get("workspace", "")
     api_key = config["api_key"]
     enc_key = config.get("encryption_key")
@@ -1802,6 +2036,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
                 memory_files.append((f"memory/{f}", os.path.join(mem_dir, f)))
 
     if not memory_files:
+        _record_sync_progress("memory", 0, 0)
         return 0
 
     # Check for changes via content hash; always send all file contents so the
@@ -1831,6 +2066,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
             log.debug(f"Memory file read error ({name}): {e}")
 
     if not changed_files:
+        _record_sync_progress("memory", len(memory_files), len(memory_files))
         return 0
 
     # Push memory files as encrypted blob (like session events).
@@ -1862,6 +2098,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     except Exception as e:
         log.warning(f"Memory sync error: {e}")
 
+    _record_sync_progress("memory", synced, len(memory_files))
     return synced
 
     # ── Real-time log streaming ────────────────────────────────────────────────────
@@ -2627,7 +2864,11 @@ def _build_cron_jobs(paths):
 
 
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
-    """Push system info + subagent data as encrypted snapshot."""
+    """Push system info + subagent data as encrypted snapshot.
+
+    Skipped when sync is paused (expired trial)."""
+    if not _sync_allowed():
+        return 0
     import subprocess, platform, json as _json
 
     api_key = config["api_key"]
@@ -3216,6 +3457,7 @@ def run_daemon() -> None:
     state["last_sync"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
     send_heartbeat(config)
+    _record_sync_progress("complete", 0, 0, status="complete")
     log.info("Recent sync complete — Brain feed should show current activity")
 
     # Validate stored log offsets on startup — prevents silent gaps
@@ -3646,7 +3888,11 @@ def sync_autonomy(config, state, paths):
     ``state['autonomy_last_day']`` and skip until that rolls over. On first
     run, pushes up to 90 days of history. Each subsequent run pushes
     whatever has changed.
+
+    Skipped when sync is paused (expired trial).
     """
+    if not _sync_allowed():
+        return 0
     api_key = config.get("api_key") or ""
     if not api_key:
         return 0

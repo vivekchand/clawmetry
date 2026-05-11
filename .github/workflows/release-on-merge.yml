@@ -46,11 +46,169 @@ jobs:
       - name: Build package
         run: python3 -m build
 
+      # Pre-publish smoke. PyPI uploads are irreversible (yanking exists
+      # but is awkward and visible to users), so we gate twine upload
+      # behind a wheel-install sanity check. This catches:
+      #   - missing files in the wheel (regressed in v0.12.99)
+      #   - module-level import errors (syntax errors past CI)
+      #   - broken `clawmetry` CLI entry point
+      #   - mismatched __version__ vs the version we bumped
+      # If any of these fail the wheel never reaches PyPI and no release
+      # tag is created — the next [RELEASE] PR can re-run cleanly.
+      - name: Pre-publish smoke (install wheel, verify CLI + imports)
+        id: smoke
+        run: |
+          set -e
+          python3 -m venv /tmp/smoke-venv
+          /tmp/smoke-venv/bin/pip install --quiet --upgrade pip
+          /tmp/smoke-venv/bin/pip install --quiet dist/*.whl
+          echo "▸ CLI version reports the bumped value"
+          ACTUAL=$(/tmp/smoke-venv/bin/clawmetry --version | tr -d '[:space:]')
+          EXPECTED='${{ steps.bump.outputs.new }}'
+          echo "  actual=$ACTUAL  expected=$EXPECTED"
+          echo "$ACTUAL" | grep -qF "$EXPECTED" || {
+            echo "❌ clawmetry --version did not report $EXPECTED"
+            exit 1
+          }
+          echo "▸ Critical modules import"
+          /tmp/smoke-venv/bin/python -c "
+          import clawmetry
+          from clawmetry import sync, cli, interceptor, providers_pricing
+          from clawmetry.sync import _sync_allowed, _post, send_heartbeat, validate_key
+          from clawmetry.config import ClawMetryConfig
+          # Smoke that the local store loads (epic #964 phase 1, ships in 0.12.165+)
+          from clawmetry import local_store
+          ls_health = local_store.get_store().health()
+          assert ls_health['engine'] == 'duckdb', f"local_store engine wrong: {ls_health}"
+          print('  imports OK')
+          "
+          echo "▸ Wheel ships runtime assets (templates, static)"
+          /tmp/smoke-venv/bin/python -c "
+          import clawmetry, os
+          base = os.path.dirname(clawmetry.__file__)
+          # Asset paths that broke in v0.12.99 — guard against regression.
+          for sub in ('static', 'templates'):
+              full = os.path.join(base, sub)
+              # Either packaged inside the wheel, or living one level up
+              # in the editable install layout — accept either.
+              if not (os.path.isdir(full) or os.path.isdir(os.path.join(base, '..', sub))):
+                  raise SystemExit(f'missing runtime asset dir: {sub}')
+          print('  assets OK')
+          "
+          echo "✅ Wheel smoke passed"
+
+      # Pre-publish daemon E2E. Validates the OSS-specific path that the
+      # cloud-contract spec doesn't cover: wheel-installed daemon process
+      # actually starts and sends a heartbeat. Catches packaging /
+      # subprocess-startup bugs that import-only smoke can't see.
+      - name: Pre-publish daemon E2E (spawn wheel-installed daemon, verify heartbeat)
+        id: daemon_e2e
+        run: |
+          set -e
+          MACHINE_ID="release-daemon-$(date +%s)-${RANDOM}"
+          REG_RESP=$(curl -sS --max-time 30 \
+            -X POST -H 'Content-Type: application/json' \
+            -d "{\"hostname\":\"$MACHINE_ID\",\"machine_id\":\"$MACHINE_ID\",\"platform\":\"Linux\",\"email\":\"release-daemon+$MACHINE_ID@clawmetry.com\"}" \
+            https://app.clawmetry.com/api/register)
+          if echo "$REG_RESP" | grep -q "Rate limit exceeded"; then
+            echo "⚠ /api/register rate-limited (10/hr per IP) — skipping daemon E2E"
+            exit 0
+          fi
+          API_KEY=$(echo "$REG_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("api_key",""))')
+          NODE_ID=$(echo "$REG_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("node_id",""))')
+          if [ -z "$API_KEY" ] || [ -z "$NODE_ID" ]; then
+            echo "❌ Register did not return api_key / node_id: ${REG_RESP:0:500}"
+            exit 1
+          fi
+          ENC_KEY=$(python3 -c 'import secrets,base64; print(base64.b64encode(secrets.token_bytes(32)).decode())')
+          mkdir -p "$HOME/.clawmetry"
+          python3 -c "
+          import json, os
+          json.dump({
+              'api_key': '$API_KEY',
+              'node_id': '$NODE_ID',
+              'encryption_key': '$ENC_KEY',
+              'platform': 'Linux',
+              'connected_at': '2026-05-07T00:00:00Z',
+          }, open(os.path.expanduser('~/.clawmetry/config.json'), 'w'))
+          "
+          # Give the daemon an empty but valid OpenClaw workspace so its
+          # auto-detection doesn't fall back to /root/.openclaw (which
+          # CI may not have permission to stat).
+          export OPENCLAW_HOME="$HOME/.openclaw-e2e-fixture"
+          mkdir -p "$OPENCLAW_HOME/agents/main/sessions" "$OPENCLAW_HOME/memory" "$OPENCLAW_HOME/logs"
+          echo "{}" > "$OPENCLAW_HOME/agents/main/sessions/sessions.json"
+          echo "▸ Spawning wheel-installed daemon for 15s (OPENCLAW_HOME=$OPENCLAW_HOME)"
+          timeout 15 /tmp/smoke-venv/bin/python -m clawmetry.sync > /tmp/daemon.log 2>&1 || true
+          if grep -q "Initial heartbeat sent" /tmp/daemon.log; then
+            echo "✅ Daemon sent initial heartbeat — wheel + cloud handshake OK"
+          else
+            echo "❌ Daemon did not send initial heartbeat. Last 80 lines:"
+            tail -80 /tmp/daemon.log
+            exit 1
+          fi
+
+      # Pre-publish cloud-contract spec. Single source of truth for the
+      # daemon ↔ cloud API contract — the same script clawmetry-cloud's
+      # deploy.yml runs post-deploy. If we add a new contract check, it
+      # lives in one file (tests/e2e/cloud-contract.mjs) and both
+      # pipelines pick it up automatically.
+      - name: Set up Node for cloud-contract spec
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright + Chromium for cloud-contract spec
+        working-directory: tests/e2e
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Pre-publish cloud-contract spec (normal user + KiloClaw deferred-sync)
+        id: contract
+        working-directory: tests/e2e
+        env:
+          CLAWMETRY_API_BASE: https://app.clawmetry.com
+        run: npm run test:cloud-contract
+
       - name: Publish to PyPI
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: twine upload --skip-existing dist/*
+
+      # Verify the wheel actually landed on PyPI and is installable.
+      # Pre-publish smoke tested the local wheel; this guards against
+      # PyPI propagation gaps or upload corruption (rare, but possible).
+      # On failure, prints the commands to manually yank from the PyPI
+      # web UI — yanking is intentionally manual so a human signs off.
+      - name: Post-publish verification (install from PyPI)
+        id: postpub
+        run: |
+          set -e
+          NEW='${{ steps.bump.outputs.new }}'
+          # PyPI's CDN is fast but not instantaneous. Poll up to 90s for
+          # the new version to appear in the JSON metadata before giving
+          # up — most upload→discoverable times are <30s.
+          for i in 1 2 3 4 5 6 7 8 9; do
+            if curl -sf "https://pypi.org/pypi/clawmetry/$NEW/json" > /dev/null; then
+              echo "▸ PyPI metadata for $NEW visible (attempt $i)"
+              break
+            fi
+            sleep 10
+          done
+          python3 -m venv /tmp/postpub-venv
+          /tmp/postpub-venv/bin/pip install --quiet --no-cache-dir "clawmetry==$NEW"
+          ACTUAL=$(/tmp/postpub-venv/bin/clawmetry --version | tr -d '[:space:]')
+          echo "$ACTUAL" | grep -qF "$NEW" || {
+            echo "❌ PyPI install reports version $ACTUAL, expected $NEW"
+            echo ""
+            echo "TO YANK $NEW (mark unavailable to new installs while keeping it in history):"
+            echo "  https://pypi.org/manage/project/clawmetry/release/$NEW/  → 'Yank'"
+            echo "Or run a follow-up [RELEASE] PR to publish $NEW patch+1 with the previous code."
+            exit 1
+          }
+          echo "✅ PyPI install of $NEW works end-to-end"
 
       - name: Create GitHub release tag
         env:
