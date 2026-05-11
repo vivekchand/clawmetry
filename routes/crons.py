@@ -77,6 +77,12 @@ def api_crons():
             j2["cost_usd"] = round(cost_by_job.get(idx, 0.0), 6)
             j2["cost_session_count"] = int(count_by_job.get(idx, 0))
             j2["cost_session_ids"] = session_ids_by_job.get(idx, [])
+            # Normalize nextRunAtMs to number (closes #685)
+            state = j2.get("state") or {}
+            normalized_next_run = _d._normalize_next_run_at_ms(state)
+            if normalized_next_run is not None:
+                state["nextRunAtMs"] = normalized_next_run
+            j2["state"] = state
             out.append(j2)
         return out
 
@@ -315,7 +321,7 @@ def api_cron_health_summary():
         last_duration_ms = state.get("lastDurationMs") or 0
         consecutive_failures = state.get("consecutiveFailures") or 0
         last_error = state.get("lastError", "")
-        next_run_ms = state.get("nextRunAtMs") or 0
+        next_run_ms = _d._normalize_next_run_at_ms(state) or 0
 
         # Detect silent jobs: enabled, has run before, but hasn't run in >2.5x expected interval
         is_silent = False

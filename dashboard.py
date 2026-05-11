@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 ClawMetry - See your agent think 🦞
 
@@ -110,6 +109,7 @@ from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
+from routes.agents import bp_agents
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
 from routes.flows import bp_flows
@@ -141,7 +141,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.164"
+__version__ = "0.12.166"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -8494,11 +8494,26 @@ def detect_config(args=None):
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
+    app.register_blueprint(bp_agents)
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_flows)
     app.register_blueprint(bp_local_query)
+
+    # Register built-in agent adapters. External plugins can register more
+    # via clawmetry.extensions entry points — see clawmetry/adapters/.
+    from clawmetry.adapters import registry as _adapter_registry
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    _adapter_registry.register(OpenClawAdapter())
     app.register_blueprint(bp_openapi)
+
+    # Register built-in agent adapters. External plugins can register more
+    # via clawmetry.extensions entry points — see clawmetry/adapters/.
+    from clawmetry.adapters import registry as _adapter_registry
+    from clawmetry.adapters.openclaw import OpenClawAdapter
+    from clawmetry.adapters.hermes import HermesAdapter
+    _adapter_registry.register(OpenClawAdapter())
+    _adapter_registry.register(HermesAdapter())
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
     # Approvals tab renders cleanly without cloud sync.
@@ -8913,6 +8928,7 @@ DASHBOARD_HTML = r"""
       <div class="modal-tab" onclick="switchModalTab('narrative')">Narrative</div>
       <div class="modal-tab" onclick="switchModalTab('full')">Full Logs</div>
       <div class="modal-tab" onclick="switchModalTab('tools')">Tools</div>
+      <div class="modal-tab" onclick="switchModalTab('models')">Model Journey</div>
     </div>
     <div class="modal-content" id="modal-content">Loading...</div>
     <div class="modal-footer">
@@ -10691,6 +10707,48 @@ def _get_anomaly_db():
         return _anomaly_db_conn
 
 
+def _fire_token_spike_alerts(new_anomalies):
+    """Fire configured token_spike alert rules for freshly inserted anomalies.
+
+    Called from _detect_and_store_anomalies() with only the anomalies that
+    were actually new (not deduped-out re-detections).  Matches each token_spike
+    anomaly against enabled token_spike rules; fires _fire_alert() when the
+    anomaly ratio meets or exceeds the rule's threshold multiplier.
+    """
+    if not new_anomalies:
+        return
+    token_spikes = [a for a in new_anomalies if a.get("metric") == "token_spike"]
+    if not token_spikes:
+        return
+    rules = [
+        r for r in _get_alert_rules()
+        if r.get("type") == "token_spike" and r.get("enabled")
+    ]
+    if not rules:
+        return
+    for anomaly in token_spikes:
+        ratio = float(anomaly.get("ratio", 0.0))
+        session_key = str(anomaly.get("session_key", "unknown"))
+        value = int(anomaly.get("value", 0))
+        baseline = float(anomaly.get("baseline", 0.0))
+        severity = str(anomaly.get("severity", "warning"))
+        for rule in rules:
+            threshold = float(rule.get("threshold", 2.0))
+            if ratio < threshold:
+                continue
+            rule_id = rule.get("id", "")
+            cooldown_key = f"token_spike_{rule_id}_{session_key}"
+            try:
+                channels = json.loads(rule.get("channels") or '["banner"]')
+            except Exception:
+                channels = ["banner"]
+            msg = (
+                f"Token spike: session {session_key} used {value:,} tokens "
+                f"({ratio:.1f}× the {baseline:.0f}-token baseline)"
+            )
+            _fire_alert(cooldown_key, "token_spike", msg, channels, severity)
+
+
 def _detect_and_store_anomalies():
     """Compute rolling-baseline anomalies and persist new ones to SQLite.
 
@@ -10834,6 +10892,7 @@ def _detect_and_store_anomalies():
             )
 
     # ── Persist new anomalies (deduplicate by session_key + metric within 24h) ──
+    truly_new_anomalies = []
     try:
         db = _get_anomaly_db()
         with _anomaly_db_lock:
@@ -10855,9 +10914,12 @@ def _detect_and_store_anomalies():
                             a["severity"],
                         ),
                     )
+                    truly_new_anomalies.append(a)
             db.commit()
     except Exception as _e:
         pass  # Non-critical — continue with in-memory results
+
+    _fire_token_spike_alerts(truly_new_anomalies)
 
     # ── Return stored anomalies from last 48h ──────────────────────────────
     try:
@@ -13328,6 +13390,27 @@ def _get_crons_from_files():
         except Exception:
             pass
     return []
+
+
+def _normalize_next_run_at_ms(state):
+    """Ensure nextRunAtMs is a number (ms timestamp) or null (closes #685)."""
+    if not isinstance(state, dict):
+        return None
+    val = state.get("nextRunAtMs")
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+    if isinstance(val, str):
+        try:
+            # ISO timestamp or numeric string
+            if "T" in val:
+                from dateutil import parser as _dtp
+                return int(_dtp.parse(val).timestamp() * 1000)
+            return int(float(val))
+        except Exception:
+            return None
+    return None
 
 
 def _get_memory_files():
