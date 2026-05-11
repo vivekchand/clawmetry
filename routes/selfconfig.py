@@ -25,6 +25,7 @@ Endpoints:
 Blueprint: bp_selfconfig
 """
 import difflib
+import glob
 import hashlib
 import json
 import logging
@@ -141,6 +142,213 @@ def _read_file_safe(path):
         return b"", False
 
 
+_EDIT_TOOL_NAMES = {"edit", "write", "multiedit", "notebookedit", "str_replace_editor"}
+_SESSION_LOOKBACK_SECONDS = 24 * 3600
+_SESSION_FILE_SCAN_LIMIT = 30
+
+
+def _sessions_dir() -> str:
+    try:
+        import dashboard as _d
+        sd = getattr(_d, "SESSIONS_DIR", None)
+        if sd:
+            return sd
+    except Exception:
+        pass
+    return os.path.expanduser("~/.openclaw/agents/main/sessions")
+
+
+def _normalise_file_path(path):
+    """Lowercase basename + the last 3 path segments — robust enough to match
+    Edit/Write tool inputs whether they are absolute, ``~/`` expanded, or
+    workspace-relative. Returns a tuple of comparable tokens."""
+    if not isinstance(path, str) or not path:
+        return ()
+    p = os.path.expanduser(path).replace("\\", "/")
+    parts = [seg for seg in p.split("/") if seg]
+    return tuple(s.lower() for s in parts[-3:])
+
+
+def _path_matches(needle_tokens, candidate):
+    if not needle_tokens or not isinstance(candidate, str) or not candidate:
+        return False
+    cand_tokens = _normalise_file_path(candidate)
+    if not cand_tokens:
+        return False
+    # The tracked filename (e.g. "SOUL.md") must appear as the candidate's
+    # final segment. Looser prefix matches would catch unrelated files.
+    return cand_tokens[-1] == needle_tokens[-1]
+
+
+def _session_label_from_index(session_id, sess_index):
+    if not session_id or not isinstance(sess_index, dict):
+        return ""
+    for key, meta in sess_index.items():
+        if not isinstance(meta, dict):
+            continue
+        sid = meta.get("sessionId") or ""
+        if sid == session_id:
+            label = meta.get("displayName") or meta.get("label") or ""
+            if label:
+                return str(label)[:80]
+            # Cron sessions: agent:main:cron:<id>
+            if ":cron:" in key:
+                parts = key.split(":")
+                try:
+                    return "cron:" + parts[parts.index("cron") + 1][:8]
+                except (ValueError, IndexError):
+                    pass
+            if ":subagent:" in key:
+                task = meta.get("task") or ""
+                if task:
+                    return ("subagent: " + str(task))[:80]
+                return "subagent"
+    return ""
+
+
+def _load_session_index(sessions_dir):
+    """Load sessions.json (sessionId → displayName mapping). Returns {} on
+    error so callers can treat missing index as ‘no labels available’."""
+    path = os.path.join(sessions_dir, "sessions.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _scan_jsonl_for_edit(jsonl_path, needle_tokens, since_ts, until_ts):
+    """Return (best_event_ts, tool_name) for the most recent Edit/Write tool
+    use in ``jsonl_path`` whose target path matches ``needle_tokens`` and
+    whose timestamp falls in (since_ts, until_ts]. Both timestamps are
+    epoch seconds. Returns None if nothing matches."""
+    best = None  # (epoch_ts, tool_name)
+    try:
+        with open(jsonl_path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or "tool_use" not in line and "toolCall" not in line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+
+                # Pull timestamp — JSONL rows use either ISO or epoch.
+                ts_raw = obj.get("timestamp") or obj.get("time")
+                ev_ts = _parse_ts_to_epoch(ts_raw)
+                if ev_ts is None:
+                    continue
+                if ev_ts <= since_ts or ev_ts > until_ts:
+                    continue
+
+                msg = obj.get("message") or {}
+                content = msg.get("content") if isinstance(msg, dict) else None
+                if not isinstance(content, list):
+                    continue
+
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type", "")
+                    if btype == "tool_use":
+                        tool_name = (block.get("name") or "").lower()
+                        inp = block.get("input") or {}
+                    elif btype == "toolCall":
+                        tool_name = (block.get("name") or "").lower()
+                        inp = block.get("arguments") or {}
+                    else:
+                        continue
+                    if tool_name not in _EDIT_TOOL_NAMES:
+                        continue
+                    if not isinstance(inp, dict):
+                        continue
+                    target = (
+                        inp.get("file_path")
+                        or inp.get("path")
+                        or inp.get("filePath")
+                        or ""
+                    )
+                    if _path_matches(needle_tokens, target):
+                        if best is None or ev_ts > best[0]:
+                            best = (ev_ts, tool_name)
+    except Exception as exc:
+        log.debug("selfconfig: scan %s failed: %s", jsonl_path, exc)
+    return best
+
+
+def _parse_ts_to_epoch(ts_raw):
+    if ts_raw is None:
+        return None
+    if isinstance(ts_raw, (int, float)):
+        return float(ts_raw) / (1000.0 if ts_raw > 1e12 else 1.0)
+    if isinstance(ts_raw, str) and ts_raw:
+        s = ts_raw.replace("Z", "+00:00")
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(s).timestamp()
+        except Exception:
+            return None
+    return None
+
+
+def _find_session_for_file_change(file_path, since_ts, until_ts):
+    """Locate the session whose Edit/Write tool call most likely caused the
+    change to ``file_path`` between ``since_ts`` and ``until_ts``.
+
+    Returns ``{"session_id", "session_label", "tool", "ts"}`` or ``None``.
+    Best-effort: scans the most recently-modified session JSONLs only, so a
+    huge sessions dir does not block the snapshot path.
+    """
+    needle = _normalise_file_path(file_path)
+    if not needle:
+        return None
+    sessions_dir = _sessions_dir()
+    pattern = os.path.join(sessions_dir, "*.jsonl")
+    try:
+        candidates = glob.glob(pattern)
+    except Exception:
+        candidates = []
+    if not candidates:
+        return None
+
+    def _mtime(p):
+        try:
+            return os.path.getmtime(p)
+        except OSError:
+            return 0.0
+
+    candidates = [c for c in candidates if _mtime(c) >= since_ts - 60]
+    candidates.sort(key=_mtime, reverse=True)
+    candidates = candidates[:_SESSION_FILE_SCAN_LIMIT]
+
+    sess_index = _load_session_index(sessions_dir)
+    best = None  # (ev_ts, session_id, tool_name)
+
+    for jsonl in candidates:
+        hit = _scan_jsonl_for_edit(jsonl, needle, since_ts, until_ts)
+        if hit is None:
+            continue
+        ev_ts, tool_name = hit
+        sid = os.path.basename(jsonl)[: -len(".jsonl")] if jsonl.endswith(".jsonl") else os.path.basename(jsonl)
+        if best is None or ev_ts > best[0]:
+            best = (ev_ts, sid, tool_name)
+
+    if best is None:
+        return None
+
+    ev_ts, sid, tool_name = best
+    return {
+        "session_id":    sid,
+        "session_label": _session_label_from_index(sid, sess_index),
+        "tool":          tool_name,
+        "ts":            int(ev_ts),
+    }
+
+
 def _snapshot_if_changed() -> None:
     """
     Walk tracked files; save a new versioned snapshot whenever the content
@@ -153,6 +361,11 @@ def _snapshot_if_changed() -> None:
     last_run = index.get("_last_run_ts", 0)
     if now - last_run < _SNAPSHOT_INTERVAL:
         return
+
+    # Window for session attribution: from the previous snapshot run up to
+    # now. On a cold start (no prior run) fall back to a 24h lookback so we
+    # still pick up the most recent edit instead of giving up.
+    since_ts = last_run if last_run else now - _SESSION_LOOKBACK_SECONDS
 
     index["_last_run_ts"] = now
 
@@ -180,7 +393,19 @@ def _snapshot_if_changed() -> None:
                 continue
 
             revisions = file_meta.get("revisions", [])
-            revisions.append({"ts": ts, "hash": new_hash, "size": len(content)})
+            revision = {"ts": ts, "hash": new_hash, "size": len(content)}
+            try:
+                # File mtime is the closest signal we have for ‘when did the
+                # write actually land?’ Use it as the upper bound so a long
+                # gap between saves does not pull in unrelated tool calls.
+                file_mtime = os.path.getmtime(path)
+                until_ts = max(file_mtime, since_ts) + 1
+                source = _find_session_for_file_change(path, since_ts, until_ts)
+                if source:
+                    revision["source"] = source
+            except Exception as exc:
+                log.debug("selfconfig: source attribution failed for %s: %s", filename, exc)
+            revisions.append(revision)
             index[filename] = {
                 "last_hash": new_hash,
                 "last_modified_ts": int(os.path.getmtime(path)),
@@ -267,12 +492,16 @@ def api_selfconfig_file(filename):
     for rev in revisions_raw:
         ts = rev["ts"]
         version_path = _versioned_path(filename, ts)
-        revisions.append({
+        entry = {
             "ts": ts,
             "hash": rev.get("hash", ""),
             "size": rev.get("size", 0),
             "version_path": version_path,
-        })
+        }
+        source = rev.get("source")
+        if isinstance(source, dict):
+            entry["source"] = source
+        revisions.append(entry)
 
     return jsonify({
         "name": filename,

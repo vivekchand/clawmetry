@@ -1,0 +1,75 @@
+<!--
+  Self-Evolve tab — standing review of agent trajectory.
+
+  Where the Brain tab's Advisor answers ad-hoc questions in prose, this tab
+  surfaces structured findings (cost hotspots, failing tools, looping paths,
+  over-eager models) that the operator can act on. Same LLM auth as Advisor:
+  uses claude CLI OAuth or ANTHROPIC_API_KEY transparently.
+
+  Empty-state guidance lives here too — when no Anthropic credential is
+  configured the user sees a single instruction line, not a broken card.
+-->
+
+<div class="page" id="page-selfevolve">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div>
+        <div style="font-size:14px;font-weight:700;color:var(--text-primary);">🔄 Self-Evolve -- How your agent could improve</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
+          Structured review of recent activity. Each finding has evidence and a concrete action.
+        </div>
+      </div>
+      <button id="selfevolve-run-btn" onclick="selfevolveRun()"
+        style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;
+               font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(37,99,235,0.3);">
+        Analyze
+      </button>
+    </div>
+
+    <!-- Empty / no-auth state -->
+    <div id="selfevolve-noauth" style="
+      display:none;
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:24px;
+      text-align:center;
+      color:var(--text-muted);
+      font-size:13px;
+      ">
+      <div style="font-size:24px;margin-bottom:8px;">🔒</div>
+      <div style="margin-bottom:6px;">Self-Evolve needs an Anthropic credential to call the analysis LLM.</div>
+      <div style="font-size:12px;">
+        Either run <code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">claude</code>
+        once to set up OAuth, or export <code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">ANTHROPIC_API_KEY</code>
+        in your shell.
+      </div>
+    </div>
+
+    <!-- Status line (analyzed at, model, event count) -->
+    <div id="selfevolve-status" style="
+      font-size:11px;
+      color:var(--text-muted);
+      margin-bottom:12px;
+      font-family:ui-monospace,Menlo,monospace;
+      "></div>
+
+    <!-- Findings list -->
+    <div id="selfevolve-findings" style="display:flex;flex-direction:column;gap:10px;">
+      <div id="selfevolve-empty" style="
+        background:var(--bg-secondary);
+        border:1px solid var(--border);
+        border-radius:8px;
+        padding:32px 24px;
+        text-align:center;
+        color:var(--text-muted);
+        font-size:13px;
+        display:none;
+        ">
+        <div style="font-size:24px;margin-bottom:8px;">🪶</div>
+        <div>No analysis yet. Click <strong>Analyze</strong> to review recent activity.</div>
+        <div style="font-size:11px;margin-top:8px;">Takes about 15 seconds.</div>
+      </div>
+    </div>
+  </div>
+</div><!-- end page-selfevolve -->

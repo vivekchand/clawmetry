@@ -67,6 +67,8 @@ from flask import (
 # truth for module-level helpers — see routes/sessions.py for the pattern.
 from routes.sessions import bp_sessions
 from routes.brain import bp_brain
+from routes.advisor import bp_advisor
+from routes.selfevolve import bp_selfevolve
 
 # Module-level helpers extracted to helpers/*.py (Phase 6 modularisation).
 # Re-exported here so existing `_d.<name>` references in routes/*.py keep
@@ -108,6 +110,9 @@ from routes.skills import bp_skills
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
+from routes.reasoning import bp_reasoning
+from routes.plugins import bp_plugins
+from routes.local_query import bp_local_query
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -135,7 +140,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.122"
+__version__ = "0.12.164"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -1295,6 +1300,21 @@ def _budget_monitor_loop():
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
+                elif rtype == "token_spike":
+                    try:
+                        vel = _compute_velocity_status()
+                    except Exception:
+                        vel = None
+                    if vel:
+                        tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
+                        if tokens_per_min >= threshold:
+                            sid = vel.get("triggeringSession") or ""
+                            sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                            msg = (
+                                f"Token spike: {int(tokens_per_min):,} tokens/min "
+                                f"(threshold: {int(threshold):,}/min){sid_hint}"
+                            )
+                            fired = True
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
@@ -2216,10 +2236,14 @@ DASHBOARD_HTML = r"""
   .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
-  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:nowrap; cursor:pointer; transition:background 0.15s; }
+  /* Wrap by default so the turn-summary badges (steps/LLM/tools/duration)
+     live on their own row below the detail, instead of squeezing the
+     detail to ~40% of viewport. */
+  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:wrap; cursor:pointer; transition:background 0.15s; }
   .brain-event:hover { background:rgba(255,255,255,0.02); }
   .brain-event.expanded { flex-wrap:wrap; }
   .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; }
+  .brain-event > .brain-turn-summary { flex-basis: 100%; width: 100%; margin-left: 80px; margin-top: 4px; }
   .brain-meta { display:contents; } /* Desktop: render children directly in brain-event flex row */
   .brain-time { color:var(--text-muted); min-width:70px; }
   .brain-source { min-width:120px; max-width:200px; font-weight:600; word-break:break-all; flex-shrink:0; }
@@ -2326,6 +2350,26 @@ DASHBOARD_HTML = r"""
   .cron-status.ok { background: var(--bg-success); color: var(--text-success); }
   .cron-status.error { background: var(--bg-error); color: var(--text-error); }
   .cron-status.pending { background: var(--bg-warning); color: var(--text-warning); }
+  .cron-status.no-data { background: rgba(107,114,128,0.18); color: #9ca3af; cursor: help; }
+  .cron-status.stale { background: rgba(245,158,11,0.18); color: #f59e0b; cursor: help; }
+  .cron-status.scheduled { background: rgba(96,165,250,0.18); color: #60a5fa; cursor: help; }
+
+  /* Cron view tabs (Active / Paused / Calendar) */
+  .cron-view-tabs { display: flex; gap: 4px; margin-bottom: 10px; padding: 4px; background: var(--bg-secondary); border-radius: 10px; width: fit-content; }
+  .cron-view-tab { background: transparent; border: none; color: var(--text-muted); padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; }
+  .cron-view-tab:hover { color: var(--text-primary); }
+  .cron-view-tab.active { background: var(--bg-tertiary); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  .cron-view-count { font-weight: 500; color: var(--text-muted); margin-left: 4px; font-size: 11px; }
+  .cron-view-tab.active .cron-view-count { color: var(--text-secondary); }
+  .cron-cal-section { font-size: 13px; font-weight: 700; color: var(--text-primary); margin: 8px 0 8px; display: flex; align-items: center; gap: 6px; }
+  .cron-cal-day { background: var(--bg-secondary); border-radius: 8px; margin-bottom: 8px; padding: 8px 12px; }
+  .cron-cal-daylabel { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 600; }
+  .cron-cal-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-top: 1px solid rgba(255,255,255,0.04); font-size: 13px; }
+  .cron-cal-row:nth-child(2) { border-top: none; }
+  .cron-cal-time { font-family: 'SF Mono','Fira Code',monospace; color: var(--text-accent); font-size: 12px; min-width: 56px; }
+  .cron-cal-status { width: 18px; text-align: center; }
+  .cron-cal-name { color: var(--text-primary); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cron-cal-sched { font-size: 11px; color: var(--text-muted); font-family: 'SF Mono','Fira Code',monospace; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Cron error info & fix */
   .cron-error-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; vertical-align: middle; }
@@ -2489,43 +2533,43 @@ DASHBOARD_HTML = r"""
   .flow-node-optimizer text { fill: #ffffff !important; }
   .flow-node-infra > text { fill: #ffffff !important; }
   /* Refined palette: lower saturation, clearer hierarchy */
-  #node-human circle:first-child { fill: #6d5ce8 !important; stroke: #5b4bd4 !important; }
-  #node-human text { fill: #6d5ce8 !important; }
-  #node-telegram rect { fill: #2f6feb !important; stroke: #1f4fb8 !important; }
-  #node-signal rect { fill: #0f766e !important; stroke: #115e59 !important; }
-  #node-whatsapp rect { fill: #2f9e44 !important; stroke: #237738 !important; }
-  #node-imessage rect { fill: #34C759 !important; stroke: #248A3D !important; }
-  #node-discord rect { fill: #5865F2 !important; stroke: #4752C4 !important; }
-  #node-slack rect { fill: #4A154B !important; stroke: #350e36 !important; }
-  #node-irc rect { fill: #6B7280 !important; stroke: #4B5563 !important; }
-  #node-webchat rect { fill: #0EA5E9 !important; stroke: #0369A1 !important; }
-  #node-googlechat rect { fill: #1A73E8 !important; stroke: #1557B0 !important; }
-  #node-bluebubbles rect { fill: #1C6EF3 !important; stroke: #1558C0 !important; }
-  #node-msteams rect { fill: #6264A7 !important; stroke: #464775 !important; }
-  #node-matrix rect { fill: #0DBD8B !important; stroke: #0A9E74 !important; }
-  #node-mattermost rect { fill: #0058CC !important; stroke: #0047A3 !important; }
-  #node-line rect { fill: #00B900 !important; stroke: #009900 !important; }
-  #node-nostr rect { fill: #8B5CF6 !important; stroke: #6D28D9 !important; }
-  #node-twitch rect { fill: #9146FF !important; stroke: #772CE8 !important; }
-  #node-feishu rect { fill: #3370FF !important; stroke: #2050CC !important; }
-  #node-zalo rect { fill: #0068FF !important; stroke: #0050CC !important; }
-  #node-gateway rect { fill: #334155 !important; stroke: #1f2937 !important; }
-  #node-brain rect { fill: #a63a16 !important; stroke: #7c2d12 !important; }
-  #brain-model-label { fill: #fde68a !important; }
-  #brain-model-text { fill: #fed7aa !important; }
-  #node-session rect { fill: #3158d4 !important; stroke: #2648b6 !important; }
-  #node-exec rect { fill: #d97706 !important; stroke: #b45309 !important; }
-  #node-browser rect { fill: #5b39c6 !important; stroke: #4629a1 !important; }
-  #node-search rect { fill: #0f766e !important; stroke: #115e59 !important; }
-  #node-cron rect { fill: #4b5563 !important; stroke: #374151 !important; }
-  #node-tts rect { fill: #a16207 !important; stroke: #854d0e !important; }
-  #node-memory rect { fill: #1e3a8a !important; stroke: #172554 !important; }
-  #node-cost-optimizer rect { fill: #166534 !important; stroke: #14532d !important; }
-  #node-automation-advisor rect { fill: #4338ca !important; stroke: #3730a3 !important; }
-  #node-runtime rect { fill: #334155 !important; stroke: #475569 !important; }
-  #node-machine rect { fill: #424b57 !important; stroke: #2f3945 !important; }
-  #node-storage rect { fill: #52525b !important; stroke: #3f3f46 !important; }
-  #node-network rect { fill: #0f766e !important; stroke: #115e59 !important; }
+  [id$="node-human"] circle:first-child { fill: #6d5ce8 !important; stroke: #5b4bd4 !important; }
+  [id$="node-human"] text { fill: #6d5ce8 !important; }
+  [id$="node-telegram"] rect { fill: #2f6feb !important; stroke: #1f4fb8 !important; }
+  [id$="node-signal"] rect { fill: #0f766e !important; stroke: #115e59 !important; }
+  [id$="node-whatsapp"] rect { fill: #2f9e44 !important; stroke: #237738 !important; }
+  [id$="node-imessage"] rect { fill: #34C759 !important; stroke: #248A3D !important; }
+  [id$="node-discord"] rect { fill: #5865F2 !important; stroke: #4752C4 !important; }
+  [id$="node-slack"] rect { fill: #4A154B !important; stroke: #350e36 !important; }
+  [id$="node-irc"] rect { fill: #6B7280 !important; stroke: #4B5563 !important; }
+  [id$="node-webchat"] rect { fill: #0EA5E9 !important; stroke: #0369A1 !important; }
+  [id$="node-googlechat"] rect { fill: #1A73E8 !important; stroke: #1557B0 !important; }
+  [id$="node-bluebubbles"] rect { fill: #1C6EF3 !important; stroke: #1558C0 !important; }
+  [id$="node-msteams"] rect { fill: #6264A7 !important; stroke: #464775 !important; }
+  [id$="node-matrix"] rect { fill: #0DBD8B !important; stroke: #0A9E74 !important; }
+  [id$="node-mattermost"] rect { fill: #0058CC !important; stroke: #0047A3 !important; }
+  [id$="node-line"] rect { fill: #00B900 !important; stroke: #009900 !important; }
+  [id$="node-nostr"] rect { fill: #8B5CF6 !important; stroke: #6D28D9 !important; }
+  [id$="node-twitch"] rect { fill: #9146FF !important; stroke: #772CE8 !important; }
+  [id$="node-feishu"] rect { fill: #3370FF !important; stroke: #2050CC !important; }
+  [id$="node-zalo"] rect { fill: #0068FF !important; stroke: #0050CC !important; }
+  [id$="node-gateway"] rect { fill: #334155 !important; stroke: #1f2937 !important; }
+  [id$="node-brain"] rect { fill: #312e81 !important; stroke: #1e1b4b !important; }
+  [id$="brain-model-label"] { fill: #e0e7ff !important; }
+  [id$="brain-model-text"] { fill: #c7d2fe !important; }
+  [id$="node-session"] rect { fill: #3158d4 !important; stroke: #2648b6 !important; }
+  [id$="node-exec"] rect { fill: #d97706 !important; stroke: #b45309 !important; }
+  [id$="node-browser"] rect { fill: #5b39c6 !important; stroke: #4629a1 !important; }
+  [id$="node-search"] rect { fill: #0f766e !important; stroke: #115e59 !important; }
+  [id$="node-cron"] rect { fill: #4b5563 !important; stroke: #374151 !important; }
+  [id$="node-tts"] rect { fill: #a16207 !important; stroke: #854d0e !important; }
+  [id$="node-memory"] rect { fill: #1e3a8a !important; stroke: #172554 !important; }
+  [id$="node-cost-optimizer"] rect { fill: #166534 !important; stroke: #14532d !important; }
+  [id$="node-automation-advisor"] rect { fill: #4338ca !important; stroke: #3730a3 !important; }
+  [id$="node-runtime"] rect { fill: #334155 !important; stroke: #475569 !important; }
+  [id$="node-machine"] rect { fill: #424b57 !important; stroke: #2f3945 !important; }
+  [id$="node-storage"] rect { fill: #52525b !important; stroke: #3f3f46 !important; }
+  [id$="node-network"] rect { fill: #0f766e !important; stroke: #115e59 !important; }
   .flow-node-clickable { cursor: pointer; }
   .flow-node-clickable:hover rect, .flow-node-clickable:hover circle { filter: brightness(1.08); }
   .flow-node rect { rx: 12; ry: 12; stroke-width: 1.6; transition: all 0.25s ease; }
@@ -2544,7 +2588,7 @@ DASHBOARD_HTML = r"""
   .flow-path.glow-yellow { stroke: #f0c040; filter: drop-shadow(0 0 6px rgba(240,192,64,0.6)); }
   .flow-path.glow-green { stroke: #50e080; filter: drop-shadow(0 0 6px rgba(80,224,128,0.6)); }
   .flow-path.glow-red { stroke: #e04040; filter: drop-shadow(0 0 6px rgba(224,64,64,0.6)); }
-  @keyframes brainPulse { 0%,100% { filter: drop-shadow(0 0 6px rgba(240,192,64,0.25)); } 50% { filter: drop-shadow(0 0 22px rgba(240,192,64,0.7)); } }
+  @keyframes brainPulse { 0%,100% { filter: drop-shadow(0 0 6px rgba(129,140,248,0.18)); } 50% { filter: drop-shadow(0 0 18px rgba(129,140,248,0.45)); } }
   .brain-group { animation: brainPulse 2.2s ease-in-out infinite; }
   .tool-indicator { opacity: 0.2; transition: opacity 0.3s ease; }
   .tool-indicator.active { opacity: 1; }
@@ -3263,22 +3307,14 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('skills')">Skills</div>
+    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts</div>
+    <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
-    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
-      <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
-        <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
-        <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
-        <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
-        <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
-        <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
-      </div>
-    </div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -3353,6 +3389,7 @@ function clawmetryLogout(){
           <select id="alert-type" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
             <option value="threshold">Threshold (daily $ amount)</option>
             <option value="spike">Spike (hourly rate multiplier)</option>
+            <option value="token_spike">Token spike (tokens/min)</option>
           </select>
           <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -3486,6 +3523,15 @@ function clawmetryLogout(){
     <div id="velocity-flagged-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;"></div>
   </div>
 
+  <!-- Prompt-Error Banner (GH #601) -->
+  <div id="prompt-error-banner" style="display:none;margin-bottom:8px;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;background:rgba(220,38,38,0.15);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <span id="prompt-error-msg"></span>
+      <button onclick="document.getElementById('prompt-error-banner').style.display='none'" style="background:none;border:none;color:inherit;opacity:0.7;cursor:pointer;font-size:18px;line-height:1;padding:0;">&times;</button>
+    </div>
+    <div id="prompt-error-list" style="margin-top:8px;display:flex;flex-direction:column;gap:4px;font-weight:400;font-size:12px;"></div>
+  </div>
+
   <!-- Stats Bar (top) -->
   <div class="stats-footer">
     <div class="stats-footer-item">
@@ -3522,6 +3568,7 @@ function clawmetryLogout(){
       <div>
         <div class="stats-footer-label">Sessions</div>
         <div class="stats-footer-value" id="hot-sessions-count">--</div>
+        <div id="hot-sessions-sub" style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.3;"></div>
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
     </div>
@@ -3572,6 +3619,8 @@ function clawmetryLogout(){
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
         <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
+        <div id="sh-mcp-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔌 MCP Tool Activity</div>
+        <div id="sh-mcp" style="margin-bottom:14px;"></div></div>
         <!-- 🔍 Diagnostics Panel (GH#28) -->
         <div id="sh-diagnostics-wrap">
           <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
@@ -3764,6 +3813,11 @@ function clawmetryLogout(){
   </div>
   <div id="cron-health-panel" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
+  <div class="cron-view-tabs" role="tablist">
+    <button class="cron-view-tab active" data-view="active" onclick="setCronView('active')">Active <span class="cron-view-count" id="crons-count-active"></span></button>
+    <button class="cron-view-tab" data-view="paused" onclick="setCronView('paused')">Paused <span class="cron-view-count" id="crons-count-paused"></span></button>
+    <button class="cron-view-tab" data-view="calendar" onclick="setCronView('calendar')">&#x1F4C5; Calendar</button>
+  </div>
   <div class="card" id="crons-list">Loading...</div>
   <!-- Cron Health Monitor (GH #302) -->
   <div id="cron-health-anomaly-banner" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;color:#ef4444;font-size:13px;font-weight:600;">&#x26A0;&#xFE0F; Anomalies detected in cron jobs — review health table below</div>
@@ -4091,8 +4145,8 @@ function clawmetryLogout(){
         <rect x="330" y="130" width="180" height="90" rx="12" ry="12" fill="#C62828" stroke="#B71C1C" stroke-width="3" filter="url(#dropShadow)"/>
         <text x="420" y="162" style="font-size:24px;text-anchor:middle;">&#x1F9E0;</text>
         <text x="420" y="186" style="font-size:18px;font-weight:800;fill:#FFD54F;text-anchor:middle;" id="brain-model-label">AI Model</text>
-        <text x="420" y="203" style="font-size:10px;fill:#ffccbc;text-anchor:middle;" id="brain-model-text">unknown</text>
-        <text x="420" y="214" style="font-size:8px;fill:#a7f3d0;text-anchor:middle;" id="brain-billing-text">Auth: unknown</text>
+        <text x="420" y="203" style="font-size:10px;fill:#c7d2fe;text-anchor:middle;" id="brain-model-text">unknown</text>
+        <text x="420" y="214" style="font-size:8px;fill:#a5b4fc;text-anchor:middle;" id="brain-billing-text">Auth: unknown</text>
         <circle cx="420" cy="225" r="4" fill="#FF8A65">
           <animate attributeName="r" values="3;5;3" dur="1.1s" repeatCount="indefinite"/>
           <animate attributeName="opacity" values="0.5;1;0.5" dur="1.1s" repeatCount="indefinite"/>
@@ -4217,6 +4271,15 @@ function clawmetryLogout(){
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
       <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+    </div>
+    <!-- Context Window Anatomy (#566) -->
+    <div id="ctx-anatomy-wrap" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:none;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Context window anatomy</span>
+        <span id="ctx-pct-label" style="font-size:11px;color:var(--text-muted);">--</span>
+      </div>
+      <div id="ctx-bar" style="display:flex;height:10px;border-radius:4px;overflow:hidden;background:var(--bg-primary);width:100%;margin-bottom:6px;"></div>
+      <div id="ctx-legend" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
     </div>
     <!-- Activity density chart -->
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
@@ -4718,7 +4781,7 @@ async function loadAlertRules() {
       try { channels = JSON.parse(r.channels); } catch(e) { channels = [r.channels]; }
       html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;">';
       html += '<span style="font-weight:600;">' + escHtml(r.type) + '</span>';
-      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : '$'+r.threshold) + '</span>';
+      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : (r.type==='token_spike' ? r.threshold.toLocaleString()+' tok/min' : '$'+r.threshold)) + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + channels.join(', ') + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + r.cooldown_min + 'min cooldown</span>';
       html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-error);font-size:16px;" data-rule-id="'+r.id+'" onclick="deleteAlertRule(this.dataset.ruleId)" title="Delete">&#x1f5d1;</span>';
@@ -4926,7 +4989,7 @@ function switchTab(name) {
   if (name === 'limits') loadRateLimits();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
-  if (name === 'brain') loadBrainPage();
+  if (name === 'brain') { if (typeof loadBrainPage === 'function') loadBrainPage(); loadContextAnatomy(); }
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'actions') loadQAHistory();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
@@ -5384,6 +5447,34 @@ async function loadTokenVelocity() {
   }
 }
 
+async function loadPromptErrors() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/prompt-errors', 5000);
+    var banner = document.getElementById('prompt-error-banner');
+    var msgEl  = document.getElementById('prompt-error-msg');
+    var listEl = document.getElementById('prompt-error-list');
+    if (!banner) return;
+    if (!d.errors || d.errors.length === 0) { banner.style.display = 'none'; return; }
+
+    msgEl.textContent = '⚠️ ' + d.count + ' prompt error' + (d.count === 1 ? '' : 's') + ' detected';
+
+    if (listEl) {
+      listEl.innerHTML = d.errors.slice(0, 5).map(function(e) {
+        var when = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+        var who = [e.provider, e.model].filter(Boolean).join('/') || 'unknown provider';
+        var msg = e.error ? String(e.error).slice(0, 120) : 'unknown error';
+        return '<div style="background:rgba(0,0,0,0.25);border-radius:5px;padding:4px 8px;">'
+          + (when ? '<span style="opacity:0.6;">' + when + '</span> ' : '')
+          + '<span style="opacity:0.8;">' + who + '</span>'
+          + ' — ' + msg
+          + '</div>';
+      }).join('');
+    }
+
+    banner.style.display = 'block';
+  } catch(e) { /* non-critical */ }
+}
+
 async function killSession(sessionId) {
   if (!confirm('Stop session ' + sessionId + '?')) return;
   try {
@@ -5531,8 +5622,10 @@ async function loadAll() {
     if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadPromptErrors === 'function') loadPromptErrors().catch(function(e){console.warn('prompt errors failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
+    if (typeof loadMcpStats === 'function') loadMcpStats().catch(function(e){console.warn('mcp stats failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -5590,6 +5683,46 @@ async function loadReliabilityCard() {
     el = document.getElementById('reliability-detail-lt');
     if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
   } catch(e) { console.warn('reliability card load failed', e); }
+}
+
+async function loadMcpStats() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/mcp-stats', 8000);
+    var wrap = document.getElementById('sh-mcp-wrap');
+    var el = document.getElementById('sh-mcp');
+    if (!wrap || !el) return;
+    if (!d.tools || d.tools.length === 0) {
+      wrap.style.display = 'block';
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No MCP tool calls detected in recent sessions.</div>';
+      return;
+    }
+    var rows = d.tools.map(function(t) {
+      var errCell = t.errors > 0
+        ? '<span style="color:#e05;">' + t.errors + ' (' + t.error_rate_pct + '%)</span>'
+        : '<span style="color:var(--text-muted);">0</span>';
+      var latCell = t.avg_latency_ms != null
+        ? (t.avg_latency_ms >= 1000
+            ? (t.avg_latency_ms / 1000).toFixed(1) + 's'
+            : t.avg_latency_ms + 'ms')
+        : '<span style="color:var(--text-faint);">—</span>';
+      return '<tr style="border-top:1px solid var(--border-secondary);">'
+        + '<td style="padding:4px 6px 4px 0;font-size:12px;font-family:\'JetBrains Mono\',monospace;color:var(--text-primary);">' + t.name + '</td>'
+        + '<td style="padding:4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + t.calls + '</td>'
+        + '<td style="padding:4px 6px;font-size:12px;text-align:right;">' + errCell + '</td>'
+        + '<td style="padding:4px 0 4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + latCell + '</td>'
+        + '</tr>';
+    }).join('');
+    el.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr>'
+      + '<th style="padding:0 6px 4px 0;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:left;font-weight:500;">Tool</th>'
+      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Calls</th>'
+      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Errors</th>'
+      + '<th style="padding:0 0 4px 6px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Avg Latency</th>'
+      + '</tr></thead>'
+      + '<tbody>' + rows + '</tbody>'
+      + '</table>';
+    wrap.style.display = 'block';
+  } catch(e) { console.warn('mcp stats failed', e); }
 }
 
 async function loadHeartbeat() {
@@ -5678,6 +5811,35 @@ async function loadHeartbeat() {
       sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">no beats yet</span>';
     }
   } catch(e) { console.warn('heartbeat panel load failed', e); }
+}
+
+async function loadContextAnatomy() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/context-anatomy', 4000);
+    if (!d || !d.buckets || !d.buckets.length) return;
+    var wrap = document.getElementById('ctx-anatomy-wrap');
+    if (!wrap) return;
+    wrap.style.display = '';
+    var pct = document.getElementById('ctx-pct-label');
+    if (pct) pct.textContent = (d.pct_used || 0) + '% of ' + Math.round((d.context_limit || 200000) / 1000) + 'K window';
+    var total = d.total_estimated || 1;
+    var bar = document.getElementById('ctx-bar');
+    if (bar) {
+      bar.innerHTML = d.buckets.map(function(b) {
+        var w = Math.max(0.5, b.tokens / total * 100).toFixed(1);
+        return '<div title="' + b.label + ': ~' + b.tokens.toLocaleString() + ' tok" style="width:' + w + '%;background:' + b.color + ';"></div>';
+      }).join('');
+    }
+    var legend = document.getElementById('ctx-legend');
+    if (legend) {
+      legend.innerHTML = d.buckets.map(function(b) {
+        var tok = b.tokens > 999 ? Math.round(b.tokens / 1000) + 'K' : b.tokens;
+        return '<span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--text-secondary);">' +
+          '<span style="width:8px;height:8px;border-radius:2px;flex-shrink:0;background:' + b.color + ';"></span>' +
+          b.label + ' ~' + tok + '</span>';
+      }).join('');
+    }
+  } catch(e) { /* silent — panel stays hidden when data unavailable */ }
 }
 
 async function loadMiniWidgets(overview, usage) {
@@ -5773,6 +5935,15 @@ async function loadMiniWidgets(overview, usage) {
     var sl = sd.sessions || sd || [];
     if (!Array.isArray(sl)) sl = [];
     document.getElementById('hot-sessions-count').textContent = sl.length;
+    // Build session-type breakdown subtitle (heartbeat / user / sub-agent)
+    var typeCounts = {};
+    sl.forEach(function(s) { var t = s.session_type || 'main'; typeCounts[t] = (typeCounts[t] || 0) + 1; });
+    var parts = [];
+    ['heartbeat', 'user', 'sub-agent'].forEach(function(t) {
+      if (typeCounts[t]) parts.push(typeCounts[t] + ' ' + t);
+    });
+    var sub = document.getElementById('hot-sessions-sub');
+    if (sub) sub.textContent = parts.length ? parts.join(' · ') : '';
   }).catch(function() {
     document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
   });
@@ -7682,6 +7853,21 @@ def _budget_monitor_loop():
                     if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
+                elif rtype == "token_spike":
+                    try:
+                        vel = _compute_velocity_status()
+                    except Exception:
+                        vel = None
+                    if vel:
+                        tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
+                        if tokens_per_min >= threshold:
+                            sid = vel.get("triggeringSession") or ""
+                            sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                            msg = (
+                                f"Token spike: {int(tokens_per_min):,} tokens/min "
+                                f"(threshold: {int(threshold):,}/min){sid_hint}"
+                            )
+                            fired = True
 
                 if fired:
                     _budget_alert_cooldowns[rule_id] = now
@@ -8276,6 +8462,8 @@ def detect_config(args=None):
         USER_NAME = "You"
 
     # ── Register blueprints (Phase 4) ───────────────────────────────────────
+    app.register_blueprint(bp_advisor)
+    app.register_blueprint(bp_selfevolve)
     app.register_blueprint(bp_alerts)
     app.register_blueprint(bp_autonomy)
     app.register_blueprint(bp_auth)
@@ -8303,6 +8491,9 @@ def detect_config(args=None):
     app.register_blueprint(bp_skills)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
+    app.register_blueprint(bp_reasoning)
+    app.register_blueprint(bp_plugins)
+    app.register_blueprint(bp_local_query)
     app.register_blueprint(bp_openapi)
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
@@ -8331,6 +8522,52 @@ def detect_config(args=None):
             return _jsonify({"error": "Connect to ClawMetry Cloud to save "
                              "integrations.", "note": _oss_note}), 402
         return _jsonify({"integrations": [], "count": 0, "note": _oss_note})
+
+    # vivekchand/clawmetry#748 — Initial-sync progress for the dashboard
+    # banner. The sync daemon writes ~/.clawmetry/sync_progress.json after
+    # each phase; we just stream it through. Local-only, no auth.
+    @app.route("/api/sync-progress", endpoint="sync_progress")
+    def _sync_progress():
+        from flask import jsonify as _jsonify
+        progress_path = os.path.expanduser("~/.clawmetry/sync_progress.json")
+        if not os.path.isfile(progress_path):
+            return _jsonify({"error": "no sync progress yet"}), 404
+        try:
+            with open(progress_path) as _f:
+                return _jsonify(json.load(_f))
+        except Exception as _e:
+            return _jsonify({"error": f"unreadable: {_e}"}), 500
+
+    # Local SQLite event store (epic #964 / phase 1) — proves the daemon is
+    # writing through to ~/.clawmetry/events.db. The dashboard's main read
+    # paths are migrating to this store progressively; in the meantime this
+    # endpoint exposes the store's own metrics so we can verify the
+    # write-through is working in prod and start the cutover safely.
+    @app.route("/api/local-store/health", endpoint="local_store_health")
+    def _local_store_health():
+        from flask import jsonify as _jsonify
+        try:
+            from clawmetry import local_store
+            return _jsonify(local_store.get_store().health())
+        except Exception as _e:
+            return _jsonify({"error": str(_e)[:300]}), 503
+
+    @app.route("/api/local-store/events", endpoint="local_store_events")
+    def _local_store_events():
+        from flask import jsonify as _jsonify, request as _req
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store()
+            rows = store.query_events(
+                session_id=_req.args.get("session_id"),
+                event_type=_req.args.get("event_type"),
+                since=_req.args.get("since"),
+                until=_req.args.get("until"),
+                limit=int(_req.args.get("limit", "200")),
+            )
+            return _jsonify({"events": rows, "count": len(rows)})
+        except Exception as _e:
+            return _jsonify({"error": str(_e)[:300]}), 500
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -8506,6 +8743,7 @@ DASHBOARD_HTML = r"""
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js') }}"></script>
+<script src="{{ url_for('static', filename='js/alerts.js') }}" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -8531,22 +8769,14 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
     <div class="nav-tab active" onclick="switchTab('overview')">Overview</div>
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('skills')">Skills</div>
+    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts</div>
+    <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
     <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
-    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')" style="display:none;">Crons</div>
+    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <div class="nav-tab nav-tab-more" onclick="toggleAdvancedTabs(event)" title="Advanced tabs">More &#9662;
-      <div class="advanced-tabs-dropdown" id="advanced-tabs-dropdown" style="display:none;">
-        <div class="nav-tab" onclick="switchTab('models');hideAdvDropdown()">Models</div>
-        <div class="nav-tab" onclick="switchTab('subagents');hideAdvDropdown()">Agents</div>
-        <div class="nav-tab" onclick="switchTab('limits');hideAdvDropdown()">Limits</div>
-        <div class="nav-tab" onclick="switchTab('version-impact');hideAdvDropdown()">Upgrades</div>
-        <div class="nav-tab" onclick="switchTab('clusters');hideAdvDropdown()">Clusters</div>
-      </div>
-    </div>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
@@ -8562,6 +8792,9 @@ DASHBOARD_HTML = r"""
 
 <!-- OVERVIEW (Split-Screen Hacker Dashboard) -->
 {% include 'tabs/overview.html' %}
+
+<!-- ALERTS (Cloud-Pro feature) -->
+{% include 'tabs/alerts.html' %}
 
 <!-- USAGE -->
 {% include 'tabs/usage.html' %}
@@ -8594,6 +8827,12 @@ DASHBOARD_HTML = r"""
 
 <!-- BRAIN -->
 {% include 'tabs/brain.html' %}
+
+<!-- SELF-EVOLVE -->
+{% include 'tabs/selfevolve.html' %}
+
+<!-- NOTIFICATIONS -->
+{% include 'tabs/notifications.html' %}
 
 <!-- CONTEXT INSPECTOR -->
 {% include 'tabs/context.html' %}
@@ -8666,6 +8905,7 @@ DASHBOARD_HTML = r"""
       <div class="modal-tab active" onclick="switchModalTab('summary')">Summary</div>
       <div class="modal-tab" onclick="switchModalTab('narrative')">Narrative</div>
       <div class="modal-tab" onclick="switchModalTab('full')">Full Logs</div>
+      <div class="modal-tab" onclick="switchModalTab('tools')">Tools</div>
     </div>
     <div class="modal-content" id="modal-content">Loading...</div>
     <div class="modal-footer">
@@ -8979,7 +9219,7 @@ def _auto_discover_gateway(token):
                         "instanceId": "clawmetry-discover",
                     },
                     "role": "operator",
-                    "scopes": ["operator.admin"],
+                    "scopes": ["operator.admin", "operator.read"],
                     "auth": {"token": token},
                 },
             }
@@ -9850,9 +10090,16 @@ def _compute_transcript_analytics():
 
     if os.path.isdir(sessions_dir):
         for fname in os.listdir(sessions_dir):
-            if not fname.endswith(".jsonl"):
+            # Accept both live `.jsonl` and archived `.jsonl.reset.<ts>` files.
+            if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
                 continue
-            sid = fname.replace(".jsonl", "")
+            # Runtime trajectory/checkpoint files duplicate session content and
+            # can dwarf real transcripts (hundreds of MB). They make usage
+            # widgets crawl on first load, so keep analytics on canonical
+            # session/reset transcripts only.
+            if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
+                continue
+            sid = fname.split(".jsonl", 1)[0]
             fpath = os.path.join(sessions_dir, fname)
             fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
 
@@ -9909,6 +10156,14 @@ def _compute_transcript_analytics():
                             if cost > 0:
                                 s_cost += cost
 
+                            # Bucket to this event's actual date, not the
+                            # session start date. Fixes the bug where a
+                            # long-running session's entire token total
+                            # piled onto the day the session started.
+                            _ev_date = (ts or fallback_dt).strftime("%Y-%m-%d")
+                            daily_tokens[_ev_date] = daily_tokens.get(_ev_date, 0) + tokens
+                            daily_cost[_ev_date] = daily_cost.get(_ev_date, 0.0) + cost
+
                             plugins = _extract_tool_plugins(obj)
                             if plugins:
                                 share_tokens = float(tokens) / float(len(plugins))
@@ -9942,9 +10197,9 @@ def _compute_transcript_analytics():
                 if s_end is None:
                     s_end = fallback_dt
 
-                day = s_start.strftime("%Y-%m-%d")
-                daily_tokens[day] = daily_tokens.get(day, 0) + s_tokens
-                daily_cost[day] = daily_cost.get(day, 0.0) + s_cost
+                # daily_tokens/daily_cost are now populated per-event above
+                # (bucketed by each event's timestamp, not the session start).
+                # Only model_usage still aggregates per-session.
                 model_usage[s_model] = model_usage.get(s_model, 0) + s_tokens
 
                 search_text = " ".join(search_parts)
@@ -9959,7 +10214,7 @@ def _compute_transcript_analytics():
                         "model": s_model,
                         "start_ts": s_start.timestamp() if s_start else 0,
                         "end_ts": s_end.timestamp() if s_end else 0,
-                        "day": day,
+                        "day": s_start.strftime("%Y-%m-%d") if s_start else fallback_dt.strftime("%Y-%m-%d"),
                         "search_text": search_text,
                         "explicit_cron_refs": explicit_cron_refs,
                         "is_cron_candidate": ("cron" in search_text)
@@ -10170,9 +10425,19 @@ def _compute_transcript_analytics():
 
     if os.path.isdir(sessions_dir):
         for fname in os.listdir(sessions_dir):
-            if not fname.endswith(".jsonl"):
+            # Accept both live `.jsonl` and archived `.jsonl.reset.<ts>` files.
+            # Reset archives carry real historical token usage from earlier
+            # days; skipping them was making the 14-day chart pile every
+            # past-day total onto today.
+            if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
                 continue
-            sid = fname.replace(".jsonl", "")
+            # Runtime trajectory/checkpoint files duplicate session content and
+            # can dwarf real transcripts (hundreds of MB). They make usage
+            # widgets crawl on first load, so keep analytics on canonical
+            # session/reset transcripts only.
+            if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
+                continue
+            sid = fname.split(".jsonl", 1)[0]
             fpath = os.path.join(sessions_dir, fname)
             fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
 
@@ -10229,6 +10494,14 @@ def _compute_transcript_analytics():
                             if cost > 0:
                                 s_cost += cost
 
+                            # Bucket to this event's actual date, not the
+                            # session start date. Fixes the bug where a
+                            # long-running session's entire token total
+                            # piled onto the day the session started.
+                            _ev_date = (ts or fallback_dt).strftime("%Y-%m-%d")
+                            daily_tokens[_ev_date] = daily_tokens.get(_ev_date, 0) + tokens
+                            daily_cost[_ev_date] = daily_cost.get(_ev_date, 0.0) + cost
+
                             plugins = _extract_tool_plugins(obj)
                             if plugins:
                                 share_tokens = float(tokens) / float(len(plugins))
@@ -10238,8 +10511,9 @@ def _compute_transcript_analytics():
                                     else 0.0
                                 )
                                 # Track daily breakdown for trend analysis (GH#201)
-                                # day is resolved when s_start is known; use fallback_dt day here
-                                _ev_day = fallback_dt.strftime("%Y-%m-%d")
+                                # use the event's actual day so trend lines
+                                # match the headline 14-day chart.
+                                _ev_day = (ts or fallback_dt).strftime("%Y-%m-%d")
                                 for p in plugins:
                                     plugin_stats[p]["tokens"] += share_tokens
                                     plugin_stats[p]["cost"] += share_cost
@@ -10272,9 +10546,9 @@ def _compute_transcript_analytics():
                 if s_end is None:
                     s_end = fallback_dt
 
-                day = s_start.strftime("%Y-%m-%d")
-                daily_tokens[day] = daily_tokens.get(day, 0) + s_tokens
-                daily_cost[day] = daily_cost.get(day, 0.0) + s_cost
+                # daily_tokens/daily_cost are now populated per-event above
+                # (bucketed by each event's timestamp, not the session start).
+                # Only model_usage still aggregates per-session.
                 model_usage[s_model] = model_usage.get(s_model, 0) + s_tokens
 
                 search_text = " ".join(search_parts)
@@ -10289,7 +10563,7 @@ def _compute_transcript_analytics():
                         "model": s_model,
                         "start_ts": s_start.timestamp() if s_start else 0,
                         "end_ts": s_end.timestamp() if s_end else 0,
-                        "day": day,
+                        "day": s_start.strftime("%Y-%m-%d") if s_start else fallback_dt.strftime("%Y-%m-%d"),
                         "search_text": search_text,
                         "explicit_cron_refs": explicit_cron_refs,
                         "is_cron_candidate": ("cron" in search_text)

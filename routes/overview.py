@@ -207,7 +207,7 @@ def api_overview():
     import dashboard as _d
 
     # Try gateway API for sessions
-    gw_sessions = _d._gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
+    gw_sessions = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_sessions and "sessions" in gw_sessions:
         sessions = gw_sessions["sessions"]
     else:
@@ -519,12 +519,148 @@ def api_timeline():
     return jsonify({"days": days, "today": now.strftime("%Y-%m-%d")})
 
 
+@bp_overview.route("/api/prompt-errors")
+def api_prompt_errors():
+    """Return recent openclaw:prompt-error events from session JSONL files.
+
+    Scans the 20 most-recently-modified session files so the response stays
+    fast regardless of how many sessions exist.  Supports ?since=<ISO8601>
+    for incremental polling by the client.
+    """
+    import dashboard as _d
+
+    since_raw = request.args.get("since")
+    since_ts = None
+    if since_raw:
+        try:
+            since_ts = datetime.fromisoformat(since_raw.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    session_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    if not os.path.isdir(session_dir):
+        return jsonify({"errors": [], "count": 0})
+
+    try:
+        all_files = [
+            f for f in os.listdir(session_dir) if f.endswith(".jsonl")
+        ]
+        # Scan most-recently-modified first so we surface fresh errors quickly.
+        all_files.sort(
+            key=lambda f: os.path.getmtime(os.path.join(session_dir, f)),
+            reverse=True,
+        )
+        files = all_files[:20]
+    except Exception:
+        return jsonify({"errors": [], "count": 0})
+
+    errors = []
+    for fname in files:
+        fpath = os.path.join(session_dir, fname)
+        try:
+            with open(fpath, "r") as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line.strip())
+                    except Exception:
+                        continue
+                    if obj.get("customType") != "openclaw:prompt-error":
+                        continue
+
+                    ts_raw = (
+                        obj.get("timestamp")
+                        or obj.get("time")
+                        or obj.get("created_at")
+                    )
+                    if since_ts and ts_raw:
+                        try:
+                            ev_ts = datetime.fromisoformat(
+                                str(ts_raw).replace("Z", "+00:00")
+                            )
+                            if ev_ts < since_ts:
+                                continue
+                        except Exception:
+                            pass
+
+                    # Fields may be at the top level or nested under "data".
+                    data = obj.get("data") if isinstance(obj.get("data"), dict) else obj
+                    errors.append(
+                        {
+                            "ts": ts_raw,
+                            "runId": data.get("runId") or obj.get("runId"),
+                            "sessionId": data.get("sessionId") or obj.get("sessionId"),
+                            "provider": data.get("provider") or obj.get("provider"),
+                            "model": data.get("model") or obj.get("model"),
+                            "api": data.get("api") or obj.get("api"),
+                            "error": data.get("error") or obj.get("error"),
+                        }
+                    )
+        except Exception:
+            continue
+
+    errors.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    errors = errors[:50]
+    return jsonify({"errors": errors, "count": len(errors)})
+
+
 @bp_overview.route("/api/cloud-cta/status")
 def cloud_cta_status():
     import dashboard as _d
 
     token = _d._read_cloud_token()
     return jsonify({"connected": bool(token)})
+
+
+@bp_overview.route(
+    "/api/cloud-proxy/<path:cloud_path>",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+def cloud_proxy(cloud_path):
+    """Forward an authenticated request to https://app.clawmetry.com/<path>.
+
+    Used by the Alerts tab (and anything else that needs cloud-side data) so
+    the cm_ token never has to leave the OSS dashboard. The token is read from
+    ~/.openclaw/openclaw.json.cloudToken and injected as Bearer.
+
+    Returns 401 if no cloud token is configured (UI shows the "Sign up for
+    Cloud" CTA in that case).
+    """
+    import dashboard as _d
+    import urllib.error
+    import urllib.request
+
+    token = _d._read_cloud_token()
+    if not token:
+        return jsonify({"error": "cloud_not_connected"}), 401
+
+    url = "https://app.clawmetry.com/" + cloud_path
+    if request.query_string:
+        url += "?" + request.query_string.decode("utf-8", errors="replace")
+
+    body = None
+    if request.method in ("POST", "PUT", "PATCH"):
+        body = request.get_data() or b""
+
+    headers = {
+        "Authorization": "Bearer " + token,
+        "Content-Type": request.headers.get("Content-Type", "application/json"),
+        "Accept": "application/json",
+    }
+
+    req = urllib.request.Request(url, data=body, headers=headers, method=request.method)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = resp.read()
+            ct = resp.headers.get("Content-Type", "application/json")
+            return (payload, resp.status, {"Content-Type": ct})
+    except urllib.error.HTTPError as e:
+        # Pass through 4xx/5xx with body so the UI can read 402 upgrade_required etc.
+        return (e.read() or b"{}", e.code,
+                {"Content-Type": e.headers.get("Content-Type", "application/json")})
+    except Exception as e:
+        return jsonify({"error": "proxy_failed", "detail": str(e)[:200]}), 502
 
 
 @bp_overview.route("/api/cloud-cta/send-otp", methods=["POST"])
