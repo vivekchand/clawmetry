@@ -5657,8 +5657,78 @@ async function loadUsage() {
     loadCostComparison();
     // Load activity heatmap
     loadHeatmap();
+    // Load prompt cache analytics (GH #979)
+    loadCacheAnalytics();
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
+  }
+}
+
+async function loadCacheAnalytics() {
+  try {
+    var d = await fetch('/api/usage/cache-trends?days=14').then(function(r) { return r.json(); });
+    var tot = d.totals || {};
+    var hasCache = (tot.cache_read_tokens || 0) + (tot.cache_write_tokens || 0) > 0;
+    var title = document.getElementById('cache-perf-title');
+    var card = document.getElementById('cache-perf-card');
+    if (!title || !card) return;
+    if (!hasCache) return;
+    title.style.display = '';
+    card.style.display = '';
+
+    var hit = tot.cache_hit_ratio_pct || 0;
+    var hitColor = hit >= 60 ? '#22c55e' : hit >= 30 ? '#f59e0b' : '#ef4444';
+    var savings = tot.est_savings_usd || 0;
+    var crToks = tot.cache_read_tokens || 0;
+    var cwToks = tot.cache_write_tokens || 0;
+
+    function fmtToks(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : String(n||0); }
+    function fmtCost(c) { return c >= 0.01 ? '$'+c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+
+    var html = '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;">'
+      + '<div style="min-width:120px;text-align:center;">'
+      + '<div style="font-size:32px;font-weight:700;color:'+hitColor+';">'+hit.toFixed(1)+'%</div>'
+      + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">cache hit rate</div>'
+      + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">'+fmtToks(crToks)+' read · '+fmtToks(cwToks)+' write</div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:180px;">';
+
+    if (savings > 0) {
+      html += '<div style="font-size:13px;margin-bottom:8px;">💰 Est. savings: <strong style="color:#22c55e;">'+fmtCost(savings)+'</strong> vs. uncached</div>';
+    }
+
+    var models = (d.by_model || []).filter(function(m) { return (m.cache_read_tokens||0)+(m.cache_write_tokens||0) > 0; });
+    if (models.length > 0) {
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+        + '<thead><tr>'
+        + '<th style="text-align:left;color:var(--text-muted);padding:2px 8px 4px 0;font-weight:500;">Model</th>'
+        + '<th style="text-align:right;color:var(--text-muted);padding:2px 0 4px 8px;font-weight:500;">Hit %</th>'
+        + '<th style="text-align:right;color:var(--text-muted);padding:2px 0 4px 8px;font-weight:500;">Saved</th>'
+        + '</tr></thead><tbody>';
+      models.forEach(function(m) {
+        var mhit = m.cache_hit_ratio_pct || 0;
+        var mc = mhit >= 60 ? '#22c55e' : mhit >= 30 ? '#f59e0b' : '#ef4444';
+        html += '<tr>'
+          + '<td style="padding:2px 8px 2px 0;color:var(--text-secondary);">'+escHtml(m.model||'—')+'</td>'
+          + '<td style="text-align:right;padding:2px 0 2px 8px;color:'+mc+';font-weight:600;">'+mhit.toFixed(1)+'%</td>'
+          + '<td style="text-align:right;padding:2px 0 2px 8px;color:var(--text-muted);">'+fmtCost(m.est_savings_usd||0)+'</td>'
+          + '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    html += '</div></div>';
+
+    var recs = d.recommendations || [];
+    if (recs.length > 0) {
+      html += '<div style="margin-top:12px;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid '+hitColor+';font-size:12px;color:var(--text-secondary);">'
+        + recs.map(function(r) { return escHtml(r); }).join('<br>')
+        + '</div>';
+    }
+
+    document.getElementById('cache-perf-content').innerHTML = html;
+  } catch(e) {
+    // Cache panel is optional — skip silently on error
   }
 }
 

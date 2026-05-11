@@ -3785,6 +3785,11 @@ function clawmetryLogout(){
   <div class="card" id="cost-comparison-card" style="display:none;">
     <div id="cost-comparison-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
   </div>
+  <!-- Prompt Cache Analytics (GH #979) -->
+  <div class="section-title" id="cache-perf-title" style="display:none;">⚡ Prompt Cache <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">hit rate · savings · per model · 14 days</span></div>
+  <div class="card" id="cache-perf-card" style="display:none;">
+    <div id="cache-perf-content" style="min-height:48px;color:var(--text-muted);"></div>
+  </div>
     <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
   <div class="card">
     <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
