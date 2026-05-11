@@ -132,7 +132,13 @@ jobs:
               'connected_at': '2026-05-07T00:00:00Z',
           }, open(os.path.expanduser('~/.clawmetry/config.json'), 'w'))
           "
-          echo "▸ Spawning wheel-installed daemon for 15s"
+          # Give the daemon an empty but valid OpenClaw workspace so its
+          # auto-detection doesn't fall back to /root/.openclaw (which
+          # CI may not have permission to stat).
+          export OPENCLAW_HOME="$HOME/.openclaw-e2e-fixture"
+          mkdir -p "$OPENCLAW_HOME/agents/main/sessions" "$OPENCLAW_HOME/memory" "$OPENCLAW_HOME/logs"
+          echo "{}" > "$OPENCLAW_HOME/agents/main/sessions/sessions.json"
+          echo "▸ Spawning wheel-installed daemon for 15s (OPENCLAW_HOME=$OPENCLAW_HOME)"
           timeout 15 /tmp/smoke-venv/bin/python -m clawmetry.sync > /tmp/daemon.log 2>&1 || true
           if grep -q "Initial heartbeat sent" /tmp/daemon.log; then
             echo "✅ Daemon sent initial heartbeat — wheel + cloud handshake OK"
