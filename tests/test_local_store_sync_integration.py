@@ -18,7 +18,7 @@ import pytest
 @pytest.fixture
 def sync_with_isolated_store(tmp_path, monkeypatch):
     """Reload sync + local_store with an isolated DB per test."""
-    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.db"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "5")
     import clawmetry.local_store as ls
