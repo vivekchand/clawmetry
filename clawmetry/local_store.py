@@ -55,16 +55,59 @@ log = logging.getLogger("clawmetry.local_store")
 # Public knobs — tuned for the common case (one daemon, one dashboard, ≤1 K
 # events/s sustained on a developer laptop). Adjust via env vars only.
 
-# Note: changed from events.db (SQLite, in 0.12.164) → events.duckdb. The
-# old file is left in place if present; the new file is created fresh.
-# The 0.12.164 SQLite file was live for hours at most; treating its data
-# as disposable is fine.
+# Naming history:
+#   0.12.164  → events.db    (SQLite — replaced by DuckDB the same release)
+#   0.12.165  → events.duckdb (DuckDB; name implied "only events" but we
+#                              also store sessions, memory_blobs, heartbeats,
+#                              system_snapshots, spans, etc. in this same DB)
+#   0.12.166+ → clawmetry.duckdb (the all-up local store for whatever
+#                                 ClawMetry needs across multi-agent
+#                                 frameworks — past + future tables)
+#
+# Compatibility: if a user has an existing events.duckdb but no
+# clawmetry.duckdb, the next start renames it in place. Lossless,
+# no schema change. See _migrate_legacy_db_path() below.
 DB_PATH = Path(
     os.environ.get(
         "CLAWMETRY_LOCAL_STORE_PATH",
-        os.path.expanduser("~/.clawmetry/events.duckdb"),
+        os.path.expanduser("~/.clawmetry/clawmetry.duckdb"),
     )
 )
+LEGACY_DB_PATH = Path(os.path.expanduser("~/.clawmetry/events.duckdb"))
+
+
+def _migrate_legacy_db_path() -> None:
+    """If the old events.duckdb exists and the new clawmetry.duckdb doesn't,
+    rename in place. Single os.rename — atomic on POSIX. Safe to call on
+    every start; no-op when there's nothing to migrate.
+
+    We intentionally DON'T touch the legacy file when the new name already
+    exists (would lose data) and DON'T touch CLAWMETRY_LOCAL_STORE_PATH-
+    overridden paths (test fixtures, custom installs)."""
+    if "CLAWMETRY_LOCAL_STORE_PATH" in os.environ:
+        return  # Custom path; user knows what they're doing.
+    if not LEGACY_DB_PATH.exists():
+        return
+    if DB_PATH.exists():
+        # Both files present — keep the new one as live. Don't clobber.
+        log.info("local store: legacy events.duckdb still present alongside "
+                 "clawmetry.duckdb. Keeping clawmetry.duckdb; old file "
+                 "untouched (delete manually if you want to reclaim space).")
+        return
+    try:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LEGACY_DB_PATH.rename(DB_PATH)
+        # Move the WAL too so DuckDB recovers cleanly on first open.
+        legacy_wal = LEGACY_DB_PATH.with_suffix(LEGACY_DB_PATH.suffix + ".wal")
+        new_wal = DB_PATH.with_suffix(DB_PATH.suffix + ".wal")
+        if legacy_wal.exists() and not new_wal.exists():
+            legacy_wal.rename(new_wal)
+        log.info("local store: migrated legacy %s → %s",
+                 LEGACY_DB_PATH.name, DB_PATH.name)
+    except OSError as e:
+        log.warning("local store: failed to migrate legacy %s → %s: %s. "
+                    "Will create a fresh clawmetry.duckdb; old file "
+                    "untouched.", LEGACY_DB_PATH.name, DB_PATH.name, e)
 
 FLUSH_INTERVAL_SECS = float(os.environ.get("CLAWMETRY_LOCAL_FLUSH_SECS", "2.0"))
 FLUSH_BATCH = int(os.environ.get("CLAWMETRY_LOCAL_FLUSH_BATCH", "1000"))
@@ -346,6 +389,10 @@ class LocalStore:
         self._flusher_stop = threading.Event()
         self._flusher_thread: threading.Thread | None = None
         self._last_flush_ts = time.monotonic()
+        # Rename the legacy events.duckdb in place BEFORE opening — once
+        # we hold a connection we can't atomically rename the file out
+        # from under DuckDB.
+        _migrate_legacy_db_path()
         self._conn = _open_connection(read_only=False)
         self._migrate()
 
