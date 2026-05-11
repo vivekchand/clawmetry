@@ -19,15 +19,136 @@ import json
 import os
 import time
 
-from flask import Blueprint, Response, jsonify
+from flask import Blueprint, Response, jsonify, request
 
 bp_brain = Blueprint('brain', __name__)
+
+
+_BRAIN_HISTORY_CACHE = {}
+_BRAIN_HISTORY_CACHE_TTL_SECONDS = 3.0
+_BRAIN_HISTORY_TAIL_BYTES = 512 * 1024
+
+
+def _brain_history_bool_arg(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "all"}
+
+
+def _try_local_store_brain(limit: int, include_artifacts: bool):
+    """Epic #964 phase 1b fast path. Returns a brain-history-shaped dict
+    when CLAWMETRY_LOCAL_STORE_READ=1 AND the local DuckDB store has
+    enough events to be useful. Returns ``None`` to defer to the JSONL
+    parser so the caller can fall through cleanly.
+
+    The shape returned is intentionally a SUBSET of the JSONL parser's
+    rich UI metadata — channel icons, source labels, etc. are not yet
+    enriched here. The full read-path migration is a follow-up; this
+    is a measurable proof that the local store is the right answer for
+    the simple list-of-events case.
+    """
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return None
+    try:
+        store = local_store.get_store()
+        rows = store.query_events(limit=limit)
+    except Exception:
+        return None
+    if not rows:
+        # Empty store → fall through to JSONL parser so a fresh install
+        # without a populated local DB still gets a useful brain feed.
+        return None
+    # Translate the local-store row shape (id/node_id/agent_id/session_id/
+    # event_type/ts/data/cost_usd/...) into the brain-history event shape
+    # the dashboard JS expects (time/type/detail/src/sessionId/...).
+    out = []
+    for r in rows:
+        data = r.get("data") if isinstance(r, dict) else None
+        # `data` from query_events is already JSON-parsed when valid, or a
+        # str/None otherwise — see local_store.query_events.
+        detail = ""
+        if isinstance(data, dict):
+            detail = (data.get("input") or data.get("summary")
+                      or data.get("text") or data.get("name") or "")
+        elif isinstance(data, str):
+            detail = data
+        out.append({
+            "time":       r.get("ts", ""),
+            "type":       (r.get("event_type") or "").upper(),
+            "detail":     str(detail)[:200],
+            "src":        (r.get("session_id") or r.get("agent_id") or "")[:32],
+            "sessionId":  r.get("session_id") or "",
+            "agentId":    r.get("agent_id") or "main",
+            "tokens":     r.get("token_count") or 0,
+            "cost":       float(r.get("cost_usd") or 0.0),
+            "model":      r.get("model") or "",
+        })
+    return {
+        "events":  out,
+        "count":   len(out),
+        "_source": "local_store",
+        "_shape":  "brain_history",
+    }
+
+
+def _brain_history_is_artifact(path):
+    name = os.path.basename(path)
+    return name.endswith(".trajectory.jsonl") or ".checkpoint." in name
+
+
+def _brain_history_read_head_tail(path, head_lines=20, tail_bytes=_BRAIN_HISTORY_TAIL_BYTES):
+    """Read a tiny context head plus byte-tail from a JSONL file.
+
+    The old implementation used readlines() on every session file. On large
+    installs that can mean hundreds of MB for every Brain refresh. This keeps
+    context rows while bounding I/O per file.
+    """
+    try:
+        with open(path, "rb") as fh:
+            size = os.fstat(fh.fileno()).st_size
+            if size <= tail_bytes:
+                return fh.read().decode("utf-8", "replace").splitlines()
+
+            head = []
+            for _ in range(head_lines):
+                line = fh.readline()
+                if not line:
+                    break
+                head.append(line.decode("utf-8", "replace").rstrip("\r\n"))
+
+            fh.seek(max(0, size - tail_bytes))
+            fh.readline()  # drop a possibly partial JSONL row
+            tail = fh.read().decode("utf-8", "replace").splitlines()
+            return head + tail[-900:]
+    except Exception:
+        return []
 
 
 @bp_brain.route("/api/brain-history")
 def api_brain_history():
     import dashboard as _d
-    # Return unified event stream - v2 no truncation
+    try:
+        limit = max(1, min(500, int(request.args.get("limit", 300))))
+    except (TypeError, ValueError):
+        limit = 300
+    include_artifacts = _brain_history_bool_arg(
+        request.args.get("include_artifacts") or request.args.get("artifacts")
+    )
+    # Epic #964 phase 1b: opt-in local-store fast path. Skip the JSONL
+    # parser entirely when CLAWMETRY_LOCAL_STORE_READ=1 AND the store
+    # has data. Falls through to the full parser otherwise (so a fresh
+    # install with an empty store still gets the rich brain feed).
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_brain(limit, include_artifacts)
+        if fast is not None:
+            return jsonify(fast)
+    cache_key = (limit, include_artifacts)
+    cached = _BRAIN_HISTORY_CACHE.get(cache_key)
+    now_cache = time.time()
+    if cached and now_cache - cached[0] < _BRAIN_HISTORY_CACHE_TTL_SECONDS:
+        return jsonify(cached[1])
+
+    # Return unified event stream - v2 bounded by limit + tail reads
     events = []
 
     # Build sessionId to displayName + channel map
@@ -35,10 +156,76 @@ def api_brain_history():
     index_path = os.path.join(session_dir, "sessions.json")
     sid_to_label = {}
     sid_to_channel = {}  # sessionId → {channel, chatType, subject}
+    sid_to_meta = {}  # sessionId → {category, icon, human_label, last_ts, provider}
+
+    # Channel-provider → emoji map. Mirrors dashboard.py's CHANNEL_ICONS;
+    # inlined here so the route is self-contained for wheel imports.
+    _CHANNEL_ICON = {
+        "telegram": "📱", "signal": "📡", "whatsapp": "💬", "discord": "🎮",
+        "slack": "💼", "imessage": "🍎", "webchat": "🌐", "matrix": "🔢",
+        "msteams": "🏢", "irc": "📡", "googlechat": "🔵", "mattermost": "⚡",
+        "line": "💚", "nostr": "🟣", "twitch": "💜", "bluebubbles": "💙",
+        "cli": "⌨️", "tui": "⌨️",
+    }
+
+    def _classify(sess_key, meta):
+        # Order matters: ":cron:" and ":subagent:" appear before channel infix.
+        if ":cron:" in sess_key:
+            return "cron"
+        if ":subagent:" in sess_key:
+            return "subagent"
+        parts = sess_key.split(":")
+        # agent:<id>:main  → main agent session
+        if len(parts) >= 3 and parts[2] == "main":
+            return "main"
+        # agent:<id>:<provider>:…  → channel session
+        if len(parts) >= 3 and parts[2] not in ("main", "subagent", "cron"):
+            return "channel"
+        return "other"
+
+    def _icon_for(category, provider):
+        if category == "main":
+            return "🧠"
+        if category == "cron":
+            return "📅"
+        if category == "subagent":
+            return "🤖"
+        if category == "channel":
+            return _CHANNEL_ICON.get((provider or "").lower(), "💬")
+        return "•"
+
+    def _human_label(sess_key, meta, fallback_sid):
+        # Channel: origin.label > displayName
+        origin = meta.get("origin") or {}
+        if isinstance(origin, dict) and origin.get("label"):
+            return str(origin["label"])[:60]
+        lbl = meta.get("displayName") or meta.get("label") or ""
+        if lbl:
+            return str(lbl)[:60]
+        # Cron: sess_key pattern agent:main:cron:<id>[:run:<tail>]
+        if ":cron:" in sess_key:
+            parts = sess_key.split(":")
+            try:
+                cron_id = parts[parts.index("cron") + 1]
+                return "cron:" + cron_id[:8]
+            except (ValueError, IndexError):
+                pass
+        # Subagent: use task if present
+        task = meta.get("task") or ""
+        if task:
+            return str(task)[:40]
+        # Fall-through: preserve old `agent:<hex8>` behaviour
+        import re as _re_fb
+        if _re_fb.match(r"[0-9a-f-]{36}$", fallback_sid):
+            return "agent:" + fallback_sid[:8]
+        return fallback_sid[:40]
+
     try:
         with open(index_path, "r") as f:
             index = json.load(f)
         for key, meta in index.items():
+            if not isinstance(meta, dict):
+                continue
             sid = meta.get("sessionId", "")
             label = meta.get("displayName") or meta.get("label") or ""
             if sid and label:
@@ -58,8 +245,23 @@ def api_brain_history():
                         channel = "cli"
                 if channel:
                     sid_to_channel[sid] = {"channel": channel, "chatType": chat_type, "subject": subject}
+
+                cat = _classify(key, meta)
+                sid_to_meta[sid] = {
+                    "category":    cat,
+                    "provider":    channel or (meta.get("origin") or {}).get("provider") or "",
+                    "icon":        _icon_for(cat, channel or (meta.get("origin") or {}).get("provider") or ""),
+                    "human_label": _human_label(key, meta, sid),
+                    "last_ts":     meta.get("updatedAt") or 0,
+                }
     except Exception:
         pass
+
+    # Main-agent source has no sessions.json row; synthesize one.
+    sid_to_meta.setdefault("main", {
+        "category": "main", "provider": "cli", "icon": "🧠",
+        "human_label": "Main", "last_ts": 0,
+    })
 
     # Color assignment
     color_palette = [
@@ -207,7 +409,19 @@ def api_brain_history():
             pass
 
     # Source 2: Session JSONL files (sub-agent activity)
-    session_files = sorted(glob.glob(os.path.join(session_dir, "*.jsonl")))
+    session_files_all = glob.glob(os.path.join(session_dir, "*.jsonl"))
+    if not include_artifacts:
+        session_files_all = [sf for sf in session_files_all if not _brain_history_is_artifact(sf)]
+
+    def _session_file_mtime(sf):
+        try:
+            return os.path.getmtime(sf)
+        except OSError:
+            return 0
+
+    session_files = sorted(session_files_all, key=_session_file_mtime, reverse=True)
+    max_files = 250 if include_artifacts else max(50, min(250, limit * 2))
+    session_files = session_files[:max_files]
 
     for sf in session_files:
         try:
@@ -228,17 +442,7 @@ def api_brain_history():
             )
             color = get_agent_color(source_id)
 
-            with open(sf, "r", errors="replace") as fh:
-                all_lines = fh.readlines()
-                # Want: first 20 (system context) + last 600 (recent activity).
-                # For files <= 620 lines the two slices overlap and we end up
-                # parsing the same JSONL line twice -> duplicate events in the
-                # Brain feed (same timestamp, same source, same payload).
-                total = len(all_lines)
-                if total <= 620:
-                    raw_lines = all_lines
-                else:
-                    raw_lines = all_lines[:20] + all_lines[-600:]
+            raw_lines = _brain_history_read_head_tail(sf)
 
             for raw in raw_lines:
                 raw = raw.strip()
@@ -492,7 +696,7 @@ def api_brain_history():
     )  # ISO string sort - correct across days
     # Keep CONTEXT events + most recent 300
     context_evts = [e for e in events if e.get("type") == "CONTEXT"]
-    other_evts = [e for e in events if e.get("type") != "CONTEXT"][:300]
+    other_evts = [e for e in events if e.get("type") != "CONTEXT"][:limit]
     events = context_evts + other_evts
     sources_seen = []
     seen_set = set()
@@ -500,11 +704,19 @@ def api_brain_history():
         s = ev["source"]
         if s not in seen_set:
             seen_set.add(s)
+            extra = sid_to_meta.get(s, {})
+            # Prefer the richer human label built from sessions.json. Fall
+            # back to whatever the event carried (sourceLabel → sid).
+            label = extra.get("human_label") or ev.get("sourceLabel") or s
             sources_seen.append(
                 {
-                    "id": s,
-                    "label": ev.get("sourceLabel", s),
-                    "color": ev.get("color", "#888"),
+                    "id":       s,
+                    "label":    label,
+                    "color":    ev.get("color", "#888"),
+                    "category": extra.get("category", "other"),
+                    "icon":     extra.get("icon", "•"),
+                    "provider": extra.get("provider", ""),
+                    "last_ts":  extra.get("last_ts", 0),
                 }
             )
     # Enrich events with channel info from session index
@@ -537,7 +749,12 @@ def api_brain_history():
         _d._ext_emit("brain.event", {"count": len(events)})
     except Exception:
         pass
-    return jsonify({"events": events, "total": len(events), "sources": sources_seen, "channels": channel_counts})
+    payload = {"events": events, "total": len(events), "sources": sources_seen, "channels": channel_counts}
+    _BRAIN_HISTORY_CACHE[cache_key] = (time.time(), payload)
+    if len(_BRAIN_HISTORY_CACHE) > 8:
+        oldest_key = min(_BRAIN_HISTORY_CACHE, key=lambda k: _BRAIN_HISTORY_CACHE[k][0])
+        _BRAIN_HISTORY_CACHE.pop(oldest_key, None)
+    return jsonify(payload)
 
 
 @bp_brain.route("/api/brain-stream")

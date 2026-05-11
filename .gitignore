@@ -27,3 +27,6 @@ Thumbs.db
 *.log
 .clawmetry-fleet.db
 .claude/worktrees/
+
+# Node (used only by tests/e2e/ for the cloud-contract spec runner)
+node_modules/

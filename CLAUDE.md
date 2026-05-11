@@ -18,7 +18,7 @@ See `ARCHITECTURE.md` for the full deep dive. TL;DR:
 ### Core
 | File | Lines | Purpose |
 |------|-------|---------|
-| `dashboard.py` | ~25,400 | Flask app, blueprint registration, embedded HTML/CSS/JS, shared helpers |
+| `dashboard.py` | ~15,000 | Flask app, blueprint registration, embedded HTML/CSS/JS, shared helpers |
 | `dashboard_claudecode.py` | ~1,350 | Claude Code session dashboard variant (standalone or Blueprint) |
 | `history.py` | ~555 | Optional time-series collector (SQLite, polls gateway every 60s) |
 
@@ -27,12 +27,12 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 
 | File | Lines | Blueprints / Purpose |
 |------|-------|----------------------|
-| `routes/sessions.py` | ~1,190 | `bp_sessions` — sessions list, transcripts, compactions, tool timeline, cost split, subagents, exports |
+| `routes/sessions.py` | ~1,560 | `bp_sessions` — sessions list, transcripts, compactions, tool timeline, cost split, subagents, exports |
 | `routes/channels.py` | ~1,500 | `bp_channels` — 21 chat-channel adapters (Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat, …) |
 | `routes/components.py` | ~1,040 | `bp_components` — Flow-panel detail endpoints (tool / runtime / machine / gateway / brain) |
 | `routes/usage.py` | ~1,070 | `bp_usage` — token/cost analytics, anomaly detection, model + skill attribution |
 | `routes/health.py` | ~920 | `bp_health` — system-health, reliability, diagnostics, rate-limits, sandbox-status, health-stream (SSE) |
-| `routes/brain.py` | ~800 | `bp_brain` — `/api/brain-history` + `/api/brain-stream` (SSE) |
+| `routes/brain.py` | ~1,030 | `bp_brain` — `/api/brain-history` + `/api/brain-stream` (SSE) |
 | `routes/infra.py` | ~785 | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
 | `routes/overview.py` | ~585 | `bp_overview` — main dashboard endpoint, channels list, timeline, cloud-CTA OTP |
 | `routes/crons.py` | ~530 | `bp_crons` — cron CRUD + run log + health summary |
@@ -46,11 +46,11 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 | File | Lines | Purpose |
 |------|-------|---------|
 | `cli.py` | ~1,900 | CLI entry point — `clawmetry`, `clawmetry connect`, `clawmetry sync`, `clawmetry status` |
-| `sync.py` | ~3,000 | Cloud sync daemon — E2E encrypted (AES-256-GCM) session streaming to `ingest.clawmetry.com` |
+| `sync.py` | ~3,880 | Cloud sync daemon — E2E encrypted (AES-256-GCM) session streaming to `ingest.clawmetry.com` |
 | `proxy.py` | ~1,290 | Enforcement proxy — budget limits, loop detection, model routing (port 4100) |
 | `interceptor.py` | ~465 | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
 | `providers_pricing.py` | ~134 | Multi-provider pricing table (Anthropic, OpenAI, Google, OpenRouter, etc.) |
-| `config.py` | ~58 | Configuration dataclass |
+| `config.py` | ~80 | Configuration dataclass |
 | `extensions.py` | ~109 | Plugin/hook system |
 | `track.py` | ~39 | Zero-config interceptor shorthand |
 | `providers/` | — | Pluggable data provider layer (LocalDataProvider, TursoDataProvider) |
@@ -86,7 +86,8 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 - `/api/transcript/<id>` — Full session transcript
 - `/api/usage` — Token and cost analytics
 - `/api/flow` — Message flow visualization (channels -> gateway -> models -> tools)
-- `/api/brain` — Live event stream
+- `/api/brain-history` — Recent reasoning/tool events (paginated)
+- `/api/brain-stream` — Live event stream (SSE)
 - `/api/crons` — Cron job management (full CRUD via gateway RPC)
 - `/api/system-health` — Disk, memory, uptime, GPU
 - `/api/nodes` — Multi-node fleet view
@@ -133,7 +134,7 @@ Tests use `CLAWMETRY_URL` and `CLAWMETRY_TOKEN` env vars. Test matrix in CI: 3 O
 ## Deploy
 - **PyPI**: `pip install clawmetry && clawmetry`
 - **Docker**: `docker build -t clawmetry . && docker run -p 8900:8900 -v ~/.openclaw:/root/.openclaw:ro clawmetry`
-- **Current version**: `0.12.99` (in `dashboard.py` `__version__`)
+- **Current version**: `0.12.162` (in `dashboard.py` `__version__`)
 
 ## CI/CD (GitHub Actions)
 - `ci.yml` — Lint + test matrix on push/PR

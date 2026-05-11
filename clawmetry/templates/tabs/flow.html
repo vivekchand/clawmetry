@@ -224,10 +224,20 @@
         <circle class="tool-indicator" id="ind-memory" cx="665" cy="378" r="5" fill="#7986CB"/>
       </g>
 
-      <!-- Skills (dynamically populated) -->
+      <!-- Skills (dynamically populated badges + clickable parent node) -->
       <g id="flow-skills-group">
-        <text x="725" y="84" style="font-size:9px;fill:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;font-weight:600;">Skills</text>
-        <g id="flow-skills-list">
+        <!-- Clickable Skills NODE — opens modal with skill cost attribution -->
+        <g class="flow-node flow-node-tool flow-node-skills" id="node-skills">
+          <rect x="690" y="68" width="118" height="34" rx="10" ry="10"
+                fill="#6D28D9" stroke="#5B21B6" stroke-width="2"
+                filter="url(#dropShadow)"/>
+          <text x="749" y="89" style="font-size:12px;font-weight:700;fill:#ffffff;text-anchor:middle;">
+            🧬 Skills
+          </text>
+          <circle class="tool-indicator" id="ind-skills" cx="800" cy="76" r="5" fill="#A78BFA"/>
+        </g>
+        <!-- Per-skill mini-badges populated by JS from /api/skills -->
+        <g id="flow-skills-list" transform="translate(0, 38)">
           <!-- Skills populated by JS from /api/skills -->
         </g>
       </g>
