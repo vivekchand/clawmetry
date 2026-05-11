@@ -112,6 +112,7 @@ from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
+from routes.local_query import bp_local_query
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -8492,6 +8493,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
+    app.register_blueprint(bp_local_query)
     app.register_blueprint(bp_openapi)
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
