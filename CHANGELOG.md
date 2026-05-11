@@ -1,6 +1,13 @@
 ## [Unreleased]
 
-### Local-first foundation (epic #964 phase 1)
+### Local-first relay (epic #964 phase 3b + 1b)
+- **Daemon-side WebSocket relay client** (`clawmetry/relay.py`) — long-lived WS to `wss://app.clawmetry.com/api/node/relay`. Listens for `{type:"query"}` frames from the cloud, dispatches via the same `relay_dispatch()` the local HTTP API uses, returns chunked responses. Reconnect with exponential backoff (2s → 60s cap). Skipped silently when no cloud account is configured (OSS-local users pay nothing).
+- **Optional dependency** — `websocket-client>=1.6` is in `extras_require["relay"]`, not the base install. `pip install clawmetry[relay]` to opt in. Daemon falls back to cloud-ingest-only mode when missing.
+- **Heartbeat now reports `local_store_size_mb`** + `local_store` health block (engine, size_bytes, events_total, ring_depth). The cloud-side rollout playbook gates phase 2 (cloud retention slim) on ≥80% adoption of this signal.
+- **Brain history opt-in fast path** — `CLAWMETRY_LOCAL_STORE_READ=1` makes `/api/brain-history` return directly from local DuckDB (tagged `_source: "local_store"`) instead of re-parsing JSONL. Falls through to legacy parser if env var unset OR store is empty — zero-change default.
+- 11 new tests cover relay dispatch, chunking, error frames, capability drift, brain fast path, and JSONL fallback.
+
+### Local-first foundation (epic #964 phase 1) — first shipped in 0.12.164
 - **Local DuckDB event store** at `~/.clawmetry/events.duckdb` — durable record of every telemetry event the daemon parses. Switched from SQLite to DuckDB (decision in clawmetry-cloud meta-PRD): columnar storage makes the dashboard's GROUP BY / time-window analytics 10–100× faster, and unlocks future Parquet export. Adds `duckdb>=0.10` as a dependency.
 - **Daemon writes through to local store** at parse time — local is now the source of truth, cloud is a hot cache. Failures in the local path never block cloud sync.
 - **Two new diagnostic endpoints** — `/api/local-store/health` and `/api/local-store/events` for verification + test harnesses
