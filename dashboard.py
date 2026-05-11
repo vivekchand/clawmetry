@@ -208,6 +208,9 @@ _security_posture_hash = ""
 _VELOCITY_TOKENS_PER_2MIN = 10000  # tokens in any 2-minute window
 _VELOCITY_CONSECUTIVE_TOOLS = 20  # consecutive tool calls without human turn
 _VELOCITY_COST_PER_MIN = 0.10  # USD/min cost rate
+# Error-spike alert thresholds (GH#954)
+_ERROR_SPIKE_THRESHOLD = int(os.environ.get("ERROR_SPIKE_THRESHOLD", "3"))
+_ERROR_SPIKE_WINDOW_SEC = int(os.environ.get("ERROR_SPIKE_WINDOW_SEC", "60"))
 
 # ── OTLP Metrics Store ─────────────────────────────────────────────────
 METRICS_FILE = None  # Set via CLI/env, defaults to {WORKSPACE}/.clawmetry-metrics.json
@@ -7607,6 +7610,97 @@ def _get_active_alerts():
         return []
 
 
+def _detect_error_spikes():
+    """Scan recent session JSONL files for per-agent error spikes (GH#954).
+
+    Fires one grouped alert when a session emits >= ERROR_SPIKE_THRESHOLD
+    error events within the last ERROR_SPIKE_WINDOW_SEC seconds, instead of
+    N separate alerts.  Dedup is handled by _fire_alert's per-rule_id cooldown.
+    """
+    from collections import Counter as _Counter
+
+    now = time.time()
+    window_start = now - _ERROR_SPIKE_WINDOW_SEC
+    sessions_dir = _get_sessions_dir()
+    if not os.path.isdir(sessions_dir):
+        return
+
+    for fname in os.listdir(sessions_dir):
+        if not fname.endswith(".jsonl"):
+            continue
+        if ".deleted." in fname or ".trajectory." in fname or ".checkpoint." in fname:
+            continue
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            if os.path.getmtime(fpath) < window_start - 5:
+                continue
+        except OSError:
+            continue
+
+        sid = fname[: -len(".jsonl")]
+        error_events = []
+        try:
+            with open(fpath, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    if obj.get("type") != "error":
+                        continue
+                    raw_ts = (
+                        obj.get("timestamp")
+                        or obj.get("time")
+                        or obj.get("created_at")
+                    )
+                    dt = _parse_event_timestamp(raw_ts, None)
+                    if dt is None:
+                        continue
+                    try:
+                        ts = dt.timestamp()
+                    except Exception:
+                        continue
+                    if ts < window_start:
+                        continue
+                    error_events.append(obj)
+        except OSError:
+            continue
+
+        if len(error_events) < _ERROR_SPIKE_THRESHOLD:
+            continue
+
+        msgs = []
+        for ev in error_events:
+            raw = ev.get("error") or ev.get("message") or ev.get("content") or ""
+            if isinstance(raw, dict):
+                raw = raw.get("content") or raw.get("text") or str(raw)
+            msgs.append(str(raw)[:80])
+        dominant = _Counter(msgs).most_common(1)[0][0] if msgs else "unknown error"
+
+        agent_label = sid if len(sid) <= 24 else sid[:24]
+        count = len(error_events)
+        alert_msg = (
+            f"Error spike: {agent_label}: {dominant} "
+            f"({count}× in {_ERROR_SPIKE_WINDOW_SEC}s)"
+        )
+        rule_id = (
+            "error_spike_"
+            + sid[:20]
+            + "_"
+            + dominant[:30].replace(" ", "_").replace("/", "_")
+        )
+        _fire_alert(
+            rule_id=rule_id,
+            alert_type="error_spike",
+            message=alert_msg,
+            channels=["banner"],
+            severity="error",
+        )
+
+
 def _budget_monitor_loop():
     """Background thread: check for anomalies, agent-down, and custom alert rules."""
     global \
@@ -7693,6 +7787,12 @@ def _budget_monitor_loop():
                     )
             except Exception as _vel_err:
                 print(f"Warning: velocity check failed: {_vel_err}")
+            # Error-spike detection (GH#954): per-session N-errors-in-window grouping
+            try:
+                _detect_error_spikes()
+            except Exception as _spike_err:
+                print(f"Warning: error spike check failed: {_spike_err}")
+
 
             # Agent error-rate check from webhook channel metrics (last 60 minutes)
             window_start = now - 3600
