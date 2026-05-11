@@ -111,6 +111,8 @@ from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
 from routes.reasoning import bp_reasoning
+from routes.plugins import bp_plugins
+from routes.local_query import bp_local_query
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -138,7 +140,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.163"
+__version__ = "0.12.164"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -3521,6 +3523,15 @@ function clawmetryLogout(){
     <div id="velocity-flagged-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;"></div>
   </div>
 
+  <!-- Prompt-Error Banner (GH #601) -->
+  <div id="prompt-error-banner" style="display:none;margin-bottom:8px;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;background:rgba(220,38,38,0.15);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <span id="prompt-error-msg"></span>
+      <button onclick="document.getElementById('prompt-error-banner').style.display='none'" style="background:none;border:none;color:inherit;opacity:0.7;cursor:pointer;font-size:18px;line-height:1;padding:0;">&times;</button>
+    </div>
+    <div id="prompt-error-list" style="margin-top:8px;display:flex;flex-direction:column;gap:4px;font-weight:400;font-size:12px;"></div>
+  </div>
+
   <!-- Stats Bar (top) -->
   <div class="stats-footer">
     <div class="stats-footer-item">
@@ -3557,6 +3568,7 @@ function clawmetryLogout(){
       <div>
         <div class="stats-footer-label">Sessions</div>
         <div class="stats-footer-value" id="hot-sessions-count">--</div>
+        <div id="hot-sessions-sub" style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.3;"></div>
       </div>
       <div id="hot-sessions-list" style="display:none;">Loading...</div>
     </div>
@@ -3607,6 +3619,8 @@ function clawmetryLogout(){
         <div id="sh-security" style="margin-bottom:14px;"></div></div>
         <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
         <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
+        <div id="sh-mcp-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔌 MCP Tool Activity</div>
+        <div id="sh-mcp" style="margin-bottom:14px;"></div></div>
         <!-- 🔍 Diagnostics Panel (GH#28) -->
         <div id="sh-diagnostics-wrap">
           <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
@@ -4257,6 +4271,15 @@ function clawmetryLogout(){
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
       <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+    </div>
+    <!-- Context Window Anatomy (#566) -->
+    <div id="ctx-anatomy-wrap" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:none;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Context window anatomy</span>
+        <span id="ctx-pct-label" style="font-size:11px;color:var(--text-muted);">--</span>
+      </div>
+      <div id="ctx-bar" style="display:flex;height:10px;border-radius:4px;overflow:hidden;background:var(--bg-primary);width:100%;margin-bottom:6px;"></div>
+      <div id="ctx-legend" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
     </div>
     <!-- Activity density chart -->
     <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
@@ -4966,7 +4989,7 @@ function switchTab(name) {
   if (name === 'limits') loadRateLimits();
   if (name === 'flow') initFlow();
   if (name === 'history') loadHistory();
-  if (name === 'brain') loadBrainPage();
+  if (name === 'brain') { if (typeof loadBrainPage === 'function') loadBrainPage(); loadContextAnatomy(); }
   if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
   if (name === 'actions') loadQAHistory();
   if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
@@ -5424,6 +5447,34 @@ async function loadTokenVelocity() {
   }
 }
 
+async function loadPromptErrors() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/prompt-errors', 5000);
+    var banner = document.getElementById('prompt-error-banner');
+    var msgEl  = document.getElementById('prompt-error-msg');
+    var listEl = document.getElementById('prompt-error-list');
+    if (!banner) return;
+    if (!d.errors || d.errors.length === 0) { banner.style.display = 'none'; return; }
+
+    msgEl.textContent = '⚠️ ' + d.count + ' prompt error' + (d.count === 1 ? '' : 's') + ' detected';
+
+    if (listEl) {
+      listEl.innerHTML = d.errors.slice(0, 5).map(function(e) {
+        var when = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+        var who = [e.provider, e.model].filter(Boolean).join('/') || 'unknown provider';
+        var msg = e.error ? String(e.error).slice(0, 120) : 'unknown error';
+        return '<div style="background:rgba(0,0,0,0.25);border-radius:5px;padding:4px 8px;">'
+          + (when ? '<span style="opacity:0.6;">' + when + '</span> ' : '')
+          + '<span style="opacity:0.8;">' + who + '</span>'
+          + ' — ' + msg
+          + '</div>';
+      }).join('');
+    }
+
+    banner.style.display = 'block';
+  } catch(e) { /* non-critical */ }
+}
+
 async function killSession(sessionId) {
   if (!confirm('Stop session ' + sessionId + '?')) return;
   try {
@@ -5571,8 +5622,10 @@ async function loadAll() {
     if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
+    if (typeof loadPromptErrors === 'function') loadPromptErrors().catch(function(e){console.warn('prompt errors failed',e)});
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
     if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
+    if (typeof loadMcpStats === 'function') loadMcpStats().catch(function(e){console.warn('mcp stats failed',e)});
     document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -5630,6 +5683,46 @@ async function loadReliabilityCard() {
     el = document.getElementById('reliability-detail-lt');
     if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
   } catch(e) { console.warn('reliability card load failed', e); }
+}
+
+async function loadMcpStats() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/mcp-stats', 8000);
+    var wrap = document.getElementById('sh-mcp-wrap');
+    var el = document.getElementById('sh-mcp');
+    if (!wrap || !el) return;
+    if (!d.tools || d.tools.length === 0) {
+      wrap.style.display = 'block';
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No MCP tool calls detected in recent sessions.</div>';
+      return;
+    }
+    var rows = d.tools.map(function(t) {
+      var errCell = t.errors > 0
+        ? '<span style="color:#e05;">' + t.errors + ' (' + t.error_rate_pct + '%)</span>'
+        : '<span style="color:var(--text-muted);">0</span>';
+      var latCell = t.avg_latency_ms != null
+        ? (t.avg_latency_ms >= 1000
+            ? (t.avg_latency_ms / 1000).toFixed(1) + 's'
+            : t.avg_latency_ms + 'ms')
+        : '<span style="color:var(--text-faint);">—</span>';
+      return '<tr style="border-top:1px solid var(--border-secondary);">'
+        + '<td style="padding:4px 6px 4px 0;font-size:12px;font-family:\'JetBrains Mono\',monospace;color:var(--text-primary);">' + t.name + '</td>'
+        + '<td style="padding:4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + t.calls + '</td>'
+        + '<td style="padding:4px 6px;font-size:12px;text-align:right;">' + errCell + '</td>'
+        + '<td style="padding:4px 0 4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + latCell + '</td>'
+        + '</tr>';
+    }).join('');
+    el.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr>'
+      + '<th style="padding:0 6px 4px 0;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:left;font-weight:500;">Tool</th>'
+      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Calls</th>'
+      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Errors</th>'
+      + '<th style="padding:0 0 4px 6px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Avg Latency</th>'
+      + '</tr></thead>'
+      + '<tbody>' + rows + '</tbody>'
+      + '</table>';
+    wrap.style.display = 'block';
+  } catch(e) { console.warn('mcp stats failed', e); }
 }
 
 async function loadHeartbeat() {
@@ -5718,6 +5811,35 @@ async function loadHeartbeat() {
       sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">no beats yet</span>';
     }
   } catch(e) { console.warn('heartbeat panel load failed', e); }
+}
+
+async function loadContextAnatomy() {
+  try {
+    var d = await fetchJsonWithTimeout('/api/context-anatomy', 4000);
+    if (!d || !d.buckets || !d.buckets.length) return;
+    var wrap = document.getElementById('ctx-anatomy-wrap');
+    if (!wrap) return;
+    wrap.style.display = '';
+    var pct = document.getElementById('ctx-pct-label');
+    if (pct) pct.textContent = (d.pct_used || 0) + '% of ' + Math.round((d.context_limit || 200000) / 1000) + 'K window';
+    var total = d.total_estimated || 1;
+    var bar = document.getElementById('ctx-bar');
+    if (bar) {
+      bar.innerHTML = d.buckets.map(function(b) {
+        var w = Math.max(0.5, b.tokens / total * 100).toFixed(1);
+        return '<div title="' + b.label + ': ~' + b.tokens.toLocaleString() + ' tok" style="width:' + w + '%;background:' + b.color + ';"></div>';
+      }).join('');
+    }
+    var legend = document.getElementById('ctx-legend');
+    if (legend) {
+      legend.innerHTML = d.buckets.map(function(b) {
+        var tok = b.tokens > 999 ? Math.round(b.tokens / 1000) + 'K' : b.tokens;
+        return '<span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--text-secondary);">' +
+          '<span style="width:8px;height:8px;border-radius:2px;flex-shrink:0;background:' + b.color + ';"></span>' +
+          b.label + ' ~' + tok + '</span>';
+      }).join('');
+    }
+  } catch(e) { /* silent — panel stays hidden when data unavailable */ }
 }
 
 async function loadMiniWidgets(overview, usage) {
@@ -5813,6 +5935,15 @@ async function loadMiniWidgets(overview, usage) {
     var sl = sd.sessions || sd || [];
     if (!Array.isArray(sl)) sl = [];
     document.getElementById('hot-sessions-count').textContent = sl.length;
+    // Build session-type breakdown subtitle (heartbeat / user / sub-agent)
+    var typeCounts = {};
+    sl.forEach(function(s) { var t = s.session_type || 'main'; typeCounts[t] = (typeCounts[t] || 0) + 1; });
+    var parts = [];
+    ['heartbeat', 'user', 'sub-agent'].forEach(function(t) {
+      if (typeCounts[t]) parts.push(typeCounts[t] + ' ' + t);
+    });
+    var sub = document.getElementById('hot-sessions-sub');
+    if (sub) sub.textContent = parts.length ? parts.join(' · ') : '';
   }).catch(function() {
     document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
   });
@@ -8361,6 +8492,8 @@ def detect_config(args=None):
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_reasoning)
+    app.register_blueprint(bp_plugins)
+    app.register_blueprint(bp_local_query)
     app.register_blueprint(bp_openapi)
 
     # Local-OSS shims for cloud-only endpoints. Return empty arrays so the
@@ -8389,6 +8522,52 @@ def detect_config(args=None):
             return _jsonify({"error": "Connect to ClawMetry Cloud to save "
                              "integrations.", "note": _oss_note}), 402
         return _jsonify({"integrations": [], "count": 0, "note": _oss_note})
+
+    # vivekchand/clawmetry#748 — Initial-sync progress for the dashboard
+    # banner. The sync daemon writes ~/.clawmetry/sync_progress.json after
+    # each phase; we just stream it through. Local-only, no auth.
+    @app.route("/api/sync-progress", endpoint="sync_progress")
+    def _sync_progress():
+        from flask import jsonify as _jsonify
+        progress_path = os.path.expanduser("~/.clawmetry/sync_progress.json")
+        if not os.path.isfile(progress_path):
+            return _jsonify({"error": "no sync progress yet"}), 404
+        try:
+            with open(progress_path) as _f:
+                return _jsonify(json.load(_f))
+        except Exception as _e:
+            return _jsonify({"error": f"unreadable: {_e}"}), 500
+
+    # Local SQLite event store (epic #964 / phase 1) — proves the daemon is
+    # writing through to ~/.clawmetry/events.db. The dashboard's main read
+    # paths are migrating to this store progressively; in the meantime this
+    # endpoint exposes the store's own metrics so we can verify the
+    # write-through is working in prod and start the cutover safely.
+    @app.route("/api/local-store/health", endpoint="local_store_health")
+    def _local_store_health():
+        from flask import jsonify as _jsonify
+        try:
+            from clawmetry import local_store
+            return _jsonify(local_store.get_store().health())
+        except Exception as _e:
+            return _jsonify({"error": str(_e)[:300]}), 503
+
+    @app.route("/api/local-store/events", endpoint="local_store_events")
+    def _local_store_events():
+        from flask import jsonify as _jsonify, request as _req
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store()
+            rows = store.query_events(
+                session_id=_req.args.get("session_id"),
+                event_type=_req.args.get("event_type"),
+                since=_req.args.get("since"),
+                until=_req.args.get("until"),
+                limit=int(_req.args.get("limit", "200")),
+            )
+            return _jsonify({"events": rows, "count": len(rows)})
+        except Exception as _e:
+            return _jsonify({"error": str(_e)[:300]}), 500
     # ────────────────────────────────────────────────────────────────────────
 
 
@@ -8726,6 +8905,7 @@ DASHBOARD_HTML = r"""
       <div class="modal-tab active" onclick="switchModalTab('summary')">Summary</div>
       <div class="modal-tab" onclick="switchModalTab('narrative')">Narrative</div>
       <div class="modal-tab" onclick="switchModalTab('full')">Full Logs</div>
+      <div class="modal-tab" onclick="switchModalTab('tools')">Tools</div>
     </div>
     <div class="modal-content" id="modal-content">Loading...</div>
     <div class="modal-footer">

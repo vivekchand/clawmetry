@@ -1082,7 +1082,7 @@ def api_token_velocity():
     })
 
 
-# ── Prompt-cache analytics (GH #851) ───────────────────────────────────────
+# ── Prompt-cache analytics (GH #851) ────────────────────────────────────
 
 
 def _empty_cache_bucket():
