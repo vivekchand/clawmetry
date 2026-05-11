@@ -1082,6 +1082,17 @@ def _flush_session_batch(
     node_id: str,
     subagent_id: str | None = None,
 ) -> None:
+    # Write-through to local SQLite first (epic #964 / phase 1 / issue #958).
+    # Local is the durable store; cloud is a hot cache. If the cloud POST fails
+    # below, the events are still recorded locally and the dashboard's local
+    # read paths will surface them. Failures here never block cloud sync — the
+    # broad except keeps the legacy behaviour intact for users who somehow
+    # land on a corrupt SQLite or a read-only ~/.clawmetry/.
+    try:
+        _local_ingest_session_batch(batch, fname, node_id, subagent_id)
+    except Exception as _e:
+        log.warning("local-store ingest failed (cloud sync continues): %s", _e)
+
     payload = {"session_file": fname, "node_id": node_id, "events": batch}
     # Include subagent_id so the cloud can correlate blobs → sub-agent sessions.
     # The session key UUID (subagent_id) differs from the .jsonl filename UUID.
@@ -1099,6 +1110,56 @@ def _flush_session_batch(
         )
     else:
         _post("/ingest/events", payload, api_key)
+
+
+def _local_ingest_session_batch(
+    batch: list,
+    session_file: str,
+    node_id: str,
+    subagent_id: str | None,
+) -> None:
+    """Translate a batch of raw OpenClaw transcript events into the local
+    store's normalised shape and queue them for write. Idempotent at the
+    store level — INSERT OR IGNORE on event id."""
+    from clawmetry import local_store  # local import: keeps cli/sync importable on Pythons missing sqlite3
+
+    store = local_store.get_store()
+    rows: list[dict] = []
+    # session_file is like '<uuid>.jsonl' — use the uuid as the canonical
+    # session_id so the dashboard's per-session views can correlate.
+    session_id = subagent_id or session_file.split(".jsonl", 1)[0]
+    for obj in batch:
+        if not isinstance(obj, dict):
+            continue
+        # Stable per-event id: prefer an explicit id from the transcript, then
+        # the openclaw eventId, else compose from session_id + timestamp +
+        # message-id-ish hint. INSERT OR IGNORE makes re-delivery harmless.
+        eid = (
+            obj.get("id")
+            or obj.get("eventId")
+            or obj.get("messageId")
+            or f"{session_id}:{obj.get('timestamp','?')}:{obj.get('type','?')}"
+        )
+        ts = obj.get("timestamp") or obj.get("ts") or ""
+        if not ts:
+            # Skip events with no timestamp — the local store's index assumes
+            # ts is set, and filtering them out is safer than synthesising one.
+            continue
+        rows.append({
+            "id": str(eid),
+            "node_id": node_id,
+            "agent_id": "main",  # OpenClaw harness; Claude Code adapter will use 'claude-code'
+            "session_id": session_id,
+            "workspace_id": obj.get("workspace") or obj.get("workspace_id"),
+            "event_type": str(obj.get("type") or obj.get("event_type") or "unknown"),
+            "ts": str(ts),
+            "data": obj,
+            "cost_usd": obj.get("cost_usd") or obj.get("costUsd"),
+            "token_count": obj.get("token_count") or obj.get("tokens"),
+            "model": obj.get("model"),
+        })
+    if rows:
+        store.ingest_many(rows)
 
 
 def sync_sessions_recent(
