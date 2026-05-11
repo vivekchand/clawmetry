@@ -43,17 +43,22 @@ setup(
         "flask>=2.0,<4",
         "waitress>=2.0",
         "cryptography>=3.0",
-        # Local event store at ~/.clawmetry/events.duckdb (epic #964 phase 1).
-        # DuckDB chosen over stdlib sqlite3 for its columnar analytical
-        # advantages on the dashboard's GROUP BY / time-window workloads.
+        # Local store at ~/.clawmetry/clawmetry.duckdb. Holds events,
+        # sessions, memory, heartbeats, system snapshots, traces. ~14 MB
+        # wheel; columnar storage gives 10–100× speed vs SQLite for the
+        # dashboard's GROUP BY/time-window workloads (epic #964).
         "duckdb>=0.10",
+        # Cloud cold-data relay tunnel (epic #964 phase 3b). ~100 KB pure
+        # Python. Was previously in extras_require["relay"]; the opt-in
+        # made cloud users silently miss the relay. Now base install so
+        # `pip install clawmetry && clawmetry connect` "just works".
+        "websocket-client>=1.6",
     ],
     extras_require={
-        "otel":  ["opentelemetry-proto>=1.20.0", "protobuf>=4.21.0"],
-        # Cloud cold-data relay tunnel (epic #964 phase 3b). Optional —
-        # if missing, the daemon runs in cloud-ingest-only mode and the
-        # cloud dashboard can't request data older than its 24h window.
-        "relay": ["websocket-client>=1.6"],
+        "otel": ["opentelemetry-proto>=1.20.0", "protobuf>=4.21.0"],
+        # Kept for back-compat with `pip install clawmetry[relay]` calls
+        # in old install scripts. No-op in 0.12.166+.
+        "relay": [],
     },
     entry_points={
         "console_scripts": [
