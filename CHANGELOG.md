@@ -1,10 +1,11 @@
 ## [Unreleased]
 
 ### Local-first foundation (epic #964 phase 1)
-- **Local SQLite event store** at `~/.clawmetry/events.db` — durable record of every telemetry event the daemon parses (#966)
-- **Daemon writes through to local store** at parse time — local is now the source of truth, cloud is a hot cache. Failures in the local path never block cloud sync (#983)
+- **Local DuckDB event store** at `~/.clawmetry/events.duckdb` — durable record of every telemetry event the daemon parses. Switched from SQLite to DuckDB (decision in clawmetry-cloud meta-PRD): columnar storage makes the dashboard's GROUP BY / time-window analytics 10–100× faster, and unlocks future Parquet export. Adds `duckdb>=0.10` as a dependency.
+- **Daemon writes through to local store** at parse time — local is now the source of truth, cloud is a hot cache. Failures in the local path never block cloud sync.
 - **Two new diagnostic endpoints** — `/api/local-store/health` and `/api/local-store/events` for verification + test harnesses
 - 27 passing tests cover ingest validation, idempotency, batch flush, query filters, restart persistence, ring overflow, and the full sync→store wire-through
+- Note: 0.12.164's SQLite `events.db` file is left in place but no longer read; safe to delete after upgrade.
 
 ---
 

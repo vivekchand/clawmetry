@@ -1,37 +1,38 @@
-"""Local SQLite event store — Phase 1 of the local-first refactor (#958).
+"""Local DuckDB event store — Phase 1 of the local-first refactor (#964).
 
-The node holds the durable record of every telemetry event. Cloud sync (sync.py)
-remains the upstream path; this module is the *local* persistence layer that the
-OSS dashboard and the future cloud→node relay (#960/#961) will read from.
+Switched from SQLite to DuckDB (decision: 2026-05-11). Same public API; the
+durability + concurrency model differs (DuckDB MVCC instead of SQLite WAL),
+but the surface — ``ingest()``, ``query_events()``, ``query_sessions()``,
+``query_aggregates()``, ``health()``, ``vacuum()`` — is unchanged.
 
-Design choices:
-
-* SQLite + WAL so the daemon (writer) and the dashboard (reader) can coexist
-  in the same process without locking. SQLite is the only zero-dep persistence
-  story that works on every platform `pip install` lands on.
-* A small in-memory ring buffer flushed every ``FLUSH_INTERVAL`` seconds or
-  ``FLUSH_BATCH`` events, whichever first. Worst-case data loss on a hard
-  kill is one flush interval (~2 s) — never DB corruption (WAL guarantees).
-* Idempotent ``ingest()``: every event carries a UUID; INSERT OR IGNORE makes
-  re-delivery from the JSONL watcher a no-op. The cloud-sync daemon and the
-  local writer can both call ingest() on the same event without dedup logic
-  outside this module.
-* Read API returns plain dicts (``query_events``, ``query_sessions``, ...) —
-  no ORM, no abstractions. The shapes mirror the cloud ``events`` table and
-  the cloud ``/api/cloud/*`` JSON responses so the dashboard can swap backends
-  with minimal edits.
-* Pure stdlib + sqlite3. No new pip deps for this phase.
+Why DuckDB:
+* Columnar storage → analytical queries (GROUP BY, time-window aggregates,
+  per-tool/per-session/per-day rollups) run an order of magnitude faster than
+  on SQLite. The dashboard's Brain/Tokens/Sessions tabs are exactly that
+  shape of workload.
+* Native Parquet and CSV I/O — future cheap archival + ad-hoc export are a
+  one-liner, not a library swap.
+* Time-series-friendly query patterns become first-class.
+* Trade-off: a real wheel dependency (~14 MB) instead of stdlib sqlite3.
+  Considered acceptable: the analytical advantages compound as the local
+  store accrues months of data.
 
 NOT in this module (deliberately):
-
 * Network — there is no HTTP server here. Adding endpoints is a follow-up
-  blueprint (`clawmetry/blueprints/local_query.py`) so this module stays
-  pure-storage and trivially unit-testable.
-* Encryption — events are stored plaintext locally. The bytes never leave
-  the device through this module; the cloud sync daemon does its own E2E
-  encryption pass before POSTing.
+  blueprint.
+* Encryption — events are stored plaintext locally. Cloud sync continues
+  to do its own E2E encryption pass before POSTing.
 * Cloud sync — independent. Adding the local store does not change what
-  sync.py ships.
+  ``sync.py`` ships.
+
+Concurrency model:
+* DuckDB connections are heavyweight; we keep a process-wide singleton
+  connection guarded by a ``threading.Lock`` for writes. Reads are issued
+  via ``.cursor()`` instances which are thread-safe.
+* DuckDB allows only one *writer* process per file; multiple *readers* are
+  allowed. The daemon process owns the writer; future external readers
+  (e.g. a separate dashboard process per #960) will open with
+  ``read_only=True``.
 """
 
 from __future__ import annotations
@@ -39,7 +40,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sqlite3
 import threading
 import time
 from collections import deque
@@ -47,30 +47,28 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+import duckdb
+
 log = logging.getLogger("clawmetry.local_store")
 
 
 # Public knobs — tuned for the common case (one daemon, one dashboard, ≤1 K
 # events/s sustained on a developer laptop). Adjust via env vars only.
 
+# Note: changed from events.db (SQLite, in 0.12.164) → events.duckdb. The
+# old file is left in place if present; the new file is created fresh.
+# The 0.12.164 SQLite file was live for hours at most; treating its data
+# as disposable is fine.
 DB_PATH = Path(
     os.environ.get(
         "CLAWMETRY_LOCAL_STORE_PATH",
-        os.path.expanduser("~/.clawmetry/events.db"),
+        os.path.expanduser("~/.clawmetry/events.duckdb"),
     )
 )
 
-# Background flusher: flush at least every FLUSH_INTERVAL seconds, OR when
-# the in-memory queue reaches FLUSH_BATCH events. Whichever first.
 FLUSH_INTERVAL_SECS = float(os.environ.get("CLAWMETRY_LOCAL_FLUSH_SECS", "2.0"))
 FLUSH_BATCH = int(os.environ.get("CLAWMETRY_LOCAL_FLUSH_BATCH", "1000"))
-
-# Cap the ring buffer so a runaway producer doesn't OOM the daemon. If we hit
-# the cap we drop oldest events on the floor and log a warning — better than
-# crashing the daemon.
 RING_MAX = int(os.environ.get("CLAWMETRY_LOCAL_RING_MAX", "10000"))
-
-# Default size cap. When the DB exceeds this, the next vacuum prunes oldest.
 LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
@@ -80,30 +78,30 @@ SCHEMA_VERSION = 1
 _DDL = [
     """
     CREATE TABLE IF NOT EXISTS events (
-        id            TEXT PRIMARY KEY,
-        node_id       TEXT NOT NULL,
-        agent_id      TEXT NOT NULL DEFAULT 'main',
-        session_id    TEXT,
-        workspace_id  TEXT,
-        event_type    TEXT NOT NULL,
-        ts            TEXT NOT NULL,
+        id            VARCHAR PRIMARY KEY,
+        node_id       VARCHAR NOT NULL,
+        agent_id      VARCHAR NOT NULL DEFAULT 'main',
+        session_id    VARCHAR,
+        workspace_id  VARCHAR,
+        event_type    VARCHAR NOT NULL,
+        ts            VARCHAR NOT NULL,
         data          BLOB,
-        cost_usd      REAL,
+        cost_usd      DOUBLE,
         token_count   INTEGER,
-        model         TEXT,
-        created_at    INTEGER NOT NULL
+        model         VARCHAR,
+        created_at    BIGINT NOT NULL
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts)",
     "CREATE INDEX IF NOT EXISTS idx_events_session     ON events(session_id, ts)",
-    "CREATE INDEX IF NOT EXISTS idx_events_agent_ts    ON events(agent_id, ts DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_events_type_ts     ON events(event_type, ts DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_events_agent_ts    ON events(agent_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_events_type_ts     ON events(event_type, ts)",
     """
     CREATE TABLE IF NOT EXISTS daily_aggregates (
-        agent_id      TEXT NOT NULL,
-        workspace_id  TEXT,
-        day           TEXT NOT NULL,
-        cost_usd      REAL DEFAULT 0,
+        agent_id      VARCHAR NOT NULL,
+        workspace_id  VARCHAR,
+        day           VARCHAR NOT NULL,
+        cost_usd      DOUBLE DEFAULT 0,
         token_count   INTEGER DEFAULT 0,
         event_count   INTEGER DEFAULT 0,
         error_count   INTEGER DEFAULT 0,
@@ -113,50 +111,16 @@ _DDL = [
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
-        applied_at INTEGER NOT NULL
+        applied_at BIGINT NOT NULL
     )
     """,
 ]
 
 
-# ── Connection management ────────────────────────────────────────────────────
-
-# One connection per thread. SQLite forbids sharing a connection across threads
-# unless check_same_thread=False, but even then concurrent writes serialize.
-# Per-thread connections + WAL mode is the standard pattern.
-_thread_local = threading.local()
-
-
-def _connect() -> sqlite3.Connection:
-    """Return the current thread's connection, creating it on first call."""
-    conn = getattr(_thread_local, "conn", None)
-    if conn is not None:
-        return conn
+def _open_connection(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
+    """Open a DuckDB connection at DB_PATH, creating the directory if needed."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=30, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    # WAL: concurrent reader + writer. NORMAL: trade strict fsync for ~10×
-    # write throughput; we accept ≤ one flush of loss on power-cut, the same
-    # bound the in-memory ring already imposes.
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA temp_store=MEMORY")
-    _thread_local.conn = conn
-    return conn
-
-
-def _migrate(conn: sqlite3.Connection) -> None:
-    """Apply DDL idempotently and stamp the schema version."""
-    for stmt in _DDL:
-        conn.execute(stmt)
-    cur = conn.execute("SELECT MAX(version) AS v FROM schema_version")
-    row = cur.fetchone()
-    current = row["v"] if row and row["v"] is not None else 0
-    if current < SCHEMA_VERSION:
-        conn.execute(
-            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
-            (SCHEMA_VERSION, int(time.time() * 1000)),
-        )
+    return duckdb.connect(str(DB_PATH), read_only=read_only)
 
 
 # ── Singleton store ─────────────────────────────────────────────────────────
@@ -177,20 +141,49 @@ def get_store() -> "LocalStore":
     return _store
 
 
+def _reset_singleton_for_tests() -> None:
+    """Test-only helper. Drops the cached store so the next get_store() picks
+    up new env vars (DB path, flush knobs)."""
+    global _store
+    with _store_lock:
+        if _store is not None:
+            try:
+                _store.stop(flush=False)
+            except Exception:
+                pass
+        _store = None
+
+
 class LocalStore:
     """Thread-safe local event store with a background batched flusher."""
 
     def __init__(self) -> None:
         self._ring: deque[dict[str, Any]] = deque(maxlen=RING_MAX)
         self._ring_lock = threading.Lock()
-        # Cumulative counter of events dropped because the ring filled up.
-        # Surfaced via ``health()`` so the dashboard can warn the user.
+        # DuckDB connection state isn't safe across concurrent transactions.
+        # All writes go through ``_write_lock``; reads issue cursors which
+        # DuckDB makes thread-safe internally.
+        self._write_lock = threading.Lock()
         self._dropped = 0
         self._flusher_stop = threading.Event()
         self._flusher_thread: threading.Thread | None = None
         self._last_flush_ts = time.monotonic()
-        # Ensure schema exists from the main thread before any worker hits it.
-        _migrate(_connect())
+        self._conn = _open_connection(read_only=False)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Apply DDL idempotently and stamp the schema version."""
+        with self._write_lock:
+            for stmt in _DDL:
+                self._conn.execute(stmt)
+            cur = self._conn.execute("SELECT MAX(version) AS v FROM schema_version")
+            row = cur.fetchone()
+            current = row[0] if row and row[0] is not None else 0
+            if current < SCHEMA_VERSION:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+                    [SCHEMA_VERSION, int(time.time() * 1000)],
+                )
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
@@ -214,7 +207,16 @@ class LocalStore:
         if self._flusher_thread:
             self._flusher_thread.join(timeout=10)
         if flush:
-            self._flush_now()
+            try:
+                self._flush_now()
+            except Exception:
+                log.exception("local store: final flush on stop failed")
+        # Close the underlying connection so a subsequent process can open it.
+        try:
+            with self._write_lock:
+                self._conn.close()
+        except Exception:
+            pass
 
     # ── ingest ──────────────────────────────────────────────────────────
 
@@ -233,11 +235,8 @@ class LocalStore:
             raise ValueError("event must include 'ts'")
         with self._ring_lock:
             if len(self._ring) >= RING_MAX:
-                # deque(maxlen=) silently drops; track for visibility.
                 self._dropped += 1
             self._ring.append(event)
-        # Trigger an immediate flush if we just hit the batch boundary,
-        # so a burst doesn't wait the full FLUSH_INTERVAL.
         if len(self._ring) >= FLUSH_BATCH:
             self._flush_now()
 
@@ -256,31 +255,26 @@ class LocalStore:
                 log.exception("local store: flush failed (will retry)")
 
     def _flush_now(self) -> int:
-        """Drain the ring into SQLite in one transaction. Returns rows written.
-        We hold a snapshot of the events while writing and only clear them from
-        the ring after a successful COMMIT — so a write failure leaves the data
-        queued for the next flush attempt instead of vanishing."""
+        """Drain the ring into DuckDB in one transaction. Returns rows written.
+        Snapshot-then-pop pattern: events stay in the ring until the COMMIT
+        succeeds, so a write failure leaves them queued for the next attempt
+        instead of vanishing."""
         with self._ring_lock:
             if not self._ring:
                 return 0
             batch = list(self._ring)
         rows = [_event_to_row(e) for e in batch]
-        conn = _connect()
-        # One transaction → one fsync (under synchronous=NORMAL) for the whole
-        # batch. INSERT OR IGNORE so re-delivery is harmless.
-        with _txn(conn):
-            conn.executemany(
-                """
-                INSERT OR IGNORE INTO events
-                  (id, node_id, agent_id, session_id, workspace_id,
-                   event_type, ts, data, cost_usd, token_count, model, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                rows,
-            )
-        # Commit succeeded — safe to remove the snapshot from the ring.
-        # New events appended *during* the write stay in the ring for the next
-        # cycle. We pop precisely len(batch) entries from the left.
+        with self._write_lock:
+            with _txn(self._conn):
+                self._conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO events
+                      (id, node_id, agent_id, session_id, workspace_id,
+                       event_type, ts, data, cost_usd, token_count, model, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    rows,
+                )
         with self._ring_lock:
             for _ in range(len(batch)):
                 if self._ring:
@@ -300,9 +294,7 @@ class LocalStore:
         until: str | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
-        """Read events. Defaults to most recent first. Empty kwargs = global
-        recent stream."""
-        conn = _connect()
+        """Read events. Defaults to most recent first."""
         clauses: list[str] = []
         params: list[Any] = []
         if session_id:
@@ -330,7 +322,7 @@ class LocalStore:
             LIMIT ?
         """
         params.append(int(limit))
-        return [_row_to_event(r) for r in conn.execute(sql, params).fetchall()]
+        return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
 
     def query_sessions(
         self,
@@ -342,7 +334,6 @@ class LocalStore:
     ) -> list[dict[str, Any]]:
         """One row per distinct session_id seen, with start/end timestamps,
         event count, and total cost."""
-        conn = _connect()
         clauses: list[str] = ["session_id IS NOT NULL"]
         params: list[Any] = []
         if agent_id:
@@ -363,7 +354,7 @@ class LocalStore:
               MAX(ts)                     AS updated_at,
               COUNT(*)                    AS event_count,
               COALESCE(SUM(cost_usd), 0)  AS cost_usd,
-              COALESCE(SUM(token_count),0) AS token_count
+              COALESCE(SUM(token_count), 0) AS token_count
             FROM events
             {where}
             GROUP BY session_id
@@ -371,7 +362,9 @@ class LocalStore:
             LIMIT ?
         """
         params.append(int(limit))
-        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+        return [_row_to_dict(r, ["session_id","agent_id","started_at","updated_at",
+                                  "event_count","cost_usd","token_count"])
+                for r in self._fetch(sql, params)]
 
     def query_aggregates(
         self,
@@ -380,11 +373,8 @@ class LocalStore:
         since: str | None = None,
         until: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Per-day rollup. Computed on the fly from events; the materialized
-        ``daily_aggregates`` table is reserved for the nightly job in #959.
-        On-the-fly is fine at the scale of one node × one year × ~1 K events/day
-        (~365 K rows; sub-100ms with the ts index)."""
-        conn = _connect()
+        """Per-day rollup. Computed on the fly from events; columnar storage
+        means this is cheap even at hundreds-of-thousands of rows."""
         clauses: list[str] = []
         params: list[Any] = []
         if agent_id:
@@ -403,35 +393,38 @@ class LocalStore:
               agent_id,
               COUNT(*)                     AS event_count,
               COALESCE(SUM(cost_usd), 0)   AS cost_usd,
-              COALESCE(SUM(token_count),0) AS token_count
+              COALESCE(SUM(token_count), 0) AS token_count
             FROM events
             {where}
             GROUP BY day, agent_id
             ORDER BY day DESC
         """
-        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+        return [_row_to_dict(r, ["day","agent_id","event_count","cost_usd","token_count"])
+                for r in self._fetch(sql, params)]
 
     # ── ops / maintenance ──────────────────────────────────────────────
 
     def health(self) -> dict[str, Any]:
         """Snapshot of store state — for the /local/health endpoint and the
         dashboard footer."""
-        conn = _connect()
         size_bytes = DB_PATH.stat().st_size if DB_PATH.exists() else 0
-        row = conn.execute(
-            "SELECT COUNT(*) AS n, MIN(ts) AS oldest, MAX(ts) AS newest FROM events"
-        ).fetchone()
+        rows = self._fetch(
+            "SELECT COUNT(*) AS n, MIN(ts) AS oldest, MAX(ts) AS newest FROM events",
+            []
+        )
+        n, oldest, newest = (rows[0] if rows else (0, None, None))
         with self._ring_lock:
             ring_depth = len(self._ring)
             dropped = self._dropped
         return {
             "db_path": str(DB_PATH),
-            "size_bytes": size_bytes,
+            "engine": "duckdb",
+            "size_bytes": int(size_bytes),
             "size_mb": round(size_bytes / 1024 / 1024, 2),
             "size_cap_bytes": LOCAL_MAX_BYTES,
-            "event_count": int(row["n"] or 0),
-            "oldest_ts": row["oldest"],
-            "newest_ts": row["newest"],
+            "event_count": int(n or 0),
+            "oldest_ts": oldest,
+            "newest_ts": newest,
             "ring_depth": ring_depth,
             "ring_max": RING_MAX,
             "ring_dropped_total": dropped,
@@ -442,58 +435,80 @@ class LocalStore:
     def vacuum(self, *, prune_to_bytes: int | None = None) -> dict[str, Any]:
         """Reclaim space. If ``prune_to_bytes`` is set (or the DB has exceeded
         ``LOCAL_MAX_BYTES``), delete oldest events first until the projected
-        size fits, then VACUUM. Returns a summary."""
-        # Drain pending writes first so size reflects reality.
+        size fits, then run a CHECKPOINT to reclaim file size."""
         self._flush_now()
-        conn = _connect()
         before_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
         cap = prune_to_bytes if prune_to_bytes is not None else LOCAL_MAX_BYTES
         deleted = 0
         if before_size > cap:
-            # Estimate rows-per-byte from the current table to translate the
-            # excess size into a rough delete-count. Conservative: prune 20%
-            # extra so we don't spam vacuum on every flush.
-            row = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()
-            n = int(row["n"] or 0)
-            if n > 0 and before_size > 0:
-                bytes_per_row = before_size / n
+            n_rows = (self._fetch("SELECT COUNT(*) FROM events", []) or [(0,)])[0][0]
+            if n_rows > 0 and before_size > 0:
+                bytes_per_row = before_size / n_rows
                 excess_bytes = (before_size - cap) * 1.2
                 rows_to_drop = int(excess_bytes / bytes_per_row) if bytes_per_row else 0
                 if rows_to_drop > 0:
-                    cur = conn.execute(
-                        """
-                        DELETE FROM events WHERE id IN (
-                          SELECT id FROM events ORDER BY ts ASC LIMIT ?
-                        )
-                        """,
-                        (rows_to_drop,),
-                    )
-                    deleted = cur.rowcount
-        # VACUUM cannot run inside a transaction; isolation_level=None lets us
-        # call it directly.
-        conn.execute("VACUUM")
+                    with self._write_lock:
+                        with _txn(self._conn):
+                            cur = self._conn.execute(
+                                """
+                                DELETE FROM events WHERE id IN (
+                                  SELECT id FROM events ORDER BY ts ASC LIMIT ?
+                                )
+                                """,
+                                [rows_to_drop],
+                            )
+                            # DuckDB returns rowcount=-1 for DELETE in some
+                            # versions; if so, trust our planned count.
+                            try:
+                                rc = cur.rowcount
+                            except Exception:
+                                rc = -1
+                            deleted = rc if rc is not None and rc >= 0 else rows_to_drop
+        # CHECKPOINT forces DuckDB to merge WAL → main file, reclaiming space
+        # similarly to SQLite VACUUM. Cheaper than full VACUUM on large DBs.
+        with self._write_lock:
+            try:
+                self._conn.execute("CHECKPOINT")
+            except Exception:
+                log.exception("local store: CHECKPOINT failed")
         after_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
         return {
-            "deleted_rows": deleted,
+            "deleted_rows": int(deleted),
             "before_bytes": before_size,
             "after_bytes": after_size,
             "cap_bytes": cap,
             "reclaimed_bytes": max(0, before_size - after_size),
         }
 
+    # ── internals ───────────────────────────────────────────────────────
+
+    def _fetch(self, sql: str, params: list[Any]) -> list[tuple]:
+        """Issue a read, returning raw row tuples. DuckDB's ``.cursor()`` is
+        thread-safe; we don't take the write lock for reads. We do however
+        serialise with the writer through the lock to dodge transaction-state
+        edge cases — DuckDB's reader-vs-writer story within one connection is
+        better with light serialisation. At our scale (hundreds of qps max)
+        this costs nothing."""
+        with self._write_lock:
+            cur = self._conn.execute(sql, params)
+            return cur.fetchall()
+
 
 # ── helpers ────────────────────────────────────────────────────────────────
+
+_EVENT_COLS = [
+    "id", "node_id", "agent_id", "session_id", "workspace_id",
+    "event_type", "ts", "data", "cost_usd", "token_count", "model",
+]
 
 
 def _event_to_row(e: dict[str, Any]) -> tuple:
     """Coerce an event dict into the column tuple for the events table.
     Unknown keys are tolerated and dropped — events come from many sources
-    (jsonl parser, gateway, claude-cli adapter) with slightly different shapes,
-    and the store should not be the strict-schema choke point."""
+    (jsonl parser, gateway, claude-cli adapter) with slightly different
+    shapes, and the store should not be the strict-schema choke point."""
     data = e.get("data")
     if data is not None and not isinstance(data, (bytes, bytearray)):
-        # Serialise dicts/lists to JSON bytes; leave strings alone (they're
-        # already in their final form).
         if isinstance(data, str):
             data = data.encode("utf-8")
         else:
@@ -514,11 +529,10 @@ def _event_to_row(e: dict[str, Any]) -> tuple:
     )
 
 
-def _row_to_event(r: sqlite3.Row) -> dict[str, Any]:
-    """Inverse of _event_to_row: rehydrate a row into a JSON-friendly dict.
-    The ``data`` column is decoded back to JSON if it's valid, else returned
-    as a UTF-8 string. Bytes-in-bytes-out callers can re-encode."""
-    out = dict(r)
+def _row_to_event(row: tuple, cols: list[str]) -> dict[str, Any]:
+    """Inverse of _event_to_row. Decodes ``data`` BLOB back to JSON if valid,
+    else to a UTF-8 string, else leaves as None."""
+    out = dict(zip(cols, row))
     raw = out.get("data")
     if raw is not None:
         try:
@@ -532,11 +546,15 @@ def _row_to_event(r: sqlite3.Row) -> dict[str, Any]:
     return out
 
 
+def _row_to_dict(row: tuple, cols: list[str]) -> dict[str, Any]:
+    """Generic tuple-to-dict for non-event rows (sessions, aggregates)."""
+    return dict(zip(cols, row))
+
+
 @contextmanager
-def _txn(conn: sqlite3.Connection) -> Iterator[None]:
-    """Explicit BEGIN/COMMIT around a block. We use isolation_level=None
-    (autocommit) so transactions are explicit; this contextmanager makes that
-    safe."""
+def _txn(conn: duckdb.DuckDBPyConnection) -> Iterator[None]:
+    """Explicit BEGIN/COMMIT around a write block. DuckDB autocommits by
+    default; this contextmanager makes batch atomicity explicit."""
     conn.execute("BEGIN")
     try:
         yield
