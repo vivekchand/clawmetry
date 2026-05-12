@@ -216,9 +216,16 @@ async function checkActiveAlerts() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
     var alerts = data.alerts || [];
+    var count = alerts.length;
+    // Update bell icon badge and Alerts nav tab badge
+    var bellBadge = document.getElementById('alerts-bell-badge');
+    var tabBadge  = document.getElementById('nav-alerts-badge');
+    var countLabel = count > 99 ? '99+' : String(count);
+    if (bellBadge) { bellBadge.textContent = countLabel; bellBadge.style.display = count > 0 ? '' : 'none'; }
+    if (tabBadge)  { tabBadge.textContent  = countLabel; tabBadge.style.display  = count > 0 ? '' : 'none'; }
     var banner = document.getElementById('alert-banner');
-    if(alerts.length === 0) {
-      banner.style.display = 'none';
+    if(count === 0) {
+      if (banner) banner.style.display = 'none';
       return;
     }
     // Show most recent alert
