@@ -2,12 +2,13 @@
 routes/reasoning.py — Reasoning chain viewer endpoint.
 
 Implements GH #565: structured visualization of LLM thinking/reasoning content.
+Extends  GH #572: coherence score — detect when reasoning doesn't support the answer.
 
   GET /api/reasoning?session=SESSION_ID
 
 Returns a structured breakdown of thinking blocks parsed from session JSONL:
 - Chains: each thinking block segmented into typed logical steps
-- Summary: aggregate token/efficiency stats across all chains
+- Summary: aggregate token/efficiency stats + avg coherence across all chains
 """
 
 import glob
@@ -18,6 +19,58 @@ import re
 from flask import Blueprint, jsonify, request
 
 bp_reasoning = Blueprint("reasoning", __name__)
+
+# ── Coherence scoring (GH #572) ──────────────────────────────────────────────
+
+_STOP_WORDS = frozenset(
+    "the a an and or but in on at to for of with is are was were be been "
+    "have has had do does did will would could should may might must shall "
+    "i we you he she it they this that these those which who what when "
+    "how why where my your his her our their its if then else so because "
+    "as by from into through out up down about after before between over "
+    "under more most some all any no not just also only even still same "
+    "can need want get go make take see know think look say come back "
+    "let set use put show keep run try give very well good great here "
+    "there now then too such each both few many much since while".split()
+)
+
+
+def _extract_keywords(text):
+    """Return significant lowercase words (≥4 chars, not stop words)."""
+    return {
+        w
+        for w in re.findall(r"[a-z]{4,}", text.lower())
+        if w not in _STOP_WORDS
+    }
+
+
+def _coherence_score(thinking_text, answer_text):
+    """Compute a reasoning coherence score (0–100) and label.
+
+    Measures keyword overlap between the thinking block and the final answer.
+    High overlap → thinking vocabulary appears in the answer → likely genuine.
+    Low overlap → thinking may be post-hoc rationalization or boilerplate.
+
+    Returns (score: int, label: str) where label is "high" | "medium" | "low".
+    """
+    if not thinking_text or not answer_text:
+        return 0, "low"
+    think_kw = _extract_keywords(thinking_text)
+    answer_kw = _extract_keywords(answer_text)
+    if not think_kw or not answer_kw:
+        return 0, "low"
+    overlap = len(think_kw & answer_kw)
+    score = min(100, round(overlap / len(answer_kw) * 100))
+    if score >= 70:
+        label = "high"
+    elif score >= 35:
+        label = "medium"
+    else:
+        label = "low"
+    return score, label
+
+
+# ── Step classification ───────────────────────────────────────────────────────
 
 # Keyword heuristics for step classification
 _PREMISE_RE = re.compile(
@@ -134,6 +187,7 @@ def _parse_session_reasoning(session_id):
         # Collect thinking + answer blocks from this assistant turn
         thinking_blocks = []
         answer_word_count = 0
+        answer_texts = []
 
         for block in content_obj:
             if not isinstance(block, dict):
@@ -146,6 +200,10 @@ def _parse_session_reasoning(session_id):
             elif btype == "text":
                 text = block.get("text", "") or ""
                 answer_word_count += len(text.split())
+                if text:
+                    answer_texts.append(text)
+
+        answer_combined = " ".join(answer_texts)
 
         for thinking_text in thinking_blocks:
             steps = _segment_thinking(thinking_text)
@@ -155,12 +213,15 @@ def _parse_session_reasoning(session_id):
             efficiency_ratio = (
                 round(thinking_tokens / answer_tokens, 1) if answer_tokens > 0 else 0.0
             )
+            c_score, c_label = _coherence_score(thinking_text, answer_combined)
             chains.append(
                 {
                     "timestamp": ts or "",
                     "thinking_tokens": thinking_tokens,
                     "answer_tokens": answer_tokens,
                     "efficiency_ratio": efficiency_ratio,
+                    "coherence_score": c_score,
+                    "coherence_label": c_label,
                     "steps": steps,
                     "raw_thinking": thinking_text,
                 }
@@ -186,6 +247,19 @@ def api_reasoning():
         else 0.0
     )
 
+    scored_chains = [c for c in chains if c["coherence_score"] > 0]
+    avg_coherence_score = (
+        round(sum(c["coherence_score"] for c in scored_chains) / len(scored_chains))
+        if scored_chains
+        else 0
+    )
+    if avg_coherence_score >= 70:
+        avg_coherence_label = "high"
+    elif avg_coherence_score >= 35:
+        avg_coherence_label = "medium"
+    else:
+        avg_coherence_label = "low"
+
     return jsonify(
         {
             "session_id": session_id,
@@ -195,6 +269,8 @@ def api_reasoning():
                 "total_answer_tokens": total_answer_tokens,
                 "avg_efficiency": avg_efficiency,
                 "chain_count": len(chains),
+                "avg_coherence_score": avg_coherence_score,
+                "avg_coherence_label": avg_coherence_label,
             },
         }
     )

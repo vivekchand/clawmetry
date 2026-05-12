@@ -2522,6 +2522,17 @@ function loadReasoningChain(sessionId, containerId) {
         container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">No reasoning chains found.</span>';
         return;
       }
+      var _coherenceColors = {high: '#10b981', medium: '#eab308', low: '#ef4444'};
+      var _coherenceIcons  = {high: '&#129001;', medium: '&#129000;', low: '&#128997;'};
+      function _coherenceBadge(score, label, small) {
+        if (!score) return '';
+        var col = _coherenceColors[label] || '#6b7280';
+        var ico = _coherenceIcons[label] || '';
+        var fs  = small ? '9px' : '10px';
+        return '<span title="Reasoning coherence: ' + label + ' (' + score + '/100). Measures how much thinking vocabulary appears in the final answer." '
+          + 'style="background:' + col + '22;color:' + col + ';padding:1px 5px;border-radius:8px;font-size:' + fs + ';font-weight:600;">'
+          + ico + ' ' + score + '</span>';
+      }
       var html = '';
       // Summary bar
       html += '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;font-size:10px;color:var(--text-muted);margin-bottom:4px;">';
@@ -2532,12 +2543,17 @@ function loadReasoningChain(sessionId, containerId) {
         html += '<span>&#9889; Efficiency: ' + summary.avg_efficiency + ':1</span>';
       }
       html += '<span>' + chains.length + ' chain' + (chains.length > 1 ? 's' : '') + '</span>';
+      if (summary.avg_coherence_score > 0) {
+        html += '<span style="display:flex;align-items:center;gap:3px;">Coherence: ' + _coherenceBadge(summary.avg_coherence_score, summary.avg_coherence_label, false) + '</span>';
+      }
       html += '</div>';
       // Render each chain
       chains.forEach(function(chain, ci) {
         html += '<div style="padding:4px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;margin-bottom:4px;">';
         if (chains.length > 1) {
-          html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;">Chain ' + (ci + 1) + ' &mdash; ' + chain.thinking_tokens + ' tokens</div>';
+          html += '<div style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text-muted);margin-bottom:3px;">Chain ' + (ci + 1) + ' &mdash; ' + chain.thinking_tokens + ' tokens'
+            + (chain.coherence_score ? ' ' + _coherenceBadge(chain.coherence_score, chain.coherence_label, true) : '')
+            + '</div>';
         }
         (chain.steps || []).forEach(function(step) {
           var col = _rcStepColors[step.type] || '#6b7280';
