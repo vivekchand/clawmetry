@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Browser-level regression sweep (2026-05-12 evening)
+- **getattr guards for 3 endpoints returning 500** (#1077). `_estimate_usd_per_token` (routes/sessions.py: `/api/delegation-tree`), `AgentReliabilityScorer` (routes/health.py: `/api/reliability`), `_build_clusters` (routes/meta.py: `/api/clusters`). All three returned `AttributeError` 500s when the underlying helper hadn't shipped; now degrade to `{...empty data, _missing: true}` so the dashboard renders cleanly. Caught by a real-browser audit that scraped DevTools console for cloud users; complements PR clawmetry-cloud#750 which suppresses harmless 410/404 calls.
+
 ### DuckDB-everywhere + heartbeat-piggyback transport (epic #1032 phase 1–5, partial #964 close-out)
 - **`/api/transcript/<sid>` reads from local DuckDB** (#1056) under `CLAWMETRY_LOCAL_STORE_READ=1`. Closes the explicit local-first blocker surfaced by the real-OpenClaw E2E pipeline.
 - **`/api/memory-files`, `/api/file`, `/api/memory`, `/api/memory-analytics` read from local DuckDB** (#1059) via new `LocalStore.query_memory_blobs()`. POST `/api/file` writes still on the filesystem — read-only by default.
