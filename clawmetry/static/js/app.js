@@ -873,7 +873,10 @@ async function loadSelfConfig() {
     var filesReq = fetch('/api/memory-files').then(function(r){return r.json();}).catch(function(){return [];});
     var trackedReq = fetch('/api/selfconfig').then(function(r){return r.json();}).catch(function(){return {files:[]};});
     var results = await Promise.all([filesReq, trackedReq]);
-    var realFiles = results[0] || [];
+    // /api/memory-files used to return a bare array; the local-store fast
+    // path wraps in {files:[...], _source:"local_store"}. Accept both.
+    var rawFiles = results[0];
+    var realFiles = Array.isArray(rawFiles) ? rawFiles : (rawFiles && rawFiles.files) || [];
     var tracked = (results[1] && results[1].files) || [];
 
     _selfconfigTrackedMeta = {};
@@ -4912,7 +4915,10 @@ async function _loadMemoryAllFiles() {
     return;
   }
   loadMemoryAnalytics();
-  var data = await fetch('/api/memory-files').then(r => r.json());
+  var rawData = await fetch('/api/memory-files').then(r => r.json());
+  // /api/memory-files used to return a bare array; the local-store fast
+  // path wraps in {files:[...], _source:"local_store"}. Accept both.
+  var data = Array.isArray(rawData) ? rawData : (rawData && rawData.files) || [];
   var el = document.getElementById('memory-list');
   // Add hover CSS once
   if (!document.getElementById('mem-ide-css')) {

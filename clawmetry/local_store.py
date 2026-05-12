@@ -1033,6 +1033,69 @@ class LocalStore:
                 "data", "updated_at"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
 
+    def query_memory_blobs(
+        self,
+        *,
+        agent_type: str | None = None,
+        agent_id: str | None = None,
+        path_prefix: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read memory-blob rows. Defaults to most recent first.
+
+        Each row mirrors the ``memory_blobs`` schema columns
+        (``agent_type``, ``agent_id``, ``path``, ``ts``, ``blob``,
+        ``sha256``, ``size_bytes``, ``updated_at``). The ``blob`` BLOB
+        is decoded back to a UTF-8 string when valid (memory files are
+        always plaintext markdown — CLAUDE.md, SOUL.md, memory/*.md);
+        leaves it as ``bytes`` if decoding fails, ``None`` when empty.
+
+        Filters:
+          - ``agent_type``: exact match on the framework discriminator
+            (e.g. ``"openclaw"``, ``"claude_code"``).
+          - ``agent_id``: exact match on the instance within that
+            framework (``"main"``, ``"subagent"``, ``"cron"``).
+          - ``path_prefix``: SQL ``LIKE prefix%`` on the path column —
+            useful for scoping to ``"memory/"`` daily files vs root
+            workspace files.
+
+        Sort order matches the other ``query_*`` methods: most-recently-
+        updated first. ``LIMIT 200`` default mirrors ``query_subagents``."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if agent_type:
+            clauses.append("agent_type = ?"); params.append(agent_type)
+        if agent_id:
+            clauses.append("agent_id = ?"); params.append(agent_id)
+        if path_prefix:
+            clauses.append("path LIKE ?"); params.append(f"{path_prefix}%")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT agent_type, agent_id, path, ts, blob, sha256,
+                   size_bytes, updated_at
+            FROM memory_blobs
+            {where}
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["agent_type", "agent_id", "path", "ts", "blob", "sha256",
+                "size_bytes", "updated_at"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            raw = d.get("blob")
+            if raw is not None:
+                try:
+                    d["blob"] = (raw.decode("utf-8")
+                                 if isinstance(raw, (bytes, bytearray)) else raw)
+                except UnicodeDecodeError:
+                    # Non-utf8 binary memory file (rare); leave as bytes so
+                    # callers can still get the raw payload.
+                    d["blob"] = bytes(raw)
+            out.append(d)
+        return out
+
     def query_system_snapshots(
         self,
         *,

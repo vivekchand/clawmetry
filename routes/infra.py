@@ -361,12 +361,214 @@ def api_logs_stream():
 
 
 # ── Memory files ───────────────────────────────────────────────────────────
+#
+# Local-store fast path (DuckDB MOAT mandate): when
+# CLAWMETRY_LOCAL_STORE_READ=1 AND the local memory_blobs table has rows for
+# this agent, serve directly from DuckDB. Falls through to the legacy
+# filesystem path otherwise (so a fresh install with no local store, or a
+# user who hasn't enabled the gate, sees the same data as before — zero-
+# change default). The POST handler at /api/file intentionally stays on
+# disk; writes are a future ingest hook (sync.py owns memory ingest today).
+
+
+def _try_local_store_memory_files():
+    """Read memory file metadata directly from the local DuckDB. Returns
+    a list shaped identically to ``_get_memory_files()`` (``[{"path":
+    str, "size": int}, ...]``). Returns ``None`` to defer to the
+    filesystem fallback if:
+      - the local_store module isn't importable
+      - the memory_blobs table is empty
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        rows = store.query_memory_blobs(limit=500)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    out = []
+    seen: set[str] = set()
+    for r in rows:
+        path = r.get("path") or ""
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        size = r.get("size_bytes")
+        if size is None:
+            blob = r.get("blob")
+            if isinstance(blob, str):
+                size = len(blob.encode("utf-8", errors="replace"))
+            elif isinstance(blob, (bytes, bytearray)):
+                size = len(blob)
+            else:
+                size = 0
+        out.append({"path": path, "size": int(size or 0)})
+    return out
+
+
+def _try_local_store_file(path: str):
+    """Read one memory file directly from the local DuckDB. Returns the
+    same response shape as the legacy filesystem-backed endpoint
+    (``{"path", "content", "size", "mtime"}``). Returns ``None`` to
+    defer to the filesystem fallback if:
+      - the local_store module isn't importable
+      - no memory_blobs row matches the requested path
+      - the blob payload isn't UTF-8 text (rare; punt to disk path)
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        # query_memory_blobs has no exact-path filter (path_prefix is the
+        # closest), so use prefix=path to narrow then exact-match in Python.
+        # path_prefix="MEMORY.md" matches "MEMORY.md" exactly AND any
+        # accidental "MEMORY.md.bak" — the in-memory filter resolves it.
+        rows = store.query_memory_blobs(path_prefix=path, limit=50)
+    except Exception:
+        return None
+    for r in rows:
+        if (r.get("path") or "") != path:
+            continue
+        blob = r.get("blob")
+        if blob is None:
+            content = ""
+        elif isinstance(blob, str):
+            content = blob
+        else:
+            # Binary blob (non-utf8) — defer to filesystem path which can
+            # at least raise a sensible error to the user.
+            return None
+        size = r.get("size_bytes")
+        if size is None:
+            size = len(content.encode("utf-8", errors="replace"))
+        # ts is an ISO string; convert to epoch seconds for parity with
+        # os.path.getmtime() which returns float seconds.
+        mtime = 0
+        ts = r.get("ts")
+        if ts:
+            try:
+                from datetime import datetime as _dt
+                mtime = int(_dt.fromisoformat(
+                    ts.replace("Z", "+00:00")
+                ).timestamp())
+            except Exception:
+                pass
+        return {
+            "path": path,
+            "content": content[:500_000],
+            "size": int(size or 0),
+            "mtime": mtime,
+            "_source": "local_store",
+        }
+    return None
+
+
+def _try_local_store_memory_analytics(bloat_warn_kb: int, bloat_crit_kb: int):
+    """Compute memory analytics from the local DuckDB. Same response
+    shape as the filesystem-backed endpoint. Returns ``None`` to defer
+    when the local store has no memory_blobs rows."""
+    files = _try_local_store_memory_files()
+    if files is None:
+        return None
+    return _build_memory_analytics(files, bloat_warn_kb, bloat_crit_kb,
+                                   source="local_store")
+
+
+def _build_memory_analytics(files, bloat_warn_kb, bloat_crit_kb, *, source=None):
+    """Pure analytics builder over a ``[{path, size}, ...]`` list. Shared
+    between the local-store fast path and the filesystem fallback so the
+    response shape stays identical regardless of source."""
+    total_bytes = sum(f.get("size", 0) for f in files)
+    root_files = [f for f in files if "/" not in f["path"]]
+    daily_files = [f for f in files if f["path"].startswith("memory/")]
+    est_tokens = total_bytes // 4
+
+    analysis = []
+    recommendations = []
+    for f in files:
+        entry = {
+            "path": f["path"],
+            "sizeBytes": f["size"],
+            "sizeKB": round(f["size"] / 1024, 1),
+            "estTokens": f["size"] // 4,
+            "status": "ok",
+        }
+        kb = f["size"] / 1024
+        if kb >= bloat_crit_kb:
+            entry["status"] = "critical"
+            recommendations.append({
+                "file": f["path"],
+                "severity": "critical",
+                "message": f"{f['path']} is {kb:.1f}KB ({f['size'] // 4} est. tokens). "
+                f"Consider pruning to keep context window budget lean.",
+            })
+        elif kb >= bloat_warn_kb:
+            entry["status"] = "warning"
+            recommendations.append({
+                "file": f["path"],
+                "severity": "warning",
+                "message": f"{f['path']} is {kb:.1f}KB. Growing large, review for stale content.",
+            })
+        analysis.append(entry)
+
+    daily_growth = []
+    date_sizes = {}
+    for f in daily_files:
+        basename = f["path"].replace("memory/", "")
+        date_part = basename.replace(".md", "")[:10]
+        if len(date_part) == 10 and date_part[4] == "-":
+            date_sizes[date_part] = date_sizes.get(date_part, 0) + f["size"]
+    for d in sorted(date_sizes.keys())[-30:]:
+        daily_growth.append({"date": d, "bytes": date_sizes[d]})
+
+    context_budgets = {}
+    for name, limit in [
+        ("claude_200k", 200000),
+        ("gpt4_128k", 128000),
+        ("gemini_1m", 1000000),
+    ]:
+        pct = round((est_tokens / limit) * 100, 1) if limit > 0 else 0
+        context_budgets[name] = {
+            "limit": limit,
+            "memoryTokens": est_tokens,
+            "percentUsed": min(pct, 100),
+            "status": "critical" if pct > 25 else ("warning" if pct > 10 else "ok"),
+        }
+
+    top_files = sorted(analysis, key=lambda x: x["sizeBytes"], reverse=True)[:5]
+    has_bloat = any(r["severity"] == "critical" for r in recommendations)
+    has_warnings = any(r["severity"] == "warning" for r in recommendations)
+
+    payload = {
+        "totalBytes": total_bytes,
+        "totalKB": round(total_bytes / 1024, 1),
+        "estTokens": est_tokens,
+        "fileCount": len(files),
+        "rootFileCount": len(root_files),
+        "dailyFileCount": len(daily_files),
+        "files": analysis,
+        "topFiles": top_files,
+        "dailyGrowth": daily_growth,
+        "contextBudgets": context_budgets,
+        "recommendations": recommendations,
+        "hasBloat": has_bloat,
+        "hasWarnings": has_warnings,
+        "thresholds": {"warnKB": bloat_warn_kb, "critKB": bloat_crit_kb},
+    }
+    if source:
+        payload["_source"] = source
+    return payload
 
 
 @bp_memory.route("/api/memory-files")
 @bp_memory.route("/api/memory")
 def api_memory_files():
     import dashboard as _d
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_memory_files()
+        if fast is not None:
+            return jsonify({"files": fast, "_source": "local_store"})
     return jsonify(_d._get_memory_files())
 
 
@@ -375,6 +577,10 @@ def api_view_file():
     """Return the contents of a memory file."""
     import dashboard as _d
     path = request.args.get("path", "")
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1" and path:
+        fast = _try_local_store_file(path)
+        if fast is not None:
+            return jsonify(fast)
     full = os.path.normpath(os.path.join(_d.WORKSPACE, path))
     if not full.startswith(os.path.normpath(_d.WORKSPACE)):
         return jsonify({"error": "Access denied"}), 403
@@ -424,106 +630,18 @@ def api_write_file():
 def api_memory_analytics():
     """Memory usage analytics with bloat detection and recommendations."""
     import dashboard as _d
-    workspace = _d.WORKSPACE or os.getcwd()
-    memory_dir = _d.MEMORY_DIR or os.path.join(workspace, "memory")
 
     # Configurable thresholds (bytes)
     bloat_warn_kb = int(request.args.get("warn_kb", 8))
     bloat_crit_kb = int(request.args.get("crit_kb", 16))
 
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_memory_analytics(bloat_warn_kb, bloat_crit_kb)
+        if fast is not None:
+            return jsonify(fast)
+
     files = _d._get_memory_files()
-    total_bytes = sum(f.get("size", 0) for f in files)
-    root_files = [f for f in files if "/" not in f["path"]]
-    daily_files = [f for f in files if f["path"].startswith("memory/")]
-
-    # Estimate tokens (rough: 1 token ~ 4 chars ~ 4 bytes for English text)
-    est_tokens = total_bytes // 4
-
-    # Per-file analysis with bloat flags
-    analysis = []
-    recommendations = []
-    for f in files:
-        entry = {
-            "path": f["path"],
-            "sizeBytes": f["size"],
-            "sizeKB": round(f["size"] / 1024, 1),
-            "estTokens": f["size"] // 4,
-            "status": "ok",
-        }
-        kb = f["size"] / 1024
-        if kb >= bloat_crit_kb:
-            entry["status"] = "critical"
-            recommendations.append(
-                {
-                    "file": f["path"],
-                    "severity": "critical",
-                    "message": f"{f['path']} is {kb:.1f}KB ({f['size'] // 4} est. tokens). "
-                    f"Consider pruning to keep context window budget lean.",
-                }
-            )
-        elif kb >= bloat_warn_kb:
-            entry["status"] = "warning"
-            recommendations.append(
-                {
-                    "file": f["path"],
-                    "severity": "warning",
-                    "message": f"{f['path']} is {kb:.1f}KB. Growing large, review for stale content.",
-                }
-            )
-        analysis.append(entry)
-
-    # Daily memory dir growth (count files per date from filenames)
-    daily_growth = []
-    if os.path.isdir(memory_dir):
-        date_sizes = {}
-        for f in daily_files:
-            basename = f["path"].replace("memory/", "")
-            date_part = basename.replace(".md", "")[:10]  # YYYY-MM-DD
-            if len(date_part) == 10 and date_part[4] == "-":
-                date_sizes[date_part] = date_sizes.get(date_part, 0) + f["size"]
-        for d in sorted(date_sizes.keys())[-30:]:
-            daily_growth.append({"date": d, "bytes": date_sizes[d]})
-
-    # Context budget estimation
-    # Common context windows: 200K tokens (Claude), 128K (GPT-4), 1M (Gemini)
-    context_budgets = {}
-    for name, limit in [
-        ("claude_200k", 200000),
-        ("gpt4_128k", 128000),
-        ("gemini_1m", 1000000),
-    ]:
-        pct = round((est_tokens / limit) * 100, 1) if limit > 0 else 0
-        context_budgets[name] = {
-            "limit": limit,
-            "memoryTokens": est_tokens,
-            "percentUsed": min(pct, 100),
-            "status": "critical" if pct > 25 else ("warning" if pct > 10 else "ok"),
-        }
-
-    # Largest files
-    top_files = sorted(analysis, key=lambda x: x["sizeBytes"], reverse=True)[:5]
-
-    has_bloat = any(r["severity"] == "critical" for r in recommendations)
-    has_warnings = any(r["severity"] == "warning" for r in recommendations)
-
-    return jsonify(
-        {
-            "totalBytes": total_bytes,
-            "totalKB": round(total_bytes / 1024, 1),
-            "estTokens": est_tokens,
-            "fileCount": len(files),
-            "rootFileCount": len(root_files),
-            "dailyFileCount": len(daily_files),
-            "files": analysis,
-            "topFiles": top_files,
-            "dailyGrowth": daily_growth,
-            "contextBudgets": context_budgets,
-            "recommendations": recommendations,
-            "hasBloat": has_bloat,
-            "hasWarnings": has_warnings,
-            "thresholds": {"warnKB": bloat_warn_kb, "critKB": bloat_crit_kb},
-        }
-    )
+    return jsonify(_build_memory_analytics(files, bloat_warn_kb, bloat_crit_kb))
 
 
 # ── Security ───────────────────────────────────────────────────────────────
