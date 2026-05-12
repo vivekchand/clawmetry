@@ -21,8 +21,8 @@ _disabled = _os.environ.get("CLAWMETRY_NO_INTERCEPT", "").strip() in ("1", "true
 
 if not _disabled:
     try:
-        from clawmetry.interceptor import patch_all as _patch_all
-        _patch_all()
+        from clawmetry.interceptor import activate as _activate
+        _activate()
     except Exception:
         pass  # never crash on import
 
