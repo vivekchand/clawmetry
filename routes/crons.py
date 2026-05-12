@@ -597,6 +597,16 @@ def api_cron_run_log():
         return jsonify({"error": "session_id required"}), 400
     sessions_dir = _d._get_sessions_dir()
     fpath = os.path.join(sessions_dir, f"{session_id}.jsonl")
+    # Guard against path-traversal via crafted session_id (e.g. "../../etc/passwd").
+    # Originally reported by @dumko2001 in #507.
+    norm_fpath = os.path.normpath(fpath)
+    norm_sessions_root = os.path.normpath(sessions_dir)
+    if not (
+        norm_fpath == norm_sessions_root
+        or norm_fpath.startswith(norm_sessions_root + os.sep)
+    ):
+        return jsonify({"error": "Invalid session_id"}), 400
+    fpath = norm_fpath
     if not os.path.isfile(fpath):
         return jsonify({"error": "Session not found"}), 404
     events = []
