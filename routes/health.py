@@ -751,10 +751,77 @@ def api_service_status():
     )
 
 
+def _try_local_store_heartbeat_status(node_id=None):
+    """Epic #964: opt-in local-store fast path for /api/heartbeat-status.
+
+    Returns the same response shape as ``_get_heartbeat_status()`` derived from
+    the most-recent row in the DuckDB ``heartbeats`` table (optionally scoped
+    to ``node_id``). Returns ``None`` to defer to the in-memory globals if:
+
+      - the local_store module isn't importable
+      - the heartbeats table is empty (fresh install / non-OpenClaw user)
+      - any unexpected error happens (we'd rather degrade than 500)
+
+    The fast path is most useful on multi-node fleets where the dashboard
+    process didn't witness the heartbeat itself (the sync daemon on each node
+    persists its own heartbeat row, but ``_last_heartbeat_ts`` lives in
+    dashboard memory and only sees what the local websocket emitted).
+    """
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return None
+    try:
+        store = local_store.get_store()
+        rows = store.query_heartbeats(limit=1, node_id=node_id) if node_id else store.query_heartbeats(limit=1)
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    import dashboard as _d
+    interval = int(_d._heartbeat_interval_sec)
+    threshold = interval * 1.5
+    now = time.time()
+
+    last_ts_str = rows[0].get("ts") or ""
+    try:
+        last_ts = datetime.fromisoformat(last_ts_str.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+    if last_ts <= 0:
+        return None
+
+    gap_sec = now - last_ts
+    if gap_sec <= interval:
+        status = "ok"
+    elif gap_sec <= threshold:
+        status = "warning"
+    else:
+        status = "silent"
+
+    return {
+        "status": status,
+        "last_heartbeat_ts": last_ts,
+        "gap_seconds": int(gap_sec),
+        "interval_seconds": interval,
+        "threshold_seconds": int(threshold),
+        "silent_since": None,
+        "_source": "local_store",
+    }
+
+
 @bp_health.route("/api/heartbeat-status")
 def api_heartbeat_status():
     """Return heartbeat gap alerting status."""
     import dashboard as _d
+    # Epic #964: opt-in local-store fast path. Optional ?node=<node_id> scopes
+    # the lookup to one fleet node (otherwise: most-recent across all nodes).
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        node = (request.args.get("node") or "").strip() or None
+        fast = _try_local_store_heartbeat_status(node)
+        if fast is not None:
+            return jsonify(fast)
     return jsonify(_d._get_heartbeat_status())
 
 
