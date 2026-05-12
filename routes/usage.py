@@ -39,11 +39,670 @@ _CLUSTER_CACHE = {"ts": 0.0, "key": None, "data": None}
 _CLUSTER_CACHE_TTL_SECONDS = 120
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Epic #964 — DuckDB local-store fast paths for the Usage tab.
+#
+# Each helper below is the FIRST path tried by its sibling Flask route when
+# CLAWMETRY_LOCAL_STORE_READ=1. They return ``None`` on any failure (import
+# error, empty store, query crash, unknown shape) so the caller can fall
+# straight through to the legacy JSONL/gateway/OTLP path with no behaviour
+# change. Successful returns carry ``_source: "local_store"`` so callers (and
+# tests) can verify which path served the request.
+#
+# Source data:
+#   * events table — one row per tool call / message / spend event, written
+#     by sync.py + the daemon. Columns: id, agent_type, node_id, agent_id,
+#     session_id, event_type, ts (ISO), data (JSON BLOB), cost_usd,
+#     token_count, model.
+#   * daily_aggregates / sessions tables — pre-rolled summaries, populated
+#     in parallel for cheap queries.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _ls_get_store():
+    """Lazy-import the local store. Centralised so a missing duckdb wheel
+    only blows up once (and we swallow it gracefully)."""
+    try:
+        from clawmetry import local_store
+        return local_store.get_store()
+    except Exception:
+        return None
+
+
+def _ls_iso_day(ts_str):
+    """Pull YYYY-MM-DD off an ISO timestamp. Tolerates None / short strings."""
+    if not ts_str or not isinstance(ts_str, str) or len(ts_str) < 10:
+        return ""
+    return ts_str[:10]
+
+
+def _ls_event_plugin(ev):
+    """Best-effort plugin/tool name extractor from an events-row data blob.
+
+    Plugins are recorded under several historical keys depending on the
+    writer (gateway, claude-cli adapter, sync.py): ``plugin``, ``tool``,
+    ``tool_name``, ``name``. We try them in order and fall back to the
+    event_type itself.
+    """
+    data = ev.get("data") if isinstance(ev, dict) else None
+    if isinstance(data, dict):
+        for k in ("plugin", "tool", "tool_name", "name"):
+            v = data.get(k)
+            if v and isinstance(v, str):
+                return v
+    et = (ev.get("event_type") or "").strip()
+    return et or "unknown"
+
+
+def _ls_event_skill(ev):
+    """Pull a skill name out of an event's data blob, if any. Returns the
+    bare skill name (e.g. ``review``) or ``None`` when no skill is named."""
+    data = ev.get("data") if isinstance(ev, dict) else None
+    if not isinstance(data, dict):
+        return None
+    for k in ("skill", "skill_name"):
+        v = data.get(k)
+        if v and isinstance(v, str):
+            return v
+    # Detect SKILL.md path references in input/file_path/path keys.
+    for k in ("file_path", "path", "input"):
+        v = data.get(k)
+        if isinstance(v, str) and "SKILL.md" in v.upper():
+            # Pull the parent dir name as the skill identifier.
+            import re as _re
+            m = _re.search(r"[/\\]([^/\\]+)[/\\]SKILL\.md", v, _re.IGNORECASE)
+            if m:
+                return m.group(1)
+    return None
+
+
+def _try_local_store_usage():
+    """Fast path for /api/usage. Builds the daily token/cost chart by
+    aggregating ``daily_aggregates`` (with a ``query_events`` fallback if
+    the aggregates table is empty). Returns the same shape as the legacy
+    handler: days[], today/week/month, todayCost/weekCost/monthCost,
+    modelBreakdown, etc. Returns None to defer."""
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        # Pull pre-rolled day buckets first — these are the "blessed" data
+        # the daemon writes once per ingest. Falls back to live event scan
+        # when aggregates are empty (e.g. fresh install, only events seeded).
+        agg_rows = store.query_aggregates()
+    except Exception:
+        return None
+    daily_tokens = {}
+    daily_cost = {}
+    if agg_rows:
+        for r in agg_rows:
+            day = r.get("day") or ""
+            if not day:
+                continue
+            daily_tokens[day] = daily_tokens.get(day, 0) + int(r.get("token_count") or 0)
+            daily_cost[day] = daily_cost.get(day, 0.0) + float(r.get("cost_usd") or 0.0)
+    else:
+        try:
+            evs = store.query_events(limit=10000)
+        except Exception:
+            return None
+        if not evs:
+            return None
+        for ev in evs:
+            day = _ls_iso_day(ev.get("ts", ""))
+            if not day:
+                continue
+            daily_tokens[day] = daily_tokens.get(day, 0) + int(ev.get("token_count") or 0)
+            daily_cost[day] = daily_cost.get(day, 0.0) + float(ev.get("cost_usd") or 0.0)
+    if not daily_tokens and not daily_cost:
+        return None
+
+    today = datetime.now()
+    days = []
+    for i in range(13, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        days.append({
+            "date": ds,
+            "tokens": int(daily_tokens.get(ds, 0)),
+            "cost": round(float(daily_cost.get(ds, 0.0)), 6),
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+        })
+
+    today_str = today.strftime("%Y-%m-%d")
+    week_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    month_start = today.strftime("%Y-%m-01")
+
+    today_tok = int(daily_tokens.get(today_str, 0))
+    week_tok = int(sum(v for k, v in daily_tokens.items() if k >= week_start))
+    month_tok = int(sum(v for k, v in daily_tokens.items() if k >= month_start))
+    today_cost = float(daily_cost.get(today_str, 0.0))
+    week_cost = float(sum(v for k, v in daily_cost.items() if k >= week_start))
+    month_cost = float(sum(v for k, v in daily_cost.items() if k >= month_start))
+
+    # Per-model breakdown: scan recent events and group.
+    model_usage = {}
+    try:
+        recent = store.query_events(limit=5000)
+        for ev in recent:
+            m = ev.get("model") or "unknown"
+            model_usage[m] = model_usage.get(m, 0) + int(ev.get("token_count") or 0)
+    except Exception:
+        pass
+    model_breakdown = [
+        {"model": k, "tokens": v}
+        for k, v in sorted(model_usage.items(), key=lambda x: -x[1])
+        if v > 0
+    ]
+
+    return {
+        "source": "local_store",
+        "_source": "local_store",
+        "days": days,
+        "today": today_tok,
+        "week": week_tok,
+        "month": month_tok,
+        "todayCost": round(today_cost, 4),
+        "weekCost": round(week_cost, 4),
+        "monthCost": round(month_cost, 4),
+        "modelBreakdown": model_breakdown,
+        "modelBilling": [],
+        "billingSummary": {},
+        "sessionCosts": {},
+        "anomalies": [],
+        "anomalySessionIds": [],
+        "trend": {},
+        "warnings": [],
+    }
+
+
+def _ls_compute_anomalies():
+    """Shared rolling-baseline anomaly detection over events. Used by both
+    /api/usage/anomalies and /api/anomalies. Buckets recent (24h) sessions
+    and flags any whose cost exceeds 2x the 7-day rolling session-cost
+    baseline. Returns ``(anomalies, baseline_avg)`` or ``(None, None)`` to
+    defer."""
+    store = _ls_get_store()
+    if store is None:
+        return None, None
+    try:
+        sessions = store.query_sessions(limit=500)
+    except Exception:
+        return None, None
+    if not sessions:
+        return None, None
+
+    # Convert ISO start timestamps to epoch.
+    def _to_epoch(s):
+        if not s:
+            return 0.0
+        try:
+            from datetime import datetime as _dt
+            return _dt.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    enriched = []
+    for s in sessions:
+        enriched.append({
+            "session_id": s.get("session_id"),
+            "cost_usd": float(s.get("cost_usd") or 0.0),
+            "start_ts": _to_epoch(s.get("started_at")),
+        })
+
+    now_ts = time.time()
+    day_ago = now_ts - 86400
+    week_ago = now_ts - 7 * 86400
+    anomalies = []
+
+    # Sort by start_ts ascending so the rolling-baseline window is well-defined.
+    enriched.sort(key=lambda r: r["start_ts"])
+    for i, sess in enumerate(enriched):
+        ts = sess["start_ts"]
+        if ts < day_ago:
+            continue
+        cost = sess["cost_usd"]
+        if cost <= 0:
+            continue
+        window_start = ts - (7 * 86400)
+        window_costs = [
+            p["cost_usd"] for p in enriched[:i]
+            if p["start_ts"] >= window_start and p["start_ts"] < ts and p["cost_usd"] > 0
+        ]
+        if not window_costs:
+            continue
+        avg = sum(window_costs) / float(len(window_costs))
+        if avg <= 0:
+            continue
+        if cost > (2.0 * avg):
+            anomalies.append({
+                "session_id": sess["session_id"],
+                "cost_usd": round(cost, 6),
+                "rolling_avg_usd": round(avg, 6),
+                "ratio": round(cost / avg, 3),
+                "timestamp": int(ts * 1000),
+            })
+
+    anomalies.sort(key=lambda a: a.get("ratio", 0), reverse=True)
+    baseline_costs = [s["cost_usd"] for s in enriched
+                      if s["start_ts"] >= week_ago and s["cost_usd"] > 0]
+    baseline_avg = (sum(baseline_costs) / float(len(baseline_costs))) if baseline_costs else 0.0
+    return anomalies, baseline_avg
+
+
+def _try_local_store_usage_anomalies():
+    """Fast path for /api/usage/anomalies."""
+    anomalies, baseline_avg = _ls_compute_anomalies()
+    if anomalies is None:
+        return None
+    return {
+        "anomalies": anomalies,
+        "baseline_7d_avg_usd": round(baseline_avg or 0.0, 6),
+        "threshold_multiplier": 2.0,
+        "_source": "local_store",
+    }
+
+
+def _try_local_store_anomalies():
+    """Fast path for /api/anomalies. The legacy handler stores acks in a
+    sqlite db so we mirror its empty/no-ack defaults."""
+    anomalies, baseline_avg = _ls_compute_anomalies()
+    if anomalies is None:
+        return None
+    # Match the legacy response shape (anomaly id + ack + severity), even
+    # though we can't persist acks in the local store yet — those need the
+    # ~/.openclaw/clawmetry.db that the legacy detector owns.
+    out = []
+    for i, a in enumerate(anomalies):
+        ratio = float(a.get("ratio") or 0)
+        sev = "critical" if ratio >= 4.0 else ("high" if ratio >= 3.0 else "medium")
+        out.append({
+            "id": i + 1,
+            "session_key": a.get("session_id"),
+            "metric": "cost_spike",
+            "value": a.get("cost_usd"),
+            "baseline": a.get("rolling_avg_usd"),
+            "ratio": ratio,
+            "severity": sev,
+            "detected_at": (a.get("timestamp") or 0) / 1000.0,
+            "acknowledged": False,
+        })
+    active = [a for a in out if not a.get("acknowledged")]
+    return {
+        "anomalies": out,
+        "active_count": len(active),
+        "has_active": bool(active),
+        "baselines": {"cost_7d_avg_usd": round(baseline_avg or 0.0, 6)},
+        "threshold_cost_multiplier": 2.0,
+        "threshold_token_multiplier": 2.0,
+        "threshold_error_multiplier": 3.0,
+        "_source": "local_store",
+    }
+
+
+def _try_local_store_usage_by_plugin(threshold_pct):
+    """Fast path for /api/usage/by-plugin. Groups events by plugin/tool
+    name, splits each event's tokens/cost across the plugins implicated.
+    Returns shape: {plugins: [...], warnings: [...]}."""
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = store.query_events(limit=20000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+    plugin_stats = defaultdict(lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0})
+    saw_any = False
+    for ev in evs:
+        plugin = _ls_event_plugin(ev)
+        if not plugin:
+            continue
+        saw_any = True
+        plugin_stats[plugin]["tokens"] += float(ev.get("token_count") or 0)
+        plugin_stats[plugin]["cost"] += float(ev.get("cost_usd") or 0.0)
+        plugin_stats[plugin]["calls"] += 1
+    if not saw_any:
+        return None
+    total_tokens = sum(s["tokens"] for s in plugin_stats.values()) or 1.0
+    rows = []
+    warnings = []
+    for plugin, st in plugin_stats.items():
+        toks = st["tokens"]
+        cost = st["cost"]
+        calls = st["calls"]
+        pct = round((toks / total_tokens) * 100.0, 2)
+        rows.append({
+            "plugin": plugin,
+            "total_tokens": int(round(toks)),
+            "cost_usd": round(cost, 6),
+            "call_count": calls,
+            "pct_of_total": pct,
+            "trend": "flat",
+        })
+        if pct >= threshold_pct:
+            warnings.append({
+                "plugin": plugin,
+                "pct_of_total": pct,
+                "message": f"{plugin} accounts for {pct:.1f}% of total token usage "
+                           f"(threshold: {threshold_pct:.0f}%)",
+                "trend": "flat",
+            })
+    rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+    return {"plugins": rows, "warnings": warnings, "_source": "local_store"}
+
+
+def _try_local_store_usage_by_plugin_trend(days_back):
+    """Fast path for /api/usage/by-plugin/trend. Builds a per-day plugin
+    breakdown from events. Same shape as the legacy handler:
+      {days: [...], plugins: {name: [{day, tokens, cost_usd, calls}, ...]}}.
+    """
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = store.query_events(limit=20000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+    from datetime import date as _date
+    today = _date.today()
+    day_list = [(today - timedelta(days=i)).strftime("%Y-%m-%d")
+                for i in range(days_back - 1, -1, -1)]
+    day_set = set(day_list)
+    # plugin -> day -> stats
+    plugin_daily: dict = defaultdict(lambda: defaultdict(
+        lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0}
+    ))
+    saw_any = False
+    for ev in evs:
+        day = _ls_iso_day(ev.get("ts", ""))
+        if day not in day_set:
+            continue
+        plugin = _ls_event_plugin(ev)
+        if not plugin:
+            continue
+        saw_any = True
+        bucket = plugin_daily[plugin][day]
+        bucket["tokens"] += float(ev.get("token_count") or 0)
+        bucket["cost"] += float(ev.get("cost_usd") or 0.0)
+        bucket["calls"] += 1
+    if not saw_any:
+        return None
+    result = {}
+    for p in sorted(plugin_daily.keys()):
+        series = []
+        for d in day_list:
+            day_data = plugin_daily[p].get(d, {"tokens": 0.0, "cost": 0.0, "calls": 0})
+            series.append({
+                "day": d,
+                "tokens": int(round(day_data["tokens"])),
+                "cost_usd": round(day_data["cost"], 6),
+                "calls": day_data["calls"],
+            })
+        result[p] = series
+    return {"days": day_list, "plugins": result, "_source": "local_store"}
+
+
+def _try_local_store_cost_comparison():
+    """Fast path for /api/usage/cost-comparison. Sums actual tokens/cost
+    over the past 30 days from the local store, then projects costs against
+    a fixed alternatives table. Mirrors ``dashboard._build_cost_comparison``
+    output shape exactly."""
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = store.query_events(limit=50000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+
+    # Window: last 30 days.
+    cutoff = datetime.now() - timedelta(days=30)
+    cutoff_iso = cutoff.strftime("%Y-%m-%d")
+
+    actual_tokens = 0
+    actual_cost = 0.0
+    model_token_map: dict = {}
+    saw_any = False
+    for ev in evs:
+        ts = ev.get("ts", "") or ""
+        if ts < cutoff_iso:
+            continue
+        saw_any = True
+        tok = int(ev.get("token_count") or 0)
+        actual_tokens += tok
+        actual_cost += float(ev.get("cost_usd") or 0.0)
+        m = ev.get("model") or ""
+        if m:
+            model_token_map[m] = model_token_map.get(m, 0) + tok
+    if not saw_any:
+        return None
+
+    actual_model = (max(model_token_map, key=lambda k: model_token_map[k])
+                    if model_token_map else "unknown")
+
+    ALTERNATIVES = [
+        ("gemini-2.0-flash",   0.10,  0.40,  "Gemini 2.0 Flash",     "Google"),
+        ("gemini-1.5-flash",   0.075, 0.30,  "Gemini 1.5 Flash",     "Google"),
+        ("gpt-4o-mini",        0.15,  0.60,  "GPT-4o Mini",          "OpenAI"),
+        ("claude-haiku-3.5",   0.80,  4.00,  "Claude Haiku 3.5",     "Anthropic"),
+        ("qwen-plus",          0.40,  1.20,  "Qwen Plus",            "Alibaba"),
+        ("claude-sonnet-3.5",  3.00, 15.00,  "Claude Sonnet 3.5",    "Anthropic"),
+        ("claude-opus-4",     15.00, 75.00,  "Claude Opus 4",        "Anthropic"),
+    ]
+    INPUT_RATIO = 0.60
+    OUTPUT_RATIO = 0.40
+    alternatives = []
+    for alt_id, in_price, out_price, display_name, provider in ALTERNATIVES:
+        if actual_tokens == 0:
+            alt_cost = 0.0
+        else:
+            alt_cost = (
+                actual_tokens * INPUT_RATIO * (in_price / 1_000_000)
+                + actual_tokens * OUTPUT_RATIO * (out_price / 1_000_000)
+            )
+        if actual_cost > 0:
+            savings_pct = round((actual_cost - alt_cost) / actual_cost * 100, 1)
+            savings_usd = round(actual_cost - alt_cost, 4)
+        else:
+            savings_pct = 0.0
+            savings_usd = 0.0
+        alternatives.append({
+            "model_id": alt_id,
+            "display_name": display_name,
+            "provider": provider,
+            "estimated_cost": round(alt_cost, 4),
+            "savings_usd": savings_usd,
+            "savings_pct": savings_pct,
+        })
+    alternatives.sort(key=lambda x: x["estimated_cost"])
+    return {
+        "actual": {
+            "model": actual_model,
+            "tokens": actual_tokens,
+            "cost_usd": round(actual_cost, 4),
+        },
+        "alternatives": alternatives,
+        "period": "30d",
+        "_source": "local_store",
+    }
+
+
+def _try_local_store_model_attribution():
+    """Fast path for /api/model-attribution. Per-model assistant turn count,
+    session count, provider tag, and share %. Switches list is best-effort
+    — derived from per-session model variation."""
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = store.query_events(limit=20000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+    try:
+        import dashboard as _d
+        provider_fn = getattr(_d, "_provider_from_model", None)
+    except Exception:
+        provider_fn = None
+
+    model_turns: dict = {}
+    sess_models: dict = defaultdict(list)
+    saw_any = False
+    # Iterate oldest-first within each session so we can track switches.
+    evs_sorted = sorted(evs, key=lambda e: (e.get("session_id") or "", e.get("ts") or ""))
+    for ev in evs_sorted:
+        m = (ev.get("model") or "").strip()
+        if not m:
+            continue
+        saw_any = True
+        # Each event is a turn for the purposes of attribution.
+        model_turns[m] = model_turns.get(m, 0) + 1
+        sid = ev.get("session_id") or ""
+        if sid:
+            if not sess_models[sid] or sess_models[sid][-1] != m:
+                sess_models[sid].append(m)
+    if not saw_any:
+        return None
+    model_sessions: dict = {}
+    switches = []
+    for sid, mlist in sess_models.items():
+        primary = mlist[0]
+        model_sessions[primary] = model_sessions.get(primary, 0) + 1
+        for prev, nxt in zip(mlist, mlist[1:]):
+            switches.append({"session": sid, "from_model": prev, "to_model": nxt})
+
+    total_turns = sum(model_turns.values())
+    sorted_models = sorted(model_turns.items(), key=lambda x: -x[1])
+    primary_model = sorted_models[0][0] if sorted_models else ""
+    models_out = []
+    for m, turns in sorted_models:
+        provider = ""
+        if provider_fn:
+            try:
+                provider = provider_fn(m) or ""
+            except Exception:
+                provider = ""
+        models_out.append({
+            "model": m,
+            "turns": turns,
+            "sessions": model_sessions.get(m, 0),
+            "provider": provider,
+            "share_pct": round(turns / total_turns * 100, 2) if total_turns else 0,
+        })
+    return {
+        "models": models_out,
+        "primary_model": primary_model,
+        "total_turns": total_turns,
+        "model_count": len(model_turns),
+        "switches": switches[:50],
+        "switch_count": len(switches),
+        "_source": "local_store",
+    }
+
+
+def _try_local_store_skill_attribution():
+    """Fast path for /api/skill-attribution. Detects skill invocations from
+    events whose data blob mentions a skill (``skill`` key or ``SKILL.md``
+    path), then attributes per-session token cost to those skills with even
+    sharing when multiple skills appear in one session."""
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = store.query_events(limit=50000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+
+    # Group by session.
+    sess_skills: dict = defaultdict(set)
+    sess_cost: dict = defaultdict(float)
+    sess_last_ts: dict = {}
+    saw_any = False
+    for ev in evs:
+        sid = ev.get("session_id") or ""
+        if not sid:
+            continue
+        skill = _ls_event_skill(ev)
+        if skill:
+            sess_skills[sid].add(skill)
+            saw_any = True
+        sess_cost[sid] += float(ev.get("cost_usd") or 0.0)
+        ts = ev.get("ts") or ""
+        if ts and ts > (sess_last_ts.get(sid) or ""):
+            sess_last_ts[sid] = ts
+    if not saw_any:
+        return None
+
+    skill_stats: dict = defaultdict(lambda: {"invocations": 0, "total_cost": 0.0,
+                                              "last_used_ts": ""})
+    for sid, skills in sess_skills.items():
+        if not skills:
+            continue
+        share = sess_cost.get(sid, 0.0) / len(skills)
+        last_ts = sess_last_ts.get(sid, "")
+        for skill in skills:
+            st = skill_stats[skill]
+            st["invocations"] += 1
+            st["total_cost"] += share
+            if last_ts > st["last_used_ts"]:
+                st["last_used_ts"] = last_ts
+
+    skills_out = []
+    total_cost = 0.0
+    for name, st in sorted(skill_stats.items(), key=lambda x: -x[1]["total_cost"]):
+        inv = st["invocations"]
+        tc = round(float(st["total_cost"]), 6)
+        avg = round(tc / inv, 6) if inv else 0.0
+        last_used = st["last_used_ts"] or None
+        total_cost += tc
+        skills_out.append({
+            "name": name,
+            "invocations": inv,
+            "total_cost_usd": tc,
+            "avg_cost_usd": avg,
+            "last_used": last_used,
+            "clawhub_url": f"https://clawhub.dev/skills/{name}",
+        })
+
+    # Top 5 by cost in the past 7 days (use the session last-used ts as proxy).
+    week_cutoff_iso = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    top5_week = [s for s in skills_out
+                 if s["last_used"] and s["last_used"] >= week_cutoff_iso][:5]
+
+    return {
+        "skills": skills_out,
+        "top5_week": top5_week,
+        "total_cost": round(total_cost, 6),
+        "note": "Skills detected from events table in the local DuckDB store.",
+        "clawhub": {"enabled": False, "url": None},
+        "_source": "local_store",
+    }
+
+
 @bp_usage.route("/api/usage")
 def api_usage():
     """Token/cost tracking from transcript files - Enhanced OTLP workaround."""
     import dashboard as _d
     import time as _time
+
+    # Epic #964 — local-store fast path. Opt-in via CLAWMETRY_LOCAL_STORE_READ=1;
+    # falls through to OTLP/transcript scan when the store is empty / disabled.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_usage()
+        if fast is not None:
+            return jsonify(fast)
 
     now = _time.time()
     if (
@@ -154,6 +813,12 @@ def api_usage_anomalies():
     """Return session cost anomalies vs rolling 7-day baseline."""
     import dashboard as _d
 
+    # Epic #964 — local-store fast path.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_usage_anomalies()
+        if fast is not None:
+            return jsonify(fast)
+
     analytics = _d._compute_transcript_analytics()
     session_summaries = analytics.get("sessions", [])
     anomalies = _d._compute_session_cost_anomalies(session_summaries)
@@ -189,6 +854,12 @@ def api_anomalies():
     - detected_at: Unix timestamp of detection
     """
     import dashboard as _d
+
+    # Epic #964 — local-store fast path.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_anomalies()
+        if fast is not None:
+            return jsonify(fast)
 
     now = time.time()
     if (
@@ -240,6 +911,17 @@ def api_usage_by_plugin():
     when a plugin's cost share exceeds the configured limit (default 50%).
     """
     import dashboard as _d
+
+    try:
+        threshold_pct_arg = float(request.args.get("threshold", 50.0))
+    except (ValueError, TypeError):
+        threshold_pct_arg = 50.0
+
+    # Epic #964 — local-store fast path.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_usage_by_plugin(threshold_pct_arg)
+        if fast is not None:
+            return jsonify(fast)
 
     analytics = _d._compute_transcript_analytics()
     plugin_stats = analytics.get("plugin_stats", {})
@@ -301,14 +983,20 @@ def api_usage_by_plugin_trend():
     """
     import dashboard as _d
 
-    analytics = _d._compute_transcript_analytics()
-    plugin_daily_stats = analytics.get("plugin_daily_stats", {})
-
     try:
         days_back = int(request.args.get("days", 14))
     except (ValueError, TypeError):
         days_back = 14
     days_back = min(max(days_back, 1), 90)
+
+    # Epic #964 — local-store fast path.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_usage_by_plugin_trend(days_back)
+        if fast is not None:
+            return jsonify(fast)
+
+    analytics = _d._compute_transcript_analytics()
+    plugin_daily_stats = analytics.get("plugin_daily_stats", {})
 
     from datetime import date, timedelta
     today = date.today()
@@ -615,6 +1303,12 @@ def api_usage_cost_comparison():
     """Return cost comparison: actual spend vs alternatives (GH#554)."""
     import dashboard as _d
 
+    # Epic #964 — local-store fast path.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_cost_comparison()
+        if fast is not None:
+            return jsonify(fast)
+
     try:
         return jsonify(_d._build_cost_comparison())
     except Exception as e:
@@ -748,6 +1442,12 @@ def api_model_attribution():
     """Per-model turn/session breakdown and switch history (GH #300)."""
     import dashboard as _d
 
+    # Epic #964 — local-store fast path.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_model_attribution()
+        if fast is not None:
+            return jsonify(fast)
+
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
     model_turns = {}    # model -> assistant turn count
     model_sessions = {} # model -> session count
@@ -859,6 +1559,12 @@ def api_skill_attribution():
     """
     import dashboard as _d
     import re as _re
+
+    # Epic #964 — local-store fast path.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_skill_attribution()
+        if fast is not None:
+            return jsonify(fast)
 
     sessions_dir = _d._get_sessions_dir()
     if not sessions_dir or not os.path.isdir(sessions_dir):
