@@ -27,10 +27,10 @@ assertions:
 * Cloud NEVER writes Cloud SQL on the cache-first relay path (``db_write``
   and ``db_query`` are monkey-patched to a counter that must stay at 0).
 
-Phases 3 + 4 are MARKED ``xfail`` (expected to fail) because the cache-first
-read paths and the action-queue contract for these phases haven't shipped
-to ``clawmetry-cloud`` yet — see the punch list in the PR body for the
-filed bugs.
+All 17 tests pass once the Phase 3 + Phase 4 wiring lands (issues #1065,
+#1066, #1067). Originally Phases 3 + 4 were marked ``xfail`` because the
+cache-first read paths and the action-queue contract hadn't shipped; the
+markers are removed alongside the wiring fix.
 
 Auth model
 ==========
@@ -448,11 +448,12 @@ class TestPhase3Alerts:
     """Daemon seeds alert rules in local DuckDB → builds alerts cache_push →
     cloud caches → /api/alerts/rules or /api/alerts serves from cache.
 
-    EXPECTED FAILURE: as of 2026-05-12, cloud-side `/api/alerts` reads from
-    Postgres directly with NO cache-first short-circuit. The cache_push is
-    accepted (Phase 2's _accept_cache_pushes handler is generic enough to
-    catch ANY {owner_hash} key), but no cloud read endpoint serves it back.
-    See bug filed in PR body.
+    Phase 3 wiring (fixes #1065, #1066): cloud reads
+    `alerts:{owner_hash}:rules` on every GET /api/alerts (canonical handler
+    in routes/alerts.py — the dead legacy /api/alerts handlers in
+    routes/api.py that shadowed it have been removed) and enqueues
+    `alert_rule_upsert` / `alert_rule_delete` items on every write so the
+    daemon keeps DuckDB in sync within one heartbeat cycle.
     """
 
     def _seed_rule(self, store):
@@ -494,18 +495,9 @@ class TestPhase3Alerts:
         assert entry is not None
         assert entry["owner_hash"] == OWNER_HASH
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Phase 3 cloud-side cache-first read NOT IMPLEMENTED. "
-            "clawmetry-cloud/routes/alerts.py:list_alerts reads Postgres "
-            "directly with no `alerts:{owner_hash}:rules` cache lookup. "
-            "Bug filed: see PR body."
-        ),
-    )
     def test_cloud_alerts_endpoint_serves_from_cache(self, oss_modules, cloud_modules):
-        """Per epic #1032 Phase 3, GET /api/alerts should short-circuit on
-        cache before hitting Postgres. Today it does not."""
+        """Per epic #1032 Phase 3, GET /api/alerts short-circuits on cache
+        before hitting Postgres."""
         self._seed_rule(oss_modules["store"])
         pushes = oss_modules["sync"]._build_alert_rules_cache_pushes(oss_modules["config"])
         _push_to_cloud(cloud_modules, pushes)
@@ -517,7 +509,6 @@ class TestPhase3Alerts:
         )
         assert r.status_code == 200, r.data
         body = r.get_json()
-        # MISSING IMPLEMENTATION: this assertion is the contract we want.
         assert body.get("_source") == "cache", (
             "GET /api/alerts must serve from cache when "
             "alerts:{owner_hash}:rules is hot"
@@ -526,18 +517,9 @@ class TestPhase3Alerts:
             "cache hit must not query Postgres"
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Phase 3 write-through relay-queue contract NOT IMPLEMENTED. "
-            "Cloud-side `routes/alerts.py:create_alert` writes Postgres "
-            "directly; there is no `alert_rule_upsert` enqueue back to the "
-            "daemon's pending_queries channel. Bug filed: see PR body."
-        ),
-    )
     def test_cloud_alert_create_enqueues_relay_action(self, oss_modules, cloud_modules):
-        """POST /api/alerts should enqueue an `alert_rule_upsert` action so
-        the daemon's local DuckDB stays in sync. Today it does not."""
+        """POST /api/alerts enqueues an `alert_rule_upsert` action so the
+        daemon's local DuckDB stays in sync within one heartbeat cycle."""
         r = cloud_modules["client"].post(
             "/api/alerts",
             headers={"Authorization": f"Bearer {API_KEY}"},
@@ -547,9 +529,10 @@ class TestPhase3Alerts:
                 "threshold_value": 5.0,
             },
         )
-        # We don't even get a chance to check the queue — assertions about
-        # the contract below WILL fail because the endpoint writes to
-        # Postgres (which is stubbed to no-op) and never queues the action.
+        # Post-#1066: routes/alerts.py:create_alert calls
+        # _enqueue_alert_rule_change → routes/heartbeat_relay._queue_push
+        # for every node owned by this token. Drain that queue and assert
+        # exactly one alert_rule_upsert landed.
         drained = cloud_modules["relay"].drain_queue(OWNER_HASH, NODE_ID, max_items=10)
         actions = [d for d in drained if d.get("type") == "alert_rule_upsert"]
         assert len(actions) == 1, (
@@ -567,20 +550,12 @@ class TestPhase4Approvals:
     → /api/cloud/approvals serves from cache. Cloud POST .../decide should
     enqueue a relay action so the daemon updates its DuckDB.
 
-    EXPECTED FAILURE: Phase 4 is NOT IMPLEMENTED. Neither side has the
-    approvals cache_push builder, the cache-first read, nor the relay
-    write-through. See bug filed in PR body.
+    Phase 4 wiring (fixes #1067): OSS exposes
+    `_build_approvals_cache_pushes` + `approval_decision` action dispatcher;
+    cloud `/api/cloud/approvals` reads `approvals:{owner_hash}:queue` first
+    and `POST .../<id>/decide` queues the decision via the relay.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Phase 4 NOT IMPLEMENTED in OSS daemon. There is no "
-            "`_build_approvals_cache_pushes` in clawmetry/sync.py and "
-            "no `approvals:{owner_hash}:queue` key in send_heartbeat. "
-            "Bug filed: see PR body."
-        ),
-    )
     def test_oss_daemon_builds_approvals_cache_push(self, oss_modules):
         """Daemon should expose `_build_approvals_cache_pushes(config)`."""
         builder = getattr(
@@ -588,19 +563,14 @@ class TestPhase4Approvals:
         )
         assert builder is not None, "OSS sync.py missing _build_approvals_cache_pushes"
 
-    @pytest.mark.xfail(
-        strict=False,  # not strict — suite-context vs isolated yields different fails
-        reason=(
-            "Phase 4 cloud-side cache-first NOT IMPLEMENTED. "
-            "clawmetry-cloud/routes/cloud.py:cloud_approvals_list queries "
-            "Postgres `approvals` table; no `approvals:{owner_hash}:queue` "
-            "cache lookup exists. Bug filed: see PR body."
-        ),
-    )
     def test_cloud_approvals_endpoint_serves_from_cache(self, oss_modules, cloud_modules):
-        """GET /api/cloud/approvals should short-circuit on cache."""
-        # Direct cache seed (since OSS builder doesn't exist yet, we manually
-        # place an entry matching what Phase 4's contract would produce).
+        """GET /api/cloud/approvals short-circuits on cache."""
+        # Direct cache seed — bypass the OSS builder so the test exercises
+        # only the cloud-side read path. (The full daemon→cloud round-trip
+        # for approvals is covered by test_oss_daemon_builds_approvals_cache_push
+        # plus the Phase 5-style tests; here we want a tight unit-style
+        # check that the cache hit returns _source: "cache" and never
+        # touches Postgres.)
         from clawmetry.sync import encrypt_payload
         blob = encrypt_payload({
             "approvals": [{"id": "ap-1", "status": "pending", "tool_name": "Bash"}],
@@ -627,15 +597,6 @@ class TestPhase4Approvals:
             "cache hit must not query Postgres"
         )
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "Phase 4 decide-via-relay NOT IMPLEMENTED. "
-            "POST /api/cloud/approvals/<id>/decide writes Postgres directly "
-            "via `db_write`, no `approval_decide` relay action enqueued. "
-            "Bug filed: see PR body."
-        ),
-    )
     def test_cloud_decide_enqueues_relay_action(self, oss_modules, cloud_modules):
         """POST .../decide should enqueue an `approval_decide` action."""
         cloud_modules["client"].post(
