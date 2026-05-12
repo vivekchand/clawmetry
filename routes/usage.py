@@ -17,6 +17,7 @@ Owns the 12 routes registered on bp_usage:
   GET  /api/skill-attribution             — per-skill cost attribution
   GET  /api/token-velocity                — runaway-loop detection
   GET  /api/usage/cache-trends            — prompt-cache hit-rate analytics
+  GET  /api/skills/fidelity              — dead-skill detector + body/linked-file stats
 
 Module-level helpers (``_usage_cache``, ``_compute_transcript_analytics``,
 ``_detect_and_store_anomalies``, ``_get_anomaly_db``, ``SESSIONS_DIR`` etc.)
@@ -1345,4 +1346,172 @@ def api_usage_cache_trends():
         "by_model": by_model_out,
         "totals": totals_out,
         "recommendations": _cache_recommendations(totals_out, by_model_out),
+    })
+
+
+# ── Skills fidelity telemetry (GH #687) ─────────────────────────────────
+
+
+@bp_usage.route('/api/skills/fidelity')
+def api_skills_fidelity():
+    """Skills fidelity telemetry: dead-skill detector + body/linked-file stats (GH #687).
+
+    Compares skills installed in workspace/skills/ against SKILL.md body-fetches
+    seen in recent session JSONL files and classifies each skill as:
+
+      dead   — installed (header always in system context) but body never fetched
+      stuck  — body fetched but linked files in the skill dir never accessed
+      active — body fetched (and either no linked files, or at least one accessed)
+      orphan — body-fetched in sessions but not installed (untracked / removed)
+
+    Query params:
+      sessions  — number of recent session files to scan (default 200, max 500)
+
+    Returns:
+      {
+        skills: [{name, installed, body_fetches, linked_file_fetches,
+                  sessions_seen, status, token_roi}],
+        dead_count, stuck_count, active_count, orphan_count,
+        total_installed, note
+      }
+    """
+    import dashboard as _d
+    import re as _re
+
+    try:
+        max_sessions = max(1, min(int(request.args.get("sessions", 200)), 500))
+    except (TypeError, ValueError):
+        max_sessions = 200
+
+    workspace = (
+        _d.WORKSPACE
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or os.environ.get("OPENCLAW_HOME")
+        or os.path.expanduser("~/.openclaw/workspace")
+    )
+    sessions_dir = _d._get_sessions_dir()
+
+    # 1. List installed skills — each subdir containing SKILL.md is one skill
+    skills_dir = os.path.join(workspace, "skills")
+    installed_skills: set = set()
+    skill_has_linked: dict = {}  # name -> bool (has non-SKILL.md, non-hidden files)
+    if os.path.isdir(skills_dir):
+        for entry in os.listdir(skills_dir):
+            entry_path = os.path.join(skills_dir, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            if not os.path.isfile(os.path.join(entry_path, "SKILL.md")):
+                continue
+            installed_skills.add(entry)
+            linked = [
+                f for f in os.listdir(entry_path)
+                if f.upper() != "SKILL.MD"
+                and not f.startswith('.')
+                and os.path.isfile(os.path.join(entry_path, f))
+            ]
+            skill_has_linked[entry] = bool(linked)
+
+    # 2. Scan recent session JSONLs for SKILL.md body-fetches and linked-file reads
+    SKILL_MD_RE = _re.compile(r'[/\\]([^/\\]+)[/\\]SKILL\.md', _re.IGNORECASE)
+    SKILL_LINKED_RE = _re.compile(
+        r'skills[/\\]([^/\\]+)[/\\]([^/\\\'">\s]{1,80})', _re.IGNORECASE
+    )
+
+    body_fetches: dict = {}    # skill_name -> count
+    linked_fetches: dict = {}  # skill_name -> count
+    skill_sessions: dict = {}  # skill_name -> set of session filenames
+
+    if sessions_dir and os.path.isdir(sessions_dir):
+        try:
+            all_files = [
+                f for f in os.listdir(sessions_dir)
+                if f.endswith('.jsonl')
+                and '.trajectory.' not in f
+                and '.checkpoint.' not in f
+            ]
+            all_files.sort(
+                key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+                reverse=True,
+            )
+            for fname in all_files[:max_sessions]:
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    with open(fpath, 'r', errors='replace') as fh:
+                        for raw in fh:
+                            raw = raw.strip()
+                            if not raw:
+                                continue
+                            try:
+                                obj = json.loads(raw)
+                            except Exception:
+                                continue
+                            if obj.get('role') not in ('assistant', 'tool', 'user'):
+                                continue
+                            line_str = json.dumps(obj)
+                            for m in SKILL_MD_RE.finditer(line_str):
+                                sname = m.group(1)
+                                if sname.lower() in ('skills', ''):
+                                    continue
+                                body_fetches[sname] = body_fetches.get(sname, 0) + 1
+                                skill_sessions.setdefault(sname, set()).add(fname)
+                            for m in SKILL_LINKED_RE.finditer(line_str):
+                                sname = m.group(1)
+                                if m.group(2).upper() == 'SKILL.MD':
+                                    continue
+                                linked_fetches[sname] = linked_fetches.get(sname, 0) + 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    # 3. Build per-skill stats and classify
+    all_names = installed_skills | set(body_fetches) | set(linked_fetches)
+    skills_out = []
+    dead_count = stuck_count = active_count = orphan_count = 0
+
+    for name in sorted(all_names):
+        installed = name in installed_skills
+        bf = body_fetches.get(name, 0)
+        lf = linked_fetches.get(name, 0)
+        sess = len(skill_sessions.get(name, set()))
+        has_linked = skill_has_linked.get(name, False)
+
+        if installed and bf == 0:
+            status = 'dead'
+            dead_count += 1
+        elif not installed and bf > 0:
+            status = 'orphan'
+            orphan_count += 1
+        elif bf > 0 and has_linked and lf == 0:
+            status = 'stuck'
+            stuck_count += 1
+        else:
+            status = 'active'
+            active_count += 1
+
+        skills_out.append({
+            'name': name,
+            'installed': installed,
+            'body_fetches': bf,
+            'linked_file_fetches': lf,
+            'sessions_seen': sess,
+            'status': status,
+            'token_roi': round(bf / sess, 3) if sess > 0 else None,
+        })
+
+    _STATUS_ORDER = {'dead': 0, 'stuck': 1, 'orphan': 2, 'active': 3}
+    skills_out.sort(key=lambda s: (_STATUS_ORDER[s['status']], -s['body_fetches']))
+
+    return jsonify({
+        'skills': skills_out,
+        'dead_count': dead_count,
+        'stuck_count': stuck_count,
+        'active_count': active_count,
+        'orphan_count': orphan_count,
+        'total_installed': len(installed_skills),
+        'note': (
+            'Dead: installed but body never fetched — remove to save header tokens. '
+            'Stuck: body fetched but linked files unread despite existing. '
+            'Orphan: body-fetched in sessions but not installed (skill removed?).'
+        ),
     })
