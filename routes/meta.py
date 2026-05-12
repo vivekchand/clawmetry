@@ -30,6 +30,7 @@ Flask app, not a Blueprint, so it stays in ``dashboard.py``.
 Pure mechanical move — zero behaviour change.
 """
 
+import html
 import json
 import os
 import sys
@@ -317,12 +318,18 @@ def auth_token():
             "<h2>Missing token</h2><p>Usage: <code>/auth?token=YOUR_TOKEN</code></p></body></html>",
             400,
         )
+    # Escape token before JS interpolation. html.escape with quote=True converts
+    # ' and " to &#x27; / &quot; which break out of the JS string-literal
+    # context inside <script>...</script> (the browser does NOT decode HTML
+    # entities inside raw <script> content, so the escaped form is just inert
+    # literal characters). Originally reported by @dumko2001 in #511.
+    escaped = html.escape(token, quote=True)
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"></head>
 <body style="background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;padding:40px;min-height:100vh;">
 <p>Authenticating...</p>
 <script>
-  localStorage.setItem('clawmetry-token', '{token}');
-  localStorage.setItem('clawmetry-gw-token', '{token}');
+  localStorage.setItem('clawmetry-token', '{escaped}');
+  localStorage.setItem('clawmetry-gw-token', '{escaped}');
   window.location.href = '/';
 </script>
 </body></html>"""
