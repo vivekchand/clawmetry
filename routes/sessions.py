@@ -1,3 +1,4 @@
+"""
 routes/sessions.py — Session / transcript / sub-agent API endpoints.
 
 Extracted from dashboard.py as the first step of an incremental modularisation.
@@ -19,9 +20,9 @@ import json
 import os
 import sys
 import time
+import csv
 from datetime import datetime, timezone
 
-import csv
 from flask import Blueprint, jsonify, request, Response
 
 bp_sessions = Blueprint('sessions', __name__)
