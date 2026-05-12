@@ -116,7 +116,7 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -831,6 +831,81 @@ class LocalStore:
                   int(sa.get("token_count") or 0),
                   data_blob, now_ms])
 
+    def ingest_alert_rule(self, rule: dict[str, Any]) -> None:
+        """Upsert one alert rule. Required: ``id``.
+
+        Optional: ``owner_hash``, ``name``, ``condition_json``,
+        ``enabled`` (default True), ``created_at``, ``updated_at``,
+        ``last_fired_at``, ``fire_count``.
+
+        ``condition_json`` accepts a dict / list / str / bytes — it is
+        coerced to a BLOB via the same path as session metadata, so the
+        cloud can store whichever rule shape it likes without dragging
+        a schema bump through here. Pre-existing values for
+        ``created_at``, ``last_fired_at``, and ``fire_count`` are
+        preserved across upserts (the relay-driven write path doesn't
+        know them — only the local evaluator does)."""
+        rid = rule.get("id")
+        if not rid:
+            raise ValueError("alert rule must include 'id'")
+        cond_blob = _to_blob(rule.get("condition_json"))
+        enabled = rule.get("enabled")
+        enabled = True if enabled is None else bool(enabled)
+        # fire_count is coerced to int when supplied, otherwise we keep the
+        # existing value via the ON CONFLICT clause below.
+        try:
+            fire_count = int(rule.get("fire_count")) if rule.get("fire_count") is not None else 0
+        except (TypeError, ValueError):
+            fire_count = 0
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO alert_rules (
+                    id, owner_hash, name, condition_json, enabled,
+                    created_at, updated_at, last_fired_at, fire_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    owner_hash     = COALESCE(excluded.owner_hash, alert_rules.owner_hash),
+                    name           = COALESCE(excluded.name, alert_rules.name),
+                    condition_json = COALESCE(excluded.condition_json, alert_rules.condition_json),
+                    enabled        = excluded.enabled,
+                    updated_at     = COALESCE(excluded.updated_at, alert_rules.updated_at),
+                    last_fired_at  = COALESCE(excluded.last_fired_at, alert_rules.last_fired_at),
+                    fire_count     = CASE
+                                       WHEN excluded.fire_count > 0
+                                         THEN excluded.fire_count
+                                       ELSE alert_rules.fire_count
+                                     END
+            """, [
+                str(rid),
+                rule.get("owner_hash"),
+                rule.get("name"),
+                cond_blob,
+                enabled,
+                rule.get("created_at"),
+                rule.get("updated_at"),
+                rule.get("last_fired_at"),
+                fire_count,
+            ])
+
+    def delete_alert_rule(self, rule_id: str) -> int:
+        """Delete one alert rule by id. Returns 1 on delete, 0 when missing.
+
+        Uses a SELECT-before-DELETE check because DuckDB's ``cur.rowcount``
+        is unreliable for DELETE on some versions (returns -1). Cheap at
+        our scale — alert rules are a tiny table."""
+        if not rule_id:
+            return 0
+        # Check existence first so we can return an accurate 0/1.
+        rid = str(rule_id)
+        rows_before = self._fetch(
+            "SELECT 1 FROM alert_rules WHERE id = ? LIMIT 1", [rid]
+        )
+        if not rows_before:
+            return 0
+        with self._write_lock:
+            self._conn.execute("DELETE FROM alert_rules WHERE id = ?", [rid])
+        return 1
+
     def ingest_system_snapshot(self, snap: dict[str, Any]) -> None:
         """Insert one system-snapshot row. Append-only;
         (agent_type, node_id, ts, kind) PK silently ignores duplicates."""
@@ -1196,6 +1271,55 @@ class LocalStore:
         cols = ["provider", "enabled", "last_test_at", "last_test_ok",
                 "last_test_error", "updated_at"]
         return [_row_to_dict(r, cols) for r in self._fetch(sql, params)]
+
+    def query_alert_rules(
+        self,
+        *,
+        owner_hash: str | None = None,
+        enabled_only: bool = False,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read alert-rule rows. Defaults to most-recently-updated first.
+
+        ``owner_hash`` scopes the result to one cm_ token (sha256 of the
+        token). ``enabled_only=True`` filters to ``enabled=TRUE``. The
+        ``condition_json`` BLOB is decoded back to a JSON dict where
+        valid (str otherwise, None when empty) so callers can drop the
+        whole row into ``/api/alerts/rules`` without a second decode."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if owner_hash:
+            clauses.append("owner_hash = ?")
+            params.append(owner_hash)
+        if enabled_only:
+            clauses.append("enabled = TRUE")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, owner_hash, name, condition_json, enabled,
+                   created_at, updated_at, last_fired_at, fire_count
+            FROM alert_rules
+            {where}
+            ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "owner_hash", "name", "condition_json", "enabled",
+                "created_at", "updated_at", "last_fired_at", "fire_count"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            raw = d.get("condition_json")
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    try:
+                        d["condition_json"] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d["condition_json"] = text
+                except UnicodeDecodeError:
+                    d["condition_json"] = None
+            out.append(d)
+        return out
 
     def query_memory_blobs(
         self,

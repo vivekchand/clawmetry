@@ -1786,6 +1786,16 @@ def send_heartbeat(config: dict) -> bool:
             payload.setdefault("cache_pushes", []).extend(ch_pushes)
     except Exception as _cp_e:
         log.debug("channel-config cache_push build failed (continuing): %s", _cp_e)
+    # Phase 3 of relay-v2 (#1032): also push the user's alert-rule list so the
+    # cloud Alerts tab paints from cache. Same envelope (`cache_pushes`) — the
+    # cloud's _accept_cache_pushes handler iterates the array regardless of
+    # which Phase contributed which entry.
+    try:
+        alert_pushes = _build_alert_rules_cache_pushes(config)
+        if alert_pushes:
+            payload.setdefault("cache_pushes", []).extend(alert_pushes)
+    except Exception as _ap_e:
+        log.debug("alert-rules cache_push build failed (continuing): %s", _ap_e)
     # Local-first: persist this heartbeat to local DuckDB so the dashboard
     # has a per-node liveness history even when offline. Best-effort.
     try:
@@ -2036,6 +2046,78 @@ def _build_channel_config_status_cache_pushes(config: dict) -> list:
     }]
 
 
+# ── Phase 3: proactive alert-rules cache_push (epic #1032) ───────────────────
+# Alert rules live in local DuckDB after Phase 3 — the cloud UI authors them,
+# the relay's pending_queries channel pipes them into the local store, and the
+# evaluator (in-process daemon) reads from DuckDB. To keep the cloud Alerts
+# tab paint-fast, we also push the current rule list to the cloud cache on
+# every heartbeat under `alerts:{owner_hash}:rules`.
+#
+# Why a flat (no node) key: alert rules are owner-scoped, not node-scoped — a
+# user with three nodes sees one rules list across all of them. Cloud-side
+# read path uses the same key shape (see clawmetry-cloud routes/alerts.py).
+#
+# TTL: 3600s. Each heartbeat overwrites the entry, so TTL only matters when
+# the daemon goes offline.
+ALERT_RULES_CACHE_TTL_SEC = 3600
+ALERT_RULES_CACHE_LIMIT = 500
+
+
+def _build_alert_rules_cache_pushes(config: dict) -> list:
+    """Return the heartbeat `cache_pushes` array for alert rules — currently
+    a single entry holding the full enabled+disabled rule list owned by this
+    cm_ token.
+
+    Returns an empty list when:
+      - The local store has no alert rules yet (no cloud has authored any).
+      - Encryption key is unset — we never push plaintext.
+      - The local store import fails — degrade silently.
+
+    The blob shape mirrors `/api/alerts/rules` so the cloud read path can
+    hand the decrypted dict straight to the existing dashboard JS.
+    """
+    enc_key = config.get("encryption_key")
+    if not enc_key:
+        return []
+    api_key = config.get("api_key", "")
+    if not api_key:
+        return []
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return []
+    owner_hash = _owner_hash_for_token(api_key)
+    try:
+        store = local_store.get_store(read_only=True)
+        # Filter by owner_hash so a multi-tenant local store (rare today, but
+        # cheap to be correct about) only pushes the calling token's rules.
+        rows = store.query_alert_rules(
+            owner_hash=owner_hash, limit=ALERT_RULES_CACHE_LIMIT
+        )
+    except Exception:
+        return []
+    if not rows:
+        return []
+    # Same shape `/api/alerts/rules` returns when the local-store fast path
+    # is enabled — cloud Alerts tab + integration tests can compare against
+    # this without translation.
+    payload = {
+        "rules":   rows,
+        "count":   len(rows),
+        "_source": "local_store",
+        "_shape":  "alert_rules",
+    }
+    try:
+        blob = encrypt_payload(payload, enc_key)
+    except Exception:
+        return []
+    return [{
+        "key":    f"alerts:{owner_hash}:rules",
+        "ttl_s":  ALERT_RULES_CACHE_TTL_SEC,
+        "blob":   blob,
+    }]
+
+
 def _dispatch_pending_action(config: dict, action: dict) -> None:
     """Handle a single action-style pending entry. Routes by ``type``.
 
@@ -2178,6 +2260,7 @@ def _run_channel_test_local(config: dict, provider: str):
     if blob is None or (isinstance(blob, (bytes, bytearray)) and len(blob) == 0):
         return False, "config blob empty"
     return True, None
+
 
 
 def _dispatch_pending_queries(config: dict, pending: list) -> None:
