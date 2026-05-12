@@ -1906,6 +1906,32 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
             )
             emitted_job_ids.append((job_id, job_hash))
 
+            # Local-store write-through (epic #964 / DuckDB MOAT). Mirrors
+            # what we just emitted to cloud — the dashboard's
+            # /api/local/* path reads from `crons` table directly so this
+            # has to land BEFORE cloud sync acks. Failures are logged
+            # but non-fatal: legacy gateway-fetch path still works.
+            try:
+                from clawmetry import local_store as _ls
+                _ls.get_store().ingest_cron({
+                    "cron_id":     job_id,
+                    "agent_type":  "openclaw",
+                    "name":        j.get("name", ""),
+                    "schedule":    expr,
+                    "enabled":     bool(j.get("enabled", True)),
+                    "last_run_at": str(job_state.get("lastRunAtMs") or ""),
+                    "last_status": str(job_state.get("lastStatus") or ""),
+                    "next_run_at": str(job_state.get("nextRunAtMs") or ""),
+                    # All other freeform fields go into the BLOB
+                    "task":        (j.get("task") or "")[:500],
+                    "lastDurationMs":      job_state.get("lastDurationMs"),
+                    "lastError":           job_state.get("lastError"),
+                    "consecutiveFailures": job_state.get("consecutiveFailures"),
+                })
+            except Exception as _e:
+                log.debug("local_store: ingest_cron failed for %s: %s",
+                          job_id, _e)
+
         if events:
             _post("/api/ingest", {"events": events, "node_id": node_id}, api_key)
             # Only record new hashes/timestamps after the POST succeeds so a
@@ -3290,6 +3316,52 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     log.info(
         f"System snapshot: {len(subagents_list)} subagents ({active_count} active)"
     )
+
+    # Local-store write-through (epic #964 / DuckDB MOAT). The dashboard
+    # reads system + subagent state from these tables — without this
+    # write, /api/local/system-snapshot + /api/local/subagents return
+    # empty even though the cloud has the data. Failures non-fatal:
+    # cloud sync still proceeds.
+    try:
+        from clawmetry import local_store as _ls
+        _store = _ls.get_store()
+        ts_iso = datetime.now(timezone.utc).isoformat()
+
+        # One snapshot row per "kind" so the dashboard can query just the
+        # part it needs (cpu / mem / disk / system) without loading the
+        # full payload every time.
+        _store.ingest_system_snapshot({
+            "node_id":    node_id,
+            "ts":         ts_iso,
+            "kind":       "system",
+            "rows":       payload.get("system", []),
+            "infra":      payload.get("infra", {}),
+            "session_count":     payload.get("sessionCount", 0),
+            "model":             payload.get("model", ""),
+            "main_tokens":       payload.get("mainTokens", 0),
+            "subagent_count":    len(subagents_list),
+            "active_subagents":  active_count,
+        })
+
+        for sa in subagents_list:
+            sid = sa.get("sessionId") or sa.get("key")
+            if not sid:
+                continue
+            _store.ingest_subagent({
+                "subagent_id":       sid,
+                "agent_type":        "openclaw",
+                "task":              sa.get("task", ""),
+                "status":            sa.get("status", ""),
+                "token_count":       sa.get("tokens", 0),
+                "model":             sa.get("model", ""),
+                "label":             sa.get("label", ""),
+                "displayName":       sa.get("displayName", ""),
+                "session_file":      sa.get("sessionFile", ""),
+                "updated_at_ms":     sa.get("updatedAt", 0),
+                "runtime_ms":        sa.get("runtimeMs", 0),
+            })
+    except Exception as _e:
+        log.debug("local_store: snapshot/subagent write-through failed: %s", _e)
 
     try:
         _post(
