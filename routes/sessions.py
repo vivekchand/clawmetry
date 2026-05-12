@@ -2011,10 +2011,109 @@ def api_transcript(session_id):
     )
 
 
+def _try_local_store_transcript_events(session_id: str):
+    """Fast path for /api/transcript-events/<id>. Reads events from DuckDB and
+    re-projects them into the structured-event shape the detail modal expects.
+
+    Issue #1088: routes through the daemon HTTP proxy first, with the standard
+    direct-open fallback inside ``_ls_call``. Returns ``None`` to defer to the
+    JSONL parser when the events table has no rows for this session.
+    """
+    rows = _ls_call("query_events", session_id=session_id, limit=10000)
+    if not rows:
+        return None
+    rows = list(reversed(rows))  # query_events is DESC; the modal reads forward.
+    events: list[dict] = []
+    msg_count = 0
+    for ev in rows:
+        ev_type = ev.get("event_type") or ""
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        ts_raw = data.get("timestamp") or data.get("time") or ev.get("ts")
+        ts_val = None
+        if isinstance(ts_raw, (int, float)):
+            ts_val = int(ts_raw * 1000) if ts_raw < 1e12 else int(ts_raw)
+        elif ts_raw:
+            try:
+                ts_val = int(
+                    datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")).timestamp() * 1000
+                )
+            except Exception:
+                ts_val = None
+
+        if ev_type == "model_change":
+            events.append({
+                "type": "model_change",
+                "modelId": data.get("modelId") or data.get("model") or "",
+                "provider": data.get("provider") or "",
+                "timestamp": ts_val,
+            })
+            continue
+        if ev_type == "thinking_level_change":
+            events.append({
+                "type": "thinking_level_change",
+                "thinkingLevel": data.get("thinkingLevel") or data.get("level") or "",
+                "timestamp": ts_val,
+            })
+            continue
+
+        msg = data.get("message") if isinstance(data.get("message"), dict) else None
+        if not msg:
+            continue
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        msg_count += 1
+
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type", "")
+                if btype == "thinking":
+                    events.append({
+                        "type": "thinking",
+                        "text": (block.get("thinking") or "")[:2000],
+                        "thinking_chars": len(block.get("thinking") or ""),
+                        "timestamp": ts_val,
+                    })
+                elif btype == "text":
+                    text = block.get("text", "") or ""
+                    if role == "user":
+                        events.append({"type": "user", "text": text[:3000], "timestamp": ts_val})
+                    elif role == "assistant":
+                        events.append({"type": "agent", "text": text[:3000], "timestamp": ts_val})
+                elif btype in ("toolCall", "tool_use"):
+                    name = block.get("name", "?")
+                    args = block.get("arguments") or block.get("input") or {}
+                    args_str = json.dumps(args, indent=2)[:1000] if isinstance(args, dict) else str(args)[:1000]
+                    events.append({
+                        "type": "tool",
+                        "toolName": name,
+                        "args": args_str,
+                        "timestamp": ts_val,
+                    })
+        elif isinstance(content, str) and content:
+            if role == "user":
+                events.append({"type": "user", "text": content[:3000], "timestamp": ts_val})
+            elif role == "assistant":
+                events.append({"type": "agent", "text": content[:3000], "timestamp": ts_val})
+            elif role == "toolResult":
+                events.append({"type": "result", "text": content[:2000], "timestamp": ts_val})
+    return {
+        "events": events[-500:],
+        "messageCount": msg_count,
+        "totalEvents": len(events),
+        "_source": "local_store",
+    }
+
+
 @bp_sessions.route("/api/transcript-events/<session_id>")
 def api_transcript_events(session_id):
     """Parse a session transcript JSONL into structured events for the detail modal."""
     import dashboard as _d
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_transcript_events(session_id)
+        if fast is not None:
+            return jsonify(fast)
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
@@ -2621,6 +2720,123 @@ def api_session_cost_breakdown(session_id):
     })
 
 
+def _try_local_store_session_export(session_id: str):
+    """Fast path for /api/sessions/<id>/export (JSON shape).
+
+    Reads events from DuckDB and re-projects them into the same export shape
+    the JSONL parser produces. Issue #1088 — uses ``_ls_call`` so the daemon
+    HTTP proxy fires under the standard install. Returns ``None`` to defer to
+    the JSONL parser when the events table has no rows for this session.
+    """
+    rows = _ls_call("query_events", session_id=session_id, limit=10000)
+    if not rows:
+        return None
+    rows = list(reversed(rows))  # query_events is DESC; export reads forward.
+    out = {
+        "session_id": session_id,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "messages": [],
+        "tool_calls": [],
+        "cost_data": {
+            "total_tokens": 0, "input_tokens": 0, "output_tokens": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0,
+            "total_cost_usd": 0.0,
+        },
+        "metadata": {
+            "start_time": None, "end_time": None, "model": None,
+            "message_count": 0, "tool_call_count": 0,
+        },
+        "_source": "local_store",
+    }
+    model = None
+    start_time = None
+    end_time = None
+    for ev in rows:
+        ev_type = ev.get("event_type") or ""
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        ts_str = data.get("timestamp") or ev.get("ts")
+        ts_ms = None
+        if isinstance(ts_str, (int, float)):
+            ts_ms = int(ts_str * 1000) if ts_str < 1e12 else int(ts_str)
+        elif ts_str:
+            try:
+                ts_ms = int(datetime.fromisoformat(str(ts_str).replace("Z", "+00:00")).timestamp() * 1000)
+            except Exception:
+                ts_ms = None
+        if ev_type == "model_change":
+            if data.get("modelId"):
+                model = data.get("modelId")
+                out["metadata"]["model"] = model
+        elif ev_type == "message":
+            msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+            role = msg.get("role", "")
+            content = msg.get("content", [])
+            usage = msg.get("usage") or {}
+            text_parts: list[str] = []
+            tool_calls_in_msg: list[dict] = []
+            if isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type", "")
+                    if btype == "text":
+                        text_parts.append(block.get("text", "") or "")
+                    elif btype == "thinking":
+                        text_parts.append(f"[THINKING] {block.get('thinking', '')}")
+                    elif btype in ("toolCall", "tool_use"):
+                        tool_calls_in_msg.append({
+                            "id": block.get("id", ""),
+                            "name": block.get("name", ""),
+                            "arguments": block.get("arguments") or block.get("input") or {},
+                        })
+            elif isinstance(content, str):
+                text_parts.append(content)
+            msg_entry = {
+                "timestamp": ts_str if isinstance(ts_str, str) else None,
+                "role": role,
+                "content": "\n".join(text_parts) if text_parts else None,
+                "model": msg.get("model") or model,
+            }
+            if isinstance(usage, dict) and usage:
+                in_t = int(usage.get("input", 0) or 0)
+                out_t = int(usage.get("output", 0) or 0)
+                cr_t = int(usage.get("cacheRead", 0) or 0)
+                cw_t = int(usage.get("cacheWrite", 0) or 0)
+                msg_entry["tokens"] = {
+                    "input": in_t, "output": out_t,
+                    "cache_read": cr_t, "cache_write": cw_t,
+                    "total": usage.get("totalTokens", in_t + out_t),
+                }
+                cost_obj = usage.get("cost") or {}
+                if isinstance(cost_obj, dict):
+                    msg_entry["cost_usd"] = cost_obj.get("total", 0.0)
+                    out["cost_data"]["total_cost_usd"] += float(cost_obj.get("total", 0) or 0)
+                    out["cost_data"]["input_tokens"] += in_t
+                    out["cost_data"]["output_tokens"] += out_t
+                    out["cost_data"]["cache_read_tokens"] += cr_t
+                    out["cost_data"]["cache_write_tokens"] += cw_t
+                    out["cost_data"]["total_tokens"] += in_t + out_t + cr_t + cw_t
+            out["messages"].append(msg_entry)
+            out["metadata"]["message_count"] += 1
+            for tc in tool_calls_in_msg:
+                out["tool_calls"].append({
+                    "timestamp": ts_str if isinstance(ts_str, str) else None,
+                    "tool_call_id": tc.get("id"),
+                    "tool_name": tc.get("name"),
+                    "arguments": tc.get("arguments"),
+                    "model": msg.get("model") or model,
+                })
+                out["metadata"]["tool_call_count"] += 1
+        if ts_ms:
+            if start_time is None or ts_ms < start_time:
+                start_time = ts_ms
+            if end_time is None or ts_ms > end_time:
+                end_time = ts_ms
+    out["metadata"]["start_time_ms"] = start_time
+    out["metadata"]["end_time_ms"] = end_time
+    return out
+
+
 @bp_sessions.route("/api/sessions/<session_id>/export")
 def api_session_export(session_id):
     """Export session data as JSON or CSV for external analysis (closes #593)."""
@@ -2629,6 +2845,17 @@ def api_session_export(session_id):
     export_format = request.args.get("format", "json").lower()
     if export_format not in ("json", "csv"):
         return jsonify({"error": "Invalid format. Use 'json' or 'csv'"}), 400
+
+    # JSON-only fast path — CSV branch falls through to the legacy parser
+    # because it relies on text formatting that's not worth duplicating.
+    if export_format == "json" and os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_session_export(session_id)
+        if fast is not None:
+            return Response(
+                json.dumps(fast, indent=2, default=str),
+                mimetype="application/json",
+                headers={"Content-Disposition": f'attachment; filename="{session_id}.json"'},
+            )
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
