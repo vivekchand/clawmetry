@@ -36,18 +36,43 @@ def _pid_file() -> Path:
 
 
 def _acquire_pid_lock() -> bool:
-    """Write PID file. Return False if another instance is already running."""
+    """Atomically claim the PID file. Return False if another instance is
+    already running. Uses ``O_CREAT|O_EXCL`` to win the create race when
+    two daemons start simultaneously — the previous ``exists()`` then
+    ``write_text()`` pattern had a TOCTOU window where both processes
+    could pass the check and both write their PIDs.
+
+    Identified by @dumko2001 in #512.
+    """
     pid_path = _pid_file()
     pid_path.parent.mkdir(parents=True, exist_ok=True)
-    if pid_path.exists():
+    pid_str = str(os.getpid()).encode()
+    while True:
         try:
-            existing_pid = int(pid_path.read_text().strip())
-            os.kill(existing_pid, 0)
-            return False
-        except (ProcessLookupError, ValueError):
-            pass
-    pid_path.write_text(str(os.getpid()))
-    return True
+            fd = os.open(str(pid_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                os.write(fd, pid_str)
+            finally:
+                os.close(fd)
+            return True
+        except FileExistsError:
+            try:
+                existing_pid = int(pid_path.read_text().strip())
+            except (ValueError, OSError):
+                try:
+                    pid_path.unlink()
+                except OSError:
+                    return False
+                continue
+            try:
+                os.kill(existing_pid, 0)
+                return False
+            except ProcessLookupError:
+                try:
+                    pid_path.unlink()
+                except OSError:
+                    pass
+                continue
 
 
 def _release_pid_lock() -> None:
