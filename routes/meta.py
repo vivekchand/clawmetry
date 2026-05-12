@@ -515,6 +515,22 @@ def api_clusters():
     sessions_dir = getattr(_d, "SESSIONS_DIR", None) or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
+    # Issue #1088: opt-in DuckDB fast path. Delegates to the same DuckDB-driven
+    # clustering used by /api/sessions/clusters and exposes a thinner shape
+    # (clusters + total_clusters) — _source: "local_store" for tests.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        try:
+            from routes.usage import _try_local_store_sessions_clusters
+            fast = _try_local_store_sessions_clusters(30)
+            if fast is not None:
+                return jsonify({
+                    "clusters": fast.get("clusters", []),
+                    "total_clusters": len(fast.get("clusters", [])),
+                    "sessions_dir": sessions_dir,
+                    "_source": "local_store",
+                })
+        except Exception:
+            pass
     # Cloud's dashboard.py doesn't ship _build_clusters; fall through to an
     # empty 200 instead of leaking a 500 with an AttributeError body into the
     # user's console. (When cloud_route_policy is loaded, this endpoint is

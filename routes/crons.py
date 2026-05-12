@@ -57,6 +57,31 @@ bp_crons = Blueprint('crons', __name__)
 # tests can assert which path served the response.
 
 
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback.
+
+    Issue #1088: every direct ``get_store().query_*`` call is dead code in
+    the standard install (daemon owns the writer lock, dashboard's open
+    raises ``IOException: Could not set lock``). This wrapper hits the
+    daemon's HTTP proxy first, then falls back to direct open for
+    single-process boots (tests + dev mode). Returns ``None`` on miss so
+    callers can defer to the legacy fallback path.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
 def _parse_iso_to_ms(ts):
     """Best-effort ISO-8601 → epoch-ms. Returns 0 on any failure."""
     if not ts:
@@ -588,6 +613,35 @@ def api_cron_kill(job_id):
     return jsonify({"ok": True, "jobId": job_id, "enabled": False, "result": result})
 
 
+def _try_local_store_cron_run_log(session_id: str):
+    """Fast path for /api/cron-run-log. Reads message events for the given
+    session from DuckDB and projects ``role/timestamp/content`` for the modal.
+
+    Issue #1088: routes through the daemon HTTP proxy first via ``_ls_call``,
+    with the standard direct-open fallback for single-process boots. Returns
+    ``None`` to defer to the JSONL parser when the events table has no
+    message rows for this session.
+    """
+    rows = _ls_call("query_events", session_id=session_id, limit=5000)
+    if not rows:
+        return None
+    rows = list(reversed(rows))  # query_events returns DESC
+    events = []
+    for ev in rows:
+        if ev.get("event_type") != "message":
+            continue
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+        events.append({
+            "role": msg.get("role", ""),
+            "timestamp": data.get("timestamp") or ev.get("ts") or "",
+            "content": str(msg.get("content", ""))[:500],
+        })
+    if not events:
+        return None
+    return {"sessionId": session_id, "events": events, "_source": "local_store"}
+
+
 @bp_crons.route("/api/cron-run-log")
 def api_cron_run_log():
     """Return a parsed session transcript for a cron run (for the run-log modal)."""
@@ -595,6 +649,10 @@ def api_cron_run_log():
     session_id = request.args.get("session_id", "")
     if not session_id:
         return jsonify({"error": "session_id required"}), 400
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_cron_run_log(session_id)
+        if fast is not None:
+            return jsonify(fast)
     sessions_dir = _d._get_sessions_dir()
     fpath = os.path.join(sessions_dir, f"{session_id}.jsonl")
     # Guard against path-traversal via crafted session_id (e.g. "../../etc/passwd").

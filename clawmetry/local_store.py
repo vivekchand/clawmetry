@@ -1608,6 +1608,7 @@ class LocalStore:
     def query_sessions_table(
         self,
         *,
+        agent_type: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         """Read rows directly from the typed ``sessions`` table.
@@ -1616,6 +1617,10 @@ class LocalStore:
         table by ``GROUP BY session_id``. The ``sessions`` table is the
         typed-session view written by ``sync.py`` + the daemon — it carries
         title, status, message_count, and a metadata BLOB.
+
+        ``agent_type`` filters rows to a single adapter (e.g. ``"openclaw"``,
+        ``"hermes"``) — used by ``/api/agents/<name>/sessions`` to render
+        per-adapter session lists from DuckDB.
 
         Returns one dict per row with ``metadata`` already JSON-decoded
         (``{}`` when missing or invalid). Rows are ordered most-recently-
@@ -1627,14 +1632,23 @@ class LocalStore:
         (``routes/local_query.py:local_store_via_daemon``) can expose it
         for cross-process callers (issue #1088).
         """
-        rows = self._fetch("""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if agent_type:
+            clauses.append("agent_type = ?")
+            params.append(str(agent_type))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
             SELECT agent_type, session_id, agent_id, title, started_at,
                    last_active_at, ended_at, status, total_tokens, cost_usd,
                    message_count, metadata
             FROM sessions
+            {where}
             ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
             LIMIT ?
-        """, [int(limit)])
+        """
+        params.append(int(limit))
+        rows = self._fetch(sql, params)
         cols = ["agent_type", "session_id", "agent_id", "title", "started_at",
                 "last_active_at", "ended_at", "status", "total_tokens",
                 "cost_usd", "message_count", "metadata"]
