@@ -46,17 +46,153 @@ from flask import Blueprint, Response, jsonify, request
 bp_health = Blueprint('health', __name__)
 
 
+# ---------------------------------------------------------------------------
+# Epic #964 — DuckDB local-store fast paths.
+#
+# Each helper below is opt-in via CLAWMETRY_LOCAL_STORE_READ=1 and returns
+# ``None`` on any failure (missing module, empty table, unexpected exception)
+# so the legacy code path runs unchanged. Response shapes match the existing
+# contracts; the only addition is a ``_source: "local_store"`` marker so
+# clients can tell which path served the request.
+# ---------------------------------------------------------------------------
+
+
+def _try_local_store_reliability(window_days: int):
+    """Compute reliability trend from local DuckDB heartbeats + events.
+
+    Builds the same response shape as ``AgentReliabilityScorer.score()``:
+    direction / slope_per_session / significant / session_count /
+    window_days / degrading_dimensions / points.
+
+    Heartbeats are the liveness signal (one per ~minute when the daemon is
+    up); error events are the failure signal. We bucket per-day and run an
+    OLS slope on the per-day delivery_score (= 1 - error_rate). Returns
+    ``None`` to defer to the HistoryDB scorer if anything goes wrong.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+    except Exception:
+        return None
+    try:
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        since_iso = (now - timedelta(days=window_days)).isoformat()
+        hb_rows = store.query_heartbeats(since=since_iso, limit=10000)
+        ev_rows = store.query_events(since=since_iso, limit=10000)
+    except Exception:
+        return None
+    if not hb_rows and not ev_rows:
+        return None
+
+    # Per-day buckets keyed by YYYY-MM-DD.
+    buckets: dict[str, dict[str, int]] = {}
+    for h in hb_rows:
+        ts = (h.get("ts") or "")[:10]
+        if not ts:
+            continue
+        b = buckets.setdefault(ts, {"beats": 0, "errors": 0, "total": 0})
+        b["beats"] += 1
+        b["total"] += 1
+    for e in ev_rows:
+        ts = (e.get("ts") or "")[:10]
+        if not ts:
+            continue
+        et = (e.get("event_type") or "").lower()
+        b = buckets.setdefault(ts, {"beats": 0, "errors": 0, "total": 0})
+        b["total"] += 1
+        if "error" in et or "fail" in et or "stalled" in et or "timeout" in et:
+            b["errors"] += 1
+
+    if not buckets:
+        return None
+
+    ordered_days = sorted(buckets.keys())
+    points = []
+    for day in ordered_days:
+        b = buckets[day]
+        total = max(b["total"], 1)
+        # delivery_score = 1.0 when no errors; drops as errors/total grows.
+        delivery = max(0.0, 1.0 - (b["errors"] / total))
+        success_rate = delivery
+        error_rate = round(b["errors"] / total, 4)
+        points.append({
+            "ts": day,
+            "delivery": round(delivery, 4),
+            "success_rate": round(success_rate, 4),
+            "error_rate": error_rate,
+            "events": b["total"],
+            "beats": b["beats"],
+        })
+
+    # OLS slope on delivery over ordered days. Same logic as the legacy
+    # scorer — keep callers' expectations stable.
+    def _ols_slope(ys):
+        n = len(ys)
+        if n < 2:
+            return 0.0
+        xs = list(range(n))
+        x_mean = sum(xs) / n
+        y_mean = sum(ys) / n
+        num = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys))
+        den = sum((x - x_mean) ** 2 for x in xs)
+        return num / den if den else 0.0
+
+    delivery_slope = _ols_slope([p["delivery"] for p in points])
+    threshold = 0.02
+    if delivery_slope < -threshold:
+        direction = "degrading"
+    elif delivery_slope > threshold:
+        direction = "improving"
+    else:
+        direction = "stable"
+
+    degrading = []
+    if delivery_slope < -threshold:
+        degrading.append("delivery_score")
+
+    # Aggregate rates across the whole window for headline numbers.
+    total_events = sum(b["total"] for b in buckets.values())
+    total_errors = sum(b["errors"] for b in buckets.values())
+    overall_error_rate = round(total_errors / total_events, 4) if total_events else 0.0
+    overall_success_rate = round(1.0 - overall_error_rate, 4)
+
+    return {
+        "direction": direction,
+        "slope_per_session": round(delivery_slope, 6),
+        "significant": abs(delivery_slope) > threshold,
+        "session_count": len(points),
+        "window_days": window_days,
+        "degrading_dimensions": degrading,
+        "delivery_slope": round(delivery_slope, 6),
+        "error_rate": overall_error_rate,
+        "success_rate": overall_success_rate,
+        "points": points[-60:],
+        "_source": "local_store",
+    }
+
+
 @bp_health.route("/api/reliability")
 def api_reliability():
     """Cross-session behavioral reliability trend (AgentReliabilityScorer)."""
     import dashboard as _d
+    try:
+        window = int(request.args.get("window", 30))
+        window = max(1, min(window, 90))
+    except (TypeError, ValueError):
+        window = 30
+    # Epic #964 fast path — only when explicitly opted in. Falls through
+    # to the HistoryDB scorer on any failure so behaviour is identical
+    # for users without local_store data.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_reliability(window)
+        if fast is not None:
+            return jsonify(fast)
     if not _d._history_db or not _d.AgentReliabilityScorer:
         return jsonify(
             {"error": "History module not available", "direction": "insufficient_data"}
         ), 200
     try:
-        window = int(request.args.get("window", 30))
-        window = max(1, min(window, 90))
         scorer = _d.AgentReliabilityScorer(_d._history_db)
         result = scorer.score(window_days=window)
         return jsonify(result)
@@ -629,6 +765,104 @@ def api_diagnostics():
     )
 
 
+def _try_local_store_service_status():
+    """Compose service_status from heartbeats + system_snapshots.
+
+    - ``sync``: True iff a heartbeat row exists within the last 5 minutes
+      (the daemon writes one per minute when up).
+    - ``gateway``: from the most recent system_snapshot of kind 'gateway'
+      (data.up boolean) when present, else inferred from the same heartbeat
+      payload (``data.gateway_up``).
+    - ``channels``: from the most recent system_snapshot of kind 'channels'
+      when present (data.channels list), else from the heartbeat payload's
+      ``channels`` field, else empty.
+    - ``resources``: from the most recent system_snapshot of kind
+      'resources' when present (data.status string), else "ok".
+
+    Returns ``None`` when no recent heartbeat exists — the legacy handler
+    will then live-probe the gateway port + run pgrep, which is the right
+    behaviour for a node that has never written to the local store.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        hb_rows = store.query_heartbeats(limit=1)
+    except Exception:
+        return None
+    if not hb_rows:
+        return None
+    hb = hb_rows[0]
+    hb_data = hb.get("data") if isinstance(hb.get("data"), dict) else {}
+
+    # Sync up = heartbeat seen recently.
+    sync_up = True
+    try:
+        from datetime import datetime, timezone
+        ts = (hb.get("ts") or "").replace("Z", "+00:00")
+        beat_dt = datetime.fromisoformat(ts)
+        age = (datetime.now(timezone.utc) - beat_dt).total_seconds()
+        sync_up = age < 300  # 5 min staleness threshold
+    except Exception:
+        pass
+
+    # Helper to grab the most recent snapshot of a given kind from the
+    # same node, falling back to any node's most recent of that kind.
+    node_id = hb.get("node_id")
+
+    def _latest_snapshot(kind: str):
+        try:
+            rows = store.query_system_snapshots(node_id=node_id, kind=kind, limit=1)
+            if not rows:
+                rows = store.query_system_snapshots(kind=kind, limit=1)
+            return rows[0] if rows else None
+        except Exception:
+            return None
+
+    gw_snap = _latest_snapshot("gateway")
+    if gw_snap and isinstance(gw_snap.get("data"), dict):
+        gw_up = bool(gw_snap["data"].get("up", gw_snap["data"].get("gateway", True)))
+    else:
+        gw_up = bool(hb_data.get("gateway_up", True))
+
+    ch_snap = _latest_snapshot("channels")
+    channels_out = []
+    if ch_snap and isinstance(ch_snap.get("data"), dict):
+        raw = ch_snap["data"].get("channels") or []
+        if isinstance(raw, list):
+            for ch in raw:
+                if isinstance(ch, dict):
+                    channels_out.append({
+                        "name": str(ch.get("name", ch.get("kind", "unknown"))),
+                        "connected": bool(ch.get("connected", ch.get("ok", False))),
+                    })
+    if not channels_out:
+        raw = hb_data.get("channels") or []
+        if isinstance(raw, list):
+            for ch in raw:
+                if isinstance(ch, dict):
+                    channels_out.append({
+                        "name": str(ch.get("name", ch.get("kind", "unknown"))),
+                        "connected": bool(ch.get("connected", ch.get("ok", False))),
+                    })
+
+    res_snap = _latest_snapshot("resources")
+    resources = "ok"
+    if res_snap and isinstance(res_snap.get("data"), dict):
+        s = res_snap["data"].get("status") or res_snap["data"].get("resources")
+        if s in ("ok", "warn", "critical"):
+            resources = s
+
+    return {
+        "service_status": {
+            "gateway": gw_up,
+            "channels": channels_out,
+            "sync": sync_up,
+            "resources": resources,
+        },
+        "_source": "local_store",
+    }
+
+
 @bp_health.route("/api/service-status")
 def api_service_status():
     """Compact service status for fleet heartbeat payloads.
@@ -650,6 +884,11 @@ def api_service_status():
         }
     """
     import dashboard as _d
+    # Epic #964 fast path. Composite of heartbeats + system_snapshots.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_service_status()
+        if fast is not None:
+            return jsonify(fast)
     cfg = _d._load_gw_config()
     # ── Gateway ──────────────────────────────────────────────────────────────
     gw_port = _d._detect_gateway_port()
@@ -871,6 +1110,69 @@ def api_health_stream():
     )
 
 
+def _try_local_store_sandbox_status():
+    """Read sandbox/inference/security from system_snapshots(kind="sandbox").
+
+    The daemon writes a single 'sandbox' kind row per snapshot containing
+    the three sub-dicts (sandbox / inference / security) the legacy handler
+    derives from the local environment. We pick the most-recent row.
+
+    Returns ``None`` if the local_store module is missing, no snapshot of
+    kind 'sandbox' exists, or the row's payload doesn't decode.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        rows = store.query_system_snapshots(kind="sandbox", limit=1)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    payload = rows[0].get("data")
+    if not isinstance(payload, dict):
+        return None
+
+    # Accept either the canonical {sandbox, inference, security} shape
+    # straight from the snapshot, or a flat dict that mirrors the legacy
+    # detection helpers' output.
+    sandbox = payload.get("sandbox")
+    inference = payload.get("inference")
+    security = payload.get("security")
+
+    # Normalise to the same canonical fields the legacy handler emits.
+    if isinstance(sandbox, dict):
+        sandbox = {
+            "name": sandbox.get("name"),
+            "status": sandbox.get("status", "running"),
+            "type": sandbox.get("type"),
+        }
+    else:
+        sandbox = None
+    if isinstance(inference, dict):
+        inference = {
+            "provider": inference.get("provider"),
+            "model": inference.get("model"),
+        }
+    else:
+        inference = None
+    if isinstance(security, dict):
+        sec_fields: dict = {}
+        if "sandbox_enabled" in security:
+            sec_fields["sandbox_enabled"] = bool(security["sandbox_enabled"])
+        if "network_policy" in security:
+            sec_fields["network_policy"] = security["network_policy"]
+        security = sec_fields or None
+    else:
+        security = None
+
+    return {
+        "sandbox": sandbox,
+        "inference": inference,
+        "security": security,
+        "_source": "local_store",
+    }
+
+
 @bp_health.route("/api/sandbox-status")
 def api_sandbox_status():
     """Dedicated endpoint: generic sandbox, inference provider & security posture.
@@ -886,6 +1188,12 @@ def api_sandbox_status():
     metadata cannot be detected (platform-agnostic, no vendor logos/assumptions).
     """
     import dashboard as _d
+    # Epic #964 fast path. When the daemon has written a sandbox snapshot
+    # to DuckDB, prefer that — it's the most recently-collected view.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_sandbox_status()
+        if fast is not None:
+            return jsonify(fast)
     sandbox_raw = _d._detect_sandbox_metadata()
     inference_raw = _d._detect_inference_metadata()
     security_raw = _d._detect_security_metadata()
@@ -1016,6 +1324,86 @@ def _detect_loops_in_sessions(sessions_dir, max_sessions=20, window=10, min_repe
     return loops, len(paths)
 
 
+def _try_local_store_loop_detection(window: int, min_repeats: int):
+    """Detect rapid-repeat tool_call loops from events table.
+
+    Walks all events with event_type='tool_call' (or 'toolCall'), groups
+    them per session, and applies the same sliding-window detection as
+    the JSONL scanner: a tool name + arg fingerprint pair appearing
+    ``min_repeats`` or more times within ``window`` consecutive calls.
+
+    Returns ``None`` when local_store is missing or no tool_call events
+    exist. ``checked`` is the count of distinct sessions inspected.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        rows = []
+        for et in ("tool_call", "toolCall"):
+            try:
+                rows.extend(store.query_events(event_type=et, limit=10000))
+            except Exception:
+                continue
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    # Sort ascending by ts so window-detection is in temporal order.
+    rows.sort(key=lambda r: r.get("ts") or "")
+
+    # Bucket per session.
+    by_session: dict = {}
+    for r in rows:
+        sid = r.get("session_id") or ""
+        if not sid:
+            continue
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        name = (data.get("name") or data.get("tool") or "").strip()
+        if not name:
+            continue
+        # Same fingerprint as the JSONL scanner: stable hash of input dict.
+        inp = data.get("input") or data.get("args") or {}
+        try:
+            raw_args = json.dumps(inp, sort_keys=True, default=str)[:500]
+        except Exception:
+            raw_args = str(inp)[:500]
+        fp = hashlib.md5(raw_args.encode()).hexdigest()[:8]
+        by_session.setdefault(sid, []).append((name, fp, r.get("ts") or ""))
+
+    if not by_session:
+        return None
+
+    loops = []
+    for sid, seq in by_session.items():
+        if len(seq) < min_repeats:
+            continue
+        seen_combos = set()
+        for i in range(max(1, len(seq) - window + 1)):
+            chunk = seq[i:i + window]
+            counts: dict = {}
+            for name, fp, _ts in chunk:
+                combo = (name, fp)
+                counts[combo] = counts.get(combo, 0) + 1
+            for combo, count in counts.items():
+                if count >= min_repeats and combo not in seen_combos:
+                    seen_combos.add(combo)
+                    first_ts = next(ts for n, f, ts in seq if (n, f) == combo)
+                    loops.append({
+                        "session_id": sid,
+                        "tool_name": combo[0],
+                        "repeat_count": count,
+                        "first_seen_ts": first_ts,
+                    })
+
+    return {
+        "checked": len(by_session),
+        "loop_count": len(loops),
+        "loops": loops,
+        "_source": "local_store",
+    }
+
+
 @bp_health.route("/api/loop-detection")
 def api_loop_detection():
     """Scan recent sessions for agent loop/drift patterns.
@@ -1049,6 +1437,14 @@ def api_loop_detection():
         min_repeats = max(2, min(10, int(request.args.get("min_repeats", 3))))
     except (TypeError, ValueError):
         min_repeats = 3
+
+    # Epic #964 fast path. When tool_call events are present in the local
+    # DuckDB, run loop detection directly against the columnar store
+    # instead of walking ~/.openclaw/agents/main/sessions/*.jsonl.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_loop_detection(window, min_repeats)
+        if fast is not None:
+            return jsonify(fast)
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
@@ -1217,6 +1613,69 @@ def _collect_mcp_stats(sessions_dir, max_sessions=20):
     return result, len(paths)
 
 
+def _try_local_store_mcp_stats():
+    """Aggregate MCP tool-call stats from events(event_type='mcp_call').
+
+    Each event row is expected to carry the tool ``name`` (and optionally
+    ``error``/``is_error`` and ``latency_ms`` / ``duration_ms``) in its
+    JSON ``data`` payload. Built-in tools are filtered out — same rule as
+    the JSONL scanner.
+
+    Returns ``None`` when the local_store module is missing or no
+    ``mcp_call`` events exist.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        rows = store.query_events(event_type="mcp_call", limit=10000)
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    # {tool_name: {calls, errors, latencies_ms}}
+    tool_stats: dict = {}
+    distinct_sessions: set = set()
+    for r in rows:
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        name = (data.get("name") or data.get("tool") or "").strip()
+        if not name or name in _BUILTIN_TOOLS:
+            continue
+        sid = r.get("session_id")
+        if sid:
+            distinct_sessions.add(sid)
+        s = tool_stats.setdefault(name, {"calls": 0, "errors": 0, "latencies_ms": []})
+        s["calls"] += 1
+        if data.get("error") or data.get("is_error") or data.get("isError"):
+            s["errors"] += 1
+        lat = data.get("latency_ms") or data.get("duration_ms")
+        if isinstance(lat, (int, float)) and lat >= 0:
+            s["latencies_ms"].append(float(lat))
+
+    if not tool_stats:
+        return None
+
+    out = []
+    for name, s in tool_stats.items():
+        calls = s["calls"]
+        errors = s["errors"]
+        lats = s["latencies_ms"]
+        out.append({
+            "name": name,
+            "calls": calls,
+            "errors": errors,
+            "error_rate_pct": round(errors * 100.0 / calls, 1) if calls else 0.0,
+            "avg_latency_ms": round(sum(lats) / len(lats)) if lats else None,
+        })
+    out.sort(key=lambda x: x["calls"], reverse=True)
+
+    return {
+        "checked": len(distinct_sessions),
+        "tools": out,
+        "_source": "local_store",
+    }
+
+
 @bp_health.route("/api/mcp-stats")
 def api_mcp_stats():
     """Per-tool stats for non-builtin (MCP / external) tool calls.
@@ -1235,6 +1694,12 @@ def api_mcp_stats():
       }
     """
     import dashboard as _d
+    # Epic #964 fast path. When mcp_call events are present in the local
+    # DuckDB, aggregate from there instead of re-walking session JSONLs.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_mcp_stats()
+        if fast is not None:
+            return jsonify(fast)
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
