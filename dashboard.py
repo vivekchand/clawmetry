@@ -9135,6 +9135,7 @@ DASHBOARD_HTML = r"""
       <div class="modal-tab" onclick="switchModalTab('full')">Full Logs</div>
       <div class="modal-tab" onclick="switchModalTab('tools')">Tools</div>
       <div class="modal-tab" onclick="switchModalTab('models')">Model Journey</div>
+      <div class="modal-tab" onclick="switchModalTab('subagents')">Subagents</div>
     </div>
     <div class="modal-content" id="modal-content">Loading...</div>
     <div class="modal-footer">
