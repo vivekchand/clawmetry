@@ -1231,6 +1231,9 @@ def _local_ingest_memory_files(all_files: list, changed_paths: list) -> None:
         })
 
 
+_sessions_json_cache: dict = {"ts": 0.0, "data": None, "mtime": 0.0}
+
+
 def sync_sessions_recent(
     config: dict, state: dict, paths: dict, minutes: int = 60
 ) -> int:
@@ -1264,6 +1267,7 @@ def sync_sessions_recent(
 
     # Build subagent map (same logic as sync_sessions)
     # Cache sessions.json for 60 seconds to avoid re-parsing every call
+    global _sessions_json_cache
     file_to_subagent_id: dict[str, str] = {}
     index_path = os.path.join(sessions_dir, "sessions.json")
     if os.path.isfile(index_path):
