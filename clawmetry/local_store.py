@@ -346,39 +346,88 @@ def _open_connection(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
 
 # ── Singleton store ─────────────────────────────────────────────────────────
 
-_store: "LocalStore | None" = None
+# Two distinct singletons: one for the writer (sync daemon), one for read-only
+# consumers (the dashboard process when daemon owns the writer lock). DuckDB
+# allows multiple read-only handles per file even while a writer holds the
+# lock, but ONLY across processes — a single process can hold one or the
+# other, not both. So if both singletons are requested in the same process
+# (unusual, but possible in tests or all-in-one local mode), `read_only=True`
+# transparently shares the writer's connection.
+_store_rw: "LocalStore | None" = None
+_store_ro: "LocalStore | None" = None
 _store_lock = threading.Lock()
 
 
-def get_store() -> "LocalStore":
-    """Lazy-init the process-wide singleton. Cheap to call repeatedly."""
-    global _store
-    if _store is not None:
-        return _store
+def get_store(read_only: bool = False) -> "LocalStore":
+    """Lazy-init the process-wide singleton. Cheap to call repeatedly.
+
+    `read_only=True` opens the DuckDB file in RO mode, skipping the schema
+    migration + background flusher. Use this in dashboard / API processes
+    that do not own the writer lock — typically a separate process from the
+    daemon that's ingesting events.
+
+    If a writer singleton already exists in this process, `read_only=True`
+    just returns the writer (DuckDB cannot have an RW handle and an RO
+    handle to the same file in the same process). All read-paths on
+    LocalStore work the same regardless of mode; ingest() raises in RO mode.
+    """
+    global _store_rw, _store_ro
+    if not read_only:
+        if _store_rw is not None:
+            return _store_rw
+        with _store_lock:
+            if _store_rw is None:
+                if _store_ro is not None:
+                    raise RuntimeError(
+                        "local_store: cannot open writer — read-only handle "
+                        "already exists in this process. Get a fresh process "
+                        "to write."
+                    )
+                _store_rw = LocalStore(read_only=False)
+                _store_rw.start()
+            return _store_rw
+    # read_only path
+    if _store_rw is not None:
+        # Same-process reader — share the writer connection (DuckDB allows
+        # multiple cursors but not a separate RO handle on the same file).
+        return _store_rw
+    if _store_ro is not None:
+        return _store_ro
     with _store_lock:
-        if _store is None:
-            _store = LocalStore()
-            _store.start()
-    return _store
+        if _store_rw is not None:
+            return _store_rw
+        if _store_ro is None:
+            _store_ro = LocalStore(read_only=True)
+            # No flusher to start — RO never writes.
+        return _store_ro
 
 
 def _reset_singleton_for_tests() -> None:
-    """Test-only helper. Drops the cached store so the next get_store() picks
+    """Test-only helper. Drops the cached stores so the next get_store() picks
     up new env vars (DB path, flush knobs)."""
-    global _store
+    global _store_rw, _store_ro
     with _store_lock:
-        if _store is not None:
-            try:
-                _store.stop(flush=False)
-            except Exception:
-                pass
-        _store = None
+        for name in ("_store_rw", "_store_ro"):
+            store = globals().get(name)
+            if store is not None:
+                try:
+                    store.stop(flush=False)
+                except Exception:
+                    pass
+        _store_rw = None
+        _store_ro = None
 
 
 class LocalStore:
-    """Thread-safe local event store with a background batched flusher."""
+    """Thread-safe local event store with a background batched flusher.
 
-    def __init__(self) -> None:
+    `read_only=True` opens the DuckDB in RO mode — read paths work the same,
+    ingest()/flush() raise. Used by the dashboard process while the daemon
+    process owns the writer lock.
+    """
+
+    def __init__(self, read_only: bool = False) -> None:
+        self._read_only = read_only
         self._ring: deque[dict[str, Any]] = deque(maxlen=RING_MAX)
         self._ring_lock = threading.Lock()
         # DuckDB connection state isn't safe across concurrent transactions.
@@ -389,12 +438,16 @@ class LocalStore:
         self._flusher_stop = threading.Event()
         self._flusher_thread: threading.Thread | None = None
         self._last_flush_ts = time.monotonic()
-        # Rename the legacy events.duckdb in place BEFORE opening — once
-        # we hold a connection we can't atomically rename the file out
-        # from under DuckDB.
-        _migrate_legacy_db_path()
-        self._conn = _open_connection(read_only=False)
-        self._migrate()
+        if not read_only:
+            # Rename the legacy events.duckdb in place BEFORE opening — once
+            # we hold a connection we can't atomically rename the file out
+            # from under DuckDB. RO mode skips this: if the file doesn't
+            # exist yet, the daemon hasn't started, and there's nothing to
+            # read anyway.
+            _migrate_legacy_db_path()
+        self._conn = _open_connection(read_only=read_only)
+        if not read_only:
+            self._migrate()
 
     def _migrate(self) -> None:
         """Bring the store schema up to v2. Order matters:
@@ -431,7 +484,10 @@ class LocalStore:
     # ── lifecycle ────────────────────────────────────────────────────────
 
     def start(self) -> None:
-        """Start the background flusher. Safe to call multiple times."""
+        """Start the background flusher. Safe to call multiple times.
+        No-op in read-only mode."""
+        if self._read_only:
+            return
         if self._flusher_thread and self._flusher_thread.is_alive():
             return
         self._flusher_stop.clear()
@@ -468,6 +524,8 @@ class LocalStore:
         background. Required keys: ``id``, ``node_id``, ``event_type``, ``ts``.
         Other columns optional. Re-ingesting the same id is a no-op (INSERT OR
         IGNORE) so callers don't need their own dedup."""
+        if self._read_only:
+            raise RuntimeError("local_store: ingest() called on read-only store")
         if not event.get("id"):
             raise ValueError("event must include 'id'")
         if not event.get("node_id"):

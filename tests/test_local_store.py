@@ -345,3 +345,68 @@ def test_ring_overflow_increments_dropped_counter(monkeypatch, tmp_path):
     h = s.health()
     assert h["ring_depth"] == 5
     assert h["ring_dropped_total"] == 15
+
+
+# ── read-only mode (cross-process dashboard read while daemon writes) ──────
+
+
+def test_read_only_mode_skips_migration_and_flusher(tmp_path, monkeypatch):
+    """RO LocalStore opens the DB without writing (no migration, no flusher).
+    Required so the dashboard process can attach to a daemon-owned file."""
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    # First open RW to materialise the schema
+    rw = ls.LocalStore(read_only=False)
+    rw.start()
+    rw.ingest({"id": "e1", "node_id": "n1", "event_type": "x",
+               "ts": int(time.time() * 1000)})
+    time.sleep(0.2)
+    rw.stop(flush=True)
+    # Now reopen RO — should NOT raise + ingest must refuse
+    ro = ls.LocalStore(read_only=True)
+    assert ro._read_only is True
+    assert ro._flusher_thread is None
+    ro.start()  # no-op in RO
+    assert ro._flusher_thread is None
+    rows = ro.query_events(limit=10)
+    assert len(rows) == 1
+    with pytest.raises(RuntimeError, match="read-only"):
+        ro.ingest({"id": "e2", "node_id": "n1", "event_type": "x",
+                   "ts": int(time.time() * 1000)})
+    ro.stop(flush=False)
+
+
+def test_get_store_ro_after_rw_returns_writer(tmp_path, monkeypatch):
+    """Same-process: get_store(read_only=True) shares the writer's connection
+    when one already exists (DuckDB rejects an RO handle next to an RW one
+    in the same process)."""
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    ls._reset_singleton_for_tests()
+    writer = ls.get_store(read_only=False)
+    assert writer._read_only is False
+    reader = ls.get_store(read_only=True)
+    assert reader is writer  # shared connection
+
+
+def test_get_store_ro_first_isolated(tmp_path, monkeypatch):
+    """When a process only ever reads (typical dashboard-only-mode), the RO
+    singleton stands alone."""
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
+    # Bootstrap the file by writing then closing (mimics daemon having run earlier)
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    seed = ls.LocalStore(read_only=False)
+    seed.start()
+    seed.ingest({"id": "x", "node_id": "n", "event_type": "x",
+                 "ts": int(time.time() * 1000)})
+    time.sleep(0.2)
+    seed.stop(flush=True)
+    importlib.reload(ls)  # fresh process boundary
+    ls._reset_singleton_for_tests()
+    reader = ls.get_store(read_only=True)
+    assert reader._read_only is True
+    rows = reader.query_events(limit=5)
+    assert len(rows) == 1
