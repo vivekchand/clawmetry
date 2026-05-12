@@ -159,6 +159,90 @@ def _compute_heartbeat_data(sessions_dir):
     }
 
 
+def _try_local_store_heartbeat(interval, now):
+    """Epic #964 phase 1b fast path. When CLAWMETRY_LOCAL_STORE_READ=1 AND
+    the local DuckDB ``heartbeats`` table has rows, build the same response
+    shape as the legacy session-transcript scanner. Returns ``None`` to
+    defer to the JSONL scanner if:
+
+      - the local_store module isn't importable
+      - the heartbeats table is empty
+      - any unexpected error happens (we'd rather degrade than 500)
+
+    Daemon-emitted heartbeats are pure liveness pings — there is no
+    "action taken" notion at the daemon layer, so every beat is treated
+    as outcome="ok". The session-transcript fallback retains its richer
+    ok/action classification when the daemon isn't writing local rows.
+    """
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return None
+    try:
+        store = local_store.get_store()
+        rows = store.query_heartbeats(limit=500)
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    cutoff_24h = now - 86400
+    beats = []
+    for r in rows:
+        ts = _parse_iso_ts(r.get("ts", ""))
+        if ts <= 0:
+            continue
+        beats.append({"ts": ts, "outcome": "ok"})
+    if not beats:
+        return None
+
+    beats.sort(key=lambda b: b["ts"], reverse=True)
+    last_heartbeat_ts = beats[0]["ts"]
+    beats_24h = [b for b in beats if b["ts"] >= cutoff_24h]
+    ok_count = sum(1 for b in beats_24h if b["outcome"] == "ok")
+    action_count = sum(1 for b in beats_24h if b["outcome"] == "action")
+    total_24h = ok_count + action_count
+    ok_ratio = round(ok_count / total_24h, 3) if total_24h > 0 else 1.0
+    recent_beats = list(reversed(beats[:10]))
+
+    age_seconds = int(now - last_heartbeat_ts) if last_heartbeat_ts > 0 else None
+    if last_heartbeat_ts == 0:
+        status = "never"
+    else:
+        gap = now - last_heartbeat_ts
+        if gap <= interval:
+            status = "healthy"
+        elif gap <= interval * 1.5:
+            status = "drifting"
+        else:
+            status = "missed"
+
+    window_seconds = 86400
+    expected_beats = max(1, window_seconds // interval) if interval > 0 else 48
+    actual_beats = len(beats_24h)
+    on_time_ratio = round(actual_beats / expected_beats, 3) if expected_beats > 0 else 0.0
+    on_time_ratio = min(on_time_ratio, 1.0)
+
+    return {
+        "last_heartbeat_ts": last_heartbeat_ts,
+        "last_heartbeat_age_seconds": age_seconds,
+        "expected_interval_seconds": interval,
+        "status": status,
+        "cadence_24h": {
+            "expected_beats": expected_beats,
+            "actual_beats": actual_beats,
+            "on_time_ratio": on_time_ratio,
+        },
+        "ok_vs_action_24h": {
+            "heartbeat_ok_count": ok_count,
+            "action_taken_count": action_count,
+            "ok_ratio": ok_ratio,
+        },
+        "recent_beats": recent_beats,
+        "_source": "local_store",
+    }
+
+
 @bp_heartbeat.route("/api/heartbeat")
 def api_heartbeat():
     """
@@ -187,6 +271,15 @@ def api_heartbeat():
 
     now = time.time()
     interval = int(_d._heartbeat_interval_sec)
+    # Epic #964 phase 1b: opt-in local-store fast path. When
+    # CLAWMETRY_LOCAL_STORE_READ=1 AND the local DuckDB heartbeats table has
+    # rows, serve directly from DuckDB. Falls through to JSONL scan otherwise
+    # (so a fresh install with no local store sees the same data as before —
+    # zero-change default).
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_heartbeat(interval, now)
+        if fast is not None:
+            return jsonify(fast)
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
