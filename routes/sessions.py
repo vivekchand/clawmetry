@@ -59,6 +59,93 @@ def _infer_session_type(session):
     return "main"
 
 
+def _get_channel_context_map(session_ids=None):
+    """Return ``{session_id: {channel, chat_type, subject, origin_label}}``
+    from the local DuckDB ``openclaw_channels`` table.
+
+    The table is the canonical, typed source for OpenClaw channel attribution
+    (Telegram/Slack/Signal/etc.) — populated by the gateway adapter via
+    ``LocalStore.ingest_channel()``. Today the legacy path infers channel
+    from a free-form ``metadata`` blob; this helper lets the local-store fast
+    path enrich session rows with the cleaner table when it has data.
+
+    Args:
+      session_ids: Optional iterable to scope the lookup. ``None`` returns
+        all rows (cheap — table is one row per session, capped well under
+        the default ``query_channels(limit=500)``).
+
+    Returns ``{}`` (no decoration) on any failure — the local-store module
+    not being importable, the table being empty, or any DuckDB error. The
+    caller treats an empty dict as "nothing to merge", which preserves the
+    pre-existing metadata-blob channel inference unchanged.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        if session_ids is not None:
+            ids = [s for s in session_ids if s]
+            if not ids:
+                return {}
+            rows = []
+            # query_channels supports one session_id at a time; for the typical
+            # /api/sessions response (≤200 rows) one full-table scan is cheaper
+            # than N round-trips.
+            if len(ids) > 20:
+                rows = store.query_channels(limit=2000)
+            else:
+                for sid in ids:
+                    rows.extend(store.query_channels(session_id=sid, limit=1))
+        else:
+            rows = store.query_channels(limit=2000)
+    except Exception:
+        return {}
+    out = {}
+    for r in rows:
+        sid = r.get("session_id")
+        if not sid:
+            continue
+        out[sid] = {
+            "channel":      r.get("channel") or "",
+            "chat_type":    r.get("chat_type") or "",
+            "subject":      r.get("subject") or "",
+            "origin_label": r.get("origin_label") or "",
+        }
+    return out
+
+
+def _decorate_with_channel_context(sessions):
+    """Mutate ``sessions`` in place, overriding empty channel/chat_type/subject
+    fields with values from the ``openclaw_channels`` table when present.
+
+    No-op when the table has no matching rows for any session in the list —
+    keeps existing values (typically inferred from the metadata blob)
+    unchanged. The override is one-way: only blank-on-the-row fields get
+    filled in, so a metadata-blob channel from the legacy path survives if
+    the channels table has nothing for that session.
+    """
+    if not sessions:
+        return sessions
+    ids = [s.get("session_id") or s.get("sessionId") for s in sessions]
+    ctx_map = _get_channel_context_map(ids)
+    if not ctx_map:
+        return sessions
+    for s in sessions:
+        sid = s.get("session_id") or s.get("sessionId")
+        ctx = ctx_map.get(sid)
+        if not ctx:
+            continue
+        # Prefer the typed table value over an empty/blank existing field.
+        if ctx["channel"] and not s.get("channel"):
+            s["channel"] = ctx["channel"]
+        if ctx["chat_type"] and not s.get("chat_type"):
+            s["chat_type"] = ctx["chat_type"]
+        if ctx["subject"] and not s.get("subject"):
+            s["subject"] = ctx["subject"]
+        if ctx["origin_label"] and not s.get("origin_label"):
+            s["origin_label"] = ctx["origin_label"]
+    return sessions
+
+
 @bp_sessions.route("/api/sessions")
 def api_sessions():
     import dashboard as _d
@@ -76,6 +163,13 @@ def api_sessions():
         sessions = _d._augment_sessions_with_burn(gw_data["sessions"])
     else:
         sessions = _d._augment_sessions_with_burn(_d._get_sessions())
+    # Same env-gate as the fast path: when the user has opted into local-store
+    # reads, decorate gateway/JSONL session rows with channel context from the
+    # typed openclaw_channels table. Lets a partially-migrated install (sessions
+    # still from gateway, channels already in DuckDB) get typed channel/chat_type/
+    # subject without waiting for the full session-table cutover.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        _decorate_with_channel_context(sessions)
     for s in sessions:
         if "session_type" not in s:
             s["session_type"] = _infer_session_type(s)
@@ -132,6 +226,9 @@ def _try_local_store_sessions():
             "session_type":   meta.get("session_type", "main"),
             "_source":        "local_store",
         })
+    # Decorate with channel context from the typed openclaw_channels table.
+    # No-op when the table is empty; overrides only blank fields when present.
+    _decorate_with_channel_context(out)
     return {"sessions": out, "_source": "local_store"}
 
 
@@ -213,6 +310,7 @@ def _try_local_store_sessions_by_type(type_filter: str = ""):
         return None
 
     sessions = []
+    explicit_types: dict[str, str] = {}
     for r in rows:
         meta = {}
         if r[11]:
@@ -240,10 +338,17 @@ def _try_local_store_sessions_by_type(type_filter: str = ""):
             "kind":           meta.get("kind", ""),
             "_source":        "local_store",
         }
+        if meta.get("session_type"):
+            explicit_types[s["session_id"]] = meta["session_type"]
+        sessions.append(s)
+    # Decorate channel context BEFORE _infer_session_type so a session with
+    # channel=telegram (typed table) classifies as "user" even if the metadata
+    # blob never carried a channel field.
+    _decorate_with_channel_context(sessions)
+    for s in sessions:
         # Honour explicit metadata.session_type when present; otherwise
         # classify with the same _infer_session_type() the legacy path uses.
-        s["session_type"] = meta.get("session_type") or _infer_session_type(s)
-        sessions.append(s)
+        s["session_type"] = explicit_types.get(s["session_id"]) or _infer_session_type(s)
 
     counts = {"main": 0, "heartbeat": 0, "user": 0, "sub-agent": 0}
     for s in sessions:
