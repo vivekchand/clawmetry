@@ -908,8 +908,14 @@ def detect_paths() -> dict:
                 f"/var/lib/openshell/sandboxes/{nemoclaw_sandbox}/.openclaw/agents/main/sessions"
             ),
         )
+    def _safe_exists(p):
+        try:
+            return p.exists()
+        except (PermissionError, OSError):
+            return False
+
     found_sessions = docker_paths.get("sessions_dir") or next(
-        (str(p) for p in sessions_candidates if p.exists()), None
+        (str(p) for p in sessions_candidates if _safe_exists(p)), None
     )
     sessions_dir = found_sessions or str(sessions_candidates[0])
 

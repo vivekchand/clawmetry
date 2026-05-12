@@ -5050,6 +5050,13 @@ async function loadSkills() {
   var summaryEl = document.getElementById('skills-summary-row');
   var listEl = document.getElementById('skills-list');
   if (!summaryEl || !listEl) return;
+  // /api/skills is cloud-disabled (410 Gone). Render an empty state instead
+  // of triggering a console-error-generating fetch on the cloud iframe.
+  if (window.CLOUD_MODE) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Skills inspector is local-only. Open the dashboard on the host running OpenClaw to view installed skills.</div>';
+    summaryEl.innerHTML = '';
+    return;
+  }
   listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
   try {
     var data = await fetch('/api/skills').then(function(r){return r.json();});
