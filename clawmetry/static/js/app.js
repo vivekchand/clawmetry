@@ -1,3 +1,60 @@
+// ─────────────────────────────────────────────────────────────────────────
+// Response-shape tolerance helpers (epic #1032 Phase 2-5 forward-compat)
+//
+// As routes migrate to the local-DuckDB fast path (`_source: "local_store"`)
+// and the cloud's heartbeat-piggyback cache (`_source: "cache"`), JSON
+// payloads have grown wrapper envelopes:
+//   • legacy:    [ {...}, {...} ]
+//   • local store: { rules: [...], _source: "local_store" }
+//   • cloud cache: { rules_blob: "<b64-ciphertext>", _source: "cache", shape: "alert_rules", ... }
+//
+// `unwrapList(resp, key)` returns the plaintext list regardless of which
+// shape the server picked. On `_source: "cache"` the cipher blob can only
+// be read by a CLOUD_MODE browser that has the user's E2E key + the
+// cloud-injected `decryptBlob` helper; if either is missing we return an
+// empty list silently (no JS error, no crash). The cloud-side decryptor
+// is owned by clawmetry-cloud/dashboard.py — never move decryption out
+// of the browser.
+// ─────────────────────────────────────────────────────────────────────────
+function unwrapList(resp, key) {
+  if (Array.isArray(resp)) return resp;
+  if (!resp || typeof resp !== 'object') return [];
+  if (Array.isArray(resp[key])) return resp[key];
+  // Cache envelope holds ciphertext only — the browser-side decryptor
+  // owns the unwrap. We can't decrypt synchronously here, so callers that
+  // can wait should use `unwrapListAsync` instead. Returning [] keeps the
+  // tab rendering instead of throwing.
+  return [];
+}
+
+async function unwrapListAsync(resp, key, blobKey) {
+  if (Array.isArray(resp)) return resp;
+  if (!resp || typeof resp !== 'object') return [];
+  if (Array.isArray(resp[key])) return resp[key];
+  if (resp._source === 'cache' && resp[blobKey] && typeof window !== 'undefined') {
+    try {
+      // The cloud-injected decryptor (see clawmetry-cloud/dashboard.py
+      // cm-brain-decrypt script block) returns the decoded payload as
+      // a JSON object; the actual list is under `key`.
+      var keyB64 = null;
+      try {
+        var ls = window.localStorage || null;
+        if (ls && window.CLOUD_NODE_ID) {
+          keyB64 = ls.getItem('cm-enc-key-' + window.CLOUD_NODE_ID);
+        }
+      } catch (e) { /* localStorage blocked */ }
+      if (keyB64 && typeof window.decryptBlob === 'function') {
+        var dec = await window.decryptBlob(resp[blobKey], keyB64);
+        if (dec && Array.isArray(dec[key])) return dec[key];
+        if (Array.isArray(dec)) return dec;
+      }
+    } catch (e) {
+      try { console.warn('[unwrapListAsync] decrypt failed for', key, e); } catch (_) {}
+    }
+  }
+  return [];
+}
+
 // === Budget & Alert Functions ===
 function openBudgetModal() {
   document.getElementById('budget-modal').style.display = 'flex';
@@ -93,7 +150,9 @@ async function createAlertRule() {
 async function loadAlertRules() {
   try {
     var data = await fetch('/api/alerts/rules').then(function(r){return r.json();});
-    var rules = data.rules || [];
+    // Tolerate all three shapes: legacy array, {rules,_source:"local_store"},
+    // {rules_blob,_source:"cache"} via the shared unwrap helper.
+    var rules = await unwrapListAsync(data, 'rules', 'rules_blob');
     if(rules.length === 0) {
       document.getElementById('alert-rules-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">No alert rules configured</div>';
       return;
@@ -2741,7 +2800,11 @@ async function loadContextInspector() {
     var contextWindow = ov.contextWindow || 200000;
     var mainTokens = ov.mainTokens || 0;
     var model = ov.model || 'unknown';
-    var events = brain.events || [];
+    // brain may be either {events:[...]} (legacy/local_store) or
+    // {_source:"cache", events_blob:"..."} (cache hit on cloud). Use the
+    // async unwrapper so the cloud-injected decryptBlob can decode the
+    // ciphertext when CLOUD_MODE+enc-key are both available.
+    var events = await unwrapListAsync(brain, 'events', 'events_blob');
 
     // Context window usage bar
     var pct = contextWindow > 0 ? Math.min(100, Math.round(mainTokens / contextWindow * 100)) : 0;
@@ -6894,7 +6957,10 @@ async function loadMainActivity() {
     var el = document.getElementById('main-activity-list');
     var dot = document.getElementById('main-activity-dot');
     var label = document.getElementById('main-activity-label');
-    var events = (data && data.events) ? data.events.slice() : [];
+    // Tolerate {events:[...]} (legacy/local_store) AND
+    // {_source:"cache",events_blob:"..."} (cloud cache hit). Cache-only
+    // browsers without the decryptor silently see an empty panel.
+    var events = (await unwrapListAsync(data, 'events', 'events_blob')).slice();
     // /api/brain-history pins CONTEXT events to the top of the array (Brain
     // tab feature) — for the compact Overview panel we want pure timestamp
     // desc so the most recent conversation sits at the top.
@@ -10418,7 +10484,7 @@ async function _renderModalBrainEvents(match) {
     var winStart = startedMs - 30000;        // -30s lead-up
 
     var data = await fetchJsonWithTimeout('/api/brain-history?limit=500', 6000);
-    var events = (data && data.events) ? data.events : [];
+    var events = await unwrapListAsync(data, 'events', 'events_blob');
     var filtered = events.filter(function(ev) {
       if ((ev.type || '').toUpperCase() === 'CONTEXT') return false;
       var src = ev.source || '';
