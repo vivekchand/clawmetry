@@ -3564,6 +3564,22 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning("relay: failed to start (continuing without cold-data relay): %s", _e)
 
+    # ── Local query HTTP server (cross-process DuckDB read fix) ────────
+    # Daemon owns the DuckDB writer lock; the dashboard process can't
+    # open the same file (DuckDB exclusive lock blocks RO too). We host
+    # the same routes/local_query.py shapes on a localhost port; the
+    # dashboard's /api/local/* proxies through. Discovery+auth via
+    # ~/.clawmetry/local_query.json. Failure here is non-fatal — the
+    # dashboard falls back to direct DuckDB access (works in
+    # single-process mode).
+    try:
+        from clawmetry import local_server as _local_server
+        _ls_port = _local_server.start()
+        if _ls_port:
+            log.info("local query server: listening on 127.0.0.1:%d", _ls_port)
+    except Exception as _e:
+        log.warning("local query server: failed to start: %s", _e)
+
     state = load_state()
 
     # Always sync recent events first (last hour) — makes the dashboard

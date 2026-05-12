@@ -52,9 +52,76 @@ def _store():
     the user never hits these endpoints. Always opens read-only — this
     process is a reader; the daemon process owns the writer lock. When
     daemon + dashboard share a process, ``get_store(read_only=True)``
-    transparently shares the writer's connection."""
+    transparently shares the writer's connection.
+
+    NOTE: when the daemon runs as a SEPARATE process (the launchd/systemd
+    install case), DuckDB's exclusive lock blocks even RO opens. In that
+    case ``_dispatch()`` proxies to the daemon's local_server first;
+    this fallback only fires in single-process mode.
+    """
     from clawmetry import local_store
     return local_store.get_store(read_only=True)
+
+
+# ── Daemon-hosted proxy (cross-process DuckDB lock fix) ─────────────────────
+
+import json as _json
+import os as _os
+
+_DISCOVERY_PATH = _os.path.expanduser("~/.clawmetry/local_query.json")
+_PROXY_TIMEOUT_SECS = 5.0
+
+
+def _read_discovery():
+    """Read ``~/.clawmetry/local_query.json`` if present + still valid.
+    Returns ``{port, token}`` or None."""
+    try:
+        with open(_DISCOVERY_PATH) as fh:
+            data = _json.load(fh)
+        port = int(data.get("port") or 0)
+        token = data.get("token") or ""
+        pid = int(data.get("pid") or 0)
+        if not (port and token and pid):
+            return None
+        # Cheap liveness check: PID alive? Avoids the ~5s socket
+        # connect-refused wait when the daemon was killed but the file
+        # wasn't cleaned up (atexit doesn't fire on SIGKILL).
+        try:
+            _os.kill(pid, 0)
+        except OSError:
+            return None
+        return {"port": port, "token": token}
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
+def _proxy_dispatch(shape: str, args: dict):
+    """Forward the dispatch to the daemon's local_server. Returns the
+    response dict on success, raises on failure."""
+    # Loop-break: if local_server is running in THIS process we ARE the
+    # daemon — proxying would just hit our own handler and recurse.
+    try:
+        from clawmetry import local_server as _ls
+        if _ls.is_running():
+            raise RuntimeError("dispatch is in-daemon; skipping proxy")
+    except ImportError:
+        pass
+    disc = _read_discovery()
+    if not disc:
+        raise FileNotFoundError("daemon local_server not discoverable")
+    import urllib.request
+    payload = _json.dumps({"shape": shape, "args": args}).encode("utf-8")
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{disc['port']}/api/local/query",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {disc['token']}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=_PROXY_TIMEOUT_SECS) as resp:
+        return _json.loads(resp.read().decode("utf-8"))
 
 
 def _coerce_args(shape: str, raw: dict) -> dict:
@@ -105,8 +172,25 @@ def _safe_int(v: Any, *, default: int, lo: int, hi: int) -> int:
 
 def _dispatch(shape: str, args: dict) -> dict:
     """Single-source-of-truth shape→method bridge. Both the HTTP and (future)
-    WS transports call this. Returns a JSON-friendly dict ready to ship."""
+    WS transports call this. Returns a JSON-friendly dict ready to ship.
+
+    Routing order:
+      1. If a daemon local_server discovery file is present + alive,
+         proxy through it (the daemon is the only process that can read
+         the DuckDB while it owns the writer lock).
+      2. Else fall back to opening the DuckDB directly (single-process
+         mode, or daemon temporarily down).
+    """
     started = time.monotonic()
+    # Try the daemon proxy first. If it fails for ANY reason, fall
+    # through to direct access — the dashboard never goes blank.
+    try:
+        body = _proxy_dispatch(shape, args)
+        body["_via"] = "daemon_proxy"
+        body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        return body
+    except Exception:
+        pass
     store = _store()
     if shape == "health":
         body = store.health()
@@ -115,6 +199,7 @@ def _dispatch(shape: str, args: dict) -> dict:
         rows = getattr(store, method_name)(**args)
         body = {"rows": rows, "count": len(rows)}
     body["_shape"] = shape
+    body["_via"] = "direct"
     body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
     return body
 
