@@ -8,11 +8,13 @@ on:
       - 'clawmetry/cli.py'
       - 'dashboard.py'
       - 'setup.py'
+      - '.github/workflows/sync-test.yml'
   pull_request:
     paths:
       - 'clawmetry/sync.py'
       - 'clawmetry/cli.py'
       - 'dashboard.py'
+      - '.github/workflows/sync-test.yml'
   workflow_dispatch:
 
 jobs:
