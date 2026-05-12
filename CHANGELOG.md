@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### DuckDB-everywhere + heartbeat-piggyback transport (epic #1032 phase 1, partial #964 close-out)
+- **`/api/transcript/<sid>` reads from local DuckDB** (#1056) under `CLAWMETRY_LOCAL_STORE_READ=1`. Closes the explicit local-first blocker surfaced by the real-OpenClaw E2E pipeline.
+- **`/api/memory-files`, `/api/file`, `/api/memory`, `/api/memory-analytics` read from local DuckDB** (#1059) via new `LocalStore.query_memory_blobs()`. POST `/api/file` writes still on the filesystem — read-only by default.
+- **Tier-1 fast paths**: `/api/component/tool/<name>`, `/api/component/brain`, `/api/autonomy`, `/api/advisor/{ask,status}`, `/api/reasoning` (#1057). The 5 OS-state component endpoints (runtime/machine/storage/network/gateway) intentionally stay off the event store.
+- **Daemon dispatches heartbeat-piggybacked queries** (#1054, #1055). Replaces the killed WS relay path. Cloud responds to `/ingest/heartbeat` with `pending_queries`; daemon dispatches via `routes/local_query._dispatch()`, encrypts, POSTs to `/ingest/cache`. Industry-validated by Datadog Remote Config / AWS SSM Run Command / OpenTelemetry OpAMP-HTTP.
+- **Real OpenClaw binary E2E coverage** (#1058). 8 tests spawn `openclaw agent --local --message ... --json` against a hermetic `OPENCLAW_HOME` and round-trip the produced JSONL through the real daemon → DuckDB → `/api/local/events` + `/api/sessions`. Skips cleanly on CI without the binary.
+- **Coverage**: 32/32 `_try_local_store_*`-gated endpoints have full seed→hit→`_source`-assert tests.
+
 ### Local store: multi-agent foundation + naming (epic #964)
 - **Local DB renamed** `events.duckdb` → `clawmetry.duckdb`. The DB now
   holds events, sessions, memory blobs, heartbeats, system snapshots
