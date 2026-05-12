@@ -202,9 +202,219 @@ def api_channels():
     return jsonify({"channels": configured})
 
 
+def _try_local_store_overview():
+    """Epic #964: opt-in local-store fast path for /api/overview.
+
+    Builds the same response shape as the legacy gateway-backed handler from
+    DuckDB: session counts (from query_sessions), most-recently-active session
+    metadata (model, tokens, updatedAt) — all derivable from
+    ``query_sessions`` + ``query_aggregates`` + ``query_events``.
+
+    System-info and infra blocks still come from local subprocesses; the fast
+    path only replaces the gateway-dependent fields (model, sessionCount,
+    activeSessions, mainSessionUpdated, mainTokens). Cron + memory counts
+    intentionally stay on their existing helpers (they hit the filesystem
+    directly and are already <5ms).
+
+    Returns ``None`` to defer to the legacy handler if:
+      - the local_store module isn't importable
+      - the sessions table is empty (fresh install / non-OpenClaw user)
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    import subprocess as _sub
+    import sys as _sys
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+    except Exception:
+        return None
+    try:
+        sess_rows = store._fetch("""
+            SELECT session_id, agent_id, title, started_at, last_active_at,
+                   ended_at, status, total_tokens, cost_usd, message_count,
+                   metadata
+            FROM sessions
+            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+            LIMIT 200
+        """, [])
+    except Exception:
+        return None
+    if not sess_rows:
+        return None
+
+    # Build a normalized view of sessions.
+    sessions = []
+    for r in sess_rows:
+        meta = {}
+        if r[10]:
+            try:
+                meta = json.loads(bytes(r[10]).decode("utf-8"))
+            except Exception:
+                pass
+        sessions.append({
+            "session_id": r[0],
+            "agent_id": r[1],
+            "title": r[2] or "",
+            "started_at": r[3] or "",
+            "last_active_at": r[4] or "",
+            "ended_at": r[5] or "",
+            "status": (r[6] or "").lower(),
+            "total_tokens": int(r[7] or 0),
+            "cost_usd": float(r[8] or 0.0),
+            "message_count": int(r[9] or 0),
+            "model": meta.get("model"),
+        })
+
+    # Pick the most recent non-subagent session as the "main" session.
+    def _is_subagent(s):
+        sid = (s.get("session_id") or "").lower()
+        return "subagent" in sid or "sub-agent" in sid
+    main = next((s for s in sessions if not _is_subagent(s)), sessions[0])
+
+    # Active = status=='active' (DuckDB persists status as a free-form string;
+    # 'active' is what sync.py writes for in-progress sessions).
+    active_count = sum(1 for s in sessions if s["status"] == "active")
+
+    # Model: prefer metadata.model on the main session; fall back to the most
+    # recently observed model across events.
+    model_name = main.get("model") or "unknown"
+    if model_name == "unknown":
+        try:
+            evs = store.query_events(limit=20)
+            for e in evs:
+                m = e.get("model")
+                if m:
+                    model_name = m
+                    break
+        except Exception:
+            pass
+
+    # Pull the latest cron + memory totals using the existing dashboard
+    # helpers. They're already filesystem-backed and fast — and they read
+    # from canonical sources (the gateway / .openclaw memory dir) that the
+    # local store doesn't replicate. We still want the fast path to be 100%
+    # local-only, so we wrap them in try/except so a missing FS doesn't break
+    # the response.
+    import dashboard as _d
+    try:
+        crons = _d._get_crons()
+    except Exception:
+        crons = []
+    enabled = len([j for j in crons if j.get("enabled")])
+    disabled = len(crons) - enabled
+    try:
+        mem_files = _d._get_memory_files()
+    except Exception:
+        mem_files = []
+    total_size = sum(f.get("size", 0) for f in mem_files)
+
+    # System info — copied verbatim from the legacy handler so the response
+    # shape matches byte-for-byte. Each subprocess has a 2s timeout so a slow
+    # df/free/uptime can't hang the request thread.
+    system = []
+    try:
+        disk = (
+            _sub.run(["df", "-h", "/"], capture_output=True, text=True, timeout=2)
+            .stdout.strip().split("\n")[-1].split()
+        )
+        disk_pct = int(disk[4].replace("%", "")) if len(disk) > 4 else 0
+        disk_color = "green" if disk_pct < 80 else ("yellow" if disk_pct < 90 else "red")
+        system.append(["Disk /", f"{disk[2]} / {disk[1]} ({disk[4]})", disk_color])
+    except Exception:
+        system.append(["Disk /", "--", ""])
+
+    try:
+        mem = (
+            _sub.run(["free", "-h"], capture_output=True, text=True, timeout=2)
+            .stdout.strip().split("\n")[1].split()
+        )
+        system.append(["RAM", f"{mem[2]} / {mem[1]}", ""])
+    except Exception:
+        system.append(["RAM", "--", ""])
+
+    try:
+        load = open("/proc/loadavg").read().split()[:3]
+        system.append(["Load", " ".join(load), ""])
+    except Exception:
+        system.append(["Load", "--", ""])
+
+    try:
+        uptime = _sub.run(
+            ["uptime", "-p"], capture_output=True, text=True, timeout=2
+        ).stdout.strip()
+        system.append(["Uptime", uptime.replace("up ", ""), ""])
+    except Exception:
+        system.append(["Uptime", "--", ""])
+
+    if _sys.platform != "win32":
+        try:
+            gw = _sub.run(
+                ["pgrep", "-f", "moltbot"], capture_output=True, text=True, timeout=2
+            )
+            gw_running = gw.returncode == 0
+        except Exception:
+            gw_running = False
+    else:
+        gw_running = False
+    system.append([
+        "Gateway",
+        "Running" if gw_running else "Stopped",
+        "green" if gw_running else "red",
+    ])
+
+    # Infra block — same shape as legacy.
+    infra = {
+        "userName": _d.USER_NAME,
+        "network": _d.get_local_ip(),
+    }
+    try:
+        import platform
+        uname = platform.uname()
+        infra["machine"] = uname.node
+        infra["runtime"] = f"Node.js - {uname.system} {uname.release.split('-')[0]}"
+    except Exception:
+        infra["machine"] = "Host"
+        infra["runtime"] = "Runtime"
+    try:
+        disk_info = (
+            _sub.run(["df", "-h", "/"], capture_output=True, text=True, timeout=2)
+            .stdout.strip().split("\n")[-1].split()
+        )
+        infra["storage"] = f"{disk_info[1]} root"
+    except Exception:
+        infra["storage"] = "Disk"
+
+    return {
+        "model": model_name,
+        "provider": _d._infer_provider_from_model(model_name),
+        "sessionCount": len(sessions),
+        "sessions": len(sessions),  # alias for E2E compatibility
+        "activeSessions": active_count,
+        "mainSessionUpdated": main.get("last_active_at") or main.get("started_at"),
+        "mainTokens": main.get("total_tokens", 0),
+        "contextWindow": 200000,
+        "cronCount": len(crons),
+        "cronEnabled": enabled,
+        "cronDisabled": disabled,
+        "memoryCount": len(mem_files),
+        "memorySize": total_size,
+        "system": system,
+        "infra": infra,
+        "_source": "local_store",
+    }
+
+
 @bp_overview.route("/api/overview")
 def api_overview():
     import dashboard as _d
+
+    # Epic #964: opt-in local-store fast path. When CLAWMETRY_LOCAL_STORE_READ=1
+    # AND the local sessions table has rows, serve directly from DuckDB. Falls
+    # through to gateway/JSONL otherwise (zero-change default).
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_overview()
+        if fast is not None:
+            return jsonify(fast)
 
     # Try gateway API for sessions
     gw_sessions = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
@@ -475,10 +685,102 @@ def api_main_activity():
     )
 
 
+def _try_local_store_timeline():
+    """Epic #964: opt-in local-store fast path for /api/timeline.
+
+    The legacy handler walks 31 daily JSONL log files (one per day for the
+    last 30 days), parsing every line to count events and bucket by hour.
+    On busy nodes that's hundreds of MB of disk I/O on a hot path.
+
+    ``query_aggregates`` is the perfect fit: DuckDB pre-buckets events by day
+    on the columnar layout in single-digit ms even at 100k+ events. We then
+    re-derive the per-hour distribution by querying ``query_events`` once per
+    day with a tight window — only days that already showed activity in the
+    aggregates pass actually get scanned.
+
+    Returns ``None`` to defer to the JSONL fallback if:
+      - the local_store module isn't importable
+      - query_aggregates returns empty (no events seen yet)
+      - any unexpected error happens
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+    except Exception:
+        return None
+    now = datetime.now()
+    cutoff = (now - timedelta(days=30)).strftime("%Y-%m-%d") + "T00:00:00"
+    try:
+        rows = store.query_aggregates(since=cutoff)
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    # Roll up per-day counts (sum across agent_ids).
+    day_counts = {}
+    for r in rows:
+        d = r.get("day")
+        if not d:
+            continue
+        day_counts[d] = day_counts.get(d, 0) + int(r.get("event_count", 0) or 0)
+
+    # Build the per-hour distribution. We pull events once for each day that
+    # had activity using the (since, until) window and bucket client-side.
+    days = []
+    import dashboard as _d
+    mem_dir = getattr(_d, "MEMORY_DIR", None)
+    for i in range(30, -1, -1):
+        d = now - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        count = day_counts.get(ds, 0)
+        hours = {}
+        if count > 0:
+            try:
+                ev_rows = store.query_events(
+                    since=ds + "T00:00:00",
+                    until=ds + "T23:59:59",
+                    limit=10000,
+                )
+                for ev in ev_rows:
+                    ts = ev.get("ts") or ""
+                    if "T" in ts:
+                        try:
+                            h = int(ts.split("T")[1][:2])
+                            hours[h] = hours.get(h, 0) + 1
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        mem_file = os.path.join(mem_dir, f"{ds}.md") if mem_dir else None
+        has_memory = bool(mem_file and os.path.exists(mem_file))
+        if count > 0 or has_memory:
+            days.append({
+                "date": ds,
+                "label": d.strftime("%a %b %d"),
+                "events": count,
+                "hasMemory": has_memory,
+                "hours": hours,
+            })
+    return {
+        "days": days,
+        "today": now.strftime("%Y-%m-%d"),
+        "_source": "local_store",
+    }
+
+
 @bp_overview.route("/api/timeline")
 def api_timeline():
     """Return available dates with activity counts for time travel."""
     import dashboard as _d
+
+    # Epic #964: opt-in local-store fast path. When CLAWMETRY_LOCAL_STORE_READ=1
+    # AND query_aggregates returns rows, serve from DuckDB. Falls through to the
+    # 30-day JSONL scan otherwise (zero-change default).
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_timeline()
+        if fast is not None:
+            return jsonify(fast)
 
     now = datetime.now()
     days = []
