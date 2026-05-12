@@ -1143,6 +1143,66 @@ def _flush_session_batch(
         _post("/ingest/events", payload, api_key)
 
 
+def _extract_cost_tokens_model(obj: dict) -> tuple:
+    """Pull (cost_usd, token_count, model) out of a raw OpenClaw transcript event.
+
+    Real OpenClaw events nest these under ``obj["message"]["usage"]``:
+
+        {
+          "type": "message",
+          "message": {
+            "model": "claude-opus-4-7",
+            "usage": {
+              "totalTokens": 162,
+              "cost": {"total": 0.00495, ...}
+            }
+          }
+        }
+
+    Older / synthesised events sometimes carry top-level ``cost_usd`` /
+    ``tokens`` / ``model``. We accept either shape so tests, sub-agent
+    adapters, and the real OpenClaw harness all populate the columns
+    (previously the nested shape silently became NULL — see MOAT_E2E_REPORT
+    2026-05-13 root-cause #4)."""
+    cost_usd = obj.get("cost_usd")
+    if cost_usd is None:
+        cost_usd = obj.get("costUsd")
+    token_count = obj.get("token_count")
+    if token_count is None:
+        token_count = obj.get("tokens")
+    model = obj.get("model")
+
+    msg = obj.get("message")
+    if isinstance(msg, dict):
+        if model is None:
+            model = msg.get("model")
+        usage = msg.get("usage")
+        if isinstance(usage, dict):
+            if token_count is None:
+                tt = usage.get("totalTokens")
+                if tt is None:
+                    tt = usage.get("total_tokens")
+                if tt is not None:
+                    try:
+                        token_count = int(tt)
+                    except (TypeError, ValueError):
+                        token_count = None
+            if cost_usd is None:
+                cost = usage.get("cost")
+                if isinstance(cost, dict):
+                    cv = cost.get("total")
+                    if cv is None:
+                        cv = cost.get("total_usd")
+                else:
+                    cv = cost  # rare: cost itself is a number
+                if cv is not None:
+                    try:
+                        cost_usd = float(cv)
+                    except (TypeError, ValueError):
+                        cost_usd = None
+    return cost_usd, token_count, model
+
+
 def _local_ingest_session_batch(
     batch: list,
     session_file: str,
@@ -1176,6 +1236,12 @@ def _local_ingest_session_batch(
             # Skip events with no timestamp — the local store's index assumes
             # ts is set, and filtering them out is safer than synthesising one.
             continue
+        # Cost / token / model live UNDER ``message.usage`` in OpenClaw's real
+        # transcript shape (verified 2026-05-13 against
+        # ~/.openclaw/agents/main/sessions/*.jsonl). Top-level ``cost_usd`` /
+        # ``tokens`` only appear in synthesised events (e.g. our own tests).
+        # See MOAT_E2E_REPORT_2026-05-13 root-cause #4.
+        cost_usd, token_count, model = _extract_cost_tokens_model(obj)
         rows.append({
             "id": str(eid),
             "node_id": node_id,
@@ -1185,9 +1251,9 @@ def _local_ingest_session_batch(
             "event_type": str(obj.get("type") or obj.get("event_type") or "unknown"),
             "ts": str(ts),
             "data": obj,
-            "cost_usd": obj.get("cost_usd") or obj.get("costUsd"),
-            "token_count": obj.get("token_count") or obj.get("tokens"),
-            "model": obj.get("model"),
+            "cost_usd": cost_usd,
+            "token_count": token_count,
+            "model": model,
         })
     if rows:
         store.ingest_many(rows)

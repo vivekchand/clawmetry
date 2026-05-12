@@ -157,6 +157,7 @@ def api_sessions():
     if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
         fast = _try_local_store_sessions()
         if fast is not None:
+            _merge_unregistered_jsonls(fast["sessions"])
             return jsonify(fast)
     gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
@@ -173,7 +174,69 @@ def api_sessions():
     for s in sessions:
         if "session_type" not in s:
             s["session_type"] = _infer_session_type(s)
+    # Backfill: union with raw JSONL files on disk. The gateway / sessions.json
+    # index can lag behind the filesystem (a brand-new session writes its
+    # JSONL immediately but only registers in sessions.json once OpenClaw's
+    # registrar runs). Without this merge those sessions stay invisible until
+    # the registrar catches up — see MOAT_E2E_REPORT_2026-05-13 root-cause #3.
+    _merge_unregistered_jsonls(sessions)
     return jsonify({"sessions": sessions})
+
+
+def _merge_unregistered_jsonls(sessions: list) -> None:
+    """Append a minimal record for any ``<uuid>.jsonl`` in the sessions dir
+    that isn't already represented in ``sessions``. Mutates the list in place.
+
+    These rows carry ``displayName='(unregistered)'`` and ``session_type='main'``
+    so the UI can flag them. We deliberately don't re-scan the full transcript
+    here (cheap mtime/size only) — once the registrar catches up, the next
+    request returns the proper row.
+    """
+    import dashboard as _d
+    try:
+        base = _d._get_sessions_dir()
+    except Exception:
+        return
+    if not base or not os.path.isdir(base):
+        return
+    known: set = set()
+    for s in sessions:
+        for k in ("sessionId", "session_id", "key"):
+            v = s.get(k)
+            if isinstance(v, str) and v and "..." not in v:
+                known.add(v)
+    try:
+        entries = os.listdir(base)
+    except OSError:
+        return
+    for fname in entries:
+        if not fname.endswith(".jsonl") or "deleted" in fname or ".trajectory." in fname:
+            continue
+        sid = fname[:-len(".jsonl")]
+        if sid in known:
+            continue
+        fpath = os.path.join(base, fname)
+        try:
+            mtime = os.path.getmtime(fpath)
+        except OSError:
+            continue
+        sessions.append({
+            "sessionId":     sid,
+            "session_id":    sid,
+            "key":           sid[:12] + "...",
+            "displayName":   "(unregistered)",
+            "title":         "(unregistered)",
+            "updatedAt":     int(mtime * 1000),
+            "last_active_at": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+            "model":         "unknown",
+            "channel":       "unknown",
+            "totalTokens":   0,
+            "total_tokens":  0,
+            "total_cost":    0.0,
+            "message_count": 0,
+            "session_type":  "main",
+            "_source":       "filesystem_unregistered",
+        })
 
 
 def _try_local_store_sessions():
