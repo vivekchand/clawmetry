@@ -312,6 +312,32 @@ _DDL = [
         PRIMARY KEY (agent_type, subagent_id)
     )
     """,
+    # Epic #1032 Phase 4 — approval queue. Authored locally when the policy
+    # watcher fires on a tool-call, mirrored to the cloud cache via heartbeat
+    # cache_push so the cloud Approvals inbox paints from cache, and resolved
+    # via the heartbeat-piggyback pending_queries channel (cloud → node).
+    # DuckDB is authoritative; Cloud SQL row is no longer written. owner_hash
+    # binds each request to the cm_ token that owns it (sha256 of the token,
+    # matching the cloud-side _owner_hash_for helper). `args` is the encoded
+    # toolCall arguments — stored as BLOB so we don't drag a JSONB-style
+    # schema bump through here when callers stuff arbitrary dicts in.
+    """
+    CREATE TABLE IF NOT EXISTS approvals (
+        id                     VARCHAR PRIMARY KEY,
+        owner_hash             VARCHAR,
+        requestor_session_id   VARCHAR,
+        action                 VARCHAR,
+        args                   BLOB,
+        status                 VARCHAR NOT NULL DEFAULT 'pending',
+        created_at             VARCHAR,
+        resolved_at            VARCHAR,
+        resolver               VARCHAR,
+        decision               VARCHAR,
+        decision_reason        VARCHAR
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_approvals_owner_status ON approvals(owner_hash, status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_approvals_session ON approvals(requestor_session_id, created_at)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -906,6 +932,113 @@ class LocalStore:
             self._conn.execute("DELETE FROM alert_rules WHERE id = ?", [rid])
         return 1
 
+    def ingest_approval(self, approval: dict[str, Any]) -> None:
+        """Upsert one approval-queue row. Required: ``id``.
+
+        Optional: ``owner_hash``, ``requestor_session_id``, ``action``,
+        ``args`` (dict / list / str / bytes — coerced to BLOB via
+        ``_to_blob``), ``status`` (default ``"pending"``), ``created_at``,
+        ``resolved_at``, ``resolver``, ``decision``, ``decision_reason``.
+
+        Re-ingesting the same id updates non-NULL fields and bumps the
+        status; pre-existing decision metadata is preserved when the new
+        row only carries the request (the common case — policy watcher
+        creates the row, decision flow updates it via
+        ``update_approval_decision`` below)."""
+        aid = approval.get("id")
+        if not aid:
+            raise ValueError("approval must include 'id'")
+        args_blob = _to_blob(approval.get("args"))
+        status = approval.get("status") or "pending"
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO approvals (
+                    id, owner_hash, requestor_session_id, action, args,
+                    status, created_at, resolved_at, resolver, decision,
+                    decision_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    owner_hash           = COALESCE(excluded.owner_hash, approvals.owner_hash),
+                    requestor_session_id = COALESCE(excluded.requestor_session_id, approvals.requestor_session_id),
+                    action               = COALESCE(excluded.action, approvals.action),
+                    args                 = COALESCE(excluded.args, approvals.args),
+                    status               = excluded.status,
+                    created_at           = COALESCE(approvals.created_at, excluded.created_at),
+                    resolved_at          = COALESCE(excluded.resolved_at, approvals.resolved_at),
+                    resolver             = COALESCE(excluded.resolver, approvals.resolver),
+                    decision             = COALESCE(excluded.decision, approvals.decision),
+                    decision_reason      = COALESCE(excluded.decision_reason, approvals.decision_reason)
+            """, [
+                str(aid),
+                approval.get("owner_hash"),
+                approval.get("requestor_session_id"),
+                approval.get("action"),
+                args_blob,
+                status,
+                approval.get("created_at"),
+                approval.get("resolved_at"),
+                approval.get("resolver"),
+                approval.get("decision"),
+                approval.get("decision_reason"),
+            ])
+
+    def update_approval_decision(
+        self,
+        approval_id: str,
+        decision: str,
+        resolver: str,
+        reason: str | None = None,
+    ) -> int:
+        """Mark a pending approval as resolved. Returns 1 on update,
+        0 when the row is missing OR already decided (idempotent).
+
+        ``decision`` is the human-readable verdict (``"approve"`` /
+        ``"deny"`` from the cloud UI button click). ``status`` is bumped
+        to mirror the cloud-side semantics: ``approved`` / ``denied``,
+        falling back to ``decision`` itself for forward-compat with
+        future verdicts (e.g. ``deferred``). ``resolved_at`` is stamped
+        with the current UTC ISO timestamp.
+
+        Only updates rows still in the ``pending`` state — late
+        retries from the cloud relay are a no-op so the user's first
+        click wins even if the network reorders deliveries."""
+        if not approval_id:
+            return 0
+        if decision == "approve":
+            new_status = "approved"
+        elif decision == "deny":
+            new_status = "denied"
+        else:
+            new_status = decision or "decided"
+        from datetime import datetime, timezone
+        resolved_at = datetime.now(timezone.utc).isoformat()
+        with self._write_lock:
+            # Pre-check is the only reliable way to distinguish "first
+            # successful flip" from "already decided, no-op" on DuckDB
+            # versions whose UPDATE rowcount returns -1. We do it inside
+            # the write lock so the read-then-write pair is atomic against
+            # concurrent decision attempts.
+            pre = self._conn.execute(
+                "SELECT status FROM approvals WHERE id = ? LIMIT 1",
+                [str(approval_id)],
+            ).fetchone()
+            if not pre:
+                return 0
+            if pre[0] != "pending":
+                return 0
+            self._conn.execute("""
+                UPDATE approvals
+                SET status          = ?,
+                    decision        = ?,
+                    decision_reason = ?,
+                    resolver        = ?,
+                    resolved_at     = ?
+                WHERE id = ?
+                  AND status = 'pending'
+            """, [new_status, decision, reason, resolver, resolved_at,
+                  str(approval_id)])
+        return 1
+
     def ingest_system_snapshot(self, snap: dict[str, Any]) -> None:
         """Insert one system-snapshot row. Append-only;
         (agent_type, node_id, ts, kind) PK silently ignores duplicates."""
@@ -1318,6 +1451,59 @@ class LocalStore:
                         d["condition_json"] = text
                 except UnicodeDecodeError:
                     d["condition_json"] = None
+            out.append(d)
+        return out
+
+    def query_approvals(
+        self,
+        *,
+        owner_hash: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read approval-queue rows. Defaults to most-recently-created first.
+
+        ``owner_hash`` scopes the result to one cm_ token (sha256 of the
+        token). ``status`` filters by stage (``pending`` / ``approved`` /
+        ``denied`` / …). The ``args`` BLOB is decoded back to a JSON dict
+        where valid (str otherwise, None when empty) so callers can hand
+        the row straight to the API without a second decode."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if owner_hash:
+            clauses.append("owner_hash = ?")
+            params.append(owner_hash)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, owner_hash, requestor_session_id, action, args,
+                   status, created_at, resolved_at, resolver, decision,
+                   decision_reason
+            FROM approvals
+            {where}
+            ORDER BY COALESCE(created_at, '') DESC, id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "owner_hash", "requestor_session_id", "action", "args",
+                "status", "created_at", "resolved_at", "resolver",
+                "decision", "decision_reason"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            raw = d.get("args")
+            if raw is not None:
+                try:
+                    text = (raw.decode("utf-8")
+                            if isinstance(raw, (bytes, bytearray)) else raw)
+                    try:
+                        d["args"] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d["args"] = text
+                except UnicodeDecodeError:
+                    d["args"] = None
             out.append(d)
         return out
 
