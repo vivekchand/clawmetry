@@ -7826,6 +7826,14 @@ function processFlowEvent(line) {
     addFlowFeedItem('⚡ Session activated', '#f0c040', 'system');
     return;
   }
+  if (msg.includes('session state') && (msg.includes('new=completed') || msg.includes('new=error') || msg.includes('new=cancelled') || msg.includes('new=aborted'))) {
+    try {
+      var termObj = JSON.parse(line);
+      var termSid = termObj.session_key || termObj.session || termObj.sessionId || termObj.id || '';
+      _clearStuckBanner(termSid);
+    } catch(e) {}
+    return;
+  }
   if (msg.includes('lane enqueue') && msg.includes('main')) {
     if (now - (flowThrottles['lane']||0) < 2000) return;
     flowThrottles['lane'] = now;
@@ -7853,7 +7861,12 @@ function processFlowEvent(line) {
     flowThrottles['stuck'] = now;
     addFlowFeedItem('⚠️ Session stuck detected', '#e04040');
     _diagPush({kind:'session.stuck', value:1, ts:now});
-    _showStuckBanner();
+    try {
+      var stuckObj = JSON.parse(line);
+      var stuckSid = stuckObj.session_key || stuckObj.session || stuckObj.sessionId || stuckObj.id || '';
+      var stuckAge = stuckObj.age_ms ? Math.round(stuckObj.age_ms / 1000) : (stuckObj.age_s || 0);
+      _showStuckBanner(stuckSid, stuckAge);
+    } catch(e) { _showStuckBanner('', 0); }
     return;
   }
   if (msg.includes('tool end') || msg.includes('tool_end')) {
@@ -7871,15 +7884,44 @@ function _diagPush(event) {
   if (_diagBuffer.length > 200) _diagBuffer = _diagBuffer.slice(-200);
 }
 
-function _showStuckBanner() {
-  var existing = document.getElementById('stuck-session-banner');
-  if (existing) return;
-  var banner = document.createElement('div');
-  banner.id = 'stuck-session-banner';
-  banner.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:9999;background:#e04040;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,0.4);display:flex;gap:12px;align-items:center;';
-  banner.innerHTML = '<span>⚠️ Session stuck detected — agent may be looping</span><button onclick="document.getElementById(\'stuck-session-banner\').remove()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:12px;">Dismiss</button>';
-  document.body.appendChild(banner);
-  setTimeout(function() { var b = document.getElementById('stuck-session-banner'); if (b) b.remove(); }, 30000);
+var _stuckCount = 0;
+var _stuckSessions = {};
+
+function _updateStuckBadge() {
+  var badge = document.getElementById('nav-stuck-badge');
+  if (!badge) return;
+  if (_stuckCount > 0) { badge.textContent = _stuckCount; badge.style.display = 'inline'; }
+  else { badge.style.display = 'none'; }
+}
+
+function _showStuckBanner(sessionId, ageSec) {
+  _stuckCount++;
+  if (sessionId) _stuckSessions[sessionId] = true;
+  _updateStuckBadge();
+  var banner = document.getElementById('stuck-session-banner');
+  if (!banner) return;
+  var label = sessionId ? sessionId.substring(0, 20) : 'unknown session';
+  var ageStr = ageSec > 0 ? ' (' + ageSec + 's)' : '';
+  var msg = document.getElementById('stuck-session-banner-msg');
+  if (msg) msg.textContent = '⚠️ Session stuck' + ageStr + ': ' + label + ' — agent may be looping';
+  var link = document.getElementById('stuck-session-banner-link');
+  if (link && sessionId) link.href = '#';
+  banner.style.display = 'flex';
+}
+
+function _clearStuckBanner(sessionId) {
+  if (sessionId && _stuckSessions[sessionId]) {
+    delete _stuckSessions[sessionId];
+    _stuckCount = Math.max(0, _stuckCount - 1);
+  } else if (!sessionId) {
+    _stuckCount = 0;
+    _stuckSessions = {};
+  }
+  _updateStuckBadge();
+  if (_stuckCount === 0) {
+    var banner = document.getElementById('stuck-session-banner');
+    if (banner) banner.style.display = 'none';
+  }
 }
 
 // === Overview Split-Screen: Clone flow SVG into overview pane ===
