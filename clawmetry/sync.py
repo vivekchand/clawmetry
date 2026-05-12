@@ -1774,9 +1774,18 @@ def send_heartbeat(config: dict) -> bool:
     last_err = None
     for attempt in range(3):
         try:
-            _post("/ingest/heartbeat", payload, config["api_key"])
+            resp_json = _post("/ingest/heartbeat", payload, config["api_key"])
             if attempt > 0:
                 log.info(f"Heartbeat succeeded after {attempt + 1} attempts")
+            # Phase 1 of relay-v2 (#1053): the cloud may piggyback a small
+            # batch of `pending_queries` on the heartbeat response. Each is
+            # a shape-allowlisted read against the local DuckDB; we run them,
+            # encrypt the result, and POST back to /ingest/cache so the
+            # cloud-side dashboard can serve subsequent requests from the
+            # warm cache without ever touching the local node.
+            pending = (resp_json or {}).get("pending_queries") or []
+            if pending:
+                _dispatch_pending_queries(config, pending)
             return True
         except Exception as e:
             last_err = e
@@ -1784,6 +1793,84 @@ def send_heartbeat(config: dict) -> bool:
                 time.sleep(2**attempt)  # 1s, 2s backoff
     log.warning(f"Heartbeat failed after 3 attempts: {last_err}")
     return False
+
+
+# ── Heartbeat-piggyback query dispatch (relay-v2 phase 1, #1053) ─────────────
+# Allowlist mirrors routes.local_query._SHAPES. Duplicated here so the
+# daemon stays safe when `routes/` isn't on sys.path (some installs run the
+# sync daemon without the dashboard module loaded).
+_PENDING_SHAPES = {"events", "sessions", "aggregates", "health", "transcript"}
+
+
+def _canonical_args_hash(args: dict) -> str:
+    """Stable sha256 of the args dict — sorted keys, no whitespace. Used as
+    the cache_key fingerprint so the cloud can detect arg drift even if the
+    same `cache_key` label is reused."""
+    import hashlib
+    canonical = json.dumps(args or {}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _local_dispatch_fallback(shape: str, args: dict) -> dict:
+    """Fallback dispatcher used when `routes.local_query` isn't importable
+    (daemon-only installs). Mirrors the minimal shape→method bridge."""
+    from clawmetry import local_store
+    store = local_store.get_store(read_only=True)
+    if shape == "health":
+        return store.health()
+    method_map = {
+        "events":     "query_events",
+        "sessions":   "query_sessions",
+        "aggregates": "query_aggregates",
+        "transcript": "query_events",
+    }
+    method = method_map.get(shape)
+    if not method:
+        raise ValueError(f"unknown shape: {shape}")
+    rows = getattr(store, method)(**(args or {}))
+    return {"rows": rows, "count": len(rows), "_shape": shape, "_via": "fallback"}
+
+
+def _dispatch_pending_queries(config: dict, pending: list) -> None:
+    """Run each cloud-requested query against the local store, encrypt the
+    result, and POST back to /ingest/cache. Failures on individual queries
+    are swallowed (logged) so one bad query never blocks the rest."""
+    try:
+        from routes.local_query import _dispatch as _local_dispatch  # type: ignore
+    except Exception:
+        _local_dispatch = _local_dispatch_fallback
+    api_key = config.get("api_key", "")
+    enc_key = config.get("encryption_key")
+    node_id = config.get("node_id", "")
+    for q in pending or []:
+        try:
+            if not isinstance(q, dict):
+                continue
+            shape = q.get("shape")
+            if shape not in _PENDING_SHAPES:
+                continue  # defensive — cloud should have already filtered
+            qid = q.get("id")
+            cache_key = q.get("cache_key")
+            args = q.get("args") or {}
+            result = _local_dispatch(shape, args)
+            if not enc_key:
+                log.debug("pending_query %s: no encryption key; skipping", qid)
+                continue
+            blob = encrypt_payload(result, enc_key)
+            _post("/ingest/cache", {
+                "node_id": node_id,
+                "id": qid,
+                "cache_key": cache_key,
+                "blob": blob,
+                "shape": shape,
+                "args_hash": _canonical_args_hash(args),
+                "ttl": 3600,
+            }, api_key)
+        except Exception as e:
+            log.warning("pending_query dispatch failed (id=%s shape=%s): %s",
+                        (q or {}).get("id") if isinstance(q, dict) else None,
+                        (q or {}).get("shape") if isinstance(q, dict) else None,
+                        e)
 
 
 def _get_version() -> str:
