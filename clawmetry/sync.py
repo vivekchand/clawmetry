@@ -1764,6 +1764,17 @@ def send_heartbeat(config: dict) -> bool:
         payload["local_store_size_mb"] = round(size_mb, 3)
     except Exception:
         pass  # local store optional — never break heartbeat over it
+    # Phase 2 of relay-v2 (epic #1032): proactively push the top-50 brain
+    # events to the cloud cache so the Brain page paints in <100ms on first
+    # load instead of waiting for a relay round-trip. The blob is the same
+    # E2E ciphertext we use for /ingest/cache, so the cloud never sees
+    # plaintext. Best-effort — heartbeat MUST succeed even if this fails.
+    try:
+        pushes = _build_brain_cache_pushes(config)
+        if pushes:
+            payload["cache_pushes"] = pushes
+    except Exception as _bp_e:
+        log.debug("brain cache_push build failed (continuing): %s", _bp_e)
     # Local-first: persist this heartbeat to local DuckDB so the dashboard
     # has a per-node liveness history even when offline. Best-effort.
     try:
@@ -1829,6 +1840,105 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
         raise ValueError(f"unknown shape: {shape}")
     rows = getattr(store, method)(**(args or {}))
     return {"rows": rows, "count": len(rows), "_shape": shape, "_via": "fallback"}
+
+
+# ── Phase 2: proactive brain cache_push (epic #1032) ─────────────────────────
+# The Brain page is the first thing most users hit on the cloud dashboard. In
+# Phase 1 the cloud only had data for it after a browser /api/cloud/subscribe
+# round-trip (one full heartbeat cycle, up to 60s). Phase 2 pushes the top-50
+# brain events on EVERY heartbeat so the page paints from cache in <100ms.
+#
+# Key shape: `brain:{owner_hash}:{node_id}:recent`. The cloud derives
+# owner_hash from the cm_ token (sha256 hex) — we compute the same value here
+# so both sides agree on the key without needing the daemon to know the
+# cloud's internal user id.
+#
+# TTL: 6h. Each heartbeat overwrites the entry, so TTL only matters when the
+# daemon goes offline — after 6h the cloud treats the cache as cold and
+# re-subscribes. Long enough to cover a typical work-day pause; short enough
+# that stale data doesn't linger after a node is decommissioned.
+BRAIN_CACHE_TTL_SEC = 21600
+BRAIN_CACHE_LIMIT = 50
+
+
+def _owner_hash_for_token(api_key: str) -> str:
+    """Mirror of cloud's `_owner_hash_for(token)` — sha256 hex of the cm_
+    token. The daemon computes it locally so the cache key it sends matches
+    exactly what the cloud derives from the same token on read."""
+    import hashlib
+    return hashlib.sha256((api_key or "").encode("utf-8")).hexdigest()
+
+
+def _build_brain_cache_pushes(config: dict) -> list:
+    """Return the heartbeat `cache_pushes` array — currently a single entry
+    holding the encrypted top-50 brain events for this node.
+
+    Returns an empty list when:
+      - The local store has no events yet (fresh install) — nothing to push.
+      - Encryption key is unset — we never push plaintext.
+      - The local store import fails — degrade silently.
+
+    The blob shape mirrors `routes.brain._try_local_store_brain` so the cloud
+    read path can hand the decrypted dict straight to the existing dashboard
+    JS without translation.
+    """
+    enc_key = config.get("encryption_key")
+    if not enc_key:
+        return []
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (api_key and node_id):
+        return []
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return []
+    try:
+        store = local_store.get_store(read_only=True)
+        rows = store.query_events(limit=BRAIN_CACHE_LIMIT)
+    except Exception:
+        return []
+    if not rows:
+        return []
+    # Same translation as routes/brain.py:_try_local_store_brain so the
+    # browser sees an identical event shape regardless of which path served
+    # the data (cache hit vs. relay subscribe vs. JSONL fallback).
+    events = []
+    for r in rows:
+        data = r.get("data") if isinstance(r, dict) else None
+        detail = ""
+        if isinstance(data, dict):
+            detail = (data.get("input") or data.get("summary")
+                      or data.get("text") or data.get("name") or "")
+        elif isinstance(data, str):
+            detail = data
+        events.append({
+            "time":      r.get("ts", ""),
+            "type":      (r.get("event_type") or "").upper(),
+            "detail":    str(detail)[:200],
+            "src":       (r.get("session_id") or r.get("agent_id") or "")[:32],
+            "sessionId": r.get("session_id") or "",
+            "agentId":   r.get("agent_id") or "main",
+            "tokens":    r.get("token_count") or 0,
+            "cost":      float(r.get("cost_usd") or 0.0),
+            "model":     r.get("model") or "",
+        })
+    payload = {
+        "events":  events,
+        "count":   len(events),
+        "_source": "local_store",
+        "_shape":  "brain_history",
+    }
+    try:
+        blob = encrypt_payload(payload, enc_key)
+    except Exception:
+        return []
+    owner_hash = _owner_hash_for_token(api_key)
+    return [{
+        "key":    f"brain:{owner_hash}:{node_id}:recent",
+        "ttl_s":  BRAIN_CACHE_TTL_SEC,
+        "blob":   blob,
+    }]
 
 
 def _dispatch_pending_queries(config: dict, pending: list) -> None:
