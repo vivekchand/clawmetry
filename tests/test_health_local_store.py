@@ -39,30 +39,51 @@ def _wait_flush(store, t: float = 2.0) -> None:
         time.sleep(0.02)
 
 
-def _stub_dashboard() -> None:
-    """Install a tiny stub `dashboard` module so routes/health.py's late
-    `import dashboard as _d` succeeds inside the test process. The stub
-    only needs the attributes the LEGACY paths reach for — the fast paths
-    we test never touch `_d`. We still set the attributes the fast paths
-    SOMETIMES read (e.g. `SESSIONS_DIR`) to /nonexistent so any accidental
-    fall-through fails fast instead of scanning the user's real workspace.
+def _stub_dashboard(monkeypatch=None) -> None:
+    """Install (or update) the `dashboard` module's legacy-path attributes
+    so routes/health.py's late ``import dashboard as _d`` succeeds inside
+    the test process AND so the legacy scanner doesn't read the user's
+    real ``~/.openclaw`` workspace when these tests run after another
+    test that already imported the real dashboard module.
+
+    Previously this function exited early if ``dashboard`` was already
+    in ``sys.modules`` (created by e.g. ``tests/test_brain_local_fastpath
+    .py``), which made the legacy scanner read the developer's real
+    workspace and return non-zero counts — test isolation defect
+    introduced in #1051.
+
+    When ``monkeypatch`` is provided, attributes are rebound via
+    ``monkeypatch.setattr`` so they get restored at teardown (does not
+    pollute the real ``dashboard`` module for subsequent tests). When
+    ``monkeypatch`` is None we still patch directly for backward
+    compatibility — fixtures that don't take monkeypatch should be
+    migrated.
     """
-    if "dashboard" in sys.modules:
-        return
-    stub = types.ModuleType("dashboard")
+    mod = sys.modules.get("dashboard")
+    if mod is None:
+        mod = types.ModuleType("dashboard")
+        sys.modules["dashboard"] = mod
+
+    def _set(attr: str, value):
+        if monkeypatch is not None:
+            monkeypatch.setattr(mod, attr, value, raising=False)
+        else:
+            setattr(mod, attr, value)
+
     # Reliability legacy path needs these — set to None so it returns the
     # "History module not available" branch if the fast path defers.
-    stub._history_db = None
-    stub.AgentReliabilityScorer = None
+    _set("_history_db", None)
+    _set("AgentReliabilityScorer", None)
     # Sandbox / loop / mcp / service-status legacy paths need these.
-    stub.SESSIONS_DIR = "/nonexistent/clawmetry-test-sessions"
-    stub._detect_sandbox_metadata = lambda: None
-    stub._detect_inference_metadata = lambda: None
-    stub._detect_security_metadata = lambda: None
-    stub._load_gw_config = lambda: {}
-    stub._detect_gateway_port = lambda: 18789
-    stub._gw_invoke = lambda *a, **kw: None
-    sys.modules["dashboard"] = stub
+    # ALWAYS rebind so a real `dashboard` imported earlier in the suite
+    # doesn't leak its real SESSIONS_DIR into the fall-back tests.
+    _set("SESSIONS_DIR", "/nonexistent/clawmetry-test-sessions")
+    _set("_detect_sandbox_metadata", lambda: None)
+    _set("_detect_inference_metadata", lambda: None)
+    _set("_detect_security_metadata", lambda: None)
+    _set("_load_gw_config", lambda: {})
+    _set("_detect_gateway_port", lambda: 18789)
+    _set("_gw_invoke", lambda *a, **kw: None)
 
 
 @pytest.fixture
@@ -78,7 +99,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "5")
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
 
-    _stub_dashboard()
+    _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -182,7 +203,7 @@ def test_reliability_falls_back_when_env_unset(tmp_path, monkeypatch):
     _history_db=None)."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "clawmetry.duckdb"))
     monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
-    _stub_dashboard()
+    _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -253,7 +274,7 @@ def test_sandbox_status_falls_back_when_env_unset(tmp_path, monkeypatch):
     """No env flag → never read from DuckDB even with a fresh snapshot."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "clawmetry.duckdb"))
     monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
-    _stub_dashboard()
+    _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -356,7 +377,7 @@ def test_mcp_stats_fast_path_aggregates_from_events(app):
 def test_mcp_stats_falls_back_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "clawmetry.duckdb"))
     monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
-    _stub_dashboard()
+    _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -436,7 +457,7 @@ def test_loop_detection_fast_path_finds_repeats(app):
 def test_loop_detection_falls_back_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "clawmetry.duckdb"))
     monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
-    _stub_dashboard()
+    _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -537,7 +558,7 @@ def test_service_status_uses_snapshots_when_present(app):
 def test_service_status_falls_back_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "clawmetry.duckdb"))
     monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
-    _stub_dashboard()
+    _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -560,3 +581,37 @@ def test_service_status_falls_back_when_env_unset(tmp_path, monkeypatch):
         store.stop(flush=True)
     except Exception:
         pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Regression: test isolation — _stub_dashboard must overwrite SESSIONS_DIR
+# even when a prior test imported the real `dashboard` module. Without this,
+# the fall-back tests above read the developer's `~/.openclaw` workspace via
+# the legacy scanner and return non-zero counts. Bug introduced in #1051
+# (audit 2026-05-12).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_stub_dashboard_rebinds_sessions_dir_even_when_real_dashboard_preloaded(
+    monkeypatch,
+):
+    """If a prior test imported the real `dashboard` module, the fall-back
+    tests above must NOT see its real `SESSIONS_DIR` — `_stub_dashboard`
+    should rebind it to `/nonexistent/...`. Reproduce the pre-fix failure
+    by preloading a stand-in `dashboard` with a "real-looking" SESSIONS_DIR,
+    then asserting the stub rebinds correctly under monkeypatch."""
+    fake_real = types.ModuleType("dashboard")
+    fake_real.SESSIONS_DIR = "/this/is/a/real/sessions/dir"
+    fake_real._history_db = object()  # non-None — simulate real
+    monkeypatch.setitem(sys.modules, "dashboard", fake_real)
+
+    _stub_dashboard(monkeypatch)
+
+    mod = sys.modules["dashboard"]
+    # Same module object — _stub_dashboard must NOT replace it.
+    assert mod is fake_real
+    # But SESSIONS_DIR must now be the safe sentinel.
+    assert mod.SESSIONS_DIR == "/nonexistent/clawmetry-test-sessions"
+    # And _history_db must be None so the reliability legacy path returns
+    # the "History module not available" branch.
+    assert mod._history_db is None
