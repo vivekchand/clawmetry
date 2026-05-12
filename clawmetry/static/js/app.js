@@ -1394,6 +1394,15 @@ async function loadSkills() {
   var summaryEl = document.getElementById('skills-summary-row');
   var listEl = document.getElementById('skills-list');
   if (!summaryEl || !listEl) return;
+  // Cloud iframes don't have access to the local skills filesystem — the
+  // cloud server returns 410 Gone for /api/skills, which the browser logs
+  // as a console error every time the user opens the Skills tab. Render
+  // an inline empty-state instead so the network call never fires.
+  if (window.CLOUD_MODE) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Skills inspector is local-only. Open the dashboard on the host running OpenClaw to view installed skills.</div>';
+    summaryEl.innerHTML = '';
+    return;
+  }
   listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
   try {
     var data = await fetch('/api/skills').then(function(r) { return r.json(); });
@@ -2794,8 +2803,11 @@ async function loadContextInspector() {
     var ov = await fetch('/api/overview').then(function(r){return r.json();}).catch(function(){return {};});
     // Fetch brain history for compaction events + turn count
     var brain = await fetch('/api/brain-history?limit=300').then(function(r){return r.json();}).catch(function(){return {events:[]};});
-    // Fetch skills for header token count
-    var skills = await fetch('/api/skills').then(function(r){return r.json();}).catch(function(){return {skills:[],summary:{}};});
+    // Fetch skills for header token count. /api/skills is cloud-disabled
+    // (410 Gone) — skip the network call in cloud mode and use empty totals.
+    var skills = window.CLOUD_MODE
+      ? {skills:[],summary:{}}
+      : await fetch('/api/skills').then(function(r){return r.json();}).catch(function(){return {skills:[],summary:{}};});
 
     var contextWindow = ov.contextWindow || 200000;
     var mainTokens = ov.mainTokens || 0;
@@ -5468,6 +5480,14 @@ function startSystemHealthRefresh() {
 async function loadDiagnostics() {
   var el = document.getElementById('sh-diagnostics');
   if (!el) return false;
+  // Diagnostics inspect local processes and on-disk OpenClaw config — neither
+  // exists in the cloud iframe. The cloud server returns 410 / 404 for both
+  // URLs, which the browser logs as console errors on every System Health
+  // refresh. Skip the call entirely and render a static "local-only" note.
+  if (window.CLOUD_MODE) {
+    el.innerHTML = '<div style="color:var(--text-muted);">Diagnostics are local-only — open the dashboard on the host to inspect detected config.</div>';
+    return true;
+  }
   try {
     var d = await fetchJsonWithTimeout('/api/diagnostics', 6000).catch(function() {
       return fetchJsonWithTimeout('/api/config-diagnostics', 6000);
@@ -7321,6 +7341,9 @@ function initFlow() {
 }
 
 function _populateFlowSkills() {
+  // /api/skills is cloud-disabled (410 Gone). Skip the fetch in cloud mode
+  // — the Flow tab still renders, just without per-skill mini-badges.
+  if (window.CLOUD_MODE) return;
   fetch('/api/skills').then(function(r){return r.json();}).then(function(d) {
     var skills = (d.skills || []).filter(function(s) { return s.status !== 'dead'; }).slice(0, 6);
     var container = document.getElementById('flow-skills-list');
