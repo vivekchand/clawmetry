@@ -1605,6 +1605,56 @@ class LocalStore:
         cols = ["agent_type", "node_id", "ts", "kind", "data"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
 
+    def query_sessions_table(
+        self,
+        *,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read rows directly from the typed ``sessions`` table.
+
+        Distinct from :meth:`query_sessions`, which aggregates the events
+        table by ``GROUP BY session_id``. The ``sessions`` table is the
+        typed-session view written by ``sync.py`` + the daemon — it carries
+        title, status, message_count, and a metadata BLOB.
+
+        Returns one dict per row with ``metadata`` already JSON-decoded
+        (``{}`` when missing or invalid). Rows are ordered most-recently-
+        active first.
+
+        Used by ``routes/sessions.py:_try_local_store_sessions`` and
+        ``routes/overview.py:_try_local_store_overview`` so the SQL lives
+        in one place — and so the daemon HTTP proxy
+        (``routes/local_query.py:local_store_via_daemon``) can expose it
+        for cross-process callers (issue #1088).
+        """
+        rows = self._fetch("""
+            SELECT agent_type, session_id, agent_id, title, started_at,
+                   last_active_at, ended_at, status, total_tokens, cost_usd,
+                   message_count, metadata
+            FROM sessions
+            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+            LIMIT ?
+        """, [int(limit)])
+        cols = ["agent_type", "session_id", "agent_id", "title", "started_at",
+                "last_active_at", "ended_at", "status", "total_tokens",
+                "cost_usd", "message_count", "metadata"]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            raw = d.get("metadata")
+            meta: dict[str, Any] = {}
+            if raw:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    meta = json.loads(text) if text else {}
+                    if not isinstance(meta, dict):
+                        meta = {}
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    meta = {}
+            d["metadata"] = meta
+            out.append(d)
+        return out
+
     def query_aggregates(
         self,
         *,

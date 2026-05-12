@@ -45,15 +45,24 @@ def _try_local_store_brain(limit: int, include_artifacts: bool):
     is a measurable proof that the local store is the right answer for
     the simple list-of-events case.
     """
+    rows = None
+    # Issue #1088: cross-process fast-path. The standard install runs daemon
+    # + dashboard as separate processes and DuckDB's exclusive writer lock
+    # blocks the dashboard from opening the file even read-only. Ask the
+    # daemon over HTTP first; fall back to direct open for single-process
+    # boots (tests, dev mode).
     try:
-        from clawmetry import local_store
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_events", limit=limit)
     except Exception:
-        return None
-    try:
-        store = local_store.get_store()
-        rows = store.query_events(limit=limit)
-    except Exception:
-        return None
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store()
+            rows = store.query_events(limit=limit)
+        except Exception:
+            return None
     if not rows:
         # Empty store → fall through to JSONL parser so a fresh install
         # without a populated local DB still gets a useful brain feed.

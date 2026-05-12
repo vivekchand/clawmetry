@@ -116,21 +116,42 @@ def _ls_event_skill(ev):
     return None
 
 
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback.
+
+    Issue #1088: every direct ``get_store().query_*`` call is dead code in
+    the standard install (daemon owns the writer lock, dashboard's open
+    raises ``IOException: Could not set lock``). This wrapper hits the
+    daemon's HTTP proxy first, then falls back to direct open for
+    single-process boots (tests + dev mode).
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
 def _try_local_store_usage():
     """Fast path for /api/usage. Builds the daily token/cost chart by
     aggregating ``daily_aggregates`` (with a ``query_events`` fallback if
     the aggregates table is empty). Returns the same shape as the legacy
     handler: days[], today/week/month, todayCost/weekCost/monthCost,
     modelBreakdown, etc. Returns None to defer."""
-    store = _ls_get_store()
-    if store is None:
-        return None
-    try:
-        # Pull pre-rolled day buckets first — these are the "blessed" data
-        # the daemon writes once per ingest. Falls back to live event scan
-        # when aggregates are empty (e.g. fresh install, only events seeded).
-        agg_rows = store.query_aggregates()
-    except Exception:
+    # Pull pre-rolled day buckets first — these are the "blessed" data
+    # the daemon writes once per ingest. Falls back to live event scan
+    # when aggregates are empty (e.g. fresh install, only events seeded).
+    agg_rows = _ls_call("query_aggregates")
+    if agg_rows is None:
         return None
     daily_tokens = {}
     daily_cost = {}
@@ -142,10 +163,7 @@ def _try_local_store_usage():
             daily_tokens[day] = daily_tokens.get(day, 0) + int(r.get("token_count") or 0)
             daily_cost[day] = daily_cost.get(day, 0.0) + float(r.get("cost_usd") or 0.0)
     else:
-        try:
-            evs = store.query_events(limit=10000)
-        except Exception:
-            return None
+        evs = _ls_call("query_events", limit=10000)
         if not evs:
             return None
         for ev in evs:
@@ -185,13 +203,10 @@ def _try_local_store_usage():
 
     # Per-model breakdown: scan recent events and group.
     model_usage = {}
-    try:
-        recent = store.query_events(limit=5000)
-        for ev in recent:
-            m = ev.get("model") or "unknown"
-            model_usage[m] = model_usage.get(m, 0) + int(ev.get("token_count") or 0)
-    except Exception:
-        pass
+    recent = _ls_call("query_events", limit=5000) or []
+    for ev in recent:
+        m = ev.get("model") or "unknown"
+        model_usage[m] = model_usage.get(m, 0) + int(ev.get("token_count") or 0)
     model_breakdown = [
         {"model": k, "tokens": v}
         for k, v in sorted(model_usage.items(), key=lambda x: -x[1])

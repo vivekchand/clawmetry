@@ -206,30 +206,43 @@ def api_reliability():
 
 
 def _try_local_store_heatmap(n_days: int):
-    """Fast path for /api/heatmap. Bucket events into a (days × 24h) grid
-    using DuckDB ``query_events`` instead of scanning every log + JSONL.
+    """Issue #1088 fast path for /api/heatmap. Bucket events into a (days × 24h)
+    grid using DuckDB ``query_events`` instead of scanning every log + JSONL.
+
+    Tries the daemon HTTP proxy FIRST (cross-process safe — under the standard
+    install the daemon owns the writer lock and direct opens fail), then falls
+    back to a direct ``get_store()`` open for single-process boots (tests +
+    dev mode).
 
     Returns ``None`` to defer to the legacy file scan if:
-      - the local_store module isn't importable
+      - neither path can reach the local store
       - the events table is empty inside the requested window
       - any unexpected error happens
     """
+    now = datetime.now()
+    cutoff = now - timedelta(days=n_days)
+    since_iso = cutoff.replace(microsecond=0).isoformat()
+    rows = None
     try:
-        from clawmetry import local_store
-        store = local_store.get_store(read_only=True)
-        cutoff = datetime.now() - timedelta(days=n_days)
-        since_iso = cutoff.replace(microsecond=0).isoformat()
+        from routes.local_query import local_store_via_daemon
         # Heatmap is bounded: 90 days × 24h = 2160 cells. 50k events is a
         # generous cap that covers a very busy single-user node and still
         # finishes in <50ms on a laptop.
-        evs = store.query_events(since=since_iso, limit=50000)
+        rows = local_store_via_daemon("query_events", limit=50000, since=since_iso)
     except Exception:
-        return None
-    if not evs:
+        rows = None
+    # Single-process fallback: open the DuckDB ourselves (tests / dev mode).
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_events(since=since_iso, limit=50000)
+        except Exception:
+            return None
+    if not rows:
         return None
 
-    now = datetime.now()
-    grid = {}
+    grid: dict[str, list[int]] = {}
     day_labels = []
     for i in range(n_days - 1, -1, -1):
         d = now - timedelta(days=i)
@@ -239,7 +252,7 @@ def _try_local_store_heatmap(n_days: int):
         day_labels.append({"date": ds, "label": lbl})
 
     counted = 0
-    for ev in evs:
+    for ev in rows:
         ts = ev.get("ts")
         if not ts:
             continue
@@ -282,7 +295,10 @@ def api_heatmap():
     except (ValueError, TypeError):
         n_days = 7
 
-    # Epic #964 — opt-in DuckDB fast path.
+    # Epic #964 / Issue #1088 — opt-in DuckDB fast path. When
+    # CLAWMETRY_LOCAL_STORE_READ=1 AND the store has events in the window,
+    # serve from DuckDB via the daemon HTTP proxy (cross-process safe).
+    # Falls through to the JSONL/log scan otherwise.
     if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
         fast = _try_local_store_heatmap(n_days)
         if fast is not None:

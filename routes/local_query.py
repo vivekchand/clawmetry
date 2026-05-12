@@ -269,6 +269,147 @@ def http_query():
         return jsonify({"error": str(e)[:300]}), 500
 
 
+# ── Daemon proxy for individual LocalStore methods (issue #1088) ───────────
+#
+# Why a second endpoint distinct from ``/api/local/query``:
+#   * ``/api/local/query`` is a STABLE public contract used by browsers, the
+#     CLI, and the future WS relay. Its shapes are deliberately frozen.
+#   * ``/__local_query__/<method>`` is an INTERNAL daemon-to-dashboard RPC.
+#     It exposes a wider allowlist of LocalStore methods so the legacy
+#     ``_try_local_store_*`` fast-paths in ``routes/`` can keep working
+#     unchanged when the dashboard runs in a separate process from the sync
+#     daemon (the launchd / systemd install case, where DuckDB's exclusive
+#     writer lock blocks the dashboard from opening the file even read-only).
+#   * The double-underscore prefix is a hint that the surface is private —
+#     not a public API, not part of the WS relay protocol.
+#
+# Allowlist enforcement: every method must be named in ``_DAEMON_METHODS``.
+# Returning a generic ``getattr(store, method)(**kwargs)`` would let an
+# attacker who already had the bearer token call ``store._fetch("DROP …")``,
+# which is a smaller foot-gun but still a foot-gun.
+
+_DAEMON_METHODS = frozenset({
+    "query_events",
+    "query_sessions",
+    "query_sessions_table",
+    "query_aggregates",
+    "query_heartbeats",
+    "query_channels",
+    "query_crons",
+    "query_subagents",
+    "query_memory_blobs",
+    "query_system_snapshots",
+    "health",
+})
+
+
+@bp_local_query.route("/__local_query__/<method>", methods=["POST"])
+def http_local_method(method: str):
+    """Dispatch a single LocalStore method call. POST body is
+    ``{"kwargs": {...}}``; response is ``{"result": <jsonable>}`` on
+    success, ``{"error": "..."}`` with a 4xx/5xx status on failure.
+    """
+    if method not in _DAEMON_METHODS:
+        return jsonify({
+            "error": f"method not allowed: {method!r}",
+            "allowed": sorted(_DAEMON_METHODS),
+        }), 400
+    body = request.get_json(silent=True) or {}
+    kwargs = body.get("kwargs") or {}
+    if not isinstance(kwargs, dict):
+        return jsonify({"error": "kwargs must be an object"}), 400
+    try:
+        store = _store()
+        fn = getattr(store, method)
+        result = fn(**kwargs)
+        return jsonify({"result": result})
+    except TypeError as e:
+        # Most likely a kwargs-mismatch (caller passed an unsupported arg).
+        return jsonify({"error": f"call failed: {str(e)[:200]}"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
+# ── Cross-process helper used by routes/* fast-paths ───────────────────────
+
+# Cache the discovery so we don't read+stat the JSON file on every request.
+# Invalidated when the call fails (daemon restarted → new port + token).
+_DAEMON_CACHE: dict = {"disc": None, "ts": 0.0}
+_DAEMON_CACHE_TTL_SECS = 30.0
+
+
+def _cached_discovery():
+    """Discovery file lookup with a 30s in-memory cache. The dashboard
+    serves dozens of requests per page-load; reading + json-parsing the
+    file every time is wasted work."""
+    import time as _t
+    now = _t.monotonic()
+    if _DAEMON_CACHE["disc"] and (now - _DAEMON_CACHE["ts"]) < _DAEMON_CACHE_TTL_SECS:
+        return _DAEMON_CACHE["disc"]
+    disc = _read_discovery()
+    _DAEMON_CACHE["disc"] = disc
+    _DAEMON_CACHE["ts"] = now
+    return disc
+
+
+def _invalidate_daemon_cache():
+    _DAEMON_CACHE["disc"] = None
+    _DAEMON_CACHE["ts"] = 0.0
+
+
+def local_store_via_daemon(method_name: str, **kwargs):
+    """Cross-process LocalStore call.
+
+    Routes a ``LocalStore.<method_name>(**kwargs)`` invocation through the
+    sync daemon's ``local_server`` HTTP endpoint, which holds the DuckDB
+    writer lock. Use this from any ``_try_local_store_*`` fast-path in
+    ``routes/*`` so the helpers fire under the standard install (daemon +
+    dashboard as separate processes) instead of silently failing the
+    direct-open with an ``IOException: Could not set lock``.
+
+    Returns the call's return value on success.
+
+    Returns ``None`` when the daemon is unreachable / the method isn't
+    allowlisted / anything else fails — the caller is expected to fall
+    through to the legacy direct-open path (``get_store()`` works fine in
+    single-process boots, e.g. tests + dev mode).
+    """
+    # Loop-break: when local_server is hosted in THIS process (the daemon)
+    # the proxy hop is pointless — talk to the LocalStore directly.
+    try:
+        from clawmetry import local_server as _ls_srv
+        if _ls_srv.is_running():
+            return None
+    except ImportError:
+        pass
+    disc = _cached_discovery()
+    if not disc:
+        return None
+    import urllib.request
+    import urllib.error
+    payload = _json.dumps({"kwargs": kwargs}).encode("utf-8")
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{disc['port']}/__local_query__/{method_name}",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {disc['token']}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_PROXY_TIMEOUT_SECS) as resp:
+            body = _json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError):
+        # Stale port / daemon restarted / network gremlin — drop the cache
+        # so the next call re-reads the discovery file.
+        _invalidate_daemon_cache()
+        return None
+    if "error" in body:
+        return None
+    return body.get("result")
+
+
 # ── Public hook for the future WS relay (#960 phase B) ─────────────────────
 
 def relay_dispatch(shape: str, args: dict) -> dict:

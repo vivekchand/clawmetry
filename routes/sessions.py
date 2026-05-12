@@ -37,6 +37,31 @@ _SUBAGENTS_SCAN_TAIL_BYTES = int(os.environ.get("CLAWMETRY_SUBAGENTS_SCAN_TAIL_B
 _GENERIC_CHANNELS = frozenset({"unknown", "direct", "", "main", "internal"})
 
 
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback.
+
+    Issue #1088: every direct ``get_store().query_*`` call is dead code in
+    the standard install (daemon owns the writer lock, dashboard's open
+    raises ``IOException: Could not set lock``). This wrapper hits the
+    daemon's HTTP proxy first, then falls back to direct open for
+    single-process boots (tests + dev mode). Returns ``None`` on miss so
+    callers can defer to the legacy fallback path.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
 def _infer_session_type(session):
     """Classify a session into one of: main / heartbeat / user / sub-agent.
 
@@ -239,53 +264,62 @@ def _merge_unregistered_jsonls(sessions: list) -> None:
         })
 
 
+def _fetch_sessions_table_rows(limit: int = 200):
+    """Cross-process fetch from the typed ``sessions`` DuckDB table.
+
+    Returns a list of dict rows (with ``metadata`` already JSON-decoded), or
+    ``None`` to defer. Tries the daemon HTTP proxy FIRST (issue #1088 — the
+    standard install runs daemon + dashboard as separate processes and
+    DuckDB's exclusive lock blocks direct opens), then falls back to a
+    direct ``get_store()`` open for single-process boots (tests + dev mode).
+    """
+    # 1. Cross-process: ask the daemon over HTTP.
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_sessions_table", limit=limit)
+        if rows is not None:
+            return rows
+    except Exception:
+        pass
+    # 2. Single-process fallback: open the DuckDB ourselves. Only works
+    #    when no other process holds the writer lock.
+    try:
+        from clawmetry import local_store
+        return local_store.get_store().query_sessions_table(limit=limit)
+    except Exception:
+        return None
+
+
 def _try_local_store_sessions():
     """Read sessions directly from the local DuckDB. Returns the same
     response shape as the legacy gateway-backed endpoint (`{"sessions":
     [...]}`). Returns ``None`` to defer to the JSONL/gateway fallback if:
-      - the local_store module isn't importable
+      - the local_store module isn't importable / daemon unreachable
       - the sessions table is empty
       - any unexpected error happens (we'd rather degrade than 500)
     """
-    try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-        rows = store._fetch("""
-            SELECT agent_type, session_id, agent_id, title, started_at,
-                   last_active_at, ended_at, status, total_tokens, cost_usd,
-                   message_count, metadata
-            FROM sessions
-            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
-            LIMIT 200
-        """, [])
-    except Exception:
-        return None
+    rows = _fetch_sessions_table_rows(limit=200)
     if not rows:
         return None
     out = []
     for r in rows:
-        meta = {}
-        if r[11]:
-            try:
-                import json as _j
-                meta = _j.loads(bytes(r[11]).decode("utf-8"))
-            except Exception:
-                pass
+        meta = r.get("metadata") or {}
+        title = r.get("title") or ""
         out.append({
-            "agent_type":     r[0],
-            "session_id":     r[1],
-            "agent_id":       r[2],
-            "title":          r[3] or "",
-            "started_at":     r[4] or "",
-            "updated_at":     r[5] or "",
-            "ended_at":       r[6] or "",
-            "status":         r[7] or "",
-            "total_tokens":   int(r[8] or 0),
-            "total_cost":     float(r[9] or 0.0),
-            "message_count":  int(r[10] or 0),
+            "agent_type":     r.get("agent_type"),
+            "session_id":     r.get("session_id"),
+            "agent_id":       r.get("agent_id"),
+            "title":          title,
+            "started_at":     r.get("started_at") or "",
+            "updated_at":     r.get("last_active_at") or "",
+            "ended_at":       r.get("ended_at") or "",
+            "status":         r.get("status") or "",
+            "total_tokens":   int(r.get("total_tokens") or 0),
+            "total_cost":     float(r.get("cost_usd") or 0.0),
+            "message_count":  int(r.get("message_count") or 0),
             "channel":        meta.get("channel", ""),
             "chat_type":      meta.get("chat_type", ""),
-            "subject":        r[3] or meta.get("subject", ""),
+            "subject":        title or meta.get("subject", ""),
             "session_type":   meta.get("session_type", "main"),
             "_source":        "local_store",
         })
@@ -1538,17 +1572,15 @@ def _try_local_store_cost_breakdown():
     """Fast path for /api/sessions/cost-breakdown. Aggregates per-session
     total cost + tokens straight out of DuckDB's ``sessions`` view.
 
+    Issue #1088: routes through the daemon HTTP proxy first (cross-process
+    safe), with a direct ``get_store()`` fallback for single-process boots.
+
     Returns ``None`` to defer to ``_compute_transcript_analytics`` if:
-      - the local_store module isn't importable
+      - neither path can reach the local store
       - the sessions table is empty
       - any unexpected error happens
     """
-    try:
-        from clawmetry import local_store
-        store = local_store.get_store(read_only=True)
-        rows = store.query_sessions(limit=1000)
-    except Exception:
-        return None
+    rows = _ls_call("query_sessions", limit=1000)
     if not rows:
         return None
     result = []
@@ -1678,17 +1710,15 @@ def _try_local_store_transcripts():
     """Fast path for /api/transcripts. Lists distinct sessions with their
     event counts + most-recent ts, straight from DuckDB.
 
+    Issue #1088: routes through the daemon HTTP proxy first (cross-process
+    safe), with a direct ``get_store()`` fallback for single-process boots.
+
     Returns ``None`` to defer to the legacy filesystem listdir if:
-      - the local_store module isn't importable
+      - neither path can reach the local store
       - the sessions table is empty
       - any unexpected error happens
     """
-    try:
-        from clawmetry import local_store
-        store = local_store.get_store(read_only=True)
-        rows = store.query_sessions(limit=50)
-    except Exception:
-        return None
+    rows = _ls_call("query_sessions", limit=50)
     if not rows:
         return None
     transcripts = []
@@ -2340,18 +2370,16 @@ def _try_local_store_session_cost_breakdown(session_id: str):
     """Fast path for /api/sessions/<id>/cost-breakdown. Reads per-turn
     cost+token breakdown from DuckDB events for the given session.
 
+    Issue #1088: routes through the daemon HTTP proxy first (cross-process
+    safe), with a direct ``get_store()`` fallback for single-process boots.
+
     Returns ``None`` to defer to the JSONL parser if:
-      - the local_store module isn't importable
+      - neither path can reach the local store
       - no events exist for this session_id (fresh sync, etc.)
       - data blobs aren't shaped like assistant messages
       - any unexpected error happens
     """
-    try:
-        from clawmetry import local_store
-        store = local_store.get_store(read_only=True)
-        evs = store.query_events(session_id=session_id, limit=5000)
-    except Exception:
-        return None
+    evs = _ls_call("query_events", session_id=session_id, limit=5000)
     if not evs:
         return None
     # Walk events oldest-first so turn_index is meaningful.
