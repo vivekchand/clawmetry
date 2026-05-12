@@ -98,6 +98,89 @@ def _summarise_event(ev: dict) -> str:
     return f"[{t}] {src} {typ}: {detail}"
 
 
+def _try_local_store_advisor_context(limit_events: int = MAX_CONTEXT_EVENTS) -> dict | None:
+    """Tier-1 DuckDB fast path for advisor context assembly.
+
+    Reads recent events directly from the local store and emits the same
+    ``{events, usage, recent_sessions, _source}`` shape ``_gather_context``
+    produces from JSONL+brain-history. Used when CLAWMETRY_LOCAL_STORE_READ=1
+    is set so the advisor stays on the same data plane the rest of the
+    fast-path-enabled dashboard uses.
+
+    Returns ``None`` to defer to the legacy gather when:
+      - the ``local_store`` module isn't importable
+      - the events table is empty
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return None
+    try:
+        store = local_store.get_store()
+        rows = store.query_events(limit=limit_events)
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    events: list[str] = []
+    sessions_seen: dict[str, dict] = {}
+    today_str = time.strftime("%Y-%m-%d")
+    today_tokens = 0
+
+    for r in rows:
+        t = (r.get("ts") or "")[:19]
+        typ = r.get("event_type") or "?"
+        sid = r.get("session_id") or "main"
+        data = r.get("data") if isinstance(r, dict) else None
+        if isinstance(data, dict):
+            detail = (data.get("input") or data.get("summary")
+                      or data.get("text") or data.get("name") or "")
+        elif isinstance(data, str):
+            detail = data
+        else:
+            detail = ""
+        if isinstance(detail, (dict, list)):
+            try:
+                detail = json.dumps(detail)[:160]
+            except Exception:
+                detail = str(detail)[:160]
+        detail = str(detail).replace("\n", " ")[:200]
+        events.append(f"[{t}] {sid[:12]} {typ}: {detail}")
+
+        sid_key = r.get("session_id") or ""
+        if sid_key:
+            entry = sessions_seen.setdefault(sid_key, {
+                "session_id": sid_key[:8],
+                "model": r.get("model") or "",
+                "tokens": 0,
+                "cost_usd": 0.0,
+                "started_at": t,
+            })
+            entry["tokens"] += int(r.get("token_count") or 0)
+            try:
+                entry["cost_usd"] = round(entry["cost_usd"] + float(r.get("cost_usd") or 0), 4)
+            except Exception:
+                pass
+            if r.get("model") and not entry["model"]:
+                entry["model"] = r["model"]
+            if t and (not entry["started_at"] or t < entry["started_at"]):
+                entry["started_at"] = t
+        if t.startswith(today_str):
+            today_tokens += int(r.get("token_count") or 0)
+
+    return {
+        "events": events[-limit_events:],
+        "usage": {
+            "today_tokens": today_tokens,
+            "total_sessions": len(sessions_seen),
+        },
+        "recent_sessions": list(sessions_seen.values())[:8],
+        "_source": "local_store",
+    }
+
+
 def _gather_context(limit_events: int = MAX_CONTEXT_EVENTS) -> dict:
     """Pull a compact snapshot of the user's current agent state.
 
@@ -105,6 +188,16 @@ def _gather_context(limit_events: int = MAX_CONTEXT_EVENTS) -> dict:
     nothing new computed, just packaged for the LLM.
     """
     import dashboard as _d
+
+    # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
+    # The legacy gather already calls into the brain endpoint (which has its
+    # own fast path), but this short-circuit keeps the advisor on a single
+    # data plane and avoids the cross-route Flask test_request_context dance
+    # when the local store is the source of truth.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_advisor_context(limit_events)
+        if fast is not None:
+            return fast
 
     out: dict = {"events": [], "usage": {}, "errors": []}
 
@@ -325,20 +418,51 @@ def api_advisor_ask():
 
     answer = _extract_answer(resp)
     usage = resp.get("usage") or {}
-    return jsonify(
-        {
-            "answer": answer or "(no answer returned)",
-            "model": resp.get("model", DEFAULT_MODEL),
-            "input_tokens": usage.get("input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
-            "events_in_context": len(ctx.get("events", [])),
-        }
-    )
+    body = {
+        "answer": answer or "(no answer returned)",
+        "model": resp.get("model", DEFAULT_MODEL),
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "events_in_context": len(ctx.get("events", [])),
+    }
+    # Surface the data-plane the advisor used so audits/UIs can confirm
+    # the advisor is on the local store when the fast path was taken.
+    if ctx.get("_source") == "local_store":
+        body["_source"] = "local_store"
+    return jsonify(body)
+
+
+def _try_local_store_advisor_status() -> dict | None:
+    """Tier-1 DuckDB fast path for /api/advisor/status.
+
+    Returns the probe payload tagged ``_source: local_store`` when the
+    local store is reachable. The status probe doesn't actually need event
+    data — it's auth-presence only — but we still surface the fast-path
+    flag so the UI/audits can confirm the advisor is on the local plane.
+
+    Returns ``None`` to defer when local_store import fails or any error.
+    """
+    try:
+        from clawmetry import local_store
+        local_store.get_store()  # smoke check — raises if DuckDB inaccessible
+    except Exception:
+        return None
+    mode, credential = _load_anthropic_auth()
+    return {
+        "available": bool(credential),
+        "auth_mode": mode or "none",
+        "model":     DEFAULT_MODEL,
+        "_source":   "local_store",
+    }
 
 
 @bp_advisor.route("/api/advisor/status")
 def api_advisor_status():
     """Cheap probe so the UI can decide whether to show the input."""
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_advisor_status()
+        if fast is not None:
+            return jsonify(fast)
     mode, credential = _load_anthropic_auth()
     return jsonify(
         {
