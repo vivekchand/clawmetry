@@ -1,9 +1,9 @@
-.PHONY: test test-api test-e2e test-fast dev lint
+.PHONY: test test-api test-e2e test-fast test-e2e-duckdb dev lint
 
 dev:
 	OPENCLAW_GATEWAY_TOKEN=dev-token python3 dashboard.py --port 8900
 
-test: test-api test-e2e
+test: test-api test-e2e test-e2e-duckdb
 
 test-fast:
 	CLAWMETRY_URL=http://localhost:8900 CLAWMETRY_TOKEN=dev-token python3 -m pytest tests/test_api.py -v
@@ -13,6 +13,11 @@ test-api:
 
 test-e2e:
 	CLAWMETRY_URL=http://localhost:8900 CLAWMETRY_TOKEN=dev-token python3 -m pytest tests/test_e2e.py -v
+
+# Self-contained: drives the daemon ingest helper + relay shapes against an
+# isolated DuckDB file. No live server, no gateway, no network. ~5s.
+test-e2e-duckdb:
+	python3 -m pytest tests/test_e2e_duckdb_relay.py -v
 
 lint: lint-py lint-js
 

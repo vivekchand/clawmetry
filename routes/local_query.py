@@ -49,9 +49,12 @@ _SHAPES = {
 
 def _store():
     """Lazy-import. Avoids paying duckdb's import cost on Flask boot when
-    the user never hits these endpoints."""
+    the user never hits these endpoints. Always opens read-only — this
+    process is a reader; the daemon process owns the writer lock. When
+    daemon + dashboard share a process, ``get_store(read_only=True)``
+    transparently shares the writer's connection."""
     from clawmetry import local_store
-    return local_store.get_store()
+    return local_store.get_store(read_only=True)
 
 
 def _coerce_args(shape: str, raw: dict) -> dict:
