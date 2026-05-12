@@ -239,6 +239,24 @@ _DDL = [
         origin_label  VARCHAR
     )
     """,
+    # Epic #1032 Phase 5: channel adapter CONFIG (distinct from
+    # openclaw_channels above, which is per-session channel METADATA).
+    # One row per provider (telegram, slack, signal, discord, ...). The
+    # blob is the E2E-encrypted adapter config (bot tokens, OAuth secrets,
+    # phone numbers, etc.) — cloud never sees plaintext. Status fields
+    # (enabled, last_test_at, last_test_ok) are non-secret summaries that
+    # the cloud UI can render after a cache_push.
+    """
+    CREATE TABLE IF NOT EXISTS channel_config (
+        provider               VARCHAR PRIMARY KEY,
+        enabled                BOOLEAN DEFAULT FALSE,
+        config_json_encrypted  BLOB,
+        last_test_at           VARCHAR,
+        last_test_ok           BOOLEAN,
+        last_test_error        VARCHAR,
+        updated_at             VARCHAR
+    )
+    """,
     # Shared by OpenClaw + Hermes (and any future cron-supporting agent).
     """
     CREATE TABLE IF NOT EXISTS crons (
@@ -256,6 +274,27 @@ _DDL = [
         PRIMARY KEY (agent_type, cron_id)
     )
     """,
+    # Phase 3 of #1032 — alert rules. Authored in the cloud UI, relayed to the
+    # local DuckDB via heartbeat-piggyback, then read by the in-process alert
+    # evaluator. owner_hash binds each rule to the cm_ token that owns it
+    # (sha256 of the token, matching the cloud-side _owner_hash_for helper).
+    # condition_json is the rule body (threshold, alert_type, channel_ids,
+    # etc.) serialized exactly as cloud stores it — keeping the local store
+    # opaque to schema drift on the cloud's `alerts` table.
+    """
+    CREATE TABLE IF NOT EXISTS alert_rules (
+        id              VARCHAR PRIMARY KEY,
+        owner_hash      VARCHAR,
+        name            VARCHAR,
+        condition_json  BLOB,
+        enabled         BOOLEAN DEFAULT TRUE,
+        created_at      VARCHAR,
+        updated_at      VARCHAR,
+        last_fired_at   VARCHAR,
+        fire_count      INTEGER DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_alert_rules_owner ON alert_rules(owner_hash, enabled)",
     # Shared by OpenClaw subagents + Claude Code Task tool.
     """
     CREATE TABLE IF NOT EXISTS subagents (
@@ -662,6 +701,67 @@ class LocalStore:
             """, [sid, ch.get("channel"), ch.get("chat_type"),
                   ch.get("subject"), ch.get("origin_label")])
 
+    def ingest_channel_config(
+        self,
+        provider: str,
+        encrypted_blob: bytes | None,
+        enabled: bool | None = None,
+        status_meta: dict[str, Any] | None = None,
+    ) -> None:
+        """Upsert one channel-adapter config row (epic #1032 Phase 5).
+
+        ``encrypted_blob`` is the E2E ciphertext of the adapter config dict
+        (bot token, OAuth secret, etc.). The cloud never sees plaintext;
+        ciphertext only ever traverses the wire and only ever rests in this
+        local DuckDB. The blob may be ``None`` when callers want to update
+        status without rotating the config (e.g. ``channel_test`` results).
+
+        ``status_meta`` is a non-secret summary the cloud can later display:
+        ``{"last_test_at", "last_test_ok", "last_test_error"}``. Any subset
+        is honored; missing keys leave the existing value untouched.
+
+        Idempotent: re-upserting the same provider replaces the blob and
+        merges status_meta. The COALESCE pattern preserves prior status
+        fields when a partial update arrives (e.g. a config rotation that
+        doesn't include a fresh test result)."""
+        if not provider:
+            raise ValueError("channel_config must include 'provider'")
+        provider = str(provider).lower().strip()
+        meta = status_meta or {}
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # Coerce blob: bytes/bytearray pass through; str gets utf-8-encoded;
+        # None means "don't touch the blob" (status-only update). The ON
+        # CONFLICT clause uses COALESCE so an explicit None preserves the
+        # existing row's blob.
+        if encrypted_blob is not None and not isinstance(encrypted_blob, (bytes, bytearray)):
+            if isinstance(encrypted_blob, str):
+                encrypted_blob = encrypted_blob.encode("utf-8")
+            else:
+                raise ValueError("encrypted_blob must be bytes or str")
+        blob_bytes = bytes(encrypted_blob) if encrypted_blob is not None else None
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO channel_config (
+                    provider, enabled, config_json_encrypted,
+                    last_test_at, last_test_ok, last_test_error, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (provider) DO UPDATE SET
+                    enabled               = COALESCE(excluded.enabled, channel_config.enabled),
+                    config_json_encrypted = COALESCE(excluded.config_json_encrypted, channel_config.config_json_encrypted),
+                    last_test_at          = COALESCE(excluded.last_test_at, channel_config.last_test_at),
+                    last_test_ok          = COALESCE(excluded.last_test_ok, channel_config.last_test_ok),
+                    last_test_error       = COALESCE(excluded.last_test_error, channel_config.last_test_error),
+                    updated_at            = excluded.updated_at
+            """, [
+                provider,
+                bool(enabled) if enabled is not None else None,
+                blob_bytes,
+                meta.get("last_test_at"),
+                bool(meta["last_test_ok"]) if "last_test_ok" in meta and meta["last_test_ok"] is not None else None,
+                meta.get("last_test_error"),
+                now_iso,
+            ])
+
     def ingest_cron(self, cron: dict[str, Any]) -> None:
         """Upsert one cron-job row. Required: cron_id."""
         cid = cron.get("cron_id")
@@ -1032,6 +1132,70 @@ class LocalStore:
                 "ended_at", "task", "status", "cost_usd", "token_count",
                 "data", "updated_at"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
+
+    def query_channel_configs(
+        self,
+        *,
+        provider: str | None = None,
+        enabled_only: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Channel-adapter config rows (epic #1032 Phase 5).
+
+        Returns one dict per provider with the FULL row including the
+        ``config_json_encrypted`` BLOB (caller is responsible for decryption
+        on the local node — cloud must never call this with the blob field
+        attached to a wire response). The blob comes back as ``bytes`` or
+        ``None`` when no config has been pushed yet.
+
+        Use :meth:`query_channel_config_status` instead when you only need
+        the non-secret status summary (``enabled``, ``last_test_at``,
+        ``last_test_ok``, ``last_test_error``). That helper omits the blob
+        so it's safe to feed straight into a cache_push payload."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if provider:
+            clauses.append("provider = ?"); params.append(str(provider).lower().strip())
+        if enabled_only:
+            clauses.append("enabled = TRUE")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT provider, enabled, config_json_encrypted,
+                   last_test_at, last_test_ok, last_test_error, updated_at
+            FROM channel_config
+            {where}
+            ORDER BY provider ASC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["provider", "enabled", "config_json_encrypted",
+                "last_test_at", "last_test_ok", "last_test_error", "updated_at"]
+        return [_row_to_dict(r, cols) for r in self._fetch(sql, params)]
+
+    def query_channel_config_status(
+        self,
+        provider: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Non-secret status summary for one or all providers (epic #1032
+        Phase 5). Always omits ``config_json_encrypted`` so callers don't
+        accidentally leak ciphertext into cache_push payloads. When
+        ``provider`` is None returns a row per configured provider; with a
+        provider filter returns at most one row."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if provider:
+            clauses.append("provider = ?"); params.append(str(provider).lower().strip())
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT provider, enabled, last_test_at, last_test_ok,
+                   last_test_error, updated_at
+            FROM channel_config
+            {where}
+            ORDER BY provider ASC
+        """
+        cols = ["provider", "enabled", "last_test_at", "last_test_ok",
+                "last_test_error", "updated_at"]
+        return [_row_to_dict(r, cols) for r in self._fetch(sql, params)]
 
     def query_memory_blobs(
         self,

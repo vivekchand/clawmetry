@@ -14,6 +14,7 @@ Module-level helpers (``_get_log_dirs``, ``_grep_log_file``,
 
 import glob
 import json
+import logging
 import os
 import sys
 from datetime import datetime
@@ -21,6 +22,126 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request
 
 bp_channels = Blueprint('channels', __name__)
+
+_log = logging.getLogger("clawmetry.routes.channels")
+
+
+# ── Epic #1032 Phase 5: channel-config fast-path (DuckDB) ──────────────────
+# When CLAWMETRY_LOCAL_STORE_READ=1 the per-channel status endpoint serves
+# the non-secret status summary straight from the local DuckDB instead of
+# hitting the gateway / parsing YAML on every request. The ciphertext blob
+# stays on this node; cloud never sees plaintext.
+
+def _local_store_read_enabled() -> bool:
+    """Feature-gate for the DuckDB-backed channel-config fast path.
+
+    Defaults OFF until rolled out broadly. Once stable we'll flip the default
+    to ON and remove the env-var check. Matches the gating pattern used for
+    other Phase 1/2 local-store reads."""
+    return os.environ.get("CLAWMETRY_LOCAL_STORE_READ", "").strip() in ("1", "true", "yes")
+
+
+def _channel_config_status_from_local_store(provider: str):
+    """Read the non-secret status summary for ``provider`` from DuckDB.
+
+    Returns the row dict tagged with ``_source: "local_store"`` on hit, or
+    ``None`` on miss / store unavailable. NEVER returns the encrypted blob —
+    HTTP responses must never carry ciphertext to keep the cloud surface
+    plaintext-free at every layer of defense."""
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return None
+    store = None
+    try:
+        store = local_store.get_store(read_only=True)
+    except Exception:
+        # Fresh install with no daemon writes yet — DuckDB can't open RO on a
+        # missing file. Try opening writable so the schema is created;
+        # subsequent reads return [] (treated as "unconfigured" below).
+        try:
+            store = local_store.get_store(read_only=False)
+        except Exception as e:
+            _log.debug("channel_config local-store open failed: %s", e)
+            return None
+    try:
+        rows = store.query_channel_config_status(provider=provider)
+    except Exception as e:
+        _log.debug("channel_config local-store read failed (provider=%s): %s", provider, e)
+        return None
+    if not rows:
+        # Provider hasn't been configured yet — still serve from the local
+        # store with explicit "unconfigured" status so the cloud UI renders
+        # "Not configured" instead of falling back to gateway parsing.
+        return {
+            "provider": provider,
+            "enabled": False,
+            "configured": False,
+            "last_test_at": None,
+            "last_test_ok": None,
+            "last_test_error": None,
+            "updated_at": None,
+            "_source": "local_store",
+        }
+    row = dict(rows[0])
+    row["configured"] = True
+    row["_source"] = "local_store"
+    return row
+
+
+@bp_channels.route("/api/channels/<provider>/status")
+def api_channel_status(provider: str):
+    """Per-channel adapter status — fast-path on DuckDB when the local-store
+    read flag is on (epic #1032 Phase 5).
+
+    Returns:
+        {provider, enabled, configured, last_test_at, last_test_ok,
+         last_test_error, updated_at, _source: "local_store"}
+
+    Never includes the encrypted config blob. The cloud read path serves
+    the same shape from Redis after a heartbeat cache_push."""
+    provider = (provider or "").lower().strip()
+    if not provider:
+        return jsonify({"error": "provider required"}), 400
+    if _local_store_read_enabled():
+        row = _channel_config_status_from_local_store(provider)
+        if row is not None:
+            return jsonify(row)
+    # Fallback when the flag is off OR the local-store import is unavailable
+    # (defensive — should never happen in practice). Returns an "unknown"
+    # status so the UI can degrade gracefully.
+    return jsonify({
+        "provider": provider,
+        "enabled": False,
+        "configured": False,
+        "last_test_at": None,
+        "last_test_ok": None,
+        "last_test_error": None,
+        "updated_at": None,
+        "_source": "fallback",
+    })
+
+
+@bp_channels.route("/api/channels/status")
+def api_channels_status_all():
+    """All-providers status summary — same shape as ``/api/channels/<p>/status``
+    but returns a list. Used by the cloud UI's channels overview tab."""
+    if not _local_store_read_enabled():
+        return jsonify({"channels": [], "_source": "fallback"})
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return jsonify({"channels": [], "_source": "fallback"})
+    try:
+        store = local_store.get_store(read_only=True)
+        rows = store.query_channel_config_status()
+    except Exception as e:
+        _log.debug("channels/status local-store read failed: %s", e)
+        return jsonify({"channels": [], "_source": "fallback"})
+    out = []
+    for r in rows:
+        d = dict(r); d["configured"] = True; out.append(d)
+    return jsonify({"channels": out, "_source": "local_store"})
 
 
 @bp_channels.route("/api/channel/telegram")

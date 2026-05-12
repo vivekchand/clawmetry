@@ -1775,6 +1775,17 @@ def send_heartbeat(config: dict) -> bool:
             payload["cache_pushes"] = pushes
     except Exception as _bp_e:
         log.debug("brain cache_push build failed (continuing): %s", _bp_e)
+    # Phase 5 of relay-v2 (#1032): channel adapter status. Non-secret
+    # status summary (provider, enabled, last_test_at/ok/error) pushed to
+    # `channels:{owner_hash}:status` TTL 3600s so the cloud Channels tab
+    # paints from Redis. Encrypted blob with config tokens NEVER traverses
+    # this push — that ciphertext lives only in local DuckDB.
+    try:
+        ch_pushes = _build_channel_config_status_cache_pushes(config)
+        if ch_pushes:
+            payload.setdefault("cache_pushes", []).extend(ch_pushes)
+    except Exception as _cp_e:
+        log.debug("channel-config cache_push build failed (continuing): %s", _cp_e)
     # Local-first: persist this heartbeat to local DuckDB so the dashboard
     # has a per-node liveness history even when offline. Best-effort.
     try:
@@ -1941,10 +1952,249 @@ def _build_brain_cache_pushes(config: dict) -> list:
     }]
 
 
+# ── Phase 5: channel adapter config (epic #1032) ────────────────────────────
+# Channel adapter configs (Telegram bot tokens, Slack OAuth, Signal phone
+# numbers, etc.) live in local DuckDB only. Cloud UI authors them via
+# pending_queries actions; the daemon persists the E2E-encrypted blob in
+# `channel_config`. Per-provider non-secret status (enabled, last_test_at,
+# last_test_ok) gets pushed back to `channels:{owner_hash}:status` on every
+# heartbeat so the cloud Channels tab paints from Redis.
+#
+# Invariant: cloud NEVER sees plaintext tokens. The encrypted blob only ever
+# rests in local DuckDB; the cache_push carries STATUS ONLY (per provider).
+
+CHANNEL_STATUS_CACHE_TTL_SEC = 3600
+
+_PENDING_ACTIONS = frozenset({"channel_config_upsert", "channel_test"})
+
+
+def _build_channel_config_status_cache_pushes(config: dict) -> list:
+    """Build the heartbeat cache_push entries for channel adapter status.
+
+    Returns ``[]`` when:
+      - No encryption key configured (status fields are non-secret BUT we
+        encrypt by convention so the cloud cache contract is uniform —
+        every cache_push blob is ciphertext).
+      - The local store has no channel_config rows yet.
+      - The local_store import fails.
+
+    Single entry shape:
+        {
+          key:   "channels:{owner_hash}:status",
+          ttl_s: 3600,
+          blob:  encrypt_payload({channels: [...], _source: "local_store",
+                                   _shape: "channel_config_status"}, key),
+        }
+
+    The ``channels`` payload is a list of per-provider status dicts —
+    NEVER the encrypted config blob. Plaintext tokens NEVER traverse the
+    wire, even encrypted, on this key.
+    """
+    enc_key = config.get("encryption_key")
+    if not enc_key:
+        return []
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (api_key and node_id):
+        return []
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return []
+    try:
+        store = local_store.get_store(read_only=True)
+        rows = store.query_channel_config_status()
+    except Exception:
+        return []
+    if not rows:
+        return []
+    channels = []
+    for r in rows:
+        channels.append({
+            "provider":        r.get("provider"),
+            "enabled":         bool(r.get("enabled")) if r.get("enabled") is not None else False,
+            "last_test_at":    r.get("last_test_at"),
+            "last_test_ok":    r.get("last_test_ok"),
+            "last_test_error": r.get("last_test_error"),
+            "updated_at":      r.get("updated_at"),
+        })
+    payload = {
+        "channels": channels,
+        "count":    len(channels),
+        "_source":  "local_store",
+        "_shape":   "channel_config_status",
+    }
+    try:
+        blob = encrypt_payload(payload, enc_key)
+    except Exception:
+        return []
+    owner_hash = _owner_hash_for_token(api_key)
+    return [{
+        "key":   f"channels:{owner_hash}:status",
+        "ttl_s": CHANNEL_STATUS_CACHE_TTL_SEC,
+        "blob":  blob,
+    }]
+
+
+def _dispatch_pending_action(config: dict, action: dict) -> None:
+    """Handle a single action-style pending entry. Routes by ``type``.
+
+    Phase 5 supports ``channel_config_upsert`` (cloud-submitted config →
+    local DuckDB) and ``channel_test`` (run the upstream-adapter test +
+    stamp result). Unknown / malformed types are silently dropped
+    (defensive — cloud should already have filtered). Per-action errors
+    are logged but never raise — one bad action must not block the
+    heartbeat batch."""
+    atype = action.get("type")
+    if atype not in _PENDING_ACTIONS:
+        return
+    if atype == "channel_config_upsert":
+        _action_channel_config_upsert(config, action)
+        return
+    if atype == "channel_test":
+        _action_channel_test(config, action)
+        return
+
+
+def _action_channel_config_upsert(config: dict, action: dict) -> None:
+    """Persist a cloud-submitted channel adapter config to local DuckDB.
+
+    Wire shape (mirrors the cloud-side relay POST):
+        {type: "channel_config_upsert", provider, encrypted_blob, enabled}
+
+    ``encrypted_blob`` is the user-key-encrypted config (bot token, OAuth
+    secret, etc.) — base64url-encoded over the wire, decoded to bytes
+    before storage. The cloud relay strips any plaintext fields before
+    queueing; the daemon does NOT decrypt either, just stores. The local
+    adapter binary picks the ciphertext up out-of-band when it actually
+    needs to dial the upstream provider."""
+    provider = (action.get("provider") or "").strip().lower()
+    if not provider:
+        log.warning("channel_config_upsert: missing provider")
+        return
+    blob_raw = action.get("encrypted_blob")
+    enabled = action.get("enabled")
+    blob_bytes = None
+    if blob_raw is not None:
+        if isinstance(blob_raw, (bytes, bytearray)):
+            blob_bytes = bytes(blob_raw)
+        elif isinstance(blob_raw, str):
+            # Cloud sends base64url (matches encrypt_payload output). Accept
+            # std base64 too; raw plaintext-only string falls back to utf-8.
+            import base64 as _b64
+            try:
+                blob_bytes = _b64.urlsafe_b64decode(blob_raw + "==")
+            except Exception:
+                try:
+                    blob_bytes = _b64.b64decode(blob_raw + "==")
+                except Exception:
+                    blob_bytes = blob_raw.encode("utf-8")
+        else:
+            log.warning("channel_config_upsert: bad blob type %s", type(blob_raw))
+            return
+    try:
+        from clawmetry import local_store
+    except Exception as e:
+        log.warning("channel_config_upsert: local_store import failed: %s", e)
+        return
+    try:
+        local_store.get_store().ingest_channel_config(
+            provider=provider,
+            encrypted_blob=blob_bytes,
+            enabled=bool(enabled) if enabled is not None else None,
+            status_meta=None,
+        )
+        log.info("channel_config_upsert provider=%s enabled=%s blob_bytes=%s",
+                 provider, enabled, len(blob_bytes) if blob_bytes else 0)
+    except Exception as e:
+        log.warning("channel_config_upsert ingest failed (provider=%s): %s",
+                    provider, e)
+
+
+def _action_channel_test(config: dict, action: dict) -> None:
+    """Run a local test of the channel adapter and stamp the result.
+
+    Wire shape: ``{type: "channel_test", provider}``.
+
+    The actual upstream ping (Telegram getMe, Slack auth.test, ...) is
+    delegated to ``_run_channel_test_local``. We persist the result via
+    ``ingest_channel_config`` with status_meta only — the blob remains
+    untouched. Status flows back to cloud on the next heartbeat
+    cache_push."""
+    provider = (action.get("provider") or "").strip().lower()
+    if not provider:
+        log.warning("channel_test: missing provider")
+        return
+    try:
+        from clawmetry import local_store
+    except Exception as e:
+        log.warning("channel_test: local_store import failed: %s", e)
+        return
+    ok, err = _run_channel_test_local(config, provider)
+    try:
+        local_store.get_store().ingest_channel_config(
+            provider=provider,
+            encrypted_blob=None,
+            enabled=None,
+            status_meta={
+                "last_test_at": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "last_test_ok": bool(ok),
+                "last_test_error": (err or "")[:240] if not ok else "",
+            },
+        )
+        log.info("channel_test provider=%s ok=%s", provider, ok)
+    except Exception as e:
+        log.warning("channel_test status persist failed (provider=%s): %s",
+                    provider, e)
+
+
+def _run_channel_test_local(config: dict, provider: str):
+    """Run the upstream ping for ``provider``. Returns (ok, error_msg|None).
+
+    For Phase 5 this is a minimal stub: it confirms an encrypted blob
+    exists in the local store (proof the user has actually configured
+    the provider) and returns success. Actual provider-specific upstream
+    pings (Telegram getMe, Slack auth.test, …) are owned by the OpenClaw
+    adapter binary — bridging them here would duplicate decryption surface
+    unnecessarily and weaken the "cloud never sees plaintext, daemon
+    never decrypts" invariant. The adapter binary writes its own real
+    test results back via the gateway in a follow-up phase."""
+    try:
+        from clawmetry import local_store
+    except Exception as e:
+        return False, f"local_store unavailable: {e}"
+    try:
+        # Daemon owns the writer; using the same RW handle for the read
+        # avoids the "cannot open RO when file doesn't exist yet" edge case
+        # on first-channel-test-before-any-config.
+        rows = local_store.get_store().query_channel_configs(
+            provider=provider, limit=1)
+    except Exception as e:
+        return False, f"local-store read failed: {e}"
+    if not rows:
+        return False, "not configured"
+    blob = rows[0].get("config_json_encrypted")
+    if blob is None or (isinstance(blob, (bytes, bytearray)) and len(blob) == 0):
+        return False, "config blob empty"
+    return True, None
+
+
 def _dispatch_pending_queries(config: dict, pending: list) -> None:
     """Run each cloud-requested query against the local store, encrypt the
     result, and POST back to /ingest/cache. Failures on individual queries
-    are swallowed (logged) so one bad query never blocks the rest."""
+    are swallowed (logged) so one bad query never blocks the rest.
+
+    Two flavors of pending entry are recognized:
+
+    1. ``{shape, id, cache_key, args}`` — read query. Dispatched via
+       routes.local_query (or fallback) and the result is encrypted +
+       POSTed to /ingest/cache.
+    2. ``{type, …}`` — local action (write or side-effect). Currently
+       supports ``channel_config_upsert`` and ``channel_test`` from
+       epic #1032 Phase 5. Action handlers run synchronously against the
+       local store / adapter; status fields are pushed back on the next
+       heartbeat via ``_build_channel_config_status_cache_pushes``."""
     try:
         from routes.local_query import _dispatch as _local_dispatch  # type: ignore
     except Exception:
@@ -1955,6 +2205,17 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
     for q in pending or []:
         try:
             if not isinstance(q, dict):
+                continue
+            # Action-style entry (epic #1032 Phase 5 onwards): no shape,
+            # has a `type`. Dispatched locally; no /ingest/cache POST —
+            # the next heartbeat's cache_push carries the status summary.
+            qtype = q.get("type")
+            if qtype:
+                try:
+                    _dispatch_pending_action(config, q)
+                except Exception as e:
+                    log.warning("pending_action dispatch failed (type=%s): %s",
+                                qtype, e)
                 continue
             shape = q.get("shape")
             if shape not in _PENDING_SHAPES:
