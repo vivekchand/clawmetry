@@ -1,4 +1,5 @@
 """Tests for ClawMetryNATExporter."""
+
 import json
 import threading
 import time
@@ -18,15 +19,18 @@ def _step(event_type, name="", metadata=None):
 # JSONL fallback (no URL/API key)
 # ---------------------------------------------------------------------------
 
+
 class TestJSONLExport:
     def test_writes_jsonl_on_flush(self, tmp_path):
         exporter = ClawMetryNATExporter(
             jsonl_dir=str(tmp_path),
-            flush_interval_sec=9999,   # disable auto-flush
+            flush_interval_sec=9999,  # disable auto-flush
             batch_size=100,
         )
         exporter.on_event(_step("WORKFLOW_START", name="test"))
-        exporter.on_event(_step("LLM_END", name="s1", metadata={"output": "hi", "output_tokens": 5}))
+        exporter.on_event(
+            _step("LLM_END", name="s1", metadata={"output": "hi", "output_tokens": 5})
+        )
         n = exporter.flush()
         exporter.close(timeout=1)
 
@@ -57,7 +61,7 @@ class TestJSONLExport:
         )
         for _ in range(3):
             exporter.on_event(_step("WORKFLOW_START"))
-        time.sleep(0.05)   # allow flush in same thread path
+        time.sleep(0.05)  # allow flush in same thread path
 
         files = list(tmp_path.glob("*.jsonl"))
         total_lines = sum(len(f.read_text().strip().splitlines()) for f in files)
@@ -68,6 +72,7 @@ class TestJSONLExport:
 # ---------------------------------------------------------------------------
 # HTTP export
 # ---------------------------------------------------------------------------
+
 
 class TestHTTPExport:
     def test_posts_to_ingest_endpoint(self, tmp_path):
@@ -91,7 +96,9 @@ class TestHTTPExport:
                 batch_size=100,
             )
             exporter.on_event(_step("WORKFLOW_START"))
-            exporter.on_event(_step("LLM_END", metadata={"output": "done", "output_tokens": 10}))
+            exporter.on_event(
+                _step("LLM_END", metadata={"output": "done", "output_tokens": 10})
+            )
             exporter.flush()
             exporter.close(timeout=1)
 
@@ -105,7 +112,10 @@ class TestHTTPExport:
 
         def fake_urlopen(req, timeout=None):
             import urllib.error
-            raise urllib.error.HTTPError(url="", code=500, msg="err", hdrs=None, fp=None)
+
+            raise urllib.error.HTTPError(
+                url="", code=500, msg="err", hdrs=None, fp=None
+            )
 
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             exporter = ClawMetryNATExporter(
@@ -127,14 +137,38 @@ class TestHTTPExport:
 # Context manager
 # ---------------------------------------------------------------------------
 
+
+class TestFlushLockedSafety:
+    def test_flush_locked_raises_if_called_without_lock(self, tmp_path):
+        """Calling _flush_locked() without holding the lock raises RuntimeError."""
+        exporter = ClawMetryNATExporter(
+            jsonl_dir=str(tmp_path),
+            flush_interval_sec=9999,
+            batch_size=100,
+        )
+        exporter.on_event(_step("WORKFLOW_START"))
+        with pytest.raises(RuntimeError, match="must be called with lock held"):
+            exporter._flush_locked()
+        exporter.close(timeout=1)
+
+
+# ---------------------------------------------------------------------------
+# Context manager
+# ---------------------------------------------------------------------------
+
+
 class TestContextManager:
     def test_context_manager_closes(self, tmp_path):
-        with ClawMetryNATExporter(jsonl_dir=str(tmp_path), flush_interval_sec=9999) as exp:
+        with ClawMetryNATExporter(
+            jsonl_dir=str(tmp_path), flush_interval_sec=9999
+        ) as exp:
             exp.on_event(_step("WORKFLOW_START"))
         assert exp._closed is True
 
     def test_close_flushes_remaining(self, tmp_path):
-        exp = ClawMetryNATExporter(jsonl_dir=str(tmp_path), flush_interval_sec=9999, batch_size=100)
+        exp = ClawMetryNATExporter(
+            jsonl_dir=str(tmp_path), flush_interval_sec=9999, batch_size=100
+        )
         exp.on_event(_step("WORKFLOW_START"))
         exp.close(timeout=2)
         files = list(tmp_path.glob("*.jsonl"))

@@ -18,6 +18,7 @@ Environment variables:
   CLAWMETRY_NAT_BATCH_SIZE — max events per HTTP POST (default 50)
   CLAWMETRY_NAT_FLUSH_SEC  — flush interval in seconds (default 5)
 """
+
 from __future__ import annotations
 
 import json
@@ -42,6 +43,7 @@ log = logging.getLogger("clawmetry-nat")
 # Defaults / env helpers
 # ---------------------------------------------------------------------------
 
+
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
@@ -56,6 +58,7 @@ def _env_int(name: str, default: int) -> int:
 # ---------------------------------------------------------------------------
 # ClawMetryNATExporter
 # ---------------------------------------------------------------------------
+
 
 class ClawMetryNATExporter:
     """
@@ -97,21 +100,27 @@ class ClawMetryNATExporter:
             jsonl_dir:          Local directory for JSONL fallback/offline mode.
             on_flush_error:     Optional callback(exc) when a flush fails.
         """
-        self.url     = (clawmetry_url or _env("CLAWMETRY_URL", "https://ingest.clawmetry.com")).rstrip("/")
+        self.url = (
+            clawmetry_url or _env("CLAWMETRY_URL", "https://ingest.clawmetry.com")
+        ).rstrip("/")
         self.api_key = api_key or _env("CLAWMETRY_API_KEY")
         self.batch_size = batch_size or _env_int("CLAWMETRY_NAT_BATCH_SIZE", 50)
-        self.flush_sec  = flush_interval_sec or float(_env_int("CLAWMETRY_NAT_FLUSH_SEC", 5))
+        self.flush_sec = flush_interval_sec or float(
+            _env_int("CLAWMETRY_NAT_FLUSH_SEC", 5)
+        )
         self.on_flush_error = on_flush_error
 
         # JSONL output dir (fallback when no URL/API key, or explicitly set)
         _default_jsonl = str(Path.home() / ".clawmetry" / "nat")
-        self.jsonl_dir = Path(jsonl_dir or _env("CLAWMETRY_NAT_JSONL_DIR", _default_jsonl))
+        self.jsonl_dir = Path(
+            jsonl_dir or _env("CLAWMETRY_NAT_JSONL_DIR", _default_jsonl)
+        )
 
         self.session_id = session_id or str(uuid.uuid4())
         self.mapper = NATEventMapper(session_id=self.session_id, model=model)
 
         self._queue: queue.Queue[Dict[str, Any]] = queue.Queue()
-        self._lock  = threading.Lock()
+        self._lock = threading.Lock()
         self._buffer: List[Dict[str, Any]] = []
         self._closed = False
 
@@ -122,7 +131,9 @@ class ClawMetryNATExporter:
         self._flush_thread.start()
 
         mode = "HTTP → " + self.url if self.api_key else f"JSONL → {self.jsonl_dir}"
-        log.info(f"ClawMetryNATExporter started (session={self.session_id}, mode={mode})")
+        log.info(
+            f"ClawMetryNATExporter started (session={self.session_id}, mode={mode})"
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -185,6 +196,10 @@ class ClawMetryNATExporter:
 
     def _flush_locked(self) -> int:
         """Flush buffer (must be called with self._lock held)."""
+        acquired = self._lock.acquire(blocking=False)
+        if acquired:
+            self._lock.release()
+            raise RuntimeError("_flush_locked() must be called with lock held")
         if not self._buffer:
             return 0
         batch = self._buffer[:]
@@ -256,6 +271,7 @@ class ClawMetryNATExporter:
 # NAT plugin registration helper (optional — requires nvidia-nat installed)
 # ---------------------------------------------------------------------------
 
+
 def register_clawmetry_exporter(
     config_class_name: str = "clawmetry",
     **exporter_kwargs: Any,
@@ -288,9 +304,9 @@ def register_clawmetry_exporter(
         class ClawMetryExporterConfig(
             TelemetryExporterBaseConfig, name=config_class_name
         ):
-            url:     str = PydanticField(default="", description="ClawMetry ingest URL")
+            url: str = PydanticField(default="", description="ClawMetry ingest URL")
             api_key: str = PydanticField(default="", description="ClawMetry API key")
-            model:   str = PydanticField(default="nat-agent", description="Model label")
+            model: str = PydanticField(default="nat-agent", description="Model label")
 
         class _NATExporter(RawExporter[IntermediateStep, IntermediateStep]):
             def __init__(
@@ -316,7 +332,9 @@ def register_clawmetry_exporter(
         async def _clawmetry_nat_exporter(
             config: ClawMetryExporterConfig, builder: Builder
         ):
-            yield _NATExporter(url=config.url, api_key=config.api_key, model=config.model)
+            yield _NATExporter(
+                url=config.url, api_key=config.api_key, model=config.model
+            )
 
         log.info(f"ClawMetry NAT plugin registered as _type: {config_class_name}")
         return _clawmetry_nat_exporter
