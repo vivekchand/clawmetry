@@ -10,12 +10,19 @@ Returns a structured breakdown of thinking blocks parsed from session JSONL:
 - Summary: aggregate token/efficiency stats across all chains
 """
 
+from __future__ import annotations
+
 import glob
 import json
 import os
 import re
 
 from flask import Blueprint, jsonify, request
+
+# Tier-1 DuckDB fast path: enable by exporting CLAWMETRY_LOCAL_STORE_READ=1.
+# When set, /api/reasoning reads thinking blocks from the local events
+# table instead of scanning JSONL on disk. Falls through cleanly when
+# the store is empty or local_store is unimportable.
 
 bp_reasoning = Blueprint("reasoning", __name__)
 
@@ -169,12 +176,119 @@ def _parse_session_reasoning(session_id):
     return chains
 
 
+def _try_local_store_reasoning(session_id: str):
+    """Tier-1 DuckDB fast path for /api/reasoning.
+
+    Reads ``message`` events for the requested ``session_id`` from the
+    local store, extracts thinking/text blocks from each assistant turn,
+    and returns the same ``{session_id, chains, summary, _source}`` shape
+    the legacy JSONL parser produces.
+
+    Returns ``None`` to defer to the legacy fallback if:
+      - the ``local_store`` module isn't importable
+      - no message events exist for this session
+      - no thinking blocks are present (chains would be empty)
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return None
+    try:
+        store = local_store.get_store()
+        rows = store.query_events(
+            session_id=session_id, event_type="message", limit=2000,
+        )
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    # query_events returns most-recent-first; reasoning chains read forward
+    # in time (legacy parser walks the JSONL top-to-bottom).
+    rows = list(reversed(rows))
+    chains = []
+    for r in rows:
+        data = r.get("data") if isinstance(r, dict) else None
+        if not isinstance(data, dict):
+            continue
+        msg = data.get("message") if isinstance(data.get("message"), dict) else data
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") and msg.get("role") != "assistant":
+            continue
+        content_obj = msg.get("content")
+        if not isinstance(content_obj, list):
+            continue
+
+        thinking_blocks = []
+        answer_word_count = 0
+        for block in content_obj:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type", "")
+            if btype == "thinking":
+                tt = block.get("thinking", "")
+                if tt:
+                    thinking_blocks.append(tt)
+            elif btype == "text":
+                text = block.get("text", "") or ""
+                answer_word_count += len(text.split())
+
+        ts = r.get("ts") or ""
+        for thinking_text in thinking_blocks:
+            steps = _segment_thinking(thinking_text)
+            thinking_word_count = sum(s["word_count"] for s in steps)
+            thinking_tokens = int(thinking_word_count * 1.3)
+            answer_tokens = int(answer_word_count * 1.3)
+            efficiency_ratio = (
+                round(thinking_tokens / answer_tokens, 1) if answer_tokens > 0 else 0.0
+            )
+            chains.append({
+                "timestamp":        ts,
+                "thinking_tokens":  thinking_tokens,
+                "answer_tokens":    answer_tokens,
+                "efficiency_ratio": efficiency_ratio,
+                "steps":            steps,
+                "raw_thinking":     thinking_text,
+            })
+
+    if not chains:
+        return None
+
+    total_thinking_tokens = sum(c["thinking_tokens"] for c in chains)
+    total_answer_tokens = sum(c["answer_tokens"] for c in chains)
+    avg_efficiency = (
+        round(total_thinking_tokens / total_answer_tokens, 1)
+        if total_answer_tokens > 0 else 0.0
+    )
+    return {
+        "session_id": session_id,
+        "chains":     chains,
+        "summary": {
+            "total_thinking_tokens": total_thinking_tokens,
+            "total_answer_tokens":   total_answer_tokens,
+            "avg_efficiency":        avg_efficiency,
+            "chain_count":           len(chains),
+        },
+        "_source": "local_store",
+    }
+
+
 @bp_reasoning.route("/api/reasoning")
 def api_reasoning():
     """Return structured reasoning chains for a session."""
     session_id = request.args.get("session", "").strip()
     if not session_id:
         return jsonify({"error": "session parameter required"}), 400
+
+    # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
+    # Falls through to legacy JSONL parser when flag is unset, the store
+    # has no events for this session, or no thinking blocks are present.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_reasoning(session_id)
+        if fast is not None:
+            return jsonify(fast)
 
     chains = _parse_session_reasoning(session_id)
 

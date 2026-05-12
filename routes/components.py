@@ -34,6 +34,125 @@ _api_tool_cache = {}
 _api_tool_cache_time = {}
 
 
+# Map tool key to tool names in transcripts (also used by the local-store
+# fast path so the fast path stays in lock-step with the legacy parser).
+_TOOL_MAP = {
+    "session": [
+        "sessions_spawn",
+        "sessions_send",
+        "sessions_list",
+        "sessions_poll",
+    ],
+    "exec": ["exec", "process"],
+    "browser": ["browser", "web_fetch"],
+    "search": ["web_search"],
+    "cron": ["cron"],
+    "tts": ["tts"],
+    "memory": ["Read", "read", "Write", "write", "Edit", "edit"],
+}
+
+
+def _try_local_store_component_tool(name: str):
+    """Tier-1 DuckDB fast path for /api/component/tool/<name>.
+
+    Reads ``tool_call`` events from the local store, filters to today + the
+    requested tool family, and shapes them into the same response the legacy
+    JSONL parser returns (``{events, stats, total, name}``).
+
+    Returns ``None`` to defer to the legacy fallback if:
+      - the ``local_store`` module isn't importable
+      - the events table is empty / has no matches
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return None
+    try:
+        store = local_store.get_store()
+        rows = store.query_events(event_type="tool_call", limit=2000)
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    tool_names = set(_TOOL_MAP.get(name, [name]))
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    events = []
+    today_calls = 0
+    today_errors = 0
+    for r in rows:
+        ts = (r.get("ts") or "")
+        if not ts.startswith(today):
+            continue
+        data = r.get("data") if isinstance(r, dict) else None
+        # `data` can be dict (preferred), str, or None
+        tn = ""
+        args = {}
+        status = "ok"
+        if isinstance(data, dict):
+            tn = data.get("name") or data.get("tool") or ""
+            args = data.get("arguments") or data.get("input") or {}
+            if not isinstance(args, dict):
+                args = {"_raw": str(args)[:200]}
+            if data.get("isError") or (isinstance(data.get("result"), dict)
+                                       and data["result"].get("status") == "error"):
+                status = "error"
+        if not tn or tn not in tool_names:
+            continue
+
+        today_calls += 1
+        if status == "error":
+            today_errors += 1
+
+        evt = {"timestamp": ts, "status": status, "tool": tn}
+        if name == "exec":
+            evt["detail"] = (args.get("command") or str(args))[:200]
+            evt["action"] = "exec"
+        elif name == "browser":
+            evt["action"] = args.get("action", "unknown")
+            evt["detail"] = (args.get("targetUrl") or args.get("url")
+                             or args.get("selector") or evt["action"])
+        elif name == "search":
+            evt["detail"] = args.get("query", "?")
+            evt["action"] = "search"
+        elif name == "tts":
+            evt["detail"] = (args.get("text") or "")[:100]
+            evt["action"] = "tts"
+            evt["voice"] = args.get("voice", "")
+        elif name == "memory":
+            path = args.get("file_path") or args.get("path") or "?"
+            evt["detail"] = path
+            evt["action"] = ("write" if tn in ("Write", "write", "Edit", "edit")
+                             else "read")
+        elif name == "session":
+            evt["detail"] = (args.get("sessionId") or args.get("name") or tn)
+            evt["action"] = tn
+            evt["session_status"] = "running"
+        elif name == "cron":
+            evt["detail"] = (args.get("expr") or args.get("action")
+                             or str(args)[:80])
+            evt["action"] = "cron"
+        else:
+            evt["detail"] = str(args)[:120]
+            evt["action"] = tn
+        events.append(evt)
+
+    if not events:
+        return None
+
+    events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+    events = events[:50]
+    return {
+        "name":    name,
+        "stats":   {"today_calls": today_calls, "today_errors": today_errors},
+        "events":  events,
+        "total":   today_calls,
+        "_source": "local_store",
+    }
+
+
 @bp_components.route("/api/component/tool/<name>")
 def api_component_tool(name):
     """Parse session transcripts for tool-specific events. Cached for 15s."""
@@ -43,6 +162,16 @@ def api_component_tool(name):
     now = _time.time()
     if name in _api_tool_cache and (now - _api_tool_cache_time.get(name, 0)) < 15:
         return jsonify(_api_tool_cache[name])
+
+    # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
+    # Falls through to legacy JSONL parser when flag is unset, store is
+    # empty, or no matching events for `name`.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_component_tool(name)
+        if fast is not None:
+            _api_tool_cache[name] = fast
+            _api_tool_cache_time[name] = now
+            return jsonify(fast)
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
@@ -971,6 +1100,143 @@ def api_component_gateway():
     return jsonify({"routes": page, "stats": stats, "total": total})
 
 
+def _try_local_store_component_brain(limit: int, offset: int):
+    """Tier-1 DuckDB fast path for /api/component/brain.
+
+    Reads ``message`` events from the local store (assistant turns carry
+    LLM usage), filters to today, and shapes them into the same
+    ``{stats, calls, total}`` payload the legacy JSONL parser returns.
+
+    Returns ``None`` to defer to the legacy fallback if:
+      - the ``local_store`` module isn't importable
+      - the events table is empty / no qualifying calls today
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return None
+    try:
+        store = local_store.get_store()
+        # Pull a generous window — events are filtered down by ts/usage below.
+        rows = store.query_events(event_type="message", limit=2000)
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    calls = []
+    total_input = 0
+    total_output = 0
+    total_cache_read = 0
+    total_cache_write = 0
+    total_cost = 0.0
+    durations = []
+    models_seen = set()
+
+    for r in rows:
+        ts = (r.get("ts") or "")
+        if not ts.startswith(today):
+            continue
+        data = r.get("data") if isinstance(r, dict) else None
+        if not isinstance(data, dict):
+            continue
+        msg = data.get("message") if isinstance(data.get("message"), dict) else data
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") and msg.get("role") != "assistant":
+            continue
+        usage = msg.get("usage")
+        if not isinstance(usage, dict):
+            continue
+
+        model = msg.get("model") or r.get("model") or "unknown"
+        models_seen.add(model)
+        tokens_in = (usage.get("input", 0) + usage.get("cacheRead", 0)
+                     + usage.get("cacheWrite", 0))
+        tokens_out = usage.get("output", 0)
+        cache_read = usage.get("cacheRead", 0)
+        cache_write = usage.get("cacheWrite", 0)
+        cost_data = usage.get("cost", {})
+        call_cost = (float(cost_data.get("total", 0))
+                     if isinstance(cost_data, dict) else 0.0)
+        if call_cost == 0 and r.get("cost_usd"):
+            try:
+                call_cost = float(r["cost_usd"])
+            except Exception:
+                pass
+
+        has_thinking = False
+        tools_used = []
+        for c in msg.get("content") or []:
+            if isinstance(c, dict):
+                if c.get("type") == "thinking":
+                    has_thinking = True
+                elif c.get("type") == "toolCall":
+                    tn = c.get("name", "")
+                    if tn and tn not in tools_used:
+                        tools_used.append(tn)
+
+        total_input += usage.get("input", 0)
+        total_output += tokens_out
+        total_cache_read += cache_read
+        total_cache_write += cache_write
+        total_cost += call_cost
+
+        sid = r.get("session_id") or ""
+        session_label = "subagent:" + sid[:8] if "subagent" in sid.lower() else "main"
+
+        calls.append({
+            "timestamp":   ts,
+            "model":       model,
+            "tokens_in":   tokens_in,
+            "tokens_out":  tokens_out,
+            "cache_read":  cache_read,
+            "cache_write": cache_write,
+            "thinking":    has_thinking,
+            "cost":        "${:.4f}".format(call_cost),
+            "cost_raw":    call_cost,
+            "tools_used":  tools_used,
+            "duration_ms": 0,
+            "session":     session_label,
+            "stop_reason": msg.get("stopReason", ""),
+        })
+
+    if not calls:
+        return None
+
+    calls.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    total = len(calls)
+    avg_ms = int(sum(durations) / len(durations)) if durations else 0
+    primary_model = (
+        max(models_seen, key=lambda m: sum(1 for c in calls if c["model"] == m))
+        if models_seen else "unknown"
+    )
+    thinking_count = sum(1 for c in calls if c.get("thinking"))
+    cache_hit_count = sum(1 for c in calls if c.get("cache_read", 0) > 0)
+
+    return {
+        "stats": {
+            "today_calls":     total,
+            "today_tokens":    {
+                "input":       total_input,
+                "output":      total_output,
+                "cache_read":  total_cache_read,
+                "cache_write": total_cache_write,
+            },
+            "today_cost":      "${:.2f}".format(total_cost),
+            "model":           primary_model,
+            "avg_response_ms": avg_ms,
+            "thinking_calls":  thinking_count,
+            "cache_hits":      cache_hit_count,
+        },
+        "calls":   calls[offset: offset + limit],
+        "total":   total,
+        "_source": "local_store",
+    }
+
+
 @bp_components.route("/api/component/brain")
 def api_component_brain():
     """Parse session transcripts for LLM API call details."""
@@ -978,6 +1244,14 @@ def api_component_brain():
 
     limit = int(request.args.get("limit", 50))
     offset = int(request.args.get("offset", 0))
+
+    # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
+    # Falls through to legacy JSONL parser when flag is unset, store is
+    # empty, or no qualifying assistant turns are present.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_component_brain(limit, offset)
+        if fast is not None:
+            return jsonify(fast)
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"

@@ -9,6 +9,8 @@ Blueprint: bp_autonomy
 Endpoint:  GET /api/autonomy
 """
 
+from __future__ import annotations
+
 import json
 import math
 import os
@@ -272,6 +274,156 @@ def _empty_response() -> dict:
     }
 
 
+def _try_local_store_autonomy() -> dict | None:
+    """Tier-1 DuckDB fast path for /api/autonomy.
+
+    Reads ``message`` events from the local store, filters to user-role
+    messages within the last 7 days, and runs the same per-session gap
+    aggregation the JSONL parser does. Returns the canonical autonomy
+    payload (score / median_gap / autonomy_ratio / trend / series_daily)
+    plus ``"_source": "local_store"``.
+
+    Returns ``None`` to defer to the legacy fallback if:
+      - the ``local_store`` module isn't importable
+      - the events table has no qualifying user messages
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return None
+    try:
+        store = local_store.get_store()
+        rows = store.query_events(event_type="message", limit=5000)
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    now_utc = datetime.now(tz=timezone.utc)
+    cutoff_ts = now_utc.timestamp() - 7 * 86400
+
+    # session_id → sorted list of user-msg unix timestamps (within the window)
+    per_session: dict[str, list[float]] = defaultdict(list)
+    for r in rows:
+        ts_str = r.get("ts") or ""
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        if ts < cutoff_ts:
+            continue
+        data = r.get("data") if isinstance(r, dict) else None
+        if not isinstance(data, dict):
+            continue
+        msg = data.get("message") if isinstance(data.get("message"), dict) else data
+        role = msg.get("role") if isinstance(msg, dict) else None
+        if role != "user":
+            continue
+        sid = r.get("session_id") or ""
+        per_session[sid].append(ts)
+
+    if not per_session:
+        return None
+
+    daily: dict = defaultdict(lambda: {
+        "gaps": [], "no_nudge_sessions": 0, "sessions": 0, "user_msgs": 0,
+    })
+    all_gaps: list = []
+    total_sessions_7d = 0
+    no_nudge_sessions_7d = 0
+    total_user_msgs_7d = 0
+
+    for sid, stamps in per_session.items():
+        stamps.sort()
+        total_sessions_7d += 1
+        session_gaps = [
+            stamps[i + 1] - stamps[i]
+            for i in range(len(stamps) - 1)
+            if stamps[i + 1] - stamps[i] > 0
+        ]
+        is_no_nudge = len(stamps) <= 1
+        if is_no_nudge:
+            no_nudge_sessions_7d += 1
+        total_user_msgs_7d += len(stamps)
+        all_gaps.extend(session_gaps)
+        day_key = datetime.fromtimestamp(stamps[0], tz=timezone.utc).strftime("%Y-%m-%d")
+        daily[day_key]["gaps"].extend(session_gaps)
+        daily[day_key]["sessions"] += 1
+        daily[day_key]["user_msgs"] += len(stamps)
+        if is_no_nudge:
+            daily[day_key]["no_nudge_sessions"] += 1
+
+    if total_sessions_7d == 0:
+        return None
+
+    median_gap = _median_safe(all_gaps)
+    autonomy_ratio = (no_nudge_sessions_7d / total_sessions_7d) if total_sessions_7d else None
+
+    series_daily = []
+    import datetime as _dt_mod
+    for offset in range(6, -1, -1):
+        day_dt = now_utc - _dt_mod.timedelta(days=offset)
+        day_str = day_dt.strftime("%Y-%m-%d")
+        bucket = daily.get(day_str)
+        if bucket and bucket["sessions"] > 0:
+            day_median = _median_safe(bucket["gaps"])
+            day_ratio = (bucket["no_nudge_sessions"] / bucket["sessions"]
+                         if bucket["sessions"] else None)
+            series_daily.append({
+                "day": day_str,
+                "median_gap_sec": day_median,
+                "autonomy_ratio": day_ratio,
+                "sessions": bucket["sessions"],
+            })
+        else:
+            series_daily.append({
+                "day": day_str,
+                "median_gap_sec": None,
+                "autonomy_ratio": None,
+                "sessions": 0,
+            })
+
+    xs, ys = [], []
+    for i, entry in enumerate(series_daily):
+        if entry["median_gap_sec"] is not None:
+            xs.append(float(i))
+            ys.append(entry["median_gap_sec"])
+
+    trend_slope_7d = 0.0
+    if len(xs) >= 2:
+        raw_slope = _linear_slope(xs, ys)
+        if median_gap and median_gap > 0:
+            trend_slope_7d = raw_slope / median_gap
+    if trend_slope_7d > 0.02:
+        trend_direction = "improving"
+    elif trend_slope_7d < -0.02:
+        trend_direction = "declining"
+    else:
+        trend_direction = "flat"
+
+    try:
+        ar = autonomy_ratio if autonomy_ratio is not None else 0.0
+        tanh_part = math.tanh(trend_slope_7d * 10) * 0.5
+        raw_score = 0.5 * ar + tanh_part + 0.5
+        score = max(0.0, min(1.0, raw_score))
+    except Exception:
+        score = 0.0
+
+    return {
+        "score": round(score, 4),
+        "median_gap_seconds_7d": median_gap,
+        "autonomy_ratio_7d": autonomy_ratio,
+        "trend_slope_7d": round(trend_slope_7d, 6),
+        "trend_direction": trend_direction,
+        "samples_7d": total_user_msgs_7d,
+        "series_daily": series_daily,
+        "_source": "local_store",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Route
 # ---------------------------------------------------------------------------
@@ -283,6 +435,17 @@ def api_autonomy():
     cached = _AUTONOMY_CACHE.get("data")
     if cached is not None and (now - float(_AUTONOMY_CACHE.get("ts") or 0)) < _AUTONOMY_CACHE_TTL_SECONDS:
         return jsonify(cached)
+
+    # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
+    # Falls through to legacy JSONL scan when the flag is unset, the store
+    # is empty, or no qualifying user messages exist in the 7-day window.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_autonomy()
+        if fast is not None:
+            _AUTONOMY_CACHE["data"] = fast
+            _AUTONOMY_CACHE["ts"] = now
+            return jsonify(fast)
+
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
