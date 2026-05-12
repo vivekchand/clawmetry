@@ -2,11 +2,10 @@
 routes/overview.py — Main-dashboard endpoints.
 
 Extracted from dashboard.py as Phase 5.8 of the incremental modularisation.
-Owns the 7 routes registered on ``bp_overview``:
+Owns the 6 routes registered on ``bp_overview``:
 
   GET  /api/channels              — active input channels for Flow diagram
   GET  /api/overview              — top-bar live data (polled every 10s)
-  GET  /api/main-activity         — main-agent recent tool-call activity
   GET  /api/timeline              — 30-day session-activity timeline
   GET  /api/cloud-cta/status      — cloud-sync CTA connected status
   POST /api/cloud-cta/send-otp    — cloud-sync CTA: send email OTP
@@ -24,7 +23,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request
@@ -546,142 +544,6 @@ def api_overview():
             "system": system,
             "infra": infra,
         }
-    )
-
-
-@bp_overview.route("/api/main-activity")
-def api_main_activity():
-    """Return recent tool calls from the main (most recently modified) session."""
-    import dashboard as _d
-
-    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
-        "~/.openclaw/agents/main/sessions"
-    )
-    if not os.path.isdir(sessions_dir):
-        return jsonify({"calls": [], "error": "sessions dir not found"})
-    # Find the main session: largest recently-modified JSONL (main sessions accumulate far more data)
-    candidates = []
-    for f in os.listdir(sessions_dir):
-        if not f.endswith(".jsonl"):
-            continue
-        fp = os.path.join(sessions_dir, f)
-        try:
-            st = os.stat(fp)
-            # Only consider files modified in last 24h
-            if time.time() - st.st_mtime < 86400:
-                candidates.append((fp, st.st_size, st.st_mtime))
-        except Exception:
-            continue
-    if not candidates:
-        return jsonify({"calls": []})
-    # Pick most recently modified file (active main session)
-    candidates.sort(key=lambda x: x[2], reverse=True)
-    best = candidates[0][0]
-    best_mt = candidates[0][2]
-    if not best:
-        return jsonify({"calls": []})
-    # Read last ~200 lines to find tool calls
-    try:
-        with open(best, "rb") as fh:
-            fh.seek(0, 2)
-            size = fh.tell()
-            chunk = min(size, 512000)
-            fh.seek(max(0, size - chunk))
-            tail = fh.read().decode("utf-8", errors="replace")
-        lines = tail.strip().split("\n")
-    except Exception:
-        return jsonify({"calls": []})
-    tool_icons = {
-        "exec": "🔧",
-        "Read": "📖",
-        "read": "📖",
-        "Edit": "✏️",
-        "edit": "✏️",
-        "Write": "✏️",
-        "write": "✏️",
-        "web_search": "🌐",
-        "web_fetch": "🌐",
-        "browser": "🖥️",
-        "message": "💬",
-        "tts": "🔊",
-        "image": "🖼️",
-        "canvas": "🎨",
-        "nodes": "📱",
-        "process": "🔧",
-    }
-    calls = []
-    for line in lines:
-        try:
-            obj = json.loads(line)
-        except Exception:
-            continue
-        msg = obj.get("message", obj)
-        ts = obj.get("timestamp") or msg.get("timestamp")
-        content = msg.get("content", [])
-        if not isinstance(content, list):
-            continue
-        for item in content:
-            if item.get("type") != "toolCall":
-                continue
-            name = item.get("name", "?")
-            args = item.get("arguments", {}) or {}
-            # Build summary
-            if name == "exec":
-                summary = args.get("command", "")[:60]
-            elif name in ("Read", "read"):
-                summary = (args.get("file_path") or args.get("path") or "")[:60]
-            elif name in ("Edit", "edit"):
-                summary = (args.get("file_path") or args.get("path") or "")[:60]
-            elif name in ("Write", "write"):
-                summary = (args.get("file_path") or args.get("path") or "")[:60]
-            elif name == "web_search":
-                summary = args.get("query", "")[:60]
-            elif name == "web_fetch":
-                summary = args.get("url", "")[:60]
-            elif name == "browser":
-                summary = args.get("action", "")
-            elif name == "message":
-                action = args.get("action", "")
-                target = args.get("target") or args.get("to") or args.get("channel", "")
-                msg = (args.get("message") or "")[:40]
-                summary = (
-                    f"{action} -> {target}: {msg}" if msg else f"{action} -> {target}"
-                )
-                summary = summary[:60]
-            elif name == "tts":
-                summary = args.get("text", "")[:60]
-            elif name == "process":
-                action = args.get("action", "")
-                sid = args.get("sessionId", "")[:15]
-                summary = f"{action}: {sid}" if sid else action
-            elif name == "sessions_spawn":
-                task = (args.get("task", "") or args.get("label", ""))[:50]
-                summary = task
-            elif name == "sessions_send":
-                label = args.get("label") or args.get("sessionKey", "")
-                summary = f"-> {label}"[:60]
-            elif name == "cron":
-                action = args.get("action", "")
-                jid = args.get("jobId", "")[:10]
-                summary = f"{action} {jid}".strip()
-            elif name == "gateway":
-                summary = args.get("action", "")
-            elif name == "session_status":
-                summary = "checking status"
-            elif name == "image":
-                summary = (args.get("prompt", "") or args.get("image", ""))[:60]
-            else:
-                # Clean up dict display
-                s = str(args)
-                if len(s) > 60:
-                    s = s[:57] + "..."
-                summary = s
-            icon = tool_icons.get(name, "⚙️")
-            calls.append({"ts": ts, "name": name, "icon": icon, "summary": summary})
-    # Return last 20
-    calls = calls[-20:]
-    return jsonify(
-        {"calls": calls, "sessionFile": os.path.basename(best), "lastModified": best_mt}
     )
 
 
