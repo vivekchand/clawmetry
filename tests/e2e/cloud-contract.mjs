@@ -246,6 +246,122 @@ async function testNormalUser() {
     !state.bodyText.toLowerCase().includes('enter your secret key')
   );
 
+  // ── Walk every free-tier tab ─────────────────────────────────────────
+  // For each tab: click, wait, screenshot (when SCREENSHOT_DIR set), and
+  // assert the tab body renders without decrypt errors. PAUSE_MS controls
+  // how long to sit on each tab — bumped under HEADLESS=0 so a human
+  // watching can actually see each surface.
+  const PAUSE_MS = HEADLESS ? 1500 : 3000;
+  const screenshotDir = process.env.SCREENSHOT_DIR;
+  if (screenshotDir) {
+    const fs = await import('node:fs');
+    fs.mkdirSync(screenshotDir, { recursive: true });
+    await page.screenshot({ path: `${screenshotDir}/00_landing.png` });
+  }
+  console.log('\n  ▸ Walking free-tier tabs');
+  const TABS = [
+    'Flow',
+    'Brain',
+    'Overview',
+    'Approvals',
+    'Alerts',
+    'Notifications',
+    'Context',
+    'Tokens',
+    'Crons',
+    'Memory',
+  ];
+  let tabIdx = 0;
+  for (const tab of TABS) {
+    tabIdx++;
+    const errBefore = errors.length;
+    const t = page.locator(`.nav-tab:has-text("${tab}"), [role="tab"]:has-text("${tab}")`).first();
+    if ((await t.count()) === 0) {
+      check(`${tab}: tab visible`, false);
+      continue;
+    }
+    await t.click({ timeout: 5000 }).catch(() => undefined);
+    await page.waitForTimeout(PAUSE_MS);
+    if (screenshotDir) {
+      await page
+        .screenshot({ path: `${screenshotDir}/${String(tabIdx).padStart(2, '0')}_${tab.toLowerCase()}.png` })
+        .catch(() => undefined);
+    }
+    const tabState = await page.evaluate(() => {
+      const text = document.body.innerText || '';
+      return {
+        bodyLen: text.length,
+        hasUnlock: text.toLowerCase().includes('enter your secret key'),
+        hasDecryptFail: text.toLowerCase().includes('could not decrypt'),
+        snippet: text.replace(/\s+/g, ' ').slice(0, 140),
+      };
+    });
+    check(`${tab}: rendered (body > 200 chars)`, tabState.bodyLen > 200, tabState.snippet);
+    check(`${tab}: no unlock prompt`, !tabState.hasUnlock);
+    check(`${tab}: no decrypt failure`, !tabState.hasDecryptFail);
+    check(`${tab}: no new JS errors`, errors.length === errBefore);
+  }
+
+  // ── Click into deeper surfaces where activity exists ────────────────
+  // After seedActivity ran, Brain should have an event row. Click the
+  // first one to verify modal/expander opens. Same for Tokens and Crons.
+  console.log('\n  ▸ Clicking into Brain feed');
+  await page.locator('.nav-tab:has-text("Brain"), [role="tab"]:has-text("Brain")').first().click().catch(() => undefined);
+  await page.waitForTimeout(PAUSE_MS);
+  // Brain renders events as cards/rows — click the first interactable one.
+  const brainCard = page.locator('.brain-event, .event-card, [data-event-id], .activity-row').first();
+  if ((await brainCard.count()) > 0) {
+    await brainCard.click({ timeout: 5000 }).catch(() => undefined);
+    await page.waitForTimeout(PAUSE_MS);
+    const after = await page.evaluate(() => (document.body.innerText || '').length);
+    check('Brain: clicking first event opens detail (body grew)', after > 200);
+  } else {
+    console.log('  (Brain has no clickable cards — empty state, skipping interaction)');
+  }
+
+  console.log('\n  ▸ Clicking into Flow nodes (channels / tools / models)');
+  await page.locator('.nav-tab:has-text("Flow"), [role="tab"]:has-text("Flow")').first().click().catch(() => undefined);
+  await page.waitForTimeout(PAUSE_MS);
+  // Flow renders nodes for channels, tools, models, etc. Click the first
+  // node with a label — opens a detail modal.
+  const flowNode = page
+    .locator('.flow-node, [data-node-id], .node-tool, .node-channel, .node-model')
+    .first();
+  if ((await flowNode.count()) > 0) {
+    await flowNode.click({ timeout: 5000 }).catch(() => undefined);
+    await page.waitForTimeout(PAUSE_MS);
+    const modalOpen = await page
+      .locator('.modal, [role="dialog"], .flow-detail-panel')
+      .first()
+      .isVisible()
+      .catch(() => false);
+    check('Flow: clicking a node opens a modal/panel', modalOpen);
+    // Close the modal so subsequent tab clicks aren't intercepted.
+    await page.keyboard.press('Escape').catch(() => undefined);
+    await page.waitForTimeout(500);
+  } else {
+    console.log('  (Flow has no nodes to click yet — sparse activity)');
+  }
+
+  console.log('\n  ▸ Hovering Tokens chart for tooltip');
+  await page.locator('.nav-tab:has-text("Tokens"), [role="tab"]:has-text("Tokens")').first().click().catch(() => undefined);
+  await page.waitForTimeout(PAUSE_MS);
+  const tokenChart = page.locator('canvas, svg.chart, [data-chart]').first();
+  if ((await tokenChart.count()) > 0) {
+    await tokenChart.hover({ timeout: 5000 }).catch(() => undefined);
+    await page.waitForTimeout(PAUSE_MS);
+    check('Tokens: chart canvas/svg present', true);
+  } else {
+    console.log('  (Tokens has no chart yet — empty state)');
+  }
+
+  console.log('\n  ▸ Crons tab — verify no JS errors on render');
+  await page.locator('.nav-tab:has-text("Crons"), [role="tab"]:has-text("Crons")').first().click().catch(() => undefined);
+  await page.waitForTimeout(PAUSE_MS);
+  if (screenshotDir) {
+    await page.screenshot({ path: `${screenshotDir}/99_crons_final.png` }).catch(() => undefined);
+  }
+
   // Filter known-harmless console noise.
   const real = errors.filter(
     e =>

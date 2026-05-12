@@ -4,7 +4,9 @@
   "type": "module",
   "description": "Node + Playwright E2E specs for ClawMetry. Single source of truth — clawmetry-cloud's deploy.yml fetches + runs cloud-contract.mjs from here.",
   "scripts": {
-    "test:cloud-contract": "node cloud-contract.mjs"
+    "test:cloud-contract": "node cloud-contract.mjs",
+    "test:real-flow": "node real-flow.mjs",
+    "test:signup-flow": "node signup-flow.mjs"
   },
   "devDependencies": {
     "playwright": "^1.59.1"
