@@ -794,6 +794,64 @@ class LocalStore:
                                   "event_count","cost_usd","token_count"])
                 for r in self._fetch(sql, params)]
 
+    def query_heartbeats(
+        self,
+        *,
+        node_id: str | None = None,
+        agent_type: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Read heartbeat rows. Defaults to most recent first.
+
+        Each row is a single daemon liveness ping (one per heartbeat
+        interval, typically every 60s). Use ``since=<iso ts>`` to filter to
+        a recent window (e.g. last 24h). The ``data`` BLOB is decoded back
+        to a JSON dict when valid, str otherwise, None when empty.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if node_id:
+            clauses.append("node_id = ?")
+            params.append(node_id)
+        if agent_type:
+            clauses.append("agent_type = ?")
+            params.append(agent_type)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        if until:
+            clauses.append("ts <= ?")
+            params.append(until)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT agent_type, node_id, ts, version, e2e, size_mb,
+                   events_total, data
+            FROM heartbeats
+            {where}
+            ORDER BY ts DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["agent_type", "node_id", "ts", "version", "e2e", "size_mb",
+                "events_total", "data"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            raw = d.get("data")
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    try:
+                        d["data"] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d["data"] = text
+                except UnicodeDecodeError:
+                    d["data"] = None
+            out.append(d)
+        return out
+
     def query_aggregates(
         self,
         *,
