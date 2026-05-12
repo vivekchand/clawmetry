@@ -643,6 +643,112 @@ class LocalStore:
                     updated_at = excluded.updated_at
             """, [atype, agent_id, path, blob_row.get("ts"), blob, sha, size, now_ms])
 
+    def ingest_channel(self, ch: dict[str, Any]) -> None:
+        """Upsert one OpenClaw channel-context row. Required: session_id.
+        Optional: channel, chat_type, subject, origin_label."""
+        sid = ch.get("session_id")
+        if not sid:
+            raise ValueError("channel must include 'session_id'")
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO openclaw_channels (
+                    session_id, channel, chat_type, subject, origin_label
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (session_id) DO UPDATE SET
+                    channel      = COALESCE(excluded.channel, openclaw_channels.channel),
+                    chat_type    = COALESCE(excluded.chat_type, openclaw_channels.chat_type),
+                    subject      = COALESCE(excluded.subject, openclaw_channels.subject),
+                    origin_label = COALESCE(excluded.origin_label, openclaw_channels.origin_label)
+            """, [sid, ch.get("channel"), ch.get("chat_type"),
+                  ch.get("subject"), ch.get("origin_label")])
+
+    def ingest_cron(self, cron: dict[str, Any]) -> None:
+        """Upsert one cron-job row. Required: cron_id."""
+        cid = cron.get("cron_id")
+        if not cid:
+            raise ValueError("cron must include 'cron_id'")
+        atype = cron.get("agent_type") or "openclaw"
+        data_blob = _to_blob({k: v for k, v in cron.items()
+                              if k not in {"cron_id", "agent_type", "agent_id",
+                                           "name", "schedule", "enabled",
+                                           "last_run_at", "last_status",
+                                           "next_run_at"}})
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO crons (
+                    agent_type, cron_id, agent_id, name, schedule, enabled,
+                    last_run_at, last_status, next_run_at, data, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (agent_type, cron_id) DO UPDATE SET
+                    agent_id     = excluded.agent_id,
+                    name         = COALESCE(excluded.name, crons.name),
+                    schedule     = COALESCE(excluded.schedule, crons.schedule),
+                    enabled      = excluded.enabled,
+                    last_run_at  = excluded.last_run_at,
+                    last_status  = excluded.last_status,
+                    next_run_at  = excluded.next_run_at,
+                    data         = COALESCE(excluded.data, crons.data),
+                    updated_at   = excluded.updated_at
+            """, [atype, cid, cron.get("agent_id") or "main",
+                  cron.get("name"), cron.get("schedule"),
+                  bool(cron.get("enabled", True)),
+                  cron.get("last_run_at"), cron.get("last_status"),
+                  cron.get("next_run_at"), data_blob, now_ms])
+
+    def ingest_subagent(self, sa: dict[str, Any]) -> None:
+        """Upsert one subagent rollup row. Required: subagent_id."""
+        sid = sa.get("subagent_id")
+        if not sid:
+            raise ValueError("subagent must include 'subagent_id'")
+        atype = sa.get("agent_type") or "openclaw"
+        data_blob = _to_blob({k: v for k, v in sa.items()
+                              if k not in {"subagent_id", "agent_type",
+                                           "parent_session_id", "spawned_at",
+                                           "ended_at", "task", "status",
+                                           "cost_usd", "token_count"}})
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO subagents (
+                    agent_type, subagent_id, parent_session_id, spawned_at,
+                    ended_at, task, status, cost_usd, token_count, data, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (agent_type, subagent_id) DO UPDATE SET
+                    parent_session_id = COALESCE(excluded.parent_session_id, subagents.parent_session_id),
+                    spawned_at        = COALESCE(subagents.spawned_at, excluded.spawned_at),
+                    ended_at          = excluded.ended_at,
+                    task              = COALESCE(excluded.task, subagents.task),
+                    status            = excluded.status,
+                    cost_usd          = excluded.cost_usd,
+                    token_count       = excluded.token_count,
+                    data              = COALESCE(excluded.data, subagents.data),
+                    updated_at        = excluded.updated_at
+            """, [atype, sid, sa.get("parent_session_id"),
+                  sa.get("spawned_at"), sa.get("ended_at"),
+                  sa.get("task"), sa.get("status"),
+                  float(sa.get("cost_usd") or 0),
+                  int(sa.get("token_count") or 0),
+                  data_blob, now_ms])
+
+    def ingest_system_snapshot(self, snap: dict[str, Any]) -> None:
+        """Insert one system-snapshot row. Append-only;
+        (agent_type, node_id, ts, kind) PK silently ignores duplicates."""
+        node_id = snap.get("node_id")
+        ts = snap.get("ts")
+        kind = snap.get("kind")
+        if not node_id or not ts or not kind:
+            raise ValueError("snapshot must include 'node_id', 'ts', 'kind'")
+        atype = snap.get("agent_type") or "openclaw"
+        data_blob = _to_blob({k: v for k, v in snap.items()
+                              if k not in {"node_id", "ts", "kind", "agent_type"}})
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT OR IGNORE INTO system_snapshots (
+                    agent_type, node_id, ts, kind, data
+                ) VALUES (?, ?, ?, ?, ?)
+            """, [atype, node_id, ts, kind, data_blob])
+
     def ingest_heartbeat(self, hb: dict[str, Any]) -> None:
         """Insert one heartbeat row. Append-only; (agent_type, node_id, ts) PK
         means duplicate timestamps are silently ignored (the daemon only sends
@@ -836,21 +942,131 @@ class LocalStore:
         params.append(int(limit))
         cols = ["agent_type", "node_id", "ts", "version", "e2e", "size_mb",
                 "events_total", "data"]
-        out: list[dict[str, Any]] = []
-        for r in self._fetch(sql, params):
-            d = dict(zip(cols, r))
-            raw = d.get("data")
-            if raw is not None:
-                try:
-                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
-                    try:
-                        d["data"] = json.loads(text)
-                    except (ValueError, TypeError):
-                        d["data"] = text
-                except UnicodeDecodeError:
-                    d["data"] = None
-            out.append(d)
-        return out
+        return _decode_data_blob_rows(self._fetch(sql, params), cols)
+
+    def query_channels(
+        self,
+        *,
+        session_id: str | None = None,
+        channel: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """OpenClaw channel context per session (Telegram/Slack/etc.)."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?"); params.append(session_id)
+        if channel:
+            clauses.append("channel = ?"); params.append(channel)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT session_id, channel, chat_type, subject, origin_label
+            FROM openclaw_channels
+            {where}
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["session_id", "channel", "chat_type", "subject", "origin_label"]
+        return [_row_to_dict(r, cols) for r in self._fetch(sql, params)]
+
+    def query_crons(
+        self,
+        *,
+        agent_type: str | None = None,
+        agent_id: str | None = None,
+        enabled_only: bool = False,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Cron jobs registered with the agent gateway."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if agent_type:
+            clauses.append("agent_type = ?"); params.append(agent_type)
+        if agent_id:
+            clauses.append("agent_id = ?"); params.append(agent_id)
+        if enabled_only:
+            clauses.append("enabled = TRUE")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT agent_type, cron_id, agent_id, name, schedule, enabled,
+                   last_run_at, last_status, next_run_at, data, updated_at
+            FROM crons
+            {where}
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["agent_type", "cron_id", "agent_id", "name", "schedule",
+                "enabled", "last_run_at", "last_status", "next_run_at",
+                "data", "updated_at"]
+        return _decode_data_blob_rows(self._fetch(sql, params), cols)
+
+    def query_subagents(
+        self,
+        *,
+        parent_session_id: str | None = None,
+        agent_type: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Subagent rollup rows."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if parent_session_id:
+            clauses.append("parent_session_id = ?"); params.append(parent_session_id)
+        if agent_type:
+            clauses.append("agent_type = ?"); params.append(agent_type)
+        if status:
+            clauses.append("status = ?"); params.append(status)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT agent_type, subagent_id, parent_session_id, spawned_at,
+                   ended_at, task, status, cost_usd, token_count, data, updated_at
+            FROM subagents
+            {where}
+            ORDER BY spawned_at DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["agent_type", "subagent_id", "parent_session_id", "spawned_at",
+                "ended_at", "task", "status", "cost_usd", "token_count",
+                "data", "updated_at"]
+        return _decode_data_blob_rows(self._fetch(sql, params), cols)
+
+    def query_system_snapshots(
+        self,
+        *,
+        node_id: str | None = None,
+        kind: str | None = None,
+        agent_type: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """System health snapshots (cpu, mem, disk, gpu rollups)."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if node_id:
+            clauses.append("node_id = ?"); params.append(node_id)
+        if kind:
+            clauses.append("kind = ?"); params.append(kind)
+        if agent_type:
+            clauses.append("agent_type = ?"); params.append(agent_type)
+        if since:
+            clauses.append("ts >= ?"); params.append(since)
+        if until:
+            clauses.append("ts <= ?"); params.append(until)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT agent_type, node_id, ts, kind, data
+            FROM system_snapshots
+            {where}
+            ORDER BY ts DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["agent_type", "node_id", "ts", "kind", "data"]
+        return _decode_data_blob_rows(self._fetch(sql, params), cols)
 
     def query_aggregates(
         self,
@@ -1036,6 +1252,27 @@ def _row_to_event(row: tuple, cols: list[str]) -> dict[str, Any]:
 def _row_to_dict(row: tuple, cols: list[str]) -> dict[str, Any]:
     """Generic tuple-to-dict for non-event rows (sessions, aggregates)."""
     return dict(zip(cols, row))
+
+
+def _decode_data_blob_rows(rows: Iterable[tuple], cols: list[str]) -> list[dict[str, Any]]:
+    """tuple→dict for tables that have a ``data`` BLOB column. Decodes the
+    BLOB back to JSON dict where possible; str otherwise; None when empty.
+    Same pattern crons/subagents/system_snapshots/heartbeats all use."""
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        raw = d.get("data")
+        if raw is not None:
+            try:
+                text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                try:
+                    d["data"] = json.loads(text)
+                except (ValueError, TypeError):
+                    d["data"] = text
+            except UnicodeDecodeError:
+                d["data"] = None
+        out.append(d)
+    return out
 
 
 @contextmanager
