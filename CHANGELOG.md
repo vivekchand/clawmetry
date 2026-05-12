@@ -1,12 +1,31 @@
 ## [Unreleased]
 
-### DuckDB-everywhere + heartbeat-piggyback transport (epic #1032 phase 1, partial #964 close-out)
+### DuckDB-everywhere + heartbeat-piggyback transport (epic #1032 phase 1–5, partial #964 close-out)
 - **`/api/transcript/<sid>` reads from local DuckDB** (#1056) under `CLAWMETRY_LOCAL_STORE_READ=1`. Closes the explicit local-first blocker surfaced by the real-OpenClaw E2E pipeline.
 - **`/api/memory-files`, `/api/file`, `/api/memory`, `/api/memory-analytics` read from local DuckDB** (#1059) via new `LocalStore.query_memory_blobs()`. POST `/api/file` writes still on the filesystem — read-only by default.
 - **Tier-1 fast paths**: `/api/component/tool/<name>`, `/api/component/brain`, `/api/autonomy`, `/api/advisor/{ask,status}`, `/api/reasoning` (#1057). The 5 OS-state component endpoints (runtime/machine/storage/network/gateway) intentionally stay off the event store.
 - **Daemon dispatches heartbeat-piggybacked queries** (#1054, #1055). Replaces the killed WS relay path. Cloud responds to `/ingest/heartbeat` with `pending_queries`; daemon dispatches via `routes/local_query._dispatch()`, encrypts, POSTs to `/ingest/cache`. Industry-validated by Datadog Remote Config / AWS SSM Run Command / OpenTelemetry OpAMP-HTTP.
+- **Phase 2 — brain cache_push on heartbeat** (#1061). Top-50 brain events ride along with every `/ingest/heartbeat` body under `brain:{owner_hash}:{node}:recent` (3600s TTL). Cloud Brain tab paints in <100ms with zero Cloud SQL hits on the happy path.
+- **Phase 3 — alert rules in DuckDB + cache_push** (#1062). New `alert_rules` table (SCHEMA_VERSION 2 → 3), CRUD via `LocalStore`, fast path on `/api/alerts/rules`, plus a single `alerts:{owner_hash}:rules` cache entry per heartbeat. Cloud reads encrypted blob, browser decrypts.
+- **Phase 4 — approvals queue in DuckDB + decision-via-pending_queries** (#1064). New `approvals` table, fast path on `/api/approvals*`, pending queue pushed to `approvals:{owner_hash}:queue` on heartbeat. Cloud decisions queued back via `pending_queries` actions — no inbound network on the OSS side.
+- **Phase 5 — channel adapter config in DuckDB** (#1063). New `channel_config` table holds E2E-encrypted blobs (Telegram bot tokens, Slack OAuth, etc.) — cloud never sees plaintext. Adapter status summary pushed to `channels:{owner_hash}:status` every heartbeat.
 - **Real OpenClaw binary E2E coverage** (#1058). 8 tests spawn `openclaw agent --local --message ... --json` against a hermetic `OPENCLAW_HOME` and round-trip the produced JSONL through the real daemon → DuckDB → `/api/local/events` + `/api/sessions`. Skips cleanly on CI without the binary.
 - **Coverage**: 32/32 `_try_local_store_*`-gated endpoints have full seed→hit→`_source`-assert tests.
+
+### JS response-shape tolerance (forward-compat, #1071)
+- `app.js` now ships `unwrapList` / `unwrapListAsync` helpers that
+  accept all three Phase 2–5 envelopes (legacy array, local-store
+  `{key:[...], _source:"local_store"}`, cloud cache `{key_blob:"...",
+  _source:"cache"}`). On `_source:"cache"` the helper reaches for the
+  cloud-injected `decryptBlob` to decode ciphertext in-browser; if the
+  decryptor isn't loaded yet we degrade to an empty list silently —
+  never throws, never blocks the dashboard from painting. Applied to
+  `loadAlertRules` + the three `/api/brain-history` consumers.
+- Pre-publish `tests/e2e/cloud-contract.mjs` per-tab JS-error check
+  now goes through the same `isHarmlessConsoleError()` filter as the
+  global rollup. Stops `/api/diagnostics` 410 + `/api/config-diagnostics`
+  404 from false-failing every tab. Flow node-click test now degrades
+  to a SKIP on empty-activity instead of hard-asserting modal-open.
 
 ### Local store: multi-agent foundation + naming (epic #964)
 - **Local DB renamed** `events.duckdb` → `clawmetry.duckdb`. The DB now
