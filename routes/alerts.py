@@ -37,12 +37,44 @@ zero behaviour change.
 """
 
 import json
+import os
 import time
 
 from flask import Blueprint, jsonify, request
 
 bp_budget = Blueprint('budget', __name__)
 bp_alerts = Blueprint('alerts', __name__)
+
+
+# ── Local-store fast path (Phase 3 of epic #1032) ────────────────────────────
+# Opt-in via CLAWMETRY_LOCAL_STORE_READ=1. Mirrors the same pattern used by
+# routes/crons.py and routes/sessions.py: gate the DuckDB read on the env flag,
+# return ``None`` to fall through to the legacy fleet-DB path on any error or
+# empty result. Cloud-authored rules land in this DuckDB table via the
+# heartbeat relay's pending_queries channel; the local evaluator picks them
+# up on its next pass.
+
+
+def _try_local_store_alert_rules():
+    """Return alert rules from the local DuckDB.
+
+    Returns ``None`` to defer to the legacy fleet-DB path if:
+      - the ``local_store`` module isn't importable
+      - the ``alert_rules`` table is empty (fresh install / no cloud sync)
+      - any unexpected error happens (we'd rather degrade than 500)
+
+    Tagged with ``_source: "local_store"`` so callers (browser, integration
+    tests, the cloud relay) can tell which path served them.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        rows = store.query_alert_rules(limit=500)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    return {"rules": rows, "_source": "local_store"}
 
 
 # ── Budget API Routes ───────────────────────────────────────────────────
@@ -193,6 +225,13 @@ def api_alert_rules():
             db.commit()
             db.close()
         return jsonify({"ok": True, "id": rule_id})
+    # Phase 3 of #1032 — local DuckDB fast path. Opt-in via
+    # CLAWMETRY_LOCAL_STORE_READ=1; falls through to the legacy fleet-DB
+    # _get_alert_rules helper on miss / disabled flag.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_alert_rules()
+        if fast is not None:
+            return jsonify(fast)
     return jsonify({"rules": _d._get_alert_rules()})
 
 
