@@ -512,11 +512,21 @@ def api_version_impact():
 def api_clusters():
     """Return session clusters grouped by tool call pattern, cost, and error types."""
     import dashboard as _d
-    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+    sessions_dir = getattr(_d, "SESSIONS_DIR", None) or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
+    # Cloud's dashboard.py doesn't ship _build_clusters; fall through to an
+    # empty 200 instead of leaking a 500 with an AttributeError body into the
+    # user's console. (When cloud_route_policy is loaded, this endpoint is
+    # normally returned as 410 by the policy enforcer; this guard is the
+    # defence-in-depth path for environments where the policy isn't active.)
+    build_clusters = getattr(_d, "_build_clusters", None)
+    if build_clusters is None:
+        return jsonify(
+            {"clusters": [], "total_clusters": 0, "sessions_dir": sessions_dir}
+        )
     try:
-        clusters = _d._build_clusters(sessions_dir)
+        clusters = build_clusters(sessions_dir)
         return jsonify(
             {
                 "clusters": clusters,

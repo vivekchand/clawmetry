@@ -188,12 +188,17 @@ def api_reliability():
         fast = _try_local_store_reliability(window)
         if fast is not None:
             return jsonify(fast)
-    if not _d._history_db or not _d.AgentReliabilityScorer:
+    # Cloud's dashboard.py is a different module than OSS's; AgentReliabilityScorer
+    # only lives in OSS. Use getattr so we degrade to a 200 "insufficient_data"
+    # response on cloud instead of 500-ing on AttributeError.
+    history_db = getattr(_d, "_history_db", None)
+    scorer_cls = getattr(_d, "AgentReliabilityScorer", None)
+    if not history_db or not scorer_cls:
         return jsonify(
             {"error": "History module not available", "direction": "insufficient_data"}
         ), 200
     try:
-        scorer = _d.AgentReliabilityScorer(_d._history_db)
+        scorer = scorer_cls(history_db)
         result = scorer.score(window_days=window)
         return jsonify(result)
     except Exception as e:

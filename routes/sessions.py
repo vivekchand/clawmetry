@@ -1280,7 +1280,16 @@ def api_delegation_tree():
     and returns per-chain token totals and estimated cost.
     """
     import dashboard as _d
-    sessions_dir = _d._get_sessions_dir()
+    # Cloud's dashboard.py is a different module than OSS's; some helpers
+    # (e.g. _get_sessions_dir, _estimate_usd_per_token) only exist in OSS.
+    # Guard with getattr so we degrade to an empty response instead of 500.
+    _get_sessions_dir = getattr(_d, "_get_sessions_dir", None)
+    _estimate_usd_per_token = getattr(_d, "_estimate_usd_per_token", None)
+    if _get_sessions_dir is None or _estimate_usd_per_token is None:
+        return jsonify(
+            {"chains": [], "total_subagents": 0, "total_chain_cost_usd": 0.0}
+        )
+    sessions_dir = _get_sessions_dir()
     index_path = os.path.join(sessions_dir, "sessions.json")
     try:
         with open(index_path) as f:
@@ -1290,7 +1299,7 @@ def api_delegation_tree():
             {"chains": [], "total_subagents": 0, "total_chain_cost_usd": 0.0}
         )
 
-    usd_per_tok = _d._estimate_usd_per_token()
+    usd_per_tok = _estimate_usd_per_token()
     now_ms = time.time() * 1000
 
     main_sessions = {}
