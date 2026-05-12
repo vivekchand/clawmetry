@@ -149,6 +149,16 @@ def api_sessions_by_type():
     returned session list (counts always cover all sessions).
     """
     import dashboard as _d
+    type_filter = request.args.get("type", "").strip()
+
+    # Epic #964: opt-in local-store fast path. Mirrors /api/sessions — when
+    # CLAWMETRY_LOCAL_STORE_READ=1 AND the local sessions table has rows,
+    # serve directly from DuckDB. Falls through to gateway/JSONL otherwise.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_sessions_by_type(type_filter)
+        if fast is not None:
+            return jsonify(fast)
+
     gw_data = _d._gw_invoke("sessions_list", {"limit": 50, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
         sessions = _d._augment_sessions_with_burn(gw_data["sessions"])
@@ -165,12 +175,87 @@ def api_sessions_by_type():
         counts[t] = counts.get(t, 0) + 1
     counts["total"] = len(sessions)
 
-    type_filter = request.args.get("type", "").strip()
     filtered = [
         s for s in sessions
         if not type_filter or s.get("session_type") == type_filter
     ]
     return jsonify({"counts": counts, "sessions": filtered})
+
+
+def _try_local_store_sessions_by_type(type_filter: str = ""):
+    """By-type variant of :func:`_try_local_store_sessions`.
+
+    Reads sessions from the local DuckDB and computes the same
+    ``{"counts": {...}, "sessions": [...]}`` shape the legacy gateway/JSONL
+    path returns. ``type_filter`` (``main``/``heartbeat``/``user``/``sub-agent``
+    or empty for all) only narrows the ``sessions`` list — ``counts`` always
+    covers every row in the local store.
+
+    Returns ``None`` to defer to the legacy fallback if:
+      - the ``local_store`` module isn't importable
+      - the sessions table is empty (fresh install / non-OpenClaw user)
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        rows = store._fetch("""
+            SELECT agent_type, session_id, agent_id, title, started_at,
+                   last_active_at, ended_at, status, total_tokens, cost_usd,
+                   message_count, metadata
+            FROM sessions
+            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+            LIMIT 200
+        """, [])
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    sessions = []
+    for r in rows:
+        meta = {}
+        if r[11]:
+            try:
+                import json as _j
+                meta = _j.loads(bytes(r[11]).decode("utf-8"))
+            except Exception:
+                pass
+        s = {
+            "agent_type":     r[0],
+            "session_id":     r[1],
+            "agent_id":       r[2],
+            "title":          r[3] or "",
+            "started_at":     r[4] or "",
+            "updated_at":     r[5] or "",
+            "ended_at":       r[6] or "",
+            "status":         r[7] or "",
+            "total_tokens":   int(r[8] or 0),
+            "total_cost":     float(r[9] or 0.0),
+            "message_count":  int(r[10] or 0),
+            "channel":        meta.get("channel", ""),
+            "chat_type":      meta.get("chat_type", ""),
+            "subject":        r[3] or meta.get("subject", ""),
+            "displayName":    r[3] or "",
+            "kind":           meta.get("kind", ""),
+            "_source":        "local_store",
+        }
+        # Honour explicit metadata.session_type when present; otherwise
+        # classify with the same _infer_session_type() the legacy path uses.
+        s["session_type"] = meta.get("session_type") or _infer_session_type(s)
+        sessions.append(s)
+
+    counts = {"main": 0, "heartbeat": 0, "user": 0, "sub-agent": 0}
+    for s in sessions:
+        t = s.get("session_type", "main")
+        counts[t] = counts.get(t, 0) + 1
+    counts["total"] = len(sessions)
+
+    filtered = [
+        s for s in sessions
+        if not type_filter or s.get("session_type") == type_filter
+    ]
+    return {"counts": counts, "sessions": filtered, "_source": "local_store"}
 
 
 @bp_sessions.route("/api/compactions")
