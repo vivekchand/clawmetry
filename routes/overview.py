@@ -683,6 +683,53 @@ def api_timeline():
     return jsonify({"days": days, "today": now.strftime("%Y-%m-%d")})
 
 
+def _try_local_store_prompt_errors(since_iso):
+    """Fast path for /api/prompt-errors. Reads ``openclaw:prompt-error``
+    events from DuckDB instead of scanning the 20 most-recent JSONL files.
+
+    Returns ``None`` to defer to the JSONL scan if:
+      - the local_store module isn't importable
+      - the events table is empty / no prompt-error rows
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        # Two event_type spellings have been seen in the wild — the canonical
+        # ``openclaw:prompt-error`` and the bare ``prompt-error`` from older
+        # ingest paths. Try both.
+        rows = store.query_events(
+            event_type="openclaw:prompt-error",
+            since=since_iso,
+            limit=200,
+        )
+        if not rows:
+            rows = store.query_events(
+                event_type="prompt-error",
+                since=since_iso,
+                limit=200,
+            )
+    except Exception:
+        return None
+    if not rows:
+        return None
+    errors = []
+    for ev in rows:
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        errors.append({
+            "ts": ev.get("ts"),
+            "runId": data.get("runId"),
+            "sessionId": ev.get("session_id") or data.get("sessionId"),
+            "provider": data.get("provider"),
+            "model": ev.get("model") or data.get("model"),
+            "api": data.get("api"),
+            "error": data.get("error"),
+        })
+    errors.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    errors = errors[:50]
+    return {"errors": errors, "count": len(errors), "_source": "local_store"}
+
+
 @bp_overview.route("/api/prompt-errors")
 def api_prompt_errors():
     """Return recent openclaw:prompt-error events from session JSONL files.
@@ -700,6 +747,12 @@ def api_prompt_errors():
             since_ts = datetime.fromisoformat(since_raw.replace("Z", "+00:00"))
         except Exception:
             pass
+
+    # Epic #964 — opt-in DuckDB fast path. Falls through on miss.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_prompt_errors(since_raw)
+        if fast is not None:
+            return jsonify(fast)
 
     session_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"

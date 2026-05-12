@@ -1471,10 +1471,70 @@ def api_export_otlp():
     return jsonify({"resourceSpans": resource_spans})
 
 
+def _try_local_store_cost_breakdown():
+    """Fast path for /api/sessions/cost-breakdown. Aggregates per-session
+    total cost + tokens straight out of DuckDB's ``sessions`` view.
+
+    Returns ``None`` to defer to ``_compute_transcript_analytics`` if:
+      - the local_store module isn't importable
+      - the sessions table is empty
+      - any unexpected error happens
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        rows = store.query_sessions(limit=1000)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    result = []
+    for r in rows:
+        sid = r.get("session_id") or ""
+        if not sid:
+            continue
+        cost = float(r.get("cost_usd") or 0.0)
+        tokens = int(r.get("token_count") or 0)
+        # Day key from started_at (ISO ts) — best-effort.
+        started_iso = r.get("started_at") or ""
+        day = ""
+        start_ts = 0
+        try:
+            dt = datetime.fromisoformat(str(started_iso).replace("Z", "+00:00"))
+            day = dt.strftime("%Y-%m-%d")
+            start_ts = int(dt.timestamp())
+        except Exception:
+            pass
+        result.append({
+            "session_id": sid,
+            "tokens": tokens,
+            "cost_usd": round(cost, 6),
+            "model": "",  # not stored at session level; UI tolerates blank
+            "day": day,
+            "start_ts": start_ts,
+        })
+    result.sort(key=lambda x: x["cost_usd"], reverse=True)
+    top10 = result[:10]
+    total_cost = sum(r["cost_usd"] for r in result)
+    return {
+        "sessions": result,
+        "top10": top10,
+        "total_cost_usd": round(total_cost, 4),
+        "_source": "local_store",
+    }
+
+
 @bp_sessions.route("/api/sessions/cost-breakdown")
 def api_sessions_cost_breakdown():
     """Per-session cost breakdown: top sessions by total cost, sorted descending."""
     import dashboard as _d
+
+    # Epic #964 — opt-in DuckDB fast path.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_cost_breakdown()
+        if fast is not None:
+            return jsonify(fast)
+
     analytics = _d._compute_transcript_analytics()
     sessions = analytics.get("sessions", [])
     usd_per_token = _d._estimate_usd_per_token()
@@ -1551,10 +1611,61 @@ def api_session_stop(session_id):
     )
 
 
+def _try_local_store_transcripts():
+    """Fast path for /api/transcripts. Lists distinct sessions with their
+    event counts + most-recent ts, straight from DuckDB.
+
+    Returns ``None`` to defer to the legacy filesystem listdir if:
+      - the local_store module isn't importable
+      - the sessions table is empty
+      - any unexpected error happens
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        rows = store.query_sessions(limit=50)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    transcripts = []
+    for r in rows:
+        sid = r.get("session_id") or ""
+        if not sid:
+            continue
+        # Coerce ts (ISO string) to ms-since-epoch for parity with the
+        # legacy ``int(os.path.getmtime(fpath) * 1000)`` shape.
+        modified_ms = 0
+        upd = r.get("updated_at")
+        if upd:
+            try:
+                modified_ms = int(
+                    datetime.fromisoformat(str(upd).replace("Z", "+00:00"))
+                    .timestamp() * 1000
+                )
+            except Exception:
+                modified_ms = 0
+        transcripts.append({
+            "id": sid,
+            "name": sid[:40],
+            "messages": int(r.get("event_count") or 0),
+            "size": 0,  # unknown from DuckDB; UI shows "—" when 0
+            "modified": modified_ms,
+        })
+    return {"transcripts": transcripts, "_source": "local_store"}
+
+
 @bp_sessions.route('/api/transcripts')
 def api_transcripts():
     """List available session transcript .jsonl files."""
     import dashboard as _d
+
+    # Epic #964 — opt-in DuckDB fast path.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_transcripts()
+        if fast is not None:
+            return jsonify(fast)
+
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
@@ -2162,10 +2273,135 @@ def api_session_model_journey(session_id):
     })
 
 
+def _try_local_store_session_cost_breakdown(session_id: str):
+    """Fast path for /api/sessions/<id>/cost-breakdown. Reads per-turn
+    cost+token breakdown from DuckDB events for the given session.
+
+    Returns ``None`` to defer to the JSONL parser if:
+      - the local_store module isn't importable
+      - no events exist for this session_id (fresh sync, etc.)
+      - data blobs aren't shaped like assistant messages
+      - any unexpected error happens
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        evs = store.query_events(session_id=session_id, limit=5000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+    # Walk events oldest-first so turn_index is meaningful.
+    evs_sorted = sorted(evs, key=lambda e: e.get("ts") or "")
+    turns = []
+    last_seen_model = ""
+    turn_index = 0
+    saw_assistant = False
+    for ev in evs_sorted:
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        if ev.get("event_type") == "model_change":
+            m = data.get("modelId") or data.get("model") or ev.get("model") or ""
+            if m:
+                last_seen_model = m
+            continue
+        # Only assistant-message events carry usage in the OpenClaw schema.
+        msg = data.get("message") if isinstance(data.get("message"), dict) else None
+        if not msg or msg.get("role") != "assistant":
+            continue
+        usage = msg.get("usage") or {}
+        if not isinstance(usage, dict):
+            continue
+        saw_assistant = True
+        turn_index += 1
+        msg_model = msg.get("model") or last_seen_model or ev.get("model") or "unknown"
+        if msg_model:
+            last_seen_model = msg_model
+        in_tok = int(usage.get("input", 0) or 0)
+        out_tok = int(usage.get("output", 0) or 0)
+        cr_tok = int(usage.get("cacheRead", 0) or 0)
+        cw_tok = int(usage.get("cacheWrite", 0) or 0)
+        cost_obj = usage.get("cost", {}) or {}
+        if isinstance(cost_obj, dict):
+            in_cost = float(cost_obj.get("input", 0) or 0)
+            out_cost = float(cost_obj.get("output", 0) or 0)
+            cr_cost = float(cost_obj.get("cacheRead", 0) or 0)
+            cw_cost = float(cost_obj.get("cacheWrite", 0) or 0)
+            tot_cost = float(cost_obj.get("total", 0) or 0)
+        else:
+            in_cost = out_cost = cr_cost = cw_cost = tot_cost = 0.0
+        if tot_cost == 0.0 and (in_cost + out_cost + cr_cost + cw_cost) > 0:
+            tot_cost = in_cost + out_cost + cr_cost + cw_cost
+        turns.append({
+            "turn_index": turn_index,
+            "model": msg_model,
+            "timestamp": ev.get("ts") if isinstance(ev.get("ts"), str) else None,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "cache_read_tokens": cr_tok,
+            "cache_write_tokens": cw_tok,
+            "input_cost_usd": round(in_cost, 8),
+            "output_cost_usd": round(out_cost, 8),
+            "cache_read_cost_usd": round(cr_cost, 8),
+            "cache_write_cost_usd": round(cw_cost, 8),
+            "total_cost_usd": round(tot_cost, 8),
+        })
+    if not saw_assistant:
+        return None
+
+    def _s(field):
+        return sum(t[field] for t in turns)
+
+    tot_in = _s("input_tokens")
+    tot_out = _s("output_tokens")
+    tot_cr = _s("cache_read_tokens")
+    tot_cw = _s("cache_write_tokens")
+    tot_in_cost = _s("input_cost_usd")
+    tot_out_cost = _s("output_cost_usd")
+    tot_cr_cost = _s("cache_read_cost_usd")
+    tot_cw_cost = _s("cache_write_cost_usd")
+    tot_cost = _s("total_cost_usd")
+    in_plus_cache = tot_in + tot_cr
+    cache_hit_pct = round(tot_cr / in_plus_cache * 100, 1) if in_plus_cache > 0 else 0.0
+    est_fresh_cost = tot_cr_cost * 10.0
+    est_savings = max(0.0, est_fresh_cost - tot_cr_cost)
+    est_savings_pct = (
+        round(est_savings / (tot_in_cost + est_fresh_cost) * 100, 1)
+        if (tot_in_cost + est_fresh_cost) > 0
+        else 0.0
+    )
+    return {
+        "session_id": session_id,
+        "turns": turns,
+        "totals": {
+            "input_tokens": tot_in,
+            "output_tokens": tot_out,
+            "cache_read_tokens": tot_cr,
+            "cache_write_tokens": tot_cw,
+            "total_tokens": tot_in + tot_out + tot_cr + tot_cw,
+            "input_cost_usd": round(tot_in_cost, 6),
+            "output_cost_usd": round(tot_out_cost, 6),
+            "cache_read_cost_usd": round(tot_cr_cost, 6),
+            "cache_write_cost_usd": round(tot_cw_cost, 6),
+            "total_cost_usd": round(tot_cost, 6),
+        },
+        "cache_hit_ratio_pct": cache_hit_pct,
+        "est_cache_savings_usd": round(est_savings, 6),
+        "est_cache_savings_pct": est_savings_pct,
+        "turn_count": len(turns),
+        "_source": "local_store",
+    }
+
+
 @bp_sessions.route("/api/sessions/<session_id>/cost-breakdown")
 def api_session_cost_breakdown(session_id):
     """Per-turn token + cost breakdown for a single session (GH #604)."""
     import dashboard as _d
+
+    # Epic #964 — opt-in DuckDB fast path.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_session_cost_breakdown(session_id)
+        if fast is not None:
+            return jsonify(fast)
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
