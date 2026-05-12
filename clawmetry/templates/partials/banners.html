@@ -1,3 +1,29 @@
+<!-- Update Available Banner -->
+<div id="update-banner" style="display:none; padding:10px 16px; background:linear-gradient(90deg,#0f3d0f 0%,#1a1a2e 100%); border-bottom:2px solid #22c55e; color:#86efac; font-size:13px; font-weight:600; align-items:center; gap:10px;">
+  <span style="font-size:18px;">&#128640;</span>
+  <span id="update-banner-msg" style="flex:1;"></span>
+  <a id="update-banner-changelog" href="https://github.com/vivekchand/clawmetry/blob/main/CHANGELOG.md" target="_blank" style="
+    background:#16a34a;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    text-decoration:none;
+    ">View Changelog</a>
+  <button onclick="dismissUpdateBanner()" style="
+    background:transparent;
+    color:#86efac;
+    border:1px solid #22c55e80;
+    border-radius:6px;
+    padding:4px 10px;
+    font-size:11px;
+    cursor:pointer;
+    ">Dismiss</button>
+</div>
+
 <!-- Alert Banner -->
 <div id="alert-banner" style="
   display:none;
