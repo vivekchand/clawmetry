@@ -6716,6 +6716,13 @@ FLEET_API_KEY = os.environ.get("CLAWMETRY_FLEET_KEY", "")
 FLEET_DB_PATH = None  # Set via CLI or auto-detected
 FLEET_NODE_TIMEOUT = 300  # seconds before node is considered offline
 
+# ── Stuck-Session Detection ────────────────────────────────────────────
+STUCK_SESSION_TIMEOUT_SEC = 300   # 5 min silent → warning alert
+STUCK_SESSION_CRITICAL_SEC = 900  # 15 min silent → critical alert
+_STUCK_SESSION_MAX_WINDOW_SEC = 7200  # beyond 2 h, assume completed — stop alerting
+_STUCK_SESSION_COOLDOWN_SEC = 1800  # per-session alert cooldown (30 min)
+_stuck_session_cooldowns: dict = {}  # session_id → last alert timestamp
+
 # ── Budget & Alert Configuration ───────────────────────────────────────
 _budget_paused = False
 _budget_paused_at = 0
@@ -7144,6 +7151,67 @@ def _fleet_maintenance_loop():
 def _start_fleet_maintenance_thread():
     """Start the background fleet maintenance thread."""
     t = threading.Thread(target=_fleet_maintenance_loop, daemon=True)
+    t.start()
+
+
+# ── Stuck-Session Health Loop ──────────────────────────────────────────
+
+
+def _check_stuck_sessions() -> None:
+    """Fire a stuck_session alert for any session silent longer than STUCK_SESSION_TIMEOUT_SEC.
+
+    Uses the session's updatedAt (ms) as the last-activity proxy.  For the
+    gateway-RPC path, sessions.list only contains live sessions, making this
+    reliable.  For the file-based fallback, file mtime serves as the proxy;
+    we cap the upper window at 2 h to avoid alerting on sessions that simply
+    finished without a terminal event.
+    """
+    global _stuck_session_cooldowns
+    now = time.time()
+    try:
+        sessions = _get_sessions()
+    except Exception:
+        return
+    for s in sessions:
+        sid = s.get("sessionId", "")
+        if not sid:
+            continue
+        updated_ms = s.get("updatedAt") or 0
+        if not updated_ms:
+            continue
+        age_sec = now - (updated_ms / 1000.0)
+        if age_sec < STUCK_SESSION_TIMEOUT_SEC:
+            continue  # still active
+        if age_sec > _STUCK_SESSION_MAX_WINDOW_SEC:
+            continue  # too old — likely completed, not stuck
+        last_alerted = _stuck_session_cooldowns.get(sid, 0)
+        if now - last_alerted < _STUCK_SESSION_COOLDOWN_SEC:
+            continue
+        _stuck_session_cooldowns[sid] = now
+        severity = "critical" if age_sec >= STUCK_SESSION_CRITICAL_SEC else "warning"
+        minutes = int(age_sec / 60)
+        label = s.get("displayName") or sid[:16]
+        agent = s.get("agent", "main")
+        msg = (
+            f'Session "{label}" appears stuck — no activity for {minutes} min'
+            f" (agent: {agent})"
+        )
+        _fire_alert(f"stuck_session_{sid[:32]}", "stuck_session", msg, severity=severity)
+
+
+def _session_health_loop() -> None:
+    """Background thread: check for stuck sessions every 30 s."""
+    while True:
+        time.sleep(30)
+        try:
+            _check_stuck_sessions()
+        except Exception as e:
+            print(f"Warning: stuck-session check error: {e}")
+
+
+def _start_session_health_thread() -> None:
+    """Start the background stuck-session detection thread."""
+    t = threading.Thread(target=_session_health_loop, daemon=True)
     t.start()
 
 
@@ -15018,6 +15086,7 @@ def _run_server(args):
     _detect_heartbeat_interval()
     _start_fleet_maintenance_thread()
     _start_budget_monitor_thread()
+    _start_session_health_thread()
 
     try:
         print(BANNER.format(version=__version__))
