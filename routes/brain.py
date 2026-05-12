@@ -28,6 +28,50 @@ _BRAIN_HISTORY_CACHE = {}
 _BRAIN_HISTORY_CACHE_TTL_SECONDS = 3.0
 _BRAIN_HISTORY_TAIL_BYTES = 512 * 1024
 
+# ── Task-type classifier (issue #571) ──────────────────────────────────
+_FACTUAL_KW = frozenset([
+    "extract", "list", "summarize", "find", "what is", "how many",
+    "cite", "return json", "schema", "lookup", "search for", "retrieve",
+    "get the", "fetch", "query", "select", "filter", "count", "calculate",
+    "convert", "parse", "format", "validate", "check if", "verify",
+    "translate", "describe", "define", "explain what", "what are",
+    "show me", "give me", "tell me", "output", "return a",
+])
+_CREATIVE_KW = frozenset([
+    "brainstorm", "write", "imagine", "draft", "generate idea",
+    "story", "poem", "essay", "blog post", "ideate", "invent",
+    "compose", "suggest creative", "come up with", "make up",
+    "creative writing", "fiction", "novel", "screenplay", "narrative", "slogan",
+    "copywriting",
+])
+_REASONING_KW = frozenset([
+    "analyze", "analyse", "explain why", "how does", "compare", "evaluate",
+    "assess", "plan", "strategy", "debug", "diagnose", "reason", "decide",
+    "prioritize", "prioritise", "review", "optimize", "optimise", "refactor",
+    "improve", "think through", "step by step", "consider", "tradeoff",
+    "trade-off", "pros and cons", "should i", "which is better",
+])
+
+
+def _classify_task_type(text):
+    """Return 'creative', 'factual', 'reasoning', 'mixed', or None."""
+    if not text:
+        return None
+    t = text.lower()
+    f = sum(1 for kw in _FACTUAL_KW if kw in t)
+    c = sum(1 for kw in _CREATIVE_KW if kw in t)
+    r = sum(1 for kw in _REASONING_KW if kw in t)
+    if not (f or c or r):
+        return None
+    top = max(f, c, r)
+    if sum(1 for s in (f, c, r) if s == top) > 1:
+        return "mixed"
+    if f == top:
+        return "factual"
+    if c == top:
+        return "creative"
+    return "reasoning"
+
 
 def _brain_history_bool_arg(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "all"}
@@ -558,6 +602,7 @@ def api_brain_history():
                                 "type": "USER",
                                 "detail": text[:300],
                                 "color": color,
+                                "taskType": _classify_task_type(text),
                             }
                         )
 
@@ -595,6 +640,7 @@ def api_brain_history():
                                         "type": "AGENT",
                                         "detail": text[:300],
                                         "color": color,
+                                        "taskType": _classify_task_type(text),
                                     }
                                 )
                             continue
@@ -886,6 +932,7 @@ def api_brain_stream():
                             "type": "AGENT",
                             "detail": text[:300],
                             "color": color,
+                            "taskType": _classify_task_type(text),
                         }
                 if btype == "tool_use":
                     tool_name = block.get("name", "")
@@ -923,6 +970,7 @@ def api_brain_stream():
                     "type": "USER",
                     "detail": text[:300],
                     "color": color,
+                    "taskType": _classify_task_type(text),
                 }
         return None
 

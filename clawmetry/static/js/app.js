@@ -2471,6 +2471,21 @@ function renderBrainStream(events) {
     if (skillName) {
       skillBadge = '<span class="brain-skill" style="color:#f59e0b;font-size:10px;flex-shrink:0;white-space:nowrap;" title="Skill: ' + escHtml(skillName) + '">🎯 ' + escHtml(skillName.length > 16 ? skillName.slice(0, 14) + '\u2026' : skillName) + '</span>';
     }
+    // Task type badge (issue #571)
+    var taskBadge = '';
+    var _tt = ev.taskType || '';
+    if (_tt) {
+      var _ttMap = {
+        creative:  ['🎨', '#f97316', 'Creative'],
+        factual:   ['🔍', '#3b82f6', 'Factual'],
+        reasoning: ['🧢', '#8b5cf6', 'Reasoning'],
+        mixed:     ['🔀', '#6b7280', 'Mixed']
+      };
+      var _ttCfg = _ttMap[_tt];
+      if (_ttCfg) {
+        taskBadge = '<span class="brain-task-type" style="color:' + _ttCfg[1] + ';font-size:10px;flex-shrink:0;white-space:nowrap;" title="Task type: ' + _ttCfg[2] + '">' + _ttCfg[0] + ' ' + _ttCfg[2] + '</span>';
+      }
+    }
     // Build turn timeline for USER events (Phase 4: Agent Runtime Timeline)
     var turnTimeline = '';
     if (evType === 'USER') {
@@ -2562,6 +2577,7 @@ function renderBrainStream(events) {
     html += '<span class="brain-source" style="color:' + color + ';flex-shrink:0;" title="' + escHtml(fullSrc) + '">' + roleIcon + ' ' + escHtml(shortSrc) + '</span>';
     html += chBadge;
     html += skillBadge;
+    html += taskBadge;
     html += '</div>';
     html += '<span class="brain-detail">' + renderBrainDetail(ev.detail || '') + '</span>';
     html += turnTimeline;
