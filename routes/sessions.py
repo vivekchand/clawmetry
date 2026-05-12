@@ -1578,10 +1578,110 @@ def api_transcripts():
     return jsonify({"transcripts": transcripts[:50]})
 
 
+def _try_local_store_transcript(session_id: str):
+    """Read a session transcript directly from the DuckDB events table.
+
+    Returns the same response shape as the JSONL parser. Returns ``None``
+    to defer to the JSONL fallback if the local_store module isn't importable,
+    the events table has no rows for this session, or anything raises.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        rows = store.query_events(session_id=session_id, limit=10000)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    # query_events returns DESC by ts; transcripts read forward.
+    rows = list(reversed(rows))
+    messages: list[dict] = []
+    model = None
+    total_tokens = 0
+    first_ts = None
+    last_ts = None
+    for ev in rows:
+        obj = ev.get("data")
+        if not isinstance(obj, dict):
+            continue
+        role = obj.get("role", obj.get("type", "unknown"))
+        content = obj.get("content", "")
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict):
+                    parts.append(part.get("text", str(part)))
+                else:
+                    parts.append(str(part))
+            content = "\n".join(parts)
+        elif not isinstance(content, str):
+            content = str(content) if content else ""
+        if obj.get("tool_calls") or obj.get("tool_use"):
+            tools = obj.get("tool_calls") or obj.get("tool_use") or []
+            if isinstance(tools, list):
+                for tc in tools:
+                    tname = tc.get("name", tc.get("function", {}).get("name", "tool"))
+                    messages.append({
+                        "role": "tool",
+                        "content": f"[Tool Call: {tname}]\n{json.dumps(tc.get('input', tc.get('arguments', {})), indent=2)[:500]}",
+                        "timestamp": obj.get("timestamp") or obj.get("time"),
+                    })
+        if role == "tool_result":
+            role = "tool"
+        ts = obj.get("timestamp") or obj.get("time") or obj.get("created_at") or ev.get("ts")
+        ts_ms = None
+        if ts:
+            if isinstance(ts, (int, float)):
+                ts_ms = int(ts * 1000) if ts < 1e12 else int(ts)
+            else:
+                try:
+                    ts_ms = int(
+                        datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp() * 1000
+                    )
+                except Exception:
+                    ts_ms = None
+            if ts_ms:
+                if not first_ts or ts_ms < first_ts:
+                    first_ts = ts_ms
+                if not last_ts or ts_ms > last_ts:
+                    last_ts = ts_ms
+        if not model:
+            model = obj.get("model") or ev.get("model")
+        usage = obj.get("usage", {})
+        if isinstance(usage, dict):
+            total_tokens += usage.get("total_tokens", 0) or (
+                usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            )
+        if content or role in ("user", "assistant", "system"):
+            messages.append({"role": role, "content": content, "timestamp": ts_ms})
+    duration = None
+    if first_ts and last_ts and last_ts > first_ts:
+        dur_sec = (last_ts - first_ts) / 1000
+        if dur_sec < 60:
+            duration = f"{dur_sec:.0f}s"
+        elif dur_sec < 3600:
+            duration = f"{dur_sec / 60:.0f}m"
+        else:
+            duration = f"{dur_sec / 3600:.1f}h"
+    return {
+        "name": session_id[:40],
+        "messageCount": len(messages),
+        "model": model,
+        "totalTokens": total_tokens,
+        "duration": duration,
+        "messages": messages[:500],
+        "_source": "local_store",
+    }
+
+
 @bp_sessions.route("/api/transcript/<session_id>")
 def api_transcript(session_id):
     """Parse and return a session transcript for the chat viewer."""
     import dashboard as _d
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_transcript(session_id)
+        if fast is not None:
+            return jsonify(fast)
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
