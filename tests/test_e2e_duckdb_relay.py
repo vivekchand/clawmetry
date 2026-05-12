@@ -373,7 +373,7 @@ def test_duckdb_read_only_handle_sees_committed_rows(pipeline):
         ro.close()
 
     assert n == EXPECTED_TOTAL_EVENTS
-    assert sv == ls.SCHEMA_VERSION == 2
+    assert sv == ls.SCHEMA_VERSION == 3
 
 
 def test_duckdb_indexes_present(pipeline):
@@ -541,7 +541,7 @@ def test_relay_shape_health(pipeline):
     assert body["_shape"] == "health"
     assert body["engine"] == "duckdb"
     assert body["event_count"] == EXPECTED_TOTAL_EVENTS
-    assert body["schema_version"] == 2
+    assert body["schema_version"] == 3
     assert body["oldest_ts"] == f"{DAY_A}T10:00:00Z"
     assert body["newest_ts"] == f"{DAY_B}T12:00:00Z"
     assert body["ring_depth"] == 0

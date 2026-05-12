@@ -1796,6 +1796,19 @@ def send_heartbeat(config: dict) -> bool:
             payload.setdefault("cache_pushes", []).extend(alert_pushes)
     except Exception as _ap_e:
         log.debug("alert-rules cache_push build failed (continuing): %s", _ap_e)
+    # Phase 4 of epic #1032: push the user's pending approvals queue so the
+    # cloud Approvals inbox paints from cache. Same envelope (`cache_pushes`)
+    # — cloud's _accept_cache_pushes iterates the array regardless of which
+    # phase produced which entry. TTL is short (60s) by acceptance criterion:
+    # "approval appears in cloud inbox within 2s", and a stale cache row
+    # would block a fresh request from showing up; the next heartbeat
+    # overwrites it anyway.
+    try:
+        ap_pushes = _build_approvals_cache_pushes(config)
+        if ap_pushes:
+            payload.setdefault("cache_pushes", []).extend(ap_pushes)
+    except Exception as _ap_e2:
+        log.debug("approvals cache_push build failed (continuing): %s", _ap_e2)
     # Local-first: persist this heartbeat to local DuckDB so the dashboard
     # has a per-node liveness history even when offline. Best-effort.
     try:
@@ -1977,14 +1990,17 @@ CHANNEL_STATUS_CACHE_TTL_SEC = 3600
 
 # Action-style pending entries the daemon handles in-process (no /ingest/cache
 # POST). Phase 5 added the channel-config actions; Phase 3 of #1032 (alert
-# rules) extends the set so cloud-authored rules land in local DuckDB on the
-# next heartbeat cycle. Mirrors the cloud-side allowlist used by
-# clawmetry-cloud/routes/alerts.py:_enqueue_alert_rule_change.
+# rules) and Phase 4 of #1032 (approvals) extend the set so cloud-authored
+# rules and Approve/Deny clicks land in local DuckDB on the next heartbeat
+# cycle. Mirrors the cloud-side allowlists used by
+# clawmetry-cloud/routes/alerts.py:_enqueue_alert_rule_change and the
+# approvals enqueue path.
 _PENDING_ACTIONS = frozenset({
     "channel_config_upsert",
     "channel_test",
     "alert_rule_upsert",
     "alert_rule_delete",
+    "approval_decision",
 })
 
 
@@ -2140,6 +2156,10 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
       * ``alert_rule_upsert`` (Phase 3) — cloud-authored alert rule →
         ``alert_rules`` table via ``ingest_alert_rule``.
       * ``alert_rule_delete`` (Phase 3) — delete one alert rule by id.
+      * ``approval_decision`` (Phase 4) — flip a row in ``approvals``
+        from ``pending`` to approved/denied based on a cloud-relayed
+        click. Idempotent — the approvals watcher polls for the new
+        status and unblocks the agent.
 
     Unknown / malformed types are silently dropped (defensive — cloud
     should already have filtered). Per-action errors are logged but never
@@ -2155,6 +2175,9 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
         return
     if atype in ("alert_rule_upsert", "alert_rule_delete"):
         _apply_pending_write(atype, action)
+        return
+    if atype == "approval_decision":
+        _apply_approval_decision(action)
         return
 
 
@@ -2282,6 +2305,73 @@ def _run_channel_test_local(config: dict, provider: str):
     return True, None
 
 
+# ── Phase 4: proactive approvals cache_push (epic #1032) ─────────────────────
+# Approvals are now authoritative in local DuckDB — the policy watcher writes
+# the row, the daemon pushes the pending-queue snapshot to the cloud cache on
+# every heartbeat under `approvals:{owner_hash}:queue`, and the cloud Approvals
+# inbox paints from cache (no Cloud SQL row).
+#
+# TTL is short (60s) so the inbox stays close to real time even between
+# heartbeats — acceptance criterion is "appears in cloud inbox within 2s",
+# which the cache_push interval (60s default) bounds at the upper end and the
+# next heartbeat overwrites at the lower end. A request that arrives BETWEEN
+# heartbeats is still visible at next-heartbeat-cache-write; the 60s TTL just
+# protects against a daemon that goes silent.
+APPROVALS_CACHE_TTL_SEC = 60
+APPROVALS_CACHE_LIMIT = 200
+
+
+def _build_approvals_cache_pushes(config: dict) -> list:
+    """Return the heartbeat `cache_pushes` array for pending approvals —
+    a single entry holding the current pending queue owned by this cm_ token.
+
+    Returns an empty list when:
+      - The local store has no pending approvals (the cloud inbox correctly
+        renders empty in that case — no push needed).
+      - Encryption key is unset — we never push plaintext.
+      - The local store import fails — degrade silently.
+
+    The blob shape mirrors `/api/cloud/approvals` (cloud-side list endpoint)
+    so the cloud read path can return the decrypted dict straight to the
+    dashboard JS without translation."""
+    enc_key = config.get("encryption_key")
+    if not enc_key:
+        return []
+    api_key = config.get("api_key", "")
+    if not api_key:
+        return []
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return []
+    owner_hash = _owner_hash_for_token(api_key)
+    try:
+        store = local_store.get_store(read_only=True)
+        rows = store.query_approvals(
+            owner_hash=owner_hash,
+            status="pending",
+            limit=APPROVALS_CACHE_LIMIT,
+        )
+    except Exception:
+        return []
+    if not rows:
+        return []
+    payload = {
+        "approvals": rows,
+        "count":     len(rows),
+        "_source":   "local_store",
+        "_shape":    "approvals_queue",
+    }
+    try:
+        blob = encrypt_payload(payload, enc_key)
+    except Exception:
+        return []
+    return [{
+        "key":    f"approvals:{owner_hash}:queue",
+        "ttl_s":  APPROVALS_CACHE_TTL_SEC,
+        "blob":   blob,
+    }]
+
 
 def _dispatch_pending_queries(config: dict, pending: list) -> None:
     """Run each cloud-requested query against the local store, encrypt the
@@ -2296,8 +2386,9 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
     2. ``{type, …}`` — local action (write or side-effect). Routed
        through ``_dispatch_pending_action``. The unified ``_PENDING_ACTIONS``
        allowlist covers Phase 5 channel-config actions
-       (``channel_config_upsert``, ``channel_test``) and Phase 3 alert-rule
-       writes (``alert_rule_upsert``, ``alert_rule_delete``). Writes are
+       (``channel_config_upsert``, ``channel_test``), Phase 3 alert-rule
+       writes (``alert_rule_upsert``, ``alert_rule_delete``), and Phase 4
+       approval decisions (``approval_decision``). Writes are
        fire-and-forget — no /ingest/cache POST; the next heartbeat's
        cache_push surfaces the new state to the cloud.
     """
@@ -2314,7 +2405,7 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
                 continue
             # Action-style entry (epic #1032 Phase 5 onwards): no shape,
             # has a `type`. Dispatched locally; no /ingest/cache POST —
-            # the next heartbeat's cache_push carries the status summary.
+            # the next heartbeat's cache_push carries the new state.
             qtype = q.get("type")
             if qtype:
                 try:
@@ -2403,6 +2494,45 @@ def _apply_pending_write(qtype: str, q: dict) -> None:
     # Unknown write — caller already gated via _PENDING_ACTIONS; reaching
     # here means the allowlist was changed without wiring this dispatcher.
     raise ValueError(f"unhandled write type: {qtype}")
+
+
+def _apply_approval_decision(q: dict) -> None:
+    """Flip an approvals row in local DuckDB based on a cloud-relayed
+    decision. Used by `_dispatch_pending_queries`.
+
+    Expected shape: ``{type: "approval_decision", id, decision, resolver,
+    reason}``. ``id`` and ``decision`` are required; ``resolver`` defaults
+    to a cloud-attribution string when unset; ``reason`` is optional.
+
+    Idempotent: ``update_approval_decision`` only flips rows still in
+    ``pending`` state, so a duplicate relay delivery is a no-op."""
+    approval_id = (q.get("id") or "").strip()
+    decision = (q.get("decision") or "").strip()
+    if not approval_id or not decision:
+        log.warning("approval_decision pending_query missing id/decision: %r", q)
+        return
+    resolver = (q.get("resolver") or "cloud-relay").strip()
+    reason = q.get("reason")
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+    except Exception as e:
+        log.warning("approval_decision %s: local_store unavailable: %s",
+                    approval_id, e)
+        return
+    try:
+        n = store.update_approval_decision(approval_id, decision, resolver,
+                                            reason)
+    except Exception as e:
+        log.warning("approval_decision %s: update failed: %s", approval_id, e)
+        return
+    if n:
+        log.info("[approval] %s relayed decision=%s by %s (status flipped)",
+                 approval_id, decision, resolver)
+    else:
+        # Either unknown id or already decided — both safe to ignore.
+        log.debug("[approval] %s relayed decision=%s — no-op (row missing or "
+                  "already decided)", approval_id, decision)
 
 
 def _get_version() -> str:

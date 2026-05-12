@@ -17,12 +17,88 @@ and module state (``_nemoclaw_policy_hash``, ``_nemoclaw_drift_info``)
 stay in ``dashboard.py`` and are reached via late ``import dashboard as _d``.
 
 Pure mechanical move — zero behaviour change.
+
+Phase 4 of epic #1032 adds an opt-in DuckDB fast path
+(``CLAWMETRY_LOCAL_STORE_READ=1``) to ``/api/nemoclaw/pending-approvals``:
+when local DuckDB has rows in the ``approvals`` table, we serve the
+queue from there (tagged ``_source: "local_store"``) instead of shelling
+out to ``openshell draft get``. Sits in front of the legacy CLI path —
+fresh installs or non-NemoClaw users degrade to the same response as
+before.
 """
+import os
+
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
 bp_nemoclaw = Blueprint('nemoclaw', __name__)
+
+
+# ── Local DuckDB fast path (epic #1032 Phase 4 — approvals queue) ───────────
+#
+# Opt-in via CLAWMETRY_LOCAL_STORE_READ=1. Mirrors routes/crons.py: a dedicated
+# helper attempts a DuckDB read and returns ``None`` on any error / empty
+# table so the legacy ``openshell draft get`` path runs untouched. The fast
+# path NEVER replaces the legacy code — it sits in front of it, so a fresh
+# install with no local store (or a non-NemoClaw user) sees the same data
+# as before.
+#
+# The local ``approvals`` table is populated by the policy watcher in
+# clawmetry/approvals.py via LocalStore.ingest_approval (Phase 4). Schema:
+#
+#   approvals (
+#     id, owner_hash, requestor_session_id, action, args BLOB, status,
+#     created_at, resolved_at, resolver, decision, decision_reason
+#   )
+#
+# Response shape mirrors the legacy ``/api/nemoclaw/pending-approvals``
+# contract (``{installed, approvals}``) — only adding ``_source:
+# "local_store"`` so tests can assert which path served the response.
+
+
+def _try_local_store_approvals():
+    """Return pending-approvals dict shaped like ``/api/nemoclaw/pending-
+    approvals`` from the local DuckDB.
+
+    Returns ``None`` to defer to the legacy openshell CLI fallback if:
+      - the ``local_store`` module isn't importable
+      - the ``approvals`` table is empty (fresh install / no pending rows)
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=False)
+        rows = store.query_approvals(status="pending", limit=500)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    approvals = []
+    for r in rows:
+        args = r.get("args") if isinstance(r.get("args"), dict) else {}
+        approvals.append({
+            # Preserve the column names so the cloud + dashboard can address
+            # rows directly by id without translation.
+            "id":                   r.get("id"),
+            # Legacy fields the dashboard JS still reads — derived from the
+            # row when present, kept as None otherwise so the renderer's
+            # `||` fallbacks behave unchanged.
+            "chunk_id":             r.get("id"),
+            "session_id":           r.get("requestor_session_id"),
+            "requestor_session_id": r.get("requestor_session_id"),
+            "action":               r.get("action"),
+            "tool_name":            r.get("action"),
+            "args":                 args,
+            "status":               r.get("status", "pending"),
+            "ts":                   r.get("created_at"),
+            "created_at":           r.get("created_at"),
+        })
+    return {
+        "installed": True,
+        "approvals": approvals,
+        "_source":   "local_store",
+    }
 
 
 # ── NemoClaw Governance API ───────────────────────────────────────────────────
@@ -218,7 +294,17 @@ def api_nemoclaw_reject():
 
 @bp_nemoclaw.route('/api/nemoclaw/pending-approvals')
 def api_nemoclaw_pending_approvals():
-    """Return pending egress approval requests from openshell."""
+    """Return pending egress approval requests from openshell.
+
+    Phase 4 of epic #1032: when ``CLAWMETRY_LOCAL_STORE_READ=1`` AND the
+    local DuckDB ``approvals`` table has pending rows, serve from there
+    and tag ``_source: "local_store"``. Otherwise fall through to the
+    legacy ``openshell draft get`` CLI path (response is unchanged).
+    """
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_approvals()
+        if fast is not None:
+            return jsonify(fast)
     import shutil as _shutil
     if not _shutil.which('openshell'):
         return jsonify({'installed': False, 'approvals': []})
