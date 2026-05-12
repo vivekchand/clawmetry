@@ -333,6 +333,95 @@ def test_pushed_blob_decrypts_to_alert_rules_shape(sync_with_rules):
     assert isinstance(sample["condition_json"], dict)
 
 
+# ── 4. Write-through dispatcher (cloud → DuckDB) ───────────────────────────
+
+
+def test_apply_pending_write_alert_rule_upsert(sync_with_rules):
+    """Cloud-authored alert_rule_upsert lands in local DuckDB."""
+    s, ls, config = sync_with_rules
+    body = {
+        "id": "cloud-rule-1",
+        "owner_hash": s._owner_hash_for_token(config["api_key"]),
+        "name": "Cloud-authored",
+        "alert_type": "session_cost",
+        "threshold_value": 5.0,
+        "enabled": True,
+        "created_at": "2026-05-12T12:00:00Z",
+        "updated_at": "2026-05-12T12:00:00Z",
+    }
+    s._apply_pending_write("alert_rule_upsert", {
+        "type": "alert_rule_upsert",
+        "id":   "cloud-rule-1",
+        "body": body,
+    })
+
+    rows = ls.get_store().query_alert_rules()
+    cloud_row = next((r for r in rows if r["id"] == "cloud-rule-1"), None)
+    assert cloud_row is not None
+    assert cloud_row["name"] == "Cloud-authored"
+    # condition_json is the full cloud body — including fields OSS doesn't
+    # break out into columns (alert_type, threshold_value).
+    assert cloud_row["condition_json"]["alert_type"] == "session_cost"
+    assert cloud_row["condition_json"]["threshold_value"] == 5.0
+
+
+def test_apply_pending_write_alert_rule_delete(sync_with_rules):
+    """Cloud-authored alert_rule_delete removes the row from local DuckDB."""
+    s, ls, config = sync_with_rules
+    # `sync_with_rules` already seeded rule-0/1/2 — pick one and delete it.
+    s._apply_pending_write("alert_rule_delete", {
+        "type": "alert_rule_delete",
+        "id":   "rule-0",
+    })
+    remaining_ids = {r["id"] for r in ls.get_store().query_alert_rules()}
+    assert "rule-0" not in remaining_ids
+    assert {"rule-1", "rule-2"} <= remaining_ids
+
+
+def test_dispatch_pending_queries_routes_writes(sync_with_rules, monkeypatch):
+    """_dispatch_pending_queries handles both shapes (reads) and types
+    (writes) in the same pending list. Read shapes still POST to
+    /ingest/cache; writes apply locally with no /ingest/cache POST."""
+    s, ls, config = sync_with_rules
+    cache_posts = []
+
+    def fake_post(path, payload, api_key, timeout=45):
+        if path == "/ingest/cache":
+            cache_posts.append(payload)
+            return {"ok": True}
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(s, "_post", fake_post)
+
+    pending = [
+        {
+            "type": "alert_rule_upsert",
+            "id": "via-dispatch",
+            "body": {
+                "id": "via-dispatch",
+                "name": "Via dispatch",
+                "alert_type": "daily_spend",
+                "threshold_value": 1.0,
+                "enabled": True,
+            },
+        },
+        {
+            "type": "alert_rule_delete",
+            "id": "rule-1",
+        },
+        # A junk item with an unknown type — must be silently skipped.
+        {"type": "unknown_write", "id": "x"},
+    ]
+    s._dispatch_pending_queries(config, pending)
+
+    rule_ids = {r["id"] for r in ls.get_store().query_alert_rules()}
+    assert "via-dispatch" in rule_ids
+    assert "rule-1" not in rule_ids
+    # Writes intentionally don't POST to /ingest/cache — heartbeat's
+    # cache_push handles the cloud-visible state on the next cycle.
+    assert cache_posts == []
+
+
 def test_send_heartbeat_attaches_alert_rules_push(sync_with_rules, monkeypatch):
     """End-to-end: send_heartbeat with seeded rules must include an alert
     rules entry in the heartbeat payload's cache_pushes list."""

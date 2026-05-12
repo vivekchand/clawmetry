@@ -1975,7 +1975,17 @@ def _build_brain_cache_pushes(config: dict) -> list:
 
 CHANNEL_STATUS_CACHE_TTL_SEC = 3600
 
-_PENDING_ACTIONS = frozenset({"channel_config_upsert", "channel_test"})
+# Action-style pending entries the daemon handles in-process (no /ingest/cache
+# POST). Phase 5 added the channel-config actions; Phase 3 of #1032 (alert
+# rules) extends the set so cloud-authored rules land in local DuckDB on the
+# next heartbeat cycle. Mirrors the cloud-side allowlist used by
+# clawmetry-cloud/routes/alerts.py:_enqueue_alert_rule_change.
+_PENDING_ACTIONS = frozenset({
+    "channel_config_upsert",
+    "channel_test",
+    "alert_rule_upsert",
+    "alert_rule_delete",
+})
 
 
 def _build_channel_config_status_cache_pushes(config: dict) -> list:
@@ -2121,12 +2131,19 @@ def _build_alert_rules_cache_pushes(config: dict) -> list:
 def _dispatch_pending_action(config: dict, action: dict) -> None:
     """Handle a single action-style pending entry. Routes by ``type``.
 
-    Phase 5 supports ``channel_config_upsert`` (cloud-submitted config →
-    local DuckDB) and ``channel_test`` (run the upstream-adapter test +
-    stamp result). Unknown / malformed types are silently dropped
-    (defensive — cloud should already have filtered). Per-action errors
-    are logged but never raise — one bad action must not block the
-    heartbeat batch."""
+    Supported types (union across phases of epic #1032):
+
+      * ``channel_config_upsert`` (Phase 5) — cloud-submitted channel
+        adapter config → local DuckDB ``channel_config`` table.
+      * ``channel_test`` (Phase 5) — run upstream-adapter test + stamp
+        the result back into ``channel_config``.
+      * ``alert_rule_upsert`` (Phase 3) — cloud-authored alert rule →
+        ``alert_rules`` table via ``ingest_alert_rule``.
+      * ``alert_rule_delete`` (Phase 3) — delete one alert rule by id.
+
+    Unknown / malformed types are silently dropped (defensive — cloud
+    should already have filtered). Per-action errors are logged but never
+    raise — one bad action must not block the heartbeat batch."""
     atype = action.get("type")
     if atype not in _PENDING_ACTIONS:
         return
@@ -2135,6 +2152,9 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
         return
     if atype == "channel_test":
         _action_channel_test(config, action)
+        return
+    if atype in ("alert_rule_upsert", "alert_rule_delete"):
+        _apply_pending_write(atype, action)
         return
 
 
@@ -2273,11 +2293,14 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
     1. ``{shape, id, cache_key, args}`` — read query. Dispatched via
        routes.local_query (or fallback) and the result is encrypted +
        POSTed to /ingest/cache.
-    2. ``{type, …}`` — local action (write or side-effect). Currently
-       supports ``channel_config_upsert`` and ``channel_test`` from
-       epic #1032 Phase 5. Action handlers run synchronously against the
-       local store / adapter; status fields are pushed back on the next
-       heartbeat via ``_build_channel_config_status_cache_pushes``."""
+    2. ``{type, …}`` — local action (write or side-effect). Routed
+       through ``_dispatch_pending_action``. The unified ``_PENDING_ACTIONS``
+       allowlist covers Phase 5 channel-config actions
+       (``channel_config_upsert``, ``channel_test``) and Phase 3 alert-rule
+       writes (``alert_rule_upsert``, ``alert_rule_delete``). Writes are
+       fire-and-forget — no /ingest/cache POST; the next heartbeat's
+       cache_push surfaces the new state to the cloud.
+    """
     try:
         from routes.local_query import _dispatch as _local_dispatch  # type: ignore
     except Exception:
@@ -2325,6 +2348,61 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
                         (q or {}).get("id") if isinstance(q, dict) else None,
                         (q or {}).get("shape") if isinstance(q, dict) else None,
                         e)
+
+
+# ── Write-through helper (Phase 3 of #1032) ─────────────────────────────────
+# Applies alert-rule writes from the cloud-relayed pending_queries channel to
+# the local DuckDB. Dispatched from ``_dispatch_pending_action`` via the
+# unified ``_PENDING_ACTIONS`` allowlist. Mirrors the cloud-side enqueue path
+# (clawmetry-cloud/routes/alerts.py:_enqueue_alert_rule_change).
+
+
+def _apply_pending_write(qtype: str, q: dict) -> None:
+    """Apply one cloud-authored write to the local DuckDB.
+
+    Routed by ``type``:
+
+      ``alert_rule_upsert`` → ``ingest_alert_rule(body)``
+      ``alert_rule_delete`` → ``delete_alert_rule(id)``
+
+    Raises on bad input so the caller's per-item logger flags it. Cloud is
+    already responsible for shape validation, so this is defense-in-depth.
+    """
+    from clawmetry import local_store
+    store = local_store.get_store()
+    if qtype == "alert_rule_upsert":
+        body = q.get("body") or {}
+        if not isinstance(body, dict):
+            raise ValueError("alert_rule_upsert: body must be a dict")
+        # The cloud uses `alert_type` (its own column) — translate into the
+        # OSS local-store shape: condition_json holds the whole cloud body so
+        # the evaluator + dashboard get everything without a follow-up fetch.
+        rule = {
+            "id":            body.get("id") or q.get("id"),
+            "owner_hash":    body.get("owner_hash"),
+            "name":          body.get("name"),
+            "condition_json": body,
+            "enabled":       body.get("enabled", True),
+            "created_at":    body.get("created_at"),
+            "updated_at":    body.get("updated_at"),
+            "last_fired_at": body.get("last_triggered_at"),
+            "fire_count":    body.get("trigger_count") or 0,
+        }
+        if not rule["id"]:
+            raise ValueError("alert_rule_upsert: id required")
+        store.ingest_alert_rule(rule)
+        log.info("local store: applied alert_rule_upsert id=%s", rule["id"])
+        return
+    if qtype == "alert_rule_delete":
+        rid = q.get("id")
+        if not rid:
+            raise ValueError("alert_rule_delete: id required")
+        n = store.delete_alert_rule(rid)
+        log.info("local store: applied alert_rule_delete id=%s (rows=%d)", rid, n)
+        return
+    # Unknown write — caller already gated via _PENDING_ACTIONS; reaching
+    # here means the allowlist was changed without wiring this dispatcher.
+    raise ValueError(f"unhandled write type: {qtype}")
 
 
 def _get_version() -> str:
