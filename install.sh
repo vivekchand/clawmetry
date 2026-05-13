@@ -61,7 +61,6 @@ esac
 
 # ── Install into venv ────────────────────────────────────────────────────────
 
-echo -e "  → Creating virtual environment..."
 # Preserve config before wiping venv (contains node_id, encryption_key)
 _CM_CFG_BAK=""
 if [ -f "$INSTALL_DIR/config.json" ]; then
@@ -72,17 +71,35 @@ elif [ -f "$HOME/.clawmetry/config.json" ] && [ "$INSTALL_DIR" = "$HOME/.clawmet
   cp "$HOME/.clawmetry/config.json" "$_CM_CFG_BAK"
 fi
 $USE_SUDO rm -rf "$INSTALL_DIR"
-$USE_SUDO python3 -m venv "$INSTALL_DIR"
-$USE_SUDO "$INSTALL_DIR/bin/pip" install --upgrade pip >/dev/null 2>&1
+
+# Try `uv` (Astral's Rust-based pip replacement) for ~5x faster installs.
+# Bootstrap a copy if missing; on any failure, silently fall back to pip so
+# corporate proxies / restrictive networks still work.
+if ! command -v uv >/dev/null 2>&1; then
+  echo -e "  → Bootstrapping uv (faster installer)..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || true
+  # uv installs to ~/.local/bin (default) or ~/.cargo/bin (older)
+  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+fi
+
+if command -v uv >/dev/null 2>&1; then
+  echo -e "  → Creating virtual environment (uv)..."
+  $USE_SUDO uv venv "$INSTALL_DIR" --quiet
+  echo -e "  → Installing clawmetry from PyPI (uv)..."
+  $USE_SUDO uv pip install --python "$INSTALL_DIR/bin/python3" --quiet --upgrade clawmetry
+else
+  echo -e "  → Bootstrapping pip fallback (this is slower)..."
+  $USE_SUDO python3 -m venv "$INSTALL_DIR"
+  $USE_SUDO "$INSTALL_DIR/bin/pip" install --upgrade pip >/dev/null 2>&1
+  echo -e "  → Installing clawmetry from PyPI (pip)..."
+  $USE_SUDO "$INSTALL_DIR/bin/pip" install --no-cache-dir --upgrade clawmetry >/dev/null 2>&1
+fi
 
 # Restore config if it was backed up
 if [ -n "$_CM_CFG_BAK" ] && [ -f "$_CM_CFG_BAK" ]; then
   $USE_SUDO cp "$_CM_CFG_BAK" "$INSTALL_DIR/config.json"
   rm -f "$_CM_CFG_BAK"
 fi
-
-echo -e "  → Installing clawmetry from PyPI..."
-$USE_SUDO "$INSTALL_DIR/bin/pip" install --no-cache-dir --upgrade clawmetry >/dev/null 2>&1
 
 # Create symlink
 mkdir -p "$BIN_DIR" 2>/dev/null || $USE_SUDO mkdir -p "$BIN_DIR"
