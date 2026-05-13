@@ -1830,10 +1830,204 @@ def _process_otlp_metrics(pb_data):
                         )
 
 
+_OTEL_SPAN_KIND_NAMES = {
+    0: "UNSPECIFIED",
+    1: "INTERNAL",
+    2: "SERVER",
+    3: "CLIENT",
+    4: "PRODUCER",
+    5: "CONSUMER",
+}
+
+_OTEL_STATUS_CODE_NAMES = {
+    0: "UNSET",
+    1: "OK",
+    2: "ERROR",
+}
+
+
+def _hex(b):
+    """OTel proto carries trace_id / span_id / parent_span_id as raw bytes.
+    DuckDB stores them as hex strings (matches the OTel spec's canonical
+    text form). ``b'' → ''`` so parent_span_id stays falsy for root spans."""
+    if not b:
+        return ""
+    try:
+        return b.hex() if isinstance(b, (bytes, bytearray)) else str(b)
+    except Exception:
+        return ""
+
+
+def _otel_to_row(span, resource_attrs):
+    """Translate one OTel proto Span (plus its resource attributes) to the
+    dict shape :func:`clawmetry.local_store.LocalStore.ingest_span` expects.
+
+    Issue #1007 / epic #1006. Maps common OTel attribute conventions onto
+    typed columns so the dashboard's usage / trace-tree views don't have
+    to JSON-extract on every read:
+
+      * ``gen_ai.request.model`` / ``llm.model`` / ``model`` → ``model``
+      * ``gen_ai.usage.input_tokens`` / ``llm.usage.prompt_tokens`` →
+        ``tokens_input``
+      * ``gen_ai.usage.output_tokens`` / ``llm.usage.completion_tokens`` →
+        ``tokens_output``
+      * ``gen_ai.usage.total_tokens`` → ``token_count``
+      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``
+      * ``tool.name`` / ``code.function`` → ``tool_name``
+      * ``session.id`` / ``openclaw.session_id`` → ``session_id``
+      * ``agent.id`` / ``openclaw.agent_id`` (also from resource) → ``agent_id``
+      * ``agent.type`` (also from resource) → ``agent_type``
+      * Resource ``service.name`` → ``service_name``
+
+    Everything not projected lands in the ``attributes`` JSON blob so the
+    span-detail panel can render any custom attributes the SDK exporter
+    set. Span events / links are passed through as JSON arrays.
+    """
+    attrs = {}
+    for attr in span.attributes:
+        attrs[attr.key] = _otel_attr_value(attr.value)
+
+    # Time columns. OTel proto carries unix-nano; we store unix-seconds in
+    # ``start_ts`` / ``end_ts`` (DOUBLE) so chart libs can format them
+    # without converting twice.
+    start_ts = (span.start_time_unix_nano or 0) / 1e9
+    end_ts = (span.end_time_unix_nano or 0) / 1e9 or start_ts
+    duration_ns = max(0, (span.end_time_unix_nano or 0) - (span.start_time_unix_nano or 0))
+    duration_ms = duration_ns / 1_000_000.0
+
+    # Status + kind.
+    kind_id = getattr(span, "kind", 0) or 0
+    kind_name = _OTEL_SPAN_KIND_NAMES.get(kind_id, str(kind_id))
+    status_code_id = 0
+    status_message = ""
+    if span.HasField("status"):
+        status_code_id = span.status.code
+        status_message = span.status.message or ""
+    status_code_name = _OTEL_STATUS_CODE_NAMES.get(status_code_id, str(status_code_id))
+
+    # Attribute → typed-column projection. ``attrs`` first (per-span) so it
+    # wins over ``resource_attrs`` (resource-level fallback) — same
+    # precedence the OTel spec uses.
+    def _pick(*keys):
+        for k in keys:
+            v = attrs.get(k)
+            if v not in (None, ""):
+                return v
+            v = resource_attrs.get(k)
+            if v not in (None, ""):
+                return v
+        return None
+
+    def _pick_int(*keys):
+        v = _pick(*keys)
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _pick_float(*keys):
+        v = _pick(*keys)
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    model = _pick("gen_ai.request.model", "gen_ai.response.model", "llm.model", "model")
+    tokens_input = _pick_int("gen_ai.usage.input_tokens", "llm.usage.prompt_tokens", "input_tokens")
+    tokens_output = _pick_int("gen_ai.usage.output_tokens", "llm.usage.completion_tokens", "output_tokens")
+    token_count = _pick_int("gen_ai.usage.total_tokens", "llm.usage.total_tokens", "total_tokens")
+    if token_count is None and (tokens_input or tokens_output):
+        token_count = (tokens_input or 0) + (tokens_output or 0)
+    cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
+    tool_name = _pick("tool.name", "code.function")
+    session_id = _pick("session.id", "openclaw.session_id", "session_id")
+    agent_id = _pick("agent.id", "openclaw.agent_id", "agent_id") or "main"
+    agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type") or "openclaw"
+    service_name = resource_attrs.get("service.name") or attrs.get("service.name")
+    node_id = _pick("node.id", "openclaw.node_id", "host.name")
+
+    # Span events: array of {time_unix_nano, name, attributes}.
+    events = []
+    for ev in span.events:
+        ev_attrs = {}
+        for a in ev.attributes:
+            ev_attrs[a.key] = _otel_attr_value(a.value)
+        events.append({
+            "time_unix_nano": ev.time_unix_nano,
+            "name": ev.name,
+            "attributes": ev_attrs,
+        })
+
+    # Span links: array of {trace_id, span_id, attributes}.
+    links = []
+    for ln in span.links:
+        ln_attrs = {}
+        for a in ln.attributes:
+            ln_attrs[a.key] = _otel_attr_value(a.value)
+        links.append({
+            "trace_id": _hex(ln.trace_id),
+            "span_id": _hex(ln.span_id),
+            "attributes": ln_attrs,
+        })
+
+    return {
+        "span_id": _hex(span.span_id),
+        "trace_id": _hex(span.trace_id),
+        "parent_span_id": _hex(span.parent_span_id) or None,
+        "agent_type": agent_type,
+        "agent_id": agent_id,
+        "node_id": node_id,
+        "session_id": session_id,
+        "service_name": service_name,
+        "name": span.name,
+        "kind": kind_name,
+        "status_code": status_code_name,
+        "status_message": status_message,
+        "status": status_code_name,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "duration_ms": duration_ms,
+        "duration_ns": duration_ns,
+        "model": model,
+        "tool_name": tool_name,
+        "cost_usd": cost_usd,
+        "token_count": token_count,
+        "tokens_input": tokens_input,
+        "tokens_output": tokens_output,
+        "input": attrs.get("gen_ai.prompt") or attrs.get("llm.prompts") or attrs.get("input"),
+        "output": attrs.get("gen_ai.completion") or attrs.get("llm.completions") or attrs.get("output"),
+        "attributes": attrs,
+        "events": events,
+        "links": links,
+    }
+
+
 def _process_otlp_traces(pb_data):
-    """Decode OTLP traces protobuf and extract relevant span data."""
+    """Decode OTLP traces protobuf and extract relevant span data.
+
+    Two-path design (issue #1007): we still feed the in-memory metrics
+    cache (the live dashboard's hot path — sub-second tiles for tokens /
+    runs / messages) AND persist every span to DuckDB via
+    ``local_store.put_span`` so the trace tree / span detail views can
+    query historical traces. The DuckDB write is best-effort wrapped in
+    try/except — a write failure must NOT break the metrics cache path.
+    """
     req = trace_service_pb2.ExportTraceServiceRequest()
     req.ParseFromString(pb_data)
+
+    # Resolve the local store lazily so unit tests that monkeypatch the
+    # singleton in advance (or run without DuckDB) don't pay the import
+    # cost upfront.
+    _store = None
+    try:
+        from clawmetry import local_store as _ls
+        _store = _ls.get_store()
+    except Exception:
+        _store = None
 
     for resource_spans in req.resource_spans:
         resource_attrs = {}
@@ -1878,6 +2072,22 @@ def _process_otlp_traces(pb_data):
                             "duration_ms": duration_ms,
                         },
                     )
+
+                # DuckDB write-through. Failures here are logged but do not
+                # break the metrics cache path above (which is what the
+                # live tiles read from). Idempotent on span_id — OTLP
+                # retries land as INSERT OR REPLACE without duping.
+                if _store is not None:
+                    try:
+                        _store.put_span(_otel_to_row(span, resource_attrs))
+                    except Exception as e:
+                        try:
+                            import logging as _lg
+                            _lg.getLogger("clawmetry.dashboard").warning(
+                                "local_store.put_span failed: %s", e
+                            )
+                        except Exception:
+                            pass
 
 
 def _get_otel_usage_data():
@@ -8764,10 +8974,204 @@ def _process_otlp_metrics(pb_data):
                         )
 
 
+_OTEL_SPAN_KIND_NAMES = {
+    0: "UNSPECIFIED",
+    1: "INTERNAL",
+    2: "SERVER",
+    3: "CLIENT",
+    4: "PRODUCER",
+    5: "CONSUMER",
+}
+
+_OTEL_STATUS_CODE_NAMES = {
+    0: "UNSET",
+    1: "OK",
+    2: "ERROR",
+}
+
+
+def _hex(b):
+    """OTel proto carries trace_id / span_id / parent_span_id as raw bytes.
+    DuckDB stores them as hex strings (matches the OTel spec's canonical
+    text form). ``b'' → ''`` so parent_span_id stays falsy for root spans."""
+    if not b:
+        return ""
+    try:
+        return b.hex() if isinstance(b, (bytes, bytearray)) else str(b)
+    except Exception:
+        return ""
+
+
+def _otel_to_row(span, resource_attrs):
+    """Translate one OTel proto Span (plus its resource attributes) to the
+    dict shape :func:`clawmetry.local_store.LocalStore.ingest_span` expects.
+
+    Issue #1007 / epic #1006. Maps common OTel attribute conventions onto
+    typed columns so the dashboard's usage / trace-tree views don't have
+    to JSON-extract on every read:
+
+      * ``gen_ai.request.model`` / ``llm.model`` / ``model`` → ``model``
+      * ``gen_ai.usage.input_tokens`` / ``llm.usage.prompt_tokens`` →
+        ``tokens_input``
+      * ``gen_ai.usage.output_tokens`` / ``llm.usage.completion_tokens`` →
+        ``tokens_output``
+      * ``gen_ai.usage.total_tokens`` → ``token_count``
+      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``
+      * ``tool.name`` / ``code.function`` → ``tool_name``
+      * ``session.id`` / ``openclaw.session_id`` → ``session_id``
+      * ``agent.id`` / ``openclaw.agent_id`` (also from resource) → ``agent_id``
+      * ``agent.type`` (also from resource) → ``agent_type``
+      * Resource ``service.name`` → ``service_name``
+
+    Everything not projected lands in the ``attributes`` JSON blob so the
+    span-detail panel can render any custom attributes the SDK exporter
+    set. Span events / links are passed through as JSON arrays.
+    """
+    attrs = {}
+    for attr in span.attributes:
+        attrs[attr.key] = _otel_attr_value(attr.value)
+
+    # Time columns. OTel proto carries unix-nano; we store unix-seconds in
+    # ``start_ts`` / ``end_ts`` (DOUBLE) so chart libs can format them
+    # without converting twice.
+    start_ts = (span.start_time_unix_nano or 0) / 1e9
+    end_ts = (span.end_time_unix_nano or 0) / 1e9 or start_ts
+    duration_ns = max(0, (span.end_time_unix_nano or 0) - (span.start_time_unix_nano or 0))
+    duration_ms = duration_ns / 1_000_000.0
+
+    # Status + kind.
+    kind_id = getattr(span, "kind", 0) or 0
+    kind_name = _OTEL_SPAN_KIND_NAMES.get(kind_id, str(kind_id))
+    status_code_id = 0
+    status_message = ""
+    if span.HasField("status"):
+        status_code_id = span.status.code
+        status_message = span.status.message or ""
+    status_code_name = _OTEL_STATUS_CODE_NAMES.get(status_code_id, str(status_code_id))
+
+    # Attribute → typed-column projection. ``attrs`` first (per-span) so it
+    # wins over ``resource_attrs`` (resource-level fallback) — same
+    # precedence the OTel spec uses.
+    def _pick(*keys):
+        for k in keys:
+            v = attrs.get(k)
+            if v not in (None, ""):
+                return v
+            v = resource_attrs.get(k)
+            if v not in (None, ""):
+                return v
+        return None
+
+    def _pick_int(*keys):
+        v = _pick(*keys)
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _pick_float(*keys):
+        v = _pick(*keys)
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    model = _pick("gen_ai.request.model", "gen_ai.response.model", "llm.model", "model")
+    tokens_input = _pick_int("gen_ai.usage.input_tokens", "llm.usage.prompt_tokens", "input_tokens")
+    tokens_output = _pick_int("gen_ai.usage.output_tokens", "llm.usage.completion_tokens", "output_tokens")
+    token_count = _pick_int("gen_ai.usage.total_tokens", "llm.usage.total_tokens", "total_tokens")
+    if token_count is None and (tokens_input or tokens_output):
+        token_count = (tokens_input or 0) + (tokens_output or 0)
+    cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
+    tool_name = _pick("tool.name", "code.function")
+    session_id = _pick("session.id", "openclaw.session_id", "session_id")
+    agent_id = _pick("agent.id", "openclaw.agent_id", "agent_id") or "main"
+    agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type") or "openclaw"
+    service_name = resource_attrs.get("service.name") or attrs.get("service.name")
+    node_id = _pick("node.id", "openclaw.node_id", "host.name")
+
+    # Span events: array of {time_unix_nano, name, attributes}.
+    events = []
+    for ev in span.events:
+        ev_attrs = {}
+        for a in ev.attributes:
+            ev_attrs[a.key] = _otel_attr_value(a.value)
+        events.append({
+            "time_unix_nano": ev.time_unix_nano,
+            "name": ev.name,
+            "attributes": ev_attrs,
+        })
+
+    # Span links: array of {trace_id, span_id, attributes}.
+    links = []
+    for ln in span.links:
+        ln_attrs = {}
+        for a in ln.attributes:
+            ln_attrs[a.key] = _otel_attr_value(a.value)
+        links.append({
+            "trace_id": _hex(ln.trace_id),
+            "span_id": _hex(ln.span_id),
+            "attributes": ln_attrs,
+        })
+
+    return {
+        "span_id": _hex(span.span_id),
+        "trace_id": _hex(span.trace_id),
+        "parent_span_id": _hex(span.parent_span_id) or None,
+        "agent_type": agent_type,
+        "agent_id": agent_id,
+        "node_id": node_id,
+        "session_id": session_id,
+        "service_name": service_name,
+        "name": span.name,
+        "kind": kind_name,
+        "status_code": status_code_name,
+        "status_message": status_message,
+        "status": status_code_name,
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "duration_ms": duration_ms,
+        "duration_ns": duration_ns,
+        "model": model,
+        "tool_name": tool_name,
+        "cost_usd": cost_usd,
+        "token_count": token_count,
+        "tokens_input": tokens_input,
+        "tokens_output": tokens_output,
+        "input": attrs.get("gen_ai.prompt") or attrs.get("llm.prompts") or attrs.get("input"),
+        "output": attrs.get("gen_ai.completion") or attrs.get("llm.completions") or attrs.get("output"),
+        "attributes": attrs,
+        "events": events,
+        "links": links,
+    }
+
+
 def _process_otlp_traces(pb_data):
-    """Decode OTLP traces protobuf and extract relevant span data."""
+    """Decode OTLP traces protobuf and extract relevant span data.
+
+    Two-path design (issue #1007): we still feed the in-memory metrics
+    cache (the live dashboard's hot path — sub-second tiles for tokens /
+    runs / messages) AND persist every span to DuckDB via
+    ``local_store.put_span`` so the trace tree / span detail views can
+    query historical traces. The DuckDB write is best-effort wrapped in
+    try/except — a write failure must NOT break the metrics cache path.
+    """
     req = trace_service_pb2.ExportTraceServiceRequest()
     req.ParseFromString(pb_data)
+
+    # Resolve the local store lazily so unit tests that monkeypatch the
+    # singleton in advance (or run without DuckDB) don't pay the import
+    # cost upfront.
+    _store = None
+    try:
+        from clawmetry import local_store as _ls
+        _store = _ls.get_store()
+    except Exception:
+        _store = None
 
     for resource_spans in req.resource_spans:
         resource_attrs = {}
@@ -8812,6 +9216,22 @@ def _process_otlp_traces(pb_data):
                             "duration_ms": duration_ms,
                         },
                     )
+
+                # DuckDB write-through. Failures here are logged but do not
+                # break the metrics cache path above (which is what the
+                # live tiles read from). Idempotent on span_id — OTLP
+                # retries land as INSERT OR REPLACE without duping.
+                if _store is not None:
+                    try:
+                        _store.put_span(_otel_to_row(span, resource_attrs))
+                    except Exception as e:
+                        try:
+                            import logging as _lg
+                            _lg.getLogger("clawmetry.dashboard").warning(
+                                "local_store.put_span failed: %s", e
+                            )
+                        except Exception:
+                            pass
 
 
 def _get_otel_usage_data():

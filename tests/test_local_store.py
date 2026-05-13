@@ -267,7 +267,10 @@ def test_health_reports_size_and_count(store):
     h = store.health()
     assert h["event_count"] == 10
     assert h["size_bytes"] > 0
-    assert h["schema_version"] == 5
+    # Bumped to 6 by issue #1007 (spans table) on top of v5 (bootstrap_archive
+    # + cron_runs). Re-asserting the version explicitly catches future schema
+    # bumps that forget to update tests.
+    assert h["schema_version"] == 6
     assert h["ring_depth"] == 0
     assert h["ring_dropped_total"] == 0
 
