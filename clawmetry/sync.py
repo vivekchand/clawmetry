@@ -3293,6 +3293,64 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     return {"rows": rows, "count": len(rows), "_shape": shape, "_via": "fallback"}
 
 
+def _channel_enrichment_from_row(r: dict) -> dict:
+    """Pull (provider, chat_id, sender_id, sender, direction) out of a
+    channel.* events row so the cloud Brain renderer can display
+    "Telegram: Vivek Chand: hello" instead of generic agent activity.
+
+    The ingest path in ``sync_channel_messages`` (PR #1191) writes channel
+    transcripts with:
+      * ``event_type`` = ``"channel.in"`` or ``"channel.out"``
+      * ``id`` = ``f"{provider}:{channel_id}:{raw_id}"`` — the only place
+        ``provider`` lives on the events row, since the events table has
+        no provider column.
+      * ``data`` = the original adapter line (``from``/``sender``/``user``
+        block, ``text``/``body``, etc.).
+
+    Returns ``{}`` for non-channel rows so callers can spread it
+    unconditionally. Never raises.
+    """
+    et = r.get("event_type") or ""
+    if not isinstance(et, str) or not et.startswith("channel."):
+        return {}
+    direction = et.split(".", 1)[1] if "." in et else ""
+    eid = r.get("id") or ""
+    provider = ""
+    chat_id = ""
+    if isinstance(eid, str) and eid.count(":") >= 2:
+        # ``{provider}:{channel_id}:{raw_id}`` — raw_id may itself contain
+        # colons (rare, but defensible: split only the first two segments).
+        parts = eid.split(":", 2)
+        provider, chat_id = parts[0], parts[1]
+    data = r.get("data") if isinstance(r.get("data"), dict) else {}
+    sender_block = (
+        data.get("from") or data.get("sender") or data.get("user") or {}
+    )
+    if not isinstance(sender_block, dict):
+        sender_block = {}
+    sender_id = (
+        data.get("sender_id")
+        or sender_block.get("id")
+        or data.get("user_id")
+        or chat_id
+    )
+    sender = (
+        data.get("sender_name")
+        or sender_block.get("username")
+        or sender_block.get("first_name")
+        or sender_block.get("name")
+        or ""
+    )
+    out = {
+        "provider":  provider,
+        "chat_id":   str(chat_id) if chat_id != "" else "",
+        "sender_id": str(sender_id) if sender_id is not None else "",
+        "sender":    str(sender),
+        "direction": direction,
+    }
+    return out
+
+
 def _rows_to_brain_events(rows: list) -> list:
     """Return raw OpenClaw event payloads ready for the cloud browser's
     ``transformEvents`` to unwrap.
@@ -3315,6 +3373,13 @@ def _rows_to_brain_events(rows: list) -> list:
     didn't already carry one (transformEvents needs ``obj.timestamp ||
     obj.time``).
 
+    Channel events (``event_type`` starts with ``channel.``) get extra
+    top-level keys — ``provider`` / ``chat_id`` / ``sender_id`` /
+    ``sender`` / ``direction`` — so the cloud Brain renderer can show
+    "Telegram: Vivek Chand: hello, how are you doing?" instead of generic
+    agent activity. ``transformEvents`` ignores keys it doesn't know about,
+    so this is a forward-compatible enrichment.
+
     The OSS-local Brain tab uses ``routes/brain.py:_try_local_store_brain``
     which builds the display shape directly — that path is unchanged.
     """
@@ -3323,12 +3388,27 @@ def _rows_to_brain_events(rows: list) -> list:
         if not isinstance(r, dict):
             continue
         data = r.get("data")
+        enrich = _channel_enrichment_from_row(r)
         if isinstance(data, dict):
             if not data.get("timestamp") and not data.get("time") and r.get("ts"):
                 data = {**data, "timestamp": r.get("ts")}
+            if enrich:
+                # Enrichment wins — the JSONL payload often carries the
+                # raw ``sender``/``from`` BLOCK under the same key name
+                # (Signal: ``data.sender = {"id":..,"name":..}``); we want
+                # the renderer to read the FLAT string we computed, not
+                # the nested dict. Same for ``provider`` / ``chat_id``
+                # which never appear in adapter payloads.
+                data = {**data, **enrich}
+                # Stamp the channel event type back on so the cloud
+                # renderer's fallback branch (line ~10038 of cloud
+                # dashboard.py) can show "CHANNEL.IN" / "CHANNEL.OUT"
+                # rather than guessing from a missing role.
+                data.setdefault("type", r.get("event_type"))
             out.append(data)
         elif isinstance(data, str):
             out.append({
+                **enrich,
                 "type":      r.get("event_type") or "raw",
                 "timestamp": r.get("ts", ""),
                 "detail":    data[:2000],
