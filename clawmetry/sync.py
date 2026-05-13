@@ -5228,6 +5228,18 @@ ALERTS_EVAL_INTERVAL_SEC = 300  # Re-evaluate alerts every 5 minutes
 def evaluate_alerts(config: dict, state: dict) -> int:
     """Trigger cloud-side alert evaluation for this node.
 
+    .. warning::
+       **Currently UNREACHABLE.** This function has zero callers in the live
+       daemon loop (see ``run_daemon`` at the top of this module). The audit
+       on 2026-05-13 (P0 #2 + P0 #3) found a duplicate ``run_daemon`` shadow
+       at the bottom of this file that *did* call ``evaluate_alerts`` every
+       60s, but that shadow was unreachable itself (the module-level
+       ``if __name__ == "__main__"`` guard fires before the second def runs).
+       The shadow has been deleted; this function is intentionally left in
+       place pending PR-D (clawmetry-cloud#779), which will rewrite it to
+       read from DuckDB and rewire it into the live ``run_daemon``. Until
+       then, alert evaluation is purely cloud-driven (cron-tick or webhook).
+
     The cloud holds the rules and runs the actual threshold checks against the
     sessions/events tables it already syncs from this daemon. We just poke the
     `/api/internal/evaluate-alerts` endpoint on a schedule.
@@ -5276,29 +5288,3 @@ def evaluate_alerts(config: dict, state: dict) -> int:
         # Still record the timestamp so we back off rather than retry on every tick
         state["alerts_last_eval_ts"] = now
         return 0
-
-
-def run_daemon() -> None:
-    """Run the sync daemon - main loop for continuous synchronization."""
-    config = load_config()
-    state = load_state()
-    paths = detect_paths()
-
-    log.info("Starting ClawMetry sync daemon...")
-
-    while True:
-        try:
-            sync_session_metadata(config, state)
-            sync_sessions(config, state, paths)
-            sync_claude_cli_sessions(config, state, paths)
-            sync_logs(config, state, paths)
-            sync_crons(config, state, paths)
-            sync_memory(config, state, paths)
-            sync_system_snapshot(config, state, paths)
-            sync_autonomy(config, state, paths)
-            evaluate_alerts(config, state)
-            save_state(state)
-        except Exception as e:
-            log.error(f"Sync error: {e}")
-
-        time.sleep(60)
