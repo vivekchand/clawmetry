@@ -1917,16 +1917,29 @@ class LocalStore:
         clauses: list[str] = []
         params: list[Any] = []
         if agent_type:
-            clauses.append("agent_type = ?")
+            clauses.append("s.agent_type = ?")
             params.append(str(agent_type))
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        # ``sessions.message_count`` is only populated by the typed-session
+        # ingest path (sync.py + claude_code adapter). The OpenClaw events
+        # path never sets it, so reading the column gave ``message_count: 0``
+        # for every OpenClaw session (#1129 bug 4). Compute it on read via a
+        # correlated subquery against ``events`` and fall back to the stored
+        # column for agents that DO populate it (e.g. ingest from sync.py
+        # where the events table may be empty).
         sql = f"""
-            SELECT agent_type, session_id, agent_id, title, started_at,
-                   last_active_at, ended_at, status, total_tokens, cost_usd,
-                   message_count, metadata
-            FROM sessions
+            SELECT s.agent_type, s.session_id, s.agent_id, s.title, s.started_at,
+                   s.last_active_at, s.ended_at, s.status, s.total_tokens, s.cost_usd,
+                   GREATEST(
+                       COALESCE(s.message_count, 0),
+                       (SELECT COUNT(*) FROM events e
+                          WHERE e.session_id = s.session_id
+                            AND e.agent_type = s.agent_type)
+                   ) AS message_count,
+                   s.metadata
+            FROM sessions s
             {where}
-            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+            ORDER BY COALESCE(s.last_active_at, s.started_at) DESC NULLS LAST
             LIMIT ?
         """
         params.append(int(limit))

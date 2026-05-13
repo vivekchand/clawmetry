@@ -2046,12 +2046,201 @@ def api_transcripts():
     return jsonify({"transcripts": transcripts[:50]})
 
 
+def _is_openclaw_event(obj: dict) -> bool:
+    """Return True if ``obj`` looks like an OpenClaw event (vs an Anthropic
+    message).
+
+    OpenClaw events carry ``{"type": "<namespace>.<action>", "data": {...}}``
+    with no top-level ``role``. Anthropic-shaped messages have a top-level
+    ``role`` field (``user`` / ``assistant`` / ``system``)."""
+    if not isinstance(obj, dict):
+        return False
+    if obj.get("role"):
+        return False
+    t = obj.get("type")
+    if not isinstance(t, str):
+        return False
+    # OpenClaw types are dotted: prompt.submitted, trace.artifacts, etc.
+    return "." in t
+
+
+def _openclaw_event_tokens(data: dict) -> int:
+    """Sum tokens for one OpenClaw event from its ``promptCache.lastCallUsage``
+    block. Falls back to ``input+output`` when ``total`` is missing.
+
+    OpenClaw writes usage at ``data.promptCache.lastCallUsage`` (per call) and
+    also sometimes at ``data.usage`` (aggregate). We prefer the per-call value
+    so two trace events don't double-count the same call."""
+    if not isinstance(data, dict):
+        return 0
+    pc = data.get("promptCache")
+    if isinstance(pc, dict):
+        lcu = pc.get("lastCallUsage")
+        if isinstance(lcu, dict):
+            total = lcu.get("total")
+            if isinstance(total, (int, float)) and total:
+                return int(total)
+            inp = lcu.get("input") or 0
+            out = lcu.get("output") or 0
+            if inp or out:
+                return int(inp) + int(out)
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        total = usage.get("total_tokens")
+        if isinstance(total, (int, float)) and total:
+            return int(total)
+        inp = usage.get("input_tokens") or 0
+        out = usage.get("output_tokens") or 0
+        if inp or out:
+            return int(inp) + int(out)
+    return 0
+
+
+def _stringify_content(content) -> str:
+    """Best-effort coerce a transcript message ``content`` field to a string."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(part.get("text", str(part)))
+            else:
+                parts.append(str(part))
+        return "\n".join(parts)
+    return str(content) if content else ""
+
+
+def _expand_openclaw_event(obj: dict, ts_ms):
+    """Map one OpenClaw event into zero or more transcript turns.
+
+    Returns a list of ``{role, content, timestamp}`` dicts. Events that are
+    pure plumbing (``session.*``, ``context.compiled``, ``agent.heartbeat``)
+    or carry no visible content return ``[]`` — never a turn with an empty
+    body or a debug-shaped ``role``."""
+    etype = obj.get("type", "")
+    data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+    turns: list[dict] = []
+
+    # Plumbing events — never visible in the transcript.
+    if etype in (
+        "session.ended", "session.started", "session.created",
+        "context.compiled", "agent.heartbeat",
+    ):
+        return turns
+
+    if etype == "prompt.submitted":
+        text = data.get("finalPromptText") or data.get("text") or data.get("prompt") or ""
+        text = _stringify_content(text)
+        if text.strip():
+            turns.append({"role": "user", "content": text, "timestamp": ts_ms})
+        return turns
+
+    if etype == "trace.artifacts":
+        # A trace can carry the final prompt, the assistant reply, and the
+        # tool calls that fired during the turn — emit each separately.
+        prompt = data.get("finalPromptText") or ""
+        prompt = _stringify_content(prompt)
+        if prompt.strip():
+            turns.append({"role": "user", "content": prompt, "timestamp": ts_ms})
+
+        atexts = data.get("assistantTexts")
+        if isinstance(atexts, list):
+            for at in atexts:
+                at_s = _stringify_content(at)
+                if at_s.strip():
+                    turns.append({"role": "assistant", "content": at_s, "timestamp": ts_ms})
+        elif isinstance(atexts, str) and atexts.strip():
+            turns.append({"role": "assistant", "content": atexts, "timestamp": ts_ms})
+
+        tool_metas = data.get("toolMetas")
+        if isinstance(tool_metas, list):
+            for tm in tool_metas:
+                if not isinstance(tm, dict):
+                    continue
+                tname = tm.get("name") or tm.get("tool") or "tool"
+                tinput = tm.get("input") or tm.get("arguments") or tm.get("args") or {}
+                toutput = tm.get("output") or tm.get("result")
+                body_parts = [f"[Tool: {tname}]"]
+                try:
+                    body_parts.append(json.dumps(tinput, indent=2)[:500])
+                except (TypeError, ValueError):
+                    body_parts.append(str(tinput)[:500])
+                if toutput is not None:
+                    try:
+                        body_parts.append(json.dumps(toutput, indent=2)[:500])
+                    except (TypeError, ValueError):
+                        body_parts.append(str(toutput)[:500])
+                turns.append({
+                    "role": "tool",
+                    "content": "\n".join(body_parts),
+                    "timestamp": ts_ms,
+                })
+        return turns
+
+    if etype == "model.completed":
+        text = (
+            data.get("completionText")
+            or data.get("text")
+            or data.get("assistantText")
+        )
+        if text is None:
+            atexts = data.get("assistantTexts")
+            if isinstance(atexts, list):
+                text = "\n".join(_stringify_content(a) for a in atexts if a)
+            elif isinstance(atexts, str):
+                text = atexts
+        text = _stringify_content(text) if text is not None else ""
+        if text.strip():
+            turns.append({"role": "assistant", "content": text, "timestamp": ts_ms})
+        return turns
+
+    if etype in ("tool.call", "tool.invoked"):
+        tname = data.get("name") or data.get("tool") or "tool"
+        tinput = data.get("input") or data.get("arguments") or data.get("args") or {}
+        try:
+            body = json.dumps(tinput, indent=2)[:500]
+        except (TypeError, ValueError):
+            body = str(tinput)[:500]
+        turns.append({
+            "role": "tool",
+            "content": f"[Tool: {tname}]\n{body}",
+            "timestamp": ts_ms,
+        })
+        return turns
+
+    if etype in ("tool.result", "tool.completed"):
+        tname = data.get("name") or data.get("tool") or "tool"
+        result = data.get("output") or data.get("result") or ""
+        try:
+            body = json.dumps(result, indent=2)[:500] if not isinstance(result, str) else result[:500]
+        except (TypeError, ValueError):
+            body = str(result)[:500]
+        if body.strip():
+            turns.append({
+                "role": "tool",
+                "content": f"[Tool result: {tname}]\n{body}",
+                "timestamp": ts_ms,
+            })
+        return turns
+
+    # Unknown OpenClaw event — silently skip rather than emit "x.y" role trash.
+    return turns
+
+
 def _try_local_store_transcript(session_id: str):
     """Read a session transcript directly from the DuckDB events table.
 
     Returns the same response shape as the JSONL parser. Returns ``None``
     to defer to the JSONL fallback if the local_store module isn't importable,
     the events table has no rows for this session, or anything raises.
+
+    Handles two event shapes:
+    * **Anthropic-style** messages — ``{role, content, usage, tool_calls}``,
+      written by Claude Code adapters.
+    * **OpenClaw events** — ``{type: "<ns>.<action>", data: {...}}`` — content
+      lives in nested fields (``data.finalPromptText``, ``data.assistantTexts``,
+      ``data.toolMetas``…), tokens in ``data.promptCache.lastCallUsage``.
     """
     try:
         from clawmetry import local_store
@@ -2072,30 +2261,6 @@ def _try_local_store_transcript(session_id: str):
         obj = ev.get("data")
         if not isinstance(obj, dict):
             continue
-        role = obj.get("role", obj.get("type", "unknown"))
-        content = obj.get("content", "")
-        if isinstance(content, list):
-            parts = []
-            for part in content:
-                if isinstance(part, dict):
-                    parts.append(part.get("text", str(part)))
-                else:
-                    parts.append(str(part))
-            content = "\n".join(parts)
-        elif not isinstance(content, str):
-            content = str(content) if content else ""
-        if obj.get("tool_calls") or obj.get("tool_use"):
-            tools = obj.get("tool_calls") or obj.get("tool_use") or []
-            if isinstance(tools, list):
-                for tc in tools:
-                    tname = tc.get("name", tc.get("function", {}).get("name", "tool"))
-                    messages.append({
-                        "role": "tool",
-                        "content": f"[Tool Call: {tname}]\n{json.dumps(tc.get('input', tc.get('arguments', {})), indent=2)[:500]}",
-                        "timestamp": obj.get("timestamp") or obj.get("time"),
-                    })
-        if role == "tool_result":
-            role = "tool"
         ts = obj.get("timestamp") or obj.get("time") or obj.get("created_at") or ev.get("ts")
         ts_ms = None
         if ts:
@@ -2113,6 +2278,34 @@ def _try_local_store_transcript(session_id: str):
                     first_ts = ts_ms
                 if not last_ts or ts_ms > last_ts:
                     last_ts = ts_ms
+
+        if _is_openclaw_event(obj):
+            # OpenClaw shape. Pull model from the top-level (modelId preferred),
+            # tokens from data.promptCache.lastCallUsage.
+            if not model:
+                model = obj.get("modelId") or obj.get("model") or ev.get("model")
+            data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+            total_tokens += _openclaw_event_tokens(data)
+            for turn in _expand_openclaw_event(obj, ts_ms):
+                if turn.get("content", "").strip():
+                    messages.append(turn)
+            continue
+
+        # Anthropic-style fallback (existing logic).
+        role = obj.get("role", obj.get("type", "unknown"))
+        content = _stringify_content(obj.get("content", ""))
+        if obj.get("tool_calls") or obj.get("tool_use"):
+            tools = obj.get("tool_calls") or obj.get("tool_use") or []
+            if isinstance(tools, list):
+                for tc in tools:
+                    tname = tc.get("name", tc.get("function", {}).get("name", "tool"))
+                    messages.append({
+                        "role": "tool",
+                        "content": f"[Tool Call: {tname}]\n{json.dumps(tc.get('input', tc.get('arguments', {})), indent=2)[:500]}",
+                        "timestamp": ts_ms,
+                    })
+        if role == "tool_result":
+            role = "tool"
         if not model:
             model = obj.get("model") or ev.get("model")
         usage = obj.get("usage", {})
