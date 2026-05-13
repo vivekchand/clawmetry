@@ -244,6 +244,95 @@ def test_v3_event_without_timestamp_is_skipped():
     assert sync._parse_v3_event(obj, session_id="s", node_id="n") is None
 
 
+# ── data.type mirrors event_type — fixes MOAT transcript discriminator ────
+
+
+@pytest.mark.parametrize("raw_obj,expected_event_type", [
+    # session
+    ({"type": "session", "version": 3, "id": "s", "timestamp": "2026-05-12T22:35:31Z", "cwd": "/x"},
+     "session.started"),
+    # model_change
+    ({"type": "model_change", "id": "m", "timestamp": "2026-05-12T22:35:31Z",
+      "modelId": "claude-opus-4-7", "provider": "anthropic"},
+     "model.changed"),
+    # message (user)
+    ({"type": "message", "id": "u", "timestamp": "2026-05-12T22:35:31Z",
+      "message": {"role": "user", "content": "hi"}},
+     "prompt.submitted"),
+    # message (assistant)
+    ({"type": "message", "id": "a", "timestamp": "2026-05-12T22:35:31Z",
+      "message": {"role": "assistant", "content": [{"type": "text", "text": "yo"}],
+                  "model": "claude-opus-4-7", "usage": {"input": 1, "output": 1, "totalTokens": 2}}},
+     "model.completed"),
+    # tool_use
+    ({"type": "tool_use", "id": "t", "timestamp": "2026-05-12T22:35:31Z",
+      "name": "bash", "input": {"command": "ls"}},
+     "tool.call"),
+    # tool_use_result
+    ({"type": "tool_use_result", "id": "tr", "timestamp": "2026-05-12T22:35:31Z",
+      "tool_use_id": "t", "content": [{"type": "text", "text": "ok"}]},
+     "tool.result"),
+])
+def test_v3_parser_stamps_data_type_matching_event_type(raw_obj, expected_event_type):
+    """MOAT discriminator fix (PR #fix-v3-data-type-discriminator):
+    ``_parse_v3_event`` MUST stamp the dot.separated event_type onto the
+    ``data["type"]`` key for every type it handles.
+
+    Without this, ``routes/sessions.py::_is_openclaw_event`` reads
+    ``data.get("type") -> None`` and rejects the row, falling through to
+    the Anthropic-shape branch which doesn't know how to read v3 content.
+    The result is /api/transcript/<sid> rendering 0 messages even though
+    /api/brain-history (which reads the typed event_type column directly)
+    shows the events fine.
+    """
+    sync = _import_sync()
+    row = sync._parse_v3_event(raw_obj, session_id="sess-1", node_id="n")
+    assert row is not None, f"parser dropped {raw_obj['type']!r}"
+    assert row["event_type"] == expected_event_type
+    # The critical invariant: data.type == event_type column.
+    assert row["data"].get("type") == row["event_type"], (
+        f"data.type ({row['data'].get('type')!r}) must match event_type "
+        f"({row['event_type']!r}) — see PR #1132's _is_openclaw_event "
+        f"discriminator. raw obj: {raw_obj!r}"
+    )
+
+
+@pytest.mark.parametrize("raw_obj,expected_event_type", [
+    ({"type": "message", "id": "u", "timestamp": "2026-05-12T22:35:31Z",
+      "message": {"role": "user", "content": "hi"}},
+     "prompt.submitted"),
+    ({"type": "message", "id": "a", "timestamp": "2026-05-12T22:35:31Z",
+      "message": {"role": "assistant", "content": [{"type": "text", "text": "yo"}],
+                  "model": "claude-opus-4-7", "usage": {"input": 1, "output": 1, "totalTokens": 2}}},
+     "model.completed"),
+    ({"type": "tool_use_result", "id": "tr", "timestamp": "2026-05-12T22:35:31Z",
+      "tool_use_id": "t", "content": [{"type": "text", "text": "ok"}]},
+     "tool.result"),
+])
+def test_v3_parser_nests_content_under_data_data(raw_obj, expected_event_type):
+    """MOAT expander fix: ``_expand_openclaw_event`` reads content from
+    the NESTED ``data.data.*`` path (because trajectory parser stores
+    ``data: obj`` of the raw event, which itself has a nested ``data`` key).
+    The v3 parser must mirror that shape so the same expander works on both."""
+    sync = _import_sync()
+    row = sync._parse_v3_event(raw_obj, session_id="sess-1", node_id="n")
+    assert row is not None
+    assert row["event_type"] == expected_event_type
+    inner = row["data"].get("data")
+    assert isinstance(inner, dict), (
+        f"data.data must be a dict so routes/sessions.py::_expand_openclaw_event "
+        f"can read content fields from it. Got {inner!r}."
+    )
+    if expected_event_type == "prompt.submitted":
+        assert inner.get("finalPromptText") == "hi"
+    elif expected_event_type == "model.completed":
+        assert inner.get("completionText") == "yo"
+        assert inner.get("modelId") == "claude-opus-4-7"
+        assert inner["promptCache"]["lastCallUsage"]["total"] == 2
+    elif expected_event_type == "tool.result":
+        assert inner.get("output") == "ok"
+
+
 def test_v3_tool_use_result_becomes_tool_result():
     sync = _import_sync()
     obj = {

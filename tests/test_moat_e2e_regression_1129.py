@@ -477,3 +477,124 @@ def test_sessions_message_count_reflects_actual_event_count(isolated_store):
         f"empty session should report message_count=0, got "
         f"{by_sid['s-empty']['message_count']!r}"
     )
+
+
+# ── Test 5 — v3 underscore session renders end-to-end via fast path ───────
+
+
+def test_v3_session_renders_transcript_via_local_store_fast_path(isolated_store):
+    """Bug 5 (MOAT closing): real-world OpenClaw .jsonl files use the v3
+    underscore schema (#1135). PR #1137 added ``_parse_v3_event`` which
+    maps each underscore type to the trajectory-shape dot.separated
+    ``event_type`` column — but the parser dropped ``type`` from the
+    serialised ``data`` blob and stored content fields FLAT at the top
+    level.
+
+    The downstream transcript expander in routes/sessions.py uses
+    ``_is_openclaw_event(obj)`` which checks ``obj.get("type")`` for a dot;
+    on v3-mapped rows that returned None, so the OpenClaw branch never
+    fired, the function fell through to the Anthropic shape, and
+    /api/transcript/<sid> rendered 0 messages even though /api/brain-history
+    (which reads the typed event_type column directly) worked fine.
+
+    This test feeds a synthetic v3 session through the daemon ingest path
+    and asserts that ``_try_local_store_transcript`` returns the local_store
+    fast path with the correct user/assistant/tool turns. On main before
+    this PR: messageCount==0. After: messageCount>=3 (user, assistant, tool).
+    """
+    sync = isolated_store["sync"]
+    ls = isolated_store["ls"]
+    store = ls.get_store()
+
+    sid = "moat-bug5-v3-session"
+    base = datetime.now(timezone.utc)
+    def _ts(offset_sec):
+        return (base + timedelta(seconds=offset_sec)).isoformat().replace("+00:00", "Z")
+
+    # Real-shape v3 events (mirror what OpenClaw writes today).
+    v3_events = [
+        {"type": "session", "version": 3, "id": sid,
+         "timestamp": _ts(0), "cwd": "/tmp/x"},
+        {"type": "model_change", "id": "mc1", "timestamp": _ts(1),
+         "modelId": "claude-opus-4-7", "provider": "anthropic"},
+        {"type": "message", "id": "u1", "timestamp": _ts(2),
+         "message": {"role": "user",
+                     "content": [{"type": "text", "text": "ping"}]}},
+        {"type": "message", "id": "a1", "timestamp": _ts(3),
+         "message": {"role": "assistant",
+                     "content": [{"type": "text", "text": "pong"}],
+                     "model": "claude-opus-4-7",
+                     "usage": {"input": 10, "output": 5, "totalTokens": 15}}},
+        {"type": "tool_use_result", "id": "tr1", "timestamp": _ts(4),
+         "tool_use_id": "tu1",
+         "content": [{"type": "text", "text": "tool ran"}]},
+    ]
+
+    sync._local_ingest_session_batch(
+        v3_events,
+        session_file=f"{sid}.jsonl",
+        node_id="agent+test-1129",
+        subagent_id=None,
+    )
+    _wait_drained(store)
+
+    # Reload routes/sessions.py so it picks up the same local_store singleton.
+    import routes.sessions as sessions_mod
+    importlib.reload(sessions_mod)
+
+    result = sessions_mod._try_local_store_transcript(sid)
+    assert result is not None, (
+        "_try_local_store_transcript returned None for a v3 session — "
+        "the fast path short-circuited (rows empty or exception)."
+    )
+    assert result.get("_source") == "local_store", (
+        f"transcript must come from local_store fast path, got "
+        f"_source={result.get('_source')!r}"
+    )
+
+    msgs = result.get("messages") or []
+    by_role_content = [(m.get("role"), m.get("content")) for m in msgs]
+
+    # Reject phantom rows that the buggy fallback might emit.
+    bad_roles = [m for m in msgs
+                 if m.get("role") in ("session.started", "model.changed",
+                                      "prompt.submitted", "model.completed",
+                                      "tool.result", "unknown")]
+    assert not bad_roles, (
+        f"transcript leaked v3 wire-protocol event types as transcript roles: "
+        f"{bad_roles!r}. The renderer must map them to user/assistant/tool."
+    )
+
+    # The 3 real turns must be present with correct role mapping.
+    assert ("user", "ping") in by_role_content, (
+        f"missing user turn ('ping') from v3 message(user→prompt.submitted). "
+        f"Got: {by_role_content!r}"
+    )
+    assistants = [c for r, c in by_role_content if r == "assistant"]
+    assert any("pong" in (c or "") for c in assistants), (
+        f"missing assistant turn ('pong') from v3 message(assistant→model.completed). "
+        f"Got: {by_role_content!r}"
+    )
+    tools = [c for r, c in by_role_content if r == "tool"]
+    assert any("tool ran" in (c or "") for c in tools), (
+        f"missing tool turn ('tool ran') from v3 tool_use_result→tool.result. "
+        f"Got: {by_role_content!r}"
+    )
+
+    assert result.get("messageCount", 0) >= 3, (
+        f"expected at least 3 transcript turns (user + assistant + tool), got "
+        f"{result.get('messageCount')!r}: {by_role_content!r}. "
+        f"This is the MOAT-closing bug — without data.type the OpenClaw "
+        f"discriminator rejects every v3 row."
+    )
+
+    # Model must be picked up from data.modelId on the assistant turn.
+    assert result.get("model") == "claude-opus-4-7", (
+        f"model not extracted from v3 assistant data.modelId; "
+        f"got {result.get('model')!r}"
+    )
+    # Tokens must come from data.data.promptCache.lastCallUsage.total.
+    assert result.get("totalTokens", 0) >= 15, (
+        f"totalTokens should reflect v3 usage.totalTokens (15), "
+        f"got {result.get('totalTokens')!r}"
+    )

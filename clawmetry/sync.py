@@ -1498,7 +1498,16 @@ def _parse_v3_event(
 
     # Defaults; overridden per type below.
     event_type = "unknown"
+    # ``data`` mirrors the TRAJECTORY shape that routes/sessions.py expects:
+    # top-level ``type`` + ``timestamp`` + sometimes ``modelId`` for the
+    # discriminator / model picker, and a NESTED ``data`` sub-dict carrying
+    # the content fields (``finalPromptText``, ``completionText``,
+    # ``promptCache``, ``toolMetas`` …) that ``_expand_openclaw_event`` and
+    # ``_openclaw_event_tokens`` read. The legacy flat keys that #1135's
+    # parser stored at the top level are kept alongside the nested copy so
+    # existing brain-feed / debug consumers keep working.
     data: dict = {"_v3_type": t}  # preserve the original tag for debugging
+    inner: dict = {}  # nested ``data.data`` payload — matches trajectory shape
     cost_usd: float | None = None
     token_count: int | None = None
     model: str | None = None
@@ -1513,6 +1522,11 @@ def _parse_v3_event(
             "cwd": obj.get("cwd"),
             "timestamp": ts,
         })
+        inner.update({
+            "id": obj.get("id"),
+            "version": obj.get("version"),
+            "cwd": obj.get("cwd"),
+        })
 
     elif t == "model_change":
         event_type = "model.changed"
@@ -1521,6 +1535,10 @@ def _parse_v3_event(
             "modelId": model,
             "provider": obj.get("provider"),
             "timestamp": ts,
+        })
+        inner.update({
+            "modelId": model,
+            "provider": obj.get("provider"),
         })
 
     elif t == "message":
@@ -1575,8 +1593,10 @@ def _parse_v3_event(
                 "finalPromptText": text,
                 "timestamp": ts,
             })
+            inner["finalPromptText"] = text
             if last_call_usage:
                 data["promptCache"] = {"lastCallUsage": last_call_usage}
+                inner["promptCache"] = {"lastCallUsage": last_call_usage}
         elif role == "assistant":
             event_type = "model.completed"
             model = msg.get("model") or model
@@ -1589,10 +1609,19 @@ def _parse_v3_event(
                 "timestamp": ts,
                 "stopReason": msg.get("stopReason"),
             })
+            inner.update({
+                "completionText": text,
+                "assistantTexts": [text] if text else [],
+                "modelId": model,
+                "provider": msg.get("provider"),
+                "stopReason": msg.get("stopReason"),
+            })
             if tool_metas:
                 data["toolMetas"] = tool_metas
+                inner["toolMetas"] = tool_metas
             if last_call_usage:
                 data["promptCache"] = {"lastCallUsage": last_call_usage}
+                inner["promptCache"] = {"lastCallUsage": last_call_usage}
         else:
             # Unknown role — be conservative, drop rather than mis-classify.
             return None
@@ -1608,6 +1637,11 @@ def _parse_v3_event(
             "id": obj.get("id"),
             "timestamp": ts,
         })
+        inner.update({
+            "name": obj.get("name") or "tool",
+            "input": obj.get("input") or {},
+            "id": obj.get("id"),
+        })
 
     elif t == "tool_use_result":
         event_type = "tool.result"
@@ -1622,12 +1656,31 @@ def _parse_v3_event(
             "is_error": obj.get("is_error"),
             "timestamp": ts,
         })
+        inner.update({
+            "tool_use_id": obj.get("tool_use_id"),
+            "output": result_text,
+            "result": result_text,
+            "is_error": obj.get("is_error"),
+        })
 
     else:
         # Unknown v3 event — log + drop so future schema additions don't
         # silently land as event_type="unknown" rows that pollute analytics.
         log.debug("unknown v3 event type %r — skipping (session=%s)", t, session_id)
         return None
+
+    # MOAT fix: stamp the dot.separated event_type onto data.type so
+    # routes/sessions.py::_is_openclaw_event (PR #1132) recognises this
+    # row as an OpenClaw event. Without this the discriminator sees
+    # data.type == None, falls back to the Anthropic shape, and
+    # /api/transcript/<sid> renders 0 messages even though brain-history
+    # (which reads the event_type column directly) works fine.
+    data["type"] = event_type
+    # MOAT fix part 2: attach the nested ``data`` payload that the
+    # trajectory parser produces (``data: obj`` of the raw event line) so
+    # ``_expand_openclaw_event`` / ``_openclaw_event_tokens`` find the
+    # content + usage at the same key paths as for trajectory events.
+    data["data"] = inner
 
     return {
         "id": str(eid),
