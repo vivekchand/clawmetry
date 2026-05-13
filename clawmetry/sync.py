@@ -975,6 +975,176 @@ def detect_paths() -> dict:
     return {"sessions_dir": sessions_dir, "log_dir": log_dir, "workspace": workspace}
 
 
+def discover_workspaces(home: Path | None = None) -> list[dict]:
+    """Discover all OpenClaw workspace profiles on this machine.
+
+    Power users sometimes keep multiple OpenClaw workspaces (work / personal /
+    experiments). Today ClawMetry auto-detects a single ``~/.openclaw`` dir;
+    this helper scans for the common multi-profile patterns so the dashboard
+    can offer a switcher.
+
+    Discovery paths (all safe, no symlink-following, read-only):
+      1. ``~/.openclaw`` — the canonical single-workspace location.
+      2. ``~/.openclaw-*`` — suffix-style profiles (e.g. ``~/.openclaw-work``).
+      3. ``~/.openclaw/profiles/<name>`` — explicit profiles convention.
+      4. ``~/.clawmetry/workspaces.json`` — user-curated list (highest trust).
+
+    A path is treated as a workspace when it contains an ``agents/`` or
+    ``workspace/`` subdir or one of the conventional context files
+    (``SOUL.md`` / ``AGENTS.md`` / ``MEMORY.md``). The check tolerates
+    ``PermissionError`` and never crashes.
+
+    Returns a list of ``{name, path, agent_count, last_active_ts}`` dicts,
+    sorted by ``last_active_ts`` desc. The single-workspace zero-config
+    case still works — it just returns a one-element list.
+    """
+    home = home or Path.home()
+    discovered: dict[str, dict] = {}  # path -> entry (de-dup by abs path)
+
+    def _is_workspace_like(p: Path) -> bool:
+        try:
+            if not p.is_dir() or p.is_symlink():
+                return False
+            # Strong signal: agents/ subdir (OpenClaw's standard layout)
+            if (p / "agents").is_dir():
+                return True
+            if (p / "workspace").is_dir():
+                return True
+            for marker in ("SOUL.md", "AGENTS.md", "MEMORY.md"):
+                if (p / marker).exists():
+                    return True
+        except (PermissionError, OSError):
+            return False
+        return False
+
+    def _agent_count(p: Path) -> int:
+        try:
+            agents_dir = p / "agents"
+            if not agents_dir.is_dir():
+                return 0
+            return sum(
+                1
+                for child in agents_dir.iterdir()
+                if child.is_dir() and not child.is_symlink()
+            )
+        except (PermissionError, OSError):
+            return 0
+
+    def _last_active(p: Path) -> float:
+        """Most-recent mtime across sessions/logs as a rough activity timestamp."""
+        latest = 0.0
+        try:
+            sessions = p / "agents" / "main" / "sessions"
+            if sessions.is_dir():
+                for f in sessions.iterdir():
+                    if f.is_symlink():
+                        continue
+                    try:
+                        m = f.stat().st_mtime
+                        if m > latest:
+                            latest = m
+                    except (PermissionError, OSError):
+                        continue
+            # Fallback: dir mtime
+            if latest == 0.0:
+                latest = p.stat().st_mtime
+        except (PermissionError, OSError):
+            pass
+        return latest
+
+    def _add(name: str, path: Path) -> None:
+        try:
+            abs_path = path.resolve(strict=False)
+        except (OSError, RuntimeError):
+            abs_path = path
+        key = str(abs_path)
+        if key in discovered:
+            return
+        if not _is_workspace_like(path):
+            return
+        discovered[key] = {
+            "name": name,
+            "path": key,
+            "agent_count": _agent_count(path),
+            "last_active_ts": _last_active(path),
+        }
+
+    # 1. Canonical ~/.openclaw
+    default = home / ".openclaw"
+    _add("default", default)
+
+    # 2. Suffix-style profiles: ~/.openclaw-<name>
+    try:
+        for entry in home.iterdir():
+            try:
+                if entry.is_symlink() or not entry.is_dir():
+                    continue
+            except (PermissionError, OSError):
+                continue
+            name = entry.name
+            if not name.startswith(".openclaw-"):
+                continue
+            profile = name[len(".openclaw-"):]
+            if profile:
+                _add(profile, entry)
+    except (PermissionError, OSError, FileNotFoundError):
+        pass
+
+    # 3. ~/.openclaw/profiles/<name> convention
+    profiles_dir = default / "profiles"
+    try:
+        if profiles_dir.is_dir() and not profiles_dir.is_symlink():
+            for entry in profiles_dir.iterdir():
+                try:
+                    if entry.is_symlink() or not entry.is_dir():
+                        continue
+                except (PermissionError, OSError):
+                    continue
+                _add(entry.name, entry)
+    except (PermissionError, OSError):
+        pass
+
+    # 4. User-curated ~/.clawmetry/workspaces.json
+    cfg_path = home / ".clawmetry" / "workspaces.json"
+    try:
+        if cfg_path.is_file() and not cfg_path.is_symlink():
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+            entries = cfg.get("workspaces") if isinstance(cfg, dict) else cfg
+            if isinstance(entries, list):
+                for item in entries:
+                    if not isinstance(item, dict):
+                        continue
+                    raw_path = item.get("path")
+                    name = item.get("name") or ""
+                    if not raw_path or not isinstance(raw_path, str):
+                        continue
+                    p = Path(os.path.expanduser(raw_path))
+                    # Stay within the user's home dir as a safety boundary
+                    # (don't follow paths outside ~ that the JSON might point at).
+                    try:
+                        rp = p.resolve(strict=False)
+                    except (OSError, RuntimeError):
+                        continue
+                    try:
+                        rp.relative_to(home.resolve(strict=False))
+                    except ValueError:
+                        # Allow explicit absolute paths outside home only when
+                        # they exist & are not symlinks — power-user override.
+                        if p.is_symlink():
+                            continue
+                    _add(name or p.name or "workspace", p)
+    except (PermissionError, OSError, json.JSONDecodeError, ValueError):
+        pass
+
+    out = sorted(
+        discovered.values(),
+        key=lambda d: d.get("last_active_ts", 0.0),
+        reverse=True,
+    )
+    return out
+
+
 # ── Sync: session events (full content, encrypted) ────────────────────────────
 
 
