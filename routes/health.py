@@ -1108,6 +1108,19 @@ def api_system_health():
             "status": "not_running",
             "memory_threshold_mb": GATEWAY_MEMORY_THRESHOLD_MB,
         }
+    # 852 follow-up: include a tiny last-hour summary from the daemon-
+    # persisted gateway.metric events so the card can show "memory
+    # trending up over the last hour" without a second roundtrip. Best-
+    # effort — empty / not-installed local_store → zero counts.
+    try:
+        gateway_health["history"] = _summarise_gateway_metric_recent(minutes=60)
+    except Exception:
+        gateway_health["history"] = {
+            "count": 0,
+            "min_rss_mb": None,
+            "max_rss_mb": None,
+            "avg_rss_mb": None,
+        }
 
     return jsonify(
         {
@@ -1152,6 +1165,97 @@ def api_gateway_health():
                 "memory_threshold_mb": GATEWAY_MEMORY_THRESHOLD_MB,
             }
         )
+
+
+def _query_gateway_metric_history(hours: int):
+    """Return ``gateway.metric`` events from the last *hours* hours sorted
+    ASC (oldest → newest). Internal helper so the test suite can drive it
+    without spinning up the Flask app.
+
+    Each row: ``{"ts": ISO8601, "rss_mb": float|None, "cpu_pct": float|None}``.
+    No DuckDB / no events → empty list (NOT an error; fresh installs have no
+    history yet).
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+    except Exception:
+        return []
+    try:
+        since_iso = (
+            datetime.now(timezone.utc) - timedelta(hours=int(hours))
+        ).isoformat()
+        # ``query_events`` defaults to DESC + LIMIT 500. A day at 30s with
+        # max dedupe relaxation is ≤ 2,880 rows; in practice (dedupe) we see
+        # ~50-300/day, but we ask for 10,000 to be safe and sort ASC here.
+        rows = store.query_events(
+            event_type="gateway.metric",
+            since=since_iso,
+            limit=10000,
+        )
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        out.append({
+            "ts":      r.get("ts"),
+            "rss_mb":  data.get("rss_mb"),
+            "cpu_pct": data.get("cpu_pct"),
+        })
+    out.sort(key=lambda r: r.get("ts") or "")
+    return out
+
+
+def _summarise_gateway_metric_recent(minutes: int = 60):
+    """Return a small {count, min_rss_mb, max_rss_mb, avg_rss_mb} summary
+    suitable for embedding in the existing ``/api/system-health.gateway``
+    block. Cheap (single read of the recent slice); never raises.
+    """
+    rows = _query_gateway_metric_history(hours=max(1, int(minutes / 60) or 1))
+    if not rows:
+        return {"count": 0, "min_rss_mb": None, "max_rss_mb": None, "avg_rss_mb": None}
+    # Restrict to the requested last-N-minutes window in case query padded out.
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    rss_values = [
+        r["rss_mb"]
+        for r in rows
+        if r.get("ts") and r["ts"] >= cutoff and r.get("rss_mb") is not None
+    ]
+    if not rss_values:
+        return {"count": 0, "min_rss_mb": None, "max_rss_mb": None, "avg_rss_mb": None}
+    return {
+        "count":      len(rss_values),
+        "min_rss_mb": round(min(rss_values), 1),
+        "max_rss_mb": round(max(rss_values), 1),
+        "avg_rss_mb": round(sum(rss_values) / len(rss_values), 1),
+    }
+
+
+@bp_health.route("/api/gateway-health/history")
+def api_gateway_health_history():
+    """24h-window sparkline data for the gateway-health card (#852 followup).
+
+    Query string:
+      * ``hours`` — lookback window (1-168, default 24).
+
+    Returns a JSON array of ``{ts, rss_mb, cpu_pct}`` rows, sorted oldest →
+    newest. Empty array (NOT 4xx/5xx) when no events have been written yet
+    — fresh installs need ~30s to capture the first sample, and the frontend
+    treats empty data as "sparkline not available yet" rather than an error.
+    """
+    try:
+        hours = int(request.args.get("hours", "24"))
+    except (TypeError, ValueError):
+        hours = 24
+    # Clamp to a sane range. 1 week max — anything longer should query DuckDB
+    # directly; the dashboard sparkline only needs 24h.
+    hours = max(1, min(168, hours))
+    try:
+        rows = _query_gateway_metric_history(hours=hours)
+    except Exception:
+        rows = []
+    return jsonify(rows)
 
 
 @bp_health.route("/api/health")

@@ -5395,6 +5395,72 @@ function startHealthStream() {
   healthStream.onerror = function() { setTimeout(startHealthStream, 30000); };
 }
 
+// Gateway-health 24h sparkline (#852 followup, MOAT/DuckDB-first).
+// Pulls daemon-captured `gateway.metric` events from /api/gateway-health/history
+// and renders them as a 240x36 inline SVG inside #sh-gateway-spark. Empty
+// data (fresh install: no daemon yet, or <30s elapsed) renders as a quiet
+// "no history yet" hint so the card never looks broken.
+async function _loadGatewayHealthSparkline() {
+  var el = document.getElementById('sh-gateway-spark');
+  if (!el) return;
+  var rows;
+  try {
+    rows = await fetchJsonWithTimeout('/api/gateway-health/history?hours=24', 6000);
+  } catch (_e) {
+    rows = [];
+  }
+  if (!Array.isArray(rows) || rows.length === 0) {
+    el.innerHTML = '<div style="font-size:10px;color:var(--text-muted);font-style:italic;opacity:0.7;">Sparkline available after daemon captures 24h of samples.</div>';
+    return;
+  }
+  // Only keep rows with a numeric rss_mb — daemon may have written
+  // gateway.metric rows where vitals weren't readable (status=warning,
+  // rss_mb=null). Those break the y-axis; skip them.
+  var pts = rows.filter(function(r) {
+    return r && typeof r.rss_mb === 'number';
+  });
+  if (pts.length === 0) {
+    el.innerHTML = '<div style="font-size:10px;color:var(--text-muted);font-style:italic;opacity:0.7;">Sparkline available after daemon captures 24h of samples.</div>';
+    return;
+  }
+  var W = 240, H = 36, pad = 2;
+  var maxRss = 0, minRss = pts[0].rss_mb;
+  pts.forEach(function(p) {
+    if (p.rss_mb > maxRss) maxRss = p.rss_mb;
+    if (p.rss_mb < minRss) minRss = p.rss_mb;
+  });
+  // Avoid a flat-line that visually collapses to the bottom — give the
+  // y-range a 10MB floor so small fluctuations are still visible.
+  var range = Math.max(10, maxRss - minRss);
+  var step = pts.length > 1 ? (W - 2*pad) / (pts.length - 1) : 0;
+  var coords = pts.map(function(p, i) {
+    var x = pad + i * step;
+    var y = H - pad - ((p.rss_mb - minRss) / range) * (H - 2*pad);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  });
+  var svg = '<svg width="' + W + '" height="' + H + '" style="display:block;background:var(--bg-primary,#0a0a0a);border-radius:4px;border:1px solid var(--border-secondary);" aria-label="Gateway RSS over last 24h">';
+  // Filled area under the curve for a "memory pressure" feel.
+  var areaPts = coords.slice();
+  areaPts.push((pad + (pts.length-1) * step).toFixed(1) + ',' + (H - pad).toFixed(1));
+  areaPts.push(pad.toFixed(1) + ',' + (H - pad).toFixed(1));
+  svg += '<polygon fill="rgba(34,197,94,0.18)" points="' + areaPts.join(' ') + '" />';
+  // Trend line.
+  svg += '<polyline fill="none" stroke="#22c55e" stroke-width="1.2" points="' + coords.join(' ') + '" />';
+  // Latest-point dot.
+  var last = pts[pts.length - 1];
+  var lastX = pad + (pts.length-1) * step;
+  var lastY = H - pad - ((last.rss_mb - minRss) / range) * (H - 2*pad);
+  svg += '<circle cx="' + lastX.toFixed(1) + '" cy="' + lastY.toFixed(1) + '" r="2" fill="#22c55e"><title>' + last.rss_mb + ' MB @ ' + (last.ts || '') + '</title></circle>';
+  svg += '</svg>';
+  // Min/max caption.
+  var caption = '<div style="font-size:10px;color:var(--text-muted);margin-top:3px;display:flex;justify-content:space-between;">'
+    + '<span>min ' + minRss.toFixed(0) + ' MB</span>'
+    + '<span style="color:var(--text-secondary);">' + pts.length + ' samples · 24h</span>'
+    + '<span>max ' + maxRss.toFixed(0) + ' MB</span>'
+    + '</div>';
+  el.innerHTML = svg + caption;
+}
+
 // ===== System Health Panel =====
 async function loadSystemHealth() {
   try {
@@ -5656,9 +5722,14 @@ async function loadSystemHealth() {
       if (typeof gw.cpu_pct === 'number') {
         gwHtml += '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">CPU: <span style="color:var(--text-secondary);font-weight:600;">' + gw.cpu_pct + '%</span></div>';
       }
+      // 24h RSS sparkline (#852 followup) — placeholder div; populated
+      // asynchronously by _loadGatewayHealthSparkline() below.
+      gwHtml += '<div id="sh-gateway-spark" style="margin-top:8px;min-height:36px;"></div>';
       gwHtml += '</div>';
       gwEl.innerHTML = gwHtml;
       if (gwWrap) gwWrap.style.display = '';
+      // Kick off the sparkline fetch; never blocks the rest of the card.
+      try { _loadGatewayHealthSparkline(); } catch (_e) {}
     } else if (gwWrap) { gwWrap.style.display = 'none'; }
 
     // Sandbox Status (conditional)
