@@ -2304,6 +2304,161 @@ _EVENT_COLS = [
 ]
 
 
+def _extract_event_metrics(
+    e: dict[str, Any],
+) -> tuple[float | None, int | None, str | None]:
+    """Pull (cost_usd, token_count, model) from an event with shape fallbacks.
+
+    Top-level ``cost_usd`` / ``token_count`` / ``model`` are honoured first —
+    that's what the interceptor, claude-cli adapter, sync, and tests already
+    provide. When absent (the OpenClaw gateway/jsonl shape), we fall through
+    nested payload shapes:
+
+      * OpenClaw: ``data.modelId`` + ``data.provider`` +
+        ``data.promptCache.lastCallUsage.{input,output,total,cacheRead,cacheWrite}``
+      * OpenClaw message: ``data.message.usage.{inputTokens,outputTokens,totalTokens}``
+        with ``data.message.usage.cost.total`` (already-priced)
+      * Anthropic SDK:  ``data.usage.{input_tokens,output_tokens,total_tokens}``
+
+    Cost is derived from tokens × pricing only when input/output split AND
+    provider AND model are all known (so we match
+    ``providers_pricing.estimate_cost_usd``'s asymmetric rates). When only
+    ``total`` is available, we leave cost=None — the brain UI / read-side
+    aggregates compute it from tokens+model on demand and shouldn't see a
+    half-correct value here.
+
+    Never raises: any extraction failure quietly leaves the field as None
+    so the store stays a permissive ingest path (#1129)."""
+    cost = e.get("cost_usd")
+    tokens = e.get("token_count")
+    model = e.get("model")
+    provider = e.get("provider")
+
+    d = e.get("data") if isinstance(e.get("data"), dict) else None
+    if d is None:
+        return cost, tokens, model
+
+    if not model:
+        model = d.get("modelId") or d.get("model") or d.get("model_id")
+        # Message-shape: data.message.{model, provider}
+        msg = d.get("message") if isinstance(d.get("message"), dict) else None
+        if not model and msg is not None:
+            model = msg.get("model")
+        if not provider and msg is not None:
+            provider = provider or msg.get("provider")
+    if not provider:
+        provider = d.get("provider")
+
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+
+    if tokens is None:
+        # 1. OpenClaw: data.promptCache.lastCallUsage
+        pc = d.get("promptCache") if isinstance(d.get("promptCache"), dict) else None
+        if pc is not None:
+            lcu = pc.get("lastCallUsage") if isinstance(pc.get("lastCallUsage"), dict) else None
+            if lcu is not None:
+                t = lcu.get("total")
+                i = lcu.get("input") or 0
+                o = lcu.get("output") or 0
+                if t is None and (i or o):
+                    t = int(i) + int(o)
+                if t:
+                    try:
+                        tokens = int(t)
+                    except (TypeError, ValueError):
+                        pass
+                if i:
+                    try:
+                        tokens_in = int(i)
+                    except (TypeError, ValueError):
+                        pass
+                if o:
+                    try:
+                        tokens_out = int(o)
+                    except (TypeError, ValueError):
+                        pass
+
+        # 2. OpenClaw message: data.message.usage.{inputTokens,outputTokens,totalTokens}
+        if tokens is None:
+            msg = d.get("message") if isinstance(d.get("message"), dict) else None
+            usage = msg.get("usage") if msg and isinstance(msg.get("usage"), dict) else None
+            if usage is not None:
+                t = usage.get("totalTokens") or usage.get("total_tokens")
+                i = usage.get("inputTokens") or usage.get("input_tokens") or 0
+                o = usage.get("outputTokens") or usage.get("output_tokens") or 0
+                if t is None and (i or o):
+                    t = int(i) + int(o)
+                if t:
+                    try:
+                        tokens = int(t)
+                    except (TypeError, ValueError):
+                        pass
+                if i and tokens_in is None:
+                    try:
+                        tokens_in = int(i)
+                    except (TypeError, ValueError):
+                        pass
+                if o and tokens_out is None:
+                    try:
+                        tokens_out = int(o)
+                    except (TypeError, ValueError):
+                        pass
+                # Already-priced cost is reliable — prefer it over re-derivation.
+                cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else None
+                if cost is None and cost_obj is not None:
+                    ct = cost_obj.get("total")
+                    if ct is not None:
+                        try:
+                            cost = float(ct)
+                        except (TypeError, ValueError):
+                            pass
+
+        # 3. Anthropic SDK: data.usage.{input_tokens,output_tokens,total_tokens}
+        if tokens is None:
+            u = d.get("usage") if isinstance(d.get("usage"), dict) else None
+            if u is not None:
+                t = u.get("total_tokens") or u.get("totalTokens")
+                i = u.get("input_tokens") or u.get("inputTokens") or 0
+                o = u.get("output_tokens") or u.get("outputTokens") or 0
+                if t is None and (i or o):
+                    t = int(i) + int(o)
+                if t:
+                    try:
+                        tokens = int(t)
+                    except (TypeError, ValueError):
+                        pass
+                if i and tokens_in is None:
+                    try:
+                        tokens_in = int(i)
+                    except (TypeError, ValueError):
+                        pass
+                if o and tokens_out is None:
+                    try:
+                        tokens_out = int(o)
+                    except (TypeError, ValueError):
+                        pass
+
+    # Derive cost only when input/output split + provider + model are all known.
+    # estimate_cost_usd uses asymmetric input/output rates; a single ``total``
+    # can't be priced correctly, so leave cost=None and let read-side compute.
+    if cost is None and provider and model and (tokens_in or tokens_out):
+        try:
+            from clawmetry.providers_pricing import estimate_cost_usd
+            est = estimate_cost_usd(
+                provider=str(provider),
+                tokens_in=int(tokens_in or 0),
+                tokens_out=int(tokens_out or 0),
+                model=str(model),
+            )
+            if est:
+                cost = float(est)
+        except Exception:
+            pass
+
+    return cost, tokens, model
+
+
 def _event_to_row(e: dict[str, Any]) -> tuple:
     """Coerce an event dict into the column tuple for the events table.
     Unknown keys are tolerated and dropped — events come from many sources
@@ -2315,6 +2470,7 @@ def _event_to_row(e: dict[str, Any]) -> tuple:
             data = data.encode("utf-8")
         else:
             data = json.dumps(data, separators=(",", ":")).encode("utf-8")
+    cost, tokens, model = _extract_event_metrics(e)
     return (
         str(e["id"]),
         str(e.get("agent_type") or "openclaw"),
@@ -2325,9 +2481,9 @@ def _event_to_row(e: dict[str, Any]) -> tuple:
         str(e["event_type"]),
         str(e["ts"]),
         data,
-        float(e["cost_usd"]) if e.get("cost_usd") is not None else None,
-        int(e["token_count"]) if e.get("token_count") is not None else None,
-        e.get("model"),
+        float(cost) if cost is not None else None,
+        int(tokens) if tokens is not None else None,
+        model,
         int(time.time() * 1000),
     )
 
