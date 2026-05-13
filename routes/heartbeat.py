@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify
+from clawmetry.config import is_local_store_read_enabled
 
 bp_heartbeat = Blueprint("heartbeat", __name__)
 
@@ -276,7 +277,7 @@ def api_heartbeat():
     # rows, serve directly from DuckDB. Falls through to JSONL scan otherwise
     # (so a fresh install with no local store sees the same data as before —
     # zero-change default).
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_heartbeat(interval, now)
         if fast is not None:
             return jsonify(fast)

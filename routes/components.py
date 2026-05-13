@@ -26,6 +26,7 @@ import time
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 bp_components = Blueprint('components', __name__)
 
@@ -166,7 +167,7 @@ def api_component_tool(name):
     # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
     # Falls through to legacy JSONL parser when flag is unset, store is
     # empty, or no matching events for `name`.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_component_tool(name)
         if fast is not None:
             _api_tool_cache[name] = fast
@@ -1248,7 +1249,7 @@ def api_component_brain():
     # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
     # Falls through to legacy JSONL parser when flag is unset, store is
     # empty, or no qualifying assistant turns are present.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_component_brain(limit, offset)
         if fast is not None:
             return jsonify(fast)

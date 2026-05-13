@@ -31,6 +31,7 @@ import os
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 bp_nemoclaw = Blueprint('nemoclaw', __name__)
 
@@ -301,7 +302,7 @@ def api_nemoclaw_pending_approvals():
     and tag ``_source: "local_store"``. Otherwise fall through to the
     legacy ``openshell draft get`` CLI path (response is unchanged).
     """
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_approvals()
         if fast is not None:
             return jsonify(fast)

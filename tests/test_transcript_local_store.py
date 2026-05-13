@@ -128,7 +128,7 @@ def test_transcript_fast_path_falls_back_when_session_empty(app, tmp_path, monke
 
 def test_transcript_fast_path_off_when_flag_unset(app, monkeypatch):
     a, ls = app
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
     store = ls.get_store()
     sid = "sess-off"
     store.ingest(_ev("o1", sid, "user", "should not be served from duckdb",
