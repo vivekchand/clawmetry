@@ -5977,6 +5977,8 @@ async function loadUsage() {
     tableHtml += '<tr><td>This Month</td><td>' + fmtTokens(data.month) + '</td><td>' + fmtCost(data.monthCost) + '</td></tr>';
     tableHtml += '</tbody>';
     document.getElementById('usage-cost-table').innerHTML = tableHtml;
+    // Issue #68 — per-session cost breakdown table.
+    renderTopSessionsByCost(data.sessions || []);
     // OTLP-specific sections
     var otelExtra = document.getElementById('otel-extra-sections');
     if (data.source === 'otlp') {
@@ -6026,6 +6028,49 @@ async function loadUsage() {
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
   }
+}
+
+// Issue #68 — render "Top sessions by cost" table on the Usage tab.
+// Rows come straight from /api/usage's new ``sessions`` array, already
+// sorted desc by total_cost_usd server-side.
+function renderTopSessionsByCost(rows) {
+  var el = document.getElementById('usage-top-sessions-table');
+  if (!el) return;
+  function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+  function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    var d = String(iso).slice(0, 10);
+    return d || '—';
+  }
+  if (!rows || rows.length === 0) {
+    el.innerHTML = '<tbody><tr><td colspan="6" style="color:#666;">No session cost data yet</td></tr></tbody>';
+    return;
+  }
+  var html = '<thead><tr>'
+    + '<th>Session</th>'
+    + '<th>Agent</th>'
+    + '<th>Model</th>'
+    + '<th style="text-align:right;">Tokens</th>'
+    + '<th style="text-align:right;">Cost</th>'
+    + '<th style="text-align:right;">Msgs</th>'
+    + '<th>Started</th>'
+    + '</tr></thead><tbody>';
+  rows.forEach(function(r) {
+    var sid = String(r.session_id || '');
+    var sidShort = sid.length > 16 ? sid.slice(-16) : sid;
+    html += '<tr>'
+      + '<td><code style="font-size:11px;color:var(--text-muted);">' + escHtml(sidShort) + '</code></td>'
+      + '<td>' + escHtml(r.agent_id || '—') + '</td>'
+      + '<td>' + (r.model ? '<span class="badge model">' + escHtml(r.model) + '</span>' : '—') + '</td>'
+      + '<td style="text-align:right;">' + fmtTokens(r.total_tokens || 0) + '</td>'
+      + '<td style="text-align:right;font-weight:600;">' + fmtCost(r.total_cost_usd || 0) + '</td>'
+      + '<td style="text-align:right;">' + (r.message_count || 0) + '</td>'
+      + '<td style="color:var(--text-muted);font-size:12px;">' + escHtml(fmtDate(r.started_at)) + '</td>'
+      + '</tr>';
+  });
+  html += '</tbody>';
+  el.innerHTML = html;
 }
 
 async function loadCacheAnalytics() {

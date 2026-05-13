@@ -228,11 +228,56 @@ def _try_local_store_usage():
         "modelBilling": [],
         "billingSummary": {},
         "sessionCosts": {},
+        "sessions": _ls_top_sessions_by_cost(limit=20),
         "anomalies": [],
         "anomalySessionIds": [],
         "trend": {},
         "warnings": [],
     }
+
+
+def _ls_top_sessions_by_cost(limit=20):
+    """Issue #68 — top-N sessions by total cost. Sources rows from the
+    DuckDB ``events`` table aggregated per session, joined back to a
+    sample event for the model column. Returns ``[]`` on any failure so
+    the caller can drop the key silently."""
+    try:
+        sessions = _ls_call("query_sessions", limit=500)
+    except Exception:
+        sessions = None
+    if not sessions:
+        return []
+    # Sort by cost desc and take top-N before the model lookup so we
+    # avoid scanning events for hundreds of cheap sessions.
+    ranked = sorted(
+        sessions,
+        key=lambda s: float(s.get("cost_usd") or 0.0),
+        reverse=True,
+    )[: max(1, int(limit))]
+    out = []
+    for s in ranked:
+        sid = s.get("session_id") or ""
+        if not sid:
+            continue
+        # Pull the most recent event for this session to grab the model
+        # column. ``query_events`` returns rows newest-first.
+        model = ""
+        try:
+            evs = _ls_call("query_events", session_id=sid, limit=1) or []
+            if evs:
+                model = evs[0].get("model") or ""
+        except Exception:
+            model = ""
+        out.append({
+            "session_id":      sid,
+            "agent_id":        s.get("agent_id") or "",
+            "model":           model,
+            "total_tokens":    int(s.get("token_count") or 0),
+            "total_cost_usd":  round(float(s.get("cost_usd") or 0.0), 6),
+            "message_count":   int(s.get("event_count") or 0),
+            "started_at":      s.get("started_at") or "",
+        })
+    return out
 
 
 def _ls_compute_anomalies():
@@ -799,6 +844,32 @@ def api_usage():
         today_cost, week_cost, month_cost, trend_data, month_tok, billing_summary
     )
 
+    # Issue #68 — top-N sessions by cost for the per-session breakdown
+    # table on the Tokens/Usage tab. We hand back the 20 most expensive
+    # sessions sorted desc so the UI can rank "who burned the budget"
+    # without re-aggregating.
+    top_sessions = sorted(
+        session_summaries,
+        key=lambda s: float(s.get("cost_usd", 0.0) or 0.0),
+        reverse=True,
+    )[:20]
+    top_sessions_rows = [
+        {
+            "session_id":     s.get("session_id") or "",
+            "agent_id":       s.get("agent_id") or "",
+            "model":          s.get("model") or "",
+            "total_tokens":   int(s.get("tokens") or 0),
+            "total_cost_usd": round(float(s.get("cost_usd") or 0.0), 6),
+            "message_count":  int(s.get("message_count") or 0),
+            "started_at":     (
+                datetime.fromtimestamp(float(s.get("start_ts") or 0)).isoformat()
+                if s.get("start_ts") else ""
+            ),
+        }
+        for s in top_sessions
+        if float(s.get("cost_usd") or 0.0) > 0
+    ]
+
     result = {
         "source": "transcripts",
         "days": days,
@@ -812,6 +883,7 @@ def api_usage():
         "modelBilling": model_billing,
         "billingSummary": billing_summary,
         "sessionCosts": session_costs,
+        "sessions": top_sessions_rows,
         "anomalies": anomalies,
         "anomalySessionIds": [a.get("session_id") for a in anomalies],
         "trend": trend_data,
