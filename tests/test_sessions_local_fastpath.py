@@ -101,7 +101,7 @@ def test_sessions_fast_path_disabled_without_flag(tmp_path, monkeypatch):
     a populated store. Default = zero behavior change for existing deploys."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -142,7 +142,7 @@ def test_sessions_api_discovers_unregistered(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENCLAW_SESSIONS_DIR", str(sessions_dir))
 
     # Disable both fast paths so the test exercises the JSONL-merge branch.
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     # Import dashboard FIRST so module-level SESSIONS_DIR sees our env var.
     import dashboard as _d
@@ -198,7 +198,7 @@ def test_sessions_api_does_not_duplicate_registered(tmp_path, monkeypatch):
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     monkeypatch.setenv("OPENCLAW_SESSIONS_DIR", str(sessions_dir))
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     import dashboard as _d
     _d.SESSIONS_DIR = str(sessions_dir)

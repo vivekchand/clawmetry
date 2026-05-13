@@ -51,7 +51,7 @@ def _reload_local_store(monkeypatch, tmp_path, *, fast_path: bool):
     if fast_path:
         monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
     else:
-        monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+        monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
     import clawmetry.local_store as ls
     importlib.reload(ls)
     return ls

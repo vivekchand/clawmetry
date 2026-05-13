@@ -32,6 +32,7 @@ import time
 from datetime import datetime, timezone
 
 from flask import Blueprint, Response, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 bp_logs = Blueprint('logs', __name__)
 bp_memory = Blueprint('memory', __name__)
@@ -565,7 +566,7 @@ def _build_memory_analytics(files, bloat_warn_kb, bloat_crit_kb, *, source=None)
 @bp_memory.route("/api/memory")
 def api_memory_files():
     import dashboard as _d
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_memory_files()
         if fast is not None:
             return jsonify({"files": fast, "_source": "local_store"})
@@ -577,7 +578,7 @@ def api_view_file():
     """Return the contents of a memory file."""
     import dashboard as _d
     path = request.args.get("path", "")
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1" and path:
+    if is_local_store_read_enabled() and path:
         fast = _try_local_store_file(path)
         if fast is not None:
             return jsonify(fast)
@@ -635,7 +636,7 @@ def api_memory_analytics():
     bloat_warn_kb = int(request.args.get("warn_kb", 8))
     bloat_crit_kb = int(request.args.get("crit_kb", 16))
 
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_memory_analytics(bloat_warn_kb, bloat_crit_kb)
         if fast is not None:
             return jsonify(fast)

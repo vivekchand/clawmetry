@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 
 from flask import Blueprint, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 from clawmetry.adapters import registry
 
@@ -115,7 +116,7 @@ def api_agent_sessions(name: str):
         limit = max(1, min(1000, int(request.args.get("limit", 100))))
     except (TypeError, ValueError):
         limit = 100
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_agent_sessions(name, limit)
         if fast is not None:
             return jsonify(fast)

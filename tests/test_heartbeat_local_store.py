@@ -170,7 +170,7 @@ def test_heartbeat_fast_path_disabled_without_env_flag(tmp_path, monkeypatch):
     see zero change without explicit opt-in."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -200,7 +200,7 @@ def test_query_heartbeats_filters(tmp_path, monkeypatch):
     """LocalStore.query_heartbeats() exposes since/until/node_id/agent_type
     filters so other consumers (alerts, fleet view) can scope reads."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     import clawmetry.local_store as ls
     importlib.reload(ls)

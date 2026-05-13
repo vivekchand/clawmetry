@@ -167,7 +167,7 @@ def test_overview_fast_path_disabled_without_flag(tmp_path, monkeypatch):
     zero change without explicit opt-in."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -266,7 +266,7 @@ def test_timeline_fast_path_disabled_without_flag(tmp_path, monkeypatch):
     populated events store."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -386,7 +386,7 @@ def test_heartbeat_status_fast_path_disabled_without_flag(tmp_path, monkeypatch)
     populated heartbeats store."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
