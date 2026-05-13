@@ -4831,6 +4831,10 @@ def run_daemon() -> None:
         time.time()
     )  # already synced at startup; next run after log_sync_interval
     consecutive_hb_failures = 0
+    # Alerts evaluator (PRD #779 PR-D pt2). 0 = fire on first cycle so we
+    # exercise the dispatch path immediately if rules + matching events are
+    # already present from startup backfill.
+    last_alerts_eval = 0.0
 
     while True:
         try:
@@ -4861,6 +4865,31 @@ def run_daemon() -> None:
                 log.info(
                     f"Synced {ev} events, {lg} log lines, {mem} memory files, {crons} crons, {sm} session rows ({enc})"
                 )
+
+            # ── Alerts evaluator (PRD #779 PR-D pt2, audit P0 #1 + #2) ──
+            # Reads cached rules + recent events from the local DuckDB and
+            # POSTs each match to the cloud's /api/cloud/alerts/dispatch
+            # endpoint for notification fan-out. Throttled to
+            # ALERTS_EVAL_INTERVAL_SEC. Failure is logged but never raises
+            # into the sync cycle — alerts are best-effort relative to the
+            # ingest path.
+            now_alerts = time.time()
+            if (now_alerts - last_alerts_eval) >= ALERTS_EVAL_INTERVAL_SEC:
+                try:
+                    n_alerts = evaluate_alerts(config, state)
+                    if n_alerts:
+                        log.info(
+                            f"alerts: dispatched {n_alerts} match(es)"
+                        )
+                except Exception as _ae:
+                    log.warning(f"alerts: evaluator tick errored: {_ae}")
+                last_alerts_eval = now_alerts
+                # Persist the eval state (last_eval_ts, cooldown memo) so
+                # cooldown survives a daemon restart.
+                try:
+                    save_state(state)
+                except Exception:
+                    pass
 
             # Re-mirror Docker data if running in Docker mode
             if hasattr(detect_paths, "_docker_cid") or any(
@@ -5222,69 +5251,135 @@ def sync_autonomy(config, state, paths):
         return 0
 
 
-ALERTS_EVAL_INTERVAL_SEC = 300  # Re-evaluate alerts every 5 minutes
+ALERTS_EVAL_INTERVAL_SEC = 60  # Re-evaluate alerts every 60s (PRD #779)
+# Window for the events read from DuckDB on each tick. Wider than the
+# evaluation interval so a slow tick doesn't drop events on the floor.
+_ALERTS_EVENT_LOOKBACK_SEC = 600
+# Cap rows fetched per tick. Generous for a single-node alert evaluator;
+# rolling-window math is O(N²) in the worst case but N is small.
+_ALERTS_EVENT_LIMIT = 2000
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _iso_now_minus(seconds: int) -> str:
+    from datetime import timedelta as _td
+    return (datetime.now(timezone.utc) - _td(seconds=seconds)).isoformat()
 
 
 def evaluate_alerts(config: dict, state: dict) -> int:
-    """Trigger cloud-side alert evaluation for this node.
+    """Local DuckDB evaluation -> cloud dispatch on match (PRD #779 PR-D pt2).
 
-    .. warning::
-       **Currently UNREACHABLE.** This function has zero callers in the live
-       daemon loop (see ``run_daemon`` at the top of this module). The audit
-       on 2026-05-13 (P0 #2 + P0 #3) found a duplicate ``run_daemon`` shadow
-       at the bottom of this file that *did* call ``evaluate_alerts`` every
-       60s, but that shadow was unreachable itself (the module-level
-       ``if __name__ == "__main__"`` guard fires before the second def runs).
-       The shadow has been deleted; this function is intentionally left in
-       place pending PR-D (clawmetry-cloud#779), which will rewrite it to
-       read from DuckDB and rewire it into the live ``run_daemon``. Until
-       then, alert evaluation is purely cloud-driven (cron-tick or webhook).
+    Closes the architectural inversion called out in the 2026-05-13 audit
+    (P0 #1 + P0 #2): the daemon now reads the events it just wrote to
+    DuckDB, walks the cloud-cached alert rules locally via
+    ``clawmetry.alert_evaluator``, and POSTs each match to the cloud's
+    ``/api/cloud/alerts/dispatch`` endpoint (which fans out to Slack/email/
+    PagerDuty). Cloud no longer evaluates rules — it just dispatches
+    notifications for matches the local node certifies.
 
-    The cloud holds the rules and runs the actual threshold checks against the
-    sessions/events tables it already syncs from this daemon. We just poke the
-    `/api/internal/evaluate-alerts` endpoint on a schedule.
+    Returns the count of dispatched matches. Persists ``alerts_last_eval_ts``
+    + ``alerts_eval_memo`` into ``state`` so cooldown survives daemon
+    restart. Skipped silently when:
+      * the user is OSS-only (no ``cm_`` api key) — alerts is Cloud-Pro only,
+      * no rules are cached locally (cloud hasn't authored or pushed any),
+      * the local store is unreachable (the function never raises into the
+        daemon loop — at most logs a WARNING and returns 0).
 
-    Throttled to ALERTS_EVAL_INTERVAL_SEC because:
-      - The 60s sync tick is unnecessarily aggressive for cost / heartbeat /
-        cron-failure rules
-      - Cloud also enforces a 1-hour debounce per alert (`_debounce_ok`), so
-        more frequent calls would waste cycles, not catch more incidents
-
-    Skips silently if the user has no cloud account configured -- alerts is a
-    Cloud-Pro-only feature (see project_alerts_pro_feature memory).
+    See PRD ``clawmetry-cloud#779`` and the cloud endpoint shipped in
+    ``clawmetry-cloud#785`` for the dispatch payload contract.
     """
     api_key = config.get("api_key", "")
     node_id = config.get("node_id", "")
-    if not api_key or not api_key.startswith("cm_"):
-        return 0  # No cloud account: nothing to evaluate
-    if not node_id:
-        return 0
+    if not api_key or not api_key.startswith("cm_") or not node_id:
+        return 0  # OSS / unconfigured node: nothing to dispatch.
 
-    last = state.get("alerts_last_eval_ts", 0)
-    now = time.time()
-    if (now - last) < ALERTS_EVAL_INTERVAL_SEC:
+    try:
+        from clawmetry import local_store, alert_evaluator
+    except Exception as e:
+        log.warning("alerts: local_store/alert_evaluator import failed: %s", e)
         return 0
 
     try:
-        result = _post(
-            "/api/internal/evaluate-alerts",
-            {"node_id": node_id},
-            api_key,
-            timeout=20,
-        )
-        state["alerts_last_eval_ts"] = now
-        triggered = result.get("triggered") if isinstance(result, dict) else None
-        if triggered:
-            log.info(
-                "[alerts] evaluated %s rules, %s triggered",
-                result.get("evaluated", "?"),
-                len(triggered),
-            )
-        return len(triggered or [])
+        store = local_store.get_store()
     except Exception as e:
-        # Cloud may return 402 if user is on Free tier and alerts are gated;
-        # log once and don't keep retrying every cycle.
-        log.warning(f"alerts evaluation skipped: {e}")
-        # Still record the timestamp so we back off rather than retry on every tick
-        state["alerts_last_eval_ts"] = now
+        log.warning("alerts: local store unavailable: %s", e)
         return 0
+
+    # Scope to rules owned by this token. Same hash the cloud uses, so a
+    # multi-tenant local store (rare today) only fires this token's rules.
+    try:
+        owner_hash = _owner_hash_for_token(api_key)
+    except Exception:
+        owner_hash = None
+    try:
+        rules = store.query_alert_rules(
+            owner_hash=owner_hash,
+            enabled_only=True,
+            limit=200,
+        )
+    except Exception as e:
+        log.warning("alerts: query_alert_rules failed: %s", e)
+        return 0
+    if not rules:
+        return 0
+
+    # Read the recent slice of events. ``since`` is whichever is more recent
+    # of (last successful eval ts) or (now - lookback) — bounds the window
+    # so a daemon restart doesn't replay the entire DuckDB history.
+    last_eval_ts = state.get("alerts_last_eval_ts")
+    since = last_eval_ts or _iso_now_minus(_ALERTS_EVENT_LOOKBACK_SEC)
+    try:
+        events = store.query_events(since=since, limit=_ALERTS_EVENT_LIMIT)
+    except Exception as e:
+        log.warning("alerts: query_events failed: %s", e)
+        return 0
+
+    last_eval_state = state.setdefault("alerts_eval_memo", {})
+    if not isinstance(last_eval_state, dict):
+        last_eval_state = {}
+        state["alerts_eval_memo"] = last_eval_state
+
+    try:
+        matches = alert_evaluator.evaluate(rules, events, last_eval_state)
+    except Exception as e:
+        log.warning("alerts: evaluator errored: %s", e)
+        state["alerts_last_eval_ts"] = _iso_now()
+        return 0
+
+    dispatched = 0
+    for m in matches:
+        rule = m.get("rule") or {}
+        evt = m.get("event") or {}
+        try:
+            resp = _post(
+                "/api/cloud/alerts/dispatch",
+                {
+                    "rule_id":       rule.get("id"),
+                    "rule_name":     rule.get("name") or "",
+                    "node_id":       node_id,
+                    "event_id":      evt.get("id"),
+                    "event_summary": (m.get("summary") or "")[:500],
+                    "evaluated_at":  _iso_now(),
+                    "metadata":      m.get("metadata") or {},
+                },
+                api_key,
+                timeout=10,
+            )
+        except Exception as e:
+            log.warning("alerts: dispatch failed (rule=%s): %s",
+                        rule.get("id"), e)
+            continue
+        if isinstance(resp, dict) and resp.get("ok"):
+            dispatched += 1
+            if resp.get("deduped"):
+                log.debug("alerts: rule=%s dispatched (cloud deduped)",
+                          rule.get("id"))
+            else:
+                log.info("alerts: rule=%s dispatched -> %s",
+                         rule.get("id"), resp.get("dispatched") or [])
+
+    state["alerts_last_eval_ts"] = _iso_now()
+    return dispatched
