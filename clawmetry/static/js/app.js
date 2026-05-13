@@ -2397,6 +2397,25 @@ function _extractChannelInfo(ev) {
   }
   chatId = chatId ? String(chatId) : '';
 
+  // ── body-missing detection (issue #1201) ─────────────────────────────
+  // The gateway.log Telegram parser (clawmetry/sync.py
+  // ``parse_telegram_outbound_line``) ingests outbound ACKs with
+  // ``body=None`` because OpenClaw stores Telegram chats in memory and
+  // the log only carries the API ACK, not the message text. Without this
+  // flag the renderer prints an empty detail row that looks like the bot
+  // replied with nothing. We surface the breadcrumb (``raw_blob.body_capture
+  // == "ack_only"``) AND a generic empty-body check so other adapters
+  // with the same shape get the same affordance for free.
+  var hasBodyText = !!(
+    ev.detail || ev.body || data.text || data.body || data.message
+  );
+  var ackOnly = false;
+  var raw = data.raw_blob;
+  if (raw && typeof raw === 'object' && raw.body_capture === 'ack_only') {
+    ackOnly = true;
+  }
+  var bodyMissing = direction === 'out' && (ackOnly || !hasBodyText);
+
   return {
     provider:      provider,
     providerLabel: _channelDisplayName(provider),
@@ -2404,7 +2423,9 @@ function _extractChannelInfo(ev) {
     providerColor: _channelColors[provider] || '#667',
     sender:        sender,
     chatId:        chatId,
-    direction:     direction
+    direction:     direction,
+    bodyMissing:   bodyMissing,
+    ackOnly:       ackOnly
   };
 }
 
@@ -2433,6 +2454,19 @@ function renderChannelEventMeta(ev, info, opts) {
   var senderText = info.sender || (info.direction === 'out' ? 'agent' : 'user');
   html += '<span class="brain-channel-sender" style="font-style:italic;color:var(--text-secondary);font-size:11px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;" title="' +
            escHtml(senderText) + '">' + escHtml(senderText) + '</span>';
+  // Body-missing affordance (issue #1201). Outbound channel events from
+  // the gateway.log parser carry no body text — surface a "sent · (no
+  // body captured)" pill instead of leaving the detail row empty, which
+  // looked like the bot replied with nothing. Tooltip explains why.
+  if (info.bodyMissing) {
+    var ackTitle = info.ackOnly
+      ? 'Body not captured — OpenClaw stores Telegram chats in memory; only the API ACK is logged.'
+      : 'Body not captured — adapter logged the send but not the message text.';
+    html += '<span class="brain-channel-sent" style="display:inline-flex;align-items:center;gap:4px;color:#10b981;font-size:10px;font-weight:600;flex-shrink:0;white-space:nowrap;" title="' +
+             escHtml(ackTitle) + '">⤴ sent</span>';
+    html += '<span class="brain-channel-nobody" style="color:var(--text-muted);font-size:10px;font-style:italic;flex-shrink:0;white-space:nowrap;" title="' +
+             escHtml(ackTitle) + '">(no body captured)</span>';
+  }
   return html;
 }
 
