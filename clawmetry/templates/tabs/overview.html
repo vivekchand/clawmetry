@@ -26,6 +26,29 @@
     <span class="refresh-time" id="refresh-time" style="font-size:11px;">Loading...</span>
   </div>
 
+  <!-- Heartbeat liveness card (closes #686) — pulse indicator + cadence + ok ratio -->
+  <div id="overview-heartbeat-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 18px;margin-bottom:14px;box-shadow:var(--card-shadow);display:none;align-items:center;gap:18px;flex-wrap:wrap;" title="Your agent fires a heartbeat session every 30 min. Green = on time, amber = drifting, red = missed.">
+    <div style="display:flex;align-items:center;gap:10px;min-width:140px;">
+      <span id="overview-hb-dot" style="width:14px;height:14px;border-radius:50%;background:#6b7280;display:inline-block;flex-shrink:0;"></span>
+      <div>
+        <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">&#x2764;&#xfe0f; Heartbeat</div>
+        <div id="overview-hb-status-label" style="font-size:13px;font-weight:600;color:var(--text-primary);">--</div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:2px;min-width:160px;">
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Last beat</div>
+      <div id="overview-hb-last-beat" style="font-size:14px;font-weight:600;color:var(--text-primary);">--</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:2px;min-width:100px;">
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Cadence</div>
+      <div id="overview-hb-cadence" style="font-size:14px;font-weight:600;color:var(--text-primary);">30m</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:2px;min-width:140px;">
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">OK ratio</div>
+      <div id="overview-hb-ok-ratio" style="font-size:14px;font-weight:600;color:var(--text-primary);">--</div>
+    </div>
+  </div>
+
   <!-- Token Velocity Alert Banner (GH #313) -->
   <div id="velocity-alert-banner" style="
     display:none;
@@ -391,4 +414,80 @@
       @keyframes hb-pulse-missed { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(239,68,68,.4)} 70%{opacity:.8;box-shadow:0 0 0 8px rgba(239,68,68,0)} }
     </style>
   </div>
+
+  <!-- Renderer for the overview heartbeat card (#686). Reads the `heartbeat`
+       block injected by /api/overview and updates the inline panel. Lives in
+       the template (not app.js) so the card is fully self-contained. -->
+  <script>
+    (function(){
+      function fmtGap(secs){
+        if(secs == null) return '--';
+        if(secs < 60) return Math.max(0, Math.round(secs)) + 's ago';
+        if(secs < 3600) return Math.round(secs/60) + 'm ago';
+        if(secs < 86400) return (secs/3600).toFixed(1) + 'h ago';
+        return Math.round(secs/86400) + 'd ago';
+      }
+      function fmtCadence(secs){
+        if(!secs) return '--';
+        if(secs < 60) return secs + 's';
+        if(secs < 3600) return Math.round(secs/60) + 'm';
+        return (secs/3600).toFixed(1) + 'h';
+      }
+      function statusColor(status){
+        if(status === 'green') return '#22c55e';
+        if(status === 'amber') return '#f59e0b';
+        if(status === 'red') return '#ef4444';
+        return '#6b7280';
+      }
+      function statusLabel(status){
+        if(status === 'green') return 'Healthy';
+        if(status === 'amber') return 'Drifting';
+        if(status === 'red') return 'Missed';
+        return 'No heartbeats yet';
+      }
+      window.renderOverviewHeartbeat = function(hb){
+        var card = document.getElementById('overview-heartbeat-card');
+        if(!card || !hb) return;
+        card.style.display = 'flex';
+        var dot = document.getElementById('overview-hb-dot');
+        if(dot){
+          dot.style.background = statusColor(hb.status);
+          dot.style.boxShadow = hb.status === 'green'
+            ? '0 0 8px ' + statusColor(hb.status) : 'none';
+        }
+        var lbl = document.getElementById('overview-hb-status-label');
+        if(lbl){ lbl.textContent = statusLabel(hb.status); }
+        var last = document.getElementById('overview-hb-last-beat');
+        if(last){ last.textContent = fmtGap(hb.gap_seconds); }
+        var cad = document.getElementById('overview-hb-cadence');
+        if(cad){ cad.textContent = fmtCadence(hb.expected_cadence_seconds); }
+        var ok = document.getElementById('overview-hb-ok-ratio');
+        if(ok){
+          if(hb.ok_ratio == null){
+            ok.textContent = '--';
+          } else {
+            ok.textContent = Math.round(hb.ok_ratio * 100) + '% (last ' + (hb.sample_size || 0) + ')';
+          }
+        }
+      };
+
+      // Self-poll /api/overview so the card stays live without coupling to
+      // app.js. The backend caches the heartbeat block for 30s so this is
+      // cheap; we still poll every 60s to keep the gap counter ticking.
+      function pollOnce(){
+        fetch('/api/overview', {credentials: 'same-origin'})
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(d){
+            if(d && d.heartbeat){ window.renderOverviewHeartbeat(d.heartbeat); }
+          })
+          .catch(function(){ /* dashboard offline — leave last-rendered state */ });
+      }
+      if(document.readyState === 'loading'){
+        document.addEventListener('DOMContentLoaded', pollOnce);
+      } else {
+        pollOnce();
+      }
+      setInterval(pollOnce, 60000);
+    })();
+  </script>
 </div>

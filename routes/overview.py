@@ -23,12 +23,193 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time as _time
 from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 
 bp_overview = Blueprint('overview', __name__)
+
+
+# Default OpenClaw heartbeat cadence (30 min). Surfaced in /api/overview's
+# `heartbeat` block so the dashboard can compare to actual gap.
+_HEARTBEAT_EXPECTED_SECONDS = 1800
+
+# 30s cache for the heartbeat block. Computing it scans DuckDB and is cheap
+# (~ms), but /api/overview fires on every refresh and we don't need fresher
+# than once-per-30s liveness data.
+_HEARTBEAT_CACHE_TTL = 30.0
+_heartbeat_cache: dict = {"ts": 0.0, "value": None}
+_heartbeat_cache_lock = threading.Lock()
+
+
+def _parse_iso_to_epoch(ts_str):
+    """ISO-8601 string → Unix float. Returns 0.0 on any parse failure."""
+    if not ts_str or not isinstance(ts_str, str):
+        return 0.0
+    try:
+        return datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _classify_heartbeat_outcome(ev_data):
+    """Return ``"ok"`` if the heartbeat event ended with a HEARTBEAT_OK reply,
+    ``"action"`` if any other content was produced.
+
+    The OpenClaw heartbeat replies exactly ``HEARTBEAT_OK`` when nothing needs
+    attention; anything else means the agent took action. We look for the
+    canonical marker in a few common shape variants so we don't miss either
+    the gateway-emitted event shape or the sync-relayed one.
+    """
+    if not isinstance(ev_data, dict):
+        return "action"
+
+    # Direct flags / classifier from upstream — honour first.
+    if ev_data.get("heartbeat_ok") is True:
+        return "ok"
+    if ev_data.get("outcome") in ("ok", "action"):
+        return ev_data["outcome"]
+
+    # Scan likely text fields for the literal marker.
+    candidates = []
+    for key in ("response", "reply", "assistant_text", "content", "text", "body"):
+        v = ev_data.get(key)
+        if isinstance(v, str):
+            candidates.append(v)
+        elif isinstance(v, list):
+            for blk in v:
+                if isinstance(blk, str):
+                    candidates.append(blk)
+                elif isinstance(blk, dict):
+                    t = blk.get("text") or blk.get("content")
+                    if isinstance(t, str):
+                        candidates.append(t)
+    for txt in candidates:
+        if txt.strip() == "HEARTBEAT_OK":
+            return "ok"
+    return "action"
+
+
+def _is_heartbeat_event(ev):
+    """Heuristic: the event came from a heartbeat session.
+
+    The OpenClaw gateway tags heartbeat sessions with ``session_type ==
+    "heartbeat"`` somewhere on the payload; older shapes embed the type in
+    the session_id or event_type. We check all of these so we capture
+    heartbeats regardless of how the upstream tagged them.
+    """
+    data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+    if (data.get("session_type") or "").lower() == "heartbeat":
+        return True
+    if (ev.get("event_type") or "").lower() == "heartbeat":
+        return True
+    sid = (ev.get("session_id") or "").lower()
+    if "heartbeat" in sid:
+        return True
+    return False
+
+
+def _compute_overview_heartbeat(now=None, expected_seconds=_HEARTBEAT_EXPECTED_SECONDS):
+    """Build the `heartbeat` block for /api/overview from DuckDB events.
+
+    Returns a dict with:
+      expected_cadence_seconds — the configured cadence (default 1800)
+      last_heartbeat_ts        — ISO-8601 UTC of most recent heartbeat or None
+      gap_seconds              — seconds since last heartbeat (None if never)
+      ok_ratio                 — of last 20 heartbeats, fraction that were
+                                 HEARTBEAT_OK (vs action taken). None if no
+                                 heartbeats observed.
+      sample_size              — how many heartbeats fed the ratio (≤20)
+      status                   — "green"  if gap < 1.5×expected
+                                 "amber"  if 1.5×–3×
+                                 "red"    if >3×
+                                 None     if no heartbeats observed
+    """
+    if now is None:
+        now = _time.time()
+
+    out = {
+        "expected_cadence_seconds": int(expected_seconds),
+        "last_heartbeat_ts": None,
+        "gap_seconds": None,
+        "ok_ratio": None,
+        "sample_size": 0,
+        "status": None,
+    }
+
+    # Read events from DuckDB. Pull a generous window (200) and filter
+    # client-side — there is no SQL filter on data.session_type today, and
+    # heartbeats are sparse (~48/day) so 200 covers >4 days.
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        rows = store.query_events(agent_id="main", limit=200)
+    except Exception:
+        return out
+
+    if not rows:
+        return out
+
+    heartbeats = []
+    for ev in rows:
+        if not _is_heartbeat_event(ev):
+            continue
+        ts_epoch = _parse_iso_to_epoch(ev.get("ts"))
+        if ts_epoch <= 0:
+            continue
+        outcome = _classify_heartbeat_outcome(ev.get("data"))
+        heartbeats.append({"ts": ts_epoch, "outcome": outcome})
+
+    if not heartbeats:
+        return out
+
+    # Most recent first.
+    heartbeats.sort(key=lambda h: h["ts"], reverse=True)
+
+    last_ts = heartbeats[0]["ts"]
+    gap = max(0.0, now - last_ts)
+
+    last_20 = heartbeats[:20]
+    ok_count = sum(1 for h in last_20 if h["outcome"] == "ok")
+    ratio = round(ok_count / len(last_20), 3) if last_20 else None
+
+    if gap < 1.5 * expected_seconds:
+        status = "green"
+    elif gap < 3.0 * expected_seconds:
+        status = "amber"
+    else:
+        status = "red"
+
+    from datetime import timezone as _tz
+    out["last_heartbeat_ts"] = datetime.fromtimestamp(last_ts, tz=_tz.utc).isoformat()
+    out["gap_seconds"] = int(gap)
+    out["ok_ratio"] = ratio
+    out["sample_size"] = len(last_20)
+    out["status"] = status
+    return out
+
+
+def _get_overview_heartbeat_cached():
+    """30s memoised wrapper around ``_compute_overview_heartbeat``.
+
+    /api/overview is on the dashboard's hot path (fires on every refresh).
+    Heartbeats fire every 30 min, so caching for 30s loses zero fidelity
+    while avoiding repeated DuckDB scans across rapid refreshes.
+    """
+    now_mono = _time.monotonic()
+    with _heartbeat_cache_lock:
+        cached = _heartbeat_cache["value"]
+        if cached is not None and (now_mono - _heartbeat_cache["ts"]) < _HEARTBEAT_CACHE_TTL:
+            return cached
+    # Compute outside the lock — it can hit DuckDB.
+    fresh = _compute_overview_heartbeat()
+    with _heartbeat_cache_lock:
+        _heartbeat_cache["value"] = fresh
+        _heartbeat_cache["ts"] = now_mono
+    return fresh
 
 
 @bp_overview.route("/api/channels")
@@ -402,6 +583,7 @@ def _try_local_store_overview():
         "memorySize": total_size,
         "system": system,
         "infra": infra,
+        "heartbeat": _get_overview_heartbeat_cached(),
         "_source": "local_store",
     }
 
@@ -547,6 +729,7 @@ def api_overview():
             "memorySize": total_size,
             "system": system,
             "infra": infra,
+            "heartbeat": _get_overview_heartbeat_cached(),
         }
     )
 
