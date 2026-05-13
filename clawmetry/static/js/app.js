@@ -11794,6 +11794,9 @@ var _wsList = [];
 var _wsActive = null;
 
 async function initWorkspaceSwitcher() {
+  // Cloud iframe disables /api/workspaces (multi-workspace is local-only). Skip
+  // the fetch to avoid a 410 console error caught by cloud-contract.mjs gate.
+  if (window.CLOUD_MODE) return;
   try {
     var resp = await fetch('/api/workspaces', { credentials: 'same-origin' });
     if (!resp.ok) return;
