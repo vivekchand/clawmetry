@@ -53,16 +53,67 @@ _TOOL_MAP = {
 }
 
 
+def _iter_tool_call_blocks(row: dict):
+    """Yield ``(tool_name, arguments, status)`` for every tool-call block
+    embedded in a DuckDB ``events`` row.
+
+    OpenClaw's transcript shape (verified 2026-05-13 against
+    ``~/.openclaw/agents/main/sessions/*.jsonl``) wraps tool calls inside
+    ``message`` events with ``message.content`` being a list of blocks.
+    A tool call is a block whose ``type`` is ``toolCall`` (current) or
+    ``tool_use`` (Anthropic-style legacy from older transcripts).
+
+    Audit P0 #4: the previous implementation queried for
+    ``event_type='tool_call'`` rows that the daemon never writes — every
+    row in DuckDB has the raw OpenClaw type (``message`` / ``assistant``
+    / ``user`` / …). All 10 component-tool endpoints fell through to the
+    legacy JSONL parser as a result.
+    """
+    data = row.get("data") if isinstance(row, dict) else None
+    if not isinstance(data, dict):
+        return
+    msg = data.get("message")
+    if not isinstance(msg, dict):
+        return
+    # Only the assistant's turn carries tool calls; user turns carry tool
+    # results (which we surface via the role==toolResult branch in the
+    # legacy parser — out of scope here, the modal already shows ok/error
+    # via the toolCall block alone).
+    if msg.get("role") not in (None, "assistant"):
+        return
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return
+    for blk in content:
+        if not isinstance(blk, dict):
+            continue
+        btype = blk.get("type")
+        if btype not in ("toolCall", "tool_use"):
+            continue
+        tool_name = blk.get("name") or blk.get("tool") or ""
+        args = blk.get("arguments") or blk.get("input") or {}
+        if not isinstance(args, dict):
+            args = {"_raw": str(args)[:200]}
+        # Per-block error flag (Anthropic uses isError on tool_use_result;
+        # toolCall blocks don't carry it directly — we leave it ok and let
+        # the toolResult branch in the legacy parser surface failures).
+        status = "error" if blk.get("isError") else "ok"
+        yield tool_name, args, status
+
+
 def _try_local_store_component_tool(name: str):
     """Tier-1 DuckDB fast path for /api/component/tool/<name>.
 
-    Reads ``tool_call`` events from the local store, filters to today + the
-    requested tool family, and shapes them into the same response the legacy
-    JSONL parser returns (``{events, stats, total, name}``).
+    Pulls today's ``message`` / ``assistant`` rows from the local store
+    (the actual OpenClaw event types — see ``clawmetry/sync.py:1375``),
+    walks the ``message.content[]`` blocks for ``toolCall`` / ``tool_use``
+    entries, filters by the tool family for ``name`` (per ``_TOOL_MAP``),
+    and shapes them into the same response the legacy JSONL parser
+    returns (``{events, stats, total, name}``).
 
     Returns ``None`` to defer to the legacy fallback if:
       - the ``local_store`` module isn't importable
-      - the events table is empty / has no matches
+      - the events table is empty / has no matching tool-call blocks
       - any unexpected error happens (we'd rather degrade than 500)
     """
     try:
@@ -71,7 +122,15 @@ def _try_local_store_component_tool(name: str):
         return None
     try:
         store = local_store.get_store()
-        rows = store.query_events(event_type="tool_call", limit=2000)
+        # Fetch a generous window of both event types we know wrap
+        # tool-call blocks. Two queries instead of one OR-filter because
+        # ``query_events`` only takes a single event_type.
+        rows = []
+        for et in ("message", "assistant"):
+            try:
+                rows.extend(store.query_events(event_type=et, limit=2000))
+            except Exception:
+                continue
     except Exception:
         return None
     if not rows:
@@ -87,58 +146,45 @@ def _try_local_store_component_tool(name: str):
         ts = (r.get("ts") or "")
         if not ts.startswith(today):
             continue
-        data = r.get("data") if isinstance(r, dict) else None
-        # `data` can be dict (preferred), str, or None
-        tn = ""
-        args = {}
-        status = "ok"
-        if isinstance(data, dict):
-            tn = data.get("name") or data.get("tool") or ""
-            args = data.get("arguments") or data.get("input") or {}
-            if not isinstance(args, dict):
-                args = {"_raw": str(args)[:200]}
-            if data.get("isError") or (isinstance(data.get("result"), dict)
-                                       and data["result"].get("status") == "error"):
-                status = "error"
-        if not tn or tn not in tool_names:
-            continue
+        for tn, args, status in _iter_tool_call_blocks(r):
+            if not tn or tn not in tool_names:
+                continue
+            today_calls += 1
+            if status == "error":
+                today_errors += 1
 
-        today_calls += 1
-        if status == "error":
-            today_errors += 1
-
-        evt = {"timestamp": ts, "status": status, "tool": tn}
-        if name == "exec":
-            evt["detail"] = (args.get("command") or str(args))[:200]
-            evt["action"] = "exec"
-        elif name == "browser":
-            evt["action"] = args.get("action", "unknown")
-            evt["detail"] = (args.get("targetUrl") or args.get("url")
-                             or args.get("selector") or evt["action"])
-        elif name == "search":
-            evt["detail"] = args.get("query", "?")
-            evt["action"] = "search"
-        elif name == "tts":
-            evt["detail"] = (args.get("text") or "")[:100]
-            evt["action"] = "tts"
-            evt["voice"] = args.get("voice", "")
-        elif name == "memory":
-            path = args.get("file_path") or args.get("path") or "?"
-            evt["detail"] = path
-            evt["action"] = ("write" if tn in ("Write", "write", "Edit", "edit")
-                             else "read")
-        elif name == "session":
-            evt["detail"] = (args.get("sessionId") or args.get("name") or tn)
-            evt["action"] = tn
-            evt["session_status"] = "running"
-        elif name == "cron":
-            evt["detail"] = (args.get("expr") or args.get("action")
-                             or str(args)[:80])
-            evt["action"] = "cron"
-        else:
-            evt["detail"] = str(args)[:120]
-            evt["action"] = tn
-        events.append(evt)
+            evt = {"timestamp": ts, "status": status, "tool": tn}
+            if name == "exec":
+                evt["detail"] = (args.get("command") or str(args))[:200]
+                evt["action"] = "exec"
+            elif name == "browser":
+                evt["action"] = args.get("action", "unknown")
+                evt["detail"] = (args.get("targetUrl") or args.get("url")
+                                 or args.get("selector") or evt["action"])
+            elif name == "search":
+                evt["detail"] = args.get("query", "?")
+                evt["action"] = "search"
+            elif name == "tts":
+                evt["detail"] = (args.get("text") or "")[:100]
+                evt["action"] = "tts"
+                evt["voice"] = args.get("voice", "")
+            elif name == "memory":
+                path = args.get("file_path") or args.get("path") or "?"
+                evt["detail"] = path
+                evt["action"] = ("write" if tn in ("Write", "write", "Edit", "edit")
+                                 else "read")
+            elif name == "session":
+                evt["detail"] = (args.get("sessionId") or args.get("name") or tn)
+                evt["action"] = tn
+                evt["session_status"] = "running"
+            elif name == "cron":
+                evt["detail"] = (args.get("expr") or args.get("action")
+                                 or str(args)[:80])
+                evt["action"] = "cron"
+            else:
+                evt["detail"] = str(args)[:120]
+                evt["action"] = tn
+            events.append(evt)
 
     if not events:
         return None

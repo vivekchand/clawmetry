@@ -123,6 +123,17 @@ LOG_FILE = CONFIG_DIR / "sync.log"
 
 POLL_INTERVAL = 15  # seconds between sync cycles
 STREAM_INTERVAL = 2  # seconds between real-time stream pushes
+
+# Adaptive heartbeat cadence (epic #775 — adaptive sync, PR 2/3).
+# When a viewer has the cloud dashboard open, the cloud sets `viewer_active:
+# true` on the heartbeat response and we tighten the loop so Telegram /
+# tool / brain events appear in the cloud Brain tab in ~3s instead of up to
+# 60s. When nobody is watching we drop back to the default 60s cadence to
+# keep idle bandwidth + Cloud Run cost flat. Back-compat: a cloud that
+# hasn't deployed PR 1 of the epic yet won't return the field, and the
+# missing-field branch falls through to SLOW.
+HEARTBEAT_INTERVAL_FAST = 3
+HEARTBEAT_INTERVAL_SLOW = 60
 BATCH_SIZE = (
     200  # events per encrypted POST (was 10; fewer HTTP requests = faster sync)
 )
@@ -1929,8 +1940,39 @@ def _collect_security_posture() -> dict | None:
         return None
 
 
+# Adaptive heartbeat: the most recent /ingest/heartbeat response body so the
+# main loop (and tests) can derive the next sleep interval without changing
+# `send_heartbeat`'s `bool` return type (callers in tests assert `is True`).
+# `None` when no successful heartbeat has been received yet OR after a 5xx.
+_LAST_HEARTBEAT_RESPONSE: dict | None = None
+
+
+def _pick_heartbeat_interval(resp_json: dict | None) -> int:
+    """Adaptive cadence (#775 PR 2/3): FAST when a viewer is watching the
+    cloud dashboard, SLOW otherwise. Pure function so it can be unit-tested
+    without booting the daemon loop.
+
+    Back-compat: a cloud that hasn't deployed PR 1 yet won't return the
+    `viewer_active` field, so missing → SLOW. Same for `None` (no successful
+    heartbeat yet) and any non-dict input.
+    """
+    if not isinstance(resp_json, dict):
+        return HEARTBEAT_INTERVAL_SLOW
+    return (
+        HEARTBEAT_INTERVAL_FAST
+        if resp_json.get("viewer_active", False)
+        else HEARTBEAT_INTERVAL_SLOW
+    )
+
+
 def send_heartbeat(config: dict) -> bool:
-    """Send heartbeat to cloud. Returns True on success, False on failure."""
+    """Send heartbeat to cloud. Returns True on success, False on failure.
+
+    Side effect: on success, stashes the parsed response body in
+    `_LAST_HEARTBEAT_RESPONSE` so the main loop can read `viewer_active`
+    via `_pick_heartbeat_interval()` and adapt the next sleep interval.
+    """
+    global _LAST_HEARTBEAT_RESPONSE
     payload = {
         "node_id": config["node_id"],
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -2018,6 +2060,10 @@ def send_heartbeat(config: dict) -> bool:
             resp_json = _post("/ingest/heartbeat", payload, config["api_key"])
             if attempt > 0:
                 log.info(f"Heartbeat succeeded after {attempt + 1} attempts")
+            # Stash for adaptive-cadence pick (#775 PR 2/3). Normalise to dict
+            # so `_pick_heartbeat_interval` always sees a sensible shape even
+            # if `_post` ever decides to return None on a 204.
+            _LAST_HEARTBEAT_RESPONSE = resp_json if isinstance(resp_json, dict) else {}
             # Phase 1 of relay-v2 (#1053): the cloud may piggyback a small
             # batch of `pending_queries` on the heartbeat response. Each is
             # a shape-allowlisted read against the local DuckDB; we run them,
@@ -2032,6 +2078,9 @@ def send_heartbeat(config: dict) -> bool:
             last_err = e
             if attempt < 2:
                 time.sleep(2**attempt)  # 1s, 2s backoff
+    # Heartbeat failed: clear the stashed response so the next interval pick
+    # falls back to SLOW (don't burn tighter cadence on a stale viewer flag).
+    _LAST_HEARTBEAT_RESPONSE = None
     log.warning(f"Heartbeat failed after 3 attempts: {last_err}")
     return False
 
@@ -4771,7 +4820,9 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"approvals watcher failed to start: {_e}")
 
-    heartbeat_interval = 60
+    # Default to SLOW; flips to FAST after a heartbeat response with
+    # `viewer_active: true` (epic #775 PR 2/3, adaptive sync cadence).
+    heartbeat_interval = HEARTBEAT_INTERVAL_SLOW
     snapshot_interval = 60  # system snapshot (subagents, flow metrics) every 60s
     log_sync_interval = 60  # log lines are low-priority; streamer covers real-time
     last_heartbeat = time.time()
@@ -4780,6 +4831,10 @@ def run_daemon() -> None:
         time.time()
     )  # already synced at startup; next run after log_sync_interval
     consecutive_hb_failures = 0
+    # Alerts evaluator (PRD #779 PR-D pt2). 0 = fire on first cycle so we
+    # exercise the dispatch path immediately if rules + matching events are
+    # already present from startup backfill.
+    last_alerts_eval = 0.0
 
     while True:
         try:
@@ -4811,6 +4866,31 @@ def run_daemon() -> None:
                     f"Synced {ev} events, {lg} log lines, {mem} memory files, {crons} crons, {sm} session rows ({enc})"
                 )
 
+            # ── Alerts evaluator (PRD #779 PR-D pt2, audit P0 #1 + #2) ──
+            # Reads cached rules + recent events from the local DuckDB and
+            # POSTs each match to the cloud's /api/cloud/alerts/dispatch
+            # endpoint for notification fan-out. Throttled to
+            # ALERTS_EVAL_INTERVAL_SEC. Failure is logged but never raises
+            # into the sync cycle — alerts are best-effort relative to the
+            # ingest path.
+            now_alerts = time.time()
+            if (now_alerts - last_alerts_eval) >= ALERTS_EVAL_INTERVAL_SEC:
+                try:
+                    n_alerts = evaluate_alerts(config, state)
+                    if n_alerts:
+                        log.info(
+                            f"alerts: dispatched {n_alerts} match(es)"
+                        )
+                except Exception as _ae:
+                    log.warning(f"alerts: evaluator tick errored: {_ae}")
+                last_alerts_eval = now_alerts
+                # Persist the eval state (last_eval_ts, cooldown memo) so
+                # cooldown survives a daemon restart.
+                try:
+                    save_state(state)
+                except Exception:
+                    pass
+
             # Re-mirror Docker data if running in Docker mode
             if hasattr(detect_paths, "_docker_cid") or any(
                 "docker-mirror" in str(v) for v in paths.values()
@@ -4831,12 +4911,25 @@ def run_daemon() -> None:
                         )
                     consecutive_hb_failures = 0
                     last_heartbeat = now
+                    # Adaptive cadence (#775 PR 2/3): if the cloud signalled a
+                    # live viewer, drop to FAST so Telegram / brain events
+                    # appear in the dashboard within seconds. Otherwise stay
+                    # at SLOW. Missing field → SLOW (back-compat with a cloud
+                    # that hasn't deployed PR 1 of the epic yet).
+                    heartbeat_interval = _pick_heartbeat_interval(
+                        _LAST_HEARTBEAT_RESPONSE
+                    )
                 else:
                     consecutive_hb_failures += 1
                     if consecutive_hb_failures >= 5:
                         log.error(
                             f"CRITICAL: {consecutive_hb_failures} consecutive heartbeat failures — node appears offline in cloud"
                         )
+                    # On failure stay on SLOW so we don't hammer a flapping
+                    # cloud. The existing 1s/2s in-call backoff inside
+                    # `send_heartbeat` already covers retry, and the next
+                    # cycle inherits whatever interval we set here.
+                    heartbeat_interval = HEARTBEAT_INTERVAL_SLOW
 
         except Exception as e:
             log.error(f"Sync cycle error: {e}")
@@ -5158,83 +5251,135 @@ def sync_autonomy(config, state, paths):
         return 0
 
 
-ALERTS_EVAL_INTERVAL_SEC = 300  # Re-evaluate alerts every 5 minutes
+ALERTS_EVAL_INTERVAL_SEC = 60  # Re-evaluate alerts every 60s (PRD #779)
+# Window for the events read from DuckDB on each tick. Wider than the
+# evaluation interval so a slow tick doesn't drop events on the floor.
+_ALERTS_EVENT_LOOKBACK_SEC = 600
+# Cap rows fetched per tick. Generous for a single-node alert evaluator;
+# rolling-window math is O(N²) in the worst case but N is small.
+_ALERTS_EVENT_LIMIT = 2000
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _iso_now_minus(seconds: int) -> str:
+    from datetime import timedelta as _td
+    return (datetime.now(timezone.utc) - _td(seconds=seconds)).isoformat()
 
 
 def evaluate_alerts(config: dict, state: dict) -> int:
-    """Trigger cloud-side alert evaluation for this node.
+    """Local DuckDB evaluation -> cloud dispatch on match (PRD #779 PR-D pt2).
 
-    The cloud holds the rules and runs the actual threshold checks against the
-    sessions/events tables it already syncs from this daemon. We just poke the
-    `/api/internal/evaluate-alerts` endpoint on a schedule.
+    Closes the architectural inversion called out in the 2026-05-13 audit
+    (P0 #1 + P0 #2): the daemon now reads the events it just wrote to
+    DuckDB, walks the cloud-cached alert rules locally via
+    ``clawmetry.alert_evaluator``, and POSTs each match to the cloud's
+    ``/api/cloud/alerts/dispatch`` endpoint (which fans out to Slack/email/
+    PagerDuty). Cloud no longer evaluates rules — it just dispatches
+    notifications for matches the local node certifies.
 
-    Throttled to ALERTS_EVAL_INTERVAL_SEC because:
-      - The 60s sync tick is unnecessarily aggressive for cost / heartbeat /
-        cron-failure rules
-      - Cloud also enforces a 1-hour debounce per alert (`_debounce_ok`), so
-        more frequent calls would waste cycles, not catch more incidents
+    Returns the count of dispatched matches. Persists ``alerts_last_eval_ts``
+    + ``alerts_eval_memo`` into ``state`` so cooldown survives daemon
+    restart. Skipped silently when:
+      * the user is OSS-only (no ``cm_`` api key) — alerts is Cloud-Pro only,
+      * no rules are cached locally (cloud hasn't authored or pushed any),
+      * the local store is unreachable (the function never raises into the
+        daemon loop — at most logs a WARNING and returns 0).
 
-    Skips silently if the user has no cloud account configured -- alerts is a
-    Cloud-Pro-only feature (see project_alerts_pro_feature memory).
+    See PRD ``clawmetry-cloud#779`` and the cloud endpoint shipped in
+    ``clawmetry-cloud#785`` for the dispatch payload contract.
     """
     api_key = config.get("api_key", "")
     node_id = config.get("node_id", "")
-    if not api_key or not api_key.startswith("cm_"):
-        return 0  # No cloud account: nothing to evaluate
-    if not node_id:
-        return 0
+    if not api_key or not api_key.startswith("cm_") or not node_id:
+        return 0  # OSS / unconfigured node: nothing to dispatch.
 
-    last = state.get("alerts_last_eval_ts", 0)
-    now = time.time()
-    if (now - last) < ALERTS_EVAL_INTERVAL_SEC:
+    try:
+        from clawmetry import local_store, alert_evaluator
+    except Exception as e:
+        log.warning("alerts: local_store/alert_evaluator import failed: %s", e)
         return 0
 
     try:
-        result = _post(
-            "/api/internal/evaluate-alerts",
-            {"node_id": node_id},
-            api_key,
-            timeout=20,
-        )
-        state["alerts_last_eval_ts"] = now
-        triggered = result.get("triggered") if isinstance(result, dict) else None
-        if triggered:
-            log.info(
-                "[alerts] evaluated %s rules, %s triggered",
-                result.get("evaluated", "?"),
-                len(triggered),
-            )
-        return len(triggered or [])
+        store = local_store.get_store()
     except Exception as e:
-        # Cloud may return 402 if user is on Free tier and alerts are gated;
-        # log once and don't keep retrying every cycle.
-        log.warning(f"alerts evaluation skipped: {e}")
-        # Still record the timestamp so we back off rather than retry on every tick
-        state["alerts_last_eval_ts"] = now
+        log.warning("alerts: local store unavailable: %s", e)
         return 0
 
+    # Scope to rules owned by this token. Same hash the cloud uses, so a
+    # multi-tenant local store (rare today) only fires this token's rules.
+    try:
+        owner_hash = _owner_hash_for_token(api_key)
+    except Exception:
+        owner_hash = None
+    try:
+        rules = store.query_alert_rules(
+            owner_hash=owner_hash,
+            enabled_only=True,
+            limit=200,
+        )
+    except Exception as e:
+        log.warning("alerts: query_alert_rules failed: %s", e)
+        return 0
+    if not rules:
+        return 0
 
-def run_daemon() -> None:
-    """Run the sync daemon - main loop for continuous synchronization."""
-    config = load_config()
-    state = load_state()
-    paths = detect_paths()
+    # Read the recent slice of events. ``since`` is whichever is more recent
+    # of (last successful eval ts) or (now - lookback) — bounds the window
+    # so a daemon restart doesn't replay the entire DuckDB history.
+    last_eval_ts = state.get("alerts_last_eval_ts")
+    since = last_eval_ts or _iso_now_minus(_ALERTS_EVENT_LOOKBACK_SEC)
+    try:
+        events = store.query_events(since=since, limit=_ALERTS_EVENT_LIMIT)
+    except Exception as e:
+        log.warning("alerts: query_events failed: %s", e)
+        return 0
 
-    log.info("Starting ClawMetry sync daemon...")
+    last_eval_state = state.setdefault("alerts_eval_memo", {})
+    if not isinstance(last_eval_state, dict):
+        last_eval_state = {}
+        state["alerts_eval_memo"] = last_eval_state
 
-    while True:
+    try:
+        matches = alert_evaluator.evaluate(rules, events, last_eval_state)
+    except Exception as e:
+        log.warning("alerts: evaluator errored: %s", e)
+        state["alerts_last_eval_ts"] = _iso_now()
+        return 0
+
+    dispatched = 0
+    for m in matches:
+        rule = m.get("rule") or {}
+        evt = m.get("event") or {}
         try:
-            sync_session_metadata(config, state)
-            sync_sessions(config, state, paths)
-            sync_claude_cli_sessions(config, state, paths)
-            sync_logs(config, state, paths)
-            sync_crons(config, state, paths)
-            sync_memory(config, state, paths)
-            sync_system_snapshot(config, state, paths)
-            sync_autonomy(config, state, paths)
-            evaluate_alerts(config, state)
-            save_state(state)
+            resp = _post(
+                "/api/cloud/alerts/dispatch",
+                {
+                    "rule_id":       rule.get("id"),
+                    "rule_name":     rule.get("name") or "",
+                    "node_id":       node_id,
+                    "event_id":      evt.get("id"),
+                    "event_summary": (m.get("summary") or "")[:500],
+                    "evaluated_at":  _iso_now(),
+                    "metadata":      m.get("metadata") or {},
+                },
+                api_key,
+                timeout=10,
+            )
         except Exception as e:
-            log.error(f"Sync error: {e}")
+            log.warning("alerts: dispatch failed (rule=%s): %s",
+                        rule.get("id"), e)
+            continue
+        if isinstance(resp, dict) and resp.get("ok"):
+            dispatched += 1
+            if resp.get("deduped"):
+                log.debug("alerts: rule=%s dispatched (cloud deduped)",
+                          rule.get("id"))
+            else:
+                log.info("alerts: rule=%s dispatched -> %s",
+                         rule.get("id"), resp.get("dispatched") or [])
 
-        time.sleep(60)
+    state["alerts_last_eval_ts"] = _iso_now()
+    return dispatched
