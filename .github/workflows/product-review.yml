@@ -1,0 +1,497 @@
+name: Post-merge Product Review (Steve + Elon)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Why this exists
+#
+# We shipped a duplicate "Alerts" tab to prod (clawmetry-cloud, 2026-05-13)
+# because nobody scrutinised the merged JS for nav consistency before it went
+# live. This workflow installs two AI-persona reviewers — Steve Jobs (UX) and
+# Elon Musk (first-principles + conversion) — that scrutinise every merge AFTER
+# it lands on main, post their feedback on the PR, and auto-open P0 issues so
+# regressions stop silently slipping through.
+#
+# Reviews are advisory, not blocking. They run post-merge so they comment on
+# ground-truth shipped code, never delay a release.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}-product-review
+  cancel-in-progress: false
+
+env:
+  ANTHROPIC_MODEL: claude-opus-4-7
+  MAX_DIFF_CHARS: "120000"   # ~30k tokens guard
+
+jobs:
+  # ── Preflight: skip noisy auto-bumps, skip-ci, bot PRs, unmerged closes ────
+  preflight:
+    name: Should we review?
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - id: gate
+        env:
+          MERGED: ${{ github.event.pull_request.merged }}
+          TITLE: ${{ github.event.pull_request.title }}
+          ACTOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -e
+          if [ "$MERGED" != "true" ]; then
+            echo "PR closed without merging — skip."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if printf '%s' "$TITLE" | grep -qiE '\[skip ci\]|\[release\] chore: bump|^chore: bump to v'; then
+            echo "Auto-bump / skip-ci PR — skip."
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          case "$ACTOR" in
+            github-actions|github-actions[bot]|dependabot[bot]|renovate[bot])
+              echo "Bot PR ($ACTOR) — skip."
+              echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+              ;;
+          esac
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+  # ── Job 1: Steve Jobs UX review ───────────────────────────────────────────
+  steve-jobs-ux:
+    name: Steve Jobs — UX review
+    needs: preflight
+    if: needs.preflight.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    outputs:
+      p0: ${{ steps.parse.outputs.p0 }}
+      p1: ${{ steps.parse.outputs.p1 }}
+      nits: ${{ steps.parse.outputs.nits }}
+      issue_url: ${{ steps.issue.outputs.url }}
+    steps:
+      # SECURITY: pull_request_target runs in the context of the *base* repo
+      # with secrets available. We deliberately check out the MERGE COMMIT
+      # (`merge_commit_sha`) on the BASE repo's main, which is the code that
+      # actually shipped — never untrusted fork HEAD.
+      - name: Checkout merge commit (shipped code)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 2
+
+      - name: Collect diff & changed-UI-file context
+        id: collect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -e
+          mkdir -p /tmp/review
+          git diff --no-color "$BASE_SHA".."$MERGE_SHA" > /tmp/review/full.diff || true
+          DIFF_SIZE=$(wc -c < /tmp/review/full.diff)
+          echo "Diff size: $DIFF_SIZE bytes"
+          if [ "$DIFF_SIZE" -gt "$MAX_DIFF_CHARS" ]; then
+            head -c "$MAX_DIFF_CHARS" /tmp/review/full.diff > /tmp/review/diff.txt
+            echo "" >> /tmp/review/diff.txt
+            echo "[... diff truncated at $MAX_DIFF_CHARS chars of $DIFF_SIZE total ...]" >> /tmp/review/diff.txt
+          else
+            cp /tmp/review/full.diff /tmp/review/diff.txt
+          fi
+          # Changed UI files (HTML/JS/CSS + dashboard.py which has inline UI)
+          git diff --name-only "$BASE_SHA".."$MERGE_SHA" \
+            | grep -E '\.(html|js|css)$|dashboard\.py$|templates/|static/' \
+            > /tmp/review/ui_files.txt || true
+          echo "UI files changed:"
+          cat /tmp/review/ui_files.txt || true
+
+      - name: Build Steve Jobs prompt
+        id: prompt
+        env:
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -e
+          python3 <<'PY'
+          import json, os, pathlib
+          diff = pathlib.Path('/tmp/review/diff.txt').read_text(errors='replace')
+          ui_files = pathlib.Path('/tmp/review/ui_files.txt').read_text(errors='replace').strip()
+          pr_num = os.environ['PR_NUM']
+          pr_title = os.environ['PR_TITLE']
+          pr_body = os.environ.get('PR_BODY') or '(no description)'
+
+          system = (
+            "You are Steve Jobs reviewing a UI/UX change that just shipped to production at ClawMetry, "
+            "an observability dashboard for AI agents. Apply Apple-grade scrutiny: simplicity, consistency, "
+            "no jargon, no duplicated nav entries, no overlapping affordances, no half-baked CTAs. "
+            "A non-technical user should grok the intent in 5 seconds.\n\n"
+            "Recent failure mode you should pattern-match against: a duplicate 'Alerts' tab in the nav shipped "
+            "because two PRs added the same menu item independently. Watch for that class of issue.\n\n"
+            "Rules:\n"
+            "- Output 3-5 bullets, no more.\n"
+            "- Each bullet MUST start with a severity emoji: 🔴 (P0 — broken/embarrassing), 🟡 (P1 — should fix), 🟢 (nit).\n"
+            "- Each bullet MUST end with a CONCRETE next action (file:line if you can name it).\n"
+            "- No preamble. No 'overall this is great'. Open with the worst issue first.\n"
+            "- If the diff is purely backend / has no UI surface, say so in ONE bullet and stop.\n"
+            "- Be specific about the user-facing string, label, or affordance — not vague design platitudes."
+          )
+
+          user = (
+            f"PR #{pr_num}: {pr_title}\n\n"
+            f"PR description:\n{pr_body}\n\n"
+            f"Changed UI files:\n{ui_files or '(none detected)'}\n\n"
+            f"Full diff (may be truncated):\n```diff\n{diff}\n```\n\n"
+            "Give your Steve-Jobs UX review now."
+          )
+
+          payload = {
+            "model": os.environ['ANTHROPIC_MODEL'],
+            "max_tokens": 1500,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+          }
+          pathlib.Path('/tmp/review/steve_payload.json').write_text(json.dumps(payload))
+          print(f"Prompt built: {len(user)} char user message")
+          PY
+
+      - name: Call Anthropic API (Steve)
+        id: call
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -e
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY secret is not set — skipping review. Configure it in repo Settings → Secrets → Actions."
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HTTP=$(curl -sS -w '%{http_code}' -o /tmp/review/steve_resp.json \
+            https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            --data @/tmp/review/steve_payload.json)
+          echo "HTTP $HTTP"
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::Anthropic API returned $HTTP"
+            cat /tmp/review/steve_resp.json
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 -c "
+          import json, pathlib
+          data = json.loads(pathlib.Path('/tmp/review/steve_resp.json').read_text())
+          text = ''.join(b.get('text','') for b in data.get('content',[]) if b.get('type')=='text')
+          pathlib.Path('/tmp/review/steve_review.md').write_text(text or '(empty response)')
+          print(text[:300])
+          "
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+
+      - name: Parse severity counts (Steve)
+        id: parse
+        if: steps.call.outputs.skipped != 'true'
+        run: |
+          set -e
+          python3 <<'PY' >> "$GITHUB_OUTPUT"
+          import pathlib
+          t = pathlib.Path('/tmp/review/steve_review.md').read_text()
+          print(f"p0={t.count('🔴')}")
+          print(f"p1={t.count('🟡')}")
+          print(f"nits={t.count('🟢')}")
+          PY
+
+      - name: Post Steve review comment
+        if: steps.call.outputs.skipped != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          {
+            echo "## Steve Jobs UX Review — post-merge"
+            echo
+            cat /tmp/review/steve_review.md
+            echo
+            echo "---"
+            echo "_Automated review against the shipped merge commit. Model: \`$ANTHROPIC_MODEL\`. This is advisory, not blocking._"
+          } > /tmp/review/steve_comment.md
+          gh pr comment "$PR_NUM" --body-file /tmp/review/steve_comment.md
+
+      - name: Auto-open P0 issue (Steve)
+        id: issue
+        if: steps.call.outputs.skipped != 'true' && steps.parse.outputs.p0 != '0' && steps.parse.outputs.p0 != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -e
+          # Ensure label exists (idempotent)
+          gh label create ux-regression --color "B60205" --description "UX regression flagged by Steve Jobs auto-review" 2>/dev/null || true
+          SUMMARY=$(grep -m1 '🔴' /tmp/review/steve_review.md | sed 's/^[[:space:]]*-\?[[:space:]]*🔴[[:space:]]*//; s/^[Pp]0[[:space:]]*//; s/^[[:space:]]*//' | head -c 120)
+          [ -z "$SUMMARY" ] && SUMMARY="UX P0 in $PR_TITLE"
+          {
+            echo "Auto-opened by Steve Jobs UX reviewer after PR #$PR_NUM merged."
+            echo
+            echo "Source PR: $PR_URL"
+            echo
+            echo "### Review excerpt"
+            echo
+            cat /tmp/review/steve_review.md
+          } > /tmp/review/steve_issue.md
+          URL=$(gh issue create \
+            --title "[UX P0 from PR #$PR_NUM] $SUMMARY" \
+            --body-file /tmp/review/steve_issue.md \
+            --label ux-regression)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+  # ── Job 2: Elon Musk first-principles + conversion review ─────────────────
+  elon-musk-product:
+    name: Elon Musk — first-principles + conversion
+    needs: preflight
+    if: needs.preflight.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    outputs:
+      p0: ${{ steps.parse.outputs.p0 }}
+      p1: ${{ steps.parse.outputs.p1 }}
+      nits: ${{ steps.parse.outputs.nits }}
+      issue_url: ${{ steps.issue.outputs.url }}
+    steps:
+      - name: Checkout merge commit (shipped code)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 2
+
+      - name: Collect diff + tier-gate signals
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -e
+          mkdir -p /tmp/review
+          git diff --no-color "$BASE_SHA".."$MERGE_SHA" > /tmp/review/full.diff || true
+          DIFF_SIZE=$(wc -c < /tmp/review/full.diff)
+          if [ "$DIFF_SIZE" -gt "$MAX_DIFF_CHARS" ]; then
+            head -c "$MAX_DIFF_CHARS" /tmp/review/full.diff > /tmp/review/diff.txt
+            echo "[... diff truncated at $MAX_DIFF_CHARS / $DIFF_SIZE chars ...]" >> /tmp/review/diff.txt
+          else
+            cp /tmp/review/full.diff /tmp/review/diff.txt
+          fi
+          # Tier-gate signals across changed files
+          git diff --name-only "$BASE_SHA".."$MERGE_SHA" > /tmp/review/changed.txt || true
+          : > /tmp/review/tier_signals.txt
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            grep -nE 'plan ==|tier ==|cloud_pro|cloud-pro|trial_expired|is_pro|upgrade_required|paywall' "$f" 2>/dev/null \
+              | sed "s|^|$f: |" >> /tmp/review/tier_signals.txt || true
+          done < /tmp/review/changed.txt
+          echo "Tier signals:" && head -50 /tmp/review/tier_signals.txt || true
+
+      - name: Build Elon prompt
+        env:
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -e
+          python3 <<'PY'
+          import json, os, pathlib
+          diff = pathlib.Path('/tmp/review/diff.txt').read_text(errors='replace')
+          tier = pathlib.Path('/tmp/review/tier_signals.txt').read_text(errors='replace').strip() or '(none detected)'
+          pr_num = os.environ['PR_NUM']
+          pr_title = os.environ['PR_TITLE']
+          pr_body = os.environ.get('PR_BODY') or '(no description)'
+
+          # Brief grounding on ClawMetry's OSS-vs-Cloud strategic split.
+          philosophy = (
+            "ClawMetry strategic split (do not forget this):\n"
+            "- ClawMetry is open-source, freemium. The OSS dashboard is the funnel into Cloud (paid).\n"
+            "- Killer monetisation features (Alerts Center, multi-node fleet, long retention, "
+            "delivery to Slack/PagerDuty/Telegram, team auth) are Cloud-Pro. OSS gets a paywalled "
+            "preview — full UI rendered, click → 'Sign up for ClawMetry Cloud' modal.\n"
+            "- Cloud-Free is a teaser tier; killer features paywall to Pro with a 7-day trial CTA.\n"
+            "- Local-compute, cloud-display: data is E2E encrypted; cloud only stores pre-computed "
+            "aggregates. Never propose pushing raw session content to cloud.\n"
+            "- Every click is a conversion opportunity. Silent failures and locked empty states are forbidden."
+          )
+
+          system = (
+            "You are Elon Musk reviewing a PR that just merged to ClawMetry's main branch. "
+            "Apply first-principles thinking. Be blunt. Optimise for: (1) is this the simplest "
+            "solution to the actual user problem, (2) does this PR move a metric toward paid "
+            "conversion, (3) are we leaking paid-tier value into OSS and torching the funnel.\n\n"
+            f"{philosophy}\n\n"
+            "Rules:\n"
+            "- Output 3-5 bullets, no more.\n"
+            "- Each bullet starts with severity: 🔴 P0 (strategic regression — kills conversion, leaks "
+            "Pro value to OSS, or adds bloat with no user upside), 🟡 P1 (should rethink), 🟢 (nit).\n"
+            "- Each bullet ends with a CONCRETE action (revert X, gate Y to Pro, delete Z, add upgrade CTA at A).\n"
+            "- Address explicitly: (a) is the simplest possible thing being done, (b) what didn't make the "
+            "cut and should have been left out, (c) is this exposed in OSS that should be Cloud-Pro, "
+            "(d) does a fence-sitter convert because of this, (e) would a churned user come back.\n"
+            "- No 'good work'. No preamble. Worst issue first."
+          )
+
+          user = (
+            f"PR #{pr_num}: {pr_title}\n\n"
+            f"PR description:\n{pr_body}\n\n"
+            f"Tier-gate signals found in changed files (plan/tier/cloud_pro/trial_expired):\n"
+            f"```\n{tier}\n```\n\n"
+            f"Full diff (may be truncated):\n```diff\n{diff}\n```\n\n"
+            "Give your Elon first-principles + conversion review now."
+          )
+
+          payload = {
+            "model": os.environ['ANTHROPIC_MODEL'],
+            "max_tokens": 1500,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+          }
+          pathlib.Path('/tmp/review/elon_payload.json').write_text(json.dumps(payload))
+          PY
+
+      - name: Call Anthropic API (Elon)
+        id: call
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -e
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY secret is not set — skipping review."
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HTTP=$(curl -sS -w '%{http_code}' -o /tmp/review/elon_resp.json \
+            https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            --data @/tmp/review/elon_payload.json)
+          echo "HTTP $HTTP"
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::Anthropic API returned $HTTP"
+            cat /tmp/review/elon_resp.json
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 -c "
+          import json, pathlib
+          data = json.loads(pathlib.Path('/tmp/review/elon_resp.json').read_text())
+          text = ''.join(b.get('text','') for b in data.get('content',[]) if b.get('type')=='text')
+          pathlib.Path('/tmp/review/elon_review.md').write_text(text or '(empty response)')
+          print(text[:300])
+          "
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+
+      - name: Parse severity counts (Elon)
+        id: parse
+        if: steps.call.outputs.skipped != 'true'
+        run: |
+          set -e
+          python3 <<'PY' >> "$GITHUB_OUTPUT"
+          import pathlib
+          t = pathlib.Path('/tmp/review/elon_review.md').read_text()
+          print(f"p0={t.count('🔴')}")
+          print(f"p1={t.count('🟡')}")
+          print(f"nits={t.count('🟢')}")
+          PY
+
+      - name: Post Elon review comment
+        if: steps.call.outputs.skipped != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          {
+            echo "## Elon Musk First-Principles + Conversion Review — post-merge"
+            echo
+            cat /tmp/review/elon_review.md
+            echo
+            echo "---"
+            echo "_Automated review. Model: \`$ANTHROPIC_MODEL\`. Advisory, not blocking._"
+          } > /tmp/review/elon_comment.md
+          gh pr comment "$PR_NUM" --body-file /tmp/review/elon_comment.md
+
+      - name: Auto-open P0 issue (Elon)
+        id: issue
+        if: steps.call.outputs.skipped != 'true' && steps.parse.outputs.p0 != '0' && steps.parse.outputs.p0 != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -e
+          gh label create product-regression --color "5319E7" --description "Product/conversion regression flagged by Elon Musk auto-review" 2>/dev/null || true
+          SUMMARY=$(grep -m1 '🔴' /tmp/review/elon_review.md | sed 's/^[[:space:]]*-\?[[:space:]]*🔴[[:space:]]*//; s/^[Pp]0[[:space:]]*//; s/^[[:space:]]*//' | head -c 120)
+          [ -z "$SUMMARY" ] && SUMMARY="Product P0 in $PR_TITLE"
+          {
+            echo "Auto-opened by Elon Musk product reviewer after PR #$PR_NUM merged."
+            echo
+            echo "Source PR: $PR_URL"
+            echo
+            echo "### Review excerpt"
+            echo
+            cat /tmp/review/elon_review.md
+          } > /tmp/review/elon_issue.md
+          URL=$(gh issue create \
+            --title "[Product P0 from PR #$PR_NUM] $SUMMARY" \
+            --body-file /tmp/review/elon_issue.md \
+            --label product-regression)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+  # ── Job 3: Summary roll-up ─────────────────────────────────────────────────
+  summary:
+    name: Summary
+    needs: [steve-jobs-ux, elon-musk-product]
+    if: always() && needs.preflight.outputs.run == 'true' && (needs.steve-jobs-ux.result != 'skipped' || needs.elon-musk-product.result != 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Post combined summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          S_P0: ${{ needs.steve-jobs-ux.outputs.p0 }}
+          S_P1: ${{ needs.steve-jobs-ux.outputs.p1 }}
+          S_NIT: ${{ needs.steve-jobs-ux.outputs.nits }}
+          S_ISSUE: ${{ needs.steve-jobs-ux.outputs.issue_url }}
+          E_P0: ${{ needs.elon-musk-product.outputs.p0 }}
+          E_P1: ${{ needs.elon-musk-product.outputs.p1 }}
+          E_NIT: ${{ needs.elon-musk-product.outputs.nits }}
+          E_ISSUE: ${{ needs.elon-musk-product.outputs.issue_url }}
+        run: |
+          set -e
+          int() { case "$1" in ''|*[!0-9]*) echo 0;; *) echo "$1";; esac; }
+          SP0=$(int "$S_P0"); SP1=$(int "$S_P1"); SN=$(int "$S_NIT")
+          EP0=$(int "$E_P0"); EP1=$(int "$E_P1"); EN=$(int "$E_NIT")
+          P0=$((SP0+EP0)); P1=$((SP1+EP1)); NIT=$((SN+EN))
+          {
+            echo "## Post-merge review summary"
+            echo
+            echo "**Totals across both reviews:** 🔴 ${P0} P0 / 🟡 ${P1} P1 / 🟢 ${NIT} nits"
+            echo
+            echo "| Reviewer | 🔴 P0 | 🟡 P1 | 🟢 nit |"
+            echo "|---|---|---|---|"
+            echo "| Steve Jobs (UX) | ${SP0} | ${SP1} | ${SN} |"
+            echo "| Elon Musk (product) | ${EP0} | ${EP1} | ${EN} |"
+            echo
+            if [ -n "$S_ISSUE" ] || [ -n "$E_ISSUE" ]; then
+              echo "**Auto-opened issues:**"
+              [ -n "$S_ISSUE" ] && echo "- UX P0: $S_ISSUE"
+              [ -n "$E_ISSUE" ] && echo "- Product P0: $E_ISSUE"
+              echo
+            fi
+            echo "_See individual comments above for full review text._"
+          } > /tmp/summary.md
+          gh pr comment "$PR_NUM" --body-file /tmp/summary.md
