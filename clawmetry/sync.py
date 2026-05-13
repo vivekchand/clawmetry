@@ -993,6 +993,20 @@ def _list_session_jsonls(sessions_dir) -> list[str]:
     try:
         for fname in os.listdir(sessions_dir):
             if fname.endswith(".jsonl") or ".jsonl.reset." in fname:
+                # Skip OpenClaw trace-artifact sidecars that live next to
+                # real session files. Without this filter the daemon
+                # ingests <sid>.trajectory.jsonl etc., and
+                # _canonical_session_file() splits at the first `.jsonl`
+                # producing phantom session_ids like '<uuid>.trajectory'
+                # that pollute DuckDB and downstream APIs. The dashboard
+                # read-path applies the same exclusion (dashboard.py,
+                # routes/sessions.py, routes/brain.py, routes/usage.py).
+                if (
+                    ".trajectory." in fname
+                    or ".checkpoint." in fname
+                    or ".deleted." in fname
+                ):
+                    continue
                 out.append(os.path.join(sessions_dir, fname))
     except OSError:
         pass
