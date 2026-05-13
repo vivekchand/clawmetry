@@ -4364,6 +4364,182 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     """Build memory file list for the Memory popup."""
 
 
+# ── BOOTSTRAP.md "First Contact" capture (issue #690) ─────────────────────────
+#
+# OpenClaw's BOOTSTRAP.md runs once at first startup to negotiate agent identity
+# and then SELF-DELETES. We watch for it on every daemon tick and snapshot the
+# file (plus the session id active when we saw it) into the local DuckDB
+# `bootstrap_archive` table BEFORE OpenClaw removes it. The store is the
+# authority — once captured, the artifact is read-only and survives any
+# subsequent re-init / workspace move.
+#
+# Idempotent: `local_store.ingest_bootstrap_archive` dedups on
+# (node_id, agent_id, content_sha256), so re-running the capture on an
+# unchanged file is a no-op. If OpenClaw rewrites BOOTSTRAP.md with new content
+# (re-negotiated identity), a fresh row is inserted, preserving the full
+# first-contact history.
+
+_BOOTSTRAP_CANDIDATE_PATHS = (
+    # Documented spec location.
+    ("agents", "main", "memory", "BOOTSTRAP.md"),
+    # Some OpenClaw builds keep the file at the workspace root.
+    ("agents", "main", "BOOTSTRAP.md"),
+    ("BOOTSTRAP.md",),
+)
+
+
+def _find_bootstrap_file(workspace: str | None = None) -> Path | None:
+    """Return the path to a present BOOTSTRAP.md, or None when absent.
+
+    Checks the documented location first, then a couple of fallbacks that
+    have been observed in the wild. Returns the first hit — bootstrap files
+    don't coexist."""
+    bases: list[Path] = [Path(_get_openclaw_dir())]
+    if workspace:
+        try:
+            bases.append(Path(workspace))
+        except Exception:
+            pass
+    for base in bases:
+        for parts in _BOOTSTRAP_CANDIDATE_PATHS:
+            candidate = base.joinpath(*parts)
+            try:
+                if candidate.is_file():
+                    return candidate
+            except OSError:
+                continue
+    return None
+
+
+def _latest_session_id(workspace: str | None = None) -> str | None:
+    """Best-effort: return the session id of the most-recently-modified
+    JSONL transcript when the bootstrap was captured. We link the artifact
+    to it so the dashboard can show "First Contact ⇄ first session" together.
+    None when no session transcripts exist (bootstrap captured before any
+    session, which is the normal first-boot case)."""
+    candidates: list[Path] = [
+        Path(_get_openclaw_dir()) / "agents" / "main" / "sessions",
+    ]
+    if workspace:
+        try:
+            candidates.append(Path(workspace) / "agents" / "main" / "sessions")
+        except Exception:
+            pass
+    for sessions_dir in candidates:
+        try:
+            if not sessions_dir.is_dir():
+                continue
+        except OSError:
+            continue
+        newest_mtime = -1.0
+        newest: Path | None = None
+        try:
+            for p in sessions_dir.iterdir():
+                if p.suffix != ".jsonl":
+                    continue
+                try:
+                    mt = p.stat().st_mtime
+                except OSError:
+                    continue
+                if mt > newest_mtime:
+                    newest_mtime = mt
+                    newest = p
+        except OSError:
+            continue
+        if newest is not None:
+            # File name is the session id; strip the suffix.
+            return newest.stem
+    return None
+
+
+def capture_bootstrap_if_present(
+    config: dict | None = None,
+    paths: dict | None = None,
+    *,
+    store=None,
+) -> bool:
+    """Daemon tick hook: snapshot BOOTSTRAP.md to the local store when
+    present. Returns True when a NEW row was written, False otherwise
+    (file absent, unchanged, or write failure — failure is logged but
+    never raised, the daemon must keep ticking).
+
+    ``store`` is overridable for tests; defaults to the process-wide
+    LocalStore singleton."""
+    try:
+        config = config or {}
+        node_id = config.get("node_id") or ""
+        if not node_id:
+            # Defensive — run_daemon backfills this on startup. Without it
+            # we can't dedup, so skip silently.
+            return False
+        workspace = ""
+        if paths:
+            workspace = paths.get("workspace") or ""
+        bootstrap_path = _find_bootstrap_file(workspace=workspace)
+        if bootstrap_path is None:
+            return False
+        try:
+            content_bytes = bootstrap_path.read_bytes()
+        except OSError as e:
+            log.warning("bootstrap capture: read failed for %s: %s",
+                        bootstrap_path, e)
+            return False
+        try:
+            content = content_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            content = content_bytes.decode("latin-1", errors="replace")
+        if not content.strip():
+            # Empty BOOTSTRAP.md is meaningless — wait until OpenClaw fills it.
+            return False
+        import hashlib
+        from datetime import datetime, timezone
+
+        sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        try:
+            mtime_iso = datetime.fromtimestamp(
+                bootstrap_path.stat().st_mtime, tz=timezone.utc
+            ).isoformat()
+        except OSError:
+            mtime_iso = None
+
+        # Defer the import so a missing duckdb dep (older installs) doesn't
+        # take the daemon down — bootstrap capture is best-effort.
+        if store is None:
+            try:
+                from clawmetry import local_store as _ls
+                store = _ls.get_store()
+            except Exception as e:
+                log.warning("bootstrap capture: local_store unavailable: %s", e)
+                return False
+
+        first_session = _latest_session_id(workspace=workspace)
+        try:
+            wrote = store.ingest_bootstrap_archive({
+                "node_id": node_id,
+                "agent_id": "main",
+                "captured_at": datetime.now(timezone.utc).isoformat(),
+                "file_mtime": mtime_iso,
+                "content": content,
+                "content_sha256": sha,
+                "first_session_id": first_session,
+                "size_bytes": len(content_bytes),
+                "source_path": str(bootstrap_path),
+            })
+        except Exception as e:
+            log.warning("bootstrap capture: ingest failed: %s", e)
+            return False
+        if wrote:
+            log.info(
+                "bootstrap capture: archived %s (sha=%s, session=%s)",
+                bootstrap_path, sha[:12], first_session or "n/a",
+            )
+        return wrote
+    except Exception as e:
+        # Catch-all so a bug in this helper never crashes the daemon loop.
+        log.warning("bootstrap capture: unexpected error: %s", e)
+        return False
+
+
 def _build_machine_info():
     """Build machine hardware info for the Machine popup."""
     try:
@@ -5762,6 +5938,14 @@ def run_daemon() -> None:
     # Always sync recent events first (last hour) — makes the dashboard
     # immediately useful even when there's a large backlog of old events.
     log.info("Syncing recent activity (last 60 min) first...")
+    # Snapshot BOOTSTRAP.md immediately at startup — it may self-delete before
+    # the first poll cycle on a fast-init OpenClaw. Idempotent; no-op when
+    # the file isn't present (issue #690).
+    try:
+        if capture_bootstrap_if_present(config, paths):
+            log.info("  Bootstrap: archived first-contact snapshot")
+    except Exception as e:
+        log.warning(f"  Bootstrap capture error: {e}")
     try:
         mem = sync_memory(config, state, paths)
         if mem:
@@ -5913,6 +6097,15 @@ def run_daemon() -> None:
     while True:
         try:
             state = load_state()
+
+            # ── BOOTSTRAP.md "First Contact" capture (issue #690) ─────────
+            # Best-effort; runs early in the tick so we snapshot the file
+            # BEFORE any other helper notices OpenClaw has self-deleted it.
+            # Idempotent — duplicate captures dedup at the local-store layer.
+            try:
+                capture_bootstrap_if_present(config, paths)
+            except Exception as _be:
+                log.warning("bootstrap capture failed: %s", _be)
 
             # ── High-priority: memory, flow metrics, subagents, recent sessions ──
             mem = sync_memory(config, state, paths)

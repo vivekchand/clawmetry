@@ -115,6 +115,7 @@ from routes.plugins import bp_plugins
 from routes.local_query import bp_local_query
 from routes.update_check import bp_update_check, start_update_check_thread
 from routes.workspaces import bp_workspaces
+from routes.bootstrap import bp_bootstrap
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -9170,6 +9171,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_openapi)
     app.register_blueprint(bp_update_check)
     app.register_blueprint(bp_workspaces)
+    app.register_blueprint(bp_bootstrap)
 
     # Register built-in agent adapters. External plugins can register more
     # via clawmetry.extensions entry points — see clawmetry/adapters/.

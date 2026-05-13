@@ -117,7 +117,7 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -421,6 +421,30 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_cron_runs_job_id     ON cron_runs(job_id, started_at)",
     "CREATE INDEX IF NOT EXISTS idx_cron_runs_started_at ON cron_runs(started_at)",
+    # Issue #690 — "First Contact" bootstrap archive. OpenClaw's BOOTSTRAP.md
+    # runs once at first startup to negotiate agent identity, then SELF-DELETES.
+    # The capture helper in ``clawmetry/sync.py`` snapshots the file (and the
+    # session id active at capture time) into this table BEFORE OpenClaw
+    # removes it, so we keep a read-only "First Contact" artifact for the
+    # life of the node. Dedup key is (node_id, agent_id, content_sha256) —
+    # re-capture on unchanged content is a no-op, but a re-bootstrap with
+    # different content lands as a fresh row so we preserve the full
+    # first-contact history when OpenClaw re-negotiates identity.
+    """
+    CREATE TABLE IF NOT EXISTS bootstrap_archive (
+        node_id           VARCHAR NOT NULL,
+        agent_id          VARCHAR NOT NULL DEFAULT 'main',
+        captured_at       VARCHAR NOT NULL,
+        file_mtime        VARCHAR,
+        content           VARCHAR,
+        content_sha256    VARCHAR,
+        first_session_id  VARCHAR,
+        size_bytes        INTEGER,
+        source_path       VARCHAR,
+        PRIMARY KEY (node_id, agent_id, content_sha256)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_bootstrap_node ON bootstrap_archive(node_id, captured_at)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -1269,6 +1293,120 @@ class LocalStore:
                 "DELETE FROM agent_budgets WHERE agent_id = ?", [aid]
             )
         return 1
+
+    # ── BOOTSTRAP archive (issue #690) ──────────────────────────────────────
+
+    def ingest_bootstrap_archive(self, row: dict[str, Any]) -> bool:
+        """Insert one BOOTSTRAP.md snapshot. Returns True if a new row was
+        written, False if (node_id, agent_id, content_sha256) already exists.
+
+        Required keys: ``node_id``, ``content``. Optional: ``agent_id``
+        (default ``"main"``), ``captured_at`` (default = now UTC ISO),
+        ``file_mtime``, ``first_session_id``, ``source_path``. ``content``
+        is stored as VARCHAR (BOOTSTRAP.md is small markdown — there's no
+        reason to BLOB-encode). ``content_sha256`` is computed here when
+        missing so callers don't have to.
+
+        Idempotent: re-capturing the same content for the same
+        (node_id, agent_id) is a no-op. If the file is rewritten (different
+        content), a new row is inserted — preserving the full first-contact
+        history when the bootstrap is re-negotiated.
+        """
+        if self._read_only:
+            raise RuntimeError(
+                "local_store: ingest_bootstrap_archive() on read-only store"
+            )
+        node_id = row.get("node_id")
+        if not node_id:
+            raise ValueError("bootstrap archive row must include 'node_id'")
+        content = row.get("content")
+        if content is None:
+            raise ValueError("bootstrap archive row must include 'content'")
+        if isinstance(content, (bytes, bytearray)):
+            content = content.decode("utf-8", errors="replace")
+        else:
+            content = str(content)
+        agent_id = row.get("agent_id") or "main"
+        sha = row.get("content_sha256")
+        if not sha:
+            import hashlib
+            sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        captured_at = row.get("captured_at")
+        if not captured_at:
+            from datetime import datetime, timezone
+            captured_at = datetime.now(timezone.utc).isoformat()
+        size_bytes = row.get("size_bytes")
+        if size_bytes is None:
+            size_bytes = len(content.encode("utf-8"))
+        params = [
+            str(node_id),
+            str(agent_id),
+            str(captured_at),
+            row.get("file_mtime"),
+            content,
+            sha,
+            row.get("first_session_id"),
+            int(size_bytes),
+            row.get("source_path"),
+        ]
+        with self._write_lock:
+            # Detect dup BEFORE the insert so we can return an accurate flag.
+            cur = self._conn.execute(
+                "SELECT 1 FROM bootstrap_archive "
+                "WHERE node_id=? AND agent_id=? AND content_sha256=? LIMIT 1",
+                [str(node_id), str(agent_id), sha],
+            )
+            if cur.fetchone():
+                return False
+            self._conn.execute(
+                """
+                INSERT INTO bootstrap_archive (
+                    node_id, agent_id, captured_at, file_mtime, content,
+                    content_sha256, first_session_id, size_bytes, source_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                params,
+            )
+        return True
+
+    def query_bootstrap_archive(
+        self,
+        *,
+        node_id: str | None = None,
+        agent_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Read bootstrap-archive rows, newest first.
+
+        ``node_id`` scopes the result to one machine; ``agent_id`` further
+        narrows to a single agent within that node. Returns full content —
+        BOOTSTRAP.md is tiny (typically <8 KB) so there's no value in a
+        lazy-content variant."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if node_id:
+            clauses.append("node_id = ?")
+            params.append(str(node_id))
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(str(agent_id))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT node_id, agent_id, captured_at, file_mtime, content,
+                   content_sha256, first_session_id, size_bytes, source_path
+            FROM bootstrap_archive
+            {where}
+            ORDER BY captured_at DESC, agent_id
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["node_id", "agent_id", "captured_at", "file_mtime", "content",
+                "content_sha256", "first_session_id", "size_bytes",
+                "source_path"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            out.append(dict(zip(cols, r)))
+        return out
 
     def ingest_approval(self, approval: dict[str, Any]) -> None:
         """Upsert one approval-queue row. Required: ``id``.
