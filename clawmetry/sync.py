@@ -2889,6 +2889,16 @@ def send_heartbeat(config: dict) -> bool:
             payload.setdefault("cache_pushes", []).extend(ap_pushes)
     except Exception as _ap_e2:
         log.debug("approvals cache_push build failed (continuing): %s", _ap_e2)
+    # Memory tab (epic #1032): proactively push the user's memory-file
+    # snapshot so the cloud Node Detail → Memory tab paints from cache.
+    # Without this push the cloud handler returns `{blob: None}` and the
+    # browser renders "No memory data synced". Best-effort.
+    try:
+        mem_pushes = _build_memory_cache_pushes(config)
+        if mem_pushes:
+            payload.setdefault("cache_pushes", []).extend(mem_pushes)
+    except Exception as _mp_e:
+        log.debug("memory cache_push build failed (continuing): %s", _mp_e)
     # Local-first: persist this heartbeat to local DuckDB so the dashboard
     # has a per-node liveness history even when offline. Best-effort.
     try:
@@ -3082,6 +3092,99 @@ def _build_brain_cache_pushes(config: dict) -> list:
     return [{
         "key":    f"brain:{owner_hash}:{node_id}:recent",
         "ttl_s":  BRAIN_CACHE_TTL_SEC,
+        "blob":   blob,
+    }]
+
+
+# ── Memory files cache push (epic #1032 — Memory tab fix) ───────────────────
+# The cloud Memory tab in Node Detail reads from a cache key populated here.
+# Same heartbeat-piggyback envelope as the Brain cache push: encrypted blob
+# under ``memory:{owner_hash}:{node_id}:files`` with the user's E2E key.
+# Cloud read path: ``routes/cloud.py:cloud_memory_files``.
+
+MEMORY_CACHE_TTL_SEC = 21600       # 6h — matches Brain TTL; files change slowly
+MEMORY_CACHE_LIMIT = 200            # plenty for SOUL.md/USER.md/AGENTS.md/etc.
+MEMORY_CONTENT_TRUNCATE = 500_000   # mirrors routes/infra.py truncation
+
+
+def _build_memory_cache_pushes(config: dict) -> list:
+    """Heartbeat cache_push entry holding the encrypted memory-file snapshot.
+
+    Returns ``[]`` when:
+      - No encryption key (we never push plaintext).
+      - Local store unimportable / empty memory_blobs table.
+
+    Decrypted payload shape mirrors what the cloud dashboard JS reads in
+    ``_renderIDE`` / ``_selectFile`` (see clawmetry-cloud/dashboard.py
+    ``_cloudLoadMemory``):
+
+        {
+          "memory_state":   {"files": [{"name": <path>, "size": <bytes>}, ...]},
+          "memory_content": [{"path": <path>, "content": <utf8 str>}, ...]
+        }
+
+    The browser holds the key; cloud only ever stores ciphertext.
+    """
+    enc_key = config.get("encryption_key")
+    if not enc_key:
+        return []
+    api_key = config.get("api_key", "")
+    node_id = config.get("node_id", "")
+    if not (api_key and node_id):
+        return []
+    try:
+        from clawmetry import local_store
+    except Exception:
+        return []
+    try:
+        store = local_store.get_store(read_only=True)
+        rows = store.query_memory_blobs(limit=MEMORY_CACHE_LIMIT)
+    except Exception:
+        return []
+    if not rows:
+        return []
+    files: list[dict] = []
+    contents: list[dict] = []
+    seen: set = set()
+    for r in rows:
+        path = r.get("path") or ""
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        blob_raw = r.get("blob")
+        if isinstance(blob_raw, (bytes, bytearray)):
+            try:
+                content = bytes(blob_raw).decode("utf-8", errors="replace")
+            except Exception:
+                content = ""
+        elif isinstance(blob_raw, str):
+            content = blob_raw
+        else:
+            content = ""
+        size = r.get("size_bytes")
+        if size is None:
+            size = len(content.encode("utf-8", errors="replace"))
+        files.append({"name": path, "path": path, "size": int(size or 0)})
+        # Truncate per-file content to bound the encrypted blob size — the
+        # cloud Memory IDE shows a viewer pane (no diffing), so >500KB per
+        # file is wasted heartbeat bandwidth.
+        contents.append({"path": path, "content": content[:MEMORY_CONTENT_TRUNCATE]})
+    if not files:
+        return []
+    payload = {
+        "memory_state":   {"files": files},
+        "memory_content": contents,
+        "_source":        "local_store",
+        "_shape":         "memory_files",
+    }
+    try:
+        blob = encrypt_payload(payload, enc_key)
+    except Exception:
+        return []
+    owner_hash = _owner_hash_for_token(api_key)
+    return [{
+        "key":    f"memory:{owner_hash}:{node_id}:files",
+        "ttl_s":  MEMORY_CACHE_TTL_SEC,
         "blob":   blob,
     }]
 
