@@ -41,6 +41,7 @@ import os
 import time
 
 from flask import Blueprint, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 bp_budget = Blueprint('budget', __name__)
 bp_alerts = Blueprint('alerts', __name__)
@@ -228,7 +229,7 @@ def api_alert_rules():
     # Phase 3 of #1032 — local DuckDB fast path. Opt-in via
     # CLAWMETRY_LOCAL_STORE_READ=1; falls through to the legacy fleet-DB
     # _get_alert_rules helper on miss / disabled flag.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_alert_rules()
         if fast is not None:
             return jsonify(fast)

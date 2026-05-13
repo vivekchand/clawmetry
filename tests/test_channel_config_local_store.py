@@ -221,7 +221,7 @@ def test_status_route_fallback_when_flag_off(tmp_path, monkeypatch):
     """With CLAWMETRY_LOCAL_STORE_READ unset, the route degrades to a
     "fallback" tagged response (no DuckDB read)."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     sys.modules.pop("clawmetry.local_store", None)
     sys.modules.pop("routes.channels", None)

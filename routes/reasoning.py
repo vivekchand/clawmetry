@@ -18,6 +18,7 @@ import os
 import re
 
 from flask import Blueprint, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 # Tier-1 DuckDB fast path: enable by exporting CLAWMETRY_LOCAL_STORE_READ=1.
 # When set, /api/reasoning reads thinking blocks from the local events
@@ -285,7 +286,7 @@ def api_reasoning():
     # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
     # Falls through to legacy JSONL parser when flag is unset, the store
     # has no events for this session, or no thinking blocks are present.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_reasoning(session_id)
         if fast is not None:
             return jsonify(fast)
