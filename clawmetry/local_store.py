@@ -367,6 +367,23 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_chmsg_provider_ts  ON channel_messages(provider, ts)",
     "CREATE INDEX IF NOT EXISTS idx_chmsg_channel_ts   ON channel_messages(provider, channel_id, ts)",
     "CREATE INDEX IF NOT EXISTS idx_chmsg_session      ON channel_messages(session_key, ts)",
+    # Issue #951 (2026-05-13) — per-agent budget overrides. One row per
+    # agent_id with a daily and/or monthly USD limit. If a row is missing
+    # for a given agent_id the global ``budget_config`` (daily/monthly_limit)
+    # applies. The dashboard's ``_budget_check`` reads this table on every
+    # cost-entry append and fires tiered alerts (80% warning, 100% critical)
+    # against the matching per-agent limit, falling back to global only when
+    # there is no override. Either limit column may be NULL — that side then
+    # falls back to global independently (e.g. you can set a daily limit
+    # without committing to a monthly one).
+    """
+    CREATE TABLE IF NOT EXISTS agent_budgets (
+        agent_id          VARCHAR PRIMARY KEY,
+        daily_limit_usd   DOUBLE,
+        monthly_limit_usd DOUBLE,
+        updated_at        BIGINT NOT NULL
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -1041,6 +1058,103 @@ class LocalStore:
             return 0
         with self._write_lock:
             self._conn.execute("DELETE FROM alert_rules WHERE id = ?", [rid])
+        return 1
+
+    # ── Per-agent budgets (issue #951) ───────────────────────────────────
+
+    def set_agent_budget(
+        self,
+        agent_id: str,
+        *,
+        daily_limit_usd: float | None = None,
+        monthly_limit_usd: float | None = None,
+    ) -> None:
+        """Upsert one per-agent budget override row. Required: ``agent_id``.
+
+        Either / both of ``daily_limit_usd`` and ``monthly_limit_usd`` may
+        be ``None`` — that side falls back to the global budget. Pass
+        ``0`` (or any non-positive value) on either column to clear the
+        per-agent limit on that side while preserving the other; pass
+        both as ``None`` and you may as well call ``delete_agent_budget``
+        for symmetry, but the row is preserved either way."""
+        if not agent_id:
+            raise ValueError("agent budget must include 'agent_id'")
+        now_ms = int(time.time() * 1000)
+        # Coerce numeric inputs; None stays NULL in DuckDB.
+        def _coerce(v):
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+        d = _coerce(daily_limit_usd)
+        m = _coerce(monthly_limit_usd)
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO agent_budgets (
+                    agent_id, daily_limit_usd, monthly_limit_usd, updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT (agent_id) DO UPDATE SET
+                    daily_limit_usd   = excluded.daily_limit_usd,
+                    monthly_limit_usd = excluded.monthly_limit_usd,
+                    updated_at        = excluded.updated_at
+            """, [str(agent_id), d, m, now_ms])
+
+    def get_agent_budget(self, agent_id: str) -> dict[str, Any] | None:
+        """Return one per-agent budget row or ``None`` when no override is
+        configured. Callers should fall back to the global budget config
+        on a ``None`` return."""
+        if not agent_id:
+            return None
+        rows = self._fetch(
+            "SELECT agent_id, daily_limit_usd, monthly_limit_usd, updated_at "
+            "FROM agent_budgets WHERE agent_id = ? LIMIT 1",
+            [str(agent_id)],
+        )
+        if not rows:
+            return None
+        r = rows[0]
+        return {
+            "agent_id": r[0],
+            "daily_limit_usd": r[1],
+            "monthly_limit_usd": r[2],
+            "updated_at": r[3],
+        }
+
+    def query_agent_budgets(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """Return all per-agent budget overrides, most-recently-updated
+        first. Cheap — this table is tiny (one row per agent)."""
+        rows = self._fetch(
+            "SELECT agent_id, daily_limit_usd, monthly_limit_usd, updated_at "
+            "FROM agent_budgets ORDER BY updated_at DESC LIMIT ?",
+            [int(limit)],
+        )
+        return [
+            {
+                "agent_id": r[0],
+                "daily_limit_usd": r[1],
+                "monthly_limit_usd": r[2],
+                "updated_at": r[3],
+            }
+            for r in rows
+        ]
+
+    def delete_agent_budget(self, agent_id: str) -> int:
+        """Delete one per-agent override row. Returns 1 on delete, 0 when
+        missing. After deletion the agent falls back to the global budget."""
+        if not agent_id:
+            return 0
+        aid = str(agent_id)
+        rows_before = self._fetch(
+            "SELECT 1 FROM agent_budgets WHERE agent_id = ? LIMIT 1", [aid]
+        )
+        if not rows_before:
+            return 0
+        with self._write_lock:
+            self._conn.execute(
+                "DELETE FROM agent_budgets WHERE agent_id = ?", [aid]
+            )
         return 1
 
     def ingest_approval(self, approval: dict[str, Any]) -> None:

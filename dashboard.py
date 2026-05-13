@@ -700,6 +700,249 @@ def _get_budget_status():
     }
 
 
+# ── Per-agent budgets (issue #951) ─────────────────────────────────────
+#
+# Per-agent overrides live in the DuckDB ``agent_budgets`` table (see
+# ``clawmetry/local_store.py``) so they survive process restarts and ride
+# the same heartbeat-piggyback relay as the rest of the local store.
+# ``_get_agent_budget`` returns ``None`` when no override is present —
+# callers fall back to the global ``daily_limit`` / ``monthly_limit``.
+#
+# Tiered alerts: the in-memory ``_budget_agent_tier_state`` dict tracks
+# {(agent_id, period): "warning" | "critical" | None} for the *current*
+# period bucket (today / this month). Once we fire a warning we don't fire
+# it again until the period resets; once we fire critical we never
+# re-fire warning for the same period. This is the dedup contract the
+# spec asks for: same threshold, same period, same agent → one alert.
+
+
+# (agent_id, period, period_key) -> tier last fired. period_key is the
+# date string for the current bucket so the slot auto-resets at midnight /
+# month-start without an explicit cron.
+_budget_agent_tier_state: dict[tuple, str] = {}
+
+
+def _get_agent_budget(agent_id):
+    """Read one per-agent budget override from the local store. Returns
+    ``None`` when the local store isn't available or the agent has no
+    override row — callers fall back to global limits."""
+    if not agent_id:
+        return None
+    try:
+        from clawmetry import local_store
+
+        store = local_store.get_store()
+        return store.get_agent_budget(agent_id)
+    except Exception:
+        return None
+
+
+def _list_agent_budgets():
+    """Return all per-agent overrides as a list. Returns [] on any error."""
+    try:
+        from clawmetry import local_store
+
+        store = local_store.get_store()
+        return store.query_agent_budgets(limit=500)
+    except Exception:
+        return []
+
+
+def _set_agent_budget(agent_id, daily_limit_usd=None, monthly_limit_usd=None):
+    """Write a per-agent override row. Returns True on success."""
+    if not agent_id:
+        return False
+    try:
+        from clawmetry import local_store
+
+        store = local_store.get_store()
+        store.set_agent_budget(
+            agent_id,
+            daily_limit_usd=daily_limit_usd,
+            monthly_limit_usd=monthly_limit_usd,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _delete_agent_budget(agent_id):
+    """Remove a per-agent override row. Returns 1 on delete, 0 when missing."""
+    if not agent_id:
+        return 0
+    try:
+        from clawmetry import local_store
+
+        store = local_store.get_store()
+        return store.delete_agent_budget(agent_id)
+    except Exception:
+        return 0
+
+
+def _agent_spend_for_period(agent_id, period_start):
+    """Sum cost-store USD entries for one agent since ``period_start``.
+
+    Cost entries written without an ``agent`` key default to ``"main"``,
+    matching how the rest of the dashboard names the primary agent."""
+    total = 0.0
+    with _metrics_lock:
+        for entry in metrics_store["cost"]:
+            ts = entry.get("timestamp", 0)
+            if ts < period_start:
+                continue
+            ent_agent = entry.get("agent", "main") or "main"
+            if ent_agent != agent_id:
+                continue
+            total += float(entry.get("usd", 0) or 0)
+    return total
+
+
+def _period_bounds():
+    """Return (today_start_ts, today_key, month_start_ts, month_key)."""
+    now_dt = datetime.now()
+    today_start = now_dt.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).timestamp()
+    today_key = now_dt.strftime("%Y-%m-%d")
+    month_start = now_dt.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    ).timestamp()
+    month_key = now_dt.strftime("%Y-%m")
+    return today_start, today_key, month_start, month_key
+
+
+def _get_agent_budget_status(agent_id):
+    """Return per-agent budget status dict for the API. Combines per-agent
+    override (when present) with global fallback and current MTD/daily
+    spend. Always returns a populated dict — never ``None``."""
+    config = _get_budget_config()
+    override = _get_agent_budget(agent_id) or {}
+    today_start, _, month_start, _ = _period_bounds()
+    daily_spent = _agent_spend_for_period(agent_id, today_start)
+    monthly_spent = _agent_spend_for_period(agent_id, month_start)
+
+    def _effective(override_val, global_key):
+        if override_val is not None and override_val > 0:
+            return float(override_val), "agent"
+        gv = config.get(global_key, 0) or 0
+        try:
+            gv = float(gv)
+        except (TypeError, ValueError):
+            gv = 0.0
+        return gv, ("global" if gv > 0 else "none")
+
+    daily_limit, daily_source = _effective(
+        override.get("daily_limit_usd"), "daily_limit"
+    )
+    monthly_limit, monthly_source = _effective(
+        override.get("monthly_limit_usd"), "monthly_limit"
+    )
+
+    def _pct(spent, limit):
+        return round((spent / limit * 100), 1) if limit > 0 else 0.0
+
+    def _status(pct):
+        if pct >= 100:
+            return "critical"
+        if pct >= 80:
+            return "warning"
+        if pct >= 50:
+            return "ok"
+        return "ok"
+
+    daily_pct = _pct(daily_spent, daily_limit)
+    monthly_pct = _pct(monthly_spent, monthly_limit)
+    overall_pct = max(daily_pct, monthly_pct)
+
+    return {
+        "agent_id": agent_id,
+        "daily_limit": daily_limit,
+        "daily_limit_usd": daily_limit,
+        "daily_limit_source": daily_source,
+        "daily_spent": round(daily_spent, 4),
+        "daily_pct": daily_pct,
+        "monthly_limit": monthly_limit,
+        "monthly_limit_usd": monthly_limit,
+        "monthly_limit_source": monthly_source,
+        "monthly_spent": round(monthly_spent, 4),
+        "mtd_spend": round(monthly_spent, 4),
+        "monthly_pct": monthly_pct,
+        "status": _status(overall_pct),
+        "has_override": bool(override),
+    }
+
+
+def _budget_check_for_agent(agent_id, *, auto_pause_enabled=None,
+                            warning_pct=80, pause_pct=100):
+    """Tiered-alert check for one agent. Honours dedup-per-period-per-tier.
+
+    Returns True when a critical (100%) breach fired AND auto-pause is
+    enabled — caller (``_budget_check``) treats that as a signal to pause
+    the gateway. Returns False otherwise."""
+    global _budget_agent_tier_state
+    override = _get_agent_budget(agent_id)
+    if not override:
+        return False
+    config = _get_budget_config()
+    if auto_pause_enabled is None:
+        auto_pause_enabled = config.get("auto_pause_enabled", False)
+    today_start, today_key, month_start, month_key = _period_bounds()
+    pause_triggered = False
+
+    for period, period_start, period_key, override_key, global_key in (
+        ("daily", today_start, today_key, "daily_limit_usd", "daily_limit"),
+        ("monthly", month_start, month_key, "monthly_limit_usd", "monthly_limit"),
+    ):
+        limit = override.get(override_key)
+        if limit is None or limit <= 0:
+            # Fall back to global limit for this period if not overridden.
+            try:
+                limit = float(config.get(global_key, 0) or 0)
+            except (TypeError, ValueError):
+                limit = 0.0
+            if limit <= 0:
+                continue
+        spent = _agent_spend_for_period(agent_id, period_start)
+        pct = (spent / limit * 100) if limit > 0 else 0
+        slot_key = (agent_id, period, period_key)
+        prior_tier = _budget_agent_tier_state.get(slot_key)
+
+        # Critical (>=100%) — supersedes warning. Dedup: once per period.
+        if pct >= pause_pct:
+            if prior_tier != "critical":
+                _budget_agent_tier_state[slot_key] = "critical"
+                _fire_alert(
+                    rule_id=f"budget_agent_{agent_id}_{period}_critical_{period_key}",
+                    alert_type="budget.critical",
+                    message=(
+                        f"BUDGET CRITICAL: agent '{agent_id}' {period} spend "
+                        f"${spent:.2f} of ${limit:.2f} (100%) limit"
+                    ),
+                    channels=["banner", "telegram"],
+                )
+                if auto_pause_enabled:
+                    pause_triggered = True
+            continue
+
+        # Warning (>=80% but <100%). Dedup: only fire when crossing from
+        # nothing → warning (don't fire if already at critical, can't
+        # happen here since we continued above, but defensive).
+        if pct >= warning_pct:
+            if prior_tier not in ("warning", "critical"):
+                _budget_agent_tier_state[slot_key] = "warning"
+                _fire_alert(
+                    rule_id=f"budget_agent_{agent_id}_{period}_warning_{period_key}",
+                    alert_type="budget.warning",
+                    message=(
+                        f"Budget warning: agent '{agent_id}' {period} spend "
+                        f"${spent:.2f} is {pct:.0f}% of ${limit:.2f} limit"
+                    ),
+                    channels=["banner", "telegram"],
+                )
+
+    return pause_triggered
+
+
 def _budget_check():
     """Check budget limits and fire alerts/auto-pause if needed."""
     global _budget_paused, _budget_paused_at, _budget_paused_reason
@@ -711,7 +954,44 @@ def _budget_check():
     warning_pct = config.get("warning_threshold_pct", 80)
     pause_pct = config.get("auto_pause_threshold_pct", 100)
 
-    # Check each period
+    # ── Per-agent budgets first (issue #951) ────────────────────────────
+    # We collect the unique set of agents that have either spent something
+    # in the cost store today/this-month OR have an override configured.
+    # Either source can trip a tier, so we union them.
+    agents_to_check = set()
+    try:
+        for ov in _list_agent_budgets():
+            aid = ov.get("agent_id")
+            if aid:
+                agents_to_check.add(aid)
+    except Exception:
+        pass
+    try:
+        with _metrics_lock:
+            for entry in metrics_store["cost"]:
+                agents_to_check.add(entry.get("agent", "main") or "main")
+    except Exception:
+        pass
+    for agent_id in agents_to_check:
+        try:
+            if _budget_check_for_agent(
+                agent_id,
+                auto_pause_enabled=config.get("auto_pause_enabled", False),
+                warning_pct=warning_pct,
+                pause_pct=pause_pct,
+            ):
+                _budget_paused = True
+                _budget_paused_at = time.time()
+                _budget_paused_reason = (
+                    f"Agent '{agent_id}' budget exceeded; gateway paused."
+                )
+                _pause_gateway()
+                return
+        except Exception:
+            # Never let one agent's check kill the whole sweep.
+            continue
+
+    # Check each period (global)
     for period in ["daily", "weekly", "monthly"]:
         limit = config.get(f"{period}_limit", 0)
         if limit <= 0:
@@ -3350,6 +3630,7 @@ function clawmetryLogout(){
       <div class="modal-tab active" onclick="switchBudgetTab('limits',this)">Budget Limits</div>
       <div class="modal-tab" onclick="switchBudgetTab('alerts',this)">Alert Rules</div>
       <div class="modal-tab" onclick="switchBudgetTab('telegram',this)">Telegram</div>
+      <div class="modal-tab" onclick="switchBudgetTab('agents',this)">Per-Agent</div>
       <div class="modal-tab" onclick="switchBudgetTab('history',this)">History</div>
     </div>
     <!-- Budget Limits Tab -->
@@ -3463,6 +3744,25 @@ function clawmetryLogout(){
         </div>
         <div id="tg-status" style="font-size:12px;color:var(--text-muted);"></div>
       </div>
+    </div>
+    <!-- Per-Agent Tab (issue #951) -->
+    <div id="budget-tab-agents" style="display:none;">
+      <div style="font-size:12px;color:var(--text-muted);line-height:1.5;margin-bottom:12px;">
+        Override the global daily / monthly limits for a specific agent. Leave a field blank to fall back to the global limit. Tiered alerts fire at 80% (warning) and 100% (critical) of whichever limit applies.
+      </div>
+      <div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Add / Update Override</div>
+        <div style="display:grid;gap:8px;">
+          <input id="agent-budget-id" type="text" placeholder="Agent ID (e.g. main, my-subagent)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <input id="agent-budget-daily" type="number" step="0.01" min="0" placeholder="Daily limit USD (blank = global)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <input id="agent-budget-monthly" type="number" step="0.01" min="0" placeholder="Monthly limit USD (blank = global)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+          <div style="display:flex;gap:8px;">
+            <button onclick="saveAgentBudget()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save Override</button>
+            <span id="agent-budget-status" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;"></span>
+          </div>
+        </div>
+      </div>
+      <div id="agent-budget-list" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
     </div>
     <!-- History Tab -->
     <div id="budget-tab-history" style="display:none;">
@@ -4693,13 +4993,98 @@ function openBudgetModal() {
 function switchBudgetTab(tab, el) {
   document.querySelectorAll('#budget-modal-tabs .modal-tab').forEach(function(t){t.classList.remove('active');});
   if(el) el.classList.add('active');
-  ['limits','alerts','telegram','history'].forEach(function(t){
+  ['limits','alerts','telegram','agents','history'].forEach(function(t){
     var d = document.getElementById('budget-tab-'+t);
     if(d) d.style.display = t===tab ? 'block' : 'none';
   });
   if(tab==='alerts') { loadAlertRules(); loadWebhookConfig(); }
   if(tab==='telegram') loadTelegramConfig();
+  if(tab==='agents') loadAgentBudgets();
   if(tab==='history') loadAlertHistory();
+}
+
+// Per-agent budgets (issue #951)
+async function loadAgentBudgets() {
+  try {
+    var data = await fetch('/api/budget').then(function(r){return r.json();});
+    var agents = (data && data.agents) || {};
+    var ids = Object.keys(agents);
+    if (ids.length === 0) {
+      document.getElementById('agent-budget-list').innerHTML =
+        '<div style="padding:20px;text-align:center;color:var(--text-muted);">No per-agent overrides yet.</div>';
+      return;
+    }
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+    html += '<tr style="border-bottom:1px solid var(--border-primary);">'
+         + '<th style="text-align:left;padding:6px;">Agent</th>'
+         + '<th style="text-align:right;padding:6px;">Daily</th>'
+         + '<th style="text-align:right;padding:6px;">Monthly</th>'
+         + '<th style="text-align:right;padding:6px;">Spend (MTD)</th>'
+         + '<th style="text-align:right;padding:6px;">Usage</th>'
+         + '<th style="padding:6px;"></th></tr>';
+    // Fetch live status for each agent (sequential is fine — tiny N).
+    var rows = await Promise.all(ids.map(async function(aid){
+      try {
+        var s = await fetch('/api/agents/'+encodeURIComponent(aid)+'/budget').then(function(r){return r.json();});
+        return [aid, agents[aid], s];
+      } catch(e) { return [aid, agents[aid], null]; }
+    }));
+    rows.forEach(function(t){
+      var aid = t[0], ov = t[1], s = t[2] || {};
+      var pct = Math.max(s.daily_pct||0, s.monthly_pct||0);
+      var barColor = pct >= 80 ? '#dc2626' : (pct >= 50 ? '#f59e0b' : '#16a34a');
+      html += '<tr style="border-bottom:1px solid var(--border-secondary);">';
+      html += '<td style="padding:6px;font-weight:600;">' + escHtml(aid) + '</td>';
+      html += '<td style="padding:6px;text-align:right;">' + (ov.daily_limit_usd != null ? '$' + (+ov.daily_limit_usd).toFixed(2) : '<span style="color:var(--text-muted);">global</span>') + '</td>';
+      html += '<td style="padding:6px;text-align:right;">' + (ov.monthly_limit_usd != null ? '$' + (+ov.monthly_limit_usd).toFixed(2) : '<span style="color:var(--text-muted);">global</span>') + '</td>';
+      html += '<td style="padding:6px;text-align:right;">$' + (+(s.mtd_spend||0)).toFixed(2) + '</td>';
+      html += '<td style="padding:6px;text-align:right;"><div style="display:inline-block;width:80px;height:8px;background:var(--bg-tertiary);border-radius:4px;overflow:hidden;"><div style="width:'+Math.min(100,pct)+'%;height:100%;background:'+barColor+';"></div></div> <span style="font-size:11px;color:var(--text-muted);">'+Math.round(pct)+'%</span></td>';
+      html += '<td style="padding:6px;text-align:right;"><span data-agent-id="'+escHtml(aid)+'" style="cursor:pointer;color:var(--text-error);font-size:14px;" onclick="deleteAgentBudget(this.dataset.agentId)" title="Remove override">&#x1f5d1;</span></td>';
+      html += '</tr>';
+    });
+    html += '</table>';
+    document.getElementById('agent-budget-list').innerHTML = html;
+  } catch(e) {
+    document.getElementById('agent-budget-list').textContent = 'Failed to load';
+  }
+}
+
+async function saveAgentBudget() {
+  var aid = (document.getElementById('agent-budget-id').value || '').trim();
+  if (!aid) {
+    document.getElementById('agent-budget-status').textContent = 'Agent ID required';
+    return;
+  }
+  var d = document.getElementById('agent-budget-daily').value;
+  var m = document.getElementById('agent-budget-monthly').value;
+  var body = {};
+  if (d !== '' && d !== null) body.daily_limit_usd = parseFloat(d);
+  if (m !== '' && m !== null) body.monthly_limit_usd = parseFloat(m);
+  try {
+    var r = await fetch('/api/agents/'+encodeURIComponent(aid)+'/budget', {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    var j = await r.json();
+    if (j && j.ok) {
+      document.getElementById('agent-budget-status').textContent = 'Saved';
+      document.getElementById('agent-budget-id').value = '';
+      document.getElementById('agent-budget-daily').value = '';
+      document.getElementById('agent-budget-monthly').value = '';
+      loadAgentBudgets();
+    } else {
+      document.getElementById('agent-budget-status').textContent = (j && j.error) || 'Save failed';
+    }
+  } catch(e) {
+    document.getElementById('agent-budget-status').textContent = 'Save failed';
+  }
+}
+
+async function deleteAgentBudget(aid) {
+  if (!aid) return;
+  await fetch('/api/agents/'+encodeURIComponent(aid)+'/budget', {method:'DELETE'});
+  loadAgentBudgets();
 }
 
 async function loadBudgetConfig() {

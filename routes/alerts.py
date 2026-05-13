@@ -154,6 +154,93 @@ def api_budget_resume():
     return jsonify({"ok": True, "paused": False})
 
 
+# ── Per-agent budget overrides (issue #951) ────────────────────────────
+
+
+@bp_budget.route("/api/budget", methods=["GET"])
+def api_budget_root():
+    """Unified GET — global config + per-agent overrides map.
+
+    Issue #951: the existing ``/api/budget/config`` keeps its shape so old
+    clients don't break; this new collapsed endpoint is convenient for the
+    Budget Settings page which renders both panels in one render.
+    """
+    import dashboard as _d
+    cfg = _d._get_budget_config()
+    overrides_list = _d._list_agent_budgets()
+    overrides = {
+        row.get("agent_id"): {
+            "daily_limit_usd": row.get("daily_limit_usd"),
+            "monthly_limit_usd": row.get("monthly_limit_usd"),
+            "updated_at": row.get("updated_at"),
+        }
+        for row in overrides_list
+        if row.get("agent_id")
+    }
+    return jsonify({"config": cfg, "agents": overrides})
+
+
+@bp_budget.route("/api/agents/<agent_id>/budget", methods=["GET"])
+def api_agent_budget_get(agent_id):
+    """Return one agent's effective budget + current MTD/daily spend.
+
+    Always returns 200 with a populated payload — when the agent has no
+    override row we still report the global limits with
+    ``daily_limit_source`` / ``monthly_limit_source`` of ``global``
+    (or ``none`` when no global is set either)."""
+    import dashboard as _d
+    return jsonify(_d._get_agent_budget_status(agent_id))
+
+
+@bp_budget.route("/api/agents/<agent_id>/budget", methods=["PUT"])
+def api_agent_budget_put(agent_id):
+    """Upsert a per-agent budget override row.
+
+    Body: ``{"daily_limit_usd": 5.0, "monthly_limit_usd": 100.0}``.
+    Either field may be omitted (or null) to fall back to global on that
+    side. Non-numeric inputs are rejected."""
+    import dashboard as _d
+    if not agent_id:
+        return jsonify({"ok": False, "error": "agent_id required"}), 400
+    data = request.get_json(silent=True) or {}
+    raw_daily = data.get("daily_limit_usd")
+    raw_monthly = data.get("monthly_limit_usd")
+
+    def _norm(v, name):
+        if v is None or v == "":
+            return None, None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None, f"{name} must be a number"
+        if f < 0:
+            return None, f"{name} must be >= 0"
+        return f, None
+
+    daily, err = _norm(raw_daily, "daily_limit_usd")
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    monthly, err = _norm(raw_monthly, "monthly_limit_usd")
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    ok = _d._set_agent_budget(
+        agent_id, daily_limit_usd=daily, monthly_limit_usd=monthly
+    )
+    if not ok:
+        return jsonify({"ok": False, "error": "local store unavailable"}), 500
+    return jsonify({"ok": True, "budget": _d._get_agent_budget_status(agent_id)})
+
+
+@bp_budget.route("/api/agents/<agent_id>/budget", methods=["DELETE"])
+def api_agent_budget_delete(agent_id):
+    """Remove the per-agent override row — agent falls back to global."""
+    import dashboard as _d
+    if not agent_id:
+        return jsonify({"ok": False, "error": "agent_id required"}), 400
+    deleted = _d._delete_agent_budget(agent_id)
+    return jsonify({"ok": True, "deleted": int(deleted)})
+
+
 @bp_budget.route("/api/budget/test-telegram", methods=["POST"])
 def api_budget_test_telegram():
     """Send a test Telegram notification using saved config."""
