@@ -4142,7 +4142,14 @@ function toggleCronAutoRefresh() {
 async function loadCrons() {
   var data = await fetch('/api/crons').then(r => r.json());
   _cronJobs = data.jobs || [];
-  // Show/hide cron action buttons based on gateway support
+  // Cron actions (create / pause / fix / kill-all) hit the local OpenClaw
+  // gateway, which is always reachable from the OSS dashboard but is
+  // cloud-disabled from the iframe. Default to true for the OSS-dashboard
+  // case so the "+ New Job" button is actually visible — the empty-state
+  // copy says to click it. Cloud-iframe stays false so we don't dangle
+  // controls that 410 when used.
+  _cronActionsAvailable = !window.CLOUD_MODE;
+  // Show/hide cron action buttons based on gateway availability
   document.querySelectorAll('.cron-action-btn').forEach(function(btn) {
     btn.style.display = _cronActionsAvailable ? '' : 'none';
   });
@@ -4304,9 +4311,17 @@ function renderCrons() {
 
   var jobs = _cronView === 'paused' ? paused : active;
   if (jobs.length === 0) {
-    var msg = _cronView === 'paused'
-      ? 'No paused jobs. Disable any active job to see it here.'
-      : 'No active cron jobs yet. Click "+ New Job" to create one.';
+    var msg;
+    if (_cronView === 'paused') {
+      msg = 'No paused jobs. Disable any active job to see it here.';
+    } else if (window.CLOUD_MODE) {
+      // In cloud iframe mode the "+ New Job" button is hidden because
+      // cron-create hits a cloud-disabled endpoint; pointing the user
+      // at an invisible button (clawmetry-cloud#793) is a UX dead-end.
+      msg = 'No active cron jobs yet. Create one from the OSS dashboard on the host running OpenClaw.';
+    } else {
+      msg = 'No active cron jobs yet. Click "+ New Job" to create one.';
+    }
     listEl.innerHTML = '<div style="color:var(--text-muted);padding:24px;text-align:center;font-size:13px;">' + msg + '</div>';
     return;
   }
