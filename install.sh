@@ -16,6 +16,21 @@ echo -e "  ${BOLD}🦞 ClawMetry${NC}  ${DIM}AI Observability for OpenClaw${NC}"
 echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
 
+# ── Pre-flight: detect existing daemon ──────────────────────────────────────
+# Re-running ``curl install.sh | bash`` against an already-installed copy used
+# to leave the OLD pip-launched daemon (running stale code) alive next to the
+# fresh venv binary. Both processes raced for the DuckDB write lock and every
+# internal query 500'd with "Conflicting lock is held in <python> (PID …)".
+# The launchctl/systemd restart blocks below only kick OS-managed jobs — they
+# do nothing for daemons that the user started by hand. We track the
+# pre-existing daemon here so the post-install cleanup block (further down)
+# can ``pkill -f`` it after the new code is in place.
+CLAWMETRY_RESTART_AFTER=0
+if pgrep -f "clawmetry\.sync|clawmetry --port|clawmetry$" >/dev/null 2>&1; then
+  echo -e "  ${DIM}↻ Existing clawmetry daemon detected — will restart it after upgrade${NC}"
+  CLAWMETRY_RESTART_AFTER=1
+fi
+
 # ── Detect OS ───────────────────────────────────────────────────────────────
 
 OS="$(uname -s)"
@@ -198,6 +213,26 @@ if [ "$OS" = "Linux" ]; then
     echo -e "  ${DIM}If clawmetry was already running, restart it with:${NC}"
     echo -e "  ${DIM}  pkill -f clawmetry && nohup clawmetry &${NC}"
   fi
+fi
+
+# ── Post-install: kill stray pre-existing daemons ───────────────────────────
+# The launchctl/systemd blocks above only restart OS-managed jobs. If the
+# user originally started clawmetry by hand (``pip install clawmetry &&
+# clawmetry --port 8900``), that pid is still attached to the OLD venv we
+# just deleted — and now races the freshly-installed daemon for the DuckDB
+# write lock. ``pkill -f`` here ensures the OLD daemon exits so the NEW one
+# (which the launchctl/systemd block above will respawn, or which the user
+# will respawn with ``clawmetry``) takes over cleanly.
+#
+# Guarded by the pre-flight detect so we don't kill a daemon that wasn't
+# there when the installer started — that case would either (a) be the
+# launchctl/systemd job we just kickstarted, or (b) be unrelated.
+if [ "$CLAWMETRY_RESTART_AFTER" = "1" ]; then
+  pkill -f "clawmetry\.sync" >/dev/null 2>&1 || true
+  # Wait briefly for the kernel to release the DuckDB write lock so the
+  # next ``clawmetry`` invocation doesn't immediately race the dying pid.
+  sleep 1
+  echo -e "  ${DIM}↺ Killed stray pre-existing daemon (lock released)${NC}"
 fi
 
 echo ""
