@@ -1,14 +1,12 @@
 """E2E contract test: Telegram messages → DuckDB → /api/brain-history.
 
 This file pins down the END-TO-END shape that the Telegram (and any other
-chat-channel) ingest path MUST satisfy. It is intentionally written
-*before* the ingest path lands so it acts as a regression contract for
-the in-flight work tracked under agent ``aca53ec8``.
+chat-channel) ingest path MUST satisfy.
 
 Pipeline under test:
 
     OpenClaw filesystem (per-chat .jsonl)
-        →  ClawMetry sync.py (``_ingest_channel_directory``)
+        →  ClawMetry sync.py (``sync_channel_messages``)
         →  Local DuckDB (``channel_messages`` table)
         →  /api/brain-history (renders chat_id/sender/body)
 
@@ -19,17 +17,11 @@ Why this exists:
      DuckDB writer, brain-history reader, JSON shaping).
   3. Documents the expected end-to-end JSON shape for reviewers.
 
-Why every test is skipped today:
-  ``clawmetry.sync._ingest_channel_directory`` does not exist yet — it is
-  the deliverable of the ingest PR (agent ``aca53ec8``). When that PR
-  merges, the ``_INGEST_FN`` import below resolves and every test in the
-  module starts running automatically. No edits required here.
-
 Hard rules followed:
   * ``monkeypatch`` for env vars (no global mutation).
   * ``tmp_path`` everywhere — never touches ``~/.openclaw`` or
     ``~/.clawmetry``.
-  * No celebrity / real-name strings in payloads (per project policy).
+  * No real-name strings in payloads (per project policy).
 """
 
 from __future__ import annotations
@@ -45,26 +37,22 @@ from flask import Flask
 # --------------------------------------------------------------------------- #
 # Ingest-function probe
 #
-# The contract is: ``clawmetry.sync`` exports a function that, given a
-# directory of per-chat ``.jsonl`` files and a provider label, ingests
-# every event into the local DuckDB ``channel_messages`` table.
-#
-# We do the import in a try/except so the module loads even on branches
-# that pre-date the ingest PR. The module-level ``pytestmark`` skip then
-# fires for every test body. Once the function lands, the import succeeds
-# and the skip evaporates.
+# The contract is: ``clawmetry.sync`` exports ``sync_channel_messages``
+# (landed in #1192), which iterates ``~/.openclaw/<provider>/`` per the
+# canonical ``_CHANNEL_DIRS`` list and ingests every event into the local
+# DuckDB ``channel_messages`` table. We probe for it so the module still
+# loads on branches that pre-date that ingest PR (skip rather than crash).
 # --------------------------------------------------------------------------- #
 try:  # pragma: no cover — exercised by the skipif gate
-    from clawmetry.sync import _ingest_channel_directory as _INGEST_FN  # noqa: F401
+    from clawmetry.sync import sync_channel_messages  # noqa: F401 — from #1192
     _INGEST_AVAILABLE = True
 except Exception:
-    _INGEST_FN = None  # type: ignore[assignment]
     _INGEST_AVAILABLE = False
 
 pytestmark = pytest.mark.skipif(
     not _INGEST_AVAILABLE,
-    reason="blocked on aca53ec8 ingest PR "
-           "(clawmetry.sync._ingest_channel_directory not yet defined)",
+    reason="clawmetry.sync.sync_channel_messages not available "
+           "(pre-#1192 branch)",
 )
 
 
@@ -86,13 +74,17 @@ def _wait_flush(store, t: float = 2.0) -> None:
 def _isolated_env(tmp_path, monkeypatch):
     """Point both OpenClaw and ClawMetry at tmp dirs and the local-store
     fast-path at a tmp DuckDB. Reload modules so module-level state
-    (DB path, env reads) picks up the new env."""
+    (DB path, env reads) picks up the new env.
+
+    NOTE: ``sync._get_openclaw_dir()`` reads ``CLAWMETRY_OPENCLAW_DIR``,
+    not ``OPENCLAW_HOME`` — we set both for belt-and-braces."""
     openclaw_home = tmp_path / "openclaw"
     clawmetry_home = tmp_path / "clawmetry"
     openclaw_home.mkdir()
     clawmetry_home.mkdir()
 
     monkeypatch.setenv("OPENCLAW_HOME", str(openclaw_home))
+    monkeypatch.setenv("CLAWMETRY_OPENCLAW_DIR", str(openclaw_home))
     monkeypatch.setenv("CLAWMETRY_HOME", str(clawmetry_home))
     monkeypatch.setenv(
         "CLAWMETRY_LOCAL_STORE_PATH", str(clawmetry_home / "events.duckdb")
@@ -153,11 +145,21 @@ def _seed_chat_file(
     chat_file.write_text("\n".join(json.dumps(e) for e in events) + "\n")
 
 
-def _ingest(env_, provider: str) -> None:
-    """Trigger the ingest path under test."""
-    chan_dir = env_["openclaw_home"] / provider
-    env_["sync"]._ingest_channel_directory(chan_dir, provider=provider)
+def _ingest(env_) -> int:
+    """Trigger the ingest path under test.
+
+    ``sync_channel_messages`` iterates every provider in the canonical
+    ``_CHANNEL_DIRS`` tuple, so a single call drains all seeded channels
+    in one go. Returns the number of newly ingested rows."""
+    cfg = {"api_key": "test-key", "node_id": "test-node"}
+    state: dict = {}
+    paths = {
+        "sessions_dir": str(env_["openclaw_home"]),
+        "log_dir": str(env_["openclaw_home"]),
+    }
+    n = env_["sync"].sync_channel_messages(cfg, state, paths)
     _wait_flush(env_["store"])
+    return n
 
 
 # --------------------------------------------------------------------------- #
@@ -170,7 +172,7 @@ def test_telegram_message_flows_end_to_end(env):
     sample_event = {
         "ts": "2026-05-13T22:54:00Z",
         "chat_id": f"telegram:{chat_id}",
-        "sender": "tester-one",
+        "sender_name": "tester-one",
         "sender_id": chat_id,
         "text": "hello, how are you doing?",
         "provider": "telegram",
@@ -183,7 +185,7 @@ def test_telegram_message_flows_end_to_end(env):
         events=[sample_event],
     )
 
-    _ingest(env, "telegram")
+    _ingest(env)
 
     # 4. Verify the row landed in DuckDB via the typed query helper.
     rows = env["store"].query_channel_messages(provider="telegram", limit=10)
@@ -236,7 +238,7 @@ def test_outbound_message_renders_as_agent(env):
         events=[{
             "ts": "2026-05-13T23:00:00Z",
             "chat_id": f"telegram:{chat_id}",
-            "sender": "agent-bot",
+            "sender_name": "agent-bot",
             "sender_id": "bot",
             "text": "Sure, here is the result.",
             "provider": "telegram",
@@ -244,7 +246,7 @@ def test_outbound_message_renders_as_agent(env):
         }],
     )
 
-    _ingest(env, "telegram")
+    _ingest(env)
 
     rows = env["store"].query_channel_messages(provider="telegram", limit=10)
     assert any(r["direction"] == "out" for r in rows), (
@@ -280,7 +282,7 @@ def test_multiline_text_survives_roundtrip(env):
         events=[{
             "ts": "2026-05-13T23:01:00Z",
             "chat_id": f"telegram:{chat_id}",
-            "sender": "tester-multiline",
+            "sender_name": "tester-multiline",
             "sender_id": chat_id,
             "text": payload,
             "provider": "telegram",
@@ -288,7 +290,7 @@ def test_multiline_text_survives_roundtrip(env):
         }],
     )
 
-    _ingest(env, "telegram")
+    _ingest(env)
 
     rows = env["store"].query_channel_messages(provider="telegram", limit=10)
     assert rows, "multi-line message did not ingest"
@@ -312,7 +314,7 @@ def test_unicode_emoji_byte_identical(env):
         events=[{
             "ts": "2026-05-13T23:02:00Z",
             "chat_id": f"telegram:{chat_id}",
-            "sender": "tester-unicode",
+            "sender_name": "tester-unicode",
             "sender_id": chat_id,
             "text": payload,
             "provider": "telegram",
@@ -320,7 +322,7 @@ def test_unicode_emoji_byte_identical(env):
         }],
     )
 
-    _ingest(env, "telegram")
+    _ingest(env)
 
     rows = env["store"].query_channel_messages(provider="telegram", limit=10)
     assert rows, "unicode message did not ingest"
@@ -333,15 +335,16 @@ def test_unicode_emoji_byte_identical(env):
 # Bonus: missing provider directory (graceful no-op)
 # --------------------------------------------------------------------------- #
 def test_missing_directory_is_silent_noop(env):
-    """When the per-provider directory does not exist (user never set up
-    Telegram), the ingest must be a silent no-op — no exception, no
-    spurious rows. This protects every other call site that loops over
-    all known providers."""
+    """When NO per-provider directory exists (user never set up any
+    chat channel), the ingest must be a silent no-op — no exception,
+    no spurious rows. This protects every call site that loops over
+    all known providers via ``_CHANNEL_DIRS``."""
     missing = env["openclaw_home"] / "telegram"  # we never create it
     assert not missing.exists(), "preflight: directory should not exist"
 
-    # Must NOT raise.
-    env["sync"]._ingest_channel_directory(missing, provider="telegram")
+    # Must NOT raise. Returns 0 since every provider dir is absent.
+    n = _ingest(env)
+    assert n == 0, f"missing dirs should ingest 0 rows, got {n}"
 
     rows = env["store"].query_channel_messages(provider="telegram", limit=10)
     assert rows == [], "missing dir should produce zero rows"
@@ -360,7 +363,7 @@ def test_two_channels_at_once(env):
         events=[{
             "ts": "2026-05-13T23:03:00Z",
             "chat_id": "telegram:9000000004",
-            "sender": "tester-tg",
+            "sender_name": "tester-tg",
             "sender_id": "9000000004",
             "text": "from telegram",
             "provider": "telegram",
@@ -374,7 +377,7 @@ def test_two_channels_at_once(env):
         events=[{
             "ts": "2026-05-13T23:04:00Z",
             "chat_id": "signal:9000000005",
-            "sender": "tester-sg",
+            "sender_name": "tester-sg",
             "sender_id": "9000000005",
             "text": "from signal",
             "provider": "signal",
@@ -382,8 +385,8 @@ def test_two_channels_at_once(env):
         }],
     )
 
-    _ingest(env, "telegram")
-    _ingest(env, "signal")
+    # Single call drains every provider in _CHANNEL_DIRS.
+    _ingest(env)
 
     tg_rows = env["store"].query_channel_messages(provider="telegram", limit=10)
     sg_rows = env["store"].query_channel_messages(provider="signal", limit=10)
