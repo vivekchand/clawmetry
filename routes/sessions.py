@@ -3471,3 +3471,167 @@ def api_session_export(session_id):
                 "Content-Disposition": f'attachment; filename="{session_id}.csv"'
             }
         )
+
+
+# ── Model-transition detection ──────────────────────────────────────────────
+
+
+def _detect_model_transitions(path):
+    """Scan a session JSONL and return turns where model or provider changed.
+
+    Returns a list of dicts: {turn, ts, from_model, from_provider,
+    to_model, to_provider}.  Empty list when no transitions exist or the
+    file cannot be read.
+    """
+    transitions = []
+    prev_model = None
+    prev_provider = None
+    turn = 0
+    try:
+        with open(path, "r", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                # Support both OpenClaw envelope ({type:"message", message:{…}})
+                # and raw {role, model, …} formats.
+                msg = obj
+                if obj.get("type") in ("message", "user", "assistant") and isinstance(
+                    obj.get("message"), dict
+                ):
+                    msg = obj["message"]
+                if msg.get("role") != "assistant":
+                    continue
+                turn += 1
+                model = (msg.get("model") or "").strip()
+                provider = (msg.get("provider") or "").strip()
+                ts = (
+                    obj.get("timestamp")
+                    or obj.get("time")
+                    or msg.get("timestamp")
+                    or ""
+                )
+                if prev_model is not None and model and (
+                    model != prev_model or provider != prev_provider
+                ):
+                    transitions.append(
+                        {
+                            "turn": turn,
+                            "ts": ts,
+                            "from_model": prev_model,
+                            "from_provider": prev_provider,
+                            "to_model": model,
+                            "to_provider": provider,
+                        }
+                    )
+                if model:
+                    prev_model = model
+                    prev_provider = provider
+                elif prev_model is None:
+                    prev_model = ""
+                    prev_provider = ""
+    except Exception:
+        pass
+    return transitions
+
+
+@bp_sessions.route("/api/sessions/<sid>/model-transitions")
+def api_session_model_transitions(sid):
+    """Return model/provider transitions detected within a single session."""
+    import dashboard as _d
+    if not sid or any(c in sid for c in ("/", "\\", "..")):
+        return jsonify({"error": "invalid session id"}), 400
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    path = os.path.join(sessions_dir, sid + ".jsonl")
+    if not os.path.isfile(path):
+        return jsonify({"error": "session not found"}), 404
+    transitions = _detect_model_transitions(path)
+    return jsonify(
+        {
+            "sessionId": sid,
+            "transitions": transitions,
+            "count": len(transitions),
+            "has_transitions": bool(transitions),
+        }
+    )
+
+
+@bp_sessions.route("/api/fallbacks")
+def api_fallbacks():
+    """Aggregate model/provider fallback summary across recent sessions.
+
+    Query params:
+      limit  — max sessions to scan (default 100, max 500)
+      top    — how many transition pairs to return (default 10)
+
+    Returns: {scanned, sessions_affected, top_transitions:[{from_model,
+    to_model, from_provider, to_provider, count, sessions:[sid,…]}]}
+    """
+    import dashboard as _d
+    try:
+        limit = max(1, min(500, int(request.args.get("limit", 100))))
+    except (TypeError, ValueError):
+        limit = 100
+    try:
+        top = max(1, min(50, int(request.args.get("top", 10))))
+    except (TypeError, ValueError):
+        top = 10
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+        "~/.openclaw/agents/main/sessions"
+    )
+    import glob as _glob
+
+    files = sorted(
+        (
+            f
+            for f in _glob.glob(os.path.join(sessions_dir, "*.jsonl"))
+            if ".deleted." not in f and ".trajectory." not in f
+        ),
+        key=os.path.getmtime,
+        reverse=True,
+    )[:limit]
+
+    pair_counts: dict = {}  # (from_model, from_provider, to_model, to_provider) → {count, sessions}
+    sessions_affected = set()
+
+    for fpath in files:
+        sid = os.path.basename(fpath).replace(".jsonl", "")
+        transitions = _detect_model_transitions(fpath)
+        if not transitions:
+            continue
+        sessions_affected.add(sid)
+        for t in transitions:
+            key = (t["from_model"], t["from_provider"], t["to_model"], t["to_provider"])
+            if key not in pair_counts:
+                pair_counts[key] = {"count": 0, "sessions": []}
+            pair_counts[key]["count"] += 1
+            if sid not in pair_counts[key]["sessions"]:
+                pair_counts[key]["sessions"].append(sid)
+
+    ranked = sorted(pair_counts.items(), key=lambda x: x[1]["count"], reverse=True)[:top]
+    top_transitions = [
+        {
+            "from_model": k[0],
+            "from_provider": k[1],
+            "to_model": k[2],
+            "to_provider": k[3],
+            "count": v["count"],
+            "sessions": v["sessions"][:10],
+        }
+        for k, v in ranked
+    ]
+
+    return jsonify(
+        {
+            "scanned": len(files),
+            "sessions_affected": len(sessions_affected),
+            "top_transitions": top_transitions,
+        }
+    )
