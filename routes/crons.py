@@ -31,6 +31,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 bp_crons = Blueprint('crons', __name__)
 
@@ -383,7 +384,7 @@ def api_crons():
     # serve directly from DuckDB. Falls through to gateway/file otherwise
     # (so a fresh install with no local store sees the same data as before
     # — zero-change default).
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_crons()
         if fast is not None:
             return jsonify(fast)
@@ -571,7 +572,7 @@ def api_cron_runs(job_id):
     Returns enriched list with p50/p95 duration stats.
     """
     # Epic #964 phase 4: opt-in local-store fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast_runs = _try_local_store_cron_runs(job_id)
         if fast_runs is not None:
             import dashboard as _d
@@ -649,7 +650,7 @@ def api_cron_run_log():
     session_id = request.args.get("session_id", "")
     if not session_id:
         return jsonify({"error": "session_id required"}), 400
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_cron_run_log(session_id)
         if fast is not None:
             return jsonify(fast)
@@ -693,7 +694,7 @@ def api_cron_run_log():
 def api_cron_health_summary():
     """Aggregate cron health: per-job success rate, cost, anomaly flags, silent detection."""
     # Epic #964 phase 4: opt-in local-store fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_cron_health_summary()
         if fast is not None:
             return jsonify(fast)
@@ -1031,7 +1032,7 @@ def api_agent_intentions():
     except ValueError:
         max_events = 200
 
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_agent_intentions(days, include_disabled, max_events)
         if fast is not None:
             return jsonify(fast)

@@ -42,6 +42,7 @@ import time
 from datetime import datetime, timedelta
 
 from flask import Blueprint, Response, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 bp_health = Blueprint('health', __name__)
 
@@ -184,7 +185,7 @@ def api_reliability():
     # Epic #964 fast path — only when explicitly opted in. Falls through
     # to the HistoryDB scorer on any failure so behaviour is identical
     # for users without local_store data.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_reliability(window)
         if fast is not None:
             return jsonify(fast)
@@ -299,7 +300,7 @@ def api_heatmap():
     # CLAWMETRY_LOCAL_STORE_READ=1 AND the store has events in the window,
     # serve from DuckDB via the daemon HTTP proxy (cross-process safe).
     # Falls through to the JSONL/log scan otherwise.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_heatmap(n_days)
         if fast is not None:
             return jsonify(fast)
@@ -976,7 +977,7 @@ def api_service_status():
     """
     import dashboard as _d
     # Epic #964 fast path. Composite of heartbeats + system_snapshots.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_service_status()
         if fast is not None:
             return jsonify(fast)
@@ -1147,7 +1148,7 @@ def api_heartbeat_status():
     import dashboard as _d
     # Epic #964: opt-in local-store fast path. Optional ?node=<node_id> scopes
     # the lookup to one fleet node (otherwise: most-recent across all nodes).
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         node = (request.args.get("node") or "").strip() or None
         fast = _try_local_store_heartbeat_status(node)
         if fast is not None:
@@ -1348,7 +1349,7 @@ def api_sandbox_status():
     import dashboard as _d
     # Epic #964 fast path. When the daemon has written a sandbox snapshot
     # to DuckDB, prefer that — it's the most recently-collected view.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_sandbox_status()
         if fast is not None:
             return jsonify(fast)
@@ -1599,7 +1600,7 @@ def api_loop_detection():
     # Epic #964 fast path. When tool_call events are present in the local
     # DuckDB, run loop detection directly against the columnar store
     # instead of walking ~/.openclaw/agents/main/sessions/*.jsonl.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_loop_detection(window, min_repeats)
         if fast is not None:
             return jsonify(fast)
@@ -1854,7 +1855,7 @@ def api_mcp_stats():
     import dashboard as _d
     # Epic #964 fast path. When mcp_call events are present in the local
     # DuckDB, aggregate from there instead of re-walking session JSONLs.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_mcp_stats()
         if fast is not None:
             return jsonify(fast)

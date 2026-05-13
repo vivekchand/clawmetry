@@ -202,7 +202,7 @@ def test_reliability_falls_back_when_env_unset(tmp_path, monkeypatch):
     the 'History module not available' branch (because we stub
     _history_db=None)."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "clawmetry.duckdb"))
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
     _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls
@@ -273,7 +273,7 @@ def test_sandbox_status_fast_path_returns_snapshot_data(app):
 def test_sandbox_status_falls_back_when_env_unset(tmp_path, monkeypatch):
     """No env flag → never read from DuckDB even with a fresh snapshot."""
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "clawmetry.duckdb"))
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
     _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls
@@ -376,7 +376,7 @@ def test_mcp_stats_fast_path_aggregates_from_events(app):
 
 def test_mcp_stats_falls_back_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "clawmetry.duckdb"))
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
     _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls
@@ -456,7 +456,7 @@ def test_loop_detection_fast_path_finds_repeats(app):
 
 def test_loop_detection_falls_back_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "clawmetry.duckdb"))
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
     _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls
@@ -557,7 +557,7 @@ def test_service_status_uses_snapshots_when_present(app):
 
 def test_service_status_falls_back_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "clawmetry.duckdb"))
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
     _stub_dashboard(monkeypatch)
 
     import clawmetry.local_store as ls

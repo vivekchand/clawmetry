@@ -27,6 +27,7 @@ import urllib.error
 import urllib.request
 
 from flask import Blueprint, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 bp_advisor = Blueprint("advisor", __name__)
 
@@ -194,7 +195,7 @@ def _gather_context(limit_events: int = MAX_CONTEXT_EVENTS) -> dict:
     # own fast path), but this short-circuit keeps the advisor on a single
     # data plane and avoids the cross-route Flask test_request_context dance
     # when the local store is the source of truth.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_advisor_context(limit_events)
         if fast is not None:
             return fast
@@ -459,7 +460,7 @@ def _try_local_store_advisor_status() -> dict | None:
 @bp_advisor.route("/api/advisor/status")
 def api_advisor_status():
     """Cheap probe so the UI can decide whether to show the input."""
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_advisor_status()
         if fast is not None:
             return jsonify(fast)

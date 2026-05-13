@@ -21,24 +21,28 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry.config import is_local_store_read_enabled
+
 bp_channels = Blueprint('channels', __name__)
 
 _log = logging.getLogger("clawmetry.routes.channels")
 
 
 # ── Epic #1032 Phase 5: channel-config fast-path (DuckDB) ──────────────────
-# When CLAWMETRY_LOCAL_STORE_READ=1 the per-channel status endpoint serves
-# the non-secret status summary straight from the local DuckDB instead of
-# hitting the gateway / parsing YAML on every request. The ciphertext blob
-# stays on this node; cloud never sees plaintext.
+# When the local-store fast path is enabled (default since 0.12.174) the
+# per-channel status endpoint serves the non-secret status summary straight
+# from the local DuckDB instead of hitting the gateway / parsing YAML on
+# every request. The ciphertext blob stays on this node; cloud never sees
+# plaintext.
 
 def _local_store_read_enabled() -> bool:
-    """Feature-gate for the DuckDB-backed channel-config fast path.
+    """Backward-compat shim — delegates to ``clawmetry.config``.
 
-    Defaults OFF until rolled out broadly. Once stable we'll flip the default
-    to ON and remove the env-var check. Matches the gating pattern used for
-    other Phase 1/2 local-store reads."""
-    return os.environ.get("CLAWMETRY_LOCAL_STORE_READ", "").strip() in ("1", "true", "yes")
+    Kept so existing call sites (``_channel_config_status_*`` below) don't
+    need to touch the import line. The single source of truth for the
+    feature gate now lives in ``clawmetry/config.py``.
+    """
+    return is_local_store_read_enabled()
 
 
 def _ls_call(method_name, **kwargs):
