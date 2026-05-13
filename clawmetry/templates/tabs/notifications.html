@@ -145,10 +145,13 @@
     var banner = document.getElementById('notifications-free-banner');
     if (banner) banner.style.display = (state.tier === 'free') ? 'block' : 'none';
 
-    // Status line
+    // Status line. Bug #1127: previously counted state.rows.length, which
+    // includes disabled rows (those render as "Connect" cards). Count only
+    // rows whose card actually says "✓ Edit" — i.e. enabled — so the header
+    // matches what the user sees in the grid.
     var status = document.getElementById('notifications-status');
     if (status) {
-      var n = state.rows.length;
+      var n = state.rows.filter(function(r){ return r && r.enabled; }).length;
       status.textContent = (n ? n + ' channel' + (n === 1 ? '' : 's') + ' configured' : 'No channels configured yet.')
         + ' · plan: ' + state.tier;
     }

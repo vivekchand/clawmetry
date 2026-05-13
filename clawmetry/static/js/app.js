@@ -3289,7 +3289,10 @@ async function loadNemoClaw() {
 
     if (!data.installed) {
       if (tab) tab.style.display = 'none';
-      page.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:14px;">NemoClaw not installed on this host.<br><span style="font-size:12px;">Install via <code style="background:var(--bg-secondary);padding:2px 6px;border-radius:3px;">pip install nemoclaw</code></span></div>';
+      // Issue #1127: previously said "pip install nemoclaw" but the package
+      // is not yet publicly released (only a 0.0.0a1 placeholder exists on
+      // PyPI). Replace with an honest "Coming soon" empty state.
+      page.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:14px;">NemoClaw governance is not yet available on this host.<br><span style="font-size:12px;">Coming soon &mdash; NVIDIA NeMo Guardrails integration is in private preview.</span></div>';
       return;
     }
 

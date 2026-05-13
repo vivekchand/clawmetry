@@ -96,12 +96,31 @@
     }
     renderRules();
 
+    // Bug #1127: Badge counted local OSS fires while page only checked cloud
+    // history -> badge "20" with page saying "no alerts fired". Fall back to
+    // the same local /api/alerts/history the nav badge uses when cloud has
+    // nothing (or errors), so the two stay consistent.
     try {
-      const hist = await fetch('/api/cloud-proxy/api/alerts/history?limit=10')
+      const hist = await fetch('/api/cloud-proxy/api/alerts/history?limit=20')
         .then(r => r.json());
       alertsState.history = hist.history || [];
     } catch {
       alertsState.history = [];
+    }
+    if (!alertsState.history.length) {
+      try {
+        const local = await fetch('/api/alerts/history?limit=20').then(r => r.json());
+        const localFires = (local.alerts || []).map(a => ({
+          id: a.id,
+          fired_at: a.fired_at,
+          resolved_at: a.acknowledged ? a.ack_at : null,
+          alert_id: a.rule_id,
+          payload: { name: a.type, actual_value: a.message, threshold_unit: '' },
+        }));
+        alertsState.history = localFires;
+      } catch {
+        // keep empty
+      }
     }
     renderHistory();
 

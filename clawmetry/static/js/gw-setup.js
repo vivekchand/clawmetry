@@ -38,11 +38,23 @@ async function checkGwConfig() {
         const d2 = await r2.json();
         if (d2.ok) { updateGwStatus(true, d2.url); return; }
       }
+      // Bug #1127: don't z-stack the gw-setup overlay on top of an already-
+      // open cloud modal — the two share the same backdrop and confuse the
+      // user. Defer until the cloud modal closes.
+      if (_isCloudModalOpen()) return;
       document.getElementById('gw-setup-overlay').style.display = 'flex';
     } else {
       updateGwStatus(true, d.url);
     }
   } catch(e) {}
+}
+
+function _isCloudModalOpen() {
+  var cm = document.getElementById('cloud-modal-overlay');
+  if (cm && cm.style.display && cm.style.display !== 'none') return true;
+  // Defensive: also honour a generic .cloud-modal.active marker if present.
+  if (document.querySelector && document.querySelector('.cloud-modal.active')) return true;
+  return false;
 }
 
 function updateGwStatus(connected, url) {
@@ -106,6 +118,10 @@ document.addEventListener('DOMContentLoaded', checkGwConfig);
 // ClawMetry Cloud CTA
 var _cloudEmail = '';
 function openCloudModal() {
+  // Bug #1127: suppress the gateway-setup overlay so the user doesn't see two
+  // stacked modals (cloud CTA on top, gw-setup peeking behind it).
+  var gw = document.getElementById('gw-setup-overlay');
+  if (gw && gw.dataset.mandatory !== 'true') gw.style.display = 'none';
   var _cmo = document.getElementById('cloud-modal-overlay');
   document.body.appendChild(_cmo);
   _cmo.style.display = 'flex';
