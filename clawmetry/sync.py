@@ -1343,6 +1343,308 @@ def _extract_channel_message(
     return None
 
 
+# ── v3 underscore-schema parser (#1135) ───────────────────────────────────────
+#
+# OpenClaw writes TWO different jsonl shapes per session:
+#
+#   1. ``<sid>.trajectory.jsonl`` — runtime debug trace sidecar.
+#      Dot.separated event types (``trace.artifacts``, ``model.completed``,
+#      ``prompt.submitted``, ``session.ended``…) with content under
+#      ``data.*``. The trajectory parser path (``_local_ingest_session_batch``
+#      below) was originally written for this shape.
+#
+#   2. ``<sid>.jsonl`` — the canonical user-facing transcript ("v3" schema,
+#      tagged by the leading ``{"type": "session", "version": 3, ...}`` line).
+#      Underscore_separated event types (``message``, ``model_change``,
+#      ``thinking_level_change``, ``tool_use_result``…) with the LLM payload
+#      nested under ``message.{role,content,usage,model}``. Until #1135 the
+#      ingest path stamped ``event_type="message"`` onto these rows AND left
+#      the data shape un-translated, so the dashboard's transcript expander
+#      (designed for the dot.separated shape from PR #1132) saw none of the
+#      content.
+#
+# ``_parse_v3_event`` maps a v3 underscore event to the SAME row shape that
+# the trajectory path produces — same dot-separated ``event_type`` values,
+# same ``data.{finalPromptText,completionText,toolMetas,promptCache.…}``
+# nested keys — so the read-side handlers in PR #1132 work unchanged. It
+# returns ``None`` for plumbing types we deliberately drop
+# (``thinking_level_change``, ``cwd_change``, …) and unknown types.
+
+# Top-level v3 event types we recognise. Anything else falls through to the
+# trajectory parser, which itself drops unknowns. Keep this set narrow to
+# avoid mis-routing trajectory events that happen to have a synonym name.
+_V3_KNOWN_TYPES = frozenset({
+    "session",
+    "model_change",
+    "thinking_level_change",
+    "cwd_change",
+    "message",
+    "tool_use",
+    "tool_use_result",
+})
+
+# Plumbing event types that carry no transcript-visible content. Returning
+# None here is intentional — the dashboard's brain feed and transcript view
+# are noisier, not richer, when these are surfaced.
+_V3_SKIP_TYPES = frozenset({
+    "thinking_level_change",
+    "cwd_change",
+})
+
+
+def _is_v3_event(obj: dict) -> bool:
+    """Sniff a single parsed JSONL event for the v3 underscore schema.
+
+    The first line of a v3 file is always ``{"type": "session", "version": N,
+    ...}`` — that's the strongest signal. For subsequent lines we look for
+    type-name + structural cues that only the v3 shape carries:
+
+    * ``model_change``, ``thinking_level_change``, ``cwd_change``,
+      ``tool_use``, ``tool_use_result`` — these names are NEW in v3 and
+      never appear in trajectory or legacy synthesised events.
+    * ``message`` is overloaded: legacy synthesised events use
+      ``{"type":"message","role":"user","text":"…"}`` (top-level fields)
+      while v3 nests under ``{"type":"message","message":{role,content,…}}``.
+      We require the nested ``message`` dict to disambiguate; without it
+      the line is treated as legacy and falls through to the trajectory
+      parser (which preserves the existing event_type and data).
+    """
+    if not isinstance(obj, dict):
+        return False
+    t = obj.get("type")
+    if not isinstance(t, str):
+        return False
+    if t == "session" and obj.get("version") is not None:
+        return True
+    if t == "message":
+        # Disambiguate v3 (nested message dict) from legacy synthesised
+        # events that ALSO use type=message but with top-level role/text.
+        return isinstance(obj.get("message"), dict)
+    return t in _V3_KNOWN_TYPES
+
+
+def _v3_content_to_text(content) -> str:
+    """Flatten a v3 ``message.content`` (string OR list of typed blocks)
+    into a single plain-text string. Tool-use blocks and other non-text
+    blocks are preserved separately by the caller — this helper deliberately
+    drops them so the resulting text mirrors what the trajectory schema
+    stored in ``finalPromptText``/``completionText`` (the printable bit)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                txt = block.get("text") or ""
+                if txt:
+                    parts.append(txt)
+        return "\n".join(parts)
+    if content is None:
+        return ""
+    return str(content)
+
+
+def _v3_extract_tool_metas(content) -> list[dict]:
+    """Pull tool_use blocks out of an assistant ``message.content`` array
+    and project them onto the ``toolMetas`` shape PR #1132's expander reads
+    (``{name, input}``). Returns [] when there are no tool calls."""
+    out: list[dict] = []
+    if not isinstance(content, list):
+        return out
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "tool_use":
+            continue
+        out.append({
+            "id": block.get("id"),
+            "name": block.get("name") or "tool",
+            "input": block.get("input") or {},
+        })
+    return out
+
+
+def _parse_v3_event(
+    obj: dict,
+    session_id: str,
+    node_id: str,
+) -> dict | None:
+    """Map ONE v3 underscore-schema event to a normalised local-store row.
+
+    Returns ``None`` for plumbing events we deliberately skip
+    (``thinking_level_change``, ``cwd_change``) and for anything unrecognised
+    inside the v3 namespace — the caller treats ``None`` as "drop this row"
+    rather than re-routing through the trajectory path (the v3 sniff already
+    classified it).
+
+    The output row carries the dot.separated ``event_type`` values and the
+    nested ``data.*`` key paths the trajectory parser produces, so the read
+    side (``_try_local_store_transcript`` / ``_try_local_store_transcript_events``
+    in routes/sessions.py) works unchanged on both shapes.
+    """
+    t = obj.get("type")
+    if not isinstance(t, str):
+        return None
+    if t in _V3_SKIP_TYPES:
+        return None
+
+    ts = obj.get("timestamp") or obj.get("ts") or ""
+    if not ts:
+        # The local store indexes on ts; without it we cannot place the
+        # event on the timeline. Safer to drop than to fabricate.
+        return None
+
+    eid = obj.get("id") or obj.get("eventId") or f"{session_id}:{ts}:{t}"
+
+    # Defaults; overridden per type below.
+    event_type = "unknown"
+    data: dict = {"_v3_type": t}  # preserve the original tag for debugging
+    cost_usd: float | None = None
+    token_count: int | None = None
+    model: str | None = None
+
+    if t == "session":
+        # First line of every v3 file. Project onto session.started so the
+        # brain feed and per-session sidebar see a session-creation marker.
+        event_type = "session.started"
+        data.update({
+            "id": obj.get("id"),
+            "version": obj.get("version"),
+            "cwd": obj.get("cwd"),
+            "timestamp": ts,
+        })
+
+    elif t == "model_change":
+        event_type = "model.changed"
+        model = obj.get("modelId") or obj.get("model")
+        data.update({
+            "modelId": model,
+            "provider": obj.get("provider"),
+            "timestamp": ts,
+        })
+
+    elif t == "message":
+        msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+        role = msg.get("role")
+        content = msg.get("content")
+        text = _v3_content_to_text(content)
+        usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+        # v3 uses Anthropic-style camelCase keys: input / output / totalTokens.
+        # PR #1132's _openclaw_event_tokens reads
+        # data.promptCache.lastCallUsage.{total,input,output}, so we project
+        # there. Cost lives under usage.cost.{total,input,output}.
+        last_call_usage: dict = {}
+        if usage:
+            inp = usage.get("input") or usage.get("input_tokens")
+            outp = usage.get("output") or usage.get("output_tokens")
+            tot = (
+                usage.get("totalTokens")
+                or usage.get("total_tokens")
+                or usage.get("total")
+            )
+            if inp is not None:
+                last_call_usage["input"] = int(inp)
+            if outp is not None:
+                last_call_usage["output"] = int(outp)
+            if tot is not None:
+                try:
+                    last_call_usage["total"] = int(tot)
+                    token_count = int(tot)
+                except (TypeError, ValueError):
+                    pass
+            elif inp is not None and outp is not None:
+                token_count = int(inp) + int(outp)
+
+            cost = usage.get("cost")
+            if isinstance(cost, dict):
+                cv = cost.get("total")
+                if cv is None and cost.get("input") is not None and cost.get("output") is not None:
+                    try:
+                        cv = float(cost["input"]) + float(cost["output"])
+                    except (TypeError, ValueError):
+                        cv = None
+                if cv is not None:
+                    try:
+                        cost_usd = float(cv)
+                    except (TypeError, ValueError):
+                        cost_usd = None
+
+        if role == "user":
+            event_type = "prompt.submitted"
+            data.update({
+                "finalPromptText": text,
+                "timestamp": ts,
+            })
+            if last_call_usage:
+                data["promptCache"] = {"lastCallUsage": last_call_usage}
+        elif role == "assistant":
+            event_type = "model.completed"
+            model = msg.get("model") or model
+            tool_metas = _v3_extract_tool_metas(content)
+            data.update({
+                "completionText": text,
+                "assistantTexts": [text] if text else [],
+                "modelId": model,
+                "provider": msg.get("provider"),
+                "timestamp": ts,
+                "stopReason": msg.get("stopReason"),
+            })
+            if tool_metas:
+                data["toolMetas"] = tool_metas
+            if last_call_usage:
+                data["promptCache"] = {"lastCallUsage": last_call_usage}
+        else:
+            # Unknown role — be conservative, drop rather than mis-classify.
+            return None
+
+    elif t == "tool_use":
+        # Top-level tool_use is rare in v3 (most tool calls live inside
+        # assistant message.content), but if/when one does appear, project
+        # it onto the dot.separated tool.call shape.
+        event_type = "tool.call"
+        data.update({
+            "name": obj.get("name") or "tool",
+            "input": obj.get("input") or {},
+            "id": obj.get("id"),
+            "timestamp": ts,
+        })
+
+    elif t == "tool_use_result":
+        event_type = "tool.result"
+        # ``content`` is typically a list of {type:"text",text:"..."} blocks
+        # or a plain string; flatten so PR #1132's expander finds it under
+        # ``data.output`` / ``data.result``.
+        result_text = _v3_content_to_text(obj.get("content"))
+        data.update({
+            "tool_use_id": obj.get("tool_use_id"),
+            "output": result_text,
+            "result": result_text,
+            "is_error": obj.get("is_error"),
+            "timestamp": ts,
+        })
+
+    else:
+        # Unknown v3 event — log + drop so future schema additions don't
+        # silently land as event_type="unknown" rows that pollute analytics.
+        log.debug("unknown v3 event type %r — skipping (session=%s)", t, session_id)
+        return None
+
+    return {
+        "id": str(eid),
+        "agent_type": "openclaw",
+        "node_id": node_id,
+        "agent_id": "main",
+        "session_id": session_id,
+        "workspace_id": None,
+        "event_type": event_type,
+        "ts": str(ts),
+        "data": data,
+        "cost_usd": cost_usd,
+        "token_count": token_count,
+        "model": model,
+    }
+
+
 def _local_ingest_session_batch(
     batch: list,
     session_file: str,
@@ -1351,7 +1653,17 @@ def _local_ingest_session_batch(
 ) -> None:
     """Translate a batch of raw OpenClaw transcript events into the local
     store's normalised shape and queue them for write. Idempotent at the
-    store level — INSERT OR IGNORE on event id."""
+    store level — INSERT OR IGNORE on event id.
+
+    Schema-aware: events that carry the v3 underscore schema (see
+    ``_is_v3_event`` / ``_parse_v3_event``) are routed through the v3 mapper,
+    which projects them onto the SAME dot.separated event_types and nested
+    data shape that the trajectory parser produces. Everything else falls
+    through to the legacy trajectory path. This per-event sniff (vs. a
+    per-batch one) keeps the code correct when a single batch happens to
+    mix shapes — e.g. the streaming reader hands us tail-of-file v3 lines
+    after a checkpoint switchover.
+    """
     from clawmetry import local_store  # local import: keeps cli/sync importable on Pythons missing sqlite3
 
     store = local_store.get_store()
@@ -1364,13 +1676,27 @@ def _local_ingest_session_batch(
             continue
         # Issue #1088 Phase 4: opportunistically project inbound channel
         # messages into the channel_messages table. Best-effort — never
-        # blocks the events ingest below on a per-row failure.
+        # blocks the events ingest below on a per-row failure. The channel
+        # extractor reads ``message.{role,content}``, which is the v3 shape,
+        # so it works regardless of which parser branch we take next.
         try:
             ch_row = _extract_channel_message(obj, session_id=session_id)
             if ch_row is not None:
                 store.ingest_channel_message(ch_row)
         except Exception as _e:
             log.debug("channel_message extract failed (continuing): %s", _e)
+
+        # v3 underscore schema (#1135) — translate onto the trajectory shape
+        # so the read path works unchanged. ``_parse_v3_event`` returns None
+        # for plumbing/unknown types; we drop those rather than fall back to
+        # the trajectory parser (which would stamp event_type="message"
+        # etc. and re-introduce the bug).
+        if _is_v3_event(obj):
+            row = _parse_v3_event(obj, session_id, node_id)
+            if row is not None:
+                rows.append(row)
+            continue
+
         # Stable per-event id: prefer an explicit id from the transcript, then
         # the openclaw eventId, else compose from session_id + timestamp +
         # message-id-ish hint. INSERT OR IGNORE makes re-delivery harmless.

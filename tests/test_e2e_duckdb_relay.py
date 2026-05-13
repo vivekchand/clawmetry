@@ -306,7 +306,12 @@ def test_daemon_ingest_per_event_type_counts(pipeline):
 
     assert by_type.get("session_start") == EXPECTED_SESSION_STARTS
     assert by_type.get("tool_call")     == EXPECTED_TOOL_CALLS
-    assert by_type.get("model_change")  == EXPECTED_MODEL_CHANGES
+    # After #1135 the v3 underscore parser maps ``model_change`` →
+    # ``model.changed`` (the dot.separated event_type produced by the
+    # trajectory parser) so the read-side handlers work uniformly across
+    # both schemas. Synthesised test events that USE the v3 type name
+    # follow the same translation.
+    assert by_type.get("model.changed") == EXPECTED_MODEL_CHANGES
     assert by_type.get("message")       == EXPECTED_MESSAGES
     assert by_type.get("compaction")    == EXPECTED_COMPACTIONS
     assert by_type.get("session_end")   == EXPECTED_SESSION_ENDS
@@ -436,7 +441,8 @@ def test_relay_shape_events_filtered_by_type(pipeline):
     for et, expected in [
         ("tool_call",     EXPECTED_TOOL_CALLS),
         ("message",       EXPECTED_MESSAGES),
-        ("model_change",  EXPECTED_MODEL_CHANGES),
+        # ``model_change`` is mapped to ``model.changed`` on ingest (#1135).
+        ("model.changed", EXPECTED_MODEL_CHANGES),
         ("compaction",    EXPECTED_COMPACTIONS),
         ("session_start", EXPECTED_SESSION_STARTS),
         ("session_end",   EXPECTED_SESSION_ENDS),
