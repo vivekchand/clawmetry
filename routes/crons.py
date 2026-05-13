@@ -593,6 +593,178 @@ def api_cron_runs(job_id):
     return jsonify(_d._enrich_cron_runs(job_id, runs))
 
 
+def _resolve_cron_runs_jsonl(job_id):
+    """Return the first `~/.openclaw/cron/runs/<jobId>.jsonl` path that exists.
+
+    Candidate roots (in order):
+      1. ``$OPENCLAW_DATA_DIR/cron/runs/<jobId>.jsonl``
+      2. ``$OPENCLAW_HOME/cron/runs/<jobId>.jsonl``
+      3. ``~/.openclaw/cron/runs/<jobId>.jsonl``
+      4. ``~/.clawdbot/cron/runs/<jobId>.jsonl``
+
+    Returns ``None`` when nothing exists. Path-traversal-safe: normalises
+    ``job_id`` and rejects anything containing ``/`` or ``..``.
+    """
+    # Defence in depth: refuse anything that could escape the runs dir.
+    if not job_id or "/" in job_id or "\\" in job_id or ".." in job_id:
+        return None
+    candidates_roots = []
+    data_dir = os.environ.get("OPENCLAW_DATA_DIR", "").strip()
+    if data_dir:
+        candidates_roots.append(os.path.expanduser(data_dir))
+    home = os.environ.get("OPENCLAW_HOME", "").strip()
+    if home:
+        candidates_roots.append(os.path.expanduser(home))
+    candidates_roots.extend([
+        os.path.expanduser("~/.openclaw"),
+        os.path.expanduser("~/.clawdbot"),
+    ])
+    for root in candidates_roots:
+        runs_dir = os.path.join(root, "cron", "runs")
+        fpath = os.path.normpath(os.path.join(runs_dir, f"{job_id}.jsonl"))
+        # Make sure we didn't escape runs_dir
+        norm_runs_dir = os.path.normpath(runs_dir)
+        if not (fpath == norm_runs_dir or fpath.startswith(norm_runs_dir + os.sep)):
+            continue
+        if os.path.isfile(fpath):
+            return fpath
+    return None
+
+
+def _read_cron_run_lines(fpath, limit):
+    """Read the last ``limit`` JSONL records from ``fpath``.
+
+    Returns a list of run dicts shaped as:
+
+        {ts, duration_ms, status, error, usage, delivered_at, next_run_at}
+
+    Malformed lines are skipped (with a debug log). Order: most-recent first.
+    On any read error returns an empty list — callers expose a 200 with
+    ``runs: []`` so the UI can show "no history yet" rather than a 500.
+    """
+    out = []
+    try:
+        with open(fpath, "r", errors="replace") as f:
+            # Cheap-but-correct: keep only the last `limit` parsed records.
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    # Malformed line — skip silently in prod, debug print in
+                    # dev. Matches the "never crash on bad input" convention.
+                    if os.environ.get("DEBUG"):
+                        print(f"[crons] skip malformed line in {fpath}")
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                # Normalise field names (gateway writers have varied between
+                # camelCase + snake_case over the years).
+                ts = (
+                    obj.get("ts")
+                    or obj.get("timestamp")
+                    or obj.get("startedAt")
+                    or obj.get("started_at")
+                )
+                if isinstance(ts, str):
+                    ts = _parse_iso_to_ms(ts)
+                duration_ms = (
+                    obj.get("duration_ms")
+                    or obj.get("durationMs")
+                    or obj.get("duration")
+                    or 0
+                )
+                try:
+                    duration_ms = int(duration_ms)
+                except (TypeError, ValueError):
+                    duration_ms = 0
+                status = obj.get("status") or obj.get("result") or "unknown"
+                err = obj.get("error") or obj.get("err") or ""
+                if err and not isinstance(err, str):
+                    err = str(err)
+                if err and len(err) > 200:
+                    err = err[:200]
+                usage = obj.get("usage") or {}
+                if not isinstance(usage, dict):
+                    usage = {}
+                delivered_at = (
+                    obj.get("delivered_at")
+                    or obj.get("deliveredAt")
+                    or (
+                        obj.get("deliveryStatus", {}).get("deliveredAt")
+                        if isinstance(obj.get("deliveryStatus"), dict)
+                        else None
+                    )
+                )
+                if isinstance(delivered_at, str):
+                    delivered_at = _parse_iso_to_ms(delivered_at) or None
+                next_run_at = (
+                    obj.get("next_run_at")
+                    or obj.get("nextRunAt")
+                    or obj.get("nextRunAtMs")
+                )
+                if isinstance(next_run_at, str):
+                    next_run_at = _parse_iso_to_ms(next_run_at) or None
+                out.append({
+                    "ts": int(ts or 0),
+                    "duration_ms": duration_ms,
+                    "status": str(status),
+                    "error": err,
+                    "usage": usage,
+                    "delivered_at": delivered_at,
+                    "next_run_at": next_run_at,
+                })
+    except Exception as e:
+        if os.environ.get("DEBUG"):
+            print(f"[crons] failed to read {fpath}: {e}")
+        return []
+    # Most-recent first, then clamp to `limit`.
+    out.sort(key=lambda r: r.get("ts") or 0, reverse=True)
+    return out[:limit]
+
+
+@bp_crons.route("/api/crons/<job_id>/runs")
+def api_crons_job_runs(job_id):
+    """Per-job run timeline for the Cron detail panel (closes #605).
+
+    Reads ``~/.openclaw/cron/runs/<jobId>.jsonl`` and returns the last
+    ``limit`` runs (default 30, capped at 100) most-recent first. This is
+    a deliberately separate endpoint from ``/api/cron/<job_id>/runs``
+    (which returns p50/p95-enriched, gateway-backed history) — this one
+    is the raw per-run feed the timeline UI needs (duration, status,
+    error, usage, delivered, next-run).
+
+    Always returns 200, even when the file is missing or every line is
+    malformed: payload is ``{jobId, runs: [], count: 0, source}``. The
+    Cron UI treats an empty list as "no history yet".
+    """
+    try:
+        limit = int(request.args.get("limit", "30"))
+    except (TypeError, ValueError):
+        limit = 30
+    limit = max(1, min(limit, 100))
+
+    fpath = _resolve_cron_runs_jsonl(job_id)
+    if not fpath:
+        return jsonify({
+            "jobId": job_id,
+            "runs": [],
+            "count": 0,
+            "source": "jsonl",
+            "file": None,
+        })
+    runs = _read_cron_run_lines(fpath, limit)
+    return jsonify({
+        "jobId": job_id,
+        "runs": runs,
+        "count": len(runs),
+        "source": "jsonl",
+        "file": fpath,
+    })
+
+
 @bp_crons.route("/api/cron/<job_id>/kill", methods=["POST"])
 def api_cron_kill(job_id):
     """Kill switch: disable a single cron job by ID.

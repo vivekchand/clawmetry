@@ -4560,16 +4560,151 @@ function toggleCronExpand(jobId) {
   renderCrons();
 }
 
+// Renders the per-job run timeline (issue #605): sparkline + stat row + table.
+// Pulled out of loadCronRuns so the markup is reviewable as a single unit and
+// can be unit-tested by passing a synthetic runs array via window.
+function _renderCronRunTimeline(jobId, runs, jobJobs) {
+  if (!runs || !runs.length) return '';
+  // Sparkline: last min(30, runs.length) runs (most-recent FIRST in `runs`).
+  var spark = runs.slice(0, 30).slice().reverse(); // oldest -> newest left-to-right
+  var maxDur = 1;
+  spark.forEach(function(r) {
+    var d = r.duration_ms || 0;
+    if (d > maxDur) maxDur = d;
+  });
+  var W = 240, H = 36, pad = 2;
+  var step = spark.length > 1 ? (W - 2*pad) / (spark.length - 1) : 0;
+  var svg = '<svg width="' + W + '" height="' + H + '" style="display:block;background:var(--bg-secondary,#111);border-radius:4px;" aria-label="Last ' + spark.length + ' runs">';
+  // Polyline for duration trend.
+  var pts = spark.map(function(r, i) {
+    var d = r.duration_ms || 0;
+    var x = pad + i * step;
+    var y = H - pad - (d / maxDur) * (H - 2*pad);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  svg += '<polyline fill="none" stroke="var(--text-muted,#888)" stroke-width="1" points="' + pts + '" />';
+  // Status dots
+  spark.forEach(function(r, i) {
+    var d = r.duration_ms || 0;
+    var x = pad + i * step;
+    var y = H - pad - (d / maxDur) * (H - 2*pad);
+    var color = (r.status === 'ok' || r.status === 'success' || r.status === 'completed') ? '#4ade80'
+              : (r.status === 'error' || r.status === 'failed' || r.status === 'failure') ? '#f87171'
+              : '#fbbf24';
+    var tip = new Date(r.ts).toLocaleString() + ' - ' + (r.status||'?') + ' - ' + (d/1000).toFixed(2) + 's';
+    svg += '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="2.5" fill="' + color + '"><title>' + escHtml(tip) + '</title></circle>';
+  });
+  svg += '</svg>';
+
+  // Stats: success rate, MTBF (mean time between failures), avg tokens/run.
+  var total = runs.length;
+  var okN = 0, errN = 0;
+  var tokSum = 0, tokN = 0;
+  var failTs = [];
+  runs.forEach(function(r) {
+    if (r.status === 'ok' || r.status === 'success' || r.status === 'completed') okN++;
+    else if (r.status === 'error' || r.status === 'failed' || r.status === 'failure') {
+      errN++;
+      if (r.ts) failTs.push(r.ts);
+    }
+    var u = r.usage || {};
+    var t = u.total_tokens || u.totalTokens || ((u.input_tokens||0)+(u.output_tokens||0)) || 0;
+    if (t > 0) { tokSum += t; tokN++; }
+  });
+  var successPct = total ? Math.round(okN / total * 100) : 0;
+  var mtbfStr = '-';
+  if (failTs.length >= 2) {
+    failTs.sort(function(a,b){return a-b;});
+    var gaps = [];
+    for (var i=1; i<failTs.length; i++) gaps.push(failTs[i]-failTs[i-1]);
+    var meanGapMs = gaps.reduce(function(a,b){return a+b;},0) / gaps.length;
+    var meanGapH = meanGapMs / 3600000;
+    if (meanGapH >= 24) mtbfStr = (meanGapH/24).toFixed(1) + 'd';
+    else if (meanGapH >= 1) mtbfStr = meanGapH.toFixed(1) + 'h';
+    else mtbfStr = Math.max(1, Math.round(meanGapMs/60000)) + 'm';
+  } else if (failTs.length <= 1) {
+    mtbfStr = errN === 0 ? 'no failures' : 'n/a';
+  }
+  var avgTok = tokN ? Math.round(tokSum / tokN) : 0;
+  var statRow = '<div style="display:flex;gap:14px;flex-wrap:wrap;color:var(--text-muted);font-size:11px;margin:8px 0;">'
+    + '<span><strong style="color:var(--text-primary);">' + successPct + '%</strong> success last ' + total + '</span>'
+    + '<span>MTBF <strong style="color:var(--text-primary);">' + escHtml(mtbfStr) + '</strong></span>'
+    + (avgTok ? '<span>~<strong style="color:var(--text-primary);">' + avgTok.toLocaleString() + '</strong> tokens/run</span>' : '')
+    + '</div>';
+
+  // Next-run-at line.
+  var nextLine = '';
+  var nextMs = null;
+  for (var k=0; k<runs.length; k++) {
+    if (runs[k].next_run_at) { nextMs = runs[k].next_run_at; break; }
+  }
+  if (!nextMs && jobJobs && jobJobs.state && jobJobs.state.nextRunAtMs) {
+    nextMs = jobJobs.state.nextRunAtMs;
+  }
+  if (nextMs) {
+    nextLine = '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Next run: <span style="color:var(--text-primary);">' + escHtml(new Date(nextMs).toLocaleString()) + '</span></div>';
+  }
+
+  // Recent-runs table (compact, scrollable).
+  var rows = '';
+  runs.slice(0, 30).forEach(function(r) {
+    var when = r.ts ? new Date(r.ts).toLocaleString() : '-';
+    var dur = r.duration_ms ? (r.duration_ms/1000).toFixed(2) + 's' : '-';
+    var statusCls = (r.status === 'ok' || r.status === 'success' || r.status === 'completed') ? 'run-status-ok'
+                  : (r.status === 'error' || r.status === 'failed' || r.status === 'failure') ? 'run-status-error'
+                  : '';
+    var err = r.error ? escHtml(String(r.error).substring(0,200)) : '';
+    var delivered = r.delivered_at
+      ? '<span title="Delivered at ' + escHtml(new Date(r.delivered_at).toLocaleString()) + '" style="color:#4ade80;">&#x2713;</span>'
+      : '<span style="color:var(--text-muted);">-</span>';
+    rows += '<tr>'
+      + '<td style="padding:3px 8px;white-space:nowrap;">' + escHtml(when) + '</td>'
+      + '<td style="padding:3px 8px;">' + escHtml(dur) + '</td>'
+      + '<td style="padding:3px 8px;" class="' + statusCls + '">' + escHtml(r.status || '?') + '</td>'
+      + '<td style="padding:3px 8px;color:var(--text-error);font-size:10px;max-width:240px;overflow:hidden;text-overflow:ellipsis;" title="' + err + '">' + err + '</td>'
+      + '<td style="padding:3px 8px;text-align:center;">' + delivered + '</td>'
+      + '</tr>';
+  });
+  var table = '<div style="max-height:240px;overflow:auto;border:1px solid var(--border-secondary);border-radius:4px;margin-top:6px;">'
+    + '<table style="width:100%;font-size:11px;border-collapse:collapse;">'
+    + '<thead style="position:sticky;top:0;background:var(--bg-secondary);"><tr style="text-align:left;color:var(--text-muted);">'
+    + '<th style="padding:4px 8px;font-weight:600;">When</th>'
+    + '<th style="padding:4px 8px;font-weight:600;">Duration</th>'
+    + '<th style="padding:4px 8px;font-weight:600;">Status</th>'
+    + '<th style="padding:4px 8px;font-weight:600;">Error</th>'
+    + '<th style="padding:4px 8px;font-weight:600;text-align:center;">Delivered</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+  return '<div class="cron-run-timeline" data-job-id="' + escHtml(jobId) + '">'
+    + svg + statRow + nextLine + table + '</div>';
+}
+
 async function loadCronRuns(jobId) {
   try {
+    // Issue #605: per-job timeline endpoint reads ~/.openclaw/cron/runs/<id>.jsonl
+    // and returns 200 + empty list if the file is missing. We race it against
+    // the legacy gateway-derived /api/cron/<id>/runs endpoint so the existing
+    // calendar heatmap + status pills still render even when the JSONL feed
+    // is empty (no OpenClaw cron writer yet).
+    var timelinePromise = fetch('/api/crons/' + encodeURIComponent(jobId) + '/runs?limit=30')
+      .then(function(r) { return r.ok ? r.json() : {runs:[]}; })
+      .catch(function() { return {runs:[]}; });
     var resp = await fetch('/api/cron/' + encodeURIComponent(jobId) + '/runs');
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     var data = await resp.json();
+    var timelineData = await timelinePromise;
+    var timelineRuns = (timelineData && timelineData.runs) || [];
     var el = document.getElementById('cron-runs-' + jobId);
     if (!el) return;
     var runs = (data && data.runs) || [];
-    if (runs.length === 0) {
-      el.innerHTML = '<div style="color:var(--text-muted);">No run history yet — your agent has not reported any runs for this job.</div>';
+    var jobObj = (_cronJobs || []).find(function(j) { return j.id === jobId; });
+    var timelineHtml = _renderCronRunTimeline(jobId, timelineRuns, jobObj);
+    if (runs.length === 0 && timelineRuns.length === 0) {
+      el.innerHTML = (timelineHtml || '') + '<div style="color:var(--text-muted);">No run history yet — your agent has not reported any runs for this job.</div>';
+      return;
+    }
+    if (runs.length === 0 && timelineRuns.length > 0) {
+      el.innerHTML = timelineHtml;
       return;
     }
     // Build calendar heatmap (last 30 days)
@@ -4608,7 +4743,7 @@ async function loadCronRuns(jobId) {
         h += '<div style="color:var(--text-error);font-size:11px;padding:2px 0 4px 8px;border-left:2px solid var(--text-error);margin-left:4px;">' + escHtml(r.error).substring(0,200) + '</div>';
       }
     });
-    el.innerHTML = h;
+    el.innerHTML = (timelineHtml || '') + h;
   } catch(e) {
     var el = document.getElementById('cron-runs-' + jobId);
     if (el) el.innerHTML = '<div style="color:var(--text-error);">Could not load run history (' + escHtml(String(e.message||e)) + '). The endpoint may be unreachable or your gateway is offline.</div>';
