@@ -78,6 +78,121 @@ def _brain_history_bool_arg(value):
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "all"}
 
 
+def _v3_message_content_to_text(content) -> str:
+    """Flatten an OpenClaw v3 ``data.message.content`` payload into plain text.
+
+    The trajectory ingest path (sync.py L2090-L2102) stores the WHOLE raw event
+    on ``data``, so user/assistant rows arrive with content nested under
+    ``data.message.content`` — either a plain string (user) or a list of typed
+    blocks (assistant: ``[{type:"text", text:...}, {type:"tool_use", ...}]``).
+    Only the ``text`` and ``thinking`` blocks carry transcript content; the
+    rest (tool_use, image, etc.) are summarised separately upstream.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "text":
+                t = block.get("text") or ""
+                if t:
+                    parts.append(t)
+            elif btype == "thinking":
+                t = block.get("thinking") or block.get("text") or ""
+                if t:
+                    parts.append(t)
+        return "\n".join(parts)
+    return ""
+
+
+def _extract_brain_detail(row: dict) -> str:
+    """Pull a human-readable ``detail`` snippet from a DuckDB event row.
+
+    Two ingest paths populate ``data`` with different shapes (P0 #1143 fix
+    landed the v3 mapper alongside the legacy trajectory parser); this helper
+    handles both plus the original flat-key fallback so brain-history never
+    returns empty strings for events that DO have content:
+
+      * Legacy/trajectory (event_type=user/assistant/attachment/queue-operation):
+        content lives under ``data.message.content`` (string or block list),
+        ``data.content``, or ``data.attachment.{name,filename}``.
+      * v3 underscore (event_type=prompt.submitted/model.completed/tool.result/
+        model.changed/session.started): content lives at the TOP of ``data``
+        under ``finalPromptText`` / ``completionText`` / ``output`` /
+        ``result`` / ``modelId`` / ``cwd``, with a mirror under ``data.data``.
+      * Anything older: the original ``input/summary/text/name`` flat keys.
+    """
+    data = row.get("data") if isinstance(row, dict) else None
+    if isinstance(data, str):
+        return data
+    if not isinstance(data, dict):
+        return ""
+
+    # --- Legacy/trajectory shape: data.message.content ---------------------
+    msg = data.get("message")
+    has_message_envelope = isinstance(msg, dict)
+    if has_message_envelope:
+        text = _v3_message_content_to_text(msg.get("content"))
+        if text:
+            return text
+        # Encrypted-thinking-only assistant turns ship as
+        # ``[{type:"thinking", thinking:"", signature:"…"}]``. The text is
+        # genuinely absent — bail out with a stable placeholder rather than
+        # falling through to noisy fallbacks like cwd / id.
+        role = msg.get("role")
+        if role in ("assistant", "user"):
+            return "(thinking)" if role == "assistant" else ""
+
+    # --- v3 mapper shape: top-level projection -----------------------------
+    for k in ("finalPromptText", "completionText", "output", "result",
+              "input", "summary", "text", "name", "content"):
+        v = data.get(k)
+        if isinstance(v, str) and v:
+            return v
+        if isinstance(v, list):
+            text = _v3_message_content_to_text(v)
+            if text:
+                return text
+
+    # --- v3 mirror shape: data.data.* --------------------------------------
+    inner = data.get("data")
+    if isinstance(inner, dict):
+        for k in ("finalPromptText", "completionText", "output", "result",
+                  "input", "summary", "text", "name"):
+            v = inner.get(k)
+            if isinstance(v, str) and v:
+                return v
+            if isinstance(v, list):
+                text = _v3_message_content_to_text(v)
+                if text:
+                    return text
+        # Assistant texts list (v3 model.completed)
+        atexts = inner.get("assistantTexts")
+        if isinstance(atexts, list):
+            joined = "\n".join(str(x) for x in atexts if isinstance(x, str) and x)
+            if joined:
+                return joined
+
+    # --- Type-specific fallbacks ------------------------------------------
+    # attachment events: surface filename
+    att = data.get("attachment")
+    if isinstance(att, dict):
+        for k in ("filename", "name", "path", "url"):
+            v = att.get(k)
+            if isinstance(v, str) and v:
+                return v
+    # session.started / model.changed: useful identifying labels
+    for k in ("modelId", "cwd", "id", "operation"):
+        v = data.get(k)
+        if isinstance(v, str) and v:
+            return v
+
+    return ""
+
+
 def _try_local_store_brain(limit: int, include_artifacts: bool):
     """Epic #964 phase 1b fast path. Returns a brain-history-shaped dict
     when CLAWMETRY_LOCAL_STORE_READ=1 AND the local DuckDB store has
@@ -117,15 +232,13 @@ def _try_local_store_brain(limit: int, include_artifacts: bool):
     # the dashboard JS expects (time/type/detail/src/sessionId/...).
     out = []
     for r in rows:
-        data = r.get("data") if isinstance(r, dict) else None
-        # `data` from query_events is already JSON-parsed when valid, or a
-        # str/None otherwise — see local_store.query_events.
-        detail = ""
-        if isinstance(data, dict):
-            detail = (data.get("input") or data.get("summary")
-                      or data.get("text") or data.get("name") or "")
-        elif isinstance(data, str):
-            detail = data
+        # P0 regression fix (#1143): the v3 sync mapper nests content under
+        # ``data.data`` and the legacy trajectory parser nests it under
+        # ``data.message.content`` — neither exposes the flat ``input/summary/
+        # text/name`` keys this fast path used to read, so EVERY row came back
+        # with detail="". ``_extract_brain_detail`` knows about all three
+        # shapes (legacy, v3 mapper top-level, v3 mapper mirror).
+        detail = _extract_brain_detail(r)
         out.append({
             "time":       r.get("ts", ""),
             "type":       (r.get("event_type") or "").upper(),
