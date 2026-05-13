@@ -3620,6 +3620,15 @@ function clawmetryLogout(){
   <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
 </div>
 
+<!-- Issue #556: Anthropic OAuth migration banner. Hidden until /api/overview
+     returns client_health.using_oauth=true. Dismiss is sticky via localStorage. -->
+<div id="oauth-banner" style="display:none;padding:10px 16px;background:#451a03;border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:500;align-items:center;gap:10px;">
+  <span style="font-size:16px;">&#9888;&#65039;</span>
+  <span id="oauth-banner-msg" style="flex:1;">You appear to be using an Anthropic <b>OAuth token</b> (Claude.ai). OAuth tokens have lower rate limits and different pricing than API keys &mdash; switch to an API key from <code>console.anthropic.com</code> for higher limits and metered billing.</span>
+  <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="background:#f59e0b;color:#1a1a2e;text-decoration:none;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Why migrate?</a>
+  <button onclick="dismissOauthBanner()" style="background:transparent;color:#fbbf24;border:1px solid #f59e0b80;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
+</div>
+
 <!-- Upgrade Impact Banner -->
 <div id="upgrade-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg,#1e3a5f 0%,#1a1a2e 100%);border-bottom:2px solid #3b82f6;color:#93c5fd;font-size:13px;font-weight:500;align-items:center;gap:10px;">
   <span style="font-size:16px;">&#128640;</span>

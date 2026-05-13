@@ -1737,10 +1737,33 @@ function setFlowTextAll(idSuffix, text, maxLen) {
   });
 }
 
+// Issue #556: Anthropic OAuth migration banner. Render when /api/overview
+// reports client_health.using_oauth=true. Dismissal is sticky in localStorage
+// so we don't nag users who acknowledged the message.
+function dismissOauthBanner() {
+  try { localStorage.setItem('cm_oauth_banner_dismissed', '1'); } catch(e) {}
+  var b = document.getElementById('oauth-banner');
+  if (b) b.style.display = 'none';
+}
+function renderOauthBanner(overview) {
+  var b = document.getElementById('oauth-banner');
+  if (!b) return;
+  var ch = overview && overview.client_health;
+  var using = !!(ch && ch.using_oauth);
+  var dismissed = false;
+  try { dismissed = localStorage.getItem('cm_oauth_banner_dismissed') === '1'; } catch(e) {}
+  if (using && !dismissed) {
+    b.style.display = 'flex';
+  } else {
+    b.style.display = 'none';
+  }
+}
+
 async function loadAll() {
   try {
     // Render overview quickly; do not block on heavy usage aggregation.
     var overview = await fetchJsonWithTimeout('/api/overview', 3000);
+    try { renderOauthBanner(overview); } catch(e) {}
 
     // Start only critical secondary panels immediately. Expensive/non-critical
     // cards are staggered below so the initial widget load does not stampede

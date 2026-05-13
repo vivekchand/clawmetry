@@ -21,6 +21,7 @@ and are reached via late ``import dashboard as _d``. Pure mechanical move
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -210,6 +211,93 @@ def _get_overview_heartbeat_cached():
         _heartbeat_cache["value"] = fresh
         _heartbeat_cache["ts"] = now_mono
     return fresh
+
+
+# Issue #556: detect users still on Anthropic Claude.ai OAuth tokens
+# (`sk-ant-oat-...`) and prompt migration to API keys (`sk-ant-api-...`).
+# OAuth tokens have lower rate limits and different pricing, so flagging
+# them in the dashboard is a high-leverage nudge.
+_OAUTH_PREFIX = "sk-ant-oat"
+_API_KEY_PREFIX = "sk-ant-api"
+# Match an OAuth-token bearer inside an Authorization header. Tolerates
+# arbitrary punctuation between the header name and value so it works on
+# both raw HTTP dumps (``Authorization: Bearer …``) and JSON-encoded payloads
+# (``"Authorization": "Bearer …"``). Header name is case-insensitive; the
+# bearer prefix itself is always lowercase.
+_OAUTH_BEARER_RE = re.compile(
+    r"authorization\W+bearer\W+sk-ant-oat[-_a-z0-9]*",
+    re.IGNORECASE,
+)
+
+
+def _detect_anthropic_oauth(limit=50):
+    """Scan the most recent events for evidence of an Anthropic OAuth token
+    (``sk-ant-oat...``) being used instead of an API key (``sk-ant-api...``).
+
+    Two signals, in order of preference:
+
+    1. ``data.api_key_prefix`` — an explicit field some interceptors emit.
+       Values starting with ``sk-ant-oat`` are an unambiguous OAuth hit;
+       ``sk-ant-api`` is an unambiguous API-key hit.
+    2. A raw ``Authorization: Bearer sk-ant-oat...`` substring anywhere in
+       the event payload (covers captured HTTP request dumps).
+
+    Returns ``{"using_oauth": bool, "last_seen_ts": <iso8601 or None>}``.
+
+    Safe to call even when the local store is unreachable — returns
+    ``using_oauth=False`` on any error instead of raising.
+    """
+    result = {"using_oauth": False, "last_seen_ts": None}
+
+    # Read events from *both* the daemon-proxied store (the standard install's
+    # writer) and the local-process store (tests + dev mode). Either path may
+    # legitimately be empty; if both are unreachable we return the default.
+    rows: list = []
+    try:
+        from routes.local_query import local_store_via_daemon
+        d = local_store_via_daemon("query_events", limit=int(limit))
+        if d:
+            rows.extend(d)
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        direct = local_store.get_store(read_only=True).query_events(
+            limit=int(limit)
+        )
+        if direct:
+            rows.extend(direct)
+    except Exception:
+        pass
+    if not rows:
+        return result
+
+    for ev in rows:
+        data = ev.get("data") if isinstance(ev, dict) else None
+        prefix = None
+        if isinstance(data, dict):
+            prefix = data.get("api_key_prefix") or data.get("apiKeyPrefix")
+        if isinstance(prefix, str):
+            p = prefix.strip().lower()
+            if p.startswith(_OAUTH_PREFIX):
+                result["using_oauth"] = True
+                result["last_seen_ts"] = ev.get("ts") or result["last_seen_ts"]
+                return result
+            if p.startswith(_API_KEY_PREFIX):
+                # Explicit API-key prefix — strong negative signal; keep scanning
+                # in case an earlier event used OAuth, but don't flag from this row.
+                continue
+        # Fall back to scanning the JSON-serialised payload for a bearer.
+        try:
+            blob = json.dumps(data) if data is not None else ""
+        except Exception:
+            blob = str(data)
+        if _OAUTH_BEARER_RE.search(blob):
+            result["using_oauth"] = True
+            result["last_seen_ts"] = ev.get("ts") or result["last_seen_ts"]
+            return result
+
+    return result
 
 
 @bp_overview.route("/api/channels")
@@ -584,6 +672,7 @@ def _try_local_store_overview():
         "system": system,
         "infra": infra,
         "heartbeat": _get_overview_heartbeat_cached(),
+        "client_health": _detect_anthropic_oauth(),
         "_source": "local_store",
     }
 
@@ -730,6 +819,7 @@ def api_overview():
             "system": system,
             "infra": infra,
             "heartbeat": _get_overview_heartbeat_cached(),
+            "client_health": _detect_anthropic_oauth(),
         }
     )
 
