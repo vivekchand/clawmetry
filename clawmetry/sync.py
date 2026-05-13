@@ -5036,24 +5036,6 @@ def _build_gateway_data(paths: dict = None) -> dict:
         }
 
 
-if __name__ == "__main__":
-    while True:
-        try:
-            run_daemon()
-            break  # clean exit
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            import traceback
-
-            log.error(f"Daemon crashed: {e}")
-            log.error(traceback.format_exc())
-            log.info("Restarting in 15 seconds...")
-            time.sleep(15)
-
-
-
-
 def _compute_autonomy_daily_series(sessions_dir, days=90):
     """
     Compute per-day autonomy aggregates from local session transcripts.
@@ -5383,3 +5365,19 @@ def evaluate_alerts(config: dict, state: dict) -> int:
 
     state["alerts_last_eval_ts"] = _iso_now()
     return dispatched
+
+
+if __name__ == "__main__":
+    while True:
+        try:
+            run_daemon()
+            break  # clean exit
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            import traceback
+
+            log.error(f"Daemon crashed: {e}")
+            log.error(traceback.format_exc())
+            log.info("Restarting in 15 seconds...")
+            time.sleep(15)
