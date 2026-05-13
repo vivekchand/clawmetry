@@ -385,6 +385,42 @@ _DDL = [
         updated_at        BIGINT NOT NULL
     )
     """,
+    # Issue #605 follow-up (DuckDB-first rule) — cron-run timeline storage.
+    # One row per JSONL line in ``~/.openclaw/cron/runs/<jobId>.jsonl``. The
+    # daemon's ``sync_cron_runs`` helper scans those files every cycle and
+    # upserts rows here so ``/api/crons/<jobId>/runs`` can read from the
+    # columnar store instead of re-parsing JSONL on every request.
+    #
+    # Schema rationale: we keep a dedicated table (not ``events``) because
+    # ``delivered_at`` / ``next_run_at`` are first-class columns and the
+    # cron-timeline UI's filter + sort patterns
+    # (``WHERE job_id=? ORDER BY started_at DESC``) want a primary-key prefix
+    # match, not a substring scan over ``data`` blobs. ``id`` is the dedup
+    # key — synthesised from ``job_id + ts`` when the JSONL doesn't include
+    # one, so re-ingestion of the same line is a no-op.
+    """
+    CREATE TABLE IF NOT EXISTS cron_runs (
+        id              VARCHAR PRIMARY KEY,
+        node_id         VARCHAR,
+        agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
+        agent_id        VARCHAR NOT NULL DEFAULT 'main',
+        job_id          VARCHAR NOT NULL,
+        started_at      VARCHAR,
+        ended_at        VARCHAR,
+        duration_ms     INTEGER,
+        status          VARCHAR,
+        error_message   VARCHAR,
+        token_count     INTEGER,
+        cost_usd        DOUBLE,
+        delivered_at    VARCHAR,
+        next_run_at     VARCHAR,
+        raw_jsonl_line  VARCHAR,
+        data            BLOB,
+        created_at      BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_cron_runs_job_id     ON cron_runs(job_id, started_at)",
+    "CREATE INDEX IF NOT EXISTS idx_cron_runs_started_at ON cron_runs(started_at)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -950,6 +986,82 @@ class LocalStore:
                   bool(cron.get("enabled", True)),
                   cron.get("last_run_at"), cron.get("last_status"),
                   cron.get("next_run_at"), data_blob, now_ms])
+
+    def ingest_cron_run(self, run: dict[str, Any]) -> None:
+        """Upsert one cron-run row (issue #605 DuckDB follow-up).
+
+        Required: ``id`` and ``job_id``. Everything else is optional and
+        defaults to ``None`` / ``0``. Re-ingesting the same id is a no-op
+        which is exactly what we want — the sync daemon scans the JSONL
+        files with an offset cursor, but a restart that re-reads a few
+        bytes (or a JSONL writer that re-emits a line) must not produce
+        duplicate rows.
+
+        Stable id rule: the daemon synthesises ``f"{job_id}:{started_at}"``
+        when the JSONL line doesn't carry one. That keeps the dedup
+        deterministic across re-scans without depending on file offsets
+        for correctness (offsets are still tracked for skip-on-cycle
+        efficiency, but they're a performance hint, not the dedup key)."""
+        rid = run.get("id")
+        if not rid:
+            raise ValueError("cron_run must include 'id'")
+        job_id = run.get("job_id")
+        if not job_id:
+            raise ValueError("cron_run must include 'job_id'")
+        atype = run.get("agent_type") or "openclaw"
+        agent_id = run.get("agent_id") or "main"
+        # Anything callers stuffed in beyond the first-class columns ends up
+        # in the BLOB so we don't lose provenance. ``usage`` is the common
+        # one — gateway writers emit a dict with input/output token splits
+        # we'd otherwise drop.
+        first_class = {
+            "id", "job_id", "node_id", "agent_type", "agent_id",
+            "started_at", "ended_at", "duration_ms", "status",
+            "error_message", "token_count", "cost_usd",
+            "delivered_at", "next_run_at", "raw_jsonl_line",
+        }
+        data_blob = _to_blob({k: v for k, v in run.items()
+                              if k not in first_class})
+        # Coerce numeric fields defensively — JSONL writers have shipped
+        # strings, floats, and missing values across versions.
+        try:
+            duration_ms = int(run.get("duration_ms") or 0)
+        except (TypeError, ValueError):
+            duration_ms = 0
+        try:
+            token_count = int(run.get("token_count") or 0)
+        except (TypeError, ValueError):
+            token_count = 0
+        try:
+            cost_usd = float(run.get("cost_usd") or 0)
+        except (TypeError, ValueError):
+            cost_usd = 0.0
+        err_msg = run.get("error_message") or ""
+        if err_msg and not isinstance(err_msg, str):
+            err_msg = str(err_msg)
+        if err_msg and len(err_msg) > 2000:
+            err_msg = err_msg[:2000]
+        raw_line = run.get("raw_jsonl_line")
+        if raw_line is not None and not isinstance(raw_line, str):
+            raw_line = str(raw_line)
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO cron_runs (
+                    id, node_id, agent_type, agent_id, job_id,
+                    started_at, ended_at, duration_ms, status, error_message,
+                    token_count, cost_usd, delivered_at, next_run_at,
+                    raw_jsonl_line, data, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO NOTHING
+            """, [
+                str(rid), run.get("node_id"), atype, agent_id, str(job_id),
+                run.get("started_at"), run.get("ended_at"),
+                duration_ms, run.get("status"), err_msg,
+                token_count, cost_usd,
+                run.get("delivered_at"), run.get("next_run_at"),
+                raw_line, data_blob, now_ms,
+            ])
 
     def ingest_subagent(self, sa: dict[str, Any]) -> None:
         """Upsert one subagent rollup row. Required: subagent_id."""
@@ -1788,6 +1900,64 @@ class LocalStore:
         cols = ["agent_type", "cron_id", "agent_id", "name", "schedule",
                 "enabled", "last_run_at", "last_status", "next_run_at",
                 "data", "updated_at"]
+        return _decode_data_blob_rows(self._fetch(sql, params), cols)
+
+    def query_cron_runs(
+        self,
+        *,
+        job_id: str | None = None,
+        agent_type: str | None = None,
+        agent_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Per-job cron-run timeline (issue #605 DuckDB follow-up).
+
+        Returns rows most-recent-first (``ORDER BY started_at DESC``). The
+        ``data`` BLOB carries the freeform per-run extras (``usage`` dict
+        with input/output token split, gateway-specific fields) and is
+        decoded back to a dict where possible — same shape contract as
+        ``query_crons``.
+
+        ``limit`` defaults to 50 (one page in the timeline UI) and is
+        clamped to ``[1, 500]``. Callers wanting a full sweep should
+        page; we deliberately keep the upper bound modest so a buggy
+        client can't yank megabytes of run history in one shot."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if job_id:
+            clauses.append("job_id = ?"); params.append(str(job_id))
+        if agent_type:
+            clauses.append("agent_type = ?"); params.append(agent_type)
+        if agent_id:
+            clauses.append("agent_id = ?"); params.append(agent_id)
+        if since:
+            clauses.append("started_at >= ?"); params.append(since)
+        if until:
+            clauses.append("started_at <= ?"); params.append(until)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        try:
+            lim = int(limit)
+        except (TypeError, ValueError):
+            lim = 50
+        lim = max(1, min(500, lim))
+        sql = f"""
+            SELECT id, node_id, agent_type, agent_id, job_id,
+                   started_at, ended_at, duration_ms, status, error_message,
+                   token_count, cost_usd, delivered_at, next_run_at,
+                   raw_jsonl_line, data, created_at
+            FROM cron_runs
+            {where}
+            ORDER BY started_at DESC, id DESC
+            LIMIT ?
+        """
+        params.append(lim)
+        cols = ["id", "node_id", "agent_type", "agent_id", "job_id",
+                "started_at", "ended_at", "duration_ms", "status",
+                "error_message", "token_count", "cost_usd",
+                "delivered_at", "next_run_at", "raw_jsonl_line",
+                "data", "created_at"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
 
     def query_subagents(

@@ -296,6 +296,9 @@ _DAEMON_METHODS = frozenset({
     "query_heartbeats",
     "query_channels",
     "query_crons",
+    # Issue #605 DuckDB follow-up: per-job cron-run timeline. Read by
+    # ``routes/crons.py:_cron_runs_from_duckdb`` via the daemon proxy.
+    "query_cron_runs",
     "query_subagents",
     "query_memory_blobs",
     "query_system_snapshots",
