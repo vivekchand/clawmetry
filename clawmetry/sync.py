@@ -186,6 +186,152 @@ if not log.handlers:
     log.propagate = False
 
 
+# ── Daemon-error → DuckDB event handler (PRD #1133 layer 4, daemon side) ────
+#
+# Why: PR #1139 surfaced daemon errors on the System Health card by parsing
+# ``~/.clawmetry/sync.log`` text on every /api/system-health call — a clear
+# violation of the DuckDB-first rule (memory feedback_duckdb_first_rule.md).
+# This handler tees every ERROR-level log line into a structured
+# ``daemon.error`` event row in the local DuckDB so the read side can do a
+# single indexed query instead of re-tailing the log on each request.
+#
+# Rate-limit: at most one row per (first-80-chars-of-message, 60s bucket).
+# Important because the original ALERTS_EVAL_INTERVAL_SEC NameError fired
+# 4×/min on every install, and we don't want that pattern to spam DuckDB
+# 5,760 rows/day when one row/minute carries the same signal.
+#
+# Failure mode: any exception inside the handler is swallowed and counted —
+# the daemon must never crash because telemetry plumbing broke.
+
+import uuid as _uuid
+import socket as _socket
+
+_DAEMON_ERROR_AGENT_ID = "clawmetry-daemon"
+_DAEMON_ERROR_AGENT_TYPE = "clawmetry"
+_DAEMON_ERROR_EVENT_TYPE = "daemon.error"
+_DAEMON_ERROR_DEDUP_PREFIX_LEN = 80
+_DAEMON_ERROR_DEDUP_BUCKET_SEC = 60
+
+
+class _DaemonErrorDuckDBHandler(logging.Handler):
+    """Logging handler that mirrors ERROR records into DuckDB ``events``.
+
+    One row per (message-prefix, 60-second-bucket) — repeated identical
+    errors within the bucket are dropped so a 4×/min NameError doesn't
+    flood the table. The cap is enforced in-memory; we don't query
+    DuckDB to dedup (would defeat the point).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        # Map[prefix → last-emitted-bucket]. Single-process daemon, so a
+        # plain dict guarded by a Lock is fine. Bounded eviction below
+        # keeps memory flat under pathological churn.
+        self._last_emit: dict[str, int] = {}
+        self._lock = threading.Lock()
+        self._dropped = 0
+        self._emitted = 0
+        self._node_id_cache: str | None = None
+
+    def _node_id(self) -> str:
+        if self._node_id_cache:
+            return self._node_id_cache
+        try:
+            cfg = load_config()
+            nid = cfg.get("node_id") or _socket.gethostname() or "unknown"
+        except Exception:
+            nid = _socket.gethostname() or "unknown"
+        self._node_id_cache = str(nid)
+        return self._node_id_cache
+
+    def _should_emit(self, msg: str, now_ts: float) -> bool:
+        """Return True iff this prefix hasn't been emitted in the current
+        60-second bucket. Updates the bookkeeping atomically."""
+        prefix = (msg or "")[:_DAEMON_ERROR_DEDUP_PREFIX_LEN]
+        bucket = int(now_ts // _DAEMON_ERROR_DEDUP_BUCKET_SEC)
+        with self._lock:
+            last = self._last_emit.get(prefix)
+            if last == bucket:
+                self._dropped += 1
+                return False
+            self._last_emit[prefix] = bucket
+            # Bounded eviction — keep the table from growing unbounded if
+            # a misbehaving caller logs millions of unique error messages.
+            if len(self._last_emit) > 1024:
+                # Drop entries older than 2 buckets (~120s).
+                stale_cutoff = bucket - 2
+                for k in [k for k, v in self._last_emit.items() if v < stale_cutoff]:
+                    del self._last_emit[k]
+            return True
+
+    def emit(self, record: logging.LogRecord) -> None:  # noqa: D401
+        try:
+            if record.levelno < logging.ERROR:
+                return
+            try:
+                msg = record.getMessage()
+            except Exception:
+                msg = str(getattr(record, "msg", ""))
+            now_ts = time.time()
+            if not self._should_emit(msg, now_ts):
+                return
+
+            exc_str: str | None = None
+            if record.exc_info:
+                try:
+                    exc_str = logging.Formatter().formatException(record.exc_info)
+                except Exception:
+                    exc_str = None
+
+            from clawmetry import local_store as _ls
+            store = _ls.get_store()
+            event = {
+                "id": _uuid.uuid4().hex,
+                "agent_id": _DAEMON_ERROR_AGENT_ID,
+                "agent_type": _DAEMON_ERROR_AGENT_TYPE,
+                "node_id": self._node_id(),
+                "event_type": _DAEMON_ERROR_EVENT_TYPE,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "data": {
+                    "message": (msg or "")[:1000],
+                    "exception": (exc_str or "")[:2000] if exc_str else None,
+                    "logger": record.name,
+                },
+            }
+            store.ingest(event)
+            self._emitted += 1
+        except Exception:
+            # Never raise from a logging handler — would break the daemon's
+            # own error logging.
+            try:
+                self._dropped += 1
+            except Exception:
+                pass
+
+
+def install_daemon_error_event_handler(logger: logging.Logger | None = None) -> _DaemonErrorDuckDBHandler | None:
+    """Attach the DuckDB-mirroring handler to the daemon logger.
+
+    Idempotent: re-running won't add a second handler. Returns the handler
+    instance (so tests can introspect ``_emitted`` / ``_dropped``) or None
+    when installation fails — the daemon should keep running either way.
+    """
+    target = logger if logger is not None else log
+    for h in target.handlers:
+        if isinstance(h, _DaemonErrorDuckDBHandler):
+            return h  # type: ignore[return-value]
+    try:
+        h = _DaemonErrorDuckDBHandler()
+        target.addHandler(h)
+        return h
+    except Exception as e:  # pragma: no cover — defensive
+        try:
+            log.warning("install_daemon_error_event_handler failed: %s", e)
+        except Exception:
+            pass
+        return None
+
+
 # ── Encryption (AES-256-GCM) ─────────────────────────────────────────────────
 
 
@@ -5052,6 +5198,15 @@ def run_daemon() -> None:
     paths = detect_paths()
     enc = "🔒 E2E encrypted" if config.get("encryption_key") else "⚠️  unencrypted"
     log.info(f"Starting sync daemon — node={config['node_id']} → {INGEST_URL} ({enc})")
+
+    # ── Install daemon-error → DuckDB tee (PRD #1133 layer 4, daemon side) ──
+    # Must happen AFTER the start-banner so we don't tee that line as an
+    # event. Failure here is non-fatal — the read side keeps its sync.log
+    # fallback.
+    try:
+        install_daemon_error_event_handler()
+    except Exception as _e:
+        log.warning("daemon-error event handler: failed to install: %s", _e)
 
     # ── Startup sync: recent-first so Brain feed shows current activity ──
     send_heartbeat(config)

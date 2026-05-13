@@ -129,35 +129,115 @@ def _parse_daemon_log_line(line):
     return ts_epoch, m.group("level"), m.group("msg")
 
 
-def compute_daemon_health(log_path=None, now=None):
-    """Read the tail of the daemon log and return a health summary dict.
+def _status_from_counts(errors_last_5min: int) -> str:
+    """Compute status pill from 5-min error count. PR #1139 thresholds."""
+    if errors_last_5min > 30:
+        return "broken"
+    if errors_last_5min > 0:
+        return "degraded"
+    return "healthy"
 
-    Returns the structure documented in PRD #1133 layer 4:
 
-        {
-            "log_path": "<absolute path>",
-            "errors_last_5min": int,
-            "errors_last_1h": int,
-            "last_error_message": str | None,
-            "last_error_ts": ISO-8601 str | None,
-            "status": "healthy" | "degraded" | "broken",
-            "log_present": bool,
-        }
+def _try_local_store_daemon_health(now_ts: float, log_path: str):
+    """DuckDB-first path: query ``events`` for ``daemon.error`` rows in the
+    last hour and aggregate the same fields the log parser produces.
 
-    Status thresholds (per PRD): >30 errors in 5 min → ``broken``,
-    >0 → ``degraded``, else ``healthy``. Missing/empty log → ``healthy``
-    so a fresh install doesn't flash red.
+    Returns the summary dict on success, or ``None`` if the local store is
+    unreachable / has zero rows in the window (so the caller can fall back
+    to log-tail parsing).
     """
-    path = log_path or _default_daemon_log_path()
-    now_ts = now if now is not None else time.time()
+    cutoff_1h_iso = datetime.fromtimestamp(
+        now_ts - 60 * 60, tz=timezone.utc
+    ).isoformat()
+    cutoff_5m_ts = now_ts - 5 * 60
+
+    rows = None
+    # Cross-process safe path (daemon owns the writer lock under the
+    # standard install — direct opens fail). Same pattern as
+    # ``_try_local_store_heatmap``.
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon(
+            "query_events",
+            event_type="daemon.error",
+            agent_id="clawmetry-daemon",
+            since=cutoff_1h_iso,
+            limit=5000,
+        )
+    except Exception:
+        rows = None
+    if rows is None:
+        # Single-process fallback (tests / dev mode).
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_events(
+                event_type="daemon.error",
+                agent_id="clawmetry-daemon",
+                since=cutoff_1h_iso,
+                limit=5000,
+            )
+        except Exception:
+            return None
+    if not rows:
+        return None
+
+    errors_5m = 0
+    errors_1h = 0
+    last_err_ts = None
+    last_err_msg = None
+    for ev in rows:
+        ts = ev.get("ts")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        ev_ts = dt.timestamp()
+        errors_1h += 1
+        if ev_ts >= cutoff_5m_ts:
+            errors_5m += 1
+        if last_err_ts is None or ev_ts >= last_err_ts:
+            last_err_ts = ev_ts
+            data = ev.get("data") or {}
+            if isinstance(data, dict):
+                last_err_msg = data.get("message") or None
+            elif isinstance(data, str):
+                last_err_msg = data
+
     summary = {
-        "log_path": path,
+        "log_path": log_path,
+        "errors_last_5min": errors_5m,
+        "errors_last_1h": errors_1h,
+        "last_error_message": (last_err_msg or "")[:500] if last_err_msg else None,
+        "last_error_ts": (
+            datetime.fromtimestamp(last_err_ts, tz=timezone.utc).isoformat()
+            if last_err_ts is not None
+            else None
+        ),
+        "status": _status_from_counts(errors_5m),
+        "log_present": os.path.exists(log_path),
+        "_source": "local_store",
+    }
+    return summary
+
+
+def _compute_daemon_health_from_log(log_path: str, now_ts: float):
+    """Legacy log-tail parser. Retained as a fallback for fresh installs
+    that don't yet have ``daemon.error`` rows in DuckDB (pre-this-PR data
+    or first-boot before the handler fires)."""
+    summary = {
+        "log_path": log_path,
         "errors_last_5min": 0,
         "errors_last_1h": 0,
         "last_error_message": None,
         "last_error_ts": None,
         "status": "healthy",
-        "log_present": os.path.exists(path),
+        "log_present": os.path.exists(log_path),
+        "_source": "sync_log",
     }
     if not summary["log_present"]:
         return summary
@@ -166,7 +246,7 @@ def compute_daemon_health(log_path=None, now=None):
     cutoff_1h = now_ts - 60 * 60
     last_err_ts = None
     last_err_msg = None
-    for line in _tail_lines(path):
+    for line in _tail_lines(log_path):
         parsed = _parse_daemon_log_line(line)
         if not parsed:
             continue
@@ -182,19 +262,53 @@ def compute_daemon_health(log_path=None, now=None):
             last_err_msg = msg
 
     if last_err_ts is not None:
-        # Render in UTC so the dashboard can reason about it consistently.
         summary["last_error_ts"] = (
             datetime.fromtimestamp(last_err_ts, tz=timezone.utc).isoformat()
         )
-        # Truncate to 500 chars at the parser layer; UI re-truncates to 200
-        # for display. Keeps the API payload bounded for chatty errors.
         summary["last_error_message"] = (last_err_msg or "")[:500]
 
-    if summary["errors_last_5min"] > 30:
-        summary["status"] = "broken"
-    elif summary["errors_last_5min"] > 0:
-        summary["status"] = "degraded"
+    summary["status"] = _status_from_counts(summary["errors_last_5min"])
     return summary
+
+
+def compute_daemon_health(log_path=None, now=None):
+    """Return a daemon health summary dict, sourced from DuckDB first.
+
+    Returns the structure documented in PRD #1133 layer 4:
+
+        {
+            "log_path": "<absolute path>",
+            "errors_last_5min": int,
+            "errors_last_1h": int,
+            "last_error_message": str | None,
+            "last_error_ts": ISO-8601 str | None,
+            "status": "healthy" | "degraded" | "broken",
+            "log_present": bool,
+            "_source": "local_store" | "sync_log",
+        }
+
+    Status thresholds (per PRD): >30 errors in 5 min → ``broken``,
+    >0 → ``degraded``, else ``healthy``. Missing/empty log + zero DuckDB
+    rows → ``healthy`` so a fresh install doesn't flash red.
+
+    Source order:
+      1. DuckDB ``events`` table (event_type='daemon.error') — populated
+         by the daemon-side handler in ``clawmetry/sync.py``. This is the
+         DuckDB-first canonical path.
+      2. ``~/.clawmetry/sync.log`` tail-parser — fallback for fresh
+         installs that don't yet have ``daemon.error`` rows but DO have
+         pre-existing ERROR lines in the log file.
+    """
+    path = log_path or _default_daemon_log_path()
+    now_ts = now if now is not None else time.time()
+
+    # DuckDB-first.
+    duckdb_summary = _try_local_store_daemon_health(now_ts, path)
+    if duckdb_summary is not None:
+        return duckdb_summary
+
+    # Fallback: log-tail parser (pre-#1133-layer-4 behavior).
+    return _compute_daemon_health_from_log(path, now_ts)
 
 
 # ---------------------------------------------------------------------------
