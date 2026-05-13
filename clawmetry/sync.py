@@ -2072,6 +2072,45 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     return {"rows": rows, "count": len(rows), "_shape": shape, "_via": "fallback"}
 
 
+def _rows_to_brain_events(rows: list) -> list:
+    """Translate raw DuckDB event rows into the dashboard-display shape the
+    cloud Brain tab's ``_cm_decryptBrain`` expects (``{time, type, detail,
+    src, sessionId, agentId, tokens, cost, model}``).
+
+    Single source of truth used by both the proactive cache_push path
+    (`_build_brain_cache_pushes`) and the heartbeat-piggyback path
+    (`_dispatch_pending_queries`) so the browser sees the SAME shape no
+    matter which writer last touched the cache key.
+
+    Bug 2026-05-13: the piggyback path was writing the raw `{rows: [...]}`
+    shape from `_local_dispatch('events', ...)`, overwriting the cache_push's
+    correct `{events: [...]}` blob. Browser saw `dec.events || []` = empty
+    and showed "No brain activity events found" even with 100+ events in
+    DuckDB. Extracting this helper + calling it from both paths fixes that.
+    """
+    out = []
+    for r in rows or []:
+        data = r.get("data") if isinstance(r, dict) else None
+        detail = ""
+        if isinstance(data, dict):
+            detail = (data.get("input") or data.get("summary")
+                      or data.get("text") or data.get("name") or "")
+        elif isinstance(data, str):
+            detail = data
+        out.append({
+            "time":      r.get("ts", ""),
+            "type":      (r.get("event_type") or "").upper(),
+            "detail":    str(detail)[:200],
+            "src":       (r.get("session_id") or r.get("agent_id") or "")[:32],
+            "sessionId": r.get("session_id") or "",
+            "agentId":   r.get("agent_id") or "main",
+            "tokens":    r.get("token_count") or 0,
+            "cost":      float(r.get("cost_usd") or 0.0),
+            "model":     r.get("model") or "",
+        })
+    return out
+
+
 # ── Phase 2: proactive brain cache_push (epic #1032) ─────────────────────────
 # The Brain page is the first thing most users hit on the cloud dashboard. In
 # Phase 1 the cloud only had data for it after a browser /api/cloud/subscribe
@@ -2133,26 +2172,7 @@ def _build_brain_cache_pushes(config: dict) -> list:
     # Same translation as routes/brain.py:_try_local_store_brain so the
     # browser sees an identical event shape regardless of which path served
     # the data (cache hit vs. relay subscribe vs. JSONL fallback).
-    events = []
-    for r in rows:
-        data = r.get("data") if isinstance(r, dict) else None
-        detail = ""
-        if isinstance(data, dict):
-            detail = (data.get("input") or data.get("summary")
-                      or data.get("text") or data.get("name") or "")
-        elif isinstance(data, str):
-            detail = data
-        events.append({
-            "time":      r.get("ts", ""),
-            "type":      (r.get("event_type") or "").upper(),
-            "detail":    str(detail)[:200],
-            "src":       (r.get("session_id") or r.get("agent_id") or "")[:32],
-            "sessionId": r.get("session_id") or "",
-            "agentId":   r.get("agent_id") or "main",
-            "tokens":    r.get("token_count") or 0,
-            "cost":      float(r.get("cost_usd") or 0.0),
-            "model":     r.get("model") or "",
-        })
+    events = _rows_to_brain_events(rows)
     payload = {
         "events":  events,
         "count":   len(events),
@@ -2620,7 +2640,29 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
             if not enc_key:
                 log.debug("pending_query %s: no encryption key; skipping", qid)
                 continue
-            blob = encrypt_payload(result, enc_key)
+            # Bug 2026-05-13 (real MOAT fix): when this pending_query targets
+            # the Brain cache key (`brain:*:recent`), the cloud's browser-side
+            # `_cm_decryptBrain` reads `dec.events` from the decrypted blob.
+            # `_local_dispatch('events', ...)` returns the raw shape
+            # `{rows: [...], count, _shape, _via}` though — so the browser
+            # sees `dec.events || []` = empty and shows "No brain activity
+            # events found" even with hundreds of events in DuckDB. Translate
+            # to the dashboard-display shape via `_rows_to_brain_events` so
+            # both this writer and `_build_brain_cache_pushes` produce
+            # identical blobs (one shouldn't silently overwrite the other
+            # with a wrong-shape payload).
+            payload = result
+            if shape == "events" and isinstance(cache_key, str) \
+                    and cache_key.startswith("brain:"):
+                rows = (result or {}).get("rows") if isinstance(result, dict) else None
+                events = _rows_to_brain_events(rows or [])
+                payload = {
+                    "events":  events,
+                    "count":   len(events),
+                    "_source": "local_store",
+                    "_shape":  "brain_history",
+                }
+            blob = encrypt_payload(payload, enc_key)
             _post("/ingest/cache", {
                 "node_id": node_id,
                 "id": qid,
