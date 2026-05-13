@@ -1145,6 +1145,7 @@ def api_task_runs():
         limit = 500
     status_filter = (request.args.get("status", "") or "").strip()
     parent_filter = (request.args.get("parent_task_id", "") or "").strip()
+    requester_filter = (request.args.get("requester_session_key", "") or "").strip()
     where = []
     args = []
     if status_filter:
@@ -1153,6 +1154,9 @@ def api_task_runs():
     if parent_filter:
         where.append("parent_task_id = ?")
         args.append(parent_filter)
+    if requester_filter:
+        where.append("requester_session_key = ?")
+        args.append(requester_filter)
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     tasks: list = []
     counts: dict = {}

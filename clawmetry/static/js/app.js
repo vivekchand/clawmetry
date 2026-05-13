@@ -10597,6 +10597,7 @@ function renderModalContent() {
   else if (_modalTab === 'narrative') renderModalNarrative(el);
   else if (_modalTab === 'tools') renderModalTools(el);
   else if (_modalTab === 'models') renderModalModelJourney(el);
+  else if (_modalTab === 'subagents') renderModalSubagents(el);
   else renderModalFull(el);
 }
 
@@ -10949,6 +10950,91 @@ async function renderModalModelJourney(el) {
   } catch(e) {
     el.innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load model journey: ' + escHtml(e.message || String(e)) + '</div>';
   }
+}
+
+async function renderModalSubagents(el) {
+  var key = window._modalSessionKey || _modalSessionId;
+  if (!key) {
+    el.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No session key available.</div>';
+    return;
+  }
+  el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading subagents…</div>';
+  var data;
+  try {
+    var r = await fetch('/api/task-runs?requester_session_key=' + encodeURIComponent(key) + '&limit=200');
+    data = await r.json();
+  } catch(e) {
+    el.innerHTML = '<div style="padding:24px;color:#ef5350">Failed to load subagents.</div>';
+    return;
+  }
+  var tasks = data.tasks || [];
+  if (!tasks.length) {
+    el.innerHTML = '<div style="padding:24px;color:var(--text-muted);">'
+      + (data.note ? escHtml(data.note) : 'No subagents spawned by this session.') + '</div>';
+    return;
+  }
+
+  // Build parent→children map; nodes whose parent is not in the result set become roots
+  var byParent = {};
+  var taskIdSet = {};
+  tasks.forEach(function(t) { taskIdSet[t.task_id] = true; });
+  tasks.forEach(function(t) {
+    var pid = (t.parent_task_id && taskIdSet[t.parent_task_id]) ? t.parent_task_id : '__root__';
+    if (!byParent[pid]) byParent[pid] = [];
+    byParent[pid].push(t);
+  });
+  var roots = byParent['__root__'] || tasks;
+
+  function calcDepth(taskId, d) {
+    var children = byParent[taskId] || [];
+    if (!children.length) return d;
+    return Math.max.apply(null, children.map(function(c) { return calcDepth(c.task_id, d + 1); }));
+  }
+  var maxDepth = roots.length
+    ? Math.max.apply(null, roots.map(function(r) { return calcDepth(r.task_id, 1); }))
+    : 1;
+
+  var stats = data.stats || {};
+  var failed = stats.failed || tasks.filter(function(t) { return t.status === 'failed'; }).length;
+  var stColor = { running: '#22c55e', succeeded: '#16a34a', failed: '#ef4444', pending: '#d97706' };
+
+  var html = '<div style="padding:16px 20px;overflow-y:auto;">';
+  html += '<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">';
+  html += _statChip('Subagents', tasks.length);
+  html += _statChip('Loopiness depth', maxDepth);
+  if (failed) html += _statChip('Failed', failed, '#ef4444');
+  html += '</div>';
+
+  function renderNode(task, depth) {
+    var indent = depth * 20;
+    var color = stColor[task.status] || '#6b7280';
+    var dur = task.duration_ms ? _fmtDur(task.duration_ms) : '';
+    var childKey = (task.child_session_key || '').trim();
+    var rawLabel = task.label || task.task || task.task_id || '(unknown)';
+    var label = escHtml(rawLabel.length > 80 ? rawLabel.substring(0, 80) + '…' : rawLabel);
+    var isClickable = !!childKey;
+    var onclick = isClickable
+      ? ' onclick="openTaskModal(\'\',\'' + label.replace(/'/g, "\\'") + '\',\'' + childKey.replace(/'/g, "\\'") + '\')"'
+      : '';
+    html += '<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;margin-left:' + indent + 'px;'
+      + 'border-top:1px solid var(--border-primary);' + (isClickable ? 'cursor:pointer;' : '') + '"' + onclick + '>';
+    html += '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + ';margin-top:5px;flex-shrink:0;"></span>';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + label + '</div>';
+    var pills = [];
+    if (task.status) pills.push('<span style="font-size:10px;color:' + color + ';font-weight:600;text-transform:uppercase;">' + escHtml(task.status) + '</span>');
+    if (dur) pills.push('<span style="font-size:11px;color:var(--text-muted);">' + escHtml(dur) + '</span>');
+    if (task.terminal_outcome) pills.push('<span style="font-size:11px;color:var(--text-muted);">' + escHtml(task.terminal_outcome.substring(0, 50)) + '</span>');
+    if (pills.length) html += '<div style="display:flex;gap:8px;margin-top:2px;align-items:center;">' + pills.join('<span style="color:var(--border-primary);">\xb7</span>') + '</div>';
+    html += '</div>';
+    if (isClickable) html += '<span style="color:var(--text-muted);font-size:14px;padding-top:2px;">›</span>';
+    html += '</div>';
+    (byParent[task.task_id] || []).forEach(function(c) { renderNode(c, depth + 1); });
+  }
+
+  roots.forEach(function(r) { renderNode(r, 0); });
+  html += '</div>';
+  el.innerHTML = html;
 }
 
 function toggleEvtBody(bodyId, idx) {
