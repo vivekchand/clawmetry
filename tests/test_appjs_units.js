@@ -177,5 +177,141 @@ console.log('stuck-session banner dismissal (issue #1127 — resurfaces after re
   truthy(!('s-1' in after), '> 24h entry pruned from store');
 }
 
+// ── Test channel-event renderer (Telegram/Signal/Slack/… provider+sender) ──
+//
+// Coordinates with the Telegram-ingest agent (PR aca53ec8) on the field
+// names: provider, sender, chat_id, direction. Verifies:
+//   1. _extractChannelInfo recognises top-level fields (the path the
+//      Brain endpoint uses after we enrich channel.* events).
+//   2. _extractChannelInfo recognises nested ev.data.{provider,from,…}
+//      (the path when the Brain endpoint passes the raw payload through).
+//   3. _extractChannelInfo returns null for non-channel events (cli/cron/
+//      tool calls) so the legacy render branch keeps owning them.
+//   4. renderChannelEventMeta produces HTML containing the provider emoji,
+//      the human display name, the sender, and a direction arrow.
+//   5. Display-name overrides ("Google Chat", "MS Teams") work.
+console.log('channel event renderer (Brain provider/sender labels)');
+{
+  const sandbox = {
+    Date: Date,
+    console: console,
+  };
+  // Pull in the channel maps + helpers + render branch. We grab a slice of
+  // app.js by line range so we don't have to single-out 4 helpers and 2
+  // dictionaries with separate regexes.
+  const lines = src.split('\n');
+  const startMarker = 'var _channelIcons = {';
+  const endMarker   = '// Render the meta row for a channel event';
+  const startIdx = lines.findIndex(function(l) { return l.indexOf(startMarker) >= 0; });
+  if (startIdx < 0) throw new Error('start marker not found in app.js');
+  const endIdx = lines.findIndex(function(l, i) { return i > startIdx && l.indexOf(endMarker) >= 0; });
+  if (endIdx < 0) throw new Error('end marker not found in app.js');
+  // Slice covers _channelIcons → _channelDisplayName + _extractChannelInfo.
+  let code = lines.slice(startIdx, endIdx).join('\n') + '\n';
+  // Add renderChannelEventMeta — single function definition.
+  code += extractFunction('renderChannelEventMeta') + '\n';
+  // escHtml is a small one-liner; pull it in too.
+  code += extractFunction('escHtml') + '\n';
+  code += '\nthis.api = {' +
+          '  _extractChannelInfo: _extractChannelInfo,' +
+          '  renderChannelEventMeta: renderChannelEventMeta,' +
+          '  _channelDisplayName: _channelDisplayName,' +
+          '  _channelIcons: _channelIcons,' +
+          '};';
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox);
+  const api = sandbox.api;
+
+  // (1) Top-level fields — the shape our brain.py enrichment emits.
+  const inboundTop = {
+    type: 'CHANNEL.IN',
+    provider: 'telegram',
+    sender: 'Vivek Chand',
+    chat_id: '1532693273',
+    detail: 'hello, how are you doing?',
+    time: '2026-05-13T10:00:00Z',
+  };
+  const info1 = api._extractChannelInfo(inboundTop);
+  truthy(info1, 'top-level channel event detected');
+  eq(info1.provider, 'telegram', 'provider parsed from top-level field');
+  eq(info1.sender, 'Vivek Chand', 'sender parsed from top-level field');
+  eq(info1.chatId, '1532693273', 'chat_id parsed from top-level field');
+  eq(info1.direction, 'in', 'direction = in for CHANNEL.IN');
+  eq(info1.providerLabel, 'Telegram', 'Telegram → Telegram (title-case)');
+  eq(info1.providerIcon, '📱', 'Telegram emoji');
+
+  // (2) Nested data — the shape if brain enrichment ever drops fields.
+  const inboundNested = {
+    type: 'CHANNEL.IN',
+    data: {
+      provider: 'signal',
+      from: { username: 'vivek', id: '+15551234567' },
+      chat_id: 'sig-abc',
+      text: 'sup',
+    },
+  };
+  const info2 = api._extractChannelInfo(inboundNested);
+  truthy(info2, 'nested-data channel event detected');
+  eq(info2.provider, 'signal', 'provider parsed from data.provider');
+  eq(info2.sender, 'vivek', 'sender parsed from data.from.username');
+  eq(info2.providerIcon, '📡', 'Signal emoji');
+  eq(info2.providerColor, '#3a76f0', 'Signal color');
+
+  // (3) Outbound (agent reply): role=assistant under data, no top-level fields.
+  const outbound = {
+    type: 'CHANNEL.OUT',
+    data: { provider: 'telegram', role: 'assistant', text: 'doing well!' },
+  };
+  const info3 = api._extractChannelInfo(outbound);
+  truthy(info3, 'outbound channel event detected');
+  eq(info3.direction, 'out', 'direction = out for CHANNEL.OUT');
+
+  // (4) Non-channel events fall through (return null).
+  eq(api._extractChannelInfo({ type: 'EXEC', detail: 'ls -la' }), null,
+     'EXEC (tool) event → null');
+  eq(api._extractChannelInfo({ type: 'AGENT', source: 'main', detail: 'thinking' }), null,
+     'AGENT main event → null');
+  eq(api._extractChannelInfo({ type: 'USER', channel: 'cli' }), null,
+     'cli channel → null (legacy branch owns it)');
+  eq(api._extractChannelInfo(null), null, 'null event → null');
+
+  // (5) Render branch: assert HTML contains provider emoji+name, sender, arrow.
+  const html = api.renderChannelEventMeta(inboundTop, info1);
+  truthy(html.indexOf('📱') !== -1, 'rendered HTML contains Telegram emoji');
+  truthy(html.indexOf('Telegram') !== -1, 'rendered HTML contains "Telegram"');
+  truthy(html.indexOf('Vivek Chand') !== -1, 'rendered HTML contains sender name');
+  truthy(html.indexOf('↘') !== -1, 'inbound rendered with ↘ arrow');
+  truthy(html.indexOf('brain-channel-pill') !== -1, 'pill class applied');
+  truthy(html.indexOf('font-style:italic') !== -1, 'sender italicised');
+  // Outbound uses ↗.
+  const htmlOut = api.renderChannelEventMeta(outbound, info3);
+  truthy(htmlOut.indexOf('↗') !== -1, 'outbound rendered with ↗ arrow');
+
+  // (6) Display-name overrides.
+  eq(api._channelDisplayName('googlechat'), 'Google Chat',
+     'googlechat → "Google Chat"');
+  eq(api._channelDisplayName('msteams'), 'MS Teams', 'msteams → "MS Teams"');
+  eq(api._channelDisplayName('imessage'), 'iMessage', 'imessage → "iMessage"');
+  eq(api._channelDisplayName('whatsapp'), 'Whatsapp',
+     'whatsapp → title-case fallback');
+
+  // (7) Detail text is unchanged — channel renderer only owns the meta row,
+  // the existing renderBrainDetail keeps owning the body. This is enforced
+  // by the renderBrainStream wiring rather than this helper, so we only
+  // assert the helper does NOT touch ev.detail.
+  eq(inboundTop.detail, 'hello, how are you doing?',
+     'helper did not mutate ev.detail');
+
+  // (8) HTML is escaped — XSS-style sender names don't break out.
+  const evil = {
+    type: 'CHANNEL.IN', provider: 'telegram',
+    sender: '<script>alert(1)</script>', chat_id: '1',
+  };
+  const evilInfo = api._extractChannelInfo(evil);
+  const evilHtml = api.renderChannelEventMeta(evil, evilInfo);
+  truthy(evilHtml.indexOf('<script>') === -1, 'sender < escaped');
+  truthy(evilHtml.indexOf('&lt;script&gt;') !== -1, 'sender appears escaped');
+}
+
 console.log('\n' + (failed === 0 ? 'PASS' : 'FAIL') + ' — ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed === 0 ? 0 : 1);

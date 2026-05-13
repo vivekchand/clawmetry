@@ -2282,16 +2282,159 @@ var _brainTypeFilter = 'all';
 var _brainChannelFilter = 'all';
 var _brainAllEvents = [];
 
+// Provider → emoji + display name. Mirrors routes/brain.py `_CHANNEL_ICON`
+// and clawmetry/sync.py `_CHANNEL_DIRS` (the canonical 21-adapter list).
+// Keep these three in sync when a new adapter ships.
 var _channelIcons = {
-  'telegram': '📱', 'whatsapp': '💬', 'discord': '🎮', 'slack': '📢',
+  'telegram': '📱', 'whatsapp': '💬', 'discord': '🎮', 'slack': '💼',
   'signal': '📡', 'irc': '💻', 'imessage': '🍎', 'webchat': '🌐',
-  'googlechat': '📧', 'cli': '🖥️', 'cron': '⏰'
+  'googlechat': '🔵', 'matrix': '🔢', 'msteams': '🏢', 'mattermost': '⚡',
+  'line': '💚', 'nostr': '🟣', 'twitch': '💜', 'bluebubbles': '💙',
+  'feishu': '🟠', 'zalo': '🩵', 'tlon': '🟤', 'synologychat': '🟦',
+  'nextcloudtalk': '☁️',
+  'cli': '🖥️', 'tui': '⌨️', 'cron': '⏰'
 };
 var _channelColors = {
   'telegram': '#2f9ef4', 'whatsapp': '#25d366', 'discord': '#5865F2', 'slack': '#4A154B',
   'signal': '#3a76f0', 'irc': '#6B7280', 'imessage': '#34C759', 'webchat': '#0EA5E9',
-  'googlechat': '#1A73E8', 'cli': '#94a3b8', 'cron': '#6B7280'
+  'googlechat': '#1A73E8', 'matrix': '#0DBD8B', 'msteams': '#4B53BC', 'mattermost': '#0072C6',
+  'line': '#06C755', 'nostr': '#9333ea', 'twitch': '#9146FF', 'bluebubbles': '#3478F6',
+  'feishu': '#00D6B9', 'zalo': '#0068FF', 'tlon': '#A78BFA', 'synologychat': '#1A73E8',
+  'nextcloudtalk': '#0082C9',
+  'cli': '#94a3b8', 'tui': '#94a3b8', 'cron': '#6B7280'
 };
+// Display-name overrides for channels whose snake/lower-case key isn't a
+// great human label. (`telegram` → `Telegram` is fine via title-case;
+// `googlechat` → `Google Chat` is not.)
+var _channelDisplayNames = {
+  'googlechat': 'Google Chat',
+  'msteams':    'MS Teams',
+  'bluebubbles':'BlueBubbles',
+  'imessage':   'iMessage',
+  'webchat':    'WebChat',
+  'irc':        'IRC',
+  'cli':        'CLI',
+  'tui':        'TUI',
+  'synologychat': 'Synology Chat',
+  'nextcloudtalk': 'Nextcloud Talk'
+};
+
+function _channelDisplayName(provider) {
+  if (!provider) return '';
+  var key = String(provider).toLowerCase();
+  if (_channelDisplayNames[key]) return _channelDisplayNames[key];
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+// ── Channel-event extraction (Brain row renderer helper) ───────────────
+// Coordinates with the Telegram-ingest agent (PR aca53ec8): the
+// `events`-table row carries `event_type=channel.in|channel.out` and the
+// raw provider payload under `data`. Brain endpoint also enriches some
+// rows with top-level `channel`/`channelSubject`/`chatType` fields. This
+// helper accepts BOTH shapes plus a graceful fallback for the legacy
+// JSONL parser path so we don't regress when ingest hasn't migrated yet.
+//
+// Returned shape (all fields optional, all strings):
+//   { provider, providerLabel, providerIcon, providerColor,
+//     sender, chatId, direction /* 'in' | 'out' */ }
+// Returns null when the event clearly isn't a channel turn.
+function _extractChannelInfo(ev) {
+  if (!ev || typeof ev !== 'object') return null;
+  var data = (ev.data && typeof ev.data === 'object') ? ev.data : {};
+
+  // ── provider ─────────────────────────────────────────────────────────
+  var provider = ev.provider || ev.channel || data.provider || '';
+  if (!provider) {
+    // event_type "channel.in"/"channel.out" doesn't carry provider on its
+    // own — we keep going only if some other field hints at a channel.
+    var src = String(ev.source || ev.src || '');
+    var srcMatch = src.match(/^(?:agent:[^:]+:)?([a-z]+)(?::|$)/);
+    if (srcMatch) {
+      var maybe = srcMatch[1];
+      if (_channelIcons[maybe] && maybe !== 'main' && maybe !== 'cli') {
+        provider = maybe;
+      }
+    }
+  }
+  // event_type can be the discriminator on its own
+  var evType = String(ev.type || ev.event_type || '').toUpperCase();
+  var isChannelType = evType === 'CHANNEL.IN' || evType === 'CHANNEL.OUT' ||
+                       evType === 'CHANNEL_IN' || evType === 'CHANNEL_OUT';
+  if (!provider && !isChannelType) return null;
+  provider = String(provider || '').toLowerCase();
+  // Treat plain CLI/cron sources as non-channel (the Brain renderer has
+  // its own 🖥️/⏰ chips for those).
+  if (provider === 'cli' || provider === 'cron' || provider === 'main') {
+    return null;
+  }
+
+  // ── direction ────────────────────────────────────────────────────────
+  var direction = ev.direction || data.direction || '';
+  if (!direction) {
+    if (evType === 'CHANNEL.OUT' || evType === 'CHANNEL_OUT') direction = 'out';
+    else if (evType === 'CHANNEL.IN' || evType === 'CHANNEL_IN') direction = 'in';
+    else if (data.role === 'assistant' || data.from_bot === true) direction = 'out';
+    else direction = 'in';
+  }
+  direction = String(direction).toLowerCase();
+  if (direction !== 'in' && direction !== 'out') direction = 'in';
+
+  // ── sender ───────────────────────────────────────────────────────────
+  var sender = ev.sender || ev.sender_name || ev.senderName || data.sender_name || '';
+  if (!sender) {
+    var senderBlock = data.from || data.sender || data.user;
+    if (senderBlock && typeof senderBlock === 'object') {
+      sender = senderBlock.username || senderBlock.first_name ||
+               senderBlock.name || senderBlock.id || '';
+    }
+  }
+  sender = sender ? String(sender) : '';
+
+  // ── chat id ──────────────────────────────────────────────────────────
+  var chatId = ev.chat_id || ev.chatId || data.chat_id || data.channel_id || '';
+  if (!chatId && data.chat && typeof data.chat === 'object') {
+    chatId = data.chat.id || '';
+  }
+  chatId = chatId ? String(chatId) : '';
+
+  return {
+    provider:      provider,
+    providerLabel: _channelDisplayName(provider),
+    providerIcon:  _channelIcons[provider] || '📨',
+    providerColor: _channelColors[provider] || '#667',
+    sender:        sender,
+    chatId:        chatId,
+    direction:     direction
+  };
+}
+
+// Render the meta row for a channel event (used by renderBrainStream when
+// _extractChannelInfo returns non-null). Replaces the generic AGENT/USER
+// type tag with a channel pill + sender name + direction arrow.
+function renderChannelEventMeta(ev, info, opts) {
+  opts = opts || {};
+  var html = '';
+  var arrow = info.direction === 'out' ? '↗' : '↘';
+  var arrowColor = info.direction === 'out' ? '#10b981' : '#60a5fa';
+  var arrowTitle = info.direction === 'out' ? 'Outbound (agent reply)' : 'Inbound (from user)';
+  // Channel pill — emoji + provider name in provider colour.
+  html += '<span class="brain-channel-pill" style="display:inline-flex;align-items:center;gap:4px;background:' +
+           info.providerColor + '22;color:' + info.providerColor +
+           ';padding:1px 8px;border-radius:10px;font-size:10px;font-weight:600;flex-shrink:0;white-space:nowrap;" title="' +
+           escHtml(info.provider + (info.chatId ? ' chat=' + info.chatId : '')) + '">' +
+           info.providerIcon + ' ' + escHtml(info.providerLabel) + '</span>';
+  // Direction arrow.
+  html += '<span class="brain-channel-direction" style="color:' + arrowColor +
+           ';font-size:11px;font-weight:700;flex-shrink:0;" title="' +
+           escHtml(arrowTitle) + '">' + arrow + '</span>';
+  // Sender name (italic). Falls back to a neutral placeholder so we never
+  // collapse to nothing — keeps the row scannable even when the upstream
+  // adapter omitted the sender block.
+  var senderText = info.sender || (info.direction === 'out' ? 'agent' : 'user');
+  html += '<span class="brain-channel-sender" style="font-style:italic;color:var(--text-secondary);font-size:11px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;" title="' +
+           escHtml(senderText) + '">' + escHtml(senderText) + '</span>';
+  return html;
+}
 
 var _brainTypeIcons = {
   'EXEC': '⚙️', 'SHELL': '⚙️', 'READ': '📖', 'WRITE': '✏️',
@@ -2606,12 +2749,24 @@ function renderBrainStream(events) {
     }
     var _evKey = _brainEvKey(ev);
     var _evExpCls = _brainExpandedKeys[_evKey] ? ' expanded' : '';
+    // Channel-event branch (Telegram, Signal, Slack, …): replace the
+    // generic AGENT/USER tag with a provider pill + sender name + direction
+    // arrow. Triggered when ev exposes channel/provider/sender or carries a
+    // channel.in/channel.out event_type. Coordinates with the Telegram
+    // ingest agent (PR aca53ec8) on field names. Falls back gracefully when
+    // those fields are missing — the legacy renderer still owns CLI/cron/
+    // tool/think rows.
+    var chInfo = _extractChannelInfo(ev);
     html += '<div class="brain-event' + _evExpCls + '" data-evkey="' + escHtml(_evKey) + '" onclick="_toggleBrainEvent(this, this.dataset.evkey)">';
     html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
-    html += '<span class="brain-type" style="background:rgba(100,100,100,0.15);color:' + color + ';padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;min-width:70px;text-align:center;display:inline-block;white-space:nowrap;">' + icon + ' ' + escHtml(evType) + '</span>';
-    html += '<span class="brain-source" style="color:' + color + ';flex-shrink:0;" title="' + escHtml(fullSrc) + '">' + roleIcon + ' ' + escHtml(shortSrc) + '</span>';
-    html += chBadge;
+    if (chInfo) {
+      html += renderChannelEventMeta(ev, chInfo);
+    } else {
+      html += '<span class="brain-type" style="background:rgba(100,100,100,0.15);color:' + color + ';padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;min-width:70px;text-align:center;display:inline-block;white-space:nowrap;">' + icon + ' ' + escHtml(evType) + '</span>';
+      html += '<span class="brain-source" style="color:' + color + ';flex-shrink:0;" title="' + escHtml(fullSrc) + '">' + roleIcon + ' ' + escHtml(shortSrc) + '</span>';
+      html += chBadge;
+    }
     html += skillBadge;
     html += taskBadge;
     html += '</div>';

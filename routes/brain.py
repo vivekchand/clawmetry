@@ -239,9 +239,10 @@ def _try_local_store_brain(limit: int, include_artifacts: bool):
         # with detail="". ``_extract_brain_detail`` knows about all three
         # shapes (legacy, v3 mapper top-level, v3 mapper mirror).
         detail = _extract_brain_detail(r)
-        out.append({
+        evt_type = (r.get("event_type") or "").upper()
+        row = {
             "time":       r.get("ts", ""),
-            "type":       (r.get("event_type") or "").upper(),
+            "type":       evt_type,
             "detail":     str(detail)[:200],
             "src":        (r.get("session_id") or r.get("agent_id") or "")[:32],
             "sessionId":  r.get("session_id") or "",
@@ -249,7 +250,45 @@ def _try_local_store_brain(limit: int, include_artifacts: bool):
             "tokens":     r.get("token_count") or 0,
             "cost":       float(r.get("cost_usd") or 0.0),
             "model":      r.get("model") or "",
-        })
+        }
+        # ── Channel-event enrichment (PR aca53ec8 / Telegram ingest) ─────
+        # Channel turns land here as event_type=channel.in|channel.out with
+        # the raw provider payload under ``data``. Surface a few flat fields
+        # (provider, sender, chat_id, channel, direction) so the Brain row
+        # renderer can paint a provider pill + sender name without having
+        # to re-parse the data blob client-side.
+        if evt_type.startswith("CHANNEL."):
+            data = r.get("data") or {}
+            if isinstance(data, dict):
+                provider = (data.get("provider") or "").lower()
+                if provider:
+                    row["provider"] = provider
+                    row["channel"] = provider
+                # direction: channel.in → "in", channel.out → "out"
+                row["direction"] = "out" if evt_type.endswith(".OUT") else "in"
+                # sender: prefer flat sender_name, fall back to from/sender/user blocks
+                sender = data.get("sender_name") or data.get("sender") or ""
+                if not sender:
+                    for blk_key in ("from", "user"):
+                        blk = data.get(blk_key)
+                        if isinstance(blk, dict):
+                            sender = (
+                                blk.get("username")
+                                or blk.get("first_name")
+                                or blk.get("name")
+                                or ""
+                            )
+                            if sender:
+                                break
+                if sender:
+                    row["sender"] = str(sender)[:80]
+                # chat_id
+                chat_id = data.get("chat_id") or data.get("channel_id") or ""
+                if not chat_id and isinstance(data.get("chat"), dict):
+                    chat_id = data["chat"].get("id") or ""
+                if chat_id:
+                    row["chat_id"] = str(chat_id)[:80]
+        out.append(row)
     return {
         "events":  out,
         "count":   len(out),
