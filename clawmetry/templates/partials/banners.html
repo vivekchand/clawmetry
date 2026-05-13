@@ -149,6 +149,42 @@
     ">Dismiss</button>
 </div>
 
+<!-- Stuck Session Banner -->
+<div id="stuck-session-banner" style="
+  display:none;
+  padding:10px 16px;
+  border-bottom:2px solid #ef4444;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:10px;
+  background:#450a0a;
+  color:#fca5a5;
+  ">
+  <span style="font-size:18px;">&#9203;</span>
+  <span id="stuck-session-banner-msg" style="flex:1;"></span>
+  <a id="stuck-session-banner-link" href="#" onclick="switchTab('overview');document.getElementById('stuck-session-banner').style.display='none';_stuckCount=0;_updateStuckBadge();" style="
+    background:#991b1b;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    text-decoration:none;
+    ">View Session</a>
+  <button onclick="document.getElementById('stuck-session-banner').style.display='none';_stuckCount=0;_updateStuckBadge();" style="
+    background:#7f1d1d;
+    color:#fecaca;
+    border:none;
+    border-radius:6px;
+    padding:4px 10px;
+    font-size:11px;
+    cursor:pointer;
+    ">Dismiss</button>
+</div>
+
 <!-- Budget Cap Banner -->
 <div id="budget-cap-banner" style="
   display:none;
