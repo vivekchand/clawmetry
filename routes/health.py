@@ -1406,16 +1406,29 @@ def api_health():
             }
         )
 
-    # 4. Uptime
+    # 4. Uptime — portable across macOS/Linux/Win (GNU `uptime -p` is Linux-only).
     try:
-        uptime = (
-            subprocess.run(["uptime", "-p"], capture_output=True, text=True, timeout=2)
-            .stdout.strip()
-            .replace("up ", "")
-        )
-        checks.append(
-            {"id": "uptime", "status": "healthy", "color": "green", "detail": uptime}
-        )
+        from helpers.system import uptime_pretty
+
+        uptime = uptime_pretty().replace("up ", "")
+        if uptime == "unknown":
+            checks.append(
+                {
+                    "id": "uptime",
+                    "status": "warning",
+                    "color": "yellow",
+                    "detail": "Unknown",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "id": "uptime",
+                    "status": "healthy",
+                    "color": "green",
+                    "detail": uptime,
+                }
+            )
     except Exception:
         checks.append(
             {

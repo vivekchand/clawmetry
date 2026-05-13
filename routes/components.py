@@ -561,10 +561,13 @@ def api_component_runtime():
         items.append({"label": "OpenClaw", "value": oc_ver, "status": "ok"})
     except Exception:
         items.append({"label": "OpenClaw", "value": "unknown", "status": "warning"})
-    # Uptime
+    # Uptime — portable across macOS/Linux/Win (GNU `uptime -p` is Linux-only).
     try:
-        up = subprocess.check_output(["uptime", "-p"], timeout=5).decode().strip()
-        items.append({"label": "Uptime", "value": up, "status": "ok"})
+        from helpers.system import uptime_pretty
+
+        up = uptime_pretty()
+        if up != "unknown":
+            items.append({"label": "Uptime", "value": up, "status": "ok"})
     except Exception:
         pass
     # Memory

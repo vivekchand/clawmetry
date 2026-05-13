@@ -784,10 +784,15 @@ def _try_local_store_overview():
         system.append(["Load", "--", ""])
 
     try:
-        uptime = _sub.run(
-            ["uptime", "-p"], capture_output=True, text=True, timeout=2
-        ).stdout.strip()
-        system.append(["Uptime", uptime.replace("up ", ""), ""])
+        # Portable: GNU `uptime -p` doesn't exist on macOS / BSD.
+        from helpers.system import uptime_pretty
+
+        uptime = uptime_pretty()
+        system.append([
+            "Uptime",
+            uptime.replace("up ", "") if uptime != "unknown" else "--",
+            "",
+        ])
     except Exception:
         system.append(["Uptime", "--", ""])
 
@@ -925,10 +930,15 @@ def api_overview():
         system.append(["Load", "--", ""])
 
     try:
-        uptime = subprocess.run(
-            ["uptime", "-p"], capture_output=True, text=True, timeout=2
-        ).stdout.strip()
-        system.append(["Uptime", uptime.replace("up ", ""), ""])
+        # Portable: GNU `uptime -p` doesn't exist on macOS / BSD.
+        from helpers.system import uptime_pretty
+
+        uptime = uptime_pretty()
+        system.append([
+            "Uptime",
+            uptime.replace("up ", "") if uptime != "unknown" else "--",
+            "",
+        ])
     except Exception:
         system.append(["Uptime", "--", ""])
 

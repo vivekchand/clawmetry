@@ -91,6 +91,53 @@ $USE_SUDO ln -sf "$INSTALL_DIR/bin/clawmetry" "$BIN_DIR/clawmetry"
 CLAWMETRY_BIN="$BIN_DIR/clawmetry"
 CLAWMETRY_VERSION=$("$INSTALL_DIR/bin/python3" -c "import importlib.metadata; print(importlib.metadata.version('clawmetry'))" 2>/dev/null || echo "installed")
 
+# ── Restart launchd jobs (macOS) ─────────────────────────────────────────────
+# After a venv reinstall, the dashboard/sync daemons launched at boot are
+# still running against the old (now deleted) venv. They'll either keep
+# serving stale code or crash-loop until reboot. `launchctl kickstart -k`
+# restarts them cleanly. Issue #1127.
+#
+# We also detect any plist whose ProgramArguments[0] points at a stale path
+# (e.g. a previous Homebrew clawmetry or ~/.local) and rewrite it to the
+# fresh venv binary so the next reboot picks up the right interpreter.
+if [ "$OS" = "Darwin" ]; then
+  _LA_DIR="$HOME/Library/LaunchAgents"
+  _UID=$(id -u)
+  # Step 1: rewrite stale ProgramArguments[0] in any com.clawmetry.* plist.
+  for _plist in "$_LA_DIR"/com.clawmetry.*.plist; do
+    [ -f "$_plist" ] || continue
+    _current=$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "$_plist" 2>/dev/null || echo "")
+    _label=$(basename "$_plist" .plist)
+    case "$_current" in
+      "$INSTALL_DIR/bin/"*)
+        # Already pointing at the fresh venv — no rewrite needed.
+        ;;
+      *)
+        # Sync daemon plists invoke `python3 -m clawmetry.sync`; the
+        # dashboard plist runs the `clawmetry` console script. Pick the
+        # matching target binary inside the new venv.
+        if [ "$_label" = "com.clawmetry.sync" ] || [[ "$_current" == *python* ]]; then
+          _new="$INSTALL_DIR/bin/python3"
+        else
+          _new="$INSTALL_DIR/bin/clawmetry"
+        fi
+        if [ -n "$_current" ] && [ "$_current" != "$_new" ]; then
+          /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $_new" "$_plist" 2>/dev/null || true
+        fi
+        ;;
+    esac
+  done
+
+  # Step 2: kickstart any registered com.clawmetry.* job. `|| true` so
+  # systems without launchd running (CI containers, Linux subprocess) don't
+  # abort the installer.
+  for _plist in "$_LA_DIR"/com.clawmetry.*.plist; do
+    [ -f "$_plist" ] || continue
+    _label=$(basename "$_plist" .plist)
+    launchctl kickstart -k "gui/$_UID/$_label" >/dev/null 2>&1 || true
+  done
+fi
+
 echo ""
 echo -e "  ${GREEN}${BOLD}✓ ClawMetry $CLAWMETRY_VERSION installed${NC}"
 echo ""

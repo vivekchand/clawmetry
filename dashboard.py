@@ -2568,10 +2568,19 @@ def _detect_gateway_token():
 
             with open(jp) as f:
                 cfg = _json.load(f)
+            # Primary path on current OpenClaw: cfg["gateway"]["auth"]["token"].
+            # Some installs / older schemas store the token at top-level
+            # cfg["auth"]["token"] (issue #1127). Try the nested gateway
+            # path first, then the top-level auth path so we cover both
+            # without breaking the common case.
             gw = cfg.get("gateway", {})
-            auth = gw.get("auth", {})
-            if isinstance(auth, dict) and "token" in auth:
-                return auth["token"]
+            if isinstance(gw, dict):
+                gw_auth = gw.get("auth", {})
+                if isinstance(gw_auth, dict) and gw_auth.get("token"):
+                    return gw_auth["token"]
+            top_auth = cfg.get("auth", {})
+            if isinstance(top_auth, dict) and top_auth.get("token"):
+                return top_auth["token"]
         except (FileNotFoundError, ValueError, KeyError, TypeError):
             pass
     return None
@@ -9779,10 +9788,17 @@ def _detect_gateway_token():
             import json as _json
             with open(jp) as f:
                 cfg = _json.load(f)
+            # Primary path on current OpenClaw: cfg["gateway"]["auth"]["token"].
+            # Older / alternate schemas put it at top-level cfg["auth"]["token"]
+            # (issue #1127). Try gateway-nested first, fall back to top-level.
             gw = cfg.get('gateway', {})
-            auth = gw.get('auth', {})
-            if isinstance(auth, dict) and 'token' in auth:
-                return auth['token']
+            if isinstance(gw, dict):
+                gw_auth = gw.get('auth', {})
+                if isinstance(gw_auth, dict) and gw_auth.get('token'):
+                    return gw_auth['token']
+            top_auth = cfg.get('auth', {})
+            if isinstance(top_auth, dict) and top_auth.get('token'):
+                return top_auth['token']
         except (FileNotFoundError, ValueError, KeyError, TypeError):
             pass
     return None

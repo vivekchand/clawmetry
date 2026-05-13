@@ -5381,17 +5381,50 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception:
         system.append(["RAM", "--", ""])
 
+    # Portable uptime: stdlib-only (no `uptime -p` — missing on macOS/BSD).
     try:
-        if sys.platform == "darwin":
-            up = subprocess.run(
-                ["uptime"], capture_output=True, text=True, timeout=5
-            ).stdout.strip()
-            system.append(["Uptime", up.split(",")[0].split("up")[-1].strip(), ""])
+        boot_ts = None
+        try:
+            import psutil  # type: ignore
+
+            boot_ts = float(psutil.boot_time())
+        except Exception:
+            if sys.platform.startswith("linux"):
+                try:
+                    with open("/proc/uptime") as _uf:
+                        boot_ts = time.time() - float(_uf.read().split()[0])
+                except Exception:
+                    pass
+            elif sys.platform == "darwin" or "bsd" in sys.platform:
+                try:
+                    import re as _re
+
+                    _out = subprocess.run(
+                        ["sysctl", "-n", "kern.boottime"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                    ).stdout
+                    _m = _re.search(r"sec\s*=\s*(\d+)", _out)
+                    if _m:
+                        boot_ts = float(_m.group(1))
+                except Exception:
+                    pass
+        if boot_ts is not None:
+            secs = max(0, int(time.time() - boot_ts))
+            days, rem = divmod(secs, 86400)
+            hours, rem = divmod(rem, 3600)
+            minutes = rem // 60
+            parts = []
+            if days:
+                parts.append(f"{days}d")
+            if hours:
+                parts.append(f"{hours}h")
+            if minutes or not parts:
+                parts.append(f"{minutes}m")
+            system.append(["Uptime", " ".join(parts), ""])
         else:
-            up = subprocess.run(
-                ["uptime", "-p"], capture_output=True, text=True, timeout=5
-            ).stdout.strip()
-            system.append(["Uptime", up.replace("up ", ""), ""])
+            system.append(["Uptime", "--", ""])
     except Exception:
         system.append(["Uptime", "--", ""])
 
