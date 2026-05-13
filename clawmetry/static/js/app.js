@@ -1770,7 +1770,9 @@ async function loadAll() {
     // the backend and queue behind transcript analytics.
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
-    loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    // Mission Control task summary was removed when the external MC service
+    // was retired (commit 62e1fe7). The /api/mc-tasks 404 was firing on every
+    // page load + every 30s — issue #1127. Frontend code now deleted below.
     if (typeof loadReliabilityCard === 'function') setTimeout(function(){ loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)}); }, 1200);
     if (typeof loadTokenVelocity === 'function') setTimeout(function(){ loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)}); }, 1600);
     if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
@@ -2235,8 +2237,19 @@ function formatBrainTime(isoStr) {
     var d = new Date(isoStr);
     var now = new Date();
     var sameDay = d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
+    var sameYear = d.getFullYear()===now.getFullYear();
     var time = d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    var prefix = sameDay ? 'Today' : d.toLocaleDateString('en-GB', {day:'numeric',month:'short'});
+    var prefix;
+    if (sameDay) {
+      prefix = 'Today';
+    } else if (sameYear) {
+      // Same year — "9 May" is unambiguous.
+      prefix = d.toLocaleDateString('en-GB', {day:'numeric',month:'short'});
+    } else {
+      // Different year — must include year, otherwise "9 May" is ambiguous
+      // (e.g. cross-year SSE replay shows up as "9 May" with no year hint).
+      prefix = d.toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'});
+    }
     return '<span style="opacity:0.45;font-size:10px;margin-right:3px;">' + prefix + '</span>' + time;
   } catch(e) { return isoStr || ''; }
 }
@@ -2697,10 +2710,30 @@ function renderBrainChart(events) {
   canvas.height = 80;
   ctx.clearRect(0, 0, W, 80);
 
-  // 60 min / 30s = 120 buckets, stacked by source color
+  // Adaptive window: pick the shortest window that contains the events so the
+  // chart actually renders bars instead of an empty 60-min background. The
+  // previous hard-coded 60-min window meant any event older than an hour
+  // (~typical for /api/brain-history?limit=300) was dropped silently.
   var now = Date.now();
-  var bucketMs = 30000;
-  var numBuckets = 120;
+  var WINDOWS = [
+    { ms: 3600000,   bucketMs: 30000   },  // 1h  / 30s  = 120 buckets
+    { ms: 21600000,  bucketMs: 180000  },  // 6h  / 3m   = 120 buckets
+    { ms: 86400000,  bucketMs: 720000  }   // 24h / 12m  = 120 buckets
+  ];
+  var oldestAge = 0;
+  for (var ei = 0; ei < events.length; ei++) {
+    try {
+      var ageE = now - new Date(events[ei].time).getTime();
+      if (ageE > oldestAge && ageE < 86400000 * 2) oldestAge = ageE;
+    } catch(e) {}
+  }
+  var win = WINDOWS[0];
+  for (var wi = 0; wi < WINDOWS.length; wi++) {
+    if (oldestAge <= WINDOWS[wi].ms) { win = WINDOWS[wi]; break; }
+    win = WINDOWS[wi];
+  }
+  var bucketMs = win.bucketMs;
+  var numBuckets = Math.floor(win.ms / bucketMs);
   var buckets = {};
   events.forEach(function(ev) {
     try {
@@ -5264,99 +5297,15 @@ async function _loadMemoryAllFiles() {
   });
 }
 
-// ===== Mission Control Summary Bar =====
-var _mcData = null;
-var _mcExpanded = null;
-var _mcRefreshTimer = null;
-
-async function loadMCTasks() {
-  try {
-    var r = await fetch('/api/mc-tasks');
-    var data = await r.json();
-    var wrapper = document.getElementById('mc-bar-wrapper');
-    if (!data.available) { wrapper.style.display='none'; return; }
-    wrapper.style.display='';
-    var tasks = data.tasks || [];
-    var cols = [
-      {key:'inbox', label:'Inbox', color:'#3b82f6', bg:'#3b82f620', icon:'📥', tasks:[]},
-      {key:'in_progress', label:'In Progress', color:'#16a34a', bg:'#16a34a20', icon:'🔄', tasks:[]},
-      {key:'review', label:'Review', color:'#d97706', bg:'#d9770620', icon:'👀', tasks:[]},
-      {key:'blocked', label:'Blocked', color:'#dc2626', bg:'#dc262620', icon:'🚫', tasks:[]},
-      {key:'done', label:'Done', color:'#6b7280', bg:'#6b728020', icon:'✅', tasks:[]}
-    ];
-    tasks.forEach(function(t) {
-      var col = t.column || 'inbox';
-      var c = cols.find(function(x){return x.key===col;});
-      if (c) c.tasks.push(t);
-    });
-    _mcData = cols;
-    var bar = document.getElementById('mc-summary-bar');
-    var html = '<span style="font-size:12px;font-weight:700;color:var(--text-tertiary);margin-right:4px;">🎯 MC</span>';
-    cols.forEach(function(c, i) {
-      if (i > 0) html += '<span style="color:var(--text-faint);font-size:12px;margin:0 2px;">│</span>';
-      var active = _mcExpanded === c.key ? 'outline:2px solid '+c.color+';outline-offset:-2px;' : '';
-      html += '<span data-col-key="'+c.key+'" onclick="toggleMCColumn(this.dataset.colKey)" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:16px;background:'+c.bg+';'+active+'transition:all 0.15s;">';
-      html += '<span style="font-size:12px;">'+c.icon+'</span>';
-      html += '<span style="font-size:11px;color:var(--text-secondary);">'+c.label+'</span>';
-      html += '<span style="font-size:12px;font-weight:700;color:'+c.color+';min-width:16px;text-align:center;">'+c.tasks.length+'</span>';
-      html += '</span>';
-    });
-    var total = tasks.length;
-    html += '<span style="margin-left:auto;font-size:10px;color:var(--text-muted);">'+total+' tasks</span>';
-    bar.innerHTML = html;
-    if (_mcExpanded) renderMCExpanded(_mcExpanded);
-  } catch(e) {
-    var w = document.getElementById('mc-bar-wrapper');
-    if (w) w.style.display='none';
-  }
-}
-
-function toggleMCColumn(key) {
-  if (_mcExpanded === key) { _mcExpanded = null; document.getElementById('mc-expanded-section').style.display='none'; }
-  else { _mcExpanded = key; renderMCExpanded(key); }
-  // Re-render bar to update active pill
-  if (_mcData) {
-    var bar = document.getElementById('mc-summary-bar');
-    var cols = _mcData;
-    var html = '<span style="font-size:12px;font-weight:700;color:var(--text-tertiary);margin-right:4px;">🎯 MC</span>';
-    cols.forEach(function(c, i) {
-      if (i > 0) html += '<span style="color:var(--text-faint);font-size:12px;margin:0 2px;">│</span>';
-      var active = _mcExpanded === c.key ? 'outline:2px solid '+c.color+';outline-offset:-2px;' : '';
-      html += '<span data-col-key="'+c.key+'" onclick="toggleMCColumn(this.dataset.colKey)" style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:16px;background:'+c.bg+';'+active+'transition:all 0.15s;">';
-      html += '<span style="font-size:12px;">'+c.icon+'</span>';
-      html += '<span style="font-size:11px;color:var(--text-secondary);">'+c.label+'</span>';
-      html += '<span style="font-size:12px;font-weight:700;color:'+c.color+';min-width:16px;text-align:center;">'+c.tasks.length+'</span>';
-      html += '</span>';
-    });
-    var total = cols.reduce(function(s,c){return s+c.tasks.length;},0);
-    html += '<span style="margin-left:auto;font-size:10px;color:var(--text-muted);">'+total+' tasks</span>';
-    bar.innerHTML = html;
-  }
-}
-
-function renderMCExpanded(key) {
-  var sec = document.getElementById('mc-expanded-section');
-  if (!_mcData) { sec.style.display='none'; return; }
-  var col = _mcData.find(function(c){return c.key===key;});
-  if (!col || col.tasks.length === 0) { sec.style.display='block'; sec.innerHTML='<div style="font-size:12px;color:var(--text-muted);padding:4px;">No tasks in '+col.label+'</div>'; return; }
-  sec.style.display='block';
-  var html = '<div style="font-size:11px;font-weight:700;color:'+col.color+';margin-bottom:8px;">'+col.icon+' '+col.label+' ('+col.tasks.length+')</div>';
-  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px;">';
-  col.tasks.forEach(function(t) {
-    var title = t.title || '--';
-    var badge = t.companyId ? '<span style="font-size:9px;background:var(--bg-secondary);padding:1px 5px;border-radius:3px;color:var(--text-muted);margin-left:6px;">'+t.companyId+'</span>' : '';
-    html += '<div style="font-size:12px;color:var(--text-secondary);padding:4px 8px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid '+col.color+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="'+(t.title||'').replace(/"/g,'&quot;')+'">'+title+badge+'</div>';
-  });
-  html += '</div>';
-  sec.innerHTML = html;
-}
-
-// MC auto-refresh every 30s
-if (!_mcRefreshTimer) {
-  _mcRefreshTimer = setInterval(function() {
-    if (document.querySelector('.nav-tab.active')?.textContent?.trim() === 'Overview') loadMCTasks();
-  }, 30000);
-}
+// ===== Mission Control Summary Bar — REMOVED =====
+// The Mission Control summary used to proxy a dedicated MC service via
+// /api/mc-tasks. That backend route was deleted in commit 62e1fe7 when the
+// external MC service was retired, but the polling code (initial fetch +
+// 30s setInterval) was left behind and was firing ~11 404s per audit walk
+// (issue #1127). The whole feature is dead — no `mc-bar-wrapper` /
+// `mc-summary-bar` / `mc-expanded-section` elements exist in the templates
+// either — so the polling loop, helpers and module-level state have all
+// been removed. If MC ever returns, restore from git history.
 
 // ===== Health Checks =====
 async function loadHealth() {
@@ -7897,7 +7846,7 @@ function initFlow() {
 
   // Hide unconfigured channels in the flow SVG
   hideUnconfiguredChannels(document);
-  
+
   fetch('/api/overview').then(function(r){return r.json();}).then(async function(d) {
     if (!d.model || d.model === 'unknown') {
       var fm = await resolvePrimaryModelFallback();
@@ -7906,7 +7855,7 @@ function initFlow() {
     if (d.model) applyBrainModelToAll(d.model);
     var tok = document.getElementById('flow-tokens');
     if (tok) tok.textContent = (d.mainTokens / 1000).toFixed(0) + 'K';
-    
+
     // Add visual hierarchy hints
     setTimeout(function() {
       enhanceArchitectureClarity();
@@ -7918,8 +7867,103 @@ function initFlow() {
 
   // Connect to the typed flow-events SSE (tails gateway.log + session JSONL)
   _startFlowSse();
+  // Active Tools + Live Tool Call Stream — DuckDB-backed (issue #1127).
+  // The flow-events SSE only fires when gateway.log emits the right keywords,
+  // which leaves "Active Tools: —" and "Waiting for activity…" stuck on most
+  // installs. /api/brain-history + /api/brain-stream read from the same
+  // DuckDB store that drives the rest of the Brain tab, so we backfill
+  // recent tool events and subscribe to the live stream from there.
+  _backfillFlowFromBrain();
+  _startFlowBrainStream();
 
   setInterval(updateFlowStats, updateInterval);
+}
+
+// Map brain-history event types → Flow's active-tool buckets (exec/browser/
+// search/memory/cron/tts). Brain events are tool-typed by routes/brain.py
+// (EXEC/READ/WRITE/BROWSER/SEARCH/SPAWN/MSG/TOOL).
+function _brainTypeToFlowTool(t) {
+  if (!t) return null;
+  t = String(t).toUpperCase();
+  if (t === 'EXEC' || t === 'SHELL' || t === 'READ' || t === 'WRITE') return 'exec';
+  if (t === 'BROWSER') return 'browser';
+  if (t === 'SEARCH') return 'search';
+  if (t === 'SPAWN') return 'cron';
+  if (t === 'MSG') return 'tts';
+  if (t === 'TOOL') return 'exec';
+  return null;
+}
+
+// Pretty label for the live feed — keeps the same surface as flow-events.
+function _flowFeedLabelForTool(toolName) {
+  var toolNames = {exec:'running a command',browser:'browsing the web',search:'searching the web',cron:'scheduling',tts:'generating speech',memory:'accessing memory'};
+  return toolNames[toolName] || 'using ' + toolName;
+}
+
+function _backfillFlowFromBrain() {
+  // One-shot historical backfill from /api/brain-history (DuckDB-backed).
+  // Populates Active Tools with the most recent tool calls so the panel is
+  // never empty after a page reload, even if /api/flow-events has been quiet.
+  fetch('/api/brain-history?limit=40').then(function(r){return r.json();}).then(function(d) {
+    var events = (d && d.events) || [];
+    var now = Date.now();
+    var seen = 0;
+    // events are most-recent-first; scan up to 8 tool-typed events.
+    for (var i = 0; i < events.length && seen < 8; i++) {
+      var ev = events[i];
+      var tool = _brainTypeToFlowTool(ev && ev.type);
+      if (!tool) continue;
+      // Only mark "active" if recent (≤ 5 min) — older events are surfaced
+      // in the feed but should NOT spuriously light up the Active Tools row.
+      try {
+        var age = now - new Date(ev.time).getTime();
+        if (age >= 0 && age < 5 * 60 * 1000) {
+          flowStats.activeTools[tool] = true;
+          // Expire after the same 5s window the SSE handler uses.
+          setTimeout(function(t) {
+            return function() { delete flowStats.activeTools[t]; };
+          }(tool), 5000);
+        }
+      } catch(e) {}
+      seen++;
+    }
+    if (seen > 0) updateFlowStats();
+  }).catch(function(){});
+}
+
+var _flowBrainSse = null;
+function _startFlowBrainStream() {
+  if (window.CLOUD_MODE) return;
+  if (_flowBrainSse && _flowBrainSse.readyState !== EventSource.CLOSED) return;
+  try {
+    var url = '/api/brain-stream';
+    var tok =
+      localStorage.getItem('clawmetry-token') ||
+      localStorage.getItem('gw_token') ||
+      localStorage.getItem('cm-token');
+    if (tok) url += '?token=' + encodeURIComponent(tok);
+    var es = new EventSource(url);
+    _flowBrainSse = es;
+    es.onmessage = function(e) {
+      try {
+        var ev = JSON.parse(e.data);
+        if (!ev || !ev.type) return;
+        var tool = _brainTypeToFlowTool(ev.type);
+        if (!tool) return;
+        // Drive Active Tools + the existing tool-call animation off the same
+        // DuckDB-backed event. triggerToolCall already handles the 5s expiry.
+        triggerToolCall(tool);
+        var label = '⚡ ' + tool + ': ' + _flowFeedLabelForTool(tool);
+        addFlowFeedItem(label, '#f0c040', 'tool');
+        flowStats.events++;
+      } catch(e2) {}
+    };
+    es.onerror = function() {
+      try { es.close(); } catch(e3) {}
+      _flowBrainSse = null;
+      setTimeout(_startFlowBrainStream, 5000);
+    };
+  } catch(e) {}
 }
 
 function _populateFlowSkills() {
@@ -8476,12 +8520,72 @@ function _updateStuckBadge() {
   else { badge.style.display = 'none'; }
 }
 
+// ── Stuck-session banner dismissal persistence (issue #1127) ───────────
+// Dismiss used to only hide the banner in-memory, so the next stuck event
+// (or page reload, since stuck events replay from /api/flow-events) made
+// the banner pop right back. We now persist a per-session dismissal stamp
+// in localStorage with a 24h TTL, and prune entries older than the TTL on
+// every read so the store can't grow unbounded.
+var _STUCK_DISMISS_KEY = 'stuck-session-dismissed';
+var _STUCK_DISMISS_TTL_MS = 24 * 60 * 60 * 1000;
+
+function _readStuckDismissals() {
+  try {
+    var raw = localStorage.getItem(_STUCK_DISMISS_KEY);
+    if (!raw) return {};
+    var obj = JSON.parse(raw);
+    return (obj && typeof obj === 'object') ? obj : {};
+  } catch(e) { return {}; }
+}
+
+function _writeStuckDismissals(obj) {
+  try { localStorage.setItem(_STUCK_DISMISS_KEY, JSON.stringify(obj || {})); }
+  catch(e) {}
+}
+
+function _pruneStuckDismissals(now) {
+  var obj = _readStuckDismissals();
+  var changed = false;
+  Object.keys(obj).forEach(function(k) {
+    var t = Number(obj[k]) || 0;
+    if (!t || (now - t) > _STUCK_DISMISS_TTL_MS) {
+      delete obj[k];
+      changed = true;
+    }
+  });
+  if (changed) _writeStuckDismissals(obj);
+  return obj;
+}
+
+function _isStuckDismissed(sessionId) {
+  if (!sessionId) return false;
+  var now = Date.now();
+  var obj = _pruneStuckDismissals(now);
+  var t = Number(obj[sessionId]) || 0;
+  return t > 0 && (now - t) < _STUCK_DISMISS_TTL_MS;
+}
+
+function _markStuckDismissed(sessionId) {
+  if (!sessionId) return;
+  var obj = _pruneStuckDismissals(Date.now());
+  obj[sessionId] = Date.now();
+  _writeStuckDismissals(obj);
+}
+
 function _showStuckBanner(sessionId, ageSec) {
+  // Issue #1127 — skip the banner entirely if the user already dismissed
+  // this session in the last 24h.
+  if (sessionId && _isStuckDismissed(sessionId)) return;
   _stuckCount++;
   if (sessionId) _stuckSessions[sessionId] = true;
   _updateStuckBadge();
   var banner = document.getElementById('stuck-session-banner');
   if (!banner) return;
+  // Stash the session id on the banner so the Dismiss handler can write
+  // a localStorage entry keyed by it (the banner template's inline
+  // onclick doesn't have direct access to the originating event).
+  if (sessionId) banner.setAttribute('data-stuck-session-id', sessionId);
+  else banner.removeAttribute('data-stuck-session-id');
   var label = sessionId ? sessionId.substring(0, 20) : 'unknown session';
   var ageStr = ageSec > 0 ? ' (' + ageSec + 's)' : '';
   var msg = document.getElementById('stuck-session-banner-msg');
@@ -8489,6 +8593,15 @@ function _showStuckBanner(sessionId, ageSec) {
   var link = document.getElementById('stuck-session-banner-link');
   if (link && sessionId) link.href = '#';
   banner.style.display = 'flex';
+}
+
+// Called from the banner's Dismiss button (banners.html). Persists the
+// dismissal for 24h so a reload won't resurface the same warning.
+function dismissStuckBanner() {
+  var banner = document.getElementById('stuck-session-banner');
+  var sid = banner ? banner.getAttribute('data-stuck-session-id') : '';
+  if (sid) _markStuckDismissed(sid);
+  _clearStuckBanner();
 }
 
 function _clearStuckBanner(sessionId) {

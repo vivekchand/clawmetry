@@ -6330,7 +6330,7 @@ async function loadAll() {
     loadAutonomy().catch(function(e){console.warn('autonomy failed',e)});
     loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
     loadHealth().catch(function(e){console.warn('health failed',e)});
-    loadMCTasks().catch(function(e){console.warn('mctasks failed',e)});
+    // /api/mc-tasks removed in commit 62e1fe7 — see issue #1127.
     if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
     if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
     if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});

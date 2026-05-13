@@ -174,7 +174,7 @@
     font-weight:600;
     text-decoration:none;
     ">View Session</a>
-  <button onclick="document.getElementById('stuck-session-banner').style.display='none';_stuckCount=0;_updateStuckBadge();" style="
+  <button onclick="(typeof dismissStuckBanner==='function')?dismissStuckBanner():(function(){document.getElementById('stuck-session-banner').style.display='none';_stuckCount=0;_updateStuckBadge();})();" style="
     background:#7f1d1d;
     color:#fecaca;
     border:none;
