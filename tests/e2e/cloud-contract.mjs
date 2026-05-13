@@ -227,7 +227,7 @@ async function testNormalUser() {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   const errors = [];
-  page.on('pageerror', e => errors.push(`pageerror: ${e.message.slice(0, 200)}`));
+  page.on('pageerror', e => errors.push(`pageerror: ${(e.stack || e.toString()).slice(0, 2000)}`));
   page.on('console', m => {
     if (m.type() === 'error') {
       const loc = m.location() || {};
