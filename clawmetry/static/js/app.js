@@ -11259,7 +11259,112 @@ document.addEventListener('DOMContentLoaded', function() {
   initOverviewCompClickHandlers();
   initFlow();
   bootDashboard();
+  // Issue #950: multi-profile workspace switcher
+  try { initWorkspaceSwitcher(); } catch (e) { /* non-fatal */ }
 });
+
+// ── Workspace switcher (issue #950) ───────────────────────────────────
+// Discovers all OpenClaw workspaces on this machine and lets power users
+// flip the dashboard between them. Hidden entirely when only one
+// workspace is found, so the zero-config single-workspace UX is unchanged.
+var _wsList = [];
+var _wsActive = null;
+
+async function initWorkspaceSwitcher() {
+  try {
+    var resp = await fetch('/api/workspaces', { credentials: 'same-origin' });
+    if (!resp.ok) return;
+    var data = await resp.json();
+    _wsList = (data && data.workspaces) || [];
+    _wsActive = data && data.active;
+  } catch (e) {
+    return;
+  }
+  renderWorkspaceSwitcher();
+  // Dismiss menu when clicking outside.
+  document.addEventListener('click', function(ev) {
+    var menu = document.getElementById('workspace-switcher-menu');
+    var btn = document.getElementById('workspace-switcher-btn');
+    if (!menu || menu.style.display === 'none') return;
+    if (menu.contains(ev.target) || (btn && btn.contains(ev.target))) return;
+    menu.style.display = 'none';
+  });
+}
+
+function renderWorkspaceSwitcher() {
+  var wrap = document.getElementById('workspace-switcher');
+  if (!wrap) return;
+  if (!_wsList || _wsList.length <= 1) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'inline-block';
+  var label = document.getElementById('workspace-switcher-label');
+  var activeEntry = _wsList.find(function(w) { return w.path === _wsActive; });
+  if (label) label.textContent = (activeEntry && activeEntry.name) || 'default';
+  var menu = document.getElementById('workspace-switcher-menu');
+  if (!menu) return;
+  menu.innerHTML = '';
+  _wsList.forEach(function(w) {
+    var item = document.createElement('div');
+    var isActive = w.path === _wsActive;
+    item.style.cssText = 'padding:8px 10px;border-radius:6px;cursor:pointer;font-size:12px;display:flex;flex-direction:column;gap:2px;' +
+      (isActive ? 'background:rgba(229,68,58,0.12);' : '');
+    item.onmouseover = function() { if (!isActive) item.style.background = 'rgba(255,255,255,0.06)'; };
+    item.onmouseout = function() { if (!isActive) item.style.background = 'transparent'; };
+    item.onclick = function() { selectWorkspace(w); };
+    var name = document.createElement('div');
+    name.style.cssText = 'font-weight:600;color:var(--text-primary,#fff);';
+    name.textContent = (isActive ? '• ' : '') + (w.name || 'workspace');
+    var path = document.createElement('div');
+    path.style.cssText = 'font-size:10px;color:var(--text-muted,#888);font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    path.title = w.path;
+    path.textContent = w.path;
+    var meta = document.createElement('div');
+    meta.style.cssText = 'font-size:10px;color:var(--text-muted,#888);';
+    var agents = (typeof w.agent_count === 'number') ? w.agent_count : 0;
+    meta.textContent = agents + (agents === 1 ? ' agent' : ' agents');
+    item.appendChild(name);
+    item.appendChild(path);
+    item.appendChild(meta);
+    menu.appendChild(item);
+  });
+}
+
+function toggleWorkspaceSwitcher(ev) {
+  if (ev) ev.stopPropagation();
+  var menu = document.getElementById('workspace-switcher-menu');
+  if (!menu) return;
+  menu.style.display = (menu.style.display === 'none' || !menu.style.display) ? 'block' : 'none';
+}
+
+async function selectWorkspace(w) {
+  if (!w || !w.path || w.path === _wsActive) {
+    var menu = document.getElementById('workspace-switcher-menu');
+    if (menu) menu.style.display = 'none';
+    return;
+  }
+  try {
+    var resp = await fetch('/api/workspaces/active', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: w.name, path: w.path })
+    });
+    if (!resp.ok) {
+      console.warn('workspace switch failed', resp.status);
+      return;
+    }
+    _wsActive = w.path;
+    renderWorkspaceSwitcher();
+    var menu = document.getElementById('workspace-switcher-menu');
+    if (menu) menu.style.display = 'none';
+    // Cleanest reload — every cached tab re-fetches against the new workspace.
+    window.location.reload();
+  } catch (e) {
+    console.warn('workspace switch error', e);
+  }
+}
 
 // ── History Tab ──────────────────────────────────────────────────────
 var _historyRange = 3600; // seconds
