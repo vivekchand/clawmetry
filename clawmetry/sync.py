@@ -3700,6 +3700,220 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
     return 0
 
 
+# ── Cron-run JSONL → DuckDB ingest (issue #605 DuckDB follow-up) ─────────
+#
+# OpenClaw's cron writer appends one JSON record per run to
+# ``~/.openclaw/cron/runs/<jobId>.jsonl``. PR #1147 had the dashboard route
+# parse those files on every request; this helper moves the parse into the
+# sync daemon so the API can read from columnar DuckDB instead.
+#
+# Per-file offset tracking lives under ``state["cron_run_offsets"]`` so the
+# daemon only re-reads new bytes each cycle. Offsets that point past the
+# current file size (post-rotation, truncation) reset to 0 — the
+# ``INSERT OR IGNORE`` on the cron_runs table makes the catch-up scan a
+# no-op for already-stored rows.
+#
+# The function is deliberately resilient: any per-file or per-line failure
+# is logged at debug level and skipped, never raised. ClawMetry is
+# read-only-by-default; a malformed cron jsonl line must not break the
+# rest of the sync cycle.
+
+
+def _cron_run_dirs() -> list[Path]:
+    """Candidate ``cron/runs`` directories, in resolution order. Mirrors
+    ``routes/crons.py:_resolve_cron_runs_jsonl`` so the daemon picks up the
+    same files the API would have read.
+    """
+    roots: list[str] = []
+    data_dir = os.environ.get("OPENCLAW_DATA_DIR", "").strip()
+    if data_dir:
+        roots.append(os.path.expanduser(data_dir))
+    home = os.environ.get("OPENCLAW_HOME", "").strip()
+    if home:
+        roots.append(os.path.expanduser(home))
+    roots.append(_get_openclaw_dir())
+    roots.append(os.path.expanduser("~/.clawdbot"))
+    out: list[Path] = []
+    seen: set[str] = set()
+    for r in roots:
+        p = Path(r) / "cron" / "runs"
+        rp = str(p)
+        if rp in seen:
+            continue
+        seen.add(rp)
+        if p.exists() and p.is_dir():
+            out.append(p)
+    return out
+
+
+def _parse_cron_run_line(line: str, job_id: str, node_id: str) -> dict | None:
+    """Parse one JSONL line into the ``LocalStore.ingest_cron_run`` shape.
+
+    Returns ``None`` on malformed JSON or non-dict payloads. The local
+    store dedups by ``id``; when the writer didn't supply one we
+    synthesise it from ``job_id`` + ``started_at`` so re-reads remain
+    idempotent.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        obj = json.loads(line)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    # Field-name normalisation matches the older
+    # ``routes/crons.py:_read_cron_run_lines`` so OpenClaw writers shipped
+    # by every gateway version round-trip cleanly.
+    started_at = (
+        obj.get("started_at")
+        or obj.get("startedAt")
+        or obj.get("ts")
+        or obj.get("timestamp")
+    )
+    ended_at = obj.get("ended_at") or obj.get("endedAt")
+    duration_ms = obj.get("duration_ms") or obj.get("durationMs") or obj.get("duration")
+    status = obj.get("status") or obj.get("result") or "unknown"
+    err = obj.get("error") or obj.get("err") or obj.get("error_message") or ""
+    if err and not isinstance(err, str):
+        err = str(err)
+    usage = obj.get("usage") if isinstance(obj.get("usage"), dict) else {}
+    token_count = (
+        obj.get("token_count")
+        or obj.get("tokens")
+        or (usage.get("total_tokens") if isinstance(usage, dict) else None)
+        or (usage.get("totalTokens") if isinstance(usage, dict) else None)
+    )
+    cost_usd = obj.get("cost_usd") or obj.get("costUsd")
+    delivered_at = obj.get("delivered_at") or obj.get("deliveredAt")
+    if not delivered_at and isinstance(obj.get("deliveryStatus"), dict):
+        delivered_at = obj["deliveryStatus"].get("deliveredAt")
+    next_run_at = (
+        obj.get("next_run_at")
+        or obj.get("nextRunAt")
+        or obj.get("nextRunAtMs")
+    )
+    # Coerce timestamps to ISO strings — the DuckDB column is VARCHAR
+    # because the gateway writer hasn't been consistent about epoch-ms
+    # vs ISO-8601 (issue #605 has examples of both). Keeping the column
+    # opaque lets us re-parse on read without a schema change.
+    def _norm_ts(v: Any) -> str | None:
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return str(int(v))
+        return str(v)
+    rid = obj.get("id") or obj.get("run_id") or obj.get("runId")
+    if not rid:
+        rid = f"{job_id}:{_norm_ts(started_at) or ''}"
+    run = {
+        "id": str(rid),
+        "node_id": node_id,
+        "job_id": job_id,
+        "agent_type": "openclaw",
+        "started_at": _norm_ts(started_at),
+        "ended_at": _norm_ts(ended_at),
+        "duration_ms": duration_ms,
+        "status": str(status) if status is not None else None,
+        "error_message": err,
+        "token_count": token_count,
+        "cost_usd": cost_usd,
+        "delivered_at": _norm_ts(delivered_at),
+        "next_run_at": _norm_ts(next_run_at),
+        "raw_jsonl_line": line[:8000],
+        # Preserve the freeform payload (usage dict, gateway extras) so
+        # ``query_cron_runs`` callers can introspect input/output token
+        # splits without losing fidelity.
+        "usage": usage,
+    }
+    return run
+
+
+def sync_cron_runs(config: dict, state: dict, paths: dict) -> int:
+    """Ingest new lines from ``~/.openclaw/cron/runs/*.jsonl`` into
+    ``cron_runs`` in the local DuckDB store.
+
+    Returns the number of rows newly ingested. Idempotent: lines already
+    in the table (matched on the synthesised ``id``) are skipped by the
+    ``ON CONFLICT DO NOTHING`` clause in ``LocalStore.ingest_cron_run``.
+    Per-file byte offsets are persisted in ``state["cron_run_offsets"]``
+    so subsequent cycles only read appended bytes.
+
+    Failure modes (all degrade silently):
+      * ``local_store`` not importable → return 0, no state mutation.
+      * ``~/.openclaw/cron/runs`` missing → return 0.
+      * Single file unreadable / line malformed → skip that file/line,
+        keep going.
+    """
+    try:
+        from clawmetry import local_store as _ls
+    except Exception as e:
+        log.debug("sync_cron_runs: local_store unavailable: %s", e)
+        return 0
+
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    offsets: dict = state.setdefault("cron_run_offsets", {})
+    runs_dirs = _cron_run_dirs()
+    if not runs_dirs:
+        return 0
+
+    try:
+        store = _ls.get_store()
+    except Exception as e:
+        log.debug("sync_cron_runs: get_store failed: %s", e)
+        return 0
+
+    n_ingested = 0
+    for runs_dir in runs_dirs:
+        try:
+            jsonl_files = sorted(runs_dir.glob("*.jsonl"))
+        except OSError:
+            continue
+        for fpath in jsonl_files:
+            try:
+                job_id = fpath.stem  # filename without ``.jsonl``
+                if not job_id:
+                    continue
+                # Per-file offset key includes the parent dir so two
+                # candidate roots don't collide on the same jobId.
+                key = f"{runs_dir}/{fpath.name}"
+                last_offset = int(offsets.get(key, 0))
+                try:
+                    size = fpath.stat().st_size
+                except OSError:
+                    continue
+                # Truncation / rotation guard: an offset past EOF means
+                # the file was rewritten — reset to 0 and rely on
+                # INSERT OR IGNORE for dedup.
+                if last_offset > size:
+                    last_offset = 0
+                if last_offset == size:
+                    continue
+                with open(fpath, "r", errors="replace") as fh:
+                    fh.seek(last_offset)
+                    for line in fh:
+                        run = _parse_cron_run_line(line, job_id, node_id)
+                        if run is None:
+                            continue
+                        try:
+                            store.ingest_cron_run(run)
+                            n_ingested += 1
+                        except Exception as e_in:
+                            log.debug(
+                                "sync_cron_runs: ingest failed for %s: %s",
+                                job_id, e_in,
+                            )
+                    new_offset = fh.tell()
+                offsets[key] = new_offset
+            except Exception as e_f:
+                log.debug("sync_cron_runs: file %s failed: %s", fpath, e_f)
+                continue
+    if n_ingested:
+        log.debug("sync_cron_runs: ingested %d new rows", n_ingested)
+    return n_ingested
+
+
 def sync_session_metadata(config: dict, state: dict = None) -> int:
     """Sync OpenClaw session metadata rows to cloud sessions table.
 
@@ -5439,6 +5653,15 @@ def run_daemon() -> None:
             log.info(f"  Crons: {cr} synced")
     except Exception as e:
         log.warning(f"  Cron sync error: {e}")
+    # Issue #605 DuckDB follow-up: ingest cron-run JSONL files so the
+    # ``/api/crons/<jobId>/runs`` endpoint can read from DuckDB instead of
+    # re-parsing JSONL on every request.
+    try:
+        crr = sync_cron_runs(config, state, paths)
+        if crr:
+            log.info(f"  Cron runs: {crr} rows ingested")
+    except Exception as e:
+        log.warning(f"  Cron-run ingest error: {e}")
     # Sync today's log lines immediately so Brain tab shows the most recent
     # activity right away — older log history is backfilled later
     try:
@@ -5569,6 +5792,15 @@ def run_daemon() -> None:
             ev += sync_claude_cli_sessions(config, state, paths)
             sm = sync_session_metadata(config, state)
             crons = sync_crons(config, state, paths)
+            # Issue #605 DuckDB follow-up: tail cron-run JSONL files into
+            # DuckDB so the dashboard's per-job timeline reads from the
+            # columnar store. Failure is non-fatal — the legacy JSONL-read
+            # fallback in routes/crons.py still works.
+            try:
+                cron_runs = sync_cron_runs(config, state, paths)
+            except Exception as _e_cr:
+                log.debug("sync_cron_runs error (non-fatal): %s", _e_cr)
+                cron_runs = 0
 
             # ── Low-priority: log lines (real-time covered by streamer) ──
             lg = 0
@@ -5579,9 +5811,9 @@ def run_daemon() -> None:
 
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
             save_state(state)
-            if ev or lg or mem or crons or sm or snap:
+            if ev or lg or mem or crons or sm or snap or cron_runs:
                 log.info(
-                    f"Synced {ev} events, {lg} log lines, {mem} memory files, {crons} crons, {sm} session rows ({enc})"
+                    f"Synced {ev} events, {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows ({enc})"
                 )
 
             # ── Alerts evaluator (PRD #779 PR-D pt2, audit P0 #1 + #2) ──

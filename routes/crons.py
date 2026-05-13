@@ -725,20 +725,75 @@ def _read_cron_run_lines(fpath, limit):
     return out[:limit]
 
 
+def _cron_runs_from_duckdb(job_id, limit):
+    """Read cron-run rows from the local DuckDB store via the daemon proxy.
+
+    Returns a list of run dicts shaped like the JSONL fallback below
+    (``{ts, duration_ms, status, error, usage, delivered_at, next_run_at}``)
+    so the UI sees a single canonical shape regardless of where the data
+    came from. Returns ``[]`` on any failure or empty result so callers
+    can decide whether to fall through to the JSONL read.
+
+    Reads through ``_ls_call`` which hits the daemon's HTTP proxy first
+    (cross-process DuckDB lock) before falling back to direct open for
+    single-process boots — same pattern the other routes/* fast-paths use.
+    """
+    rows = _ls_call("query_cron_runs", job_id=job_id, limit=int(limit))
+    if not rows:
+        return []
+    out = []
+    for r in rows:
+        try:
+            ts = _parse_iso_to_ms(r.get("started_at"))
+            duration_ms = int(r.get("duration_ms") or 0)
+        except (TypeError, ValueError):
+            ts = 0
+            duration_ms = 0
+        err = r.get("error_message") or ""
+        if err and len(err) > 200:
+            err = err[:200]
+        # ``usage`` lives inside the freeform ``data`` blob that
+        # ``query_cron_runs`` decodes from JSON. Surfaces null when the
+        # writer didn't include one.
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        delivered_at = _parse_iso_to_ms(r.get("delivered_at")) or None
+        next_run_at = _parse_iso_to_ms(r.get("next_run_at")) or None
+        out.append({
+            "ts": ts,
+            "duration_ms": duration_ms,
+            "status": str(r.get("status") or "unknown"),
+            "error": err,
+            "usage": usage,
+            "delivered_at": delivered_at,
+            "next_run_at": next_run_at,
+        })
+    # ``query_cron_runs`` already orders DESC by started_at, but the
+    # numeric ``ts`` ordering may differ when the writer mixed ISO + epoch
+    # representations across versions. Re-sort defensively.
+    out.sort(key=lambda r: r.get("ts") or 0, reverse=True)
+    return out
+
+
 @bp_crons.route("/api/crons/<job_id>/runs")
 def api_crons_job_runs(job_id):
     """Per-job run timeline for the Cron detail panel (closes #605).
 
-    Reads ``~/.openclaw/cron/runs/<jobId>.jsonl`` and returns the last
-    ``limit`` runs (default 30, capped at 100) most-recent first. This is
-    a deliberately separate endpoint from ``/api/cron/<job_id>/runs``
-    (which returns p50/p95-enriched, gateway-backed history) — this one
-    is the raw per-run feed the timeline UI needs (duration, status,
-    error, usage, delivered, next-run).
+    DuckDB-first (issue #605 DuckDB follow-up): the sync daemon ingests
+    ``~/.openclaw/cron/runs/<jobId>.jsonl`` into the ``cron_runs`` table
+    every cycle, and this endpoint reads from DuckDB. The legacy JSONL
+    read remains as a fallback for graceful migration — used only when
+    DuckDB has zero rows for the requested job (fresh install, daemon
+    hasn't run yet, or a non-OpenClaw user).
 
-    Always returns 200, even when the file is missing or every line is
-    malformed: payload is ``{jobId, runs: [], count: 0, source}``. The
-    Cron UI treats an empty list as "no history yet".
+    Returns the last ``limit`` runs (default 30, capped at 100) most
+    recent first. Always 200, even when the file is missing and DuckDB
+    is empty — the Cron UI treats an empty list as "no history yet".
+
+    Path-traversal guard: ``job_id`` is rejected if it contains ``/``,
+    ``\\``, or ``..`` before we touch any filesystem path. The DuckDB
+    read is parameterised so it doesn't need the guard, but we apply it
+    uniformly so both transports refuse the same inputs.
     """
     try:
         limit = int(request.args.get("limit", "30"))
@@ -746,13 +801,38 @@ def api_crons_job_runs(job_id):
         limit = 30
     limit = max(1, min(limit, 100))
 
+    # Defence in depth — same as ``_resolve_cron_runs_jsonl``. Refuse
+    # anything that could escape the runs dir before the JSONL fallback.
+    if not job_id or "/" in job_id or "\\" in job_id or ".." in job_id:
+        return jsonify({
+            "jobId": job_id,
+            "runs": [],
+            "count": 0,
+            "source": "duckdb",
+            "file": None,
+        })
+
+    # DuckDB-first read (preferred path).
+    runs = _cron_runs_from_duckdb(job_id, limit)
+    if runs:
+        return jsonify({
+            "jobId": job_id,
+            "runs": runs,
+            "count": len(runs),
+            "source": "duckdb",
+            "file": None,
+        })
+
+    # Fallback: JSONL read. Only fires while the daemon is still building
+    # the cron_runs table for this job — first cycle on a fresh install,
+    # or when local_store isn't available (e.g. a stripped Docker image).
     fpath = _resolve_cron_runs_jsonl(job_id)
     if not fpath:
         return jsonify({
             "jobId": job_id,
             "runs": [],
             "count": 0,
-            "source": "jsonl",
+            "source": "duckdb",
             "file": None,
         })
     runs = _read_cron_run_lines(fpath, limit)
