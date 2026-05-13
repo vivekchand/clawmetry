@@ -22,11 +22,13 @@ and are reached via late ``import dashboard as _d``. Pure mechanical move
 import json
 import os
 import re
+import statistics
 import subprocess
 import sys
 import threading
+import time
 import time as _time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
@@ -298,6 +300,178 @@ def _detect_anthropic_oauth(limit=50):
             return result
 
     return result
+
+
+# ── Autonomy score (issue #688) ─────────────────────────────────────────────
+#
+# Surface a north-star metric on /api/overview so the dashboard can show a
+# primary KPI card (above cost). Sourced entirely from the v3 OpenClaw parser's
+# ``prompt.submitted`` events in the local DuckDB store — every event of that
+# type maps 1:1 to a human turn.
+#
+# Shape (top-level field on /api/overview response):
+#   "autonomy": {
+#       "median_gap_seconds": <float|null>,  # median seconds between user
+#                                              turns within a session (7d)
+#       "autonomy_ratio":     <float 0-1>,    # share of sessions completed
+#                                              with <=1 user turn (7d)
+#       "trend_pct":          <float>,        # last-7d median vs prior-7d
+#                                              median, positive = improving
+#       "sample_size_7d":     <int>,          # total user-turn events seen
+#   }
+#
+# Cached in-process for 60s — it's an analytic over up to ~14 days of events,
+# not a hot read. If the store is unreachable or empty we return the canonical
+# "no data" payload (median_gap_seconds=null, ratio=0, trend_pct=0, samples=0)
+# rather than omit the field — the UI can render the placeholder unconditionally.
+
+_AUTONOMY_OVERVIEW_CACHE = {"ts": 0.0, "data": None}
+_AUTONOMY_OVERVIEW_CACHE_TTL = 60.0  # seconds
+
+
+def _autonomy_empty() -> dict:
+    return {
+        "median_gap_seconds": None,
+        "autonomy_ratio": 0.0,
+        "trend_pct": 0.0,
+        "sample_size_7d": 0,
+    }
+
+
+def _ls_call_autonomy(method_name: str, **kwargs):
+    """Cross-process LocalStore call for the autonomy helper.
+
+    Mirrors the pattern in ``_ls_call`` below — tries the daemon HTTP proxy
+    first (covers the standard launchd/systemd install where the daemon owns
+    the DuckDB writer lock), then falls back to a direct ``get_store()`` open
+    for single-process boots (tests + dev mode).
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        r = local_store_via_daemon(method_name, **kwargs)
+        if r is not None:
+            return r
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
+def _compute_autonomy_overview() -> dict:
+    """Compute the 4-field autonomy block from ``prompt.submitted`` events.
+
+    Pulls the last 14 days of user-turn events from DuckDB (need 14d so we
+    can compare current-7d median against prior-7d for the trend %), buckets
+    by session_id, computes consecutive gaps in seconds, takes the median,
+    and counts "one nudge" sessions (sessions with <=1 user turn = the agent
+    finished without further human input).
+
+    Always returns a dict — never raises. On any error or empty data set,
+    returns ``_autonomy_empty()`` so the UI can render the placeholder card.
+    """
+    now = datetime.now(tz=timezone.utc)
+    cutoff_14d_iso = (now - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    cutoff_7d_ts = (now - timedelta(days=7)).timestamp()
+    cutoff_14d_ts = (now - timedelta(days=14)).timestamp()
+
+    rows = _ls_call_autonomy(
+        "query_events",
+        event_type="prompt.submitted",
+        since=cutoff_14d_iso,
+        limit=5000,
+    )
+    if not rows:
+        return _autonomy_empty()
+
+    # session_id → [ts_unix, ts_unix, ...] sorted ascending. We collect ALL
+    # 14d events so we can compute both the 7d window (current) and the
+    # 7-14d window (prior) from the same scan.
+    by_session_7d: dict = {}
+    by_session_prior: dict = {}
+
+    for r in rows:
+        ts_str = r.get("ts") or ""
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        sid = r.get("session_id") or ""
+        if ts >= cutoff_7d_ts:
+            by_session_7d.setdefault(sid, []).append(ts)
+        elif ts >= cutoff_14d_ts:
+            by_session_prior.setdefault(sid, []).append(ts)
+
+    def _stats(by_session):
+        """Return (median_gap_seconds_or_None, ratio_one_nudge, total_msgs,
+        total_sessions) for the per-session bucket."""
+        all_gaps: list = []
+        one_nudge = 0
+        total_msgs = 0
+        total_sessions = 0
+        for stamps in by_session.values():
+            if not stamps:
+                continue
+            stamps.sort()
+            total_sessions += 1
+            total_msgs += len(stamps)
+            if len(stamps) <= 1:
+                one_nudge += 1
+            for i in range(len(stamps) - 1):
+                d = stamps[i + 1] - stamps[i]
+                if d > 0:
+                    all_gaps.append(d)
+        med = statistics.median(all_gaps) if all_gaps else None
+        ratio = (one_nudge / total_sessions) if total_sessions else 0.0
+        return med, ratio, total_msgs, total_sessions
+
+    med_7d, ratio_7d, msgs_7d, sess_7d = _stats(by_session_7d)
+    med_prior, _, _, _ = _stats(by_session_prior)
+
+    # trend_pct: positive when current 7d median > prior-7d median (gaps
+    # growing → user nudging less often → more autonomous). Expressed as a
+    # percentage delta. Zero when either window has no data (we can't claim
+    # improvement without something to compare against).
+    if med_7d is not None and med_prior is not None and med_prior > 0:
+        trend_pct = ((med_7d - med_prior) / med_prior) * 100.0
+    else:
+        trend_pct = 0.0
+
+    if sess_7d == 0 and msgs_7d == 0:
+        return _autonomy_empty()
+
+    return {
+        "median_gap_seconds": float(med_7d) if med_7d is not None else None,
+        "autonomy_ratio": float(ratio_7d),
+        "trend_pct": round(float(trend_pct), 2),
+        "sample_size_7d": int(msgs_7d),
+    }
+
+
+def _autonomy_for_overview() -> dict:
+    """Cached wrapper around ``_compute_autonomy_overview``.
+
+    60s TTL — the metric is over a 7d window, so sub-minute freshness is
+    pointless and the cost of the scan would dominate the /api/overview
+    response time on busy nodes.
+    """
+    now = time.monotonic()
+    cached = _AUTONOMY_OVERVIEW_CACHE.get("data")
+    cached_ts = float(_AUTONOMY_OVERVIEW_CACHE.get("ts") or 0.0)
+    if cached is not None and (now - cached_ts) < _AUTONOMY_OVERVIEW_CACHE_TTL:
+        return cached
+    try:
+        data = _compute_autonomy_overview()
+    except Exception:
+        data = _autonomy_empty()
+    _AUTONOMY_OVERVIEW_CACHE["data"] = data
+    _AUTONOMY_OVERVIEW_CACHE["ts"] = now
+    return data
 
 
 @bp_overview.route("/api/channels")
@@ -673,6 +847,8 @@ def _try_local_store_overview():
         "infra": infra,
         "heartbeat": _get_overview_heartbeat_cached(),
         "client_health": _detect_anthropic_oauth(),
+        # Issue #688: north-star metric. Always present, even on empty data.
+        "autonomy": _autonomy_for_overview(),
         "_source": "local_store",
     }
 
@@ -820,6 +996,8 @@ def api_overview():
             "infra": infra,
             "heartbeat": _get_overview_heartbeat_cached(),
             "client_health": _detect_anthropic_oauth(),
+            # Issue #688: north-star autonomy metric (always present).
+            "autonomy": _autonomy_for_overview(),
         }
     )
 
