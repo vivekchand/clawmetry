@@ -116,7 +116,7 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -338,6 +338,35 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_approvals_owner_status ON approvals(owner_hash, status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_approvals_session ON approvals(requestor_session_id, created_at)",
+    # Issue #1088 Phase 4 (2026-05-13) — channel-message foundation. Replaces
+    # the per-provider log-grep + JSONL-scan path that the 21 routes in
+    # ``routes/channels.py`` use today. Each row is one inbound or outbound
+    # message on a chat-channel adapter (Telegram, Signal, WhatsApp, Discord,
+    # Slack, IRC, iMessage, WebChat, …). Schema is provider-agnostic — the
+    # ``provider`` column discriminates and ``raw_blob`` carries the
+    # adapter-specific payload (attachments, message_id, sender metadata) so
+    # we don't need a per-provider column carry. Only 3 providers will land
+    # fast-paths in this PR; the remaining 18 follow once the schema proves
+    # out (see issue #1088 follow-up).
+    """
+    CREATE TABLE IF NOT EXISTS channel_messages (
+        id            VARCHAR PRIMARY KEY,
+        agent_id      VARCHAR NOT NULL DEFAULT 'main',
+        provider      VARCHAR NOT NULL,
+        channel_id    VARCHAR,
+        sender_id     VARCHAR,
+        sender_name   VARCHAR,
+        body          VARCHAR,
+        ts            VARCHAR NOT NULL,
+        direction     VARCHAR NOT NULL,
+        session_key   VARCHAR,
+        raw_blob      BLOB,
+        created_at    BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_chmsg_provider_ts  ON channel_messages(provider, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_chmsg_channel_ts   ON channel_messages(provider, channel_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_chmsg_session      ON channel_messages(session_key, ts)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -726,6 +755,77 @@ class LocalStore:
                     origin_label = COALESCE(excluded.origin_label, openclaw_channels.origin_label)
             """, [sid, ch.get("channel"), ch.get("chat_type"),
                   ch.get("subject"), ch.get("origin_label")])
+
+    def ingest_channel_message(self, msg: dict[str, Any]) -> None:
+        """Upsert one channel-message row (issue #1088 Phase 4).
+
+        Required keys: ``id``, ``provider``, ``ts``, ``direction``.
+        Optional: ``agent_id`` (default ``"main"``), ``channel_id``,
+        ``sender_id``, ``sender_name``, ``body``, ``session_key``,
+        ``raw_blob`` (any JSON-able value — coerced to BLOB for opaque
+        per-provider extras like attachments / message_id / reactions).
+
+        ``direction`` MUST be ``"in"`` (inbound from user) or ``"out"``
+        (outbound from agent). The PRIMARY KEY is ``id`` so re-ingesting
+        the same upstream id is a no-op (the daemon scans logs +
+        transcripts on every cycle; idempotency is essential).
+
+        We coerce ``provider`` to lowercase so ``"Telegram"`` and
+        ``"telegram"`` round-trip to the same partition — every query
+        helper below also lowercases on input.
+        """
+        mid = msg.get("id")
+        if not mid:
+            raise ValueError("channel_message must include 'id'")
+        provider = msg.get("provider")
+        if not provider:
+            raise ValueError("channel_message must include 'provider'")
+        ts = msg.get("ts")
+        if not ts:
+            raise ValueError("channel_message must include 'ts'")
+        direction = msg.get("direction")
+        if direction not in ("in", "out"):
+            raise ValueError(
+                "channel_message direction must be 'in' or 'out' "
+                f"(got {direction!r})"
+            )
+        provider = str(provider).lower().strip()
+        raw_blob = _to_blob(msg.get("raw_blob"))
+        body = msg.get("body")
+        if body is not None:
+            body = str(body)
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO channel_messages (
+                    id, agent_id, provider, channel_id, sender_id, sender_name,
+                    body, ts, direction, session_key, raw_blob, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    agent_id     = COALESCE(excluded.agent_id, channel_messages.agent_id),
+                    provider     = excluded.provider,
+                    channel_id   = COALESCE(excluded.channel_id, channel_messages.channel_id),
+                    sender_id    = COALESCE(excluded.sender_id, channel_messages.sender_id),
+                    sender_name  = COALESCE(excluded.sender_name, channel_messages.sender_name),
+                    body         = COALESCE(excluded.body, channel_messages.body),
+                    ts           = excluded.ts,
+                    direction    = excluded.direction,
+                    session_key  = COALESCE(excluded.session_key, channel_messages.session_key),
+                    raw_blob     = COALESCE(excluded.raw_blob, channel_messages.raw_blob)
+            """, [
+                str(mid),
+                str(msg.get("agent_id") or "main"),
+                provider,
+                msg.get("channel_id"),
+                msg.get("sender_id"),
+                msg.get("sender_name"),
+                body,
+                str(ts),
+                direction,
+                msg.get("session_key"),
+                raw_blob,
+                now_ms,
+            ])
 
     def ingest_channel_config(
         self,
@@ -1287,6 +1387,177 @@ class LocalStore:
         params.append(int(limit))
         cols = ["session_id", "channel", "chat_type", "subject", "origin_label"]
         return [_row_to_dict(r, cols) for r in self._fetch(sql, params)]
+
+    def query_channel_messages(
+        self,
+        *,
+        provider: str | None = None,
+        channel_id: str | None = None,
+        since: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Read channel-message rows (issue #1088 Phase 4).
+
+        Returns rows ordered most-recent first. The ``raw_blob`` BLOB is
+        decoded back to JSON dict where possible, str otherwise, None when
+        empty — same convention as the other ``data``-blob tables so callers
+        can hand the row straight to the API without a second decode.
+
+        Filters:
+          * ``provider`` — exact match, lowercased (``"telegram"`` etc.).
+          * ``channel_id`` — exact match (e.g. Telegram chat id, Slack
+            channel id, Discord guild+channel composite).
+          * ``since`` — ISO-8601 timestamp; rows with ``ts >= since``.
+
+        Defaults to ``limit=50`` to mirror the existing per-channel route's
+        page size — the dashboard's "messages" panes show 50 messages by
+        default and lazy-load older ones via the offset query param the
+        legacy path supports.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if provider:
+            clauses.append("provider = ?")
+            params.append(str(provider).lower().strip())
+        if channel_id:
+            clauses.append("channel_id = ?")
+            params.append(str(channel_id))
+        if since:
+            clauses.append("ts >= ?")
+            params.append(str(since))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, agent_id, provider, channel_id, sender_id, sender_name,
+                   body, ts, direction, session_key, raw_blob
+            FROM channel_messages
+            {where}
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "agent_id", "provider", "channel_id", "sender_id",
+                "sender_name", "body", "ts", "direction", "session_key",
+                "raw_blob"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            raw = d.get("raw_blob")
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    try:
+                        d["raw_blob"] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d["raw_blob"] = text
+                except UnicodeDecodeError:
+                    d["raw_blob"] = None
+            out.append(d)
+        return out
+
+    def query_channel_threads(
+        self,
+        *,
+        provider: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Per-thread (per ``channel_id``) summary for one provider
+        (issue #1088 Phase 4).
+
+        Returns one row per distinct ``channel_id`` ordered by most-recent
+        activity. Each row carries the latest sender, latest body snippet,
+        and total inbound / outbound counts so the cloud UI's "threads"
+        panel can render without a second fetch.
+
+        Why a dedicated helper instead of asking the route to GROUP BY:
+        DuckDB's columnar engine makes this a single scan, but the result
+        shape is route-specific (we drop the raw_blob; we project a snippet
+        column). Keeping the SQL here means the future WS relay can expose
+        the same shape verbatim.
+        """
+        if not provider:
+            return []
+        sql = """
+            SELECT
+              channel_id,
+              MAX(ts)                                        AS last_ts,
+              ARG_MAX(sender_name, ts)                       AS last_sender,
+              ARG_MAX(body, ts)                              AS last_body,
+              ARG_MAX(direction, ts)                         AS last_direction,
+              ARG_MAX(session_key, ts)                       AS session_key,
+              SUM(CASE WHEN direction = 'in'  THEN 1 ELSE 0 END) AS msg_in,
+              SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END) AS msg_out,
+              COUNT(*)                                       AS total
+            FROM channel_messages
+            WHERE provider = ?
+              AND channel_id IS NOT NULL
+            GROUP BY channel_id
+            ORDER BY last_ts DESC
+            LIMIT ?
+        """
+        rows = self._fetch(
+            sql, [str(provider).lower().strip(), int(limit)]
+        )
+        cols = ["channel_id", "last_ts", "last_sender", "last_body",
+                "last_direction", "session_key", "msg_in", "msg_out", "total"]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            # Cap snippet at 200 chars so the threads pane stays compact
+            # — the full body is one query away via query_channel_messages.
+            body = d.get("last_body") or ""
+            if isinstance(body, str) and len(body) > 200:
+                d["last_body"] = body[:200]
+            d["msg_in"]  = int(d.get("msg_in")  or 0)
+            d["msg_out"] = int(d.get("msg_out") or 0)
+            d["total"]   = int(d.get("total")   or 0)
+            out.append(d)
+        return out
+
+    def query_channel_summary(
+        self,
+        *,
+        agent_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Cross-provider counts for the channels overview tab
+        (issue #1088 Phase 4).
+
+        Returns one row per provider with inbound / outbound counts and the
+        most-recent activity timestamp. Powers ``/api/channels/summary``,
+        which the cloud-side channels overview page hits on every nav.
+
+        ``agent_id`` scopes the result to a single agent instance; ``None``
+        sums across the local node.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(str(agent_id))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT
+              provider,
+              COUNT(*)                                          AS total,
+              SUM(CASE WHEN direction = 'in'  THEN 1 ELSE 0 END) AS msg_in,
+              SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END) AS msg_out,
+              COUNT(DISTINCT channel_id)                        AS distinct_channels,
+              MAX(ts)                                           AS last_ts
+            FROM channel_messages
+            {where}
+            GROUP BY provider
+            ORDER BY last_ts DESC NULLS LAST
+        """
+        cols = ["provider", "total", "msg_in", "msg_out",
+                "distinct_channels", "last_ts"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            d["total"]             = int(d.get("total")             or 0)
+            d["msg_in"]            = int(d.get("msg_in")            or 0)
+            d["msg_out"]           = int(d.get("msg_out")           or 0)
+            d["distinct_channels"] = int(d.get("distinct_channels") or 0)
+            out.append(d)
+        return out
 
     def query_crons(
         self,

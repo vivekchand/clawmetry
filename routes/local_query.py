@@ -304,6 +304,12 @@ _DAEMON_METHODS = frozenset({
     "query_compactions",
     "query_cost_split",
     "query_session_model_journey",
+    # Phase 4 (issue #1088 follow-up, 2026-05-13): channel-message
+    # foundation. Three helpers proved out the schema; the remaining 18
+    # per-provider channel routes follow once these go green.
+    "query_channel_messages",
+    "query_channel_threads",
+    "query_channel_summary",
     "health",
 })
 

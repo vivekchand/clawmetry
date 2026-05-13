@@ -267,7 +267,7 @@ def test_health_reports_size_and_count(store):
     h = store.health()
     assert h["event_count"] == 10
     assert h["size_bytes"] > 0
-    assert h["schema_version"] == 3
+    assert h["schema_version"] == 4
     assert h["ring_depth"] == 0
     assert h["ring_dropped_total"] == 0
 
@@ -583,3 +583,165 @@ def test_query_session_model_journey_orders_segments(store):
     assert rows[3]["model"] == "claude-opus-4-7"
     # Empty session_id returns nothing rather than scanning the table.
     assert store.query_session_model_journey(session_id="") == []
+
+
+# ── channel_messages (issue #1088 Phase 4) ───────────────────────────────
+
+
+def test_channel_message_ingest_round_trip(store):
+    """One inbound + one outbound message round-trips through DuckDB."""
+    store.ingest_channel_message({
+        "id":          "msg-tg-1",
+        "agent_id":    "main",
+        "provider":    "telegram",
+        "channel_id":  "1234",
+        "sender_id":   "user-7",
+        "sender_name": "Alice",
+        "body":        "hello world",
+        "ts":          "2026-05-13T10:00:00Z",
+        "direction":   "in",
+        "session_key": "sess-A",
+        "raw_blob":    {"message_id": 42},
+    })
+    store.ingest_channel_message({
+        "id":         "msg-tg-2",
+        "provider":   "Telegram",  # mixed case → lowercased
+        "channel_id": "1234",
+        "body":       "(reply)",
+        "ts":         "2026-05-13T10:00:01Z",
+        "direction":  "out",
+    })
+    rows = store.query_channel_messages(provider="telegram")
+    assert len(rows) == 2
+    # Most-recent first.
+    assert rows[0]["id"] == "msg-tg-2"
+    assert rows[1]["id"] == "msg-tg-1"
+    # Provider lowercased on ingest.
+    assert rows[0]["provider"] == "telegram"
+    # raw_blob round-trips as a dict.
+    assert rows[1]["raw_blob"] == {"message_id": 42}
+
+
+def test_channel_message_validates_required_fields(store):
+    """Missing id / provider / ts / bad direction all raise ValueError."""
+    with pytest.raises(ValueError):
+        store.ingest_channel_message({"provider": "tg", "ts": "x", "direction": "in"})
+    with pytest.raises(ValueError):
+        store.ingest_channel_message({"id": "1", "ts": "x", "direction": "in"})
+    with pytest.raises(ValueError):
+        store.ingest_channel_message({"id": "1", "provider": "tg", "direction": "in"})
+    with pytest.raises(ValueError):
+        store.ingest_channel_message({"id": "1", "provider": "tg", "ts": "x", "direction": "sideways"})
+
+
+def test_query_channel_messages_filters_and_limit(store):
+    """provider/channel_id/since/limit all gate the result set."""
+    base = "2026-05-13T10:00:0"
+    for i in range(5):
+        store.ingest_channel_message({
+            "id":         f"m-tg-{i}",
+            "provider":   "telegram",
+            "channel_id": "1111" if i < 3 else "2222",
+            "body":       f"tg-{i}",
+            "ts":         f"{base}{i}Z",
+            "direction":  "in",
+        })
+    for i in range(2):
+        store.ingest_channel_message({
+            "id":         f"m-sl-{i}",
+            "provider":   "slack",
+            "channel_id": "C42",
+            "body":       f"sl-{i}",
+            "ts":         f"{base}{i}Z",
+            "direction":  "in",
+        })
+    # Provider filter.
+    assert {r["id"] for r in store.query_channel_messages(provider="slack")} == {
+        "m-sl-0", "m-sl-1"
+    }
+    # channel_id filter scopes to one chat.
+    assert {r["id"] for r in store.query_channel_messages(
+        provider="telegram", channel_id="1111"
+    )} == {"m-tg-0", "m-tg-1", "m-tg-2"}
+    # since cuts off old rows.
+    rows = store.query_channel_messages(
+        provider="telegram", since="2026-05-13T10:00:03Z"
+    )
+    assert {r["id"] for r in rows} == {"m-tg-3", "m-tg-4"}
+    # limit caps the page.
+    assert len(store.query_channel_messages(provider="telegram", limit=2)) == 2
+
+
+def test_query_channel_threads_groups_by_channel(store):
+    """One row per channel_id, with in/out counts and last-* fields."""
+    base = "2026-05-13T10:00:0"
+    for i, body, dirn in [
+        (0, "hi",        "in"),
+        (1, "yo",        "in"),
+        (2, "(reply)",   "out"),
+        (3, "thx",       "in"),
+    ]:
+        store.ingest_channel_message({
+            "id":          f"t-{i}",
+            "provider":    "telegram",
+            "channel_id":  "1234",
+            "sender_name": "Alice" if dirn == "in" else "Bot",
+            "body":        body,
+            "ts":          f"{base}{i}Z",
+            "direction":   dirn,
+        })
+    # Different channel_id — its own thread row.
+    store.ingest_channel_message({
+        "id":          "t-other",
+        "provider":    "telegram",
+        "channel_id":  "9999",
+        "sender_name": "Bob",
+        "body":        "stranger danger",
+        "ts":          "2026-05-13T09:00:00Z",
+        "direction":   "in",
+    })
+    threads = store.query_channel_threads(provider="telegram")
+    by_chan = {t["channel_id"]: t for t in threads}
+    assert set(by_chan) == {"1234", "9999"}
+    main = by_chan["1234"]
+    assert main["msg_in"] == 3
+    assert main["msg_out"] == 1
+    assert main["total"] == 4
+    assert main["last_body"] == "thx"
+    assert main["last_direction"] == "in"
+    # Most-recent thread sorted first.
+    assert threads[0]["channel_id"] == "1234"
+    # Empty provider returns empty list (cheap guard).
+    assert store.query_channel_threads(provider="") == []
+
+
+def test_query_channel_summary_groups_across_providers(store):
+    """One row per provider; in/out counts; distinct_channels honoured."""
+    for i in range(3):
+        store.ingest_channel_message({
+            "id":         f"s-tg-{i}",
+            "provider":   "telegram",
+            "channel_id": "1" if i < 2 else "2",
+            "body":       "x",
+            "ts":         f"2026-05-13T10:00:0{i}Z",
+            "direction":  "in" if i < 2 else "out",
+        })
+    store.ingest_channel_message({
+        "id":         "s-sl-1",
+        "provider":   "slack",
+        "channel_id": "C42",
+        "body":       "x",
+        "ts":         "2026-05-13T11:00:00Z",
+        "direction":  "in",
+    })
+    summary = store.query_channel_summary()
+    by_prov = {r["provider"]: r for r in summary}
+    assert set(by_prov) == {"telegram", "slack"}
+    tg = by_prov["telegram"]
+    assert tg["msg_in"] == 2
+    assert tg["msg_out"] == 1
+    assert tg["total"] == 3
+    assert tg["distinct_channels"] == 2
+    sl = by_prov["slack"]
+    assert sl["msg_in"] == 1
+    assert sl["distinct_channels"] == 1

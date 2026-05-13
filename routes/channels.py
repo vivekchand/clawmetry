@@ -21,24 +21,54 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry.config import is_local_store_read_enabled
+
 bp_channels = Blueprint('channels', __name__)
 
 _log = logging.getLogger("clawmetry.routes.channels")
 
 
 # ── Epic #1032 Phase 5: channel-config fast-path (DuckDB) ──────────────────
-# When CLAWMETRY_LOCAL_STORE_READ=1 the per-channel status endpoint serves
-# the non-secret status summary straight from the local DuckDB instead of
-# hitting the gateway / parsing YAML on every request. The ciphertext blob
-# stays on this node; cloud never sees plaintext.
+# When the local-store fast path is enabled (default since 0.12.174) the
+# per-channel status endpoint serves the non-secret status summary straight
+# from the local DuckDB instead of hitting the gateway / parsing YAML on
+# every request. The ciphertext blob stays on this node; cloud never sees
+# plaintext.
 
 def _local_store_read_enabled() -> bool:
-    """Feature-gate for the DuckDB-backed channel-config fast path.
+    """Backward-compat shim — delegates to ``clawmetry.config``.
 
-    Defaults OFF until rolled out broadly. Once stable we'll flip the default
-    to ON and remove the env-var check. Matches the gating pattern used for
-    other Phase 1/2 local-store reads."""
-    return os.environ.get("CLAWMETRY_LOCAL_STORE_READ", "").strip() in ("1", "true", "yes")
+    Kept so existing call sites (``_channel_config_status_*`` below) don't
+    need to touch the import line. The single source of truth for the
+    feature gate now lives in ``clawmetry/config.py``.
+    """
+    return is_local_store_read_enabled()
+
+
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback.
+
+    Mirrors ``routes.sessions._ls_call`` — every fast-path that wants to
+    read from the DuckDB store goes through the daemon's HTTP proxy first
+    so we work under the standard install (daemon owns the writer lock,
+    dashboard's direct open raises ``IOException: Could not set lock``).
+    Falls back to a direct read for single-process boots (dev mode + tests,
+    where the daemon and dashboard share a process). Returns ``None`` on
+    any failure so callers defer to the legacy path.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
 
 
 def _channel_config_status_from_local_store(provider: str):
@@ -144,14 +174,317 @@ def api_channels_status_all():
     return jsonify({"channels": out, "_source": "local_store"})
 
 
+# ── Issue #1088 Phase 4: channel-message foundation (DuckDB fast-paths) ─────
+#
+# Three POC endpoints over the new ``channel_messages`` table. They are the
+# canonical "list messages" / "list threads" / "cross-provider summary"
+# shapes — every per-provider route in this file (Telegram, iMessage,
+# Signal, …) will eventually delegate to one of these so the schema lives
+# in one place. This PR ships only the three; the remaining 18 land in
+# follow-up PRs once the schema proves out (see issue #1088).
+
+def _try_local_store_channel_messages(provider, since, limit):
+    """Fast path for ``/api/channels/<provider>/messages``. Returns ``None``
+    on miss so the caller can fall through to the legacy log-grep path."""
+    rows = _ls_call(
+        "query_channel_messages",
+        provider=provider,
+        since=since or None,
+        limit=limit,
+    )
+    if not rows:
+        return None
+    messages = []
+    for r in rows:
+        messages.append({
+            "id":          r.get("id"),
+            "timestamp":   r.get("ts"),
+            "direction":   r.get("direction"),
+            "sender":      r.get("sender_name") or r.get("sender_id") or "",
+            "senderId":    r.get("sender_id") or "",
+            "channelId":   r.get("channel_id") or "",
+            "text":        r.get("body") or "",
+            "sessionId":   r.get("session_key") or "",
+        })
+    return {
+        "messages":  messages,
+        "total":     len(messages),
+        "provider":  provider,
+        "_source":   "local_store",
+    }
+
+
+def _try_local_store_channel_threads(provider, limit):
+    """Fast path for ``/api/channels/<provider>/threads``."""
+    rows = _ls_call(
+        "query_channel_threads",
+        provider=provider,
+        limit=limit,
+    )
+    if not rows:
+        return None
+    threads = []
+    for r in rows:
+        threads.append({
+            "channelId":   r.get("channel_id") or "",
+            "lastTs":      r.get("last_ts") or "",
+            "lastSender":  r.get("last_sender") or "",
+            "lastSnippet": r.get("last_body") or "",
+            "lastDirection": r.get("last_direction") or "",
+            "sessionId":   r.get("session_key") or "",
+            "msgIn":       int(r.get("msg_in") or 0),
+            "msgOut":      int(r.get("msg_out") or 0),
+            "total":       int(r.get("total") or 0),
+        })
+    return {
+        "threads":  threads,
+        "total":    len(threads),
+        "provider": provider,
+        "_source":  "local_store",
+    }
+
+
+def _try_local_store_channel_summary():
+    """Fast path for ``/api/channels/summary``."""
+    rows = _ls_call("query_channel_summary")
+    if rows is None:
+        return None
+    by_provider = []
+    grand_in = 0
+    grand_out = 0
+    for r in rows:
+        by_provider.append({
+            "provider":         r.get("provider"),
+            "msgIn":            int(r.get("msg_in") or 0),
+            "msgOut":           int(r.get("msg_out") or 0),
+            "total":            int(r.get("total") or 0),
+            "distinctChannels": int(r.get("distinct_channels") or 0),
+            "lastTs":           r.get("last_ts") or "",
+        })
+        grand_in  += int(r.get("msg_in")  or 0)
+        grand_out += int(r.get("msg_out") or 0)
+    return {
+        "providers": by_provider,
+        "totals":    {
+            "msgIn":  grand_in,
+            "msgOut": grand_out,
+            "total":  grand_in + grand_out,
+        },
+        "_source":   "local_store",
+    }
+
+
+# ── Issue #1088 Phase 5: per-provider channel fast-paths (DuckDB) ──────────
+#
+# The 19 per-provider routes below (Telegram, Signal, WhatsApp, Discord,
+# Slack, IRC, WebChat, Google Chat, MS Teams, Matrix, Mattermost, LINE,
+# Nostr, Twitch, Feishu, Zalo, Tlon, Synology Chat, Nextcloud Talk) all
+# share the same legacy "scrape gateway logs + session JSONLs" pattern.
+# Now that ``channel_messages`` is the single source of truth, every one
+# of them gets a tiny ``_try_local_store_provider_<name>`` early-return
+# that pulls the per-provider rows from DuckDB and reshapes them into the
+# legacy {messages, total, todayIn, todayOut, …extras} envelope so the
+# embedded UI doesn't need to change.
+#
+# Three legacy routes are intentionally NOT migrated and still hit their
+# original sources because the data isn't in ``channel_messages``:
+#   * ``/api/channel/imessage`` — reads ``~/Library/Messages/chat.db`` (Apple
+#     SQLite). The OpenClaw gateway never sees these messages so the table
+#     would be permanently empty for iMessage. Migrating would break the
+#     macOS-native experience.
+#   * ``/api/channel/bluebubbles`` — calls a third-party REST API for live
+#     chat counts. Same reason: the gateway doesn't proxy BlueBubbles
+#     messages, so DuckDB has no rows to serve.
+#   * ``/api/channel/tui`` — reads ``openclaw-tui``-tagged user messages
+#     directly from session JSONLs. These aren't channel adapter messages
+#     (no "messageChannel=tui" log line) so the ingest hook never picks
+#     them up.
+
+def _format_local_store_provider_messages(
+    provider,
+    rows,
+    limit,
+    extras=None,
+):
+    """Reshape ``query_channel_messages`` rows into the legacy envelope.
+
+    Caller passes the raw row list (already provider-filtered, newest-first
+    — ``query_channel_messages`` does the ORDER BY ts DESC) plus any
+    provider-specific ``extras`` (e.g. ``{"workspaces": [...]}``). Returns
+    the dict the route handler will JSON-ify, tagged with
+    ``_source: "local_store"``.
+
+    Today counters use the local-time ``YYYY-MM-DD`` prefix the same way
+    the legacy paths do — DuckDB stores ts as ISO-8601 strings so a simple
+    ``today in ts`` substring match is consistent across the board.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    messages: list[dict] = []
+    today_in = 0
+    today_out = 0
+    for r in rows:
+        ts = r.get("ts") or ""
+        direction = r.get("direction") or ""
+        sender = r.get("sender_name") or r.get("sender_id") or (
+            "User" if direction == "in" else "Clawd"
+        )
+        body = r.get("body") or ""
+        # Cap each body at 300 chars — matches the legacy per-provider
+        # pages which truncate the same way to keep the table compact.
+        if isinstance(body, str) and len(body) > 300:
+            body = body[:300]
+        messages.append({
+            "timestamp":  ts,
+            "direction":  direction,
+            "sender":     sender,
+            "text":       body,
+            "chatId":     r.get("channel_id") or "",
+            "sessionId":  r.get("session_key") or "",
+        })
+        if today and today in str(ts):
+            if direction == "in":
+                today_in += 1
+            elif direction == "out":
+                today_out += 1
+    out = {
+        "messages":  messages[:limit],
+        "total":     len(messages),
+        "todayIn":   today_in,
+        "todayOut":  today_out,
+        "_source":   "local_store",
+    }
+    if extras:
+        out.update(extras)
+    return out
+
+
+def _try_local_store_provider_messages(
+    provider,
+    limit,
+    extras_extractor=None,
+):
+    """Generic per-provider fast-path. Returns ``None`` on miss so the
+    caller falls through to the legacy log-grep path.
+
+    ``extras_extractor`` is an optional callable invoked with the raw row
+    list; it returns a dict that gets merged into the response envelope
+    (used by Slack/Discord/IRC/etc. to surface workspace / guild / channel
+    lists parsed out of message bodies — same regexes the legacy paths
+    apply, just over the DuckDB body column instead of log lines)."""
+    rows = _ls_call(
+        "query_channel_messages",
+        provider=provider,
+        # Pull a generous window so today-counters + extras extraction stay
+        # accurate even when the caller asked for a tiny page. 1000 is the
+        # ``query_channel_messages`` upper bound.
+        limit=1000,
+    )
+    if not rows:
+        return None
+    extras = extras_extractor(rows) if extras_extractor else None
+    return _format_local_store_provider_messages(provider, rows, limit, extras)
+
+
+@bp_channels.route("/api/channels/<provider>/messages")
+def api_channel_messages(provider: str):
+    """List recent messages for one provider — DuckDB fast path
+    (issue #1088 Phase 4).
+
+    Params:
+      since (ISO ts, optional): only messages with ``ts >= since``.
+      limit (int, default 50, max 1000): page size.
+
+    Falls through to a legacy ``/api/channel/<provider>`` redirect when the
+    DuckDB has no rows yet (fresh install, daemon hasn't ingested any
+    inbound channel messages). The cloud UI treats that as "no messages
+    yet" rather than an error."""
+    provider = (provider or "").lower().strip()
+    if not provider:
+        return jsonify({"error": "provider required"}), 400
+    try:
+        limit = max(1, min(int(request.args.get("limit", 50)), 1000))
+    except (TypeError, ValueError):
+        limit = 50
+    since = (request.args.get("since") or "").strip() or None
+    fast = _try_local_store_channel_messages(provider, since, limit)
+    if fast is not None:
+        return jsonify(fast)
+    # Empty-but-tagged response so the cloud UI distinguishes "schema is
+    # live but no rows yet" from "endpoint missing". Per-provider legacy
+    # routes (e.g. /api/channel/telegram) still work for callers that need
+    # the log-grep fallback during the schema's bake-in window.
+    return jsonify({
+        "messages": [],
+        "total":    0,
+        "provider": provider,
+        "_source":  "local_store_empty",
+    })
+
+
+@bp_channels.route("/api/channels/<provider>/threads")
+def api_channel_threads(provider: str):
+    """List recent chat threads (per ``channel_id``) for one provider —
+    DuckDB fast path (issue #1088 Phase 4).
+
+    Params:
+      limit (int, default 50, max 500): max threads to return.
+    """
+    provider = (provider or "").lower().strip()
+    if not provider:
+        return jsonify({"error": "provider required"}), 400
+    try:
+        limit = max(1, min(int(request.args.get("limit", 50)), 500))
+    except (TypeError, ValueError):
+        limit = 50
+    fast = _try_local_store_channel_threads(provider, limit)
+    if fast is not None:
+        return jsonify(fast)
+    return jsonify({
+        "threads":  [],
+        "total":    0,
+        "provider": provider,
+        "_source":  "local_store_empty",
+    })
+
+
+@bp_channels.route("/api/channels/summary")
+def api_channels_summary():
+    """Cross-provider message counts — DuckDB fast path (issue #1088
+    Phase 4). One row per provider with inbound / outbound counts and the
+    most-recent activity timestamp."""
+    fast = _try_local_store_channel_summary()
+    if fast is not None:
+        return jsonify(fast)
+    return jsonify({
+        "providers": [],
+        "totals":    {"msgIn": 0, "msgOut": 0, "total": 0},
+        "_source":   "local_store_empty",
+    })
+
+
 @bp_channels.route("/api/channel/telegram")
 def api_channel_telegram():
-    """Parse logs and session transcripts for Telegram message activity."""
+    """Parse logs and session transcripts for Telegram message activity.
+
+    Issue #1088 Phase 5 fast-path: when ``CLAWMETRY_LOCAL_STORE_READ=1`` and
+    the DuckDB ``channel_messages`` table has Telegram rows, serve from
+    there. Falls through to the legacy log-grep path on miss / read flag
+    off so the behaviour is bit-identical for existing users."""
     import dashboard as _d
     import re
 
     limit = request.args.get("limit", 50, type=int)
     offset = request.args.get("offset", 0, type=int)
+
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages("telegram", limit + offset)
+        if fast is not None:
+            # Honour the legacy ``offset`` paginator the Telegram tab uses
+            # for "load more". The other per-provider routes don't expose
+            # offset so the shared helper doesn't bake it in.
+            msgs = fast.get("messages") or []
+            fast["messages"] = msgs[offset : offset + limit]
+            return jsonify(fast)
 
     messages = []
     today = datetime.now().strftime("%Y-%m-%d")
@@ -502,11 +835,20 @@ def api_channel_imessage():
 
 @bp_channels.route("/api/channel/whatsapp")
 def api_channel_whatsapp():
-    """Parse logs and session transcripts for WhatsApp message activity."""
+    """Parse logs and session transcripts for WhatsApp message activity.
+
+    Issue #1088 Phase 5 fast-path on ``channel_messages`` — see telegram
+    handler for the gating + fall-through pattern."""
     import dashboard as _d
     import re
 
     limit = request.args.get("limit", 50, type=int)
+
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages("whatsapp", limit)
+        if fast is not None:
+            return jsonify(fast)
+
     messages = []
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -627,11 +969,19 @@ def api_channel_whatsapp():
 
 @bp_channels.route("/api/channel/signal")
 def api_channel_signal():
-    """Parse logs and session transcripts for Signal message activity."""
+    """Parse logs and session transcripts for Signal message activity.
+
+    Issue #1088 Phase 5 fast-path on ``channel_messages``."""
     import dashboard as _d
     import re
 
     limit = request.args.get("limit", 50, type=int)
+
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages("signal", limit)
+        if fast is not None:
+            return jsonify(fast)
+
     messages = []
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -750,11 +1100,32 @@ def api_channel_signal():
 
 @bp_channels.route("/api/channel/discord")
 def api_channel_discord():
-    """Discord channel data: log-based with guild/channel extraction."""
+    """Discord channel data: log-based with guild/channel extraction.
+
+    Issue #1088 Phase 5 fast-path on ``channel_messages`` — extracts
+    ``[Discord guild #channel]`` markers out of the row bodies the same
+    way the legacy log-grep path does, so the UI's filter dropdowns stay
+    populated."""
     import dashboard as _d
     import re
 
     limit = request.args.get("limit", 50, type=int)
+
+    if _local_store_read_enabled():
+        def _extras(rows):
+            guilds: set[str] = set()
+            channels: set[str] = set()
+            for r in rows:
+                body = r.get("body") or ""
+                m = re.search(r"\[Discord\s+([^\]]+?)\s+#?(\S+)\]", body)
+                if m:
+                    guilds.add(m.group(1))
+                    channels.add(m.group(2))
+            return {"guilds": sorted(guilds), "channels": sorted(channels)}
+        fast = _try_local_store_provider_messages("discord", limit, _extras)
+        if fast is not None:
+            return jsonify(fast)
+
     today = datetime.now().strftime("%Y-%m-%d")
     messages = []
     guilds = set()
@@ -905,11 +1276,36 @@ def api_channel_discord():
 
 @bp_channels.route("/api/channel/slack")
 def api_channel_slack():
-    """Slack channel data: log-based with workspace/channel extraction."""
+    """Slack channel data: log-based with workspace/channel extraction.
+
+    Issue #1088 Phase 5 fast-path — extracts ``[Slack workspace #channel]``
+    markers + #-mentions out of DuckDB row bodies, mirroring the legacy
+    regex set so the UI filters still populate."""
     import dashboard as _d
     import re
 
     limit = request.args.get("limit", 50, type=int)
+
+    if _local_store_read_enabled():
+        def _extras(rows):
+            workspaces: set[str] = set()
+            channels: set[str] = set()
+            for r in rows:
+                body = r.get("body") or ""
+                m = re.search(r"\[Slack\s+([^\]]+?)\s+#?(\S+)\]", body)
+                if m:
+                    workspaces.add(m.group(1))
+                    channels.add(m.group(2))
+                for ch in re.findall(r"#([a-z0-9_-]+)", body[:200]):
+                    channels.add(ch)
+            return {
+                "workspaces": sorted(workspaces),
+                "channels":   sorted(channels),
+            }
+        fast = _try_local_store_provider_messages("slack", limit, _extras)
+        if fast is not None:
+            return jsonify(fast)
+
     today = datetime.now().strftime("%Y-%m-%d")
     messages = []
     workspaces = set()
@@ -1061,11 +1457,39 @@ def api_channel_slack():
 
 @bp_channels.route("/api/channel/irc")
 def api_channel_irc():
-    """IRC channel data: log-based, extracts channel names and nicks."""
+    """IRC channel data: log-based, extracts channel names and nicks.
+
+    Issue #1088 Phase 5 fast-path — pulls ``#channel`` and ``[IRC #ch nick]``
+    markers out of DuckDB row bodies. ``status`` defaults to "connected"
+    when there are rows, matching the legacy heuristic."""
     import dashboard as _d
     import re
 
     limit = request.args.get("limit", 50, type=int)
+
+    if _local_store_read_enabled():
+        def _extras(rows):
+            channels: set[str] = set()
+            nicks: set[str] = set()
+            for r in rows:
+                body = r.get("body") or ""
+                for ch in re.findall(r"#\w+", body):
+                    channels.add(ch)
+                for nick in re.findall(r"nick[=:](\w+)", body, re.I):
+                    nicks.add(nick)
+                for ch in re.findall(r"\[IRC\s+(#\w+)", body):
+                    channels.add(ch)
+                for nick in re.findall(r"\[IRC\s+#\w+\s+(\w+)\]", body):
+                    nicks.add(nick)
+            return {
+                "channels": sorted(channels),
+                "nicks":    sorted(nicks),
+                "status":   "connected" if rows else "configured",
+            }
+        fast = _try_local_store_provider_messages("irc", limit, _extras)
+        if fast is not None:
+            return jsonify(fast)
+
     today = datetime.now().strftime("%Y-%m-%d")
     base = (
         _d._generic_channel_data.__wrapped__("irc")
@@ -1210,11 +1634,30 @@ def api_channel_irc():
 
 @bp_channels.route("/api/channel/webchat")
 def api_channel_webchat():
-    """Webchat channel data: parse logs + sessions, return active session info."""
+    """Webchat channel data: parse logs + sessions, return active session info.
+
+    Issue #1088 Phase 5 fast-path — derives ``activeSessions`` and
+    ``lastActive`` from the DuckDB row set (distinct ``session_key`` and
+    ``MAX(ts)`` respectively) so the cloud UI's "Live sessions" badge
+    stays correct without grepping log files."""
     import dashboard as _d
     import re
 
     limit = request.args.get("limit", 50, type=int)
+
+    if _local_store_read_enabled():
+        def _extras(rows):
+            active = {r.get("session_key") for r in rows if r.get("session_key")}
+            last = max((r.get("ts") or "" for r in rows), default=None) or None
+            return {
+                "activeSessions": len(active),
+                "lastActive":     last,
+                "status":         "connected" if rows else "configured",
+            }
+        fast = _try_local_store_provider_messages("webchat", limit, _extras)
+        if fast is not None:
+            return jsonify(fast)
+
     today = datetime.now().strftime("%Y-%m-%d")
 
     messages = []
@@ -1370,7 +1813,18 @@ def api_channel_webchat():
 
 @bp_channels.route("/api/channel/googlechat")
 def api_channel_googlechat():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``. Falls through
+    to the generic log-grep helper on miss. ``spaces`` stays empty —
+    populated downstream once the Google Chat adapter publishes space
+    metadata (tracked separately)."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "googlechat", request.args.get("limit", 50, type=int),
+            extras_extractor=lambda _rows: {"spaces": []},
+        )
+        if fast is not None:
+            return jsonify(fast)
     result = _d._generic_channel_data("googlechat")
     data = result.get_json()
     data["spaces"] = []
@@ -1556,7 +2010,17 @@ def api_channel_bluebubbles():
 
 @bp_channels.route("/api/channel/msteams")
 def api_channel_msteams():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``. ``teams``
+    stays empty — populated once the MS Teams adapter publishes team
+    metadata."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "msteams", request.args.get("limit", 50, type=int),
+            extras_extractor=lambda _rows: {"teams": []},
+        )
+        if fast is not None:
+            return jsonify(fast)
     result = _d._generic_channel_data("msteams")
     data = result.get_json()
     data["teams"] = []
@@ -1686,13 +2150,30 @@ def api_channel_tui():
 
 @bp_channels.route("/api/channel/matrix")
 def api_channel_matrix():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "matrix", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
     return _d._generic_channel_data("matrix")
 
 
 @bp_channels.route("/api/channel/mattermost")
 def api_channel_mattermost():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``. ``channels``
+    stays empty — populated once the Mattermost adapter publishes team
+    /channel metadata."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "mattermost", request.args.get("limit", 50, type=int),
+            extras_extractor=lambda _rows: {"channels": []},
+        )
+        if fast is not None:
+            return jsonify(fast)
     result = _d._generic_channel_data("mattermost")
     data = result.get_json()
     data["channels"] = []
@@ -1701,47 +2182,103 @@ def api_channel_mattermost():
 
 @bp_channels.route("/api/channel/line")
 def api_channel_line():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "line", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
     return _d._generic_channel_data("line")
 
 
 @bp_channels.route("/api/channel/nostr")
 def api_channel_nostr():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "nostr", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
     return _d._generic_channel_data("nostr")
 
 
 @bp_channels.route("/api/channel/twitch")
 def api_channel_twitch():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "twitch", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
     return _d._generic_channel_data("twitch")
 
 
 @bp_channels.route("/api/channel/feishu")
 def api_channel_feishu():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "feishu", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
     return _d._generic_channel_data("feishu")
 
 
 @bp_channels.route("/api/channel/zalo")
 def api_channel_zalo():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "zalo", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
     return _d._generic_channel_data("zalo")
 
 
 @bp_channels.route("/api/channel/tlon")
 def api_channel_tlon():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "tlon", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
     return _d._generic_channel_data("tlon")
 
 
 @bp_channels.route("/api/channel/synology-chat")
 def api_channel_synology_chat():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "synology-chat", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
     return _d._generic_channel_data("synology-chat")
 
 
 @bp_channels.route("/api/channel/nextcloud-talk")
 def api_channel_nextcloud_talk():
+    """Issue #1088 Phase 5 fast-path on ``channel_messages``."""
     import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "nextcloud-talk", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
     return _d._generic_channel_data("nextcloud-talk")

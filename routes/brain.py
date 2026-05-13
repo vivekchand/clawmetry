@@ -20,6 +20,7 @@ import os
 import time
 
 from flask import Blueprint, Response, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 bp_brain = Blueprint('brain', __name__)
 
@@ -147,7 +148,7 @@ def api_brain_history():
     # parser entirely when CLAWMETRY_LOCAL_STORE_READ=1 AND the store
     # has data. Falls through to the full parser otherwise (so a fresh
     # install with an empty store still gets the rich brain feed).
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_brain(limit, include_artifacts)
         if fast is not None:
             return jsonify(fast)

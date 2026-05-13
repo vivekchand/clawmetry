@@ -1203,6 +1203,121 @@ def _extract_cost_tokens_model(obj: dict) -> tuple:
     return cost_usd, token_count, model
 
 
+def _extract_channel_message(
+    obj: dict,
+    *,
+    session_id: str,
+) -> dict | None:
+    """Best-effort projection of a transcript event into a
+    ``channel_messages`` row.
+
+    Issue #1088 Phase 4. Returns ``None`` when the event is not a chat
+    message OR carries no recoverable channel signal — the daemon then
+    just records the event in ``events`` and moves on.
+
+    Two recognition paths:
+
+    1. **Inbound** — a ``user``-role message whose text starts with one of
+       the known adapter wrappers (e.g. ``[Telegram Alice id:123]…``,
+       ``[iMessage +14155551234]…``). The Connector layer prefixes every
+       inbound channel message with this bracket-tag so downstream
+       routing / observability can attribute it without scanning the
+       gateway log. We mirror that parser here so the local DuckDB has a
+       single canonical row per inbound message — the same key the
+       dashboard uses for dedupe.
+    2. **Outbound** — an ``assistant``-role message in a session whose
+       session_id was previously seen carrying an inbound channel
+       message. The session_id is the join key so we don't have to
+       re-parse the session metadata blob — the inbound path stamps
+       the channel and chat-id on a sentinel row this code reads
+       opportunistically (a future PR can plumb the session→channel
+       index more directly).
+
+    The shape is intentionally narrow: ``provider``, ``channel_id``,
+    ``sender_*``, ``body``, ``ts``, ``direction``. Per-provider extras
+    (attachments, reactions, message_id) ride along in ``raw_blob`` so
+    we don't widen the schema for adapter-specific fields.
+    """
+    import re as _re
+    if not isinstance(obj, dict):
+        return None
+    if obj.get("type") != "message":
+        return None
+    msg = obj.get("message")
+    if not isinstance(msg, dict):
+        return None
+    role = msg.get("role")
+    if role not in ("user", "assistant"):
+        return None
+    content = msg.get("content")
+    text = ""
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "text":
+                text = c.get("text", "") or ""
+                if text:
+                    break
+    if not text:
+        return None
+    # Skip system/heartbeat noise — these aren't user-facing channel msgs.
+    stripped = text.strip()
+    if stripped.startswith("System:") or "HEARTBEAT" in stripped:
+        return None
+    ts = obj.get("timestamp") or obj.get("ts") or ""
+    if not ts:
+        return None
+    eid = (
+        obj.get("id")
+        or obj.get("eventId")
+        or obj.get("messageId")
+        or f"{session_id}:{ts}:{role}"
+    )
+    if role == "user":
+        # Recognised inbound formats — the Connector layer tags every
+        # inbound message with one of these prefixes. We try Telegram /
+        # iMessage / WhatsApp / Signal / Discord / Slack first because
+        # those cover ~95% of installed adapters; the rest fall through
+        # to the generic ``[Provider …]`` matcher.
+        m = _re.match(
+            r"\[(?P<prov>Telegram|iMessage|WhatsApp|Signal|Discord|Slack|"
+            r"IRC|WebChat|GoogleChat|MSTeams|BlueBubbles|Matrix|Mattermost|"
+            r"LINE|Nostr|Twitch|Feishu|Zalo|Tlon|SynologyChat|NextcloudTalk)"
+            r"\s+(?P<sender>.+?)\s+id:(?P<sid>[^\]]+?)\]\s*(?P<body>.*)",
+            stripped,
+            flags=_re.IGNORECASE | _re.DOTALL,
+        )
+        if not m:
+            return None
+        provider = m.group("prov").lower()
+        sender_name = m.group("sender").strip()
+        chan_id = m.group("sid").strip()
+        body = m.group("body").strip() or stripped
+        return {
+            "id":          str(eid),
+            "agent_id":    "main",
+            "provider":    provider,
+            "channel_id":  chan_id,
+            "sender_id":   chan_id,
+            "sender_name": sender_name,
+            "body":        body[:4000],
+            "ts":          str(ts),
+            "direction":   "in",
+            "session_key": session_id,
+            "raw_blob":    None,
+        }
+    # Assistant turn — outbound. We don't know the channel from the
+    # event alone (the session-metadata blob carries it, processed in
+    # _local_ingest_sessions_batch). Skip here; the per-session metadata
+    # writer takes care of attribution via the ``openclaw_channels``
+    # table. The summary endpoint joins on session_key so outbound
+    # counts populate from a follow-up adapter PR. Returning None here
+    # keeps this PR's footprint minimal and avoids stamping the wrong
+    # provider on assistant turns from sessions we haven't classified.
+    return None
+
+
 def _local_ingest_session_batch(
     batch: list,
     session_file: str,
@@ -1222,6 +1337,15 @@ def _local_ingest_session_batch(
     for obj in batch:
         if not isinstance(obj, dict):
             continue
+        # Issue #1088 Phase 4: opportunistically project inbound channel
+        # messages into the channel_messages table. Best-effort — never
+        # blocks the events ingest below on a per-row failure.
+        try:
+            ch_row = _extract_channel_message(obj, session_id=session_id)
+            if ch_row is not None:
+                store.ingest_channel_message(ch_row)
+        except Exception as _e:
+            log.debug("channel_message extract failed (continuing): %s", _e)
         # Stable per-event id: prefer an explicit id from the transcript, then
         # the openclaw eventId, else compose from session_id + timestamp +
         # message-id-ish hint. INSERT OR IGNORE makes re-delivery harmless.
@@ -1948,6 +2072,49 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     return {"rows": rows, "count": len(rows), "_shape": shape, "_via": "fallback"}
 
 
+def _rows_to_brain_events(rows: list) -> list:
+    """Return raw OpenClaw event payloads ready for the cloud browser's
+    ``transformEvents`` to unwrap.
+
+    The cloud Brain ``_cm_decryptBrain`` decrypts the blob, reads
+    ``dec.events``, then runs ``transformEvents(rawEvs, ...)`` over each
+    item — which expects the ORIGINAL JSONL shape:
+    ``{type, message:{role, content}, timestamp}``. It walks
+    ``message.content[].type === 'text'/'tool_use'/'thinking'`` to extract
+    the human-readable detail.
+
+    Earlier we pre-flattened to ``{type:'ASSISTANT', detail:'', src, ...}``
+    (the OSS-local shape). That made ``transformEvents`` fall through to its
+    empty-detail fallback and DROP every event — cloud Brain showed "No
+    brain activity events found" even with hundreds of rows in DuckDB.
+    Bug confirmed live 2026-05-13 (Diya/Telegram messages).
+
+    For each row we forward ``row['data']`` as-is. We backfill
+    ``timestamp`` from the column-level ``ts`` only when the inner JSONL
+    didn't already carry one (transformEvents needs ``obj.timestamp ||
+    obj.time``).
+
+    The OSS-local Brain tab uses ``routes/brain.py:_try_local_store_brain``
+    which builds the display shape directly — that path is unchanged.
+    """
+    out = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        data = r.get("data")
+        if isinstance(data, dict):
+            if not data.get("timestamp") and not data.get("time") and r.get("ts"):
+                data = {**data, "timestamp": r.get("ts")}
+            out.append(data)
+        elif isinstance(data, str):
+            out.append({
+                "type":      r.get("event_type") or "raw",
+                "timestamp": r.get("ts", ""),
+                "detail":    data[:2000],
+            })
+    return out
+
+
 # ── Phase 2: proactive brain cache_push (epic #1032) ─────────────────────────
 # The Brain page is the first thing most users hit on the cloud dashboard. In
 # Phase 1 the cloud only had data for it after a browser /api/cloud/subscribe
@@ -2009,26 +2176,7 @@ def _build_brain_cache_pushes(config: dict) -> list:
     # Same translation as routes/brain.py:_try_local_store_brain so the
     # browser sees an identical event shape regardless of which path served
     # the data (cache hit vs. relay subscribe vs. JSONL fallback).
-    events = []
-    for r in rows:
-        data = r.get("data") if isinstance(r, dict) else None
-        detail = ""
-        if isinstance(data, dict):
-            detail = (data.get("input") or data.get("summary")
-                      or data.get("text") or data.get("name") or "")
-        elif isinstance(data, str):
-            detail = data
-        events.append({
-            "time":      r.get("ts", ""),
-            "type":      (r.get("event_type") or "").upper(),
-            "detail":    str(detail)[:200],
-            "src":       (r.get("session_id") or r.get("agent_id") or "")[:32],
-            "sessionId": r.get("session_id") or "",
-            "agentId":   r.get("agent_id") or "main",
-            "tokens":    r.get("token_count") or 0,
-            "cost":      float(r.get("cost_usd") or 0.0),
-            "model":     r.get("model") or "",
-        })
+    events = _rows_to_brain_events(rows)
     payload = {
         "events":  events,
         "count":   len(events),
@@ -2496,7 +2644,29 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
             if not enc_key:
                 log.debug("pending_query %s: no encryption key; skipping", qid)
                 continue
-            blob = encrypt_payload(result, enc_key)
+            # Bug 2026-05-13 (real MOAT fix): when this pending_query targets
+            # the Brain cache key (`brain:*:recent`), the cloud's browser-side
+            # `_cm_decryptBrain` reads `dec.events` from the decrypted blob.
+            # `_local_dispatch('events', ...)` returns the raw shape
+            # `{rows: [...], count, _shape, _via}` though — so the browser
+            # sees `dec.events || []` = empty and shows "No brain activity
+            # events found" even with hundreds of events in DuckDB. Translate
+            # to the dashboard-display shape via `_rows_to_brain_events` so
+            # both this writer and `_build_brain_cache_pushes` produce
+            # identical blobs (one shouldn't silently overwrite the other
+            # with a wrong-shape payload).
+            payload = result
+            if shape == "events" and isinstance(cache_key, str) \
+                    and cache_key.startswith("brain:"):
+                rows = (result or {}).get("rows") if isinstance(result, dict) else None
+                events = _rows_to_brain_events(rows or [])
+                payload = {
+                    "events":  events,
+                    "count":   len(events),
+                    "_source": "local_store",
+                    "_shape":  "brain_history",
+                }
+            blob = encrypt_payload(payload, enc_key)
             _post("/ingest/cache", {
                 "node_id": node_id,
                 "id": qid,

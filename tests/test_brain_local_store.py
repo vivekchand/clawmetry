@@ -65,7 +65,7 @@ def _build_app(tmp_path, monkeypatch, *, enable_fast_path: bool):
     if enable_fast_path:
         monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
     else:
-        monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+        monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -161,7 +161,7 @@ def test_brain_history_skips_duckdb_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")  # for the seed write
     store = ls.get_store()
     _seed(store, n=3)
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     # Now arm the trap. Any call to query_events from this point on
     # raises — the route MUST NOT touch it.

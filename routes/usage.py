@@ -32,6 +32,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, make_response, request
+from clawmetry.config import is_local_store_read_enabled
 
 bp_usage = Blueprint('usage', __name__)
 
@@ -714,7 +715,7 @@ def api_usage():
 
     # Epic #964 — local-store fast path. Opt-in via CLAWMETRY_LOCAL_STORE_READ=1;
     # falls through to OTLP/transcript scan when the store is empty / disabled.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_usage()
         if fast is not None:
             return jsonify(fast)
@@ -829,7 +830,7 @@ def api_usage_anomalies():
     import dashboard as _d
 
     # Epic #964 — local-store fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_usage_anomalies()
         if fast is not None:
             return jsonify(fast)
@@ -871,7 +872,7 @@ def api_anomalies():
     import dashboard as _d
 
     # Epic #964 — local-store fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_anomalies()
         if fast is not None:
             return jsonify(fast)
@@ -933,7 +934,7 @@ def api_usage_by_plugin():
         threshold_pct_arg = 50.0
 
     # Epic #964 — local-store fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_usage_by_plugin(threshold_pct_arg)
         if fast is not None:
             return jsonify(fast)
@@ -1005,7 +1006,7 @@ def api_usage_by_plugin_trend():
     days_back = min(max(days_back, 1), 90)
 
     # Epic #964 — local-store fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_usage_by_plugin_trend(days_back)
         if fast is not None:
             return jsonify(fast)
@@ -1246,7 +1247,7 @@ def api_sessions_clusters():
         days_arg = int(request.args.get("days", 30))
     except (ValueError, TypeError):
         days_arg = 30
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_sessions_clusters(days_arg)
         if fast is not None:
             return jsonify(fast)
@@ -1517,7 +1518,7 @@ def api_usage_cost_comparison():
     import dashboard as _d
 
     # Epic #964 — local-store fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_cost_comparison()
         if fast is not None:
             return jsonify(fast)
@@ -1656,7 +1657,7 @@ def api_model_attribution():
     import dashboard as _d
 
     # Epic #964 — local-store fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_model_attribution()
         if fast is not None:
             return jsonify(fast)
@@ -1774,7 +1775,7 @@ def api_skill_attribution():
     import re as _re
 
     # Epic #964 — local-store fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_skill_attribution()
         if fast is not None:
             return jsonify(fast)
