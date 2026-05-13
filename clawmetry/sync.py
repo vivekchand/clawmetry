@@ -123,6 +123,17 @@ LOG_FILE = CONFIG_DIR / "sync.log"
 
 POLL_INTERVAL = 15  # seconds between sync cycles
 STREAM_INTERVAL = 2  # seconds between real-time stream pushes
+
+# Adaptive heartbeat cadence (epic #775 — adaptive sync, PR 2/3).
+# When a viewer has the cloud dashboard open, the cloud sets `viewer_active:
+# true` on the heartbeat response and we tighten the loop so Telegram /
+# tool / brain events appear in the cloud Brain tab in ~3s instead of up to
+# 60s. When nobody is watching we drop back to the default 60s cadence to
+# keep idle bandwidth + Cloud Run cost flat. Back-compat: a cloud that
+# hasn't deployed PR 1 of the epic yet won't return the field, and the
+# missing-field branch falls through to SLOW.
+HEARTBEAT_INTERVAL_FAST = 3
+HEARTBEAT_INTERVAL_SLOW = 60
 BATCH_SIZE = (
     200  # events per encrypted POST (was 10; fewer HTTP requests = faster sync)
 )
@@ -1929,8 +1940,39 @@ def _collect_security_posture() -> dict | None:
         return None
 
 
+# Adaptive heartbeat: the most recent /ingest/heartbeat response body so the
+# main loop (and tests) can derive the next sleep interval without changing
+# `send_heartbeat`'s `bool` return type (callers in tests assert `is True`).
+# `None` when no successful heartbeat has been received yet OR after a 5xx.
+_LAST_HEARTBEAT_RESPONSE: dict | None = None
+
+
+def _pick_heartbeat_interval(resp_json: dict | None) -> int:
+    """Adaptive cadence (#775 PR 2/3): FAST when a viewer is watching the
+    cloud dashboard, SLOW otherwise. Pure function so it can be unit-tested
+    without booting the daemon loop.
+
+    Back-compat: a cloud that hasn't deployed PR 1 yet won't return the
+    `viewer_active` field, so missing → SLOW. Same for `None` (no successful
+    heartbeat yet) and any non-dict input.
+    """
+    if not isinstance(resp_json, dict):
+        return HEARTBEAT_INTERVAL_SLOW
+    return (
+        HEARTBEAT_INTERVAL_FAST
+        if resp_json.get("viewer_active", False)
+        else HEARTBEAT_INTERVAL_SLOW
+    )
+
+
 def send_heartbeat(config: dict) -> bool:
-    """Send heartbeat to cloud. Returns True on success, False on failure."""
+    """Send heartbeat to cloud. Returns True on success, False on failure.
+
+    Side effect: on success, stashes the parsed response body in
+    `_LAST_HEARTBEAT_RESPONSE` so the main loop can read `viewer_active`
+    via `_pick_heartbeat_interval()` and adapt the next sleep interval.
+    """
+    global _LAST_HEARTBEAT_RESPONSE
     payload = {
         "node_id": config["node_id"],
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -2018,6 +2060,10 @@ def send_heartbeat(config: dict) -> bool:
             resp_json = _post("/ingest/heartbeat", payload, config["api_key"])
             if attempt > 0:
                 log.info(f"Heartbeat succeeded after {attempt + 1} attempts")
+            # Stash for adaptive-cadence pick (#775 PR 2/3). Normalise to dict
+            # so `_pick_heartbeat_interval` always sees a sensible shape even
+            # if `_post` ever decides to return None on a 204.
+            _LAST_HEARTBEAT_RESPONSE = resp_json if isinstance(resp_json, dict) else {}
             # Phase 1 of relay-v2 (#1053): the cloud may piggyback a small
             # batch of `pending_queries` on the heartbeat response. Each is
             # a shape-allowlisted read against the local DuckDB; we run them,
@@ -2032,6 +2078,9 @@ def send_heartbeat(config: dict) -> bool:
             last_err = e
             if attempt < 2:
                 time.sleep(2**attempt)  # 1s, 2s backoff
+    # Heartbeat failed: clear the stashed response so the next interval pick
+    # falls back to SLOW (don't burn tighter cadence on a stale viewer flag).
+    _LAST_HEARTBEAT_RESPONSE = None
     log.warning(f"Heartbeat failed after 3 attempts: {last_err}")
     return False
 
@@ -4725,7 +4774,9 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning(f"approvals watcher failed to start: {_e}")
 
-    heartbeat_interval = 60
+    # Default to SLOW; flips to FAST after a heartbeat response with
+    # `viewer_active: true` (epic #775 PR 2/3, adaptive sync cadence).
+    heartbeat_interval = HEARTBEAT_INTERVAL_SLOW
     snapshot_interval = 60  # system snapshot (subagents, flow metrics) every 60s
     log_sync_interval = 60  # log lines are low-priority; streamer covers real-time
     last_heartbeat = time.time()
@@ -4785,12 +4836,25 @@ def run_daemon() -> None:
                         )
                     consecutive_hb_failures = 0
                     last_heartbeat = now
+                    # Adaptive cadence (#775 PR 2/3): if the cloud signalled a
+                    # live viewer, drop to FAST so Telegram / brain events
+                    # appear in the dashboard within seconds. Otherwise stay
+                    # at SLOW. Missing field → SLOW (back-compat with a cloud
+                    # that hasn't deployed PR 1 of the epic yet).
+                    heartbeat_interval = _pick_heartbeat_interval(
+                        _LAST_HEARTBEAT_RESPONSE
+                    )
                 else:
                     consecutive_hb_failures += 1
                     if consecutive_hb_failures >= 5:
                         log.error(
                             f"CRITICAL: {consecutive_hb_failures} consecutive heartbeat failures — node appears offline in cloud"
                         )
+                    # On failure stay on SLOW so we don't hammer a flapping
+                    # cloud. The existing 1s/2s in-call backoff inside
+                    # `send_heartbeat` already covers retry, and the next
+                    # cycle inherits whatever interval we set here.
+                    heartbeat_interval = HEARTBEAT_INTERVAL_SLOW
 
         except Exception as e:
             log.error(f"Sync cycle error: {e}")
