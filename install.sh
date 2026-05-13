@@ -103,9 +103,11 @@ CLAWMETRY_VERSION=$("$INSTALL_DIR/bin/python3" -c "import importlib.metadata; pr
 if [ "$OS" = "Darwin" ]; then
   _LA_DIR="$HOME/Library/LaunchAgents"
   _UID=$(id -u)
+  _DARWIN_PLIST_FOUND=0
   # Step 1: rewrite stale ProgramArguments[0] in any com.clawmetry.* plist.
   for _plist in "$_LA_DIR"/com.clawmetry.*.plist; do
     [ -f "$_plist" ] || continue
+    _DARWIN_PLIST_FOUND=1
     _current=$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "$_plist" 2>/dev/null || echo "")
     _label=$(basename "$_plist" .plist)
     case "$_current" in
@@ -136,6 +138,49 @@ if [ "$OS" = "Darwin" ]; then
     _label=$(basename "$_plist" .plist)
     launchctl kickstart -k "gui/$_UID/$_label" >/dev/null 2>&1 || true
   done
+
+  # Cross-platform sanity: no plist means user installed via pip directly
+  # without running `clawmetry connect`, so there is no managed daemon to
+  # restart. Print a manual hint instead of staying silent.
+  if [ "$_DARWIN_PLIST_FOUND" = "0" ]; then
+    echo -e "  ${DIM}Hint: no managed daemon found. If clawmetry was already running,${NC}"
+    echo -e "  ${DIM}restart it with: pkill -f clawmetry && nohup clawmetry &${NC}"
+  fi
+fi
+
+# ── Restart user daemon (Linux + WSL) ────────────────────────────────────────
+# Same stale-venv problem as macOS (#1182). Linux uses systemd --user units
+# registered as `clawmetry-sync.service` (see clawmetry/cli.py::_register_systemd).
+# WSL ships without systemd by default, so we fall back to a pkill hint.
+if [ "$OS" = "Linux" ]; then
+  _IS_WSL=0
+  if grep -qi microsoft /proc/version 2>/dev/null; then
+    _IS_WSL=1
+  fi
+
+  _RESTARTED=0
+  # Prefer systemd --user when both systemctl is present AND a clawmetry unit
+  # is registered. `list-unit-files` enumerates installed units even when none
+  # are running, which is what we want here.
+  if [ "$_IS_WSL" = "0" ] && command -v systemctl >/dev/null 2>&1; then
+    if systemctl --user list-unit-files 2>/dev/null | grep -q '^clawmetry-sync\.service'; then
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+      if systemctl --user restart clawmetry-sync.service >/dev/null 2>&1; then
+        echo -e "  ${DIM}↺ Restarted clawmetry-sync systemd user service${NC}"
+        _RESTARTED=1
+      fi
+    fi
+  fi
+
+  if [ "$_RESTARTED" = "0" ]; then
+    if [ "$_IS_WSL" = "1" ]; then
+      echo -e "  ${DIM}WSL detected — systemd user services not available by default.${NC}"
+    else
+      echo -e "  ${DIM}Hint: no systemd user unit found for clawmetry.${NC}"
+    fi
+    echo -e "  ${DIM}If clawmetry was already running, restart it with:${NC}"
+    echo -e "  ${DIM}  pkill -f clawmetry && nohup clawmetry &${NC}"
+  fi
 fi
 
 echo ""
