@@ -424,41 +424,17 @@ def api_brain_history():
                             "color": "#a855f7",
                         }
                     )
-                else:
-                    msg_lower = msg.lower()
-                    for kw in (
-                        "exec",
-                        "browser",
-                        "web_search",
-                        "web_fetch",
-                        "read",
-                        "write",
-                        "edit",
-                        "message",
-                        "spawn",
-                        "subagents",
-                        "tts",
-                        "nodes",
-                        "canvas",
-                    ):
-                        if kw in msg_lower:
-                            ev_type = tool_to_type(kw)
-                            try:
-                                start = msg_lower.index(kw)
-                                detail = msg[start : start + 300].split("\n")[0].strip()
-                            except Exception:
-                                detail = ""
-                            events.append(
-                                {
-                                    "time": ts,
-                                    "source": "main",
-                                    "sourceLabel": "main",
-                                    "type": ev_type,
-                                    "detail": detail,
-                                    "color": "#a855f7",
-                                }
-                            )
-                            break
+                # NOTE: a previous implementation also did substring keyword
+                # matching here ("if 'browser' in msg_lower → BROWSER event").
+                # That mis-classified benign console messages (e.g. "Opened in
+                # your browser. Keep that tab to control OpenClaw." or "Token
+                # auto-auth included in browser/clipboard URL.") as BROWSER
+                # tool invocations and contaminated the Brain stream with
+                # onboarding/lifecycle text. Removed — only bracketed
+                # ``[tool] ...`` log lines now produce events from this path.
+                # DuckDB-first: real tool calls already arrive via local_store
+                # ingestion, so this fallback is pure noise. (issue: brain
+                # onboarding-text contamination, 2026-05-13.)
         except Exception:
             pass
 
