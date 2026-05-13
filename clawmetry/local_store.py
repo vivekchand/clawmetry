@@ -117,7 +117,7 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -445,6 +445,76 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_bootstrap_node ON bootstrap_archive(node_id, captured_at)",
+    # Issue #1007 (Phase 1 of epic #1006) — OTel-compatible span storage.
+    # One row per OTel span received via the /v1/traces OTLP receiver. Shape
+    # mirrors the OpenTelemetry data model so any OTLP-emitting SDK (OpenAI,
+    # Anthropic, LangChain, OpenClaw with OTel exporter, …) lands here
+    # without a bespoke per-SDK translator. Follows the open OTel spec — not
+    # a fork or wrapper of any vendor's code.
+    #
+    # Column-level rationale:
+    #   * ``span_id`` is PK so re-delivery of the same OTel span (common with
+    #     the OTLP HTTP exporter's retry-on-503 path) is a no-op via
+    #     ``INSERT OR REPLACE``.
+    #   * Time columns: ``start_ts`` / ``end_ts`` are DOUBLE unix-seconds
+    #     (matches what OTel proto's ``start_time_unix_nano`` carries once
+    #     converted). ``ts`` mirrors ``start_ts`` and is the canonical
+    #     retention key for vacuum / range pruning — keeping it separate
+    #     means we can someday store ``ts`` = ingest-time without breaking
+    #     query semantics that key off span start.
+    #   * Typed top-level columns (``model``, ``tool_name``, ``cost_usd``,
+    #     ``tokens_input``, ``tokens_output``, ``token_count``) are
+    #     projected from common OTel ``gen_ai.*`` attribute conventions in
+    #     ``_otel_to_row`` (see dashboard.py) so the dashboard's usage views
+    #     don't need to JSON-extract on every read.
+    #   * BLOB columns (``input``, ``output``, ``attributes``, ``events``,
+    #     ``links``) carry JSON-encoded values, decoded back on read.
+    #     Matches the convention used by ``events.data`` / ``heartbeats.data``
+    #     — see ``_decode_data_blob_rows`` for the symmetric decoder.
+    #
+    # Storage envelope (per epic #1006): ~70 spans/session × ~15 KB ≈
+    # 1 MB/session. Heavy-user 50 sessions/day = ~50 MB/day, ~18 GB/year.
+    # Mitigated by Snappy compression + opt-in ``clawmetry prune --spans``.
+    """
+    CREATE TABLE IF NOT EXISTS spans (
+        span_id            VARCHAR PRIMARY KEY,
+        trace_id           VARCHAR NOT NULL,
+        parent_span_id     VARCHAR,
+        agent_type         VARCHAR NOT NULL DEFAULT 'openclaw',
+        agent_id           VARCHAR DEFAULT 'main',
+        node_id            VARCHAR,
+        session_id         VARCHAR,
+        service_name       VARCHAR,
+        name               VARCHAR NOT NULL,
+        kind               VARCHAR,
+        status_code        VARCHAR,
+        status_message     VARCHAR,
+        status             VARCHAR,
+        start_ts           DOUBLE NOT NULL,
+        end_ts             DOUBLE,
+        duration_ms        DOUBLE,
+        duration_ns        BIGINT,
+        model              VARCHAR,
+        tool_name           VARCHAR,
+        cost_usd           DOUBLE,
+        token_count        INTEGER,
+        tokens_input       INTEGER,
+        tokens_output      INTEGER,
+        input              BLOB,
+        output             BLOB,
+        attributes         BLOB,
+        events             BLOB,
+        links              BLOB,
+        ts                 DOUBLE NOT NULL,
+        created_at         BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_spans_trace_id    ON spans(trace_id, span_id)",
+    "CREATE INDEX IF NOT EXISTS idx_spans_trace_start ON spans(trace_id, start_ts)",
+    "CREATE INDEX IF NOT EXISTS idx_spans_parent      ON spans(parent_span_id)",
+    "CREATE INDEX IF NOT EXISTS idx_spans_session     ON spans(session_id, start_ts)",
+    "CREATE INDEX IF NOT EXISTS idx_spans_agent_ts    ON spans(agent_type, start_ts)",
+    "CREATE INDEX IF NOT EXISTS idx_spans_ts          ON spans(ts)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -1561,6 +1631,273 @@ class LocalStore:
                   if isinstance(hb.get("local_store"), dict) else hb.get("events_total"),
                 data_blob,
             ])
+
+    # ── spans (OTel trace ingest) ───────────────────────────────────────
+    #
+    # Issue #1007 / epic #1006. Spans land here from the OTLP /v1/traces
+    # receiver (see ``dashboard.py:_process_otlp_traces`` → ``_otel_to_row``
+    # → ``put_span``). We accept a permissive dict-shape so producers other
+    # than OTel-proto can write spans directly without dragging a protobuf
+    # dependency through this module (e.g. tests, future OpenClaw/Claude
+    # Code adapters).
+    #
+    # Cross-process safety: spans are upserted synchronously under
+    # ``_write_lock`` — same path as ``ingest_session`` / ``ingest_cron`` /
+    # ``ingest_heartbeat`` (the non-event helpers). Volume per /v1/traces
+    # POST is bounded (~hundreds of spans batch, not the multi-kHz
+    # tool-call stream that needs the ring), so we don't gain anything
+    # from a flusher queue here and we get strong "after POST 200, span is
+    # in DuckDB" semantics for free.
+
+    def ingest_span(self, span: dict[str, Any]) -> None:
+        """Upsert one OTel-shaped span row.
+
+        Required keys: ``span_id``, ``trace_id``, ``name``, ``start_ts``.
+        ``start_ts`` is unix-seconds (float). ``end_ts`` defaults to
+        ``start_ts`` when missing (zero-duration span — valid for
+        events/markers).
+
+        Optional shape (all coerced gracefully when absent):
+          * Identity: ``parent_span_id``, ``agent_type`` (default
+            ``"openclaw"``), ``agent_id`` (default ``"main"``), ``node_id``,
+            ``session_id``, ``service_name``
+          * Status: ``kind``, ``status`` (free-form), ``status_code`` /
+            ``status_message`` (OTel-shaped)
+          * Metrics: ``duration_ms``, ``duration_ns``, ``cost_usd``,
+            ``token_count``, ``tokens_input``, ``tokens_output``, ``model``,
+            ``tool_name``
+          * JSON payloads: ``input``, ``output``, ``attributes``, ``events``,
+            ``links`` — accept dict / list / str / bytes; coerced to BLOB
+            via ``_to_blob`` and decoded back via ``_decode_data_blob_rows``
+            equivalent in ``query_spans``.
+
+        ``INSERT OR REPLACE`` semantics: re-delivering the same ``span_id``
+        overwrites the prior row. OTel exporters retry on transient 5xx,
+        so idempotency is essential; making it ON CONFLICT DO REPLACE
+        (rather than DO NOTHING) means a retry that carries late-arriving
+        ``end_ts`` correctly overwrites the half-row from the first try.
+
+        Also exposed as ``put_span`` for symmetry with the helper name the
+        issue body uses (``local_store.put_span``).
+        """
+        if self._read_only:
+            raise RuntimeError("local_store: ingest_span() called on read-only store")
+        span_id = span.get("span_id")
+        if not span_id:
+            raise ValueError("span must include 'span_id'")
+        trace_id = span.get("trace_id")
+        if not trace_id:
+            raise ValueError("span must include 'trace_id'")
+        name = span.get("name")
+        if not name:
+            raise ValueError("span must include 'name'")
+        start_ts = span.get("start_ts")
+        if start_ts is None:
+            raise ValueError("span must include 'start_ts'")
+        try:
+            start_ts_f = float(start_ts)
+        except (TypeError, ValueError):
+            raise ValueError(f"span 'start_ts' must be numeric (got {start_ts!r})")
+        end_ts = span.get("end_ts")
+        try:
+            end_ts_f = float(end_ts) if end_ts is not None else start_ts_f
+        except (TypeError, ValueError):
+            end_ts_f = start_ts_f
+        # Duration: prefer explicit, else derive from (end - start).
+        duration_ms = span.get("duration_ms")
+        duration_ns = span.get("duration_ns")
+        if duration_ms is None and duration_ns is None:
+            duration_ms = max(0.0, (end_ts_f - start_ts_f) * 1000.0)
+        elif duration_ms is None and duration_ns is not None:
+            try:
+                duration_ms = float(duration_ns) / 1_000_000.0
+            except (TypeError, ValueError):
+                duration_ms = None
+        elif duration_ns is None and duration_ms is not None:
+            try:
+                duration_ns = int(float(duration_ms) * 1_000_000)
+            except (TypeError, ValueError):
+                duration_ns = None
+
+        def _i(v):
+            if v is None:
+                return None
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+
+        def _f(v):
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        params = [
+            str(span_id),
+            str(trace_id),
+            span.get("parent_span_id"),
+            str(span.get("agent_type") or "openclaw"),
+            str(span.get("agent_id") or "main"),
+            span.get("node_id"),
+            span.get("session_id"),
+            span.get("service_name"),
+            str(name),
+            span.get("kind"),
+            span.get("status_code"),
+            span.get("status_message"),
+            span.get("status"),
+            start_ts_f,
+            end_ts_f,
+            _f(duration_ms),
+            _i(duration_ns),
+            span.get("model"),
+            span.get("tool_name"),
+            _f(span.get("cost_usd")),
+            _i(span.get("token_count")),
+            _i(span.get("tokens_input")),
+            _i(span.get("tokens_output")),
+            _to_blob(span.get("input")),
+            _to_blob(span.get("output")),
+            _to_blob(span.get("attributes")),
+            _to_blob(span.get("events")),
+            _to_blob(span.get("links")),
+            start_ts_f,  # ts = canonical retention key, mirror of start_ts
+            int(time.time() * 1000),
+        ]
+        # DuckDB doesn't support ON CONFLICT DO REPLACE; emulate with
+        # DELETE-then-INSERT inside one transaction. Same pattern works for
+        # ``INSERT OR REPLACE`` semantics without losing the FK-free PK
+        # constraint enforcement.
+        with self._write_lock:
+            with _txn(self._conn):
+                self._conn.execute(
+                    "DELETE FROM spans WHERE span_id = ?",
+                    [str(span_id)],
+                )
+                self._conn.execute("""
+                    INSERT INTO spans (
+                        span_id, trace_id, parent_span_id, agent_type, agent_id,
+                        node_id, session_id, service_name, name, kind,
+                        status_code, status_message, status,
+                        start_ts, end_ts, duration_ms, duration_ns,
+                        model, tool_name, cost_usd, token_count,
+                        tokens_input, tokens_output,
+                        input, output, attributes, events, links,
+                        ts, created_at
+                    ) VALUES (?, ?, ?, ?, ?,
+                              ?, ?, ?, ?, ?,
+                              ?, ?, ?,
+                              ?, ?, ?, ?,
+                              ?, ?, ?, ?,
+                              ?, ?,
+                              ?, ?, ?, ?, ?,
+                              ?, ?)
+                """, params)
+
+    # Alias used by the issue body / callers that prefer "put" semantics.
+    def put_span(self, span: dict[str, Any]) -> None:
+        """Alias for :meth:`ingest_span`. Provided so the OTLP receiver can
+        call ``local_store.get_store().put_span(...)`` per the issue spec
+        without us painting the rest of the module a different colour."""
+        self.ingest_span(span)
+
+    def query_spans(
+        self,
+        *,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+        parent_span_id: str | None = None,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+        agent_type: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Read spans. Defaults to most recent first (by ``start_ts DESC``).
+
+        Filters compose with AND. ``since`` / ``until`` are unix-second
+        floats matching the ``start_ts`` / ``end_ts`` column type. Pass
+        ``trace_id`` to fetch one trace's spans (the trace-tree UI's
+        canonical query).
+
+        BLOB columns (``input``, ``output``, ``attributes``, ``events``,
+        ``links``) are decoded back to JSON dict/list where the stored
+        bytes parse, plain str when they don't, ``None`` when empty.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if trace_id:
+            clauses.append("trace_id = ?")
+            params.append(str(trace_id))
+        if span_id:
+            clauses.append("span_id = ?")
+            params.append(str(span_id))
+        if parent_span_id:
+            clauses.append("parent_span_id = ?")
+            params.append(str(parent_span_id))
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(str(session_id))
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(str(agent_id))
+        if agent_type:
+            clauses.append("agent_type = ?")
+            params.append(str(agent_type))
+        if since is not None:
+            clauses.append("start_ts >= ?")
+            params.append(float(since))
+        if until is not None:
+            clauses.append("start_ts <= ?")
+            params.append(float(until))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT span_id, trace_id, parent_span_id, agent_type, agent_id,
+                   node_id, session_id, service_name, name, kind,
+                   status_code, status_message, status,
+                   start_ts, end_ts, duration_ms, duration_ns,
+                   model, tool_name, cost_usd, token_count,
+                   tokens_input, tokens_output,
+                   input, output, attributes, events, links,
+                   ts
+            FROM spans
+            {where}
+            ORDER BY start_ts DESC, span_id DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = [
+            "span_id", "trace_id", "parent_span_id", "agent_type", "agent_id",
+            "node_id", "session_id", "service_name", "name", "kind",
+            "status_code", "status_message", "status",
+            "start_ts", "end_ts", "duration_ms", "duration_ns",
+            "model", "tool_name", "cost_usd", "token_count",
+            "tokens_input", "tokens_output",
+            "input", "output", "attributes", "events", "links",
+            "ts",
+        ]
+        blob_cols = ("input", "output", "attributes", "events", "links")
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            for c in blob_cols:
+                raw = d.get(c)
+                if raw is None:
+                    continue
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    try:
+                        d[c] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d[c] = text
+                except UnicodeDecodeError:
+                    d[c] = None
+            out.append(d)
+        return out
 
     # ── flush ───────────────────────────────────────────────────────────
 

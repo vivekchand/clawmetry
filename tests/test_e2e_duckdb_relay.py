@@ -372,13 +372,13 @@ def test_duckdb_read_only_handle_sees_committed_rows(pipeline):
     ro = duckdb.connect(str(db_path), read_only=True)
     try:
         n = ro.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        # Schema version 2 expected (current).
+        # Schema version 5 expected (current — bumped by issue #1007).
         sv = ro.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
     finally:
         ro.close()
 
     assert n == EXPECTED_TOTAL_EVENTS
-    assert sv == ls.SCHEMA_VERSION == 4
+    assert sv == ls.SCHEMA_VERSION == 5
 
 
 def test_duckdb_indexes_present(pipeline):
@@ -547,7 +547,7 @@ def test_relay_shape_health(pipeline):
     assert body["_shape"] == "health"
     assert body["engine"] == "duckdb"
     assert body["event_count"] == EXPECTED_TOTAL_EVENTS
-    assert body["schema_version"] == 4
+    assert body["schema_version"] == 6
     assert body["oldest_ts"] == f"{DAY_A}T10:00:00Z"
     assert body["newest_ts"] == f"{DAY_B}T12:00:00Z"
     assert body["ring_depth"] == 0
