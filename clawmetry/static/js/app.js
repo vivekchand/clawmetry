@@ -5429,6 +5429,65 @@ async function loadSystemHealth() {
       if (dmWrap) dmWrap.style.display = '';
     } else if (dmWrap) { dmWrap.style.display = 'none'; }
 
+    // Gateway health (#852) — surface OpenClaw gateway process vitals
+    // (RSS / CPU / uptime). The ~600MB → ~945MB memory-bloat-OOM pattern
+    // was invisible from the dashboard until this card landed.
+    var gwWrap = document.getElementById('sh-gateway-wrap');
+    var gwEl = document.getElementById('sh-gateway');
+    if (d.gateway && gwEl) {
+      var gw = d.gateway;
+      var gwStatus = gw.status || 'not_running';
+      var gwDot, gwLabel, gwColor;
+      if (gwStatus === 'critical') {
+        gwDot = '🔴'; gwLabel = 'Critical'; gwColor = 'var(--text-error,#dc2626)';
+      } else if (gwStatus === 'warning') {
+        gwDot = '🟡'; gwLabel = 'Warning'; gwColor = '#f59e0b';
+      } else if (gwStatus === 'healthy') {
+        gwDot = '🟢'; gwLabel = 'Healthy'; gwColor = 'var(--text-success,#22c55e)';
+      } else {
+        gwDot = '⚫'; gwLabel = 'Not running'; gwColor = 'var(--text-muted)';
+      }
+      var rss = (typeof gw.rss_mb === 'number') ? gw.rss_mb : null;
+      var thr = gw.memory_threshold_mb || 900;
+      var memPct = (rss !== null) ? Math.min(100, Math.round((rss / thr) * 100)) : 0;
+      var memBarColor = (gwStatus === 'critical') ? 'var(--text-error,#dc2626)'
+                      : (gwStatus === 'warning') ? '#f59e0b'
+                      : 'var(--text-success,#22c55e)';
+      // Pretty uptime: "1d 3h", "47m", "12s"
+      function _fmtUp(s) {
+        if (s === null || s === undefined) return '—';
+        s = Math.max(0, Math.floor(s));
+        if (s < 60) return s + 's';
+        if (s < 3600) return Math.floor(s/60) + 'm';
+        if (s < 86400) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+        return Math.floor(s/86400) + 'd ' + Math.floor((s%86400)/3600) + 'h';
+      }
+      var gwHtml = '<div style="padding:8px 14px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:13px;">';
+      gwHtml += '<div style="display:flex;align-items:center;gap:8px;">';
+      gwHtml += gwDot + ' <span style="font-weight:600;color:' + gwColor + ';">' + gwLabel + '</span>';
+      if (gw.pid) {
+        gwHtml += '<span style="color:var(--text-muted);font-size:11px;font-family:\'JetBrains Mono\',monospace;">PID ' + gw.pid + '</span>';
+      }
+      gwHtml += '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">Uptime: <span style="color:var(--text-secondary);font-weight:600;">' + _fmtUp(gw.uptime_seconds) + '</span></span>';
+      gwHtml += '</div>';
+      if (rss !== null) {
+        gwHtml += '<div style="margin-top:8px;">';
+        gwHtml += '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-bottom:4px;">';
+        gwHtml += '<span>Memory</span>';
+        gwHtml += '<span style="color:' + gwColor + ';font-weight:600;">' + rss + ' MB</span><span> / ' + thr + ' MB</span>';
+        gwHtml += '</div>';
+        gwHtml += '<div style="height:6px;background:var(--bg-primary);border-radius:3px;overflow:hidden;border:1px solid var(--border-secondary);">';
+        gwHtml += '<div style="height:100%;width:' + memPct + '%;background:' + memBarColor + ';transition:width 0.3s ease;"></div>';
+        gwHtml += '</div></div>';
+      }
+      if (typeof gw.cpu_pct === 'number') {
+        gwHtml += '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">CPU: <span style="color:var(--text-secondary);font-weight:600;">' + gw.cpu_pct + '%</span></div>';
+      }
+      gwHtml += '</div>';
+      gwEl.innerHTML = gwHtml;
+      if (gwWrap) gwWrap.style.display = '';
+    } else if (gwWrap) { gwWrap.style.display = 'none'; }
+
     // Sandbox Status (conditional)
     var sbWrap = document.getElementById('sh-sandbox-wrap');
     var sbEl = document.getElementById('sh-sandbox');

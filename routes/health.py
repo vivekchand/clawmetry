@@ -16,6 +16,7 @@ Owns the 11 routes registered on bp_health:
   GET  /api/health-stream         — SSE auto-refresh of health checks (30s)
   GET  /api/sandbox-status        — sandbox / inference / security posture
   GET  /api/loop-detection        — scan recent sessions for repeated tool-call loops (#849)
+  GET  /api/gateway-health        — OpenClaw gateway process vitals (#852)
 
 Module-level helpers (``_history_db``, ``AgentReliabilityScorer``,
 ``_find_log_file``, ``SESSIONS_DIR``, ``_load_gw_config``, ``_detect_gateway_port``,
@@ -195,6 +196,272 @@ def compute_daemon_health(log_path=None, now=None):
     elif summary["errors_last_5min"] > 0:
         summary["status"] = "degraded"
     return summary
+
+
+# ---------------------------------------------------------------------------
+# Gateway process health (#852).
+#
+# OpenClaw's gateway is a separate process listening on :18789. We already
+# socket-check the port from ``/api/system-health`` — this surface adds
+# process-level vitals (RSS, CPU, uptime) so the user can spot the slow
+# memory-bloat-then-crash pattern (~600 MB → ~945 MB OOM) before the gateway
+# dies. ``psutil`` is preferred when available; otherwise we fall back to a
+# bounded ``ps`` invocation so we don't add a hard dependency for OSS installs
+# that don't ship psutil.
+#
+# Pure helpers — no Flask globals — so they're unit-testable without a server.
+# ---------------------------------------------------------------------------
+
+# Memory bloat threshold. OpenClaw gateway has been observed to crash around
+# 945 MB; 900 MB gives us a ~50 MB cushion to surface "critical" before OOM.
+# warning kicks in at 75% of this (= 675 MB).
+GATEWAY_MEMORY_THRESHOLD_MB = 900
+GATEWAY_MEMORY_WARNING_RATIO = 0.75
+
+
+def _default_gateway_pid_path():
+    """Canonical path to OpenClaw's gateway PID file.
+
+    Honours ``OPENCLAW_HOME`` so multi-workspace setups + tests can override.
+    """
+    home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
+    return os.path.join(home, "gateway", "gateway.pid")
+
+
+def _read_gateway_pid(pid_path=None):
+    """Return the gateway PID as an int, or ``None`` if missing/unreadable.
+
+    The OpenClaw gateway writes its PID to ``~/.openclaw/gateway/gateway.pid``
+    when it starts. We treat any unreadable/garbage file as "no gateway"
+    rather than crashing — same graceful-degrade contract as the rest of
+    ``routes/health.py``.
+    """
+    path = pid_path or _default_gateway_pid_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    # Some daemons write "<pid>\n<extra metadata>" — take just the first token.
+    first = raw.splitlines()[0].strip().split()[0] if raw.split() else ""
+    try:
+        pid = int(first)
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _find_gateway_pid_by_cmdline():
+    """Walk running processes for an ``openclaw-gateway`` cmdline.
+
+    Used as a fallback when the PID file is missing (Docker installs, manual
+    starts, stale PID files). Prefers psutil when available; otherwise runs
+    a bounded ``ps -eo pid,command`` and scans cmdlines.
+    """
+    try:
+        import psutil  # type: ignore
+
+        for p in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                cmd = " ".join(p.info.get("cmdline") or [])
+                if "openclaw-gateway" in cmd or "openclaw/gateway" in cmd:
+                    return int(p.info["pid"])
+            except Exception:
+                continue
+        return None
+    except Exception:
+        pass
+    # ps fallback — wide enough cmdline column to spot the gateway.
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        for line in (out.stdout or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if "openclaw-gateway" not in line and "openclaw/gateway" not in line:
+                continue
+            head = line.split(None, 1)
+            if not head:
+                continue
+            try:
+                return int(head[0])
+            except ValueError:
+                continue
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+    return None
+
+
+def _process_vitals_psutil(pid):
+    """Return ``(uptime_seconds, rss_mb, cpu_pct)`` via psutil, or ``None``."""
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return None
+    try:
+        proc = psutil.Process(pid)
+        # cpu_percent() with interval=None returns the value since the last
+        # call; first call returns 0.0. That's fine — the next /api/system-health
+        # poll (and there will be one ~every 30s) returns a real number.
+        with proc.oneshot():
+            rss_bytes = proc.memory_info().rss
+            create_ts = proc.create_time()
+            cpu_pct = proc.cpu_percent(interval=None)
+    except Exception:
+        return None
+    uptime = max(0, int(time.time() - create_ts))
+    rss_mb = round(rss_bytes / (1024 * 1024), 1)
+    return uptime, rss_mb, round(float(cpu_pct), 1)
+
+
+def _process_vitals_ps(pid):
+    """Return ``(uptime_seconds, rss_mb, cpu_pct)`` via ``ps`` fallback, or ``None``.
+
+    ``ps -o rss=,pcpu=,etime= -p <pid>`` works on macOS + Linux. ``rss`` is
+    in kilobytes; ``etime`` is a duration we parse to seconds.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "rss=,pcpu=,etime=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return None
+    line = (out.stdout or "").strip()
+    if not line:
+        return None
+    parts = line.split()
+    if len(parts) < 3:
+        return None
+    try:
+        rss_kb = int(parts[0])
+        cpu_pct = float(parts[1])
+    except ValueError:
+        return None
+    rss_mb = round(rss_kb / 1024.0, 1)
+    uptime = _parse_etime(parts[2])
+    return uptime, rss_mb, round(cpu_pct, 1)
+
+
+def _parse_etime(etime):
+    """Parse ``ps`` ``etime`` (``[[dd-]hh:]mm:ss``) to seconds, or 0 on garbage."""
+    if not etime:
+        return 0
+    days = 0
+    rest = etime
+    if "-" in rest:
+        d, _, rest = rest.partition("-")
+        try:
+            days = int(d)
+        except ValueError:
+            days = 0
+    parts = rest.split(":")
+    try:
+        parts_i = [int(p) for p in parts]
+    except ValueError:
+        return 0
+    if len(parts_i) == 3:
+        h, m, s = parts_i
+    elif len(parts_i) == 2:
+        h, m, s = 0, parts_i[0], parts_i[1]
+    elif len(parts_i) == 1:
+        h, m, s = 0, 0, parts_i[0]
+    else:
+        return 0
+    return days * 86400 + h * 3600 + m * 60 + s
+
+
+def _classify_gateway_status(rss_mb, threshold_mb):
+    """Memory-pressure classification used by the dashboard badge."""
+    if rss_mb is None:
+        return "not_running"
+    if rss_mb > threshold_mb:
+        return "critical"
+    if rss_mb > threshold_mb * GATEWAY_MEMORY_WARNING_RATIO:
+        return "warning"
+    return "healthy"
+
+
+def compute_gateway_health(
+    pid_path=None,
+    threshold_mb=GATEWAY_MEMORY_THRESHOLD_MB,
+    _psutil_vitals=_process_vitals_psutil,
+    _ps_vitals=_process_vitals_ps,
+    _cmdline_pid=_find_gateway_pid_by_cmdline,
+):
+    """Return the gateway-process health payload documented in issue #852.
+
+    Discovery order:
+      1. PID file at ``~/.openclaw/gateway/gateway.pid``.
+      2. Cmdline scan for ``openclaw-gateway`` (psutil, then ``ps``).
+
+    Vitals source order:
+      1. psutil (rss + cpu + create_time).
+      2. ``ps -o rss=,pcpu=,etime= -p <pid>`` fallback.
+
+    Returns the canonical shape — all keys always present, fields default to
+    ``None`` when the gateway isn't running:
+
+        {
+          "pid": int | null,
+          "uptime_seconds": int | null,
+          "rss_mb": float | null,
+          "cpu_pct": float | null,
+          "status": "healthy" | "warning" | "critical" | "not_running",
+          "memory_threshold_mb": 900,
+        }
+    """
+    payload = {
+        "pid": None,
+        "uptime_seconds": None,
+        "rss_mb": None,
+        "cpu_pct": None,
+        "status": "not_running",
+        "memory_threshold_mb": threshold_mb,
+    }
+    pid = _read_gateway_pid(pid_path)
+    if pid is None:
+        try:
+            pid = _cmdline_pid()
+        except Exception:
+            pid = None
+    if pid is None:
+        return payload
+
+    vitals = None
+    try:
+        vitals = _psutil_vitals(pid)
+    except Exception:
+        vitals = None
+    if vitals is None:
+        try:
+            vitals = _ps_vitals(pid)
+        except Exception:
+            vitals = None
+    if vitals is None:
+        # PID exists but we can't read vitals (process gone between calls,
+        # permission denied, ps not on PATH). Report the PID we found but
+        # leave vitals null — UI still renders "Running, vitals unavailable".
+        payload["pid"] = pid
+        payload["status"] = "warning"
+        return payload
+
+    uptime, rss_mb, cpu_pct = vitals
+    payload["pid"] = pid
+    payload["uptime_seconds"] = uptime
+    payload["rss_mb"] = rss_mb
+    payload["cpu_pct"] = cpu_pct
+    payload["status"] = _classify_gateway_status(rss_mb, threshold_mb)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +980,21 @@ def api_system_health():
             "log_present": False,
         }
 
+    # --- GATEWAY PROCESS HEALTH (#852) ---
+    # Surfaces RSS / CPU / uptime so the ~600MB → ~945MB OOM pattern is
+    # visible from the dashboard, not just by tailing logs.
+    try:
+        gateway_health = compute_gateway_health()
+    except Exception:
+        gateway_health = {
+            "pid": None,
+            "uptime_seconds": None,
+            "rss_mb": None,
+            "cpu_pct": None,
+            "status": "not_running",
+            "memory_threshold_mb": GATEWAY_MEMORY_THRESHOLD_MB,
+        }
+
     return jsonify(
         {
             "services": services,
@@ -730,8 +1012,32 @@ def api_system_health():
             "security": _d._detect_security_metadata(),
             "service_status": service_status,
             "daemon": daemon_health,
+            "gateway": gateway_health,
         }
     )
+
+
+@bp_health.route("/api/gateway-health")
+def api_gateway_health():
+    """Standalone JSON probe for gateway process vitals (#852).
+
+    Mirrors the ``gateway`` block returned by ``/api/system-health`` so an
+    operator (or external monitor) can poll just this surface without
+    pulling the full system-health payload.
+    """
+    try:
+        return jsonify(compute_gateway_health())
+    except Exception:
+        return jsonify(
+            {
+                "pid": None,
+                "uptime_seconds": None,
+                "rss_mb": None,
+                "cpu_pct": None,
+                "status": "not_running",
+                "memory_threshold_mb": GATEWAY_MEMORY_THRESHOLD_MB,
+            }
+        )
 
 
 @bp_health.route("/api/health")
