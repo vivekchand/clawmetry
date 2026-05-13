@@ -2472,6 +2472,326 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
     return total
 
 
+# ── Sync: channel-adapter transcripts (Telegram, Signal, WhatsApp, …) ────────
+#
+# OpenClaw's chat-channel adapters persist inbound/outbound messages to a
+# per-provider directory next to ``agents/``:
+#
+#   ~/.openclaw/telegram/<chat_id>.jsonl
+#   ~/.openclaw/signal/<chat_id>.jsonl
+#   ~/.openclaw/whatsapp/<chat_id>.jsonl
+#   ~/.openclaw/discord/<channel_id>.jsonl
+#   ~/.openclaw/slack/<channel_id>.jsonl
+#   ~/.openclaw/imessage/<chat_id>.jsonl
+#   ~/.openclaw/webchat/<session_id>.jsonl
+#   …                    (one dir per adapter — see routes/channels.py)
+#
+# Until this PR, ``sync.py`` only watched ``agents/main/sessions/`` which made
+# the Brain tab + ``channel_messages`` table miss every chat-channel turn —
+# the user observed "I message Diya on Telegram and ClawMetry shows nothing".
+#
+# DuckDB-first HARD RULE: every event lands in the ``events`` table (so
+# Brain/timeline reads see it) AND, when it parses as a chat turn, in
+# ``channel_messages`` (so per-provider routes in ``routes/channels.py`` see
+# it). No JSONL re-read at request time.
+#
+# The directory layout below is the canonical list maintained alongside the
+# 21 adapter routes in ``routes/channels.py``. If a new adapter ships, add its
+# directory name to ``_CHANNEL_DIRS`` and the daemon will pick it up on the
+# next cycle — no further wiring required.
+_CHANNEL_DIRS: tuple[str, ...] = (
+    "telegram",
+    "signal",
+    "whatsapp",
+    "discord",
+    "slack",
+    "irc",
+    "imessage",
+    "webchat",
+    "googlechat",
+    "msteams",
+    "bluebubbles",
+    "matrix",
+    "mattermost",
+    "line",
+    "nostr",
+    "twitch",
+    "feishu",
+    "zalo",
+    "tlon",
+    "synologychat",
+    "nextcloudtalk",
+)
+
+# Filenames inside ``~/.openclaw/<channel>/`` that are NOT conversation
+# transcripts — they're per-adapter bookkeeping (offset trackers, schema
+# manifests, etc.). Skip them so we don't crash on JSON-object-per-file
+# layouts and don't pollute ``events`` with daemon plumbing.
+_CHANNEL_NON_TRANSCRIPT_BASENAMES: frozenset[str] = frozenset({
+    "update-offset-default.json",
+    "schema.json",
+    "manifest.json",
+})
+
+
+def _list_channel_transcripts(channel_dir: str) -> list[str]:
+    """Return paths to all *transcript* files under a single channel dir.
+
+    A "transcript" is any ``*.jsonl`` (live or archived ``.jsonl.reset.<ts>``);
+    we explicitly skip the per-adapter bookkeeping files listed in
+    ``_CHANNEL_NON_TRANSCRIPT_BASENAMES``. The dashboard read path applies
+    the same exclusion via ``routes/channels.py``.
+    """
+    out: list[str] = []
+    try:
+        for fname in os.listdir(channel_dir):
+            if fname in _CHANNEL_NON_TRANSCRIPT_BASENAMES:
+                continue
+            # We accept .jsonl (live) and .jsonl.reset.<ts> (archived).
+            if fname.endswith(".jsonl") or ".jsonl.reset." in fname:
+                out.append(os.path.join(channel_dir, fname))
+    except OSError:
+        pass
+    return out
+
+
+def _parse_channel_event(
+    obj: dict, *, provider: str, channel_id: str
+) -> tuple[dict | None, dict | None]:
+    """Project one channel-jsonl line into (events_row, channel_messages_row).
+
+    The provider/channel-id are taken from the file path (cheap, robust),
+    and the per-event fields are read from a deliberately permissive set
+    of keys so we accept whatever shape the adapter writes:
+
+    * direction   — ``direction`` | ``"in"`` if a ``from``/``sender`` block
+                    is present | ``"out"`` if an ``assistant`` role / ``to``
+                    block is present. Defaults to ``"in"`` (most adapter
+                    jsonls record inbound first).
+    * body        — first present of ``text`` | ``body`` | ``message`` |
+                    ``content`` (string form) | content[0].text.
+    * sender_id   — ``sender_id`` | ``from.id`` | ``user.id`` | ``user_id``.
+    * sender_name — ``sender_name`` | ``from.username`` | ``from.first_name`` |
+                    ``user.name``.
+    * ts          — ``ts`` | ``timestamp`` | ``date`` (epoch-secs → ISO).
+    * id          — ``id`` | ``message_id`` | ``update_id`` (uniqueness key).
+
+    Returns ``(None, None)`` for lines we can't pin to a timestamp — those
+    are usually heartbeat/keepalive plumbing the adapter writes between
+    real messages. Always returns the events_row when we have a ts (so the
+    Brain tab paints), even if the body is empty.
+    """
+    if not isinstance(obj, dict):
+        return None, None
+
+    # ── ts ───────────────────────────────────────────────────────────────
+    raw_ts = obj.get("ts") or obj.get("timestamp") or obj.get("date")
+    if not raw_ts:
+        return None, None
+    if isinstance(raw_ts, (int, float)):
+        # Telegram/WhatsApp encode date as epoch seconds; coerce so all
+        # downstream sorts work on ISO strings.
+        try:
+            raw_ts = datetime.fromtimestamp(
+                float(raw_ts), tz=timezone.utc
+            ).isoformat()
+        except (ValueError, OSError, OverflowError):
+            return None, None
+    ts = str(raw_ts)
+
+    # ── id (stable across re-ingest) ─────────────────────────────────────
+    raw_id = (
+        obj.get("id")
+        or obj.get("message_id")
+        or obj.get("messageId")
+        or obj.get("update_id")
+        or obj.get("updateId")
+    )
+    if raw_id is None:
+        raw_id = f"{provider}:{channel_id}:{ts}"
+    eid = f"{provider}:{channel_id}:{raw_id}"
+
+    # ── direction ────────────────────────────────────────────────────────
+    direction = obj.get("direction")
+    if direction not in ("in", "out"):
+        if obj.get("role") == "assistant" or obj.get("from_bot") is True:
+            direction = "out"
+        elif obj.get("from") or obj.get("sender") or obj.get("user"):
+            direction = "in"
+        else:
+            direction = "in"
+
+    # ── body ─────────────────────────────────────────────────────────────
+    body = obj.get("text") or obj.get("body") or obj.get("message")
+    if body is None:
+        content = obj.get("content")
+        if isinstance(content, str):
+            body = content
+        elif isinstance(content, list):
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "text":
+                    body = c.get("text") or ""
+                    if body:
+                        break
+    if body is not None:
+        body = str(body)
+
+    # ── sender ───────────────────────────────────────────────────────────
+    sender_block = obj.get("from") or obj.get("sender") or obj.get("user") or {}
+    if not isinstance(sender_block, dict):
+        sender_block = {}
+    sender_id = (
+        obj.get("sender_id")
+        or sender_block.get("id")
+        or obj.get("user_id")
+        or channel_id
+    )
+    sender_name = (
+        obj.get("sender_name")
+        or sender_block.get("username")
+        or sender_block.get("first_name")
+        or sender_block.get("name")
+    )
+
+    events_row = {
+        "id": eid,
+        "agent_id": "main",
+        # Channel turns share the events table with session turns; the
+        # event_type lets the Brain/timeline filters distinguish them.
+        "event_type": f"channel.{direction}",
+        "ts": ts,
+        # session_id stays None — channel messages don't belong to an agent
+        # session (an LLM turn is a separate row). The session_key column
+        # on channel_messages handles correlation when the adapter writes
+        # one.
+        "session_id": None,
+        "workspace_id": None,
+        "data": obj,
+        "cost_usd": None,
+        "token_count": None,
+        "model": None,
+    }
+    channel_row = {
+        "id": eid,
+        "agent_id": "main",
+        "provider": provider,
+        "channel_id": str(channel_id),
+        "sender_id": str(sender_id) if sender_id is not None else None,
+        "sender_name": sender_name,
+        "body": (body[:4000] if body else None),
+        "ts": ts,
+        "direction": direction,
+        "session_key": obj.get("session_id") or obj.get("session_key"),
+        "raw_blob": obj,
+    }
+    return events_row, channel_row
+
+
+def sync_channel_messages(config: dict, state: dict, paths: dict) -> int:
+    """Tail each ``~/.openclaw/<channel>/*.jsonl`` and ingest both events
+    + channel_messages rows into local DuckDB.
+
+    Returns the number of NEW rows ingested this cycle. Idempotent — the
+    PRIMARY KEY on each table absorbs replays. Per-file offsets live in
+    ``state["last_channel_offsets"]`` so we don't re-scan from byte zero
+    on every cycle.
+    """
+    if not _sync_allowed():
+        return 0
+    _record_sync_progress("channel_messages", 0)
+    from clawmetry import local_store
+
+    openclaw_root = Path(_get_openclaw_dir())
+    offsets: dict = state.setdefault("last_channel_offsets", {})
+    store = local_store.get_store()
+    node_id = config["node_id"]
+    total = 0
+
+    for provider in _CHANNEL_DIRS:
+        if total >= MAX_EVENTS_PER_CYCLE:
+            break
+        channel_dir = openclaw_root / provider
+        if not channel_dir.is_dir():
+            continue
+        for fpath in _list_channel_transcripts(str(channel_dir)):
+            if total >= MAX_EVENTS_PER_CYCLE:
+                break
+            fname = os.path.basename(fpath)
+            # Strip both .jsonl and any .reset.<ts> suffix to get the
+            # canonical chat_id (== filename stem). Telegram writes
+            # ``<chat_id>.jsonl``; archived resets share the same chat_id.
+            channel_id = fname.split(".jsonl", 1)[0]
+            offset_key = f"{provider}/{fname}"
+            offset = int(offsets.get(offset_key, 0))
+            events_batch: list[dict] = []
+            channel_batch: list[dict] = []
+
+            try:
+                with open(fpath, "r", errors="replace") as f:
+                    f.seek(0, 2)
+                    size = f.tell()
+                    if offset > size:
+                        # File was rotated/truncated — restart from byte 0
+                        # rather than skip silently. DuckDB PK dedupes
+                        # any replayed messages on the upstream id.
+                        offset = 0
+                    f.seek(offset)
+                    for raw in f:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            obj = json.loads(raw)
+                        except Exception:
+                            continue
+                        ev, ch = _parse_channel_event(
+                            obj, provider=provider, channel_id=channel_id
+                        )
+                        if ev is None:
+                            continue
+                        # Stamp node_id + agent_type onto the events row
+                        # so the dashboard's per-node filters work. The
+                        # store layer fills agent_type='openclaw' by
+                        # default; we pass it explicitly for forward-
+                        # compat with other harnesses' channel adapters.
+                        ev["node_id"] = node_id
+                        ev["agent_type"] = "openclaw"
+                        events_batch.append(ev)
+                        if ch is not None:
+                            channel_batch.append(ch)
+                        if len(events_batch) >= BATCH_SIZE:
+                            break
+                    offsets[offset_key] = f.tell()
+            except OSError as e:
+                log.warning(
+                    "channel sync error (%s/%s): %s", provider, fname, e
+                )
+                continue
+
+            if events_batch:
+                try:
+                    store.ingest_many(events_batch)
+                except Exception as e:
+                    log.warning(
+                        "channel events ingest failed (%s/%s): %s",
+                        provider, fname, e,
+                    )
+            for ch in channel_batch:
+                try:
+                    store.ingest_channel_message(ch)
+                except Exception as e:
+                    # Per-row try/except so a malformed message can't take
+                    # down the whole batch — the events row already landed.
+                    log.debug(
+                        "channel_message ingest skipped (%s/%s): %s",
+                        provider, fname, e,
+                    )
+            total += len(events_batch)
+
+    _record_sync_progress("channel_messages", total, total)
+    return total
+
+
 # ── Sync: logs (full lines, encrypted) ────────────────────────────────────────
 
 
@@ -6266,6 +6586,15 @@ def run_daemon() -> None:
 
             ev = sync_sessions(config, state, paths)
             ev += sync_claude_cli_sessions(config, state, paths)
+            # Tail ~/.openclaw/<channel>/*.jsonl (Telegram, Signal, WhatsApp,
+            # Discord, Slack, …). Until 2026-05-13 this watch path was missing
+            # entirely — the user observed "I message Diya on Telegram and
+            # ClawMetry shows nothing in Brain." Failure is non-fatal: the
+            # next cycle will retry from the saved offset.
+            try:
+                ev += sync_channel_messages(config, state, paths)
+            except Exception as _ce:
+                log.warning(f"channel sync error (non-fatal): {_ce}")
             sm = sync_session_metadata(config, state)
             crons = sync_crons(config, state, paths)
             # Issue #605 DuckDB follow-up: tail cron-run JSONL files into

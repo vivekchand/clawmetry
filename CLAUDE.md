@@ -75,9 +75,14 @@ All HTTP endpoints live here, organised by feature. Each module owns one or more
 
 ## How it works
 1. Reads session transcripts from `~/.openclaw/agents/main/sessions/*.jsonl`
-2. Connects to OpenClaw gateway via WebSocket (JSON-RPC, port 18789) for live data
-3. Optionally receives OpenTelemetry metrics/traces on `/v1/metrics` and `/v1/traces`
-4. Serves dashboard UI at `http://localhost:8900`
+2. Reads chat-channel transcripts from `~/.openclaw/<channel>/*.jsonl` —
+   one directory per adapter (`telegram/`, `signal/`, `whatsapp/`,
+   `discord/`, `slack/`, `irc/`, `imessage/`, `webchat/`, …). The 21
+   adapter directories match the routes in `routes/channels.py`. New
+   adapter? Add its dir name to `_CHANNEL_DIRS` in `clawmetry/sync.py`.
+3. Connects to OpenClaw gateway via WebSocket (JSON-RPC, port 18789) for live data
+4. Optionally receives OpenTelemetry metrics/traces on `/v1/metrics` and `/v1/traces`
+5. Serves dashboard UI at `http://localhost:8900`
 
 ## API Endpoints (key ones)
 - `/api/overview` — Main dashboard data (sessions, tokens, crons, health)
