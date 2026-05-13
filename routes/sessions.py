@@ -460,6 +460,58 @@ def _try_local_store_sessions_by_type(type_filter: str = ""):
     return {"counts": counts, "sessions": filtered, "_source": "local_store"}
 
 
+def _try_local_store_compactions(wanted_sid: str, summary_chars: int, full_summary: bool):
+    """Fast path for /api/compactions. Reads compaction events from DuckDB
+    via :meth:`LocalStore.query_compactions` and projects them into the
+    same shape the JSONL scanner returns.
+
+    Issue #1088 phase 3. Returns ``None`` when the events table has no
+    ``compaction`` rows so the route falls through to the JSONL scan."""
+    rows = _ls_call(
+        "query_compactions",
+        session_id=wanted_sid or None,
+        limit=1000,
+    )
+    if not rows:
+        return None
+    compactions: list = []
+    total_tokens = 0
+    for r in rows:
+        ts = r.get("timestamp") or ""
+        ts_ms = 0
+        if isinstance(ts, str) and ts:
+            try:
+                ts_ms = int(
+                    datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000
+                )
+            except Exception:
+                ts_ms = 0
+        summary = r.get("summary") or ""
+        tokens_before = int(r.get("tokens_before") or 0)
+        total_tokens += tokens_before
+        entry = {
+            "session_id":          r.get("session_id") or "",
+            "timestamp":           ts,
+            "ts_ms":               ts_ms,
+            "tokens_before":       tokens_before,
+            "first_kept_entry_id": r.get("first_kept_entry_id") or "",
+            "from_hook":           bool(r.get("from_hook")),
+        }
+        if full_summary or len(summary) <= summary_chars:
+            entry["summary"] = summary
+        else:
+            entry["summary"] = summary[:summary_chars]
+            entry["summary_truncated"] = True
+        compactions.append(entry)
+    compactions.sort(key=lambda c: c.get("ts_ms", 0), reverse=True)
+    return {
+        "compactions":            compactions,
+        "total_compactions":      len(compactions),
+        "total_tokens_compacted": total_tokens,
+        "_source":                "local_store",
+    }
+
+
 @bp_sessions.route("/api/compactions")
 def api_compactions():
     """Return OpenClaw session-compaction events.
@@ -481,6 +533,11 @@ def api_compactions():
     except ValueError:
         summary_chars = 500
     full_summary = bool(wanted_sid)
+
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_compactions(wanted_sid, summary_chars, full_summary)
+        if fast is not None:
+            return jsonify(fast)
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
@@ -567,6 +624,147 @@ def api_compactions():
     })
 
 
+def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
+                                   include_unpaired: bool):
+    """Fast path for /api/session-tools. Reads message events for one
+    session from DuckDB and pairs ``toolCall`` / ``toolResult`` blocks into
+    the same timeline shape the JSONL parser returns.
+
+    Issue #1088 phase 3. Returns ``None`` to defer to the JSONL parser
+    when the events table has no message rows for this session."""
+    rows = _ls_call("query_events", session_id=sid, limit=10000)
+    if not rows:
+        return None
+    rows = list(reversed(rows))  # query_events returns DESC
+
+    def _parse_ts(ts):
+        if not ts or not isinstance(ts, str):
+            return 0
+        try:
+            return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000)
+        except Exception:
+            return 0
+
+    def _truncate(val, limit):
+        if limit <= 0 or val is None:
+            return val
+        if isinstance(val, str):
+            return val if len(val) <= limit else val[:limit] + "…"
+        try:
+            s = json.dumps(val, separators=(",", ":"))
+        except Exception:
+            s = str(val)
+        return s if len(s) <= limit else s[:limit] + "…"
+
+    calls: dict = {}
+    result_by_id: dict = {}
+    turn_index = 0
+    saw_message = False
+    for ev in rows:
+        if ev.get("event_type") != "message":
+            continue
+        saw_message = True
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+        role = msg.get("role", "")
+        ev_ts_ms = _parse_ts(data.get("timestamp") or ev.get("ts"))
+        if role == "assistant":
+            turn_index += 1
+            content = msg.get("content") or []
+            if not isinstance(content, list):
+                continue
+            usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+            cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
+            msg_cost = float(cost_obj.get("total", 0) or 0)
+            msg_model = msg.get("model", "")
+            msg_provider = msg.get("provider", "")
+            for blk in content:
+                if not isinstance(blk, dict) or blk.get("type") != "toolCall":
+                    continue
+                tcid = blk.get("id", "")
+                if not tcid:
+                    continue
+                calls[tcid] = {
+                    "tool_call_id":     tcid,
+                    "tool_name":        blk.get("name", ""),
+                    "arguments":        _truncate(blk.get("arguments"), args_chars),
+                    "start_ms":         ev_ts_ms,
+                    "turn_index":       turn_index,
+                    "model":            msg_model,
+                    "provider":         msg_provider,
+                    "message_cost_usd": msg_cost,
+                }
+        elif role == "toolResult":
+            tcid = msg.get("toolCallId", "")
+            if not tcid:
+                continue
+            details = msg.get("details")
+            result_by_id[tcid] = {
+                "end_ms":         ev_ts_ms,
+                "is_error":       bool(msg.get("isError", False)),
+                "result_size":    len(json.dumps(details)) if details is not None else 0,
+                "result_preview": _truncate(details, result_chars),
+            }
+    if not saw_message:
+        return None
+
+    tools: list = []
+    tool_counts: dict = {}
+    for tcid, call in calls.items():
+        res = result_by_id.get(tcid)
+        if not res and not include_unpaired:
+            continue
+        rec = dict(call)
+        if res:
+            rec["end_ms"] = res["end_ms"]
+            rec["duration_ms"] = max(0, res["end_ms"] - call["start_ms"]) if res["end_ms"] and call["start_ms"] else 0
+            rec["is_error"] = res["is_error"]
+            rec["result_size"] = res["result_size"]
+            rec["result_preview"] = res["result_preview"]
+            rec["paired"] = True
+        else:
+            rec["end_ms"] = 0
+            rec["duration_ms"] = 0
+            rec["is_error"] = False
+            rec["result_size"] = 0
+            rec["result_preview"] = None
+            rec["paired"] = False
+        tools.append(rec)
+        tn = rec["tool_name"] or "unknown"
+        agg = tool_counts.setdefault(tn, {"calls": 0, "errors": 0,
+                                          "total_duration_ms": 0,
+                                          "total_cost_usd": 0.0})
+        agg["calls"] += 1
+        if rec["is_error"]:
+            agg["errors"] += 1
+        agg["total_duration_ms"] += rec["duration_ms"]
+        agg["total_cost_usd"] += float(rec.get("message_cost_usd") or 0.0)
+
+    tools.sort(key=lambda r: r.get("start_ms", 0))
+    by_tool = [
+        {"tool_name": k, **v,
+         "error_rate_pct": round(v["errors"] / v["calls"] * 100, 1) if v["calls"] else 0}
+        for k, v in sorted(tool_counts.items(), key=lambda kv: -kv[1]["calls"])
+    ]
+    first_start = min((r["start_ms"] for r in tools if r.get("start_ms")), default=0)
+    last_end = max((r.get("end_ms", 0) for r in tools), default=0)
+    return {
+        "session_id": sid,
+        "tools": tools,
+        "by_tool": by_tool,
+        "stats": {
+            "total_calls":     len(tools),
+            "paired_calls":    sum(1 for r in tools if r.get("paired")),
+            "error_calls":     sum(1 for r in tools if r.get("is_error")),
+            "distinct_tools":  len(tool_counts),
+            "first_start_ms":  first_start,
+            "last_end_ms":     last_end,
+            "span_ms":         max(0, last_end - first_start) if first_start and last_end else 0,
+        },
+        "_source": "local_store",
+    }
+
+
 @bp_sessions.route("/api/session-tools")
 def api_session_tools():
     """Return the tool_call / tool_result timeline for a single session."""
@@ -585,6 +783,12 @@ def api_session_tools():
     include_unpaired = str(request.args.get("include_unpaired", "")).lower() in (
         "1", "true", "yes"
     )
+
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_session_tools(sid, args_chars, result_chars, include_unpaired)
+        if fast is not None:
+            return jsonify(fast)
+
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
@@ -730,6 +934,46 @@ def api_session_tools():
     })
 
 
+def _try_local_store_cost_split(wanted_sid: str, limit: int):
+    """Fast path for /api/cost-split. Reads per-session token + cost
+    aggregates from DuckDB via :meth:`LocalStore.query_cost_split` and
+    rolls them into the same ``{sessions, totals}`` shape the JSONL
+    walker returns.
+
+    Issue #1088 phase 3. Returns ``None`` when the events table has no
+    message rows so the route falls through to the JSONL walker."""
+    rows = _ls_call(
+        "query_cost_split",
+        session_id=wanted_sid or None,
+        limit=limit,
+    )
+    if not rows:
+        return None
+    # Compute totals (mirrors the legacy path's aggregation).
+    totals = {
+        "input_tokens":         sum(r["input_tokens"] for r in rows),
+        "output_tokens":        sum(r["output_tokens"] for r in rows),
+        "cache_read_tokens":    sum(r["cache_read_tokens"] for r in rows),
+        "cache_write_tokens":   sum(r["cache_write_tokens"] for r in rows),
+        "total_tokens":         sum(r["total_tokens"] for r in rows),
+        "input_cost_usd":       round(sum(r["input_cost_usd"] for r in rows), 4),
+        "output_cost_usd":      round(sum(r["output_cost_usd"] for r in rows), 4),
+        "cache_read_cost_usd":  round(sum(r["cache_read_cost_usd"] for r in rows), 4),
+        "cache_write_cost_usd": round(sum(r["cache_write_cost_usd"] for r in rows), 4),
+        "total_cost_usd":       round(sum(r["total_cost_usd"] for r in rows), 4),
+        "session_count":        len(rows),
+    }
+    tot_in_cache = totals["input_tokens"] + totals["cache_read_tokens"]
+    totals["cache_hit_ratio_pct"] = (
+        round(totals["cache_read_tokens"] / tot_in_cache * 100, 1)
+        if tot_in_cache else 0.0
+    )
+    if wanted_sid:
+        # Single-session lookup returns the session list as-is, no totals.
+        return {"sessions": rows, "totals": {}, "_source": "local_store"}
+    return {"sessions": rows, "totals": totals, "_source": "local_store"}
+
+
 @bp_sessions.route("/api/cost-split")
 def api_cost_split():
     """Per-token-type token + cost breakdown per session.
@@ -744,6 +988,12 @@ def api_cost_split():
         limit = max(1, min(int(request.args.get("limit", "30")), 500))
     except ValueError:
         limit = 30
+
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_cost_split(wanted_sid, limit)
+        if fast is not None:
+            return jsonify(fast)
+
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )
@@ -2309,6 +2559,132 @@ def api_transcript_events(session_id):
     )
 
 
+def _try_local_store_session_model_journey(session_id: str):
+    """Fast path for /api/session-model-journey/<id>. Reads ordered
+    model_change / thinking_level_change / message rows from DuckDB via
+    :meth:`LocalStore.query_session_model_journey` and folds them into
+    the same ``segments`` shape the JSONL walker produces.
+
+    Issue #1088 phase 3. Returns ``None`` when the events table has no
+    matching rows so the route falls through to the JSONL walker."""
+    rows = _ls_call(
+        "query_session_model_journey",
+        session_id=session_id,
+        limit=5000,
+    )
+    if not rows:
+        return None
+
+    def _parse_ts(ts):
+        if not ts:
+            return 0
+        if isinstance(ts, (int, float)):
+            return int(ts * 1000) if ts < 1e12 else int(ts)
+        try:
+            return int(
+                datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp() * 1000
+            )
+        except Exception:
+            return 0
+
+    segments: list = []
+    thinking_changes: list = []
+    current_model = ""
+    current_provider = ""
+    seg_start_ms = 0
+    seg_tokens = 0
+    seg_cost = 0.0
+    first_ts = 0
+    last_ts = 0
+
+    for r in rows:
+        ts_ms = _parse_ts(r.get("ts"))
+        if ts_ms and not first_ts:
+            first_ts = ts_ms
+        if ts_ms:
+            last_ts = ts_ms
+        kind = r.get("kind")
+        if kind == "model_change":
+            new_model = r.get("model") or ""
+            new_provider = r.get("provider") or ""
+            if not new_model:
+                continue
+            if current_model:
+                segments.append({
+                    "modelId":     current_model,
+                    "provider":    current_provider,
+                    "start_ms":    seg_start_ms,
+                    "end_ms":      ts_ms or last_ts,
+                    "duration_ms": max(0, (ts_ms or last_ts) - seg_start_ms) if seg_start_ms else 0,
+                    "tokens":      seg_tokens,
+                    "cost_usd":    round(seg_cost, 6),
+                })
+            current_model = new_model
+            current_provider = new_provider
+            seg_start_ms = ts_ms
+            seg_tokens = 0
+            seg_cost = 0.0
+        elif kind == "thinking_level_change":
+            thinking_changes.append({
+                "thinkingLevel": r.get("level") or "",
+                "timestamp_ms":  ts_ms,
+            })
+        else:  # message
+            msg_model = r.get("model") or ""
+            if msg_model and not current_model:
+                current_model = msg_model
+                current_provider = r.get("provider") or ""
+                seg_start_ms = ts_ms or first_ts
+            elif msg_model and msg_model != current_model:
+                if current_model:
+                    segments.append({
+                        "modelId":     current_model,
+                        "provider":    current_provider,
+                        "start_ms":    seg_start_ms,
+                        "end_ms":      ts_ms or last_ts,
+                        "duration_ms": max(0, (ts_ms or last_ts) - seg_start_ms) if seg_start_ms else 0,
+                        "tokens":      seg_tokens,
+                        "cost_usd":    round(seg_cost, 6),
+                    })
+                current_model = msg_model
+                current_provider = r.get("provider") or ""
+                seg_start_ms = ts_ms
+                seg_tokens = 0
+                seg_cost = 0.0
+            seg_tokens += int(r.get("total_tokens") or 0)
+            seg_cost += float(r.get("total_cost") or 0)
+
+    if current_model:
+        segments.append({
+            "modelId":     current_model,
+            "provider":    current_provider,
+            "start_ms":    seg_start_ms,
+            "end_ms":      last_ts,
+            "duration_ms": max(0, last_ts - seg_start_ms) if seg_start_ms else 0,
+            "tokens":      seg_tokens,
+            "cost_usd":    round(seg_cost, 6),
+        })
+
+    total_tokens = sum(s["tokens"] for s in segments)
+    total_cost = sum(s["cost_usd"] for s in segments)
+    total_duration = max(0, last_ts - first_ts) if first_ts and last_ts else 0
+    return {
+        "session_id":       session_id,
+        "segments":         segments,
+        "thinking_changes": thinking_changes,
+        "stats": {
+            "total_models_used":  len({s["modelId"] for s in segments}),
+            "total_segments":     len(segments),
+            "total_tokens":       total_tokens,
+            "total_cost_usd":     round(total_cost, 6),
+            "total_duration_ms":  total_duration,
+            "first_ts":           first_ts,
+            "last_ts":            last_ts,
+        },
+        "_source": "local_store",
+    }
+
+
 @bp_sessions.route("/api/session-model-journey/<session_id>")
 def api_session_model_journey(session_id):
     """Return the ordered model journey for a session.
@@ -2320,6 +2696,10 @@ def api_session_model_journey(session_id):
     in the session detail modal.
     """
     import dashboard as _d
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_session_model_journey(session_id)
+        if fast is not None:
+            return jsonify(fast)
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )

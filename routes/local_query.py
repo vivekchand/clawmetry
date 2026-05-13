@@ -299,6 +299,11 @@ _DAEMON_METHODS = frozenset({
     "query_subagents",
     "query_memory_blobs",
     "query_system_snapshots",
+    # Phase 3 (issue #1088 follow-up, 2026-05-13): per-feature aggregation
+    # helpers powering the next batch of Bypass-Medium fast-paths.
+    "query_compactions",
+    "query_cost_split",
+    "query_session_model_journey",
     "health",
 })
 

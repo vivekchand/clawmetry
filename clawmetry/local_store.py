@@ -789,7 +789,15 @@ class LocalStore:
             ])
 
     def ingest_cron(self, cron: dict[str, Any]) -> None:
-        """Upsert one cron-job row. Required: cron_id."""
+        """Upsert one cron-job row. Required: cron_id.
+
+        Dict-shaped ``schedule`` values (the gateway shape:
+        ``{kind:'every', everyMs:60000}``) are JSON-encoded before storing
+        so ``_row_to_cron_job`` in ``routes/crons.py`` can decode them
+        back. Without this, DuckDB's default ``str(dict)`` representation
+        is not valid JSON and downstream consumers (e.g.
+        ``/api/agent-intentions`` schedule-kind projection) lose the
+        ``kind``/``everyMs`` fields needed to compute firings."""
         cid = cron.get("cron_id")
         if not cid:
             raise ValueError("cron must include 'cron_id'")
@@ -799,6 +807,9 @@ class LocalStore:
                                            "name", "schedule", "enabled",
                                            "last_run_at", "last_status",
                                            "next_run_at"}})
+        schedule = cron.get("schedule")
+        if isinstance(schedule, (dict, list)):
+            schedule = json.dumps(schedule, separators=(",", ":"))
         now_ms = int(time.time() * 1000)
         with self._write_lock:
             self._conn.execute("""
@@ -817,7 +828,7 @@ class LocalStore:
                     data         = COALESCE(excluded.data, crons.data),
                     updated_at   = excluded.updated_at
             """, [atype, cid, cron.get("agent_id") or "main",
-                  cron.get("name"), cron.get("schedule"),
+                  cron.get("name"), schedule,
                   bool(cron.get("enabled", True)),
                   cron.get("last_run_at"), cron.get("last_status"),
                   cron.get("next_run_at"), data_blob, now_ms])
@@ -1667,6 +1678,223 @@ class LocalStore:
                     meta = {}
             d["metadata"] = meta
             out.append(d)
+        return out
+
+    def query_compactions(
+        self,
+        *,
+        session_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Read OpenClaw compaction events (issue #1088 phase 3).
+
+        Compaction events live in the ``events`` table with
+        ``event_type='compaction'``. Their ``data`` blob carries the
+        original transcript shape: ``{type:"compaction", summary:"...",
+        tokensBefore:N, firstKeptEntryId:"...", fromHook:bool,
+        timestamp:"..."}``. This helper projects them into the row shape
+        ``/api/compactions`` returns so the route doesn't need to re-decode.
+
+        ``session_id`` filters to one session (returns full summary text).
+        Defaults to most-recent first."""
+        clauses: list[str] = ["event_type = 'compaction'"]
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT session_id, ts, data
+            FROM events
+            {where}
+            ORDER BY ts DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            sid, ts, raw = r
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    data = {}
+            out.append({
+                "session_id":          sid,
+                "timestamp":           data.get("timestamp") or ts or "",
+                "summary":             data.get("summary") or "",
+                "tokens_before":       int(data.get("tokensBefore") or data.get("tokens_before") or 0),
+                "first_kept_entry_id": data.get("firstKeptEntryId") or data.get("first_kept_entry_id") or "",
+                "from_hook":           bool(data.get("fromHook") or data.get("from_hook") or False),
+            })
+        return out
+
+    def query_cost_split(
+        self,
+        *,
+        session_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Per-session input/output/cache token + cost split (issue #1088 phase 3).
+
+        Aggregates ``message`` events by ``session_id`` extracting the
+        ``data.message.usage`` block — the same structure
+        ``/api/cost-split`` walks the JSONL for. Returns one row per
+        session ordered by total cost descending.
+
+        ``session_id`` filters to one session (limit ignored). Otherwise
+        returns the top ``limit`` sessions by total cost."""
+        clauses: list[str] = ["event_type = 'message'"]
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT session_id, model, data
+            FROM events
+            {where}
+            ORDER BY ts ASC
+        """
+        # Aggregate in Python — DuckDB's JSON extraction would work but we
+        # want consistent decoding with query_events (which Python already
+        # does), and the row counts here are bounded by limit*~200 turns.
+        per_session: dict[str, dict[str, Any]] = {}
+        for sid, model, raw in self._fetch(sql, params):
+            if not sid:
+                continue
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    data = {}
+            msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+            usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+            if not usage:
+                continue
+            agg = per_session.setdefault(sid, {
+                "session_id":          sid,
+                "primary_model":       "",
+                "input_tokens":        0,
+                "output_tokens":       0,
+                "cache_read_tokens":   0,
+                "cache_write_tokens":  0,
+                "input_cost_usd":      0.0,
+                "output_cost_usd":     0.0,
+                "cache_read_cost_usd": 0.0,
+                "cache_write_cost_usd": 0.0,
+                "total_cost_usd":      0.0,
+                "_model_tokens":       {},
+            })
+            agg["input_tokens"]       += int(usage.get("input", 0) or 0)
+            agg["output_tokens"]      += int(usage.get("output", 0) or 0)
+            agg["cache_read_tokens"]  += int(usage.get("cacheRead", 0) or 0)
+            agg["cache_write_tokens"] += int(usage.get("cacheWrite", 0) or 0)
+            cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
+            agg["input_cost_usd"]      += float(cost_obj.get("input", 0) or 0)
+            agg["output_cost_usd"]     += float(cost_obj.get("output", 0) or 0)
+            agg["cache_read_cost_usd"] += float(cost_obj.get("cacheRead", 0) or 0)
+            agg["cache_write_cost_usd"] += float(cost_obj.get("cacheWrite", 0) or 0)
+            agg["total_cost_usd"]      += float(cost_obj.get("total", 0) or 0)
+            mt = int(usage.get("totalTokens", 0) or 0)
+            mm = msg.get("model") or model or ""
+            if mt and mm:
+                agg["_model_tokens"][mm] = agg["_model_tokens"].get(mm, 0) + mt
+        out: list[dict[str, Any]] = []
+        for agg in per_session.values():
+            mt = agg.pop("_model_tokens", {})
+            agg["primary_model"] = (
+                max(mt.items(), key=lambda kv: kv[1])[0] if mt else ""
+            )
+            agg["total_tokens"] = (
+                agg["input_tokens"] + agg["output_tokens"]
+                + agg["cache_read_tokens"] + agg["cache_write_tokens"]
+            )
+            input_plus_cache = agg["input_tokens"] + agg["cache_read_tokens"]
+            agg["cache_hit_ratio_pct"] = (
+                round(agg["cache_read_tokens"] / input_plus_cache * 100, 1)
+                if input_plus_cache else 0.0
+            )
+            # Round cost fields to 6 decimals for consistency with the legacy path.
+            for k in ("input_cost_usd", "output_cost_usd", "cache_read_cost_usd",
+                      "cache_write_cost_usd", "total_cost_usd"):
+                agg[k] = round(agg[k], 6)
+            out.append(agg)
+        out.sort(key=lambda r: r.get("total_cost_usd", 0), reverse=True)
+        if session_id:
+            return out
+        return out[:int(limit)]
+
+    def query_session_model_journey(
+        self,
+        *,
+        session_id: str,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        """Ordered model + message events for one session (issue #1088 phase 3).
+
+        Returns rows ordered by timestamp ASC, each carrying enough fields
+        to drive ``/api/session-model-journey`` segment computation:
+          * model_change rows: ``{kind:'model_change', model, provider, ts}``
+          * message rows:      ``{kind:'message', model, provider, total_tokens, total_cost, ts}``
+          * thinking rows:     ``{kind:'thinking_level_change', level, ts}``
+
+        Single-session helper — caller passes ``session_id``. Uses the
+        existing events table; no new schema required."""
+        if not session_id:
+            return []
+        sql = """
+            SELECT event_type, ts, data, model
+            FROM events
+            WHERE session_id = ?
+              AND event_type IN ('model_change', 'message', 'thinking_level_change')
+            ORDER BY ts ASC, id ASC
+            LIMIT ?
+        """
+        out: list[dict[str, Any]] = []
+        for et, ts, raw, ev_model in self._fetch(sql, [session_id, int(limit)]):
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    data = {}
+            if et == "model_change":
+                out.append({
+                    "kind":      "model_change",
+                    "model":     data.get("modelId") or data.get("model") or ev_model or "",
+                    "provider":  data.get("provider") or "",
+                    "ts":        ts,
+                })
+            elif et == "thinking_level_change":
+                out.append({
+                    "kind":  "thinking_level_change",
+                    "level": data.get("thinkingLevel") or data.get("level") or "",
+                    "ts":    ts,
+                })
+            else:  # message
+                msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+                usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+                cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
+                out.append({
+                    "kind":         "message",
+                    "model":        msg.get("model") or ev_model or "",
+                    "provider":     msg.get("provider") or "",
+                    "total_tokens": int(usage.get("totalTokens", 0) or 0),
+                    "total_cost":   float(cost_obj.get("total", 0) or 0),
+                    "ts":           ts,
+                })
         return out
 
     def query_aggregates(

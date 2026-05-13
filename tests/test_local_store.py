@@ -410,3 +410,176 @@ def test_get_store_ro_first_isolated(tmp_path, monkeypatch):
     assert reader._read_only is True
     rows = reader.query_events(limit=5)
     assert len(rows) == 1
+
+
+# ── phase-3 query helpers (issue #1088 follow-up, 2026-05-13) ─────────────
+
+
+def test_query_compactions_round_trip(store):
+    """compaction events round-trip back as projected rows with summary,
+    tokens_before, first_kept_entry_id, and from_hook fields."""
+    store.ingest(_ev(
+        id="cmp-1",
+        session_id="sess-cmp",
+        event_type="compaction",
+        ts="2026-05-12T10:00:00Z",
+        data={
+            "type": "compaction",
+            "timestamp": "2026-05-12T10:00:00Z",
+            "summary": "Compacted 12 messages → 2K-token summary",
+            "tokensBefore": 8500,
+            "firstKeptEntryId": "ent-42",
+            "fromHook": True,
+        },
+    ))
+    store.ingest(_ev(
+        id="cmp-2",
+        session_id="sess-other",
+        event_type="compaction",
+        ts="2026-05-12T11:00:00Z",
+        data={"type": "compaction", "summary": "later one",
+              "tokensBefore": 100, "firstKeptEntryId": "", "fromHook": False},
+    ))
+    _wait_for_flush(store)
+
+    rows = store.query_compactions()
+    assert len(rows) == 2
+    # Most-recent first.
+    assert rows[0]["session_id"] == "sess-other"
+    assert rows[1]["session_id"] == "sess-cmp"
+    assert rows[1]["summary"].startswith("Compacted")
+    assert rows[1]["tokens_before"] == 8500
+    assert rows[1]["first_kept_entry_id"] == "ent-42"
+    assert rows[1]["from_hook"] is True
+
+    # session_id filter narrows.
+    only_one = store.query_compactions(session_id="sess-cmp")
+    assert [r["session_id"] for r in only_one] == ["sess-cmp"]
+
+
+def test_query_cost_split_aggregates_per_session(store):
+    """Two assistant turns in the same session aggregate into one cost-split
+    row with summed tokens + costs and a primary_model derived from the
+    most-used model."""
+    for i in range(2):
+        store.ingest(_ev(
+            id=f"cs-{i}",
+            session_id="sess-cs",
+            event_type="message",
+            ts=f"2026-05-12T10:0{i}:00Z",
+            model="claude-opus-4-7",
+            data={
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-opus-4-7",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "usage": {
+                        "input": 1000, "output": 500,
+                        "cacheRead": 2000, "cacheWrite": 100,
+                        "totalTokens": 3600,
+                        "cost": {"input": 0.01, "output": 0.02,
+                                 "cacheRead": 0.001, "cacheWrite": 0.0005,
+                                 "total": 0.0315},
+                    },
+                },
+            },
+        ))
+    # A different session that should appear as a second row.
+    store.ingest(_ev(
+        id="cs-other",
+        session_id="sess-cs-other",
+        event_type="message",
+        ts="2026-05-12T10:05:00Z",
+        model="claude-haiku-4",
+        data={
+            "type": "message",
+            "message": {
+                "role": "assistant", "model": "claude-haiku-4",
+                "content": [{"type": "text", "text": "x"}],
+                "usage": {"input": 100, "output": 50, "totalTokens": 150,
+                          "cost": {"total": 0.001, "input": 0.0007, "output": 0.0003}},
+            },
+        },
+    ))
+    _wait_for_flush(store)
+
+    rows = store.query_cost_split()
+    assert len(rows) == 2
+    by_sid = {r["session_id"]: r for r in rows}
+    aggregated = by_sid["sess-cs"]
+    assert aggregated["primary_model"] == "claude-opus-4-7"
+    assert aggregated["input_tokens"] == 2000
+    assert aggregated["output_tokens"] == 1000
+    assert aggregated["cache_read_tokens"] == 4000
+    assert aggregated["cache_write_tokens"] == 200
+    assert aggregated["total_tokens"] == 7200
+    assert aggregated["total_cost_usd"] == pytest.approx(0.063, abs=1e-6)
+    # Cache hit ratio = cache_read / (input + cache_read) = 4000 / 6000 = 66.7%
+    assert aggregated["cache_hit_ratio_pct"] == pytest.approx(66.7, abs=0.1)
+    # Single-session lookup ignores aggregations from other sessions.
+    only = store.query_cost_split(session_id="sess-cs")
+    assert len(only) == 1
+    assert only[0]["session_id"] == "sess-cs"
+
+
+def test_query_session_model_journey_orders_segments(store):
+    """model_change + assistant message events emerge in timestamp order with
+    kind tags so the route can fold them into segments."""
+    store.ingest(_ev(
+        id="mj-mc-1",
+        session_id="sess-mj",
+        event_type="model_change",
+        ts="2026-05-12T10:00:00Z",
+        data={"modelId": "claude-sonnet-4-5", "provider": "anthropic"},
+    ))
+    store.ingest(_ev(
+        id="mj-msg-1",
+        session_id="sess-mj",
+        event_type="message",
+        ts="2026-05-12T10:01:00Z",
+        model="claude-sonnet-4-5",
+        data={
+            "type": "message",
+            "message": {
+                "role": "assistant", "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": {"totalTokens": 200, "cost": {"total": 0.003}},
+            },
+        },
+    ))
+    store.ingest(_ev(
+        id="mj-think-1",
+        session_id="sess-mj",
+        event_type="thinking_level_change",
+        ts="2026-05-12T10:02:00Z",
+        data={"thinkingLevel": "high"},
+    ))
+    store.ingest(_ev(
+        id="mj-mc-2",
+        session_id="sess-mj",
+        event_type="model_change",
+        ts="2026-05-12T10:03:00Z",
+        data={"modelId": "claude-opus-4-7", "provider": "anthropic"},
+    ))
+    # Different session — should not appear in the result.
+    store.ingest(_ev(
+        id="mj-other",
+        session_id="sess-other",
+        event_type="model_change",
+        ts="2026-05-12T10:04:00Z",
+        data={"modelId": "x", "provider": "y"},
+    ))
+    _wait_for_flush(store)
+
+    rows = store.query_session_model_journey(session_id="sess-mj")
+    assert [r["kind"] for r in rows] == [
+        "model_change", "message", "thinking_level_change", "model_change"
+    ]
+    assert rows[0]["model"] == "claude-sonnet-4-5"
+    assert rows[1]["total_tokens"] == 200
+    assert rows[1]["total_cost"] == pytest.approx(0.003, abs=1e-6)
+    assert rows[2]["level"] == "high"
+    assert rows[3]["model"] == "claude-opus-4-7"
+    # Empty session_id returns nothing rather than scanning the table.
+    assert store.query_session_model_journey(session_id="") == []
