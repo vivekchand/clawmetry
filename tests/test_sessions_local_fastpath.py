@@ -19,6 +19,14 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
+    # Isolate the on-disk sessions dir so the unregistered-JSONL merge
+    # (added 2026-05-13) doesn't surface random files from the dev's
+    # ~/.openclaw workspace into these unit tests.
+    empty_sessions = tmp_path / "sessions_empty"
+    empty_sessions.mkdir()
+    monkeypatch.setenv("OPENCLAW_SESSIONS_DIR", str(empty_sessions))
+    import dashboard as _d
+    monkeypatch.setattr(_d, "SESSIONS_DIR", str(empty_sessions), raising=False)
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -117,3 +125,103 @@ def test_sessions_fast_path_disabled_without_flag(tmp_path, monkeypatch):
         store.stop(flush=True)
     except Exception:
         pass
+
+
+def test_sessions_api_discovers_unregistered(tmp_path, monkeypatch):
+    """A `<uuid>.jsonl` dropped into the sessions dir but NOT yet registered
+    in `sessions.json` (or any gateway / WS source) must still appear in
+    `/api/sessions`. Regression for MOAT_E2E_REPORT_2026-05-13 root-cause #3:
+    new sessions were invisible until OpenClaw's registrar caught up.
+    """
+    import json as _json
+
+    # Isolate dashboard's SESSIONS_DIR onto a tmp path so we don't depend on
+    # whatever the dev's machine has under ~/.openclaw.
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    monkeypatch.setenv("OPENCLAW_SESSIONS_DIR", str(sessions_dir))
+
+    # Disable both fast paths so the test exercises the JSONL-merge branch.
+    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+
+    # Import dashboard FIRST so module-level SESSIONS_DIR sees our env var.
+    import dashboard as _d
+    _d.SESSIONS_DIR = str(sessions_dir)
+
+    # Stub gateway + WS-fallback to return nothing — forces the route into
+    # the file-based path that the merge augments.
+    monkeypatch.setattr(_d, "_gw_invoke", lambda *a, **kw: None)
+    monkeypatch.setattr(_d, "_get_sessions", lambda: [])
+    monkeypatch.setattr(_d, "_augment_sessions_with_burn", lambda s: s)
+
+    # Drop a JSONL with no entry in sessions.json — simulates a brand-new
+    # session whose registrar hasn't run yet.
+    sid = "f00dface-1111-2222-3333-444455556666"
+    jsonl = sessions_dir / f"{sid}.jsonl"
+    jsonl.write_text(_json.dumps({
+        "type": "session", "id": sid,
+        "timestamp": "2026-05-13T10:00:00Z",
+    }) + "\n")
+
+    # Trajectory + deleted variants must NOT show up.
+    (sessions_dir / f"{sid}.trajectory.jsonl").write_text("{}\n")
+    (sessions_dir / "deadbeef-deleted.jsonl").write_text("{}\n")
+
+    import routes.sessions as sessions_mod
+    importlib.reload(sessions_mod)
+
+    a = Flask(__name__)
+    a.register_blueprint(sessions_mod.bp_sessions)
+    r = a.test_client().get("/api/sessions")
+    assert r.status_code == 200
+    body = r.get_json() or {}
+    sids = {s.get("sessionId") or s.get("session_id") for s in body.get("sessions", [])}
+    assert sid in sids, f"unregistered JSONL not surfaced: got {sids}"
+
+    # Find our row and assert the unregistered marker is set.
+    row = next(
+        s for s in body["sessions"]
+        if (s.get("sessionId") or s.get("session_id")) == sid
+    )
+    assert row.get("displayName") == "(unregistered)"
+    assert row.get("_source") == "filesystem_unregistered"
+
+    # Trajectory / deleted variants stayed out.
+    assert not any(".trajectory" in (sid_ or "") for sid_ in sids)
+    assert not any("deleted" in (sid_ or "") for sid_ in sids)
+
+
+def test_sessions_api_does_not_duplicate_registered(tmp_path, monkeypatch):
+    """When a JSONL is registered AND on disk, the merge must NOT duplicate
+    it — the registered row takes precedence (matches by sessionId / key).
+    """
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    monkeypatch.setenv("OPENCLAW_SESSIONS_DIR", str(sessions_dir))
+    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+
+    import dashboard as _d
+    _d.SESSIONS_DIR = str(sessions_dir)
+
+    sid = "deadbeef-aaaa-bbbb-cccc-dddddddddddd"
+    (sessions_dir / f"{sid}.jsonl").write_text("{}\n")
+
+    # Gateway returns the same session — merge must not add a second copy.
+    monkeypatch.setattr(_d, "_gw_invoke", lambda *a, **kw: {
+        "sessions": [{"sessionId": sid, "displayName": "Real Session", "key": sid}],
+    })
+    monkeypatch.setattr(_d, "_augment_sessions_with_burn", lambda s: s)
+
+    import routes.sessions as sessions_mod
+    importlib.reload(sessions_mod)
+
+    a = Flask(__name__)
+    a.register_blueprint(sessions_mod.bp_sessions)
+    r = a.test_client().get("/api/sessions")
+    body = r.get_json() or {}
+    matches = [
+        s for s in body["sessions"]
+        if (s.get("sessionId") or s.get("session_id")) == sid
+    ]
+    assert len(matches) == 1, f"expected 1 row for {sid}, got {len(matches)}"
+    assert matches[0]["displayName"] == "Real Session"

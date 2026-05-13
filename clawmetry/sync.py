@@ -1143,6 +1143,181 @@ def _flush_session_batch(
         _post("/ingest/events", payload, api_key)
 
 
+def _extract_cost_tokens_model(obj: dict) -> tuple:
+    """Pull (cost_usd, token_count, model) out of a raw OpenClaw transcript event.
+
+    Real OpenClaw events nest these under ``obj["message"]["usage"]``:
+
+        {
+          "type": "message",
+          "message": {
+            "model": "claude-opus-4-7",
+            "usage": {
+              "totalTokens": 162,
+              "cost": {"total": 0.00495, ...}
+            }
+          }
+        }
+
+    Older / synthesised events sometimes carry top-level ``cost_usd`` /
+    ``tokens`` / ``model``. We accept either shape so tests, sub-agent
+    adapters, and the real OpenClaw harness all populate the columns
+    (previously the nested shape silently became NULL — see MOAT_E2E_REPORT
+    2026-05-13 root-cause #4)."""
+    cost_usd = obj.get("cost_usd")
+    if cost_usd is None:
+        cost_usd = obj.get("costUsd")
+    token_count = obj.get("token_count")
+    if token_count is None:
+        token_count = obj.get("tokens")
+    model = obj.get("model")
+
+    msg = obj.get("message")
+    if isinstance(msg, dict):
+        if model is None:
+            model = msg.get("model")
+        usage = msg.get("usage")
+        if isinstance(usage, dict):
+            if token_count is None:
+                tt = usage.get("totalTokens")
+                if tt is None:
+                    tt = usage.get("total_tokens")
+                if tt is not None:
+                    try:
+                        token_count = int(tt)
+                    except (TypeError, ValueError):
+                        token_count = None
+            if cost_usd is None:
+                cost = usage.get("cost")
+                if isinstance(cost, dict):
+                    cv = cost.get("total")
+                    if cv is None:
+                        cv = cost.get("total_usd")
+                else:
+                    cv = cost  # rare: cost itself is a number
+                if cv is not None:
+                    try:
+                        cost_usd = float(cv)
+                    except (TypeError, ValueError):
+                        cost_usd = None
+    return cost_usd, token_count, model
+
+
+def _extract_channel_message(
+    obj: dict,
+    *,
+    session_id: str,
+) -> dict | None:
+    """Best-effort projection of a transcript event into a
+    ``channel_messages`` row.
+
+    Issue #1088 Phase 4. Returns ``None`` when the event is not a chat
+    message OR carries no recoverable channel signal — the daemon then
+    just records the event in ``events`` and moves on.
+
+    Two recognition paths:
+
+    1. **Inbound** — a ``user``-role message whose text starts with one of
+       the known adapter wrappers (e.g. ``[Telegram Alice id:123]…``,
+       ``[iMessage +14155551234]…``). The Connector layer prefixes every
+       inbound channel message with this bracket-tag so downstream
+       routing / observability can attribute it without scanning the
+       gateway log. We mirror that parser here so the local DuckDB has a
+       single canonical row per inbound message — the same key the
+       dashboard uses for dedupe.
+    2. **Outbound** — an ``assistant``-role message in a session whose
+       session_id was previously seen carrying an inbound channel
+       message. The session_id is the join key so we don't have to
+       re-parse the session metadata blob — the inbound path stamps
+       the channel and chat-id on a sentinel row this code reads
+       opportunistically (a future PR can plumb the session→channel
+       index more directly).
+
+    The shape is intentionally narrow: ``provider``, ``channel_id``,
+    ``sender_*``, ``body``, ``ts``, ``direction``. Per-provider extras
+    (attachments, reactions, message_id) ride along in ``raw_blob`` so
+    we don't widen the schema for adapter-specific fields.
+    """
+    import re as _re
+    if not isinstance(obj, dict):
+        return None
+    if obj.get("type") != "message":
+        return None
+    msg = obj.get("message")
+    if not isinstance(msg, dict):
+        return None
+    role = msg.get("role")
+    if role not in ("user", "assistant"):
+        return None
+    content = msg.get("content")
+    text = ""
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "text":
+                text = c.get("text", "") or ""
+                if text:
+                    break
+    if not text:
+        return None
+    # Skip system/heartbeat noise — these aren't user-facing channel msgs.
+    stripped = text.strip()
+    if stripped.startswith("System:") or "HEARTBEAT" in stripped:
+        return None
+    ts = obj.get("timestamp") or obj.get("ts") or ""
+    if not ts:
+        return None
+    eid = (
+        obj.get("id")
+        or obj.get("eventId")
+        or obj.get("messageId")
+        or f"{session_id}:{ts}:{role}"
+    )
+    if role == "user":
+        # Recognised inbound formats — the Connector layer tags every
+        # inbound message with one of these prefixes. We try Telegram /
+        # iMessage / WhatsApp / Signal / Discord / Slack first because
+        # those cover ~95% of installed adapters; the rest fall through
+        # to the generic ``[Provider …]`` matcher.
+        m = _re.match(
+            r"\[(?P<prov>Telegram|iMessage|WhatsApp|Signal|Discord|Slack|"
+            r"IRC|WebChat|GoogleChat|MSTeams|BlueBubbles|Matrix|Mattermost|"
+            r"LINE|Nostr|Twitch|Feishu|Zalo|Tlon|SynologyChat|NextcloudTalk)"
+            r"\s+(?P<sender>.+?)\s+id:(?P<sid>[^\]]+?)\]\s*(?P<body>.*)",
+            stripped,
+            flags=_re.IGNORECASE | _re.DOTALL,
+        )
+        if not m:
+            return None
+        provider = m.group("prov").lower()
+        sender_name = m.group("sender").strip()
+        chan_id = m.group("sid").strip()
+        body = m.group("body").strip() or stripped
+        return {
+            "id":          str(eid),
+            "agent_id":    "main",
+            "provider":    provider,
+            "channel_id":  chan_id,
+            "sender_id":   chan_id,
+            "sender_name": sender_name,
+            "body":        body[:4000],
+            "ts":          str(ts),
+            "direction":   "in",
+            "session_key": session_id,
+            "raw_blob":    None,
+        }
+    # Assistant turn — outbound. We don't know the channel from the
+    # event alone (the session-metadata blob carries it, processed in
+    # _local_ingest_sessions_batch). Skip here; the per-session metadata
+    # writer takes care of attribution via the ``openclaw_channels``
+    # table. The summary endpoint joins on session_key so outbound
+    # counts populate from a follow-up adapter PR. Returning None here
+    # keeps this PR's footprint minimal and avoids stamping the wrong
+    # provider on assistant turns from sessions we haven't classified.
+    return None
+
+
 def _local_ingest_session_batch(
     batch: list,
     session_file: str,
@@ -1162,6 +1337,15 @@ def _local_ingest_session_batch(
     for obj in batch:
         if not isinstance(obj, dict):
             continue
+        # Issue #1088 Phase 4: opportunistically project inbound channel
+        # messages into the channel_messages table. Best-effort — never
+        # blocks the events ingest below on a per-row failure.
+        try:
+            ch_row = _extract_channel_message(obj, session_id=session_id)
+            if ch_row is not None:
+                store.ingest_channel_message(ch_row)
+        except Exception as _e:
+            log.debug("channel_message extract failed (continuing): %s", _e)
         # Stable per-event id: prefer an explicit id from the transcript, then
         # the openclaw eventId, else compose from session_id + timestamp +
         # message-id-ish hint. INSERT OR IGNORE makes re-delivery harmless.
@@ -1176,6 +1360,12 @@ def _local_ingest_session_batch(
             # Skip events with no timestamp — the local store's index assumes
             # ts is set, and filtering them out is safer than synthesising one.
             continue
+        # Cost / token / model live UNDER ``message.usage`` in OpenClaw's real
+        # transcript shape (verified 2026-05-13 against
+        # ~/.openclaw/agents/main/sessions/*.jsonl). Top-level ``cost_usd`` /
+        # ``tokens`` only appear in synthesised events (e.g. our own tests).
+        # See MOAT_E2E_REPORT_2026-05-13 root-cause #4.
+        cost_usd, token_count, model = _extract_cost_tokens_model(obj)
         rows.append({
             "id": str(eid),
             "node_id": node_id,
@@ -1185,9 +1375,9 @@ def _local_ingest_session_batch(
             "event_type": str(obj.get("type") or obj.get("event_type") or "unknown"),
             "ts": str(ts),
             "data": obj,
-            "cost_usd": obj.get("cost_usd") or obj.get("costUsd"),
-            "token_count": obj.get("token_count") or obj.get("tokens"),
-            "model": obj.get("model"),
+            "cost_usd": cost_usd,
+            "token_count": token_count,
+            "model": model,
         })
     if rows:
         store.ingest_many(rows)

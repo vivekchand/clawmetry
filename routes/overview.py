@@ -221,45 +221,40 @@ def _try_local_store_overview():
     """
     import subprocess as _sub
     import sys as _sys
+    # Issue #1088: cross-process fast path. Try the daemon HTTP proxy first
+    # (covers the standard launchd/systemd install where DuckDB's writer lock
+    # blocks the dashboard from opening directly), then fall back to direct
+    # open for tests + dev mode.
+    sess_rows = None
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
+        from routes.local_query import local_store_via_daemon
+        sess_rows = local_store_via_daemon("query_sessions_table", limit=200)
     except Exception:
-        return None
-    try:
-        sess_rows = store._fetch("""
-            SELECT session_id, agent_id, title, started_at, last_active_at,
-                   ended_at, status, total_tokens, cost_usd, message_count,
-                   metadata
-            FROM sessions
-            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
-            LIMIT 200
-        """, [])
-    except Exception:
-        return None
+        sess_rows = None
+    if sess_rows is None:
+        try:
+            from clawmetry import local_store
+            sess_rows = local_store.get_store().query_sessions_table(limit=200)
+        except Exception:
+            return None
     if not sess_rows:
         return None
 
     # Build a normalized view of sessions.
     sessions = []
     for r in sess_rows:
-        meta = {}
-        if r[10]:
-            try:
-                meta = json.loads(bytes(r[10]).decode("utf-8"))
-            except Exception:
-                pass
+        meta = r.get("metadata") or {}
         sessions.append({
-            "session_id": r[0],
-            "agent_id": r[1],
-            "title": r[2] or "",
-            "started_at": r[3] or "",
-            "last_active_at": r[4] or "",
-            "ended_at": r[5] or "",
-            "status": (r[6] or "").lower(),
-            "total_tokens": int(r[7] or 0),
-            "cost_usd": float(r[8] or 0.0),
-            "message_count": int(r[9] or 0),
+            "session_id": r.get("session_id"),
+            "agent_id": r.get("agent_id"),
+            "title": r.get("title") or "",
+            "started_at": r.get("started_at") or "",
+            "last_active_at": r.get("last_active_at") or "",
+            "ended_at": r.get("ended_at") or "",
+            "status": (r.get("status") or "").lower(),
+            "total_tokens": int(r.get("total_tokens") or 0),
+            "cost_usd": float(r.get("cost_usd") or 0.0),
+            "message_count": int(r.get("message_count") or 0),
             "model": meta.get("model"),
         })
 
@@ -277,15 +272,23 @@ def _try_local_store_overview():
     # recently observed model across events.
     model_name = main.get("model") or "unknown"
     if model_name == "unknown":
+        evs = None
         try:
-            evs = store.query_events(limit=20)
-            for e in evs:
-                m = e.get("model")
-                if m:
-                    model_name = m
-                    break
+            from routes.local_query import local_store_via_daemon
+            evs = local_store_via_daemon("query_events", limit=20)
         except Exception:
-            pass
+            evs = None
+        if evs is None:
+            try:
+                from clawmetry import local_store
+                evs = local_store.get_store().query_events(limit=20)
+            except Exception:
+                evs = []
+        for e in (evs or []):
+            m = e.get("model")
+            if m:
+                model_name = m
+                break
 
     # Pull the latest cron + memory totals using the existing dashboard
     # helpers. They're already filesystem-backed and fast — and they read
@@ -547,6 +550,23 @@ def api_overview():
     )
 
 
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback (issue #1088)."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
 def _try_local_store_timeline():
     """Epic #964: opt-in local-store fast path for /api/timeline.
 
@@ -560,22 +580,17 @@ def _try_local_store_timeline():
     day with a tight window — only days that already showed activity in the
     aggregates pass actually get scanned.
 
+    Issue #1088: routes through the daemon HTTP proxy first via ``_ls_call``,
+    with the standard direct-open fallback for single-process boots.
+
     Returns ``None`` to defer to the JSONL fallback if:
-      - the local_store module isn't importable
+      - neither path can reach the local store
       - query_aggregates returns empty (no events seen yet)
       - any unexpected error happens
     """
-    try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-    except Exception:
-        return None
     now = datetime.now()
     cutoff = (now - timedelta(days=30)).strftime("%Y-%m-%d") + "T00:00:00"
-    try:
-        rows = store.query_aggregates(since=cutoff)
-    except Exception:
-        return None
+    rows = _ls_call("query_aggregates", since=cutoff)
     if not rows:
         return None
 
@@ -598,22 +613,20 @@ def _try_local_store_timeline():
         count = day_counts.get(ds, 0)
         hours = {}
         if count > 0:
-            try:
-                ev_rows = store.query_events(
-                    since=ds + "T00:00:00",
-                    until=ds + "T23:59:59",
-                    limit=10000,
-                )
-                for ev in ev_rows:
-                    ts = ev.get("ts") or ""
-                    if "T" in ts:
-                        try:
-                            h = int(ts.split("T")[1][:2])
-                            hours[h] = hours.get(h, 0) + 1
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+            ev_rows = _ls_call(
+                "query_events",
+                since=ds + "T00:00:00",
+                until=ds + "T23:59:59",
+                limit=10000,
+            ) or []
+            for ev in ev_rows:
+                ts = ev.get("ts") or ""
+                if "T" in ts:
+                    try:
+                        h = int(ts.split("T")[1][:2])
+                        hours[h] = hours.get(h, 0) + 1
+                    except Exception:
+                        pass
         mem_file = os.path.join(mem_dir, f"{ds}.md") if mem_dir else None
         has_memory = bool(mem_file and os.path.exists(mem_file))
         if count > 0 or has_memory:
@@ -683,6 +696,71 @@ def api_timeline():
     return jsonify({"days": days, "today": now.strftime("%Y-%m-%d")})
 
 
+def _try_local_store_prompt_errors(since_iso):
+    """Fast path for /api/prompt-errors. Reads ``openclaw:prompt-error``
+    events from DuckDB instead of scanning the 20 most-recent JSONL files.
+
+    Issue #1088: tries the daemon HTTP proxy FIRST (cross-process safe under
+    the standard install where the daemon owns the writer lock), then falls
+    back to a direct ``get_store()`` open for single-process boots (tests +
+    dev mode).
+
+    Returns ``None`` to defer to the JSONL scan if:
+      - neither path can reach the local store
+      - the events table is empty / no prompt-error rows
+      - any unexpected error happens (we'd rather degrade than 500)
+    """
+    def _fetch(event_type):
+        # Cross-process: ask the daemon first.
+        try:
+            from routes.local_query import local_store_via_daemon
+            r = local_store_via_daemon(
+                "query_events",
+                event_type=event_type,
+                since=since_iso,
+                limit=200,
+            )
+            if r is not None:
+                return r
+        except Exception:
+            pass
+        # Single-process fallback.
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            return store.query_events(
+                event_type=event_type,
+                since=since_iso,
+                limit=200,
+            )
+        except Exception:
+            return None
+
+    # Two event_type spellings have been seen in the wild — the canonical
+    # ``openclaw:prompt-error`` and the bare ``prompt-error`` from older
+    # ingest paths. Try both.
+    rows = _fetch("openclaw:prompt-error")
+    if not rows:
+        rows = _fetch("prompt-error")
+    if not rows:
+        return None
+    errors = []
+    for ev in rows:
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        errors.append({
+            "ts": ev.get("ts"),
+            "runId": data.get("runId"),
+            "sessionId": ev.get("session_id") or data.get("sessionId"),
+            "provider": data.get("provider"),
+            "model": ev.get("model") or data.get("model"),
+            "api": data.get("api"),
+            "error": data.get("error"),
+        })
+    errors.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    errors = errors[:50]
+    return {"errors": errors, "count": len(errors), "_source": "local_store"}
+
+
 @bp_overview.route("/api/prompt-errors")
 def api_prompt_errors():
     """Return recent openclaw:prompt-error events from session JSONL files.
@@ -700,6 +778,12 @@ def api_prompt_errors():
             since_ts = datetime.fromisoformat(since_raw.replace("Z", "+00:00"))
         except Exception:
             pass
+
+    # Epic #964 — opt-in DuckDB fast path. Falls through on miss.
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_prompt_errors(since_raw)
+        if fast is not None:
+            return jsonify(fast)
 
     session_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"

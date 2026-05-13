@@ -256,3 +256,112 @@ def test_local_ingest_sessions_batch_failure_does_not_break_caller(sync_with_iso
             sync._local_ingest_sessions_batch(
                 [{"session_id": "x"}], node_id="agent+test"
             )
+
+
+def test_sync_extracts_cost_and_tokens(sync_with_isolated_store):
+    """Real OpenClaw transcript shape: cost / tokens / model live under
+    ``message.usage.{cost.total, totalTokens}`` and ``message.model``.
+
+    Regression for MOAT_E2E_REPORT_2026-05-13 root-cause #4: the old code
+    only checked top-level ``cost_usd`` / ``tokens`` / ``model`` and dropped
+    the nested values to NULL, breaking every Token chart and the
+    ``/api/local/aggregates`` cost roll-up.
+    """
+    sync, ls = sync_with_isolated_store
+    batch = [
+        # 1. Real OpenClaw `message` event with nested usage (the case that
+        #    was silently NULL before this fix).
+        {
+            "id": "ev-real",
+            "type": "message",
+            "timestamp": "2026-05-12T22:35:31.159296Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input": 200, "output": 100,
+                    "totalTokens": 1234,
+                    "cost": {"input": 0.30, "output": 0.12, "total": 0.42},
+                },
+            },
+        },
+        # 2. Synthesised event with top-level fields (legacy / sub-agent path).
+        #    Should still work — top-level wins.
+        {
+            "id": "ev-flat",
+            "type": "tool_call",
+            "timestamp": "2026-05-12T22:35:32.000Z",
+            "tokens": 50,
+            "cost_usd": 0.01,
+            "model": "claude-haiku",
+        },
+        # 3. Event with neither — both columns stay NULL (no synthesised zeros).
+        {
+            "id": "ev-bare",
+            "type": "thinking_level_change",
+            "timestamp": "2026-05-12T22:35:33.000Z",
+        },
+    ]
+    with patch.object(sync, "_post"):
+        sync._flush_session_batch(
+            batch, "session-cost.jsonl", api_key="cm_x",
+            enc_key=None, node_id="agent+test", subagent_id=None,
+        )
+    store = ls.get_store()
+    _wait_for_flush(store)
+    rows = {r["id"]: r for r in store.query_events(session_id="session-cost")}
+    assert len(rows) == 3
+
+    # Nested usage: extracted to columns.
+    real = rows["ev-real"]
+    assert real["token_count"] == 1234
+    assert round(real["cost_usd"], 6) == 0.42
+    assert real["model"] == "claude-opus-4-7"
+    # Raw blob preserved for downstream re-parsing.
+    assert real["data"]["message"]["usage"]["cost"]["total"] == 0.42
+
+    # Top-level still works.
+    flat = rows["ev-flat"]
+    assert flat["token_count"] == 50
+    assert round(flat["cost_usd"], 6) == 0.01
+    assert flat["model"] == "claude-haiku"
+
+    # Bare event: NULL preserved, no synthesised zero.
+    bare = rows["ev-bare"]
+    assert bare["token_count"] is None
+    assert bare["cost_usd"] is None
+    assert bare["model"] is None
+
+
+def test_extract_cost_tokens_model_unit():
+    """Direct unit test for the extractor — covers the field-name edge cases
+    (totalTokens vs total_tokens, cost dict vs scalar, missing message).
+    """
+    from clawmetry import sync as _sync
+
+    # OpenClaw real shape
+    c, t, m = _sync._extract_cost_tokens_model({
+        "type": "message",
+        "message": {
+            "model": "claude-opus-4-7",
+            "usage": {"totalTokens": 162, "cost": {"total": 0.00495}},
+        },
+    })
+    assert c == 0.00495 and t == 162 and m == "claude-opus-4-7"
+
+    # snake_case fallback
+    c, t, m = _sync._extract_cost_tokens_model({
+        "message": {"usage": {"total_tokens": 50, "cost": {"total_usd": 0.005}}}
+    })
+    assert c == 0.005 and t == 50
+
+    # Top-level wins
+    c, t, m = _sync._extract_cost_tokens_model({
+        "cost_usd": 0.99, "tokens": 7, "model": "haiku",
+        "message": {"usage": {"totalTokens": 1, "cost": {"total": 0.01}}},
+    })
+    assert c == 0.99 and t == 7 and m == "haiku"
+
+    # Empty
+    assert _sync._extract_cost_tokens_model({}) == (None, None, None)
+    assert _sync._extract_cost_tokens_model({"type": "session"}) == (None, None, None)

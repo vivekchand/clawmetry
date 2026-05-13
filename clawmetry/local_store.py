@@ -116,7 +116,7 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -338,6 +338,35 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_approvals_owner_status ON approvals(owner_hash, status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_approvals_session ON approvals(requestor_session_id, created_at)",
+    # Issue #1088 Phase 4 (2026-05-13) — channel-message foundation. Replaces
+    # the per-provider log-grep + JSONL-scan path that the 21 routes in
+    # ``routes/channels.py`` use today. Each row is one inbound or outbound
+    # message on a chat-channel adapter (Telegram, Signal, WhatsApp, Discord,
+    # Slack, IRC, iMessage, WebChat, …). Schema is provider-agnostic — the
+    # ``provider`` column discriminates and ``raw_blob`` carries the
+    # adapter-specific payload (attachments, message_id, sender metadata) so
+    # we don't need a per-provider column carry. Only 3 providers will land
+    # fast-paths in this PR; the remaining 18 follow once the schema proves
+    # out (see issue #1088 follow-up).
+    """
+    CREATE TABLE IF NOT EXISTS channel_messages (
+        id            VARCHAR PRIMARY KEY,
+        agent_id      VARCHAR NOT NULL DEFAULT 'main',
+        provider      VARCHAR NOT NULL,
+        channel_id    VARCHAR,
+        sender_id     VARCHAR,
+        sender_name   VARCHAR,
+        body          VARCHAR,
+        ts            VARCHAR NOT NULL,
+        direction     VARCHAR NOT NULL,
+        session_key   VARCHAR,
+        raw_blob      BLOB,
+        created_at    BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_chmsg_provider_ts  ON channel_messages(provider, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_chmsg_channel_ts   ON channel_messages(provider, channel_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_chmsg_session      ON channel_messages(session_key, ts)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -727,6 +756,77 @@ class LocalStore:
             """, [sid, ch.get("channel"), ch.get("chat_type"),
                   ch.get("subject"), ch.get("origin_label")])
 
+    def ingest_channel_message(self, msg: dict[str, Any]) -> None:
+        """Upsert one channel-message row (issue #1088 Phase 4).
+
+        Required keys: ``id``, ``provider``, ``ts``, ``direction``.
+        Optional: ``agent_id`` (default ``"main"``), ``channel_id``,
+        ``sender_id``, ``sender_name``, ``body``, ``session_key``,
+        ``raw_blob`` (any JSON-able value — coerced to BLOB for opaque
+        per-provider extras like attachments / message_id / reactions).
+
+        ``direction`` MUST be ``"in"`` (inbound from user) or ``"out"``
+        (outbound from agent). The PRIMARY KEY is ``id`` so re-ingesting
+        the same upstream id is a no-op (the daemon scans logs +
+        transcripts on every cycle; idempotency is essential).
+
+        We coerce ``provider`` to lowercase so ``"Telegram"`` and
+        ``"telegram"`` round-trip to the same partition — every query
+        helper below also lowercases on input.
+        """
+        mid = msg.get("id")
+        if not mid:
+            raise ValueError("channel_message must include 'id'")
+        provider = msg.get("provider")
+        if not provider:
+            raise ValueError("channel_message must include 'provider'")
+        ts = msg.get("ts")
+        if not ts:
+            raise ValueError("channel_message must include 'ts'")
+        direction = msg.get("direction")
+        if direction not in ("in", "out"):
+            raise ValueError(
+                "channel_message direction must be 'in' or 'out' "
+                f"(got {direction!r})"
+            )
+        provider = str(provider).lower().strip()
+        raw_blob = _to_blob(msg.get("raw_blob"))
+        body = msg.get("body")
+        if body is not None:
+            body = str(body)
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO channel_messages (
+                    id, agent_id, provider, channel_id, sender_id, sender_name,
+                    body, ts, direction, session_key, raw_blob, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    agent_id     = COALESCE(excluded.agent_id, channel_messages.agent_id),
+                    provider     = excluded.provider,
+                    channel_id   = COALESCE(excluded.channel_id, channel_messages.channel_id),
+                    sender_id    = COALESCE(excluded.sender_id, channel_messages.sender_id),
+                    sender_name  = COALESCE(excluded.sender_name, channel_messages.sender_name),
+                    body         = COALESCE(excluded.body, channel_messages.body),
+                    ts           = excluded.ts,
+                    direction    = excluded.direction,
+                    session_key  = COALESCE(excluded.session_key, channel_messages.session_key),
+                    raw_blob     = COALESCE(excluded.raw_blob, channel_messages.raw_blob)
+            """, [
+                str(mid),
+                str(msg.get("agent_id") or "main"),
+                provider,
+                msg.get("channel_id"),
+                msg.get("sender_id"),
+                msg.get("sender_name"),
+                body,
+                str(ts),
+                direction,
+                msg.get("session_key"),
+                raw_blob,
+                now_ms,
+            ])
+
     def ingest_channel_config(
         self,
         provider: str,
@@ -789,7 +889,15 @@ class LocalStore:
             ])
 
     def ingest_cron(self, cron: dict[str, Any]) -> None:
-        """Upsert one cron-job row. Required: cron_id."""
+        """Upsert one cron-job row. Required: cron_id.
+
+        Dict-shaped ``schedule`` values (the gateway shape:
+        ``{kind:'every', everyMs:60000}``) are JSON-encoded before storing
+        so ``_row_to_cron_job`` in ``routes/crons.py`` can decode them
+        back. Without this, DuckDB's default ``str(dict)`` representation
+        is not valid JSON and downstream consumers (e.g.
+        ``/api/agent-intentions`` schedule-kind projection) lose the
+        ``kind``/``everyMs`` fields needed to compute firings."""
         cid = cron.get("cron_id")
         if not cid:
             raise ValueError("cron must include 'cron_id'")
@@ -799,6 +907,9 @@ class LocalStore:
                                            "name", "schedule", "enabled",
                                            "last_run_at", "last_status",
                                            "next_run_at"}})
+        schedule = cron.get("schedule")
+        if isinstance(schedule, (dict, list)):
+            schedule = json.dumps(schedule, separators=(",", ":"))
         now_ms = int(time.time() * 1000)
         with self._write_lock:
             self._conn.execute("""
@@ -817,7 +928,7 @@ class LocalStore:
                     data         = COALESCE(excluded.data, crons.data),
                     updated_at   = excluded.updated_at
             """, [atype, cid, cron.get("agent_id") or "main",
-                  cron.get("name"), cron.get("schedule"),
+                  cron.get("name"), schedule,
                   bool(cron.get("enabled", True)),
                   cron.get("last_run_at"), cron.get("last_status"),
                   cron.get("next_run_at"), data_blob, now_ms])
@@ -1277,6 +1388,177 @@ class LocalStore:
         cols = ["session_id", "channel", "chat_type", "subject", "origin_label"]
         return [_row_to_dict(r, cols) for r in self._fetch(sql, params)]
 
+    def query_channel_messages(
+        self,
+        *,
+        provider: str | None = None,
+        channel_id: str | None = None,
+        since: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Read channel-message rows (issue #1088 Phase 4).
+
+        Returns rows ordered most-recent first. The ``raw_blob`` BLOB is
+        decoded back to JSON dict where possible, str otherwise, None when
+        empty — same convention as the other ``data``-blob tables so callers
+        can hand the row straight to the API without a second decode.
+
+        Filters:
+          * ``provider`` — exact match, lowercased (``"telegram"`` etc.).
+          * ``channel_id`` — exact match (e.g. Telegram chat id, Slack
+            channel id, Discord guild+channel composite).
+          * ``since`` — ISO-8601 timestamp; rows with ``ts >= since``.
+
+        Defaults to ``limit=50`` to mirror the existing per-channel route's
+        page size — the dashboard's "messages" panes show 50 messages by
+        default and lazy-load older ones via the offset query param the
+        legacy path supports.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if provider:
+            clauses.append("provider = ?")
+            params.append(str(provider).lower().strip())
+        if channel_id:
+            clauses.append("channel_id = ?")
+            params.append(str(channel_id))
+        if since:
+            clauses.append("ts >= ?")
+            params.append(str(since))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT id, agent_id, provider, channel_id, sender_id, sender_name,
+                   body, ts, direction, session_key, raw_blob
+            FROM channel_messages
+            {where}
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["id", "agent_id", "provider", "channel_id", "sender_id",
+                "sender_name", "body", "ts", "direction", "session_key",
+                "raw_blob"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            raw = d.get("raw_blob")
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    try:
+                        d["raw_blob"] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d["raw_blob"] = text
+                except UnicodeDecodeError:
+                    d["raw_blob"] = None
+            out.append(d)
+        return out
+
+    def query_channel_threads(
+        self,
+        *,
+        provider: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Per-thread (per ``channel_id``) summary for one provider
+        (issue #1088 Phase 4).
+
+        Returns one row per distinct ``channel_id`` ordered by most-recent
+        activity. Each row carries the latest sender, latest body snippet,
+        and total inbound / outbound counts so the cloud UI's "threads"
+        panel can render without a second fetch.
+
+        Why a dedicated helper instead of asking the route to GROUP BY:
+        DuckDB's columnar engine makes this a single scan, but the result
+        shape is route-specific (we drop the raw_blob; we project a snippet
+        column). Keeping the SQL here means the future WS relay can expose
+        the same shape verbatim.
+        """
+        if not provider:
+            return []
+        sql = """
+            SELECT
+              channel_id,
+              MAX(ts)                                        AS last_ts,
+              ARG_MAX(sender_name, ts)                       AS last_sender,
+              ARG_MAX(body, ts)                              AS last_body,
+              ARG_MAX(direction, ts)                         AS last_direction,
+              ARG_MAX(session_key, ts)                       AS session_key,
+              SUM(CASE WHEN direction = 'in'  THEN 1 ELSE 0 END) AS msg_in,
+              SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END) AS msg_out,
+              COUNT(*)                                       AS total
+            FROM channel_messages
+            WHERE provider = ?
+              AND channel_id IS NOT NULL
+            GROUP BY channel_id
+            ORDER BY last_ts DESC
+            LIMIT ?
+        """
+        rows = self._fetch(
+            sql, [str(provider).lower().strip(), int(limit)]
+        )
+        cols = ["channel_id", "last_ts", "last_sender", "last_body",
+                "last_direction", "session_key", "msg_in", "msg_out", "total"]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            # Cap snippet at 200 chars so the threads pane stays compact
+            # — the full body is one query away via query_channel_messages.
+            body = d.get("last_body") or ""
+            if isinstance(body, str) and len(body) > 200:
+                d["last_body"] = body[:200]
+            d["msg_in"]  = int(d.get("msg_in")  or 0)
+            d["msg_out"] = int(d.get("msg_out") or 0)
+            d["total"]   = int(d.get("total")   or 0)
+            out.append(d)
+        return out
+
+    def query_channel_summary(
+        self,
+        *,
+        agent_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Cross-provider counts for the channels overview tab
+        (issue #1088 Phase 4).
+
+        Returns one row per provider with inbound / outbound counts and the
+        most-recent activity timestamp. Powers ``/api/channels/summary``,
+        which the cloud-side channels overview page hits on every nav.
+
+        ``agent_id`` scopes the result to a single agent instance; ``None``
+        sums across the local node.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(str(agent_id))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT
+              provider,
+              COUNT(*)                                          AS total,
+              SUM(CASE WHEN direction = 'in'  THEN 1 ELSE 0 END) AS msg_in,
+              SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END) AS msg_out,
+              COUNT(DISTINCT channel_id)                        AS distinct_channels,
+              MAX(ts)                                           AS last_ts
+            FROM channel_messages
+            {where}
+            GROUP BY provider
+            ORDER BY last_ts DESC NULLS LAST
+        """
+        cols = ["provider", "total", "msg_in", "msg_out",
+                "distinct_channels", "last_ts"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            d["total"]             = int(d.get("total")             or 0)
+            d["msg_in"]            = int(d.get("msg_in")            or 0)
+            d["msg_out"]           = int(d.get("msg_out")           or 0)
+            d["distinct_channels"] = int(d.get("distinct_channels") or 0)
+            out.append(d)
+        return out
+
     def query_crons(
         self,
         *,
@@ -1604,6 +1886,287 @@ class LocalStore:
         params.append(int(limit))
         cols = ["agent_type", "node_id", "ts", "kind", "data"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
+
+    def query_sessions_table(
+        self,
+        *,
+        agent_type: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Read rows directly from the typed ``sessions`` table.
+
+        Distinct from :meth:`query_sessions`, which aggregates the events
+        table by ``GROUP BY session_id``. The ``sessions`` table is the
+        typed-session view written by ``sync.py`` + the daemon — it carries
+        title, status, message_count, and a metadata BLOB.
+
+        ``agent_type`` filters rows to a single adapter (e.g. ``"openclaw"``,
+        ``"hermes"``) — used by ``/api/agents/<name>/sessions`` to render
+        per-adapter session lists from DuckDB.
+
+        Returns one dict per row with ``metadata`` already JSON-decoded
+        (``{}`` when missing or invalid). Rows are ordered most-recently-
+        active first.
+
+        Used by ``routes/sessions.py:_try_local_store_sessions`` and
+        ``routes/overview.py:_try_local_store_overview`` so the SQL lives
+        in one place — and so the daemon HTTP proxy
+        (``routes/local_query.py:local_store_via_daemon``) can expose it
+        for cross-process callers (issue #1088).
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if agent_type:
+            clauses.append("agent_type = ?")
+            params.append(str(agent_type))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT agent_type, session_id, agent_id, title, started_at,
+                   last_active_at, ended_at, status, total_tokens, cost_usd,
+                   message_count, metadata
+            FROM sessions
+            {where}
+            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+            LIMIT ?
+        """
+        params.append(int(limit))
+        rows = self._fetch(sql, params)
+        cols = ["agent_type", "session_id", "agent_id", "title", "started_at",
+                "last_active_at", "ended_at", "status", "total_tokens",
+                "cost_usd", "message_count", "metadata"]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            raw = d.get("metadata")
+            meta: dict[str, Any] = {}
+            if raw:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    meta = json.loads(text) if text else {}
+                    if not isinstance(meta, dict):
+                        meta = {}
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    meta = {}
+            d["metadata"] = meta
+            out.append(d)
+        return out
+
+    def query_compactions(
+        self,
+        *,
+        session_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Read OpenClaw compaction events (issue #1088 phase 3).
+
+        Compaction events live in the ``events`` table with
+        ``event_type='compaction'``. Their ``data`` blob carries the
+        original transcript shape: ``{type:"compaction", summary:"...",
+        tokensBefore:N, firstKeptEntryId:"...", fromHook:bool,
+        timestamp:"..."}``. This helper projects them into the row shape
+        ``/api/compactions`` returns so the route doesn't need to re-decode.
+
+        ``session_id`` filters to one session (returns full summary text).
+        Defaults to most-recent first."""
+        clauses: list[str] = ["event_type = 'compaction'"]
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT session_id, ts, data
+            FROM events
+            {where}
+            ORDER BY ts DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            sid, ts, raw = r
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    data = {}
+            out.append({
+                "session_id":          sid,
+                "timestamp":           data.get("timestamp") or ts or "",
+                "summary":             data.get("summary") or "",
+                "tokens_before":       int(data.get("tokensBefore") or data.get("tokens_before") or 0),
+                "first_kept_entry_id": data.get("firstKeptEntryId") or data.get("first_kept_entry_id") or "",
+                "from_hook":           bool(data.get("fromHook") or data.get("from_hook") or False),
+            })
+        return out
+
+    def query_cost_split(
+        self,
+        *,
+        session_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Per-session input/output/cache token + cost split (issue #1088 phase 3).
+
+        Aggregates ``message`` events by ``session_id`` extracting the
+        ``data.message.usage`` block — the same structure
+        ``/api/cost-split`` walks the JSONL for. Returns one row per
+        session ordered by total cost descending.
+
+        ``session_id`` filters to one session (limit ignored). Otherwise
+        returns the top ``limit`` sessions by total cost."""
+        clauses: list[str] = ["event_type = 'message'"]
+        params: list[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT session_id, model, data
+            FROM events
+            {where}
+            ORDER BY ts ASC
+        """
+        # Aggregate in Python — DuckDB's JSON extraction would work but we
+        # want consistent decoding with query_events (which Python already
+        # does), and the row counts here are bounded by limit*~200 turns.
+        per_session: dict[str, dict[str, Any]] = {}
+        for sid, model, raw in self._fetch(sql, params):
+            if not sid:
+                continue
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    data = {}
+            msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+            usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+            if not usage:
+                continue
+            agg = per_session.setdefault(sid, {
+                "session_id":          sid,
+                "primary_model":       "",
+                "input_tokens":        0,
+                "output_tokens":       0,
+                "cache_read_tokens":   0,
+                "cache_write_tokens":  0,
+                "input_cost_usd":      0.0,
+                "output_cost_usd":     0.0,
+                "cache_read_cost_usd": 0.0,
+                "cache_write_cost_usd": 0.0,
+                "total_cost_usd":      0.0,
+                "_model_tokens":       {},
+            })
+            agg["input_tokens"]       += int(usage.get("input", 0) or 0)
+            agg["output_tokens"]      += int(usage.get("output", 0) or 0)
+            agg["cache_read_tokens"]  += int(usage.get("cacheRead", 0) or 0)
+            agg["cache_write_tokens"] += int(usage.get("cacheWrite", 0) or 0)
+            cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
+            agg["input_cost_usd"]      += float(cost_obj.get("input", 0) or 0)
+            agg["output_cost_usd"]     += float(cost_obj.get("output", 0) or 0)
+            agg["cache_read_cost_usd"] += float(cost_obj.get("cacheRead", 0) or 0)
+            agg["cache_write_cost_usd"] += float(cost_obj.get("cacheWrite", 0) or 0)
+            agg["total_cost_usd"]      += float(cost_obj.get("total", 0) or 0)
+            mt = int(usage.get("totalTokens", 0) or 0)
+            mm = msg.get("model") or model or ""
+            if mt and mm:
+                agg["_model_tokens"][mm] = agg["_model_tokens"].get(mm, 0) + mt
+        out: list[dict[str, Any]] = []
+        for agg in per_session.values():
+            mt = agg.pop("_model_tokens", {})
+            agg["primary_model"] = (
+                max(mt.items(), key=lambda kv: kv[1])[0] if mt else ""
+            )
+            agg["total_tokens"] = (
+                agg["input_tokens"] + agg["output_tokens"]
+                + agg["cache_read_tokens"] + agg["cache_write_tokens"]
+            )
+            input_plus_cache = agg["input_tokens"] + agg["cache_read_tokens"]
+            agg["cache_hit_ratio_pct"] = (
+                round(agg["cache_read_tokens"] / input_plus_cache * 100, 1)
+                if input_plus_cache else 0.0
+            )
+            # Round cost fields to 6 decimals for consistency with the legacy path.
+            for k in ("input_cost_usd", "output_cost_usd", "cache_read_cost_usd",
+                      "cache_write_cost_usd", "total_cost_usd"):
+                agg[k] = round(agg[k], 6)
+            out.append(agg)
+        out.sort(key=lambda r: r.get("total_cost_usd", 0), reverse=True)
+        if session_id:
+            return out
+        return out[:int(limit)]
+
+    def query_session_model_journey(
+        self,
+        *,
+        session_id: str,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        """Ordered model + message events for one session (issue #1088 phase 3).
+
+        Returns rows ordered by timestamp ASC, each carrying enough fields
+        to drive ``/api/session-model-journey`` segment computation:
+          * model_change rows: ``{kind:'model_change', model, provider, ts}``
+          * message rows:      ``{kind:'message', model, provider, total_tokens, total_cost, ts}``
+          * thinking rows:     ``{kind:'thinking_level_change', level, ts}``
+
+        Single-session helper — caller passes ``session_id``. Uses the
+        existing events table; no new schema required."""
+        if not session_id:
+            return []
+        sql = """
+            SELECT event_type, ts, data, model
+            FROM events
+            WHERE session_id = ?
+              AND event_type IN ('model_change', 'message', 'thinking_level_change')
+            ORDER BY ts ASC, id ASC
+            LIMIT ?
+        """
+        out: list[dict[str, Any]] = []
+        for et, ts, raw, ev_model in self._fetch(sql, [session_id, int(limit)]):
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    data = {}
+            if et == "model_change":
+                out.append({
+                    "kind":      "model_change",
+                    "model":     data.get("modelId") or data.get("model") or ev_model or "",
+                    "provider":  data.get("provider") or "",
+                    "ts":        ts,
+                })
+            elif et == "thinking_level_change":
+                out.append({
+                    "kind":  "thinking_level_change",
+                    "level": data.get("thinkingLevel") or data.get("level") or "",
+                    "ts":    ts,
+                })
+            else:  # message
+                msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+                usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+                cost_obj = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
+                out.append({
+                    "kind":         "message",
+                    "model":        msg.get("model") or ev_model or "",
+                    "provider":     msg.get("provider") or "",
+                    "total_tokens": int(usage.get("totalTokens", 0) or 0),
+                    "total_cost":   float(cost_obj.get("total", 0) or 0),
+                    "ts":           ts,
+                })
+        return out
 
     def query_aggregates(
         self,
