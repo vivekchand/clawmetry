@@ -2073,41 +2073,45 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
 
 
 def _rows_to_brain_events(rows: list) -> list:
-    """Translate raw DuckDB event rows into the dashboard-display shape the
-    cloud Brain tab's ``_cm_decryptBrain`` expects (``{time, type, detail,
-    src, sessionId, agentId, tokens, cost, model}``).
+    """Return raw OpenClaw event payloads ready for the cloud browser's
+    ``transformEvents`` to unwrap.
 
-    Single source of truth used by both the proactive cache_push path
-    (`_build_brain_cache_pushes`) and the heartbeat-piggyback path
-    (`_dispatch_pending_queries`) so the browser sees the SAME shape no
-    matter which writer last touched the cache key.
+    The cloud Brain ``_cm_decryptBrain`` decrypts the blob, reads
+    ``dec.events``, then runs ``transformEvents(rawEvs, ...)`` over each
+    item — which expects the ORIGINAL JSONL shape:
+    ``{type, message:{role, content}, timestamp}``. It walks
+    ``message.content[].type === 'text'/'tool_use'/'thinking'`` to extract
+    the human-readable detail.
 
-    Bug 2026-05-13: the piggyback path was writing the raw `{rows: [...]}`
-    shape from `_local_dispatch('events', ...)`, overwriting the cache_push's
-    correct `{events: [...]}` blob. Browser saw `dec.events || []` = empty
-    and showed "No brain activity events found" even with 100+ events in
-    DuckDB. Extracting this helper + calling it from both paths fixes that.
+    Earlier we pre-flattened to ``{type:'ASSISTANT', detail:'', src, ...}``
+    (the OSS-local shape). That made ``transformEvents`` fall through to its
+    empty-detail fallback and DROP every event — cloud Brain showed "No
+    brain activity events found" even with hundreds of rows in DuckDB.
+    Bug confirmed live 2026-05-13 (Diya/Telegram messages).
+
+    For each row we forward ``row['data']`` as-is. We backfill
+    ``timestamp`` from the column-level ``ts`` only when the inner JSONL
+    didn't already carry one (transformEvents needs ``obj.timestamp ||
+    obj.time``).
+
+    The OSS-local Brain tab uses ``routes/brain.py:_try_local_store_brain``
+    which builds the display shape directly — that path is unchanged.
     """
     out = []
     for r in rows or []:
-        data = r.get("data") if isinstance(r, dict) else None
-        detail = ""
+        if not isinstance(r, dict):
+            continue
+        data = r.get("data")
         if isinstance(data, dict):
-            detail = (data.get("input") or data.get("summary")
-                      or data.get("text") or data.get("name") or "")
+            if not data.get("timestamp") and not data.get("time") and r.get("ts"):
+                data = {**data, "timestamp": r.get("ts")}
+            out.append(data)
         elif isinstance(data, str):
-            detail = data
-        out.append({
-            "time":      r.get("ts", ""),
-            "type":      (r.get("event_type") or "").upper(),
-            "detail":    str(detail)[:200],
-            "src":       (r.get("session_id") or r.get("agent_id") or "")[:32],
-            "sessionId": r.get("session_id") or "",
-            "agentId":   r.get("agent_id") or "main",
-            "tokens":    r.get("token_count") or 0,
-            "cost":      float(r.get("cost_usd") or 0.0),
-            "model":     r.get("model") or "",
-        })
+            out.append({
+                "type":      r.get("event_type") or "raw",
+                "timestamp": r.get("ts", ""),
+                "detail":    data[:2000],
+            })
     return out
 
 
