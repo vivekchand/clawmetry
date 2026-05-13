@@ -19,6 +19,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify
+from clawmetry.config import is_local_store_read_enabled
 
 bp_autonomy = Blueprint("autonomy", __name__)
 
@@ -439,7 +440,7 @@ def api_autonomy():
     # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
     # Falls through to legacy JSONL scan when the flag is unset, the store
     # is empty, or no qualifying user messages exist in the 7-day window.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_autonomy()
         if fast is not None:
             _AUTONOMY_CACHE["data"] = fast

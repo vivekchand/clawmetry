@@ -26,6 +26,7 @@ import sys
 from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request
+from clawmetry.config import is_local_store_read_enabled
 
 bp_overview = Blueprint('overview', __name__)
 
@@ -412,7 +413,7 @@ def api_overview():
     # Epic #964: opt-in local-store fast path. When CLAWMETRY_LOCAL_STORE_READ=1
     # AND the local sessions table has rows, serve directly from DuckDB. Falls
     # through to gateway/JSONL otherwise (zero-change default).
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_overview()
         if fast is not None:
             return jsonify(fast)
@@ -652,7 +653,7 @@ def api_timeline():
     # Epic #964: opt-in local-store fast path. When CLAWMETRY_LOCAL_STORE_READ=1
     # AND query_aggregates returns rows, serve from DuckDB. Falls through to the
     # 30-day JSONL scan otherwise (zero-change default).
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_timeline()
         if fast is not None:
             return jsonify(fast)
@@ -780,7 +781,7 @@ def api_prompt_errors():
             pass
 
     # Epic #964 — opt-in DuckDB fast path. Falls through on miss.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_prompt_errors(since_raw)
         if fast is not None:
             return jsonify(fast)

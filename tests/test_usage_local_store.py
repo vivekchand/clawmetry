@@ -129,7 +129,7 @@ def _build_app(tmp_path, monkeypatch, *, enable_fast_path: bool):
     if enable_fast_path:
         monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
     else:
-        monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+        monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
@@ -169,7 +169,7 @@ def legacy_path_app(tmp_path, monkeypatch):
     _seed_anomaly_session(store)
 
     # Now drop the flag so the route handlers must take the legacy path.
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
     import routes.usage as usage_mod
     importlib.reload(usage_mod)
 

@@ -25,6 +25,7 @@ from datetime import datetime
 import csv
 from datetime import timezone
 from flask import Blueprint, jsonify, request, Response
+from clawmetry.config import is_local_store_read_enabled
 
 bp_sessions = Blueprint('sessions', __name__)
 
@@ -179,7 +180,7 @@ def api_sessions():
     # serve directly from DuckDB. Falls through to gateway/JSONL otherwise
     # (so a fresh install with no local store, or a non-OpenClaw user, sees
     # the same data as before — zero-change default).
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_sessions()
         if fast is not None:
             _merge_unregistered_jsonls(fast["sessions"])
@@ -194,7 +195,7 @@ def api_sessions():
     # typed openclaw_channels table. Lets a partially-migrated install (sessions
     # still from gateway, channels already in DuckDB) get typed channel/chat_type/
     # subject without waiting for the full session-table cutover.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         _decorate_with_channel_context(sessions)
     for s in sessions:
         if "session_type" not in s:
@@ -348,7 +349,7 @@ def api_sessions_by_type():
     # Epic #964: opt-in local-store fast path. Mirrors /api/sessions — when
     # CLAWMETRY_LOCAL_STORE_READ=1 AND the local sessions table has rows,
     # serve directly from DuckDB. Falls through to gateway/JSONL otherwise.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_sessions_by_type(type_filter)
         if fast is not None:
             return jsonify(fast)
@@ -534,7 +535,7 @@ def api_compactions():
         summary_chars = 500
     full_summary = bool(wanted_sid)
 
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_compactions(wanted_sid, summary_chars, full_summary)
         if fast is not None:
             return jsonify(fast)
@@ -784,7 +785,7 @@ def api_session_tools():
         "1", "true", "yes"
     )
 
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_session_tools(sid, args_chars, result_chars, include_unpaired)
         if fast is not None:
             return jsonify(fast)
@@ -989,7 +990,7 @@ def api_cost_split():
     except ValueError:
         limit = 30
 
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_cost_split(wanted_sid, limit)
         if fast is not None:
             return jsonify(fast)
@@ -1879,7 +1880,7 @@ def api_sessions_cost_breakdown():
     import dashboard as _d
 
     # Epic #964 — opt-in DuckDB fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_cost_breakdown()
         if fast is not None:
             return jsonify(fast)
@@ -2008,7 +2009,7 @@ def api_transcripts():
     import dashboard as _d
 
     # Epic #964 — opt-in DuckDB fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_transcripts()
         if fast is not None:
             return jsonify(fast)
@@ -2145,7 +2146,7 @@ def _try_local_store_transcript(session_id: str):
 def api_transcript(session_id):
     """Parse and return a session transcript for the chat viewer."""
     import dashboard as _d
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_transcript(session_id)
         if fast is not None:
             return jsonify(fast)
@@ -2364,7 +2365,7 @@ def _try_local_store_transcript_events(session_id: str):
 def api_transcript_events(session_id):
     """Parse a session transcript JSONL into structured events for the detail modal."""
     import dashboard as _d
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_transcript_events(session_id)
         if fast is not None:
             return jsonify(fast)
@@ -2700,7 +2701,7 @@ def api_session_model_journey(session_id):
     in the session detail modal.
     """
     import dashboard as _d
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_session_model_journey(session_id)
         if fast is not None:
             return jsonify(fast)
@@ -2972,7 +2973,7 @@ def api_session_cost_breakdown(session_id):
     import dashboard as _d
 
     # Epic #964 — opt-in DuckDB fast path.
-    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if is_local_store_read_enabled():
         fast = _try_local_store_session_cost_breakdown(session_id)
         if fast is not None:
             return jsonify(fast)
@@ -3232,7 +3233,7 @@ def api_session_export(session_id):
 
     # JSON-only fast path — CSV branch falls through to the legacy parser
     # because it relies on text formatting that's not worth duplicating.
-    if export_format == "json" and os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+    if export_format == "json" and is_local_store_read_enabled():
         fast = _try_local_store_session_export(session_id)
         if fast is not None:
             return Response(

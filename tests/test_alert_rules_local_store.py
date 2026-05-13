@@ -193,7 +193,7 @@ def test_api_alerts_rules_flag_off_uses_legacy(fresh_store, monkeypatch):
         "enabled": True,
     })
 
-    monkeypatch.delenv("CLAWMETRY_LOCAL_STORE_READ", raising=False)
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
 
     sys.modules.pop("routes.alerts", None)
     import routes.alerts as ra
