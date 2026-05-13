@@ -6688,7 +6688,35 @@ function _buildReplayEvent(m, idx) {
     extra.from_hook = m.from_hook;
     extra.summary_truncated = m.summary_truncated;
   }
-  return { role: role, type: type, content: m.content || '', timestamp: m.timestamp, tokens: m.tokens || null, originalIndex: idx, extra: extra };
+  // Issue #564: decoding params (temperature / top_p / max_tokens / …) come
+  // through verbatim from the backend on assistant turns so the renderer can
+  // show a "⚙ T=0.7 · top_p=1 · max=4096" pill inline with the message.
+  return {
+    role: role,
+    type: type,
+    content: m.content || '',
+    timestamp: m.timestamp,
+    tokens: m.tokens || null,
+    params: m.params || null,
+    originalIndex: idx,
+    extra: extra
+  };
+}
+
+// Format the decoding-params dict into a compact inline pill. Returns ''
+// when nothing useful is set so callers can cheaply skip rendering.
+function _fmtDecodingParams(p) {
+  if (!p || typeof p !== 'object') return '';
+  var parts = [];
+  if (typeof p.temperature === 'number') parts.push('T=' + p.temperature);
+  if (typeof p.top_p === 'number') parts.push('top_p=' + p.top_p);
+  if (typeof p.top_k === 'number') parts.push('top_k=' + p.top_k);
+  if (typeof p.max_tokens === 'number') parts.push('max=' + p.max_tokens);
+  if (Array.isArray(p.stop_sequences) && p.stop_sequences.length) {
+    parts.push('stop=' + p.stop_sequences.length);
+  }
+  if (!parts.length) return '';
+  return '⚙ ' + parts.join(' · ');
 }
 
 function _renderReplayEvent(ev, highlighted) {
@@ -6712,6 +6740,13 @@ function _renderReplayEvent(ev, highlighted) {
     html += '<div style="white-space:pre-wrap;word-break:break-word;">' + escHtml(content) + '</div>';
   }
   if (ev.tokens) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">&#128200; ' + ev.tokens + ' tokens</div>';
+  // Issue #564: decoding-config pill — small inline summary of the sampling
+  // params that produced this assistant turn (only present when the backend
+  // could extract at least one known key).
+  var decoded = _fmtDecodingParams(ev.params);
+  if (decoded) {
+    html += '<div class="chat-decoding" title="Sampling parameters" style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' + escHtml(decoded) + '</div>';
+  }
   if (ev.timestamp) html += '<div class="chat-ts">' + new Date(ev.timestamp).toLocaleString() + '</div>';
   html += '</div>';
   return html;

@@ -2228,6 +2228,115 @@ def _expand_openclaw_event(obj: dict, ts_ms):
     return turns
 
 
+# Sampling parameter keys we surface in the "Decoding" pill. Order is the
+# display order in the UI; missing keys are simply dropped.
+_DECODING_KEYS = (
+    "temperature",
+    "top_p",
+    "top_k",
+    "max_tokens",
+    "stop_sequences",
+)
+
+# Camel-case → snake-case aliases — adapters write either style depending on
+# whether they came from Anthropic SDK (snake), OpenAI SDK (snake), or
+# OpenClaw gateway (camel). We collapse them to the canonical snake form.
+_DECODING_ALIASES = {
+    "maxTokens": "max_tokens",
+    "topP": "top_p",
+    "topK": "top_k",
+    "stopSequences": "stop_sequences",
+    "stop": "stop_sequences",
+    # OpenAI also calls it max_completion_tokens on newer models; treat the
+    # same way so the UI still shows a sensible "max=" value.
+    "max_completion_tokens": "max_tokens",
+}
+
+
+def _extract_decoding_params(obj):
+    """Pull ``{temperature, top_p, top_k, max_tokens, stop_sequences}`` out of
+    a parsed event, no matter which nested shape the adapter chose.
+
+    Handles three nested-key shapes (see issue #564):
+
+    1. ``obj["data"]["params"]``         — OpenClaw gateway model.completed
+    2. ``obj["data"]["message"]["params"]`` — Claude Code adapter payload
+    3. ``obj["data"]["config"]``         — generic LLM-client wrapper
+
+    Also handles a flat fallback where the params live directly on the
+    message dict (``obj["params"]`` / ``obj["config"]``) — common when the
+    DuckDB writer has already unwrapped the outer envelope.
+
+    Returns an empty dict when none of the keys are present so callers can
+    cheaply test truthiness without first checking ``is not None``. Never
+    raises on weird input — bad shapes return ``{}``.
+    """
+    if not isinstance(obj, dict):
+        return {}
+
+    # Candidate buckets, in priority order. The first non-empty bucket wins
+    # for any given key; we don't try to merge across buckets to avoid
+    # surfacing stale config from a sibling event.
+    candidates = []
+    data = obj.get("data") if isinstance(obj.get("data"), dict) else None
+    if data is not None:
+        # Path 1 — data.params  (e.g. model.completed gateway events)
+        if isinstance(data.get("params"), dict):
+            candidates.append(data["params"])
+        # Path 2 — data.message.params  (Anthropic SDK request payload)
+        msg = data.get("message") if isinstance(data.get("message"), dict) else None
+        if msg and isinstance(msg.get("params"), dict):
+            candidates.append(msg["params"])
+        if msg and isinstance(msg.get("metadata"), dict):
+            md = msg["metadata"]
+            if isinstance(md.get("params"), dict):
+                candidates.append(md["params"])
+        # Path 3 — data.config  (generic wrappers, our own SDK)
+        if isinstance(data.get("config"), dict):
+            candidates.append(data["config"])
+        # Anthropic non-streaming requests sometimes inline these on `data`
+        # itself when the writer flattened the message.
+        candidates.append(data)
+
+    # Flat fallback — when the caller already passed the message dict.
+    if isinstance(obj.get("params"), dict):
+        candidates.append(obj["params"])
+    if isinstance(obj.get("config"), dict):
+        candidates.append(obj["config"])
+    candidates.append(obj)
+
+    out = {}
+    for bucket in candidates:
+        if not isinstance(bucket, dict):
+            continue
+        for raw_key, val in bucket.items():
+            key = _DECODING_ALIASES.get(raw_key, raw_key)
+            if key not in _DECODING_KEYS:
+                continue
+            if key in out:
+                continue  # earlier bucket already supplied this key
+            # Skip clearly junk values. We accept 0 as a valid temperature.
+            if val is None:
+                continue
+            if key == "stop_sequences":
+                if isinstance(val, str):
+                    out[key] = [val]
+                elif isinstance(val, list):
+                    cleaned = [str(s) for s in val if s is not None]
+                    if cleaned:
+                        out[key] = cleaned
+                continue
+            if key in ("temperature", "top_p"):
+                if isinstance(val, (int, float)):
+                    out[key] = float(val)
+                continue
+            if key in ("top_k", "max_tokens"):
+                if isinstance(val, (int, float)):
+                    out[key] = int(val)
+                continue
+    return out
+
+
 def _try_local_store_transcript(session_id: str):
     """Read a session transcript directly from the DuckDB events table.
 
@@ -2286,9 +2395,15 @@ def _try_local_store_transcript(session_id: str):
                 model = obj.get("modelId") or obj.get("model") or ev.get("model")
             data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
             total_tokens += _openclaw_event_tokens(data)
+            # Issue #564: surface decoding params on assistant turns so the UI
+            # can show the "T=… top_p=… max=…" pill inline with the reply.
+            decoding = _extract_decoding_params(obj)
             for turn in _expand_openclaw_event(obj, ts_ms):
-                if turn.get("content", "").strip():
-                    messages.append(turn)
+                if not turn.get("content", "").strip():
+                    continue
+                if decoding and turn.get("role") == "assistant":
+                    turn["params"] = decoding
+                messages.append(turn)
             continue
 
         # Anthropic-style fallback (existing logic).
@@ -2314,7 +2429,12 @@ def _try_local_store_transcript(session_id: str):
                 usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
             )
         if content or role in ("user", "assistant", "system"):
-            messages.append({"role": role, "content": content, "timestamp": ts_ms})
+            msg_entry = {"role": role, "content": content, "timestamp": ts_ms}
+            if role == "assistant":
+                decoding = _extract_decoding_params(obj)
+                if decoding:
+                    msg_entry["params"] = decoding
+            messages.append(msg_entry)
     duration = None
     if first_ts and last_ts and last_ts > first_ts:
         dur_sec = (last_ts - first_ts) / 1000
@@ -2425,13 +2545,19 @@ def api_transcript(session_id):
                             usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
                         )
                     if content or role in ("user", "assistant", "system"):
-                        messages.append(
-                            {
-                                "role": role,
-                                "content": content,
-                                "timestamp": ts_ms,
-                            }
-                        )
+                        msg_entry = {
+                            "role": role,
+                            "content": content,
+                            "timestamp": ts_ms,
+                        }
+                        # Issue #564: attach decoding config (T/top_p/max…)
+                        # to assistant turns so the UI can render an inline
+                        # pill next to the reply.
+                        if role == "assistant":
+                            decoding = _extract_decoding_params(obj)
+                            if decoding:
+                                msg_entry["params"] = decoding
+                        messages.append(msg_entry)
                 except (json.JSONDecodeError, ValueError):
                     pass
     except Exception as e:
