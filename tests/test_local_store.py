@@ -267,7 +267,7 @@ def test_health_reports_size_and_count(store):
     h = store.health()
     assert h["event_count"] == 10
     assert h["size_bytes"] > 0
-    assert h["schema_version"] == 3
+    assert h["schema_version"] == 4
     assert h["ring_depth"] == 0
     assert h["ring_dropped_total"] == 0
 
@@ -410,3 +410,338 @@ def test_get_store_ro_first_isolated(tmp_path, monkeypatch):
     assert reader._read_only is True
     rows = reader.query_events(limit=5)
     assert len(rows) == 1
+
+
+# ── phase-3 query helpers (issue #1088 follow-up, 2026-05-13) ─────────────
+
+
+def test_query_compactions_round_trip(store):
+    """compaction events round-trip back as projected rows with summary,
+    tokens_before, first_kept_entry_id, and from_hook fields."""
+    store.ingest(_ev(
+        id="cmp-1",
+        session_id="sess-cmp",
+        event_type="compaction",
+        ts="2026-05-12T10:00:00Z",
+        data={
+            "type": "compaction",
+            "timestamp": "2026-05-12T10:00:00Z",
+            "summary": "Compacted 12 messages → 2K-token summary",
+            "tokensBefore": 8500,
+            "firstKeptEntryId": "ent-42",
+            "fromHook": True,
+        },
+    ))
+    store.ingest(_ev(
+        id="cmp-2",
+        session_id="sess-other",
+        event_type="compaction",
+        ts="2026-05-12T11:00:00Z",
+        data={"type": "compaction", "summary": "later one",
+              "tokensBefore": 100, "firstKeptEntryId": "", "fromHook": False},
+    ))
+    _wait_for_flush(store)
+
+    rows = store.query_compactions()
+    assert len(rows) == 2
+    # Most-recent first.
+    assert rows[0]["session_id"] == "sess-other"
+    assert rows[1]["session_id"] == "sess-cmp"
+    assert rows[1]["summary"].startswith("Compacted")
+    assert rows[1]["tokens_before"] == 8500
+    assert rows[1]["first_kept_entry_id"] == "ent-42"
+    assert rows[1]["from_hook"] is True
+
+    # session_id filter narrows.
+    only_one = store.query_compactions(session_id="sess-cmp")
+    assert [r["session_id"] for r in only_one] == ["sess-cmp"]
+
+
+def test_query_cost_split_aggregates_per_session(store):
+    """Two assistant turns in the same session aggregate into one cost-split
+    row with summed tokens + costs and a primary_model derived from the
+    most-used model."""
+    for i in range(2):
+        store.ingest(_ev(
+            id=f"cs-{i}",
+            session_id="sess-cs",
+            event_type="message",
+            ts=f"2026-05-12T10:0{i}:00Z",
+            model="claude-opus-4-7",
+            data={
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-opus-4-7",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "usage": {
+                        "input": 1000, "output": 500,
+                        "cacheRead": 2000, "cacheWrite": 100,
+                        "totalTokens": 3600,
+                        "cost": {"input": 0.01, "output": 0.02,
+                                 "cacheRead": 0.001, "cacheWrite": 0.0005,
+                                 "total": 0.0315},
+                    },
+                },
+            },
+        ))
+    # A different session that should appear as a second row.
+    store.ingest(_ev(
+        id="cs-other",
+        session_id="sess-cs-other",
+        event_type="message",
+        ts="2026-05-12T10:05:00Z",
+        model="claude-haiku-4",
+        data={
+            "type": "message",
+            "message": {
+                "role": "assistant", "model": "claude-haiku-4",
+                "content": [{"type": "text", "text": "x"}],
+                "usage": {"input": 100, "output": 50, "totalTokens": 150,
+                          "cost": {"total": 0.001, "input": 0.0007, "output": 0.0003}},
+            },
+        },
+    ))
+    _wait_for_flush(store)
+
+    rows = store.query_cost_split()
+    assert len(rows) == 2
+    by_sid = {r["session_id"]: r for r in rows}
+    aggregated = by_sid["sess-cs"]
+    assert aggregated["primary_model"] == "claude-opus-4-7"
+    assert aggregated["input_tokens"] == 2000
+    assert aggregated["output_tokens"] == 1000
+    assert aggregated["cache_read_tokens"] == 4000
+    assert aggregated["cache_write_tokens"] == 200
+    assert aggregated["total_tokens"] == 7200
+    assert aggregated["total_cost_usd"] == pytest.approx(0.063, abs=1e-6)
+    # Cache hit ratio = cache_read / (input + cache_read) = 4000 / 6000 = 66.7%
+    assert aggregated["cache_hit_ratio_pct"] == pytest.approx(66.7, abs=0.1)
+    # Single-session lookup ignores aggregations from other sessions.
+    only = store.query_cost_split(session_id="sess-cs")
+    assert len(only) == 1
+    assert only[0]["session_id"] == "sess-cs"
+
+
+def test_query_session_model_journey_orders_segments(store):
+    """model_change + assistant message events emerge in timestamp order with
+    kind tags so the route can fold them into segments."""
+    store.ingest(_ev(
+        id="mj-mc-1",
+        session_id="sess-mj",
+        event_type="model_change",
+        ts="2026-05-12T10:00:00Z",
+        data={"modelId": "claude-sonnet-4-5", "provider": "anthropic"},
+    ))
+    store.ingest(_ev(
+        id="mj-msg-1",
+        session_id="sess-mj",
+        event_type="message",
+        ts="2026-05-12T10:01:00Z",
+        model="claude-sonnet-4-5",
+        data={
+            "type": "message",
+            "message": {
+                "role": "assistant", "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": {"totalTokens": 200, "cost": {"total": 0.003}},
+            },
+        },
+    ))
+    store.ingest(_ev(
+        id="mj-think-1",
+        session_id="sess-mj",
+        event_type="thinking_level_change",
+        ts="2026-05-12T10:02:00Z",
+        data={"thinkingLevel": "high"},
+    ))
+    store.ingest(_ev(
+        id="mj-mc-2",
+        session_id="sess-mj",
+        event_type="model_change",
+        ts="2026-05-12T10:03:00Z",
+        data={"modelId": "claude-opus-4-7", "provider": "anthropic"},
+    ))
+    # Different session — should not appear in the result.
+    store.ingest(_ev(
+        id="mj-other",
+        session_id="sess-other",
+        event_type="model_change",
+        ts="2026-05-12T10:04:00Z",
+        data={"modelId": "x", "provider": "y"},
+    ))
+    _wait_for_flush(store)
+
+    rows = store.query_session_model_journey(session_id="sess-mj")
+    assert [r["kind"] for r in rows] == [
+        "model_change", "message", "thinking_level_change", "model_change"
+    ]
+    assert rows[0]["model"] == "claude-sonnet-4-5"
+    assert rows[1]["total_tokens"] == 200
+    assert rows[1]["total_cost"] == pytest.approx(0.003, abs=1e-6)
+    assert rows[2]["level"] == "high"
+    assert rows[3]["model"] == "claude-opus-4-7"
+    # Empty session_id returns nothing rather than scanning the table.
+    assert store.query_session_model_journey(session_id="") == []
+
+
+# ── channel_messages (issue #1088 Phase 4) ───────────────────────────────
+
+
+def test_channel_message_ingest_round_trip(store):
+    """One inbound + one outbound message round-trips through DuckDB."""
+    store.ingest_channel_message({
+        "id":          "msg-tg-1",
+        "agent_id":    "main",
+        "provider":    "telegram",
+        "channel_id":  "1234",
+        "sender_id":   "user-7",
+        "sender_name": "Alice",
+        "body":        "hello world",
+        "ts":          "2026-05-13T10:00:00Z",
+        "direction":   "in",
+        "session_key": "sess-A",
+        "raw_blob":    {"message_id": 42},
+    })
+    store.ingest_channel_message({
+        "id":         "msg-tg-2",
+        "provider":   "Telegram",  # mixed case → lowercased
+        "channel_id": "1234",
+        "body":       "(reply)",
+        "ts":         "2026-05-13T10:00:01Z",
+        "direction":  "out",
+    })
+    rows = store.query_channel_messages(provider="telegram")
+    assert len(rows) == 2
+    # Most-recent first.
+    assert rows[0]["id"] == "msg-tg-2"
+    assert rows[1]["id"] == "msg-tg-1"
+    # Provider lowercased on ingest.
+    assert rows[0]["provider"] == "telegram"
+    # raw_blob round-trips as a dict.
+    assert rows[1]["raw_blob"] == {"message_id": 42}
+
+
+def test_channel_message_validates_required_fields(store):
+    """Missing id / provider / ts / bad direction all raise ValueError."""
+    with pytest.raises(ValueError):
+        store.ingest_channel_message({"provider": "tg", "ts": "x", "direction": "in"})
+    with pytest.raises(ValueError):
+        store.ingest_channel_message({"id": "1", "ts": "x", "direction": "in"})
+    with pytest.raises(ValueError):
+        store.ingest_channel_message({"id": "1", "provider": "tg", "direction": "in"})
+    with pytest.raises(ValueError):
+        store.ingest_channel_message({"id": "1", "provider": "tg", "ts": "x", "direction": "sideways"})
+
+
+def test_query_channel_messages_filters_and_limit(store):
+    """provider/channel_id/since/limit all gate the result set."""
+    base = "2026-05-13T10:00:0"
+    for i in range(5):
+        store.ingest_channel_message({
+            "id":         f"m-tg-{i}",
+            "provider":   "telegram",
+            "channel_id": "1111" if i < 3 else "2222",
+            "body":       f"tg-{i}",
+            "ts":         f"{base}{i}Z",
+            "direction":  "in",
+        })
+    for i in range(2):
+        store.ingest_channel_message({
+            "id":         f"m-sl-{i}",
+            "provider":   "slack",
+            "channel_id": "C42",
+            "body":       f"sl-{i}",
+            "ts":         f"{base}{i}Z",
+            "direction":  "in",
+        })
+    # Provider filter.
+    assert {r["id"] for r in store.query_channel_messages(provider="slack")} == {
+        "m-sl-0", "m-sl-1"
+    }
+    # channel_id filter scopes to one chat.
+    assert {r["id"] for r in store.query_channel_messages(
+        provider="telegram", channel_id="1111"
+    )} == {"m-tg-0", "m-tg-1", "m-tg-2"}
+    # since cuts off old rows.
+    rows = store.query_channel_messages(
+        provider="telegram", since="2026-05-13T10:00:03Z"
+    )
+    assert {r["id"] for r in rows} == {"m-tg-3", "m-tg-4"}
+    # limit caps the page.
+    assert len(store.query_channel_messages(provider="telegram", limit=2)) == 2
+
+
+def test_query_channel_threads_groups_by_channel(store):
+    """One row per channel_id, with in/out counts and last-* fields."""
+    base = "2026-05-13T10:00:0"
+    for i, body, dirn in [
+        (0, "hi",        "in"),
+        (1, "yo",        "in"),
+        (2, "(reply)",   "out"),
+        (3, "thx",       "in"),
+    ]:
+        store.ingest_channel_message({
+            "id":          f"t-{i}",
+            "provider":    "telegram",
+            "channel_id":  "1234",
+            "sender_name": "Alice" if dirn == "in" else "Bot",
+            "body":        body,
+            "ts":          f"{base}{i}Z",
+            "direction":   dirn,
+        })
+    # Different channel_id — its own thread row.
+    store.ingest_channel_message({
+        "id":          "t-other",
+        "provider":    "telegram",
+        "channel_id":  "9999",
+        "sender_name": "Bob",
+        "body":        "stranger danger",
+        "ts":          "2026-05-13T09:00:00Z",
+        "direction":   "in",
+    })
+    threads = store.query_channel_threads(provider="telegram")
+    by_chan = {t["channel_id"]: t for t in threads}
+    assert set(by_chan) == {"1234", "9999"}
+    main = by_chan["1234"]
+    assert main["msg_in"] == 3
+    assert main["msg_out"] == 1
+    assert main["total"] == 4
+    assert main["last_body"] == "thx"
+    assert main["last_direction"] == "in"
+    # Most-recent thread sorted first.
+    assert threads[0]["channel_id"] == "1234"
+    # Empty provider returns empty list (cheap guard).
+    assert store.query_channel_threads(provider="") == []
+
+
+def test_query_channel_summary_groups_across_providers(store):
+    """One row per provider; in/out counts; distinct_channels honoured."""
+    for i in range(3):
+        store.ingest_channel_message({
+            "id":         f"s-tg-{i}",
+            "provider":   "telegram",
+            "channel_id": "1" if i < 2 else "2",
+            "body":       "x",
+            "ts":         f"2026-05-13T10:00:0{i}Z",
+            "direction":  "in" if i < 2 else "out",
+        })
+    store.ingest_channel_message({
+        "id":         "s-sl-1",
+        "provider":   "slack",
+        "channel_id": "C42",
+        "body":       "x",
+        "ts":         "2026-05-13T11:00:00Z",
+        "direction":  "in",
+    })
+    summary = store.query_channel_summary()
+    by_prov = {r["provider"]: r for r in summary}
+    assert set(by_prov) == {"telegram", "slack"}
+    tg = by_prov["telegram"]
+    assert tg["msg_in"] == 2
+    assert tg["msg_out"] == 1
+    assert tg["total"] == 3
+    assert tg["distinct_channels"] == 2
+    sl = by_prov["slack"]
+    assert sl["msg_in"] == 1
+    assert sl["distinct_channels"] == 1

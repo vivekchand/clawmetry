@@ -1040,6 +1040,196 @@ def api_usage_by_plugin_trend():
     return jsonify({"days": day_list, "plugins": result})
 
 
+def _build_cluster_payload(session_profiles, *, days, now_ts):
+    """Aggregate per-session profiles into clusters keyed by
+    (tool_category, cost_tier, error_presence, model_family)."""
+    def _model_family(model_str):
+        m = (model_str or "").lower()
+        if "claude" in m:
+            return "claude"
+        if "gpt" in m or "openai" in m:
+            return "gpt"
+        if "gemini" in m or "google" in m:
+            return "gemini"
+        if "llama" in m or "mistral" in m or "groq" in m:
+            return "open-source"
+        return "other"
+
+    def _tool_category(tool_name):
+        t = (tool_name or "").lower()
+        if t in ("none", ""):
+            return "no-tools"
+        if t in ("exec", "bash", "shell", "run"):
+            return "code-execution"
+        if t in ("read", "write", "edit", "file_read", "file_write"):
+            return "file-ops"
+        if t in ("web_search", "web_fetch", "browser"):
+            return "web"
+        if t in ("message", "tts", "send_message"):
+            return "communication"
+        if t in ("sessions_spawn", "sessions_send", "subagents"):
+            return "orchestration"
+        if t in ("memory_search", "memory_get"):
+            return "memory"
+        return "other-tools"
+
+    clusters_map = defaultdict(
+        lambda: {
+            "sessions": [], "total_tokens": 0, "total_cost_usd": 0.0,
+            "error_count": 0, "tool_freq": defaultdict(int),
+        }
+    )
+    for sp in session_profiles:
+        mf = _model_family(sp["model"])
+        tc = _tool_category(sp["top_tool"])
+        has_errors = "errors" if sp["error_count"] > 0 else "clean"
+        cluster_key = f"{tc}|{sp['cost_tier']}|{has_errors}|{mf}"
+        c = clusters_map[cluster_key]
+        c["sessions"].append(sp["session_id"])
+        c["total_tokens"] += sp["tokens"]
+        c["total_cost_usd"] += sp["cost_usd"]
+        c["error_count"] += sp["error_count"]
+        for tool, cnt in sp["tool_counts"].items():
+            c["tool_freq"][tool] += cnt
+        if "tool_category" not in c:
+            c["tool_category"] = tc
+            c["cost_tier"] = sp["cost_tier"]
+            c["has_errors"] = has_errors == "errors"
+            c["model_family"] = mf
+
+    clusters_out = []
+    for key, c in clusters_map.items():
+        n = len(c["sessions"])
+        avg_cost = c["total_cost_usd"] / n if n > 0 else 0.0
+        top_tools_sorted = sorted(c["tool_freq"].items(), key=lambda x: x[1], reverse=True)[:5]
+        tc = c.get("tool_category", "other")
+        cost_tier = c.get("cost_tier", "cheap")
+        mf = c.get("model_family", "other")
+        has_err = c.get("has_errors", False)
+        label_parts = []
+        if tc == "code-execution": label_parts.append("Code execution")
+        elif tc == "file-ops":     label_parts.append("File operations")
+        elif tc == "web":          label_parts.append("Web browsing")
+        elif tc == "communication":label_parts.append("Messaging")
+        elif tc == "orchestration":label_parts.append("Agent orchestration")
+        elif tc == "memory":       label_parts.append("Memory access")
+        elif tc == "no-tools":     label_parts.append("Conversational")
+        else:                       label_parts.append("Mixed tools")
+        if cost_tier == "expensive": label_parts.append("high-cost")
+        elif cost_tier == "medium":  label_parts.append("medium-cost")
+        if has_err: label_parts.append("with errors")
+        if mf not in ("claude", "other"): label_parts.append(mf)
+        clusters_out.append({
+            "cluster_id": key,
+            "label": " ".join(label_parts),
+            "session_count": n,
+            "session_ids": c["sessions"][:10],
+            "total_tokens": c["total_tokens"],
+            "total_cost_usd": round(c["total_cost_usd"], 6),
+            "avg_cost_usd": round(avg_cost, 6),
+            "error_count": c["error_count"],
+            "tool_category": tc,
+            "cost_tier": cost_tier,
+            "has_errors": has_err,
+            "model_family": mf,
+            "top_tools": [{"tool": t, "count": cnt} for t, cnt in top_tools_sorted],
+        })
+    clusters_out.sort(key=lambda x: x["session_count"], reverse=True)
+    return {
+        "clusters": clusters_out,
+        "total_sessions": len(session_profiles),
+        "days": days,
+        "generated_at": int(now_ts * 1000),
+    }
+
+
+def _try_local_store_sessions_clusters(days: int):
+    """Fast path for /api/sessions/clusters. Reads sessions + events from
+    DuckDB and runs the same cluster aggregation as the legacy JSONL walker.
+
+    Issue #1088: routes through the daemon HTTP proxy via ``_ls_call``.
+    Returns ``None`` to defer to the JSONL fallback when DuckDB has no
+    sessions in the time window.
+    """
+    now_ts = time.time()
+    cutoff_ts = now_ts - (days * 86400)
+    cutoff_iso = datetime.utcfromtimestamp(cutoff_ts).isoformat()
+    sessions = _ls_call("query_sessions", since=cutoff_iso, limit=2000)
+    if not sessions:
+        return None
+    # One bulk events fetch; group by session_id (avoids N+1 daemon hops).
+    events = _ls_call("query_events", since=cutoff_iso, limit=20000) or []
+    by_session: dict = defaultdict(list)
+    for ev in events:
+        sid = ev.get("session_id")
+        if sid:
+            by_session[sid].append(ev)
+
+    import dashboard as _d
+    usd_per_tok = _d._estimate_usd_per_token()
+    session_profiles = []
+    for s in sessions:
+        sid = s.get("session_id")
+        if not sid:
+            continue
+        evs = by_session.get(sid, [])
+        tool_counts: dict = defaultdict(int)
+        error_count = 0
+        s_model = "unknown"
+        has_cron = False
+        has_subagent = False
+        turn_count = 0
+        s_tokens = int(s.get("token_count") or 0)
+        for ev in evs:
+            data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+            msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+            mdl = ev.get("model") or msg.get("model") or data.get("model")
+            if mdl:
+                s_model = mdl
+            for t in _d._extract_tool_plugins(data) or []:
+                tool_counts[t] += 1
+            etype = ev.get("event_type") or data.get("type") or ""
+            if etype in ("error", "tool_error"):
+                error_count += 1
+            if isinstance(data.get("error"), dict) and data["error"]:
+                error_count += 1
+            blob = json.dumps(data, default=str).lower()
+            if "cron" in blob or "scheduled" in blob:
+                has_cron = True
+            if "subagent" in blob or "spawned" in blob:
+                has_subagent = True
+            if etype == "message":
+                turn_count += 1
+        # Token fallback: derive from event-level token_count if sessions row was zero.
+        if s_tokens == 0:
+            s_tokens = sum(int(ev.get("token_count") or 0) for ev in evs)
+        if s_tokens == 0 and not tool_counts:
+            continue
+        total_tools = sum(tool_counts.values())
+        top_tool = max(tool_counts, key=tool_counts.get) if tool_counts else "none"
+        cost = float(s.get("cost_usd") or 0.0)
+        if cost == 0.0 and s_tokens:
+            cost = round(s_tokens * usd_per_tok, 6)
+        if cost >= 0.10:
+            cost_tier = "expensive"
+        elif cost >= 0.02:
+            cost_tier = "medium"
+        else:
+            cost_tier = "cheap"
+        session_profiles.append({
+            "session_id": sid, "model": s_model, "top_tool": top_tool,
+            "tool_counts": dict(tool_counts), "total_tools": total_tools,
+            "error_count": error_count, "tokens": s_tokens, "cost_usd": cost,
+            "cost_tier": cost_tier, "has_cron": has_cron,
+            "has_subagent": has_subagent, "turn_count": turn_count,
+        })
+    if not session_profiles:
+        return None
+    payload = _build_cluster_payload(session_profiles, days=days, now_ts=now_ts)
+    payload["_source"] = "local_store"
+    return payload
+
+
 @bp_usage.route("/api/sessions/clusters")
 def api_sessions_clusters():
     """Cluster sessions by behavior pattern (tool usage, cost profile, error type, model).
@@ -1052,6 +1242,14 @@ def api_sessions_clusters():
 
     _CLUSTER_ANALYTICS_TTL = 120  # seconds
     now_ts = time.time()
+    try:
+        days_arg = int(request.args.get("days", 30))
+    except (ValueError, TypeError):
+        days_arg = 30
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_sessions_clusters(days_arg)
+        if fast is not None:
+            return jsonify(fast)
 
     # Optional time window filter (days)
     try:

@@ -57,6 +57,31 @@ bp_crons = Blueprint('crons', __name__)
 # tests can assert which path served the response.
 
 
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback.
+
+    Issue #1088: every direct ``get_store().query_*`` call is dead code in
+    the standard install (daemon owns the writer lock, dashboard's open
+    raises ``IOException: Could not set lock``). This wrapper hits the
+    daemon's HTTP proxy first, then falls back to direct open for
+    single-process boots (tests + dev mode). Returns ``None`` on miss so
+    callers can defer to the legacy fallback path.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
 def _parse_iso_to_ms(ts):
     """Best-effort ISO-8601 → epoch-ms. Returns 0 on any failure."""
     if not ts:
@@ -588,6 +613,35 @@ def api_cron_kill(job_id):
     return jsonify({"ok": True, "jobId": job_id, "enabled": False, "result": result})
 
 
+def _try_local_store_cron_run_log(session_id: str):
+    """Fast path for /api/cron-run-log. Reads message events for the given
+    session from DuckDB and projects ``role/timestamp/content`` for the modal.
+
+    Issue #1088: routes through the daemon HTTP proxy first via ``_ls_call``,
+    with the standard direct-open fallback for single-process boots. Returns
+    ``None`` to defer to the JSONL parser when the events table has no
+    message rows for this session.
+    """
+    rows = _ls_call("query_events", session_id=session_id, limit=5000)
+    if not rows:
+        return None
+    rows = list(reversed(rows))  # query_events returns DESC
+    events = []
+    for ev in rows:
+        if ev.get("event_type") != "message":
+            continue
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+        events.append({
+            "role": msg.get("role", ""),
+            "timestamp": data.get("timestamp") or ev.get("ts") or "",
+            "content": str(msg.get("content", ""))[:500],
+        })
+    if not events:
+        return None
+    return {"sessionId": session_id, "events": events, "_source": "local_store"}
+
+
 @bp_crons.route("/api/cron-run-log")
 def api_cron_run_log():
     """Return a parsed session transcript for a cron run (for the run-log modal)."""
@@ -595,6 +649,10 @@ def api_cron_run_log():
     session_id = request.args.get("session_id", "")
     if not session_id:
         return jsonify({"error": "session_id required"}), 400
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_cron_run_log(session_id)
+        if fast is not None:
+            return jsonify(fast)
     sessions_dir = _d._get_sessions_dir()
     fpath = os.path.join(sessions_dir, f"{session_id}.jsonl")
     # Guard against path-traversal via crafted session_id (e.g. "../../etc/passwd").
@@ -818,6 +876,127 @@ def api_cron_kill_all():
     )
 
 
+def _project_intentions(jobs, days: int, include_disabled: bool, max_events: int):
+    """Walk the cron job list and produce the ``intentions`` + ``recently_added``
+    payload ``/api/agent-intentions`` returns. Pulled out of the route so the
+    fast-path can reuse the projection logic against ``query_crons`` rows
+    without duplicating the timeline math."""
+    now_ms = int(datetime.now().timestamp() * 1000)
+    window_end_ms = now_ms + days * 24 * 3600 * 1000
+    recent_threshold_ms = now_ms - 24 * 3600 * 1000
+
+    intentions: list = []
+    recently_added: list = []
+
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        enabled = bool(job.get("enabled", True))
+        if not enabled and not include_disabled:
+            continue
+        job_id = job.get("id", "")
+        job_name = job.get("name", job_id)
+        sched = job.get("schedule") or {}
+        state = job.get("state") or {}
+        created_at_ms = job.get("createdAtMs") or 0
+        if isinstance(created_at_ms, str):
+            try:
+                from dateutil import parser as _dtp
+                created_at_ms = int(_dtp.parse(created_at_ms).timestamp() * 1000)
+            except Exception:
+                created_at_ms = 0
+        is_recently_added = bool(created_at_ms and created_at_ms >= recent_threshold_ms)
+        if is_recently_added:
+            recently_added.append({
+                "jobId":       job_id,
+                "name":        job_name,
+                "createdAtMs": created_at_ms,
+                "schedule":    sched,
+                "enabled":     enabled,
+            })
+        last_status = state.get("lastStatus", "pending")
+        last_run_ms = state.get("lastRunAtMs") or 0
+        if isinstance(last_run_ms, str):
+            try:
+                from dateutil import parser as _dtp
+                last_run_ms = int(_dtp.parse(last_run_ms).timestamp() * 1000)
+            except Exception:
+                last_run_ms = 0
+        next_run_ms = state.get("nextRunAtMs") or 0
+        sched_kind = (sched.get("kind") or "").lower() if isinstance(sched, dict) else ""
+        every_ms = sched.get("everyMs") if isinstance(sched, dict) else None
+        try:
+            every_ms = int(every_ms) if every_ms else 0
+        except (TypeError, ValueError):
+            every_ms = 0
+        firings: list = []
+        if sched_kind in ("every", "interval") and every_ms > 0:
+            t = int(next_run_ms) if next_run_ms else now_ms + every_ms
+            if t < now_ms:
+                gap = now_ms - t
+                t += ((gap // every_ms) + 1) * every_ms
+            while t <= window_end_ms and len(firings) < 100:
+                firings.append(t)
+                t += every_ms
+        elif next_run_ms and now_ms <= next_run_ms <= window_end_ms:
+            firings.append(int(next_run_ms))
+        for ts in firings:
+            intentions.append({
+                "jobId":           job_id,
+                "name":            job_name,
+                "scheduledForMs":  ts,
+                "scheduleKind":    sched_kind or "unknown",
+                "lastStatus":      last_status,
+                "lastRunAtMs":     last_run_ms,
+                "isRecentlyAdded": is_recently_added,
+                "enabled":         enabled,
+            })
+            if len(intentions) >= max_events:
+                break
+        if len(intentions) >= max_events:
+            break
+    intentions.sort(key=lambda r: r.get("scheduledForMs", 0))
+    recently_added.sort(key=lambda r: -(r.get("createdAtMs") or 0))
+    return intentions, recently_added, now_ms, window_end_ms
+
+
+def _try_local_store_agent_intentions(days: int, include_disabled: bool, max_events: int):
+    """Fast path for /api/agent-intentions. Reads cron jobs from the local
+    DuckDB ``crons`` table (already populated by sync.py) and runs the
+    same projection ``/api/agent-intentions`` does against the gateway
+    response.
+
+    Issue #1088 phase 3. Returns ``None`` when the crons table is empty
+    so the route falls through to the gateway RPC."""
+    rows = _ls_call("query_crons", limit=500)
+    if not rows:
+        return None
+    jobs = []
+    for r in rows:
+        try:
+            jobs.append(_row_to_cron_job(r))
+        except Exception:
+            continue
+    intentions, recently_added, now_ms, window_end_ms = _project_intentions(
+        jobs, days, include_disabled, max_events
+    )
+    return {
+        "intentions":     intentions,
+        "recently_added": recently_added,
+        "window": {
+            "startMs": now_ms,
+            "endMs":   window_end_ms,
+            "days":    days,
+        },
+        "stats": {
+            "total_intentions":     len(intentions),
+            "recently_added_count": len(recently_added),
+            "truncated":            len(intentions) >= max_events,
+        },
+        "_source": "local_store",
+    }
+
+
 @bp_crons.route("/api/agent-intentions")
 def api_agent_intentions():
     """Cron jobs reframed as the agent's planned future actions.
@@ -852,100 +1031,19 @@ def api_agent_intentions():
     except ValueError:
         max_events = 200
 
+    if os.environ.get("CLAWMETRY_LOCAL_STORE_READ") == "1":
+        fast = _try_local_store_agent_intentions(days, include_disabled, max_events)
+        if fast is not None:
+            return jsonify(fast)
+
     gw_data = _d._gw_invoke("cron", {"action": "list", "includeDisabled": True}) or {}
     jobs = gw_data.get("jobs", []) or _d._get_crons()
     if not isinstance(jobs, list):
         jobs = []
 
-    now_ms = int(datetime.now().timestamp() * 1000)
-    window_end_ms = now_ms + days * 24 * 3600 * 1000
-    recent_threshold_ms = now_ms - 24 * 3600 * 1000
-
-    intentions: list = []
-    recently_added: list = []
-
-    for job in jobs:
-        if not isinstance(job, dict):
-            continue
-        enabled = bool(job.get("enabled", True))
-        if not enabled and not include_disabled:
-            continue
-
-        job_id = job.get("id", "")
-        job_name = job.get("name", job_id)
-        sched = job.get("schedule") or {}
-        state = job.get("state") or {}
-
-        created_at_ms = job.get("createdAtMs") or 0
-        if isinstance(created_at_ms, str):
-            try:
-                from dateutil import parser as _dtp
-                created_at_ms = int(_dtp.parse(created_at_ms).timestamp() * 1000)
-            except Exception:
-                created_at_ms = 0
-        is_recently_added = bool(created_at_ms and created_at_ms >= recent_threshold_ms)
-        if is_recently_added:
-            recently_added.append({
-                "jobId": job_id,
-                "name": job_name,
-                "createdAtMs": created_at_ms,
-                "schedule": sched,
-                "enabled": enabled,
-            })
-
-        last_status = state.get("lastStatus", "pending")
-        last_run_ms = state.get("lastRunAtMs") or 0
-        if isinstance(last_run_ms, str):
-            try:
-                from dateutil import parser as _dtp
-                last_run_ms = int(_dtp.parse(last_run_ms).timestamp() * 1000)
-            except Exception:
-                last_run_ms = 0
-        next_run_ms = state.get("nextRunAtMs") or 0
-
-        sched_kind = (sched.get("kind") or "").lower() if isinstance(sched, dict) else ""
-        every_ms = sched.get("everyMs") if isinstance(sched, dict) else None
-        try:
-            every_ms = int(every_ms) if every_ms else 0
-        except (TypeError, ValueError):
-            every_ms = 0
-
-        firings: list = []
-        if sched_kind in ("every", "interval") and every_ms > 0:
-            # Walk forward by everyMs from the gateway's nextRunAtMs.
-            # If nextRunAtMs is unset, the gateway hasn't scheduled it yet —
-            # assume the first firing is one interval out.
-            t = int(next_run_ms) if next_run_ms else now_ms + every_ms
-            # If next_run is already in the past, advance to the first future tick
-            if t < now_ms:
-                gap = now_ms - t
-                t += ((gap // every_ms) + 1) * every_ms
-            while t <= window_end_ms and len(firings) < 100:
-                firings.append(t)
-                t += every_ms
-        elif next_run_ms and now_ms <= next_run_ms <= window_end_ms:
-            # Cron-expression / one-shot: only the immediate next firing
-            firings.append(int(next_run_ms))
-
-        for ts in firings:
-            intentions.append({
-                "jobId": job_id,
-                "name": job_name,
-                "scheduledForMs": ts,
-                "scheduleKind": sched_kind or "unknown",
-                "lastStatus": last_status,
-                "lastRunAtMs": last_run_ms,
-                "isRecentlyAdded": is_recently_added,
-                "enabled": enabled,
-            })
-            if len(intentions) >= max_events:
-                break
-        if len(intentions) >= max_events:
-            break
-
-    intentions.sort(key=lambda r: r.get("scheduledForMs", 0))
-    recently_added.sort(key=lambda r: -(r.get("createdAtMs") or 0))
-
+    intentions, recently_added, now_ms, window_end_ms = _project_intentions(
+        jobs, days, include_disabled, max_events
+    )
     return jsonify({
         "intentions": intentions,
         "recently_added": recently_added,

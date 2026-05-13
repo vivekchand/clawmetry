@@ -550,6 +550,23 @@ def api_overview():
     )
 
 
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback (issue #1088)."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
 def _try_local_store_timeline():
     """Epic #964: opt-in local-store fast path for /api/timeline.
 
@@ -563,22 +580,17 @@ def _try_local_store_timeline():
     day with a tight window — only days that already showed activity in the
     aggregates pass actually get scanned.
 
+    Issue #1088: routes through the daemon HTTP proxy first via ``_ls_call``,
+    with the standard direct-open fallback for single-process boots.
+
     Returns ``None`` to defer to the JSONL fallback if:
-      - the local_store module isn't importable
+      - neither path can reach the local store
       - query_aggregates returns empty (no events seen yet)
       - any unexpected error happens
     """
-    try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-    except Exception:
-        return None
     now = datetime.now()
     cutoff = (now - timedelta(days=30)).strftime("%Y-%m-%d") + "T00:00:00"
-    try:
-        rows = store.query_aggregates(since=cutoff)
-    except Exception:
-        return None
+    rows = _ls_call("query_aggregates", since=cutoff)
     if not rows:
         return None
 
@@ -601,22 +613,20 @@ def _try_local_store_timeline():
         count = day_counts.get(ds, 0)
         hours = {}
         if count > 0:
-            try:
-                ev_rows = store.query_events(
-                    since=ds + "T00:00:00",
-                    until=ds + "T23:59:59",
-                    limit=10000,
-                )
-                for ev in ev_rows:
-                    ts = ev.get("ts") or ""
-                    if "T" in ts:
-                        try:
-                            h = int(ts.split("T")[1][:2])
-                            hours[h] = hours.get(h, 0) + 1
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+            ev_rows = _ls_call(
+                "query_events",
+                since=ds + "T00:00:00",
+                until=ds + "T23:59:59",
+                limit=10000,
+            ) or []
+            for ev in ev_rows:
+                ts = ev.get("ts") or ""
+                if "T" in ts:
+                    try:
+                        h = int(ts.split("T")[1][:2])
+                        hours[h] = hours.get(h, 0) + 1
+                    except Exception:
+                        pass
         mem_file = os.path.join(mem_dir, f"{ds}.md") if mem_dir else None
         has_memory = bool(mem_file and os.path.exists(mem_file))
         if count > 0 or has_memory:
