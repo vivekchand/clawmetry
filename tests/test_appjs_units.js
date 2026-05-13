@@ -311,6 +311,87 @@ console.log('channel event renderer (Brain provider/sender labels)');
   const evilHtml = api.renderChannelEventMeta(evil, evilInfo);
   truthy(evilHtml.indexOf('<script>') === -1, 'sender < escaped');
   truthy(evilHtml.indexOf('&lt;script&gt;') !== -1, 'sender appears escaped');
+
+  // (9) Body-missing affordance for outbound channel events (issue #1201).
+  // PR #1198 ingests Telegram outbound ACKs from gateway.log with
+  // body=None and a raw_blob.body_capture="ack_only" breadcrumb. Without
+  // this affordance the Brain row collapsed to an empty detail span — the
+  // user concluded the bot replied with nothing. Verify the renderer:
+  //   - flags the event via info.bodyMissing / info.ackOnly,
+  //   - emits a "⤴ sent" pill + "(no body captured)" label, NOT empty,
+  //   - explains the missing-body via tooltip,
+  //   - does NOT trigger for inbound (user) events with empty body,
+  //   - does NOT trigger for outbound events that DO have body text.
+  const ackOnly = {
+    type: 'CHANNEL.OUT',
+    provider: 'telegram',
+    sender: 'agent',
+    chat_id: '1532693273',
+    direction: 'out',
+    detail: '',  // _extract_brain_detail returned empty (no body in data)
+    data: {
+      provider: 'telegram',
+      raw_blob: {
+        source: 'gateway.log',
+        method: 'sendMessage',
+        body_capture: 'ack_only',
+        note: 'OpenClaw stores Telegram chats in memory; gateway.log only records the API ACK, not the body.',
+      },
+    },
+  };
+  const ackInfo = api._extractChannelInfo(ackOnly);
+  truthy(ackInfo, 'gateway-log outbound event detected as channel');
+  eq(ackInfo.direction, 'out', 'gateway-log outbound → direction=out');
+  eq(ackInfo.bodyMissing, true, 'body-less outbound flagged bodyMissing');
+  eq(ackInfo.ackOnly, true, 'raw_blob.body_capture=ack_only flagged ackOnly');
+  const ackHtml = api.renderChannelEventMeta(ackOnly, ackInfo);
+  truthy(ackHtml.indexOf('sent') !== -1,
+    'body-less outbound rendered with "sent" affordance (NOT empty)');
+  truthy(ackHtml.indexOf('(no body captured)') !== -1,
+    'body-less outbound rendered with "(no body captured)" label');
+  truthy(ackHtml.indexOf('OpenClaw stores Telegram chats in memory') !== -1,
+    'tooltip explains why body is missing (ack_only path)');
+  truthy(ackHtml.length > 100,
+    'body-less outbound HTML is non-trivial (proves no empty render)');
+
+  // Outbound WITH body text → no affordance (renderer keeps the body row).
+  const outWithBody = {
+    type: 'CHANNEL.OUT', provider: 'telegram',
+    sender: 'agent', chat_id: '1', detail: 'doing well!',
+    data: { provider: 'telegram', text: 'doing well!' },
+  };
+  const outBodyInfo = api._extractChannelInfo(outWithBody);
+  eq(outBodyInfo.bodyMissing, false,
+    'outbound WITH body text → bodyMissing=false (no affordance)');
+  const outBodyHtml = api.renderChannelEventMeta(outWithBody, outBodyInfo);
+  truthy(outBodyHtml.indexOf('(no body captured)') === -1,
+    'outbound WITH body → no "(no body captured)" affordance');
+
+  // Inbound with empty body → still no affordance (we only mark outbound;
+  // an empty inbound row is the user's actual silence, not a capture gap).
+  const inEmpty = {
+    type: 'CHANNEL.IN', provider: 'telegram',
+    sender: 'Vivek', chat_id: '1', detail: '',
+    data: { provider: 'telegram' },
+  };
+  const inEmptyInfo = api._extractChannelInfo(inEmpty);
+  eq(inEmptyInfo.bodyMissing, false,
+    'inbound empty event → bodyMissing=false (only outbound flagged)');
+
+  // Generic body-less outbound (no ack_only breadcrumb) still gets
+  // affordance — defensive default for adapters that drop body silently.
+  const outNoBlobBody = {
+    type: 'CHANNEL.OUT', provider: 'signal',
+    sender: 'agent', chat_id: 'sig-1', detail: '',
+    data: { provider: 'signal' },
+  };
+  const outNoBlobInfo = api._extractChannelInfo(outNoBlobBody);
+  eq(outNoBlobInfo.bodyMissing, true,
+    'outbound w/o body → bodyMissing=true even without ack_only breadcrumb');
+  eq(outNoBlobInfo.ackOnly, false, '… but ackOnly=false in that path');
+  const outNoBlobHtml = api.renderChannelEventMeta(outNoBlobBody, outNoBlobInfo);
+  truthy(outNoBlobHtml.indexOf('(no body captured)') !== -1,
+    'generic body-less outbound also gets affordance');
 }
 
 console.log('\n' + (failed === 0 ? 'PASS' : 'FAIL') + ' — ' + passed + ' passed, ' + failed + ' failed');
