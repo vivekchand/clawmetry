@@ -189,3 +189,38 @@ def test_send_heartbeat_5xx_clears_response_falls_back_to_slow(
         sync_mod._pick_heartbeat_interval(sync_mod._LAST_HEARTBEAT_RESPONSE)
         == sync_mod.HEARTBEAT_INTERVAL_SLOW
     )
+
+
+# ── Adaptive cycle-sleep contract (P0 real-time MOAT, 2026-05-13) ──────────────
+#
+# The main loop's tail `time.sleep()` previously hard-coded `POLL_INTERVAL`
+# (15s). With FAST cadence (3s) that floored the heartbeat latency at 15s
+# even with an active viewer. The fix sleeps `min(POLL_INTERVAL,
+# heartbeat_interval)` so FAST actually means FAST.
+
+def test_cycle_sleep_fast_when_viewer_active(sync_mod):
+    """When the loop picks FAST=3s, the cycle sleep must drop to 3s
+    (or less) — not stay at POLL_INTERVAL=15s."""
+    hb = sync_mod._pick_heartbeat_interval({"viewer_active": True})
+    cycle_sleep = max(1, min(sync_mod.POLL_INTERVAL, hb))
+    assert cycle_sleep == sync_mod.HEARTBEAT_INTERVAL_FAST == 3
+    # Sanity: this MUST be strictly tighter than the old 15s floor.
+    assert cycle_sleep < sync_mod.POLL_INTERVAL
+
+
+def test_cycle_sleep_slow_keeps_poll_interval(sync_mod):
+    """When idle (SLOW=60s), POLL_INTERVAL (15s) still rules so we don't
+    accidentally regress to a 60s sync cycle for everyone idle."""
+    hb = sync_mod._pick_heartbeat_interval({"viewer_active": False})
+    cycle_sleep = max(1, min(sync_mod.POLL_INTERVAL, hb))
+    assert cycle_sleep == sync_mod.POLL_INTERVAL
+
+
+def test_cycle_sleep_floor_is_one_second(sync_mod, monkeypatch):
+    """Defensive: if a future change ever sets HEARTBEAT_INTERVAL_FAST
+    to 0 (or POLL_INTERVAL becomes negative on a misconfig), the floor
+    must keep the loop alive, not enter a tight 0s busy-spin."""
+    monkeypatch.setattr(sync_mod, "HEARTBEAT_INTERVAL_FAST", 0)
+    hb = sync_mod._pick_heartbeat_interval({"viewer_active": True})
+    cycle_sleep = max(1, min(sync_mod.POLL_INTERVAL, hb))
+    assert cycle_sleep == 1

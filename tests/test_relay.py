@@ -42,25 +42,21 @@ def _send_payloads(ws):
     return [json.loads(c.args[0]) for c in ws.send.call_args_list]
 
 
-def test_start_relay_thread_skips_when_no_cloud_account():
+def test_start_relay_thread_is_noop():
+    """As of 2026-05-13 the WS relay was retired (404 in prod); the
+    daemon no longer opens any long-lived WebSocket. ``start_relay_thread``
+    is now a no-op that returns ``None`` regardless of config — covers
+    every previously-skipped path in one assertion.
+    See ``project_relay_transport_decision``.
+    """
     from clawmetry import relay
     importlib.reload(relay)
+    # No config — always None.
     assert relay.start_relay_thread({}) is None
+    # Partial config — still None.
     assert relay.start_relay_thread({"node_id": "x"}) is None
     assert relay.start_relay_thread({"api_key": "y"}) is None
-
-
-def test_start_relay_thread_skips_when_websocket_missing(monkeypatch):
-    from clawmetry import relay
-    importlib.reload(relay)
-    # Force the import inside start_relay_thread() to fail.
-    sys.modules.pop("websocket", None)
-    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
-    def fake_import(name, *a, **k):
-        if name == "websocket":
-            raise ImportError("forced")
-        return real_import(name, *a, **k)
-    monkeypatch.setitem(__builtins__ if isinstance(__builtins__, dict) else __builtins__.__dict__, "__import__", fake_import) if isinstance(__builtins__, dict) else monkeypatch.setattr("builtins.__import__", fake_import)
+    # Full config that would previously have spun a thread — also None.
     assert relay.start_relay_thread({"api_key": "k", "node_id": "n"}) is None
 
 

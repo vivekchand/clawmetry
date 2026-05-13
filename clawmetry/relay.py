@@ -1,44 +1,47 @@
-"""clawmetry/relay.py — node-side WebSocket relay client (epic #964 phase 3b).
+"""clawmetry/relay.py — DEPRECATED stub.
 
-Maintains a long-lived WebSocket to `wss://app.clawmetry.com/api/node/relay`,
-waits for `{type:"query"}` frames from the cloud, dispatches each via
-`routes.local_query.relay_dispatch()`, returns chunked responses.
+The node-side WebSocket relay client was retired 2026-05-13. The cloud
+endpoint ``wss://app.clawmetry.com/api/node/relay`` was killed 2026-05-12
+(returns 404 in prod) after the simple-websocket handshake-400 dead end
+documented in ``reference_ws_handshake_400_unsolved.md``. Per
+``project_relay_transport_decision``, the replacement is heartbeat
+piggyback: the cloud attaches ``pending_queries`` to the heartbeat
+response, the daemon answers via ``/ingest/cache``. No new long-lived
+connections.
 
-Design notes
-------------
-- **Base install dep** since 0.12.166. `websocket-client` is ~100 KB pure
-  Python; the previous `extras_require["relay"]` opt-in caused cloud users
-  to silently miss the relay.
-- **Daemon thread.** One thread per process. Reconnects with exponential
-  backoff (2s → 60s cap). The sync daemon's main loop is unaware.
-- **Skipped on OSS-local mode.** If `config` has no `api_key` / `node_id`,
-  the relay never starts — local-only OSS users pay no overhead.
-- **Privacy boundary unchanged.** Encrypted blobs stay encrypted; plaintext
-  columns (token counts, timestamps, event types) ride the WS in the clear
-  (TLS-protected). Same trust model as today's heartbeat / ingest.
+This module is kept as a no-op stub so:
+  * old daemon installs that still ``from clawmetry import relay`` don't
+    crash on import, and
+  * the existing unit tests in ``tests/test_relay.py`` can still import
+    the dispatch / chunking helpers (which are unrelated to the dead WS
+    supervisor and continue to drive the heartbeat-piggyback query path
+    via ``routes.local_query.relay_dispatch``).
 
-Tests live in `tests/test_relay.py` and mock the WebSocket layer.
+The reconnect supervisor (``_relay_supervisor``) is intentionally NOT
+exported anymore — calling ``start_relay_thread`` is a no-op that
+returns ``None``.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
-import time
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
+# Historical constants — preserved so any external code that imported them
+# (or any test that asserts on the module surface) keeps working.
 RELAY_URL_DEFAULT = "wss://app.clawmetry.com/api/node/relay"
 CHUNK_ROWS = 100               # max rows per response frame
 RECONNECT_INITIAL_SEC = 2
 RECONNECT_MAX_SEC = 60
-RECV_TIMEOUT_SEC = 30          # forces a heartbeat ping when idle
+RECV_TIMEOUT_SEC = 30
 
 # Shapes the node advertises in its register frame. Mirrors the allowlist in
-# `routes/local_query._SHAPES` — keep these in sync.
+# ``routes/local_query._SHAPES`` — keep these in sync (the heartbeat-piggyback
+# replacement uses the same dispatch table, so the drift test stays useful).
 _CAPABILITIES = [
     "query.events",
     "query.sessions",
@@ -49,107 +52,23 @@ _CAPABILITIES = [
 
 
 def start_relay_thread(config: dict, version: str = "unknown") -> Optional[threading.Thread]:
-    """Spin up a daemon thread that maintains the WS to cloud.
+    """No-op since 2026-05-13. See module docstring.
 
-    Returns the thread object on success, ``None`` when relay can't or
-    shouldn't run (no cloud account, `websocket-client` missing). Callers
-    don't need to do anything with the returned thread — it's daemon=True.
+    Returns ``None`` unconditionally so callers' ``if t:`` guards stay
+    valid. Logged at DEBUG (not INFO/WARNING) so users don't see a
+    misleading "relay disabled" line on every daemon start.
     """
-    api_key = (config or {}).get("api_key")
-    node_id = (config or {}).get("node_id")
-    if not api_key or not node_id:
-        log.debug("relay: no cloud account (api_key/node_id missing) — relay disabled")
-        return None
-    try:
-        import websocket  # noqa: F401 — pull dep early to fail fast
-    except ImportError:
-        # 0.12.166+ ships websocket-client as a base dep, so this branch
-        # only fires on a corrupt install. Keep the message anyway in case
-        # someone's pinning to an older clawmetry transitively.
-        log.warning(
-            "relay: websocket-client not importable. The base install should "
-            "include it; reinstall with `pip install --force-reinstall clawmetry`.")
-        return None
-
-    relay_url = os.environ.get("CLAWMETRY_RELAY_URL", RELAY_URL_DEFAULT)
-    t = threading.Thread(
-        target=_relay_supervisor,
-        args=(relay_url, api_key, node_id, version),
-        daemon=True,
-        name="clawmetry-relay",
+    log.debug(
+        "relay: start_relay_thread is a no-op (WS retired 2026-05-13, "
+        "replaced by heartbeat-piggyback per project_relay_transport_decision)"
     )
-    t.start()
-    log.info("relay: thread started → %s", relay_url)
-    return t
-
-
-def _relay_supervisor(relay_url: str, api_key: str, node_id: str, version: str) -> None:
-    """Reconnect loop. Each call to `_run_once` is one WS session; on any
-    exception we backoff and retry. Backoff resets after a clean exit."""
-    backoff = RECONNECT_INITIAL_SEC
-    while True:
-        try:
-            _run_once(relay_url, api_key, node_id, version)
-            # Clean exit (server closed gracefully) — reset backoff.
-            backoff = RECONNECT_INITIAL_SEC
-            log.info("relay: connection closed by server; reconnecting in %ds", backoff)
-            time.sleep(backoff)
-        except Exception as e:  # noqa: BLE001 — any failure → retry
-            log.warning("relay: error: %s — reconnecting in %ds", str(e)[:200], backoff)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, RECONNECT_MAX_SEC)
-
-
-def _run_once(relay_url: str, api_key: str, node_id: str, version: str) -> None:
-    """One full WS session lifecycle: connect → register → dispatch
-    incoming frames → return. Raises on any networking failure so the
-    supervisor's backoff loop kicks in."""
-    import websocket
-    url = f"{relay_url}?token={api_key}&node_id={node_id}"
-    ws = websocket.create_connection(
-        url,
-        header=[f"User-Agent: clawmetry-relay/{version}"],
-        timeout=10,
-    )
-    try:
-        # Register frame announces capabilities so the cloud knows which
-        # shapes are safe to route to this node.
-        ws.send(json.dumps({
-            "type": "register",
-            "node_id": node_id,
-            "version": version,
-            "capabilities": _CAPABILITIES,
-        }))
-        ws.settimeout(RECV_TIMEOUT_SEC)
-        while True:
-            try:
-                raw = ws.recv()
-            except websocket.WebSocketTimeoutException:
-                # No traffic in RECV_TIMEOUT_SEC — send our own ping so the
-                # cloud LB doesn't drop us as idle (Cloud Run idle = 5 min).
-                try:
-                    ws.ping()
-                except Exception:
-                    raise
-                continue
-            if not raw:
-                # Empty payload = server requested close.
-                return
-            try:
-                frame = json.loads(raw)
-            except Exception:
-                log.warning("relay: dropping non-JSON frame")
-                continue
-            _handle_frame(ws, frame)
-    finally:
-        try:
-            ws.close()
-        except Exception:
-            pass
+    return None
 
 
 def _handle_frame(ws, frame: dict) -> None:
-    """Single-frame dispatcher. `ws` is a live websocket.WebSocket."""
+    """Single-frame dispatcher. Retained for unit tests; the live WS path
+    is dead, but the dispatch shape is reused by the heartbeat-piggyback
+    handler in ``sync._dispatch_pending_queries``."""
     ftype = frame.get("type")
     if ftype == "query":
         _handle_query(ws, frame)
@@ -163,9 +82,9 @@ def _handle_frame(ws, frame: dict) -> None:
 
 
 def _handle_query(ws, frame: dict) -> None:
-    """Dispatch a `query` frame through the same path the HTTP API uses,
-    chunk-stream the response back. All errors → `{type:"error"}` frame
-    so the cloud can surface them cleanly."""
+    """Dispatch a ``query`` frame through the same path the HTTP API
+    uses, chunk-stream the response back. Retained for back-compat
+    tests; the live network path is dead."""
     qid = frame.get("id")
     shape = frame.get("shape", "")
     args = frame.get("args") or {}
@@ -207,8 +126,6 @@ def _handle_query(ws, frame: dict) -> None:
             "rows": sl,
         }
         if is_final:
-            # Carry shape + count metadata on the final frame so the cloud
-            # can validate completeness without re-iterating chunks.
             out["_shape"] = body.get("_shape")
             out["_elapsed_ms"] = body.get("_elapsed_ms")
             out["count"] = body.get("count", total)
@@ -219,6 +136,4 @@ def _send_error(ws, qid, code: str, msg: str) -> None:
     try:
         ws.send(json.dumps({"type": "error", "id": qid, "code": code, "msg": msg}))
     except Exception:
-        # If the WS itself is dead, the supervisor loop will catch it on
-        # the next recv() and reconnect — nothing to do here.
         log.debug("relay: failed to send error frame for qid=%s", qid)

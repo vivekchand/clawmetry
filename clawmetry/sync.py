@@ -5905,17 +5905,17 @@ def run_daemon() -> None:
     send_heartbeat(config)
     log.info("Initial heartbeat sent")
 
-    # ── Cloud cold-data relay (epic #964 phase 3b) ─────────────────────
-    # Long-lived WS to wss://app.clawmetry.com/api/node/relay so the cloud
-    # dashboard can request data older than its 24h hot window without us
-    # paying for permanent storage. No-op if the user hasn't connected to
-    # cloud or the optional `websocket-client` dep is missing — degrades
-    # gracefully to today's cloud-ingest-only behavior.
-    try:
-        from clawmetry import relay as _relay
-        _relay.start_relay_thread(config, version=_get_version())
-    except Exception as _e:
-        log.warning("relay: failed to start (continuing without cold-data relay): %s", _e)
+    # WS relay deleted 2026-05-13: replaced by heartbeat-piggyback
+    # (see project_relay_transport_decision). The cloud endpoint
+    # /api/node/relay was killed 2026-05-12 (returns 404 in prod) after
+    # the simple-websocket handshake-400 dead end documented in
+    # reference_ws_handshake_400_unsolved.md. The reconnect loop was
+    # spamming `relay: error: Handshake status 404 Not Found ...
+    # reconnecting in 60s` forever — wasting bandwidth and burying real
+    # errors. Cold-data reads now ride `pending_queries` piggybacked on
+    # the heartbeat response and answered via /ingest/cache (issue #1053).
+    # `clawmetry/relay.py` is retained as a stub so any third-party
+    # importers don't crash, but `start_relay_thread` is no longer called.
 
     # ── Local query HTTP server (cross-process DuckDB read fix) ────────
     # Daemon owns the DuckDB writer lock; the dashboard process can't
@@ -6080,7 +6080,11 @@ def run_daemon() -> None:
 
     # Default to SLOW; flips to FAST after a heartbeat response with
     # `viewer_active: true` (epic #775 PR 2/3, adaptive sync cadence).
-    heartbeat_interval = HEARTBEAT_INTERVAL_SLOW
+    # Seed from the startup heartbeat so the very first cycle picks up
+    # FAST cadence when the user already has the cloud Brain tab open
+    # at daemon start — otherwise the first 60s after startup is stuck
+    # on SLOW even with an active viewer (2026-05-13 real-time MOAT fix).
+    heartbeat_interval = _pick_heartbeat_interval(_LAST_HEARTBEAT_RESPONSE)
     snapshot_interval = 60  # system snapshot (subagents, flow metrics) every 60s
     log_sync_interval = 60  # log lines are low-priority; streamer covers real-time
     last_heartbeat = time.time()
@@ -6220,7 +6224,17 @@ def run_daemon() -> None:
         except Exception as e:
             log.error(f"Sync cycle error: {e}")
 
-        time.sleep(POLL_INTERVAL)
+        # Adaptive cycle sleep (P0 real-time MOAT, 2026-05-13). The
+        # original `time.sleep(POLL_INTERVAL=15)` floored the heartbeat
+        # latency at 15s even when `heartbeat_interval` had dropped to
+        # FAST (3s) on viewer_active. That hard-capped Brain-tab
+        # freshness at ~15s instead of the target 1-2s. We now sleep at
+        # most `heartbeat_interval` so the next cycle (and its
+        # heartbeat-piggyback brain push) fires on the FAST cadence
+        # whenever a viewer is active. When idle (SLOW=60s),
+        # POLL_INTERVAL still rules, so bandwidth + Cloud Run cost stay
+        # flat.
+        time.sleep(max(1, min(POLL_INTERVAL, heartbeat_interval)))
 
 
 def _build_gateway_data(paths: dict = None) -> dict:
