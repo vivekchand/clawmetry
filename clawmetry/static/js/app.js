@@ -2629,6 +2629,85 @@ function setBrainChannelFilter(ch, btn) {
   renderBrainStream(_brainAllEvents);
 }
 
+// Collapse runs of body-less outbound channel events from the same chat
+// (issue: P1 follow-up to #1205). After #1205 every gateway.log Telegram
+// outbound ACK renders as a "⤴ sent · (no body captured)" row — once the
+// Brain feed hydrates with dozens of these from one chat the feed turns
+// into visual noise. Threshold of 3+ to collapse: 1 or 2 stays as-is so
+// short bursts read naturally; 3+ becomes one summary row with a count
+// and time range, click-to-expand. Pure presentation — the underlying
+// events array is untouched.
+//
+// Grouping rules:
+//   - same provider + chat_id (different chats never merge)
+//   - direction === "out" (inbound silence is intentional per #1205)
+//   - bodyMissing === true (body-bearing rows render normally + break run)
+//   - any non-matching event in between (inbound, body-bearing, non-channel)
+//     breaks the run
+//
+// Input: array sorted newest-first (renderBrainStream sorts before this).
+// Output: array of same/fewer length where collapsed entries carry
+// __collapsedRun (the original event objects) + __collapsedCount.
+function _collapseBodylessOutbound(events) {
+  if (!events || events.length === 0) return events || [];
+  var collapsed = [];
+  var i = 0;
+  while (i < events.length) {
+    var ev = events[i];
+    var info = _extractChannelInfo(ev);
+    if (info && info.bodyMissing && info.direction === 'out') {
+      // Walk forward gathering same-chat body-less outbound events. Any
+      // mismatch (different chat, inbound, body-bearing, non-channel)
+      // breaks the run — strict adjacency is the whole point.
+      var run = [ev];
+      var j = i + 1;
+      while (j < events.length) {
+        var ne = events[j];
+        var ninfo = _extractChannelInfo(ne);
+        if (ninfo && ninfo.bodyMissing && ninfo.direction === 'out' &&
+            ninfo.provider === info.provider && ninfo.chatId === info.chatId) {
+          run.push(ne);
+          j++;
+        } else {
+          break;
+        }
+      }
+      if (run.length >= 3) {
+        // Synthesize a wrapper that preserves the head event's identity
+        // (so source/time/etc. on the row reflect a real event) but
+        // carries the run for the renderer to summarise + expand.
+        var wrapper = {};
+        for (var k in ev) { if (Object.prototype.hasOwnProperty.call(ev, k)) wrapper[k] = ev[k]; }
+        wrapper.__collapsedRun = run;
+        wrapper.__collapsedCount = run.length;
+        collapsed.push(wrapper);
+        i = j;
+      } else {
+        // Under threshold — render each row individually. Don't skip ahead
+        // (we still want the next iteration to check those events fresh).
+        collapsed.push(ev);
+        i++;
+      }
+    } else {
+      collapsed.push(ev);
+      i++;
+    }
+  }
+  return collapsed;
+}
+
+function _toggleBrainCollapsedRun(btn, key) {
+  var host = btn.closest('.brain-event');
+  if (!host) return;
+  var inner = host.querySelector('.brain-collapsed-run');
+  if (!inner) return;
+  var open = inner.style.display !== 'none';
+  inner.style.display = open ? 'none' : '';
+  btn.textContent = open ? '▸ expand' : '▾ collapse';
+  // Don't bubble up into _toggleBrainEvent (which toggles the turn detail).
+  if (event && event.stopPropagation) event.stopPropagation();
+}
+
 function renderBrainStream(events) {
   var el = document.getElementById('brain-stream');
   if (!el) return;
@@ -2644,6 +2723,11 @@ function renderBrainStream(events) {
     var tb = b.time ? new Date(b.time).getTime() : 0;
     return tb - ta;
   });
+  // Collapse 3+ consecutive body-less outbound rows from the same chat
+  // into a single summary row (P1 follow-up to #1205). Pure presentation
+  // — the underlying _brainAllEvents store is unchanged so re-renders
+  // (filter changes, auto-refresh) recompute from the source of truth.
+  filtered = _collapseBodylessOutbound(filtered);
   if (!filtered || filtered.length === 0) {
     el.innerHTML = '<div style="color:var(--text-muted);padding:20px">No activity yet</div>';
     return;
@@ -2791,6 +2875,52 @@ function renderBrainStream(events) {
     // those fields are missing — the legacy renderer still owns CLI/cron/
     // tool/think rows.
     var chInfo = _extractChannelInfo(ev);
+    // Collapsed-run branch (P1 follow-up to #1205): when the collapse
+    // pass merged 3+ same-chat body-less outbound rows, render ONE
+    // summary row with count + time-range + expand affordance. Click
+    // expand → reveals the underlying rows inline (the same renderer
+    // re-runs over each event in the run, so each row keeps its own
+    // "⤴ sent · (no body captured)" treatment).
+    if (chInfo && ev.__collapsedRun && ev.__collapsedCount >= 3) {
+      var run = ev.__collapsedRun;
+      // Times are sorted newest-first from the upstream sort, so the
+      // last event in the run is the oldest. Format "oldest → newest".
+      var newestT = run[0] && run[0].time ? formatBrainTime(run[0].time) : '';
+      var oldestT = run[run.length - 1] && run[run.length - 1].time ? formatBrainTime(run[run.length - 1].time) : '';
+      var rangeLabel = oldestT && newestT && oldestT !== newestT
+        ? oldestT + ' → ' + newestT
+        : (newestT || oldestT || '');
+      html += '<div class="brain-event brain-collapsed' + _evExpCls + '" data-evkey="' + escHtml(_evKey) + '">';
+      html += '<div class="brain-meta">';
+      html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
+      html += renderChannelEventMeta(ev, chInfo);
+      // Count badge — monospace so eye latches onto the number.
+      html += '<span class="brain-collapsed-count" style="display:inline-flex;align-items:center;gap:4px;background:rgba(16,185,129,0.12);color:#10b981;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;flex-shrink:0;white-space:nowrap;" title="' +
+        escHtml(ev.__collapsedCount + ' consecutive outbound ACKs from this chat — bodies not captured (collapsed for readability)') +
+        '">↪ ' + ev.__collapsedCount + ' outbound</span>';
+      if (rangeLabel) {
+        html += '<span class="brain-collapsed-range" style="color:var(--text-muted);font-size:10px;flex-shrink:0;white-space:nowrap;">' + escHtml(rangeLabel) + '</span>';
+      }
+      html += '<span class="brain-collapsed-note" style="color:var(--text-muted);font-size:10px;font-style:italic;flex-shrink:0;white-space:nowrap;">(bodies not captured)</span>';
+      // Expand affordance — small text button, monospace arrow.
+      html += '<button type="button" class="brain-collapsed-toggle" onclick="_toggleBrainCollapsedRun(this, this.closest(\'.brain-event\').dataset.evkey)" style="margin-left:auto;padding:1px 8px;border-radius:10px;border:1px solid var(--border,#444);background:transparent;color:var(--text-secondary);font-size:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer;flex-shrink:0;">▸ expand</button>';
+      html += '</div>';
+      // Expanded rows live in this hidden container — each one re-runs
+      // the same channel-event meta render so the user sees the rows
+      // they would have seen without collapse.
+      html += '<div class="brain-collapsed-run" style="display:none;margin-top:6px;padding:6px 0 2px 16px;border-left:2px solid rgba(16,185,129,0.3);">';
+      run.forEach(function(rev) {
+        var rinfo = _extractChannelInfo(rev);
+        if (!rinfo) return;
+        html += '<div class="brain-collapsed-row" style="display:flex;gap:6px;align-items:center;padding:2px 0;font-size:11px;">';
+        html += '<span class="brain-time" style="color:var(--text-faint);min-width:90px;flex-shrink:0;">' + formatBrainTime(rev.time) + '</span>';
+        html += renderChannelEventMeta(rev, rinfo);
+        html += '</div>';
+      });
+      html += '</div>';
+      html += '</div>';
+      return;  // collapsed row replaces the whole event div — no detail/turnTimeline
+    }
     html += '<div class="brain-event' + _evExpCls + '" data-evkey="' + escHtml(_evKey) + '" onclick="_toggleBrainEvent(this, this.dataset.evkey)">';
     html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';

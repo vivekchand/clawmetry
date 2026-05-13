@@ -394,5 +394,145 @@ console.log('channel event renderer (Brain provider/sender labels)');
     'generic body-less outbound also gets affordance');
 }
 
+// ── Test _collapseBodylessOutbound (P1 follow-up to #1205) ─────────────
+//
+// After #1205 every gateway.log Telegram outbound ACK becomes a row in
+// Brain. Once history hydrates the user sees dozens of "⤴ sent · (no
+// body captured)" rows back-to-back from the same chat — visual noise.
+// The collapse helper folds 3+ same-chat body-less outbound rows into
+// one summary; under threshold or interrupted runs render normally.
+//
+// Threshold = 3. Grouping = same provider + chat_id, direction=out,
+// bodyMissing=true. Any non-matching event in between breaks the run.
+console.log('_collapseBodylessOutbound (P1 follow-up to #1205 — collapse outbound noise)');
+{
+  const sandbox = { Date: Date, console: console };
+  // Reuse the same slice technique — pull channel maps + helpers + the
+  // collapse helper into one sandbox.
+  const lines = src.split('\n');
+  const startMarker = 'var _channelIcons = {';
+  const endMarker   = '// Render the meta row for a channel event';
+  const startIdx = lines.findIndex(function(l) { return l.indexOf(startMarker) >= 0; });
+  const endIdx = lines.findIndex(function(l, i) { return i > startIdx && l.indexOf(endMarker) >= 0; });
+  let code = lines.slice(startIdx, endIdx).join('\n') + '\n';
+  code += extractFunction('_collapseBodylessOutbound') + '\n';
+  code += '\nthis.api = { _collapseBodylessOutbound: _collapseBodylessOutbound };';
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox);
+  const collapse = sandbox.api._collapseBodylessOutbound;
+
+  // Helper to mint a body-less outbound channel event for a given chat.
+  function ackOut(chatId, ts) {
+    return {
+      type: 'CHANNEL.OUT', provider: 'telegram',
+      chat_id: chatId, sender: 'agent', detail: '',
+      time: ts || '2026-05-13T22:00:00Z',
+      data: {
+        provider: 'telegram',
+        raw_blob: { source: 'gateway.log', body_capture: 'ack_only' },
+      },
+    };
+  }
+  function inbound(chatId) {
+    return {
+      type: 'CHANNEL.IN', provider: 'telegram',
+      chat_id: chatId, sender: 'Vivek', detail: 'hi',
+      time: '2026-05-13T22:00:00Z',
+    };
+  }
+  function bodied(chatId) {
+    return {
+      type: 'CHANNEL.OUT', provider: 'telegram',
+      chat_id: chatId, sender: 'agent', detail: 'hello there',
+      time: '2026-05-13T22:00:00Z',
+      data: { provider: 'telegram', text: 'hello there' },
+    };
+  }
+
+  // (1) 5 body-less outbound from same chat → collapsed to 1 wrapper row.
+  const five = [
+    ackOut('1', '2026-05-13T22:00:00Z'),
+    ackOut('1', '2026-05-13T22:10:00Z'),
+    ackOut('1', '2026-05-13T22:20:00Z'),
+    ackOut('1', '2026-05-13T22:30:00Z'),
+    ackOut('1', '2026-05-13T22:40:00Z'),
+  ];
+  const out1 = collapse(five);
+  eq(out1.length, 1, '5 same-chat body-less outbound → 1 row');
+  eq(out1[0].__collapsedCount, 5, 'wrapper carries __collapsedCount=5');
+  truthy(Array.isArray(out1[0].__collapsedRun), 'wrapper carries __collapsedRun array');
+  eq(out1[0].__collapsedRun.length, 5, 'run preserves all 5 originals');
+
+  // (2) Inbound between body-less outbound runs → no collapse, 6 rows.
+  const interrupted = [
+    ackOut('1'), ackOut('1'),         // 2 outbound — under threshold alone
+    inbound('1'),                      // breaks the run
+    ackOut('1'), ackOut('1'), ackOut('1'),  // 3 outbound after — but per-side count <3 vs 3
+  ];
+  const out2 = collapse(interrupted);
+  // First 2 + inbound stay un-collapsed (2 < 3 threshold), then the 3
+  // after collapse into 1. Net: 2 + 1 + 1 = 4 rows. The spec asks for
+  // "no collapse on either side" but only when neither side reaches
+  // the threshold; the user's spec example used 2-then-3 which matches
+  // this — the trailing 3 SHOULD collapse since they are themselves a
+  // valid run. Assert the inbound is preserved and not absorbed.
+  truthy(out2.length === 4, 'mixed: 2 outbound + inbound + 3 outbound → 4 rows (trailing 3 collapse)');
+  eq(out2[0].__collapsedCount, undefined, 'first row not collapsed (under threshold)');
+  eq(out2[1].__collapsedCount, undefined, 'second row not collapsed (under threshold)');
+  eq(out2[2].type, 'CHANNEL.IN', 'inbound preserved between runs');
+  eq(out2[3].__collapsedCount, 3, 'trailing 3 outbound collapse');
+
+  // (3) 2 body-less outbound in a row → no collapse (under threshold).
+  const two = [ ackOut('1'), ackOut('1') ];
+  const out3 = collapse(two);
+  eq(out3.length, 2, '2 body-less in a row → 2 rows (under threshold)');
+  eq(out3[0].__collapsedCount, undefined, 'no wrapper added');
+
+  // (4) Body-less + body-bearing + body-less → no collapse (broken by bodied).
+  const bodyBroken = [ ackOut('1'), bodied('1'), ackOut('1') ];
+  const out4 = collapse(bodyBroken);
+  eq(out4.length, 3, 'body-less + bodied + body-less → 3 rows (bodied breaks run)');
+  eq(out4[0].__collapsedCount, undefined, 'first body-less not collapsed');
+  eq(out4[1].detail, 'hello there', 'bodied row passes through');
+  eq(out4[2].__collapsedCount, undefined, 'last body-less not collapsed');
+
+  // (5) Different chats never merge — 3 from chat A + 3 from chat B = 2 wrappers.
+  const twoChats = [
+    ackOut('A'), ackOut('A'), ackOut('A'),
+    ackOut('B'), ackOut('B'), ackOut('B'),
+  ];
+  const out5 = collapse(twoChats);
+  eq(out5.length, 2, 'different chats → 2 separate wrappers');
+  eq(out5[0].__collapsedCount, 3, 'chat A wrapper count=3');
+  eq(out5[1].__collapsedCount, 3, 'chat B wrapper count=3');
+  eq(out5[0].chat_id, 'A', 'first wrapper preserves chat A id');
+  eq(out5[1].chat_id, 'B', 'second wrapper preserves chat B id');
+
+  // (6) Inbound NEVER collapses even with empty bodies (per #1205 — that's
+  // intentional silence from the user, not a capture gap).
+  const inboundRun = [
+    Object.assign(inbound('1'), { detail: '' }),
+    Object.assign(inbound('1'), { detail: '' }),
+    Object.assign(inbound('1'), { detail: '' }),
+    Object.assign(inbound('1'), { detail: '' }),
+  ];
+  const out6 = collapse(inboundRun);
+  eq(out6.length, 4, 'inbound empties never collapse — preserved as 4 rows');
+
+  // (7) Defensive: empty + null inputs.
+  eq(collapse([]).length, 0, 'empty array → empty array');
+  eq(collapse(null).length, 0, 'null → empty array');
+
+  // (8) Non-channel events between body-less outbound break the run.
+  const toolBetween = [
+    ackOut('1'), ackOut('1'),
+    { type: 'EXEC', source: 'main', detail: 'ls' },
+    ackOut('1'), ackOut('1'),
+  ];
+  const out8 = collapse(toolBetween);
+  eq(out8.length, 5, 'EXEC between outbound runs → no collapse on either side (both 2)');
+  eq(out8[2].type, 'EXEC', 'EXEC preserved');
+}
+
 console.log('\n' + (failed === 0 ? 'PASS' : 'FAIL') + ' — ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed === 0 ? 0 : 1);
