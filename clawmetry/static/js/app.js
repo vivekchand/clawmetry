@@ -5386,6 +5386,49 @@ async function loadSystemHealth() {
       }
     } catch(e) {}
 
+    // Daemon health (PRD #1133 layer 4) — surface sync.log error rate so
+    // the silent-NameError class of bug stops slipping past users.
+    var dmWrap = document.getElementById('sh-daemon-wrap');
+    var dmEl = document.getElementById('sh-daemon');
+    if (d.daemon && dmEl) {
+      var dm = d.daemon;
+      var dmStatus = dm.status || 'healthy';
+      var dmDot = dmStatus === 'healthy' ? '🟢' : (dmStatus === 'degraded' ? '🟡' : '🔴');
+      var dmColor = dmStatus === 'healthy' ? 'var(--text-success,#22c55e)'
+                  : dmStatus === 'degraded' ? '#f59e0b'
+                  : 'var(--text-error,#dc2626)';
+      var dmLabel = dmStatus === 'healthy' ? 'Healthy'
+                  : dmStatus === 'degraded' ? 'Degraded'
+                  : 'BROKEN';
+      var e5 = dm.errors_last_5min || 0;
+      var e1h = dm.errors_last_1h || 0;
+      var msg = dm.last_error_message || '';
+      // Truncate to 200 chars at the UI layer (parser already capped at 500).
+      var msgShort = msg.length > 200 ? msg.slice(0, 200) + '…' : msg;
+      var html = '<div style="padding:8px 14px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:13px;">';
+      html += '<div style="display:flex;align-items:center;gap:8px;">';
+      html += dmDot + ' <span style="font-weight:600;color:' + dmColor + ';">' + dmLabel + '</span>';
+      html += '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">';
+      html += 'Last 5m: <span style="color:' + (e5 > 0 ? dmColor : 'var(--text-muted)') + ';font-weight:600;">' + e5 + '</span>';
+      html += ' &nbsp;·&nbsp; Last 1h: <span style="color:' + (e1h > 0 ? dmColor : 'var(--text-muted)') + ';font-weight:600;">' + e1h + '</span>';
+      html += '</span></div>';
+      if (msgShort) {
+        html += '<div style="margin-top:8px;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;font-family:\'JetBrains Mono\',monospace;font-size:11px;color:var(--text-secondary);word-break:break-word;">';
+        html += escHtml(msgShort);
+        if (dm.last_error_ts) {
+          html += '<div style="margin-top:4px;color:var(--text-muted);font-size:10px;">at ' + escHtml(dm.last_error_ts) + '</div>';
+        }
+        html += '</div>';
+      }
+      if (dm.log_path) {
+        html += '<div style="margin-top:6px;font-size:10px;color:var(--text-muted);font-family:\'JetBrains Mono\',monospace;">📄 ' + escHtml(dm.log_path) + '</div>';
+      }
+      html += '</div>';
+      dmEl.innerHTML = html;
+      // Always show the card — daemon is core infrastructure, even "healthy" is reassuring.
+      if (dmWrap) dmWrap.style.display = '';
+    } else if (dmWrap) { dmWrap.style.display = 'none'; }
+
     // Sandbox Status (conditional)
     var sbWrap = document.getElementById('sh-sandbox-wrap');
     var sbEl = document.getElementById('sh-sandbox');

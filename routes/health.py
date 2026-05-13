@@ -35,16 +35,166 @@ Module-level helpers (``_history_db``, ``AgentReliabilityScorer``,
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 
 bp_health = Blueprint('health', __name__)
+
+
+# ---------------------------------------------------------------------------
+# Daemon-log error-rate parser (PRD #1133 layer 4 — read side only)
+#
+# Reads the tail of ``~/.clawmetry/sync.log`` and counts ERROR-level lines in
+# rolling 5-min and 1-hour windows so the System Health card can warn the
+# user when the cloud-sync daemon is silently failing (e.g. the
+# ``ALERTS_EVAL_INTERVAL_SEC`` NameError that was logging 4×/min on every
+# install since 0.12.179 with no in-product surface).
+#
+# Pure helpers — no Flask globals — so they can be unit-tested without a
+# running server. The endpoint that consumes these lives below in
+# ``api_system_health``.
+# ---------------------------------------------------------------------------
+
+# Lines look like:
+#   2026-05-13 09:33:52,180 [clawmetry-sync] ERROR Sync cycle error: ...
+# Capture the timestamp + the message body (everything after the level).
+_DAEMON_LOG_LINE_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:[,.]\d+)?\s+"
+    r"\[[^\]]+\]\s+(?P<level>[A-Z]+)\s+(?P<msg>.*)$"
+)
+
+# How many lines to read from the tail of the log. Safe upper bound: even at
+# 60 ERROR lines/min (well above the PRD trigger of 10/min) a 1-hour window
+# only sees ~3,600 lines, and we cap at 1,000 to stay cheap on slower disks.
+DAEMON_LOG_TAIL_LINES = 1000
+
+
+def _default_daemon_log_path():
+    """Return the canonical sync.log path. Honours ``CLAWMETRY_HOME`` for tests."""
+    home = os.environ.get("CLAWMETRY_HOME") or os.path.expanduser("~/.clawmetry")
+    return os.path.join(home, "sync.log")
+
+
+def _tail_lines(path, n=DAEMON_LOG_TAIL_LINES):
+    """Return the last ``n`` lines of ``path`` (or [] if missing/unreadable).
+
+    Uses a bounded read from the end of the file so we never load multi-MB
+    logs into memory. Falls back to a full read for tiny files.
+    """
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return []
+    # Estimate ~256 bytes/line average for our log format; cap at 512 KB.
+    read_bytes = min(size, max(256 * n, 64 * 1024), 512 * 1024)
+    try:
+        with open(path, "rb") as f:
+            if size > read_bytes:
+                f.seek(size - read_bytes)
+                # Drop the partial first line so we never split mid-record.
+                f.readline()
+            data = f.read()
+    except OSError:
+        return []
+    try:
+        text = data.decode("utf-8", errors="replace")
+    except Exception:
+        return []
+    lines = text.splitlines()
+    return lines[-n:] if len(lines) > n else lines
+
+
+def _parse_daemon_log_line(line):
+    """Return ``(ts_epoch, level, message)`` or ``None`` if the line is non-conforming.
+
+    Timestamps in the log are local-time without TZ info; we treat them as
+    naive local time (which matches how Python's ``logging`` module writes
+    them). For window arithmetic we convert via ``mktime``.
+    """
+    m = _DAEMON_LOG_LINE_RE.match(line)
+    if not m:
+        return None
+    try:
+        dt = datetime.strptime(m.group("ts"), "%Y-%m-%d %H:%M:%S")
+        ts_epoch = time.mktime(dt.timetuple())
+    except (ValueError, OverflowError):
+        return None
+    return ts_epoch, m.group("level"), m.group("msg")
+
+
+def compute_daemon_health(log_path=None, now=None):
+    """Read the tail of the daemon log and return a health summary dict.
+
+    Returns the structure documented in PRD #1133 layer 4:
+
+        {
+            "log_path": "<absolute path>",
+            "errors_last_5min": int,
+            "errors_last_1h": int,
+            "last_error_message": str | None,
+            "last_error_ts": ISO-8601 str | None,
+            "status": "healthy" | "degraded" | "broken",
+            "log_present": bool,
+        }
+
+    Status thresholds (per PRD): >30 errors in 5 min → ``broken``,
+    >0 → ``degraded``, else ``healthy``. Missing/empty log → ``healthy``
+    so a fresh install doesn't flash red.
+    """
+    path = log_path or _default_daemon_log_path()
+    now_ts = now if now is not None else time.time()
+    summary = {
+        "log_path": path,
+        "errors_last_5min": 0,
+        "errors_last_1h": 0,
+        "last_error_message": None,
+        "last_error_ts": None,
+        "status": "healthy",
+        "log_present": os.path.exists(path),
+    }
+    if not summary["log_present"]:
+        return summary
+
+    cutoff_5m = now_ts - 5 * 60
+    cutoff_1h = now_ts - 60 * 60
+    last_err_ts = None
+    last_err_msg = None
+    for line in _tail_lines(path):
+        parsed = _parse_daemon_log_line(line)
+        if not parsed:
+            continue
+        ts_epoch, level, msg = parsed
+        if level != "ERROR":
+            continue
+        if ts_epoch >= cutoff_1h:
+            summary["errors_last_1h"] += 1
+        if ts_epoch >= cutoff_5m:
+            summary["errors_last_5min"] += 1
+        if last_err_ts is None or ts_epoch >= last_err_ts:
+            last_err_ts = ts_epoch
+            last_err_msg = msg
+
+    if last_err_ts is not None:
+        # Render in UTC so the dashboard can reason about it consistently.
+        summary["last_error_ts"] = (
+            datetime.fromtimestamp(last_err_ts, tz=timezone.utc).isoformat()
+        )
+        # Truncate to 500 chars at the parser layer; UI re-truncates to 200
+        # for display. Keeps the API payload bounded for chatty errors.
+        summary["last_error_message"] = (last_err_msg or "")[:500]
+
+    if summary["errors_last_5min"] > 30:
+        summary["status"] = "broken"
+    elif summary["errors_last_5min"] > 0:
+        summary["status"] = "degraded"
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +696,23 @@ def api_system_health():
         "resources": resources_state,
     }
 
+    # --- DAEMON ERROR-RATE (PRD #1133 layer 4) ---
+    # Tails ~/.clawmetry/sync.log so the user notices silent NameError-class
+    # daemon bugs without having to ssh in and `tail -f` the log.
+    try:
+        daemon_health = compute_daemon_health()
+    except Exception:
+        # Never crash on bad input — fall back to a healthy-shaped null block.
+        daemon_health = {
+            "log_path": _default_daemon_log_path(),
+            "errors_last_5min": 0,
+            "errors_last_1h": 0,
+            "last_error_message": None,
+            "last_error_ts": None,
+            "status": "healthy",
+            "log_present": False,
+        }
+
     return jsonify(
         {
             "services": services,
@@ -562,6 +729,7 @@ def api_system_health():
             "inference": _d._detect_inference_metadata(),
             "security": _d._detect_security_metadata(),
             "service_status": service_status,
+            "daemon": daemon_health,
         }
     )
 
