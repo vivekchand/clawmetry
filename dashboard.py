@@ -14636,13 +14636,42 @@ def _get_uptime_str(pid):
 
 
 def _read_cloud_token():
+    """Resolve the cloud bearer the dashboard uses for /api/cloud-proxy/*.
+
+    Two sources of truth (audit P0 #5, clawmetry-cloud#779):
+
+      1. ``~/.openclaw/openclaw.json`` → ``clawmetry.cloudToken`` (legacy
+         OpenClaw sidecar path; written by ``clawmetry connect``).
+      2. ``~/.clawmetry/config.json`` → ``api_key`` (the daemon's own
+         config, written by ``python -m clawmetry.sync`` once the node is
+         paired). Validated by the ``cm_`` prefix.
+
+    Without (2) the dashboard would 401 the entire Alerts UI even on
+    machines where the daemon is fully cloud-paired but never had the
+    OpenClaw sidecar config written.
+    """
+    # Source 1 — OpenClaw sidecar (existing path, kept first so an explicit
+    # `clawmetry connect` write wins over the daemon-side copy).
     cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
     try:
         with open(cfg_path) as f:
             data = json.load(f)
-        return data.get("clawmetry", {}).get("cloudToken")
+        tok = (data.get("clawmetry", {}) or {}).get("cloudToken", "")
+        if tok:
+            return tok
     except Exception:
-        return None
+        pass
+    # Source 2 — daemon's own config (audit P0 #5 fallback).
+    daemon_cfg = os.path.expanduser("~/.clawmetry/config.json")
+    try:
+        with open(daemon_cfg) as f:
+            data = json.load(f)
+        tok = data.get("api_key", "")
+        if isinstance(tok, str) and tok.startswith("cm_"):
+            return tok
+    except Exception:
+        pass
+    return None
 
 
 def _write_cloud_token(token):
