@@ -312,6 +312,52 @@ def api_flow_events():
     )
 
 
+@bp_logs.route("/api/flow/runs")
+def api_flow_runs():
+    """Historical flow-runs list — closes #611.
+
+    Each row is one session_id's worth of events, aggregated from the local
+    DuckDB ``events`` table:
+
+      session_id, agent_id, started_at, duration_seconds, channels_touched,
+      models_invoked, tools_called, total_cost, status (completed/failed),
+      models[], channel
+
+    Query params:
+      ``limit``  — max rows (default 30, hard cap 200)
+      ``since``  — ISO timestamp lower-bound on event ts
+      ``until``  — ISO timestamp upper-bound
+
+    Returns ``{runs: [...], _source: "local_store"|"empty"}``. Never raises
+    — on any store failure we return an empty list with the legacy tag so
+    the Flow tab degrades gracefully.
+    """
+    try:
+        limit_raw = int(request.args.get("limit", 30))
+    except (TypeError, ValueError):
+        limit_raw = 30
+    limit = max(1, min(200, limit_raw))
+    since = request.args.get("since") or None
+    until = request.args.get("until") or None
+    agent_id = request.args.get("agent_id") or None
+
+    runs: list = []
+    source = "empty"
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        runs = store.query_flow_runs(
+            agent_id=agent_id, since=since, until=until, limit=limit,
+        ) or []
+        if runs:
+            source = "local_store"
+    except Exception:
+        runs = []
+        source = "empty"
+
+    return jsonify({"runs": runs, "count": len(runs), "_source": source})
+
+
 @bp_logs.route("/api/logs-stream")
 def api_logs_stream():
     """SSE endpoint - streams new log lines in real-time."""

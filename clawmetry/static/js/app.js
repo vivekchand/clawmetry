@@ -7654,10 +7654,150 @@ function _startFlowSse() {
   _flowSse.onerror = function() { setTimeout(_startFlowSse, 5000); };
 }
 
+// ── Flow sub-tabs (Live | Runs) — issue #611 ────────────────────────────
+function switchFlowSubtab(name) {
+  var live = document.getElementById('flow-live-pane');
+  var runs = document.getElementById('flow-runs-pane');
+  if (!live || !runs) return;
+  if (name === 'runs') {
+    live.style.display = 'none';
+    runs.style.display = 'block';
+    loadFlowRuns();
+  } else {
+    live.style.display = '';
+    runs.style.display = 'none';
+  }
+  var tabs = document.querySelectorAll('#flow-subtabs .flow-subtab');
+  for (var i = 0; i < tabs.length; i++) {
+    var active = tabs[i].getAttribute('data-sub') === name;
+    tabs[i].classList.toggle('active', active);
+    tabs[i].style.borderBottom = active
+      ? '2px solid var(--accent-primary,#3b82f6)'
+      : '2px solid transparent';
+    tabs[i].style.color = active
+      ? 'var(--text-primary)'
+      : 'var(--text-muted)';
+  }
+}
+
+function _fmtRunDuration(secs) {
+  var s = Number(secs) || 0;
+  if (s < 1) return '<1s';
+  if (s < 60) return s.toFixed(0) + 's';
+  if (s < 3600) return (s / 60).toFixed(1) + 'm';
+  return (s / 3600).toFixed(1) + 'h';
+}
+
+function _fmtRunCost(c) {
+  var n = Number(c) || 0;
+  if (n === 0) return '$0';
+  if (n < 0.01) return '<$0.01';
+  return '$' + n.toFixed(2);
+}
+
+function _fmtRunStarted(iso) {
+  if (!iso) return '—';
+  try {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString();
+  } catch (e) { return iso; }
+}
+
+function loadFlowRuns() {
+  var sel = document.getElementById('flow-runs-limit');
+  var tbody = document.getElementById('flow-runs-tbody');
+  var countEl = document.getElementById('flow-runs-count');
+  if (!tbody) return;
+  var lim = sel ? parseInt(sel.value, 10) || 30 : 30;
+  tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">Loading flow runs&hellip;</td></tr>';
+  fetch('/api/flow/runs?limit=' + lim)
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var runs = (d && d.runs) || [];
+      if (countEl) countEl.textContent = runs.length + ' run' + (runs.length === 1 ? '' : 's');
+      if (!runs.length) {
+        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">No historical flow runs yet — the live Flow view will populate this once a session completes.</td></tr>';
+        return;
+      }
+      var rows = runs.map(function(r) {
+        var sid = String(r.session_id || '');
+        var sidShort = sid.length > 12 ? sid.slice(0, 8) + '…' : sid;
+        var models = (r.models || []).join(', ') || (r.models_invoked || 0);
+        var status = r.status || 'completed';
+        var statusColor = status === 'failed' ? '#ef4444' : '#22c55e';
+        var ch = r.channel || '—';
+        return ''
+          + '<tr style="border-top:1px solid var(--border-secondary,#2a2a4a);cursor:pointer;" '
+          +     'onclick="showFlowRunDetail(' + JSON.stringify(sid).replace(/"/g, '&quot;') + ')" '
+          +     'onmouseover="this.style.background=\'var(--bg-tertiary,#0d0d1f)\'" '
+          +     'onmouseout="this.style.background=\'\'">'
+          + '<td style="padding:8px 14px;font-family:monospace;color:var(--text-primary);">' + sidShort + '</td>'
+          + '<td style="padding:8px 14px;color:var(--text-muted);">' + _fmtRunStarted(r.started_at) + '</td>'
+          + '<td style="padding:8px 14px;text-align:right;color:var(--text-muted);">' + _fmtRunDuration(r.duration_seconds) + '</td>'
+          + '<td style="padding:8px 14px;color:var(--text-muted);">' + ch + '</td>'
+          + '<td style="padding:8px 14px;text-align:right;color:var(--text-primary);" title="' + models + '">' + (r.models_invoked || 0) + '</td>'
+          + '<td style="padding:8px 14px;text-align:right;color:var(--text-primary);">' + (r.tools_called || 0) + '</td>'
+          + '<td style="padding:8px 14px;text-align:right;color:var(--text-primary);">' + _fmtRunCost(r.total_cost) + '</td>'
+          + '<td style="padding:8px 14px;"><span style="color:' + statusColor + ';font-weight:600;">' + status + '</span></td>'
+          + '</tr>';
+      }).join('');
+      tbody.innerHTML = rows;
+    })
+    .catch(function() {
+      tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#ef4444;font-size:12px;">Failed to load flow runs.</td></tr>';
+    });
+}
+
+function showFlowRunDetail(sid) {
+  var box = document.getElementById('flow-runs-detail');
+  var title = document.getElementById('flow-runs-detail-title');
+  var body = document.getElementById('flow-runs-detail-body');
+  if (!box || !body) return;
+  if (title) title.textContent = 'Run · ' + sid;
+  body.innerHTML = '<div style="color:var(--text-muted);">Loading transcript&hellip;</div>';
+  box.style.display = 'block';
+  // Re-fetch /api/flow/runs to find this row (cheap; ≤200 rows). Then
+  // render a compact summary. The live Flow diagram is intentionally not
+  // re-driven here — the live view stays the source of truth for the
+  // animated SVG. Clicking a row gives users the stats panel for that run.
+  fetch('/api/flow/runs?limit=200')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var run = ((d && d.runs) || []).find(function(x) { return String(x.session_id) === String(sid); });
+      if (!run) { body.innerHTML = '<div style="color:#ef4444;">Run not found.</div>'; return; }
+      var models = (run.models || []).map(function(m) {
+        return '<span style="display:inline-block;background:var(--bg-tertiary,#0d0d1f);border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;padding:2px 8px;margin:2px 4px 2px 0;font-family:monospace;font-size:11px;">' + m + '</span>';
+      }).join('') || '<span style="color:var(--text-muted);">(none)</span>';
+      var statusColor = run.status === 'failed' ? '#ef4444' : '#22c55e';
+      body.innerHTML = ''
+        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">'
+        + '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Session</div><div style="font-family:monospace;color:var(--text-primary);word-break:break-all;">' + sid + '</div></div>'
+        + '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Started</div><div style="color:var(--text-primary);">' + _fmtRunStarted(run.started_at) + '</div></div>'
+        + '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Duration</div><div style="color:var(--text-primary);">' + _fmtRunDuration(run.duration_seconds) + '</div></div>'
+        + '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Channel</div><div style="color:var(--text-primary);">' + (run.channel || '—') + '</div></div>'
+        + '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Tool calls</div><div style="color:var(--text-primary);">' + (run.tools_called || 0) + '</div></div>'
+        + '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Total cost</div><div style="color:var(--text-primary);">' + _fmtRunCost(run.total_cost) + '</div></div>'
+        + '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Events</div><div style="color:var(--text-primary);">' + (run.event_count || 0) + '</div></div>'
+        + '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Status</div><div style="color:' + statusColor + ';font-weight:600;">' + run.status + '</div></div>'
+        + '</div>'
+        + '<div style="margin-top:14px;"><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Models invoked</div><div>' + models + '</div></div>'
+        + '<div style="margin-top:14px;"><a href="/api/transcript/' + encodeURIComponent(sid) + '" target="_blank" style="font-size:12px;color:var(--accent-primary,#3b82f6);text-decoration:none;">View full transcript &rarr;</a></div>';
+    })
+    .catch(function() {
+      body.innerHTML = '<div style="color:#ef4444;">Failed to load run detail.</div>';
+    });
+}
+
+function hideFlowRunDetail() {
+  var box = document.getElementById('flow-runs-detail');
+  if (box) box.style.display = 'none';
+}
+
 function initFlow() {
   if (flowInitDone) return;
   flowInitDone = true;
-  
+
   // Performance: Reduce update frequency on mobile
   var updateInterval = window.innerWidth < 768 ? 3000 : 2000;
 

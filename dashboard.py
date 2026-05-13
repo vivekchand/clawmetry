@@ -4315,6 +4315,13 @@ function clawmetryLogout(){
 
 <!-- FLOW -->
 <div class="page" id="page-flow">
+  <!-- Flow sub-tabs: Live | Runs (#611) -->
+  <div id="flow-subtabs" style="display:flex;gap:4px;border-bottom:1px solid var(--border-primary);margin:0 0 12px 0;padding:0;font-size:12px;">
+    <div class="flow-subtab active" data-sub="live" onclick="switchFlowSubtab('live')" style="padding:8px 16px;cursor:pointer;border-bottom:2px solid var(--accent-primary,#3b82f6);font-weight:600;color:var(--text-primary);">Live</div>
+    <div class="flow-subtab" data-sub="runs" onclick="switchFlowSubtab('runs')" style="padding:8px 16px;cursor:pointer;border-bottom:2px solid transparent;font-weight:600;color:var(--text-muted);">Runs</div>
+  </div>
+
+  <div id="flow-live-pane">
   <div class="flow-stats">
     <div class="flow-stat"><span class="flow-stat-label">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
     <div class="flow-stat"><span class="flow-stat-label">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
@@ -4580,6 +4587,49 @@ function clawmetryLogout(){
       <div style="color:#555;">Waiting for activity...</div>
     </div>
   </div>
+  </div><!-- end flow-live-pane -->
+
+  <!-- FLOW RUNS PANE (#611) — historical runs aggregated from DuckDB events -->
+  <div id="flow-runs-pane" style="display:none;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+      <div style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128202; Flow Runs <span id="flow-runs-count" style="font-size:11px;color:var(--text-muted);font-weight:400;margin-left:6px;"></span></div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <label style="font-size:11px;color:var(--text-muted);">Limit:</label>
+        <select id="flow-runs-limit" onchange="loadFlowRuns()" style="font-size:11px;padding:3px 8px;background:var(--bg-primary,#0a0a1a);border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;color:var(--text-primary);">
+          <option value="10">10</option>
+          <option value="30" selected>30</option>
+          <option value="100">100</option>
+        </select>
+        <button onclick="loadFlowRuns()" style="font-size:11px;padding:3px 10px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:var(--text-primary);cursor:pointer;">&#8635; Refresh</button>
+      </div>
+    </div>
+    <div style="background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;overflow:hidden;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="background:var(--bg-tertiary,#0d0d1f);color:var(--text-muted);text-align:left;">
+            <th style="padding:10px 14px;font-weight:600;">Session</th>
+            <th style="padding:10px 14px;font-weight:600;">Started</th>
+            <th style="padding:10px 14px;font-weight:600;text-align:right;">Duration</th>
+            <th style="padding:10px 14px;font-weight:600;">Channel</th>
+            <th style="padding:10px 14px;font-weight:600;text-align:right;">Models</th>
+            <th style="padding:10px 14px;font-weight:600;text-align:right;">Tools</th>
+            <th style="padding:10px 14px;font-weight:600;text-align:right;">Cost</th>
+            <th style="padding:10px 14px;font-weight:600;">Status</th>
+          </tr>
+        </thead>
+        <tbody id="flow-runs-tbody">
+          <tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">Loading flow runs&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="flow-runs-detail" style="margin-top:16px;display:none;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:14px 18px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div id="flow-runs-detail-title" style="font-size:13px;font-weight:700;color:var(--text-primary);"></div>
+        <button onclick="hideFlowRunDetail()" style="background:transparent;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;">&times;</button>
+      </div>
+      <div id="flow-runs-detail-body" style="font-size:12px;color:var(--text-muted);line-height:1.7;"></div>
+    </div>
+  </div><!-- end flow-runs-pane -->
 </div><!-- end page-flow -->
 
 <!-- BRAIN -->

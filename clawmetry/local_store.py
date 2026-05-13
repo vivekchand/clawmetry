@@ -44,6 +44,7 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -1502,6 +1503,90 @@ class LocalStore:
         cols = ["session_id", "channel", "chat_type", "subject", "origin_label"]
         return [_row_to_dict(r, cols) for r in self._fetch(sql, params)]
 
+    def query_flow_runs(
+        self,
+        *,
+        agent_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Aggregate historical flow runs from the ``events`` table.
+
+        A "flow run" is one session's worth of events. For each session we
+        compute the start time, total duration, distinct models invoked,
+        tool-call count, total cost, and a left-joined channel from the
+        ``openclaw_channels`` per-session metadata table.
+
+        Status is heuristic: any event with ``event_type LIKE '%error%'``
+        flips the run to ``failed``; otherwise ``completed``. We don't try
+        to detect "in-progress" here — the live Flow view is the source of
+        truth for that.
+
+        Ordered most-recent first (by ``MAX(ts)``). Issue #611.
+        """
+        clauses: list[str] = ["e.session_id IS NOT NULL"]
+        params: list[Any] = []
+        if agent_id:
+            clauses.append("e.agent_id = ?")
+            params.append(agent_id)
+        if since:
+            clauses.append("e.ts >= ?")
+            params.append(since)
+        if until:
+            clauses.append("e.ts <= ?")
+            params.append(until)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT
+              e.session_id                              AS session_id,
+              MIN(e.agent_id)                           AS agent_id,
+              MIN(e.ts)                                 AS started_at,
+              MAX(e.ts)                                 AS updated_at,
+              COUNT(*)                                  AS event_count,
+              COUNT(DISTINCT e.model)
+                  FILTER (WHERE e.model IS NOT NULL)    AS models_invoked,
+              LIST(DISTINCT e.model)
+                  FILTER (WHERE e.model IS NOT NULL)    AS model_list,
+              COUNT(*) FILTER (WHERE
+                  e.event_type IN ('tool_call', 'toolCall', 'tool_use'))
+                                                        AS tools_called,
+              COALESCE(SUM(e.cost_usd), 0)              AS total_cost,
+              COALESCE(SUM(e.token_count), 0)           AS token_count,
+              MAX(CASE WHEN LOWER(e.event_type) LIKE '%error%'
+                       THEN 1 ELSE 0 END)               AS has_error,
+              MIN(c.channel)                            AS channel
+            FROM events e
+            LEFT JOIN openclaw_channels c
+              ON c.session_id = e.session_id
+            {where}
+            GROUP BY e.session_id
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = [
+            "session_id", "agent_id", "started_at", "updated_at",
+            "event_count", "models_invoked", "model_list", "tools_called",
+            "total_cost", "token_count", "has_error", "channel",
+        ]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            row = dict(zip(cols, r))
+            started = row.get("started_at") or ""
+            ended = row.get("updated_at") or ""
+            row["duration_seconds"] = _duration_seconds(started, ended)
+            row["status"] = "failed" if row.pop("has_error", 0) else "completed"
+            ml = row.pop("model_list", None) or []
+            # DuckDB LIST returns a Python list already; coerce just in case.
+            try:
+                row["models"] = [str(m) for m in ml if m]
+            except TypeError:
+                row["models"] = []
+            row["channels_touched"] = 1 if row.get("channel") else 0
+            out.append(row)
+        return out
+
     def query_channel_messages(
         self,
         *,
@@ -2635,6 +2720,29 @@ def _row_to_event(row: tuple, cols: list[str]) -> dict[str, Any]:
 def _row_to_dict(row: tuple, cols: list[str]) -> dict[str, Any]:
     """Generic tuple-to-dict for non-event rows (sessions, aggregates)."""
     return dict(zip(cols, row))
+
+
+def _duration_seconds(start_iso: str, end_iso: str) -> float:
+    """Best-effort ISO-timestamp diff in seconds. Returns 0.0 on parse fail.
+
+    Events arrive from multiple sources with slightly different ISO formats
+    (``Z`` suffix vs ``+00:00`` vs naive). We normalise the common cases
+    and never raise — flow-runs read paths must stay permissive."""
+    if not start_iso or not end_iso:
+        return 0.0
+    def _parse(s: str):
+        try:
+            s2 = s.replace("Z", "+00:00") if s.endswith("Z") else s
+            return datetime.fromisoformat(s2)
+        except (TypeError, ValueError):
+            return None
+    a, b = _parse(start_iso), _parse(end_iso)
+    if a is None or b is None:
+        return 0.0
+    try:
+        return max(0.0, (b - a).total_seconds())
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _decode_data_blob_rows(rows: Iterable[tuple], cols: list[str]) -> list[dict[str, Any]]:
