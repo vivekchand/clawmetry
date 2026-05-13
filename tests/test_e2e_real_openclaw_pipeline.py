@@ -239,7 +239,10 @@ ALL_EVENTS = sorted(
 EXPECTED_TOTAL = 11  # 1 + 1 + 4 + 3 + 1 + 1
 EXPECTED_BY_TYPE = {
     "session_start": 1,
-    "model_change":  1,
+    # ``model_change`` is mapped to ``model.changed`` on ingest by the v3
+    # underscore parser (#1135), so the canonical event_type in DuckDB
+    # matches the one the trajectory parser produces.
+    "model.changed": 1,
     "tool_call":     4,
     "message":       3,
     "compaction":    1,

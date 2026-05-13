@@ -1,0 +1,5 @@
+{"type": "session.started", "timestamp": "2026-05-12T22:30:00.000Z", "data": {"sessionId": "trajectory-fixture", "workspace": "/tmp/test"}}
+{"type": "prompt.submitted", "timestamp": "2026-05-12T22:30:01.000Z", "data": {"finalPromptText": "trajectory schema sanity check", "modelId": "claude-opus-4-7"}}
+{"type": "trace.artifacts", "timestamp": "2026-05-12T22:30:02.000Z", "modelId": "claude-opus-4-7", "data": {"finalPromptText": "trajectory schema sanity check", "assistantTexts": ["trajectory reply"], "promptCache": {"lastCallUsage": {"input": 100, "output": 50, "total": 150}}}}
+{"type": "model.completed", "timestamp": "2026-05-12T22:30:03.000Z", "data": {"completionText": "done", "modelId": "claude-opus-4-7", "promptCache": {"lastCallUsage": {"input": 10, "output": 5, "total": 15}}}}
+{"type": "session.ended", "timestamp": "2026-05-12T22:30:04.000Z", "data": {}}

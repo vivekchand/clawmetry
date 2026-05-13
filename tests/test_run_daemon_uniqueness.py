@@ -26,10 +26,14 @@ def test_run_daemon_resolves_to_live_definition():
     from clawmetry import sync
 
     line = inspect.getsourcelines(sync.run_daemon)[1]
-    assert line < 4700, (
+    # Threshold bumped 2026-05-13 (#1135) when the v3 underscore parser
+    # added ~326 lines above run_daemon. The shadow that prompted this
+    # test lived at ~5281 in the pre-cleanup file, so we keep a 200-line
+    # safety margin above the live def.
+    assert line < 5200, (
         f"sync.run_daemon resolves to line {line}, but the live def lives "
-        f"near line 4641. A duplicate def has likely been re-introduced "
-        f"further down the file -- check `grep -n '^def run_daemon' "
+        f"near the top of the file. A duplicate def has likely been "
+        f"re-introduced further down -- check `grep -n '^def run_daemon' "
         f"clawmetry/sync.py` and delete the shadow."
     )
 

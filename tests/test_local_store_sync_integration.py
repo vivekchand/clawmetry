@@ -310,15 +310,22 @@ def test_sync_extracts_cost_and_tokens(sync_with_isolated_store):
     store = ls.get_store()
     _wait_for_flush(store)
     rows = {r["id"]: r for r in store.query_events(session_id="session-cost")}
-    assert len(rows) == 3
+    # After #1135 the v3 ``thinking_level_change`` row is intentionally
+    # dropped (plumbing event with no transcript-visible content), so the
+    # batch produces 2 rows, not 3 (real + flat — bare is skipped).
+    assert len(rows) == 2
 
-    # Nested usage: extracted to columns.
+    # Nested usage: extracted to columns. After #1135 the v3 ``message``
+    # event is mapped to ``model.completed`` (the dot.separated event_type
+    # the trajectory parser produces), so the read-side handlers work
+    # uniformly across both schemas.
     real = rows["ev-real"]
+    assert real["event_type"] == "model.completed"
     assert real["token_count"] == 1234
     assert round(real["cost_usd"], 6) == 0.42
     assert real["model"] == "claude-opus-4-7"
-    # Raw blob preserved for downstream re-parsing.
-    assert real["data"]["message"]["usage"]["cost"]["total"] == 0.42
+    # PR #1132's expander reads tokens from this exact path:
+    assert real["data"]["promptCache"]["lastCallUsage"]["total"] == 1234
 
     # Top-level still works.
     flat = rows["ev-flat"]
@@ -326,11 +333,10 @@ def test_sync_extracts_cost_and_tokens(sync_with_isolated_store):
     assert round(flat["cost_usd"], 6) == 0.01
     assert flat["model"] == "claude-haiku"
 
-    # Bare event: NULL preserved, no synthesised zero.
-    bare = rows["ev-bare"]
-    assert bare["token_count"] is None
-    assert bare["cost_usd"] is None
-    assert bare["model"] is None
+    # ``ev-bare`` (thinking_level_change) is now intentionally dropped by
+    # ``_parse_v3_event`` — it carries no user-visible content and was
+    # only polluting analytics with NULL-cost / NULL-token rows.
+    assert "ev-bare" not in rows
 
 
 def test_extract_cost_tokens_model_unit():
