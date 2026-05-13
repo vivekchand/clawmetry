@@ -20,6 +20,7 @@ import threading
 import subprocess
 import urllib.request
 import urllib.error
+import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 from itertools import islice
@@ -2591,6 +2592,138 @@ def _detect_ollama_for_heartbeat():
         pass
 
     return result
+
+
+# ── Gateway process-metric capture (#852 follow-up) ──────────────────────────
+# PR #1146 added a *live* gateway-health snapshot (RSS/CPU/uptime). That's
+# fine for "is it green right now?" but the gateway's slow memory-bloat-OOM
+# pattern (~600 MB → ~945 MB) is only visible if you SEE THE TREND.
+#
+# Per the DuckDB-first rule, historical data lives in DuckDB. We capture
+# gateway vitals every 30s in the daemon loop and write them as
+# ``event_type="gateway.metric"`` events. The dashboard's
+# ``/api/gateway-health/history`` then plots a 24h sparkline.
+#
+# Constraints:
+#   * Every 30s max (rate-cap to keep DB writes cheap).
+#   * Dedupe: if a fresh sample matches the previous one closely (within
+#     5 min and small variance) we skip writing — the gateway is largely
+#     idle between agent calls so otherwise we'd write ~2,880 near-identical
+#     rows/day. With dedupe a typical day is ~50-300 rows.
+#   * Skip writes when the gateway isn't running — no point flooding the
+#     event log with "not_running" rows during dev or after a crash.
+#   * Best-effort: any failure (compute_gateway_health, local_store import,
+#     ingest) is swallowed; the daemon loop keeps ticking.
+
+GATEWAY_METRIC_INTERVAL_SEC = 30
+GATEWAY_METRIC_DEDUP_WINDOW_SEC = 300        # 5 min
+GATEWAY_METRIC_DEDUP_RSS_TOLERANCE_MB = 5.0  # don't re-write within ±5 MB
+GATEWAY_METRIC_DEDUP_CPU_TOLERANCE_PCT = 2.0  # don't re-write within ±2% CPU
+
+# Module-level state for rate-capping + dedupe. (last_write_ts, last_payload).
+# Reset on import; the daemon runs as one long-lived process, so this is fine.
+# Sentinel ``None`` means "no sample written yet" — the rate-cap check skips
+# the comparison so the very first call always falls through to capture.
+_LAST_GATEWAY_METRIC_TS: float | None = None
+_LAST_GATEWAY_METRIC: dict | None = None
+
+
+def _should_dedupe_gateway_metric(prev: dict | None, curr: dict) -> bool:
+    """Return True when *curr* is close enough to *prev* that we should skip
+    the write. The five-minute time window is enforced by the caller — this
+    helper just answers the value-similarity question.
+    """
+    if not isinstance(prev, dict):
+        return False
+    # PID changed → gateway restarted; always write.
+    if prev.get("pid") != curr.get("pid"):
+        return False
+    prev_rss = prev.get("rss_mb")
+    curr_rss = curr.get("rss_mb")
+    if prev_rss is None or curr_rss is None:
+        # Vitals went missing/recovered → write so the gap is visible.
+        return prev_rss == curr_rss
+    if abs(float(curr_rss) - float(prev_rss)) > GATEWAY_METRIC_DEDUP_RSS_TOLERANCE_MB:
+        return False
+    prev_cpu = prev.get("cpu_pct") or 0.0
+    curr_cpu = curr.get("cpu_pct") or 0.0
+    if abs(float(curr_cpu) - float(prev_cpu)) > GATEWAY_METRIC_DEDUP_CPU_TOLERANCE_PCT:
+        return False
+    return True
+
+
+def capture_gateway_metric(config: dict) -> bool:
+    """Capture one ``gateway.metric`` event into local DuckDB.
+
+    Returns True when a row was written, False when skipped (rate-capped,
+    deduped, gateway not running, or any failure).
+
+    Imports ``routes.health.compute_gateway_health`` lazily so the daemon
+    doesn't pull the dashboard module graph at import time (the daemon is
+    optional; ``routes/`` is a peer of ``clawmetry/`` at the repo root).
+    """
+    global _LAST_GATEWAY_METRIC_TS, _LAST_GATEWAY_METRIC
+    now_mono = time.monotonic()
+    if (
+        _LAST_GATEWAY_METRIC_TS is not None
+        and (now_mono - _LAST_GATEWAY_METRIC_TS) < GATEWAY_METRIC_INTERVAL_SEC
+    ):
+        return False
+
+    try:
+        import routes.health as _rh  # late import — daemon is optional
+    except Exception as _e:
+        log.debug("gateway.metric: cannot import routes.health (%s)", _e)
+        return False
+
+    try:
+        # Attribute lookup (NOT a bound reference) so tests + future
+        # hot-reloads pick up monkeypatched implementations.
+        snap = _rh.compute_gateway_health()
+    except Exception as _e:
+        log.debug("gateway.metric: compute_gateway_health failed (%s)", _e)
+        return False
+
+    if not snap or snap.get("status") == "not_running":
+        # Skip noise when the gateway isn't found at all.
+        _LAST_GATEWAY_METRIC_TS = now_mono
+        return False
+
+    curr = {
+        "rss_mb":         snap.get("rss_mb"),
+        "cpu_pct":        snap.get("cpu_pct"),
+        "pid":            snap.get("pid"),
+        "uptime_seconds": snap.get("uptime_seconds"),
+    }
+
+    # Dedupe within DEDUP_WINDOW: if this sample looks like the last one and
+    # we wrote that one less than 5 min ago, skip the write.
+    if _LAST_GATEWAY_METRIC is not None:
+        elapsed = now_mono - _LAST_GATEWAY_METRIC_TS
+        if elapsed < GATEWAY_METRIC_DEDUP_WINDOW_SEC and _should_dedupe_gateway_metric(
+            _LAST_GATEWAY_METRIC, curr
+        ):
+            return False
+
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+        store.ingest({
+            "id":         uuid.uuid4().hex,
+            "node_id":    config.get("node_id") or "unknown",
+            "agent_id":   "openclaw-gateway",
+            "agent_type": "openclaw",
+            "event_type": "gateway.metric",
+            "ts":         datetime.now(timezone.utc).isoformat(),
+            "data":       curr,
+        })
+    except Exception as _e:
+        log.debug("gateway.metric: ingest failed (%s)", _e)
+        return False
+
+    _LAST_GATEWAY_METRIC_TS = now_mono
+    _LAST_GATEWAY_METRIC = curr
+    return True
 
 
 # ── Daemon-collected snapshots ────────────────────────────────────────────────
@@ -5565,6 +5698,16 @@ def run_daemon() -> None:
             if now_snap - last_snapshot > snapshot_interval:
                 snap = sync_system_snapshot(config, state, paths)  # subagents + flow
                 last_snapshot = now_snap
+
+            # ── Gateway process metric capture (#852 follow-up) ──
+            # Persists RSS/CPU into DuckDB every 30s (rate-capped + deduped
+            # inside the helper) so the dashboard can render a 24h sparkline
+            # of memory pressure, not just a live snapshot. Best-effort.
+            try:
+                capture_gateway_metric(config)
+            except Exception as _gm_e:
+                log.debug("gateway.metric capture failed (continuing): %s", _gm_e)
+
             ev = sync_sessions(config, state, paths)
             ev += sync_claude_cli_sessions(config, state, paths)
             sm = sync_session_metadata(config, state)
