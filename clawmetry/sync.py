@@ -2666,7 +2666,14 @@ def _openclaw_claude_session_offset_key(jsonl_path: str) -> str:
 
 
 def _translate_claude_session_line(
-    obj: dict, *, session_id: str, node_id: str, line_no: int,
+    obj: dict,
+    *,
+    session_id: str,
+    node_id: str,
+    line_no: int,
+    openclaw_session_id: str | None = None,
+    kind: str = "top",
+    subagent_file: str | None = None,
 ) -> dict | None:
     """Map a Claude Code session JSONL line onto an ``events`` row.
 
@@ -2674,18 +2681,32 @@ def _translate_claude_session_line(
     non-dict). Never raises.
 
     Field mapping:
-      * ``id``         ← ``f"openclaw-cc:{session_id}:{uuid_or_lineno}"``
+      * ``id``         ← ``f"openclaw-cc:{join_id}:{kind}:{uuid_or_lineno}"``
+                         where ``join_id`` is the OpenClaw session UUID
+                         when provided (sessions.json walk path) or the
+                         Claude Code session UUID (process-inspection
+                         fallback path).
       * ``agent_type`` ← ``"openclaw"`` (so Brain's per-agent filters
                          still match — this transcript belongs to the
                          OpenClaw agent that spawned the claude CLI)
       * ``agent_id``   ← ``"main"``
-      * ``session_id`` ← Claude Code session UUID (from filename)
+      * ``session_id`` ← OpenClaw session UUID when ``openclaw_session_id``
+                         is set (so the ``sessions`` table row written by
+                         the sessions.json walk joins to these events).
+                         Falls back to the Claude Code session UUID for
+                         the process-inspection path which doesn't know
+                         about the OpenClaw binding (closes #1226).
       * ``event_type`` ← Claude Code ``type`` field (user / assistant /
-                         system / queue-operation / attachment / …)
+                         system / queue-operation / attachment / …) —
+                         subagent rows are prefixed ``subagent:`` so
+                         Brain can render them under a sub-agent lane.
       * ``ts``         ← Claude Code ``timestamp``
       * ``data``       ← the full JSON line (verbatim — Brain's
                          ``_extract_brain_detail`` walks several
-                         alternative paths to find the rendered text)
+                         alternative paths to find the rendered text).
+                         The Claude Code session UUID is also embedded
+                         here as ``_claude_session_id`` for cross-ref
+                         and debugging without a schema bump (#1226).
 
     Cost / token / model fields ride along when the line carries them
     (assistant messages with ``message.usage.*``); legacy
@@ -2697,20 +2718,38 @@ def _translate_claude_session_line(
     if not ts:
         return None
     evt_type = str(obj.get("type") or "unknown")
+    if kind == "subagent":
+        evt_type = f"subagent:{evt_type}"
     # Stable id: prefer Claude Code's ``uuid`` / ``id``; otherwise compose
-    # from session+line so re-reads after a state-loss don't dupe.
+    # from session+line so re-reads after a state-loss don't dupe. When
+    # this line is from a subagent file, scope the id with the file basename
+    # so the same uuid/line-number across multiple subagents stays unique.
     eid_inner = obj.get("uuid") or obj.get("id") or f"line:{line_no}"
+    if subagent_file:
+        eid_inner = f"{subagent_file}:{eid_inner}"
+    join_id = openclaw_session_id or session_id
     cost_usd, token_count, model = _extract_cost_tokens_model(obj)
+    # Embed cross-ref metadata in data so Brain / debugging can correlate
+    # the OpenClaw side ↔ Claude CLI side without a schema change. We copy
+    # the dict so we don't mutate the caller's parsed line.
+    out_data = dict(obj)
+    out_data["_claude_session_id"] = session_id
+    if openclaw_session_id:
+        out_data["_openclaw_session_id"] = openclaw_session_id
+    if kind != "top":
+        out_data["_oc_cc_kind"] = kind
+    if subagent_file:
+        out_data["_subagent_file"] = subagent_file
     return {
-        "id": f"openclaw-cc:{session_id}:{eid_inner}",
+        "id": f"openclaw-cc:{join_id}:{kind}:{eid_inner}",
         "node_id": node_id,
         "agent_type": "openclaw",
         "agent_id": "main",
-        "session_id": session_id,
+        "session_id": join_id,
         "workspace_id": obj.get("cwd") or obj.get("workspace_id"),
         "event_type": evt_type,
         "ts": str(ts),
-        "data": obj,
+        "data": out_data,
         "cost_usd": cost_usd,
         "token_count": token_count,
         "model": model,
@@ -2727,10 +2766,24 @@ def sync_openclaw_claude_sessions(
     config: dict | None,
     state: dict,
     paths: dict | None = None,
+    skip_claude_ids: set[str] | None = None,
 ) -> int:
     """Discover OpenClaw-spawned ``claude`` CLI session files via process
     inspection and tail their newly-appended bytes into the local DuckDB
     ``events`` table.
+
+    SECONDARY discovery path. The PRIMARY path is
+    :func:`sync_openclaw_claude_sessions_via_index`, which walks
+    ``sessions.json`` and follows the ``claudeCliSessionId`` binding.
+    This function only fires for sessions whose binding hasn't been
+    written to ``sessions.json`` yet (e.g. mid-session, or after a
+    crash that lost the binding) — exactly the historical failure
+    mode PR #1224 was designed to catch.
+
+    ``skip_claude_ids`` lets the caller suppress sessions already
+    handled by the index path so we don't double-write rows. The
+    events PRIMARY KEY would dedup them anyway, but skipping saves
+    the file IO.
 
     Returns the number of events ingested this call. Designed to be
     called once per daemon sync cycle. All failure modes are swallowed
@@ -2772,6 +2825,13 @@ def sync_openclaw_claude_sessions(
         return 0
     if not targets:
         return 0
+    if skip_claude_ids:
+        targets = [
+            (sid, p) for (sid, p) in targets
+            if sid not in skip_claude_ids
+        ]
+        if not targets:
+            return 0
 
     offsets: dict = state.setdefault("claude_session_byte_offsets", {})
     rows: list[dict] = []
@@ -2854,6 +2914,492 @@ def sync_openclaw_claude_sessions(
             ", ".join(os.path.basename(p) for p in files_touched),
         )
     return len(rows)
+
+
+# ── Sync: OpenClaw → Claude Code sessions via sessions.json (PR #1226) ───────
+#
+# PRIMARY discovery path. Reads ``~/.openclaw/agents/main/sessions/sessions.json``
+# (the same index sync_claude_cli_sessions reads for the cloud-stream path)
+# and follows ``cliSessionIds.claude-cli`` (or legacy ``claudeCliSessionId``)
+# into ``~/.claude/projects/<encoded-cwd>/`` to capture three classes of files:
+#
+#   1. <claude-id>.jsonl                   — top-level transcript
+#   2. <claude-id>/subagents/*.jsonl       — sub-agent transcripts
+#   3. <claude-id>/tool-results/*          — tool-result dumps (opaque text)
+#
+# All three classes write into the local DuckDB ``events`` table keyed under
+# the OpenClaw session UUID (NOT the Claude Code UUID). Plus we upsert one row
+# into ``sessions`` per OpenClaw session so the typed-session view in
+# ``query_sessions_table`` joins against these events.
+#
+# Why this exists: PR #1224 wired up process-inspection discovery and tagged
+# events under the Claude UUID. Brain's join queries miss those rows, and
+# sub-agent transcripts + tool-results were never captured at all. Diya
+# (OpenClaw's bot) flagged these three gaps explicitly when verifying the
+# install. This PR closes them.
+#
+# Diya's diagnosis (verbatim from the user):
+#   "Sub-agent transcripts and large tool outputs live at
+#    49f1d9fc-.../subagents/ and 49f1d9fc-.../tool-results/ — alongside the
+#    top-level transcript."
+#   "It needs to follow claudeCliSessionId into ~/.claude/projects/ to get
+#    the real conversation."
+#   "sessions.json lists a sessionFile at ~/.openclaw/agents/main/sessions/
+#    625c0ad9-….jsonl, but I checked: that file does not exist. The generic
+#    OpenClaw write path only runs when OpenClaw uses its built-in agent
+#    loop. With the Claude CLI provider, that path is bypassed and the CLI
+#    owns the transcript."
+
+# Hard cap on tool-result body length stored in `data` (truncated). We
+# don't want a 1 MB grep dump occupying a single row.
+_OC_CC_TOOL_RESULT_MAX_BYTES = 64 * 1024
+
+# Cap on number of tool-result files ingested per session per cycle, so a
+# fresh discovery of a 100-file dir doesn't stall the cycle.
+_OC_CC_MAX_TOOL_RESULTS_PER_CYCLE = 200
+
+# Cap on number of subagent files inspected per session per cycle.
+_OC_CC_MAX_SUBAGENT_FILES_PER_CYCLE = 50
+
+
+def _walk_openclaw_session_bindings(sessions_dir: str) -> list[dict]:
+    """Read ``~/.openclaw/agents/main/sessions/sessions.json`` and return one
+    binding dict per session that has a Claude CLI binding. Each dict has:
+
+      * ``key``                — sessions.json top-level key (e.g. ``agent:main:main``)
+      * ``openclaw_session_id`` — the OpenClaw session UUID
+      * ``claude_session_id``  — the Claude Code session UUID
+      * ``workspace_dir``      — the agent CWD (from systemPromptReport)
+      * ``title``              — origin.label / chatType / key (best-effort)
+      * ``started_at``         — ISO ts (from sessionStartedAt or startedAt)
+      * ``last_active_at``     — ISO ts (from lastInteractionAt or updatedAt)
+      * ``status``             — sessions.json ``status`` field, default 'active'
+      * ``origin``             — full origin dict (for metadata)
+
+    Returns ``[]`` if the index doesn't exist or can't be parsed. Never
+    raises — best-effort observability.
+    """
+    if not sessions_dir:
+        return []
+    index_path = os.path.join(sessions_dir, "sessions.json")
+    if not os.path.isfile(index_path):
+        return []
+    try:
+        with open(index_path) as fi:
+            idx = json.load(fi)
+    except Exception:
+        return []
+    if not isinstance(idx, dict):
+        return []
+    out: list[dict] = []
+    for key, meta in idx.items():
+        if not isinstance(meta, dict):
+            continue
+        cli_id = meta.get("claudeCliSessionId") or (
+            meta.get("cliSessionIds", {}) or {}
+        ).get("claude-cli")
+        if not cli_id:
+            continue
+        oc_id = meta.get("sessionId")
+        if not oc_id:
+            continue
+        # workspace_dir comes from systemPromptReport.workspaceDir (the CLI's
+        # cwd). When that's missing — e.g. a pre-systemPromptReport session
+        # written by an older OpenClaw — fall back to the OpenClaw default
+        # workspace, which is the only CWD the user has anyway.
+        sp = meta.get("systemPromptReport") or {}
+        workspace = sp.get("workspaceDir") or os.path.join(
+            _get_openclaw_dir(), "workspace",
+        )
+        # Title: origin.label > chatType > key — Brain renders this in the
+        # session list so an empty string is jarring.
+        origin = meta.get("origin") or {}
+        title = (
+            origin.get("label")
+            or meta.get("chatType")
+            or key
+        )
+        # Convert ms-epoch fields to ISO so downstream renderers don't have
+        # to special-case sessions vs events. sessionStartedAt is the canonical
+        # name; older OpenClaw used startedAt.
+        def _iso(ms_or_iso):
+            if not ms_or_iso:
+                return None
+            if isinstance(ms_or_iso, (int, float)):
+                try:
+                    return datetime.fromtimestamp(
+                        ms_or_iso / 1000.0, tz=timezone.utc,
+                    ).isoformat().replace("+00:00", "Z")
+                except (ValueError, OSError):
+                    return None
+            return str(ms_or_iso)
+
+        out.append({
+            "key": key,
+            "openclaw_session_id": str(oc_id),
+            "claude_session_id": str(cli_id),
+            "workspace_dir": workspace,
+            "title": str(title)[:200] if title else key,
+            "started_at": _iso(
+                meta.get("sessionStartedAt") or meta.get("startedAt"),
+            ),
+            "last_active_at": _iso(
+                meta.get("lastInteractionAt") or meta.get("updatedAt"),
+            ),
+            "status": meta.get("status") or "active",
+            "origin": origin,
+            "channel": (
+                origin.get("provider")
+                or meta.get("lastChannel")
+                or (meta.get("deliveryContext") or {}).get("channel")
+            ),
+            "chat_type": meta.get("chatType"),
+        })
+    return out
+
+
+def _claude_session_dir(workspace_dir: str, claude_session_id: str) -> Path:
+    """Return ``~/.claude/projects/<encoded-cwd>/<claude-session-id>/`` —
+    the directory that holds the subagents/ and tool-results/ subdirs.
+    """
+    slug = _encode_cwd_for_claude_projects(workspace_dir)
+    return _claude_projects_root() / slug / claude_session_id
+
+
+def _claude_session_top_level_path(
+    workspace_dir: str, claude_session_id: str,
+) -> Path:
+    """Return the top-level ``<claude-id>.jsonl`` path."""
+    slug = _encode_cwd_for_claude_projects(workspace_dir)
+    return _claude_projects_root() / slug / f"{claude_session_id}.jsonl"
+
+
+def _upsert_openclaw_session_row(binding: dict, node_id: str) -> None:
+    """Upsert a row into the typed ``sessions`` table for an OpenClaw session,
+    keyed by the OpenClaw session UUID. Best-effort — failures are logged
+    and swallowed so observability doesn't block ingest.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+    except Exception as e:
+        log.debug("openclaw-cc upsert_session: store unavailable: %s", e)
+        return
+    try:
+        store.ingest_session({
+            "agent_type": "openclaw",
+            "session_id": binding["openclaw_session_id"],
+            "node_id": node_id,
+            "agent_id": "main",
+            "workspace_id": binding.get("workspace_dir"),
+            "title": binding.get("title"),
+            "started_at": binding.get("started_at"),
+            "last_active_at": binding.get("last_active_at"),
+            "status": binding.get("status") or "active",
+            "metadata": {
+                "claude_session_id": binding.get("claude_session_id"),
+                "key": binding.get("key"),
+                "origin": binding.get("origin"),
+                "channel": binding.get("channel"),
+                "chat_type": binding.get("chat_type"),
+            },
+        })
+    except Exception as e:
+        log.debug("openclaw-cc upsert_session failed (non-fatal): %s", e)
+    # Also write the openclaw_channels row so the channel pill renders.
+    if binding.get("channel") or binding.get("origin"):
+        try:
+            origin = binding.get("origin") or {}
+            store.ingest_channel({
+                "session_id": binding["openclaw_session_id"],
+                "channel": binding.get("channel"),
+                "chat_type": binding.get("chat_type"),
+                "subject": origin.get("label"),
+                "origin_label": origin.get("label"),
+            })
+        except Exception as e:
+            log.debug("openclaw-cc ingest_channel failed (non-fatal): %s", e)
+
+
+def _ingest_jsonl_file_tail(
+    jsonl_path: str,
+    *,
+    state: dict,
+    node_id: str,
+    claude_session_id: str,
+    openclaw_session_id: str | None,
+    kind: str,
+    subagent_file: str | None,
+) -> tuple[list[dict], int]:
+    """Tail a JSONL file by byte offset and translate each new line into
+    an events row. Returns ``(rows, lines_read)``. State is updated in-place.
+
+    Shared between top-level and subagent file ingestion. Idempotent —
+    re-reads emit identical row ids that hit the events PRIMARY KEY.
+    """
+    offsets: dict = state.setdefault("claude_session_byte_offsets", {})
+    key = _openclaw_claude_session_offset_key(jsonl_path)
+    rows: list[dict] = []
+    try:
+        cur_size = os.path.getsize(jsonl_path)
+    except OSError:
+        return rows, 0
+    last_off = int(offsets.get(key, 0) or 0)
+    if last_off > cur_size:
+        last_off = 0
+    if last_off >= cur_size:
+        offsets[key] = cur_size
+        return rows, 0
+    try:
+        with open(jsonl_path, "rb") as f:
+            f.seek(last_off)
+            lines_read = 0
+            buf_lines: list[str] = []
+            for raw in f:
+                lines_read += 1
+                if lines_read > _OC_CC_MAX_LINES_PER_FILE_PER_CYCLE:
+                    break
+                buf_lines.append(raw.decode("utf-8", errors="replace"))
+            new_off = f.tell()
+    except OSError as e:
+        log.debug("openclaw-cc read error %s (non-fatal): %s", jsonl_path, e)
+        return rows, 0
+    for i, raw_line in enumerate(buf_lines):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+        except Exception:
+            continue
+        row = _translate_claude_session_line(
+            obj,
+            session_id=claude_session_id,
+            node_id=node_id,
+            line_no=last_off + i,
+            openclaw_session_id=openclaw_session_id,
+            kind=kind,
+            subagent_file=subagent_file,
+        )
+        if row is not None:
+            rows.append(row)
+    offsets[key] = new_off
+    return rows, len(buf_lines)
+
+
+def _ingest_tool_result_files(
+    tool_results_dir: Path,
+    *,
+    state: dict,
+    node_id: str,
+    claude_session_id: str,
+    openclaw_session_id: str,
+) -> list[dict]:
+    """Translate each tool-result file under ``<claude-id>/tool-results/`` into
+    one events row. Tool-results are arbitrary text dumps (the on-disk shape
+    Claude Code uses for large grep / WebFetch / Read outputs that don't fit
+    inline in the transcript). Each file's basename is its stable id, so we
+    dedup by (session, basename) regardless of size or content.
+
+    State tracks per-file mtime; we re-read only on mtime bump (or on first
+    discovery). The body is truncated to ``_OC_CC_TOOL_RESULT_MAX_BYTES``
+    so the row stays small — full dumps live on disk anyway.
+    """
+    rows: list[dict] = []
+    if not tool_results_dir.is_dir():
+        return rows
+    seen_mtimes: dict = state.setdefault("claude_tool_result_mtimes", {})
+    try:
+        entries = list(tool_results_dir.iterdir())
+    except OSError:
+        return rows
+    # Cap so a freshly populated dir doesn't stall the cycle.
+    entries.sort(key=lambda p: p.name)
+    if len(entries) > _OC_CC_MAX_TOOL_RESULTS_PER_CYCLE:
+        entries = entries[:_OC_CC_MAX_TOOL_RESULTS_PER_CYCLE]
+    for entry in entries:
+        try:
+            if not entry.is_file():
+                continue
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        seen_key = f"{claude_session_id}:{entry.name}"
+        if seen_mtimes.get(seen_key) == mtime:
+            continue
+        # Read up to the truncation cap so we never DoS ourselves on a
+        # multi-MB grep result. Beyond the cap we record metadata only.
+        try:
+            with open(entry, "rb") as f:
+                head_bytes = f.read(_OC_CC_TOOL_RESULT_MAX_BYTES + 1)
+        except OSError:
+            continue
+        truncated = len(head_bytes) > _OC_CC_TOOL_RESULT_MAX_BYTES
+        body = head_bytes[:_OC_CC_TOOL_RESULT_MAX_BYTES].decode(
+            "utf-8", errors="replace",
+        )
+        try:
+            size = entry.stat().st_size
+        except OSError:
+            size = len(head_bytes)
+        ts_iso = datetime.fromtimestamp(
+            mtime, tz=timezone.utc,
+        ).isoformat().replace("+00:00", "Z")
+        rows.append({
+            "id": (
+                f"openclaw-cc:{openclaw_session_id}:tool-result:{entry.name}"
+            ),
+            "node_id": node_id,
+            "agent_type": "openclaw",
+            "agent_id": "main",
+            "session_id": openclaw_session_id,
+            "workspace_id": None,
+            "event_type": "tool-result",
+            "ts": ts_iso,
+            "data": {
+                "_claude_session_id": claude_session_id,
+                "_openclaw_session_id": openclaw_session_id,
+                "_oc_cc_kind": "tool-result",
+                "filename": entry.name,
+                "size_bytes": size,
+                "truncated": truncated,
+                "body": body,
+            },
+            "cost_usd": None,
+            "token_count": None,
+            "model": None,
+        })
+        seen_mtimes[seen_key] = mtime
+    return rows
+
+
+def sync_openclaw_claude_sessions_via_index(
+    config: dict | None,
+    state: dict,
+    paths: dict | None = None,
+) -> tuple[int, set[str]]:
+    """Primary discovery path: walk OpenClaw's sessions.json and tail the
+    top-level + subagent + tool-result files Claude Code wrote for each
+    bound session.
+
+    Returns ``(events_ingested, claude_ids_handled)``. The second tuple
+    element is consumed by the process-inspection fallback so it can skip
+    sessions we've already covered here.
+
+    Default: ON. Same escape hatch as the process-inspection path
+    (``CLAWMETRY_DISABLE_CLAUDE_SESSION_INGEST=1``).
+    """
+    if os.environ.get("CLAWMETRY_DISABLE_CLAUDE_SESSION_INGEST", "").strip() in (
+        "1", "true", "yes", "on",
+    ):
+        return 0, set()
+    try:
+        if not _sync_allowed():
+            return 0, set()
+    except Exception:
+        pass
+
+    node_id = (config or {}).get("node_id") or "local"
+    paths = paths or {}
+    sessions_dir = paths.get("sessions_dir") or os.path.join(
+        _get_openclaw_dir(), "agents", "main", "sessions",
+    )
+    bindings = _walk_openclaw_session_bindings(sessions_dir)
+    if not bindings:
+        return 0, set()
+
+    rows: list[dict] = []
+    handled: set[str] = set()
+    files_touched: list[str] = []
+    sessions_upserted: list[str] = []
+
+    for binding in bindings:
+        claude_id = binding["claude_session_id"]
+        oc_id = binding["openclaw_session_id"]
+        workspace = binding["workspace_dir"]
+
+        top_path = _claude_session_top_level_path(workspace, claude_id)
+        sess_dir = _claude_session_dir(workspace, claude_id)
+        # If neither the top-level file nor the subdir exists, this binding
+        # points at a Claude session that hasn't started writing — skip it
+        # this cycle, the daemon will re-check next cycle.
+        if not top_path.is_file() and not sess_dir.is_dir():
+            continue
+
+        # Always upsert the sessions row first so even an empty / not-yet-
+        # written top-level file produces a renderable session in the UI.
+        # Idempotent (ON CONFLICT DO UPDATE).
+        _upsert_openclaw_session_row(binding, node_id)
+        sessions_upserted.append(oc_id)
+        handled.add(claude_id)
+
+        # 1. Top-level transcript
+        if top_path.is_file():
+            top_rows, _ = _ingest_jsonl_file_tail(
+                str(top_path),
+                state=state,
+                node_id=node_id,
+                claude_session_id=claude_id,
+                openclaw_session_id=oc_id,
+                kind="top",
+                subagent_file=None,
+            )
+            if top_rows:
+                rows.extend(top_rows)
+                files_touched.append(str(top_path))
+
+        # 2. Sub-agent transcripts — one JSONL per spawned sub-agent.
+        subagents_dir = sess_dir / "subagents"
+        if subagents_dir.is_dir():
+            try:
+                sub_files = sorted(subagents_dir.glob("*.jsonl"))
+            except OSError:
+                sub_files = []
+            if len(sub_files) > _OC_CC_MAX_SUBAGENT_FILES_PER_CYCLE:
+                sub_files = sub_files[:_OC_CC_MAX_SUBAGENT_FILES_PER_CYCLE]
+            for sub_path in sub_files:
+                sub_rows, _ = _ingest_jsonl_file_tail(
+                    str(sub_path),
+                    state=state,
+                    node_id=node_id,
+                    claude_session_id=claude_id,
+                    openclaw_session_id=oc_id,
+                    kind="subagent",
+                    subagent_file=sub_path.stem,
+                )
+                if sub_rows:
+                    rows.extend(sub_rows)
+                    files_touched.append(str(sub_path))
+
+        # 3. Tool-result dumps — one event per file, dedup by mtime.
+        tool_dir = sess_dir / "tool-results"
+        tr_rows = _ingest_tool_result_files(
+            tool_dir,
+            state=state,
+            node_id=node_id,
+            claude_session_id=claude_id,
+            openclaw_session_id=oc_id,
+        )
+        if tr_rows:
+            rows.extend(tr_rows)
+            files_touched.append(str(tool_dir))
+
+    if rows:
+        try:
+            from clawmetry import local_store
+            local_store.get_store().ingest_many(rows)
+        except Exception as e:
+            log.warning(
+                "openclaw-cc-index local-store ingest failed (non-fatal): %s", e,
+            )
+            return 0, handled
+
+    if rows or sessions_upserted:
+        log.debug(
+            "openclaw-cc-index: %d events / %d sessions / %d files",
+            len(rows), len(sessions_upserted), len(files_touched),
+        )
+    return len(rows), handled
 
 
 # ── Sync: channel-adapter transcripts (Telegram, Signal, WhatsApp, …) ────────
@@ -7063,17 +7609,37 @@ def run_daemon() -> None:
 
             ev = sync_sessions(config, state, paths)
             ev += sync_claude_cli_sessions(config, state, paths)
-            # Process-discovered Claude Code session JSONLs (PR
-            # release/openclaw-claude-session-ingest, 2026-05-14). The legacy
-            # ``sync_claude_cli_sessions`` above only fires when
-            # ``sessions.json`` carries the ``claudeCliSessionId`` binding —
-            # any session started before OpenClaw wrote that binding (or where
-            # the binding was lost on a crash) is invisible to it. This
-            # complementary path inspects running ``claude`` subprocesses
-            # directly and tails their session files, so capture is
-            # independent of OpenClaw's index. Failure is non-fatal.
+            # PRIMARY: walk OpenClaw's sessions.json → ``cliSessionIds.claude-cli``
+            # → ``~/.claude/projects/<encoded-cwd>/<id>.jsonl`` plus subagents/
+            # and tool-results/. Tags events under the OpenClaw session UUID
+            # and upserts a ``sessions`` row so the typed-session view joins.
+            # Closes #1226 — the P0 follow-up to PR #1224. Failure is
+            # non-fatal: the next cycle will retry from the saved offset.
+            handled_claude_ids: set[str] = set()
             try:
-                oc_cc = sync_openclaw_claude_sessions(config, state, paths)
+                oc_cc_idx, handled_claude_ids = (
+                    sync_openclaw_claude_sessions_via_index(
+                        config, state, paths,
+                    )
+                )
+                ev += oc_cc_idx
+            except Exception as _occ_idx_e:
+                log.debug(
+                    "openclaw-cc-index sync error (non-fatal): %s",
+                    _occ_idx_e,
+                )
+                oc_cc_idx = 0
+            # SECONDARY: process-discovered Claude Code session JSONLs (PR
+            # #1224, 2026-05-14). Catches sessions whose binding hasn't been
+            # written to sessions.json yet — e.g. a brand-new session
+            # mid-spawn, or one whose binding was lost on a crash. Skip
+            # sessions already handled by the index path above so we don't
+            # double-process. Failure is non-fatal.
+            try:
+                oc_cc = sync_openclaw_claude_sessions(
+                    config, state, paths,
+                    skip_claude_ids=handled_claude_ids,
+                )
                 ev += oc_cc
             except Exception as _occ_e:
                 log.debug(
