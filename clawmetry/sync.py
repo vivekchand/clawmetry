@@ -6932,6 +6932,52 @@ def parse_telegram_outbound_line(line: str) -> dict | None:
     }
 
 
+def _telegram_outbound_event_row(
+    msg: dict, *, node_id: str,
+) -> dict:
+    """Project a ``channel_messages`` row (from ``parse_telegram_outbound_line``)
+    onto the ``events`` table shape that the Brain feed reads.
+
+    The Brain tab calls ``LocalStore.query_events`` and surfaces rows whose
+    ``event_type`` starts with ``CHANNEL.`` (see ``routes/brain.py`` —
+    ``_try_local_store_brain``). Without this projection, telegram outbound
+    rows live ONLY in ``channel_messages`` and the Brain feed silently
+    omits them — exactly the P0 user-visible regression that motivated
+    this helper.
+
+    The ``id`` matches the ``channel_messages.id`` so the events row and
+    the channel_messages row are 1:1 — both use ``ingest_many`` /
+    ``ingest_channel_message``'s ``INSERT OR IGNORE`` / upsert semantics
+    so re-running the parser after a state-file loss is a no-op.
+    """
+    raw = msg.get("raw_blob") or {}
+    return {
+        "id": msg["id"],
+        "node_id": node_id,
+        "agent_type": "openclaw",
+        "agent_id": "main",
+        "event_type": "channel.out",
+        "ts": msg["ts"],
+        # Channel turns are NOT tied to an LLM session — leave session_id
+        # NULL so the per-session token/cost rollups don't double-count.
+        "session_id": None,
+        "workspace_id": None,
+        "data": {
+            "provider": _TELEGRAM_PROVIDER,
+            "channel_id": msg.get("channel_id"),
+            "chat_id": raw.get("chat_id"),
+            "message_id": raw.get("message_id"),
+            "method": raw.get("method"),
+            "direction": "out",
+            "body_capture": raw.get("body_capture"),
+            "source": raw.get("source") or "gateway.log",
+        },
+        "cost_usd": None,
+        "token_count": None,
+        "model": None,
+    }
+
+
 def _telegram_log_offset_key(log_path: str) -> str:
     """Per-log-path key under ``state['last_log_offsets']``.
 
@@ -6948,12 +6994,24 @@ def sync_telegram_from_gateway_log(
     paths: dict | None = None,
 ) -> int:
     """Tail the OpenClaw gateway.log for new Telegram outbound ACKs and
-    ingest them into the local DuckDB ``channel_messages`` table.
+    ingest them into BOTH the local DuckDB ``channel_messages`` table
+    (channel detail view) AND the ``events`` table (Brain feed).
 
     Returns the number of messages ingested this call. Designed to be
     called once per daemon sync cycle. All failure modes are swallowed
     (the daemon must never crash because telemetry plumbing broke); a
     warning is logged and ``0`` is returned.
+
+    Why two writes
+    --------------
+    The Brain tab reads from ``LocalStore.query_events`` (the ``events``
+    table) and renders any row whose ``event_type`` starts with
+    ``CHANNEL.``. Until this dual-write was added, telegram outbound
+    rows landed ONLY in ``channel_messages`` and Brain showed an empty
+    Telegram channel — exactly the P0 user-visible bug this helper was
+    meant to prevent. ``sync_channel_messages`` already dual-writes for
+    JSONL-backed channels (see L2771-L2789); this brings the gateway-log
+    parser into the same contract.
 
     Tail-and-resume contract
     ------------------------
@@ -6964,7 +7022,8 @@ def sync_telegram_from_gateway_log(
 
     Log rotation / truncation handling: if the file is shorter than the
     stored offset we reset to ``0`` and re-scan from the top. The
-    ``ingest_channel_message`` PRIMARY KEY makes the re-scan idempotent.
+    ``ingest_channel_message`` PRIMARY KEY (and ``events`` ``INSERT OR
+    IGNORE``) makes the re-scan idempotent.
     """
     try:
         if paths and isinstance(paths, dict) and paths.get("logs_dir"):
@@ -7028,7 +7087,17 @@ def sync_telegram_from_gateway_log(
         complete = text[: last_nl + 1]
         new_offset = prev_offset + len(complete.encode("utf-8", errors="ignore"))
 
+        # Resolve node_id ONCE per cycle (cheap dict lookup; the daemon
+        # caches it for the life of the process). The events table needs
+        # it on every row.
+        node_id = (
+            (config or {}).get("node_id")
+            or os.environ.get("CLAWMETRY_NODE_ID")
+            or "local"
+        )
+
         ingested = 0
+        events_batch: list[dict] = []
         for raw_line in complete.splitlines():
             if "[telegram]" not in raw_line:
                 # Cheap pre-filter — only ~0.005% of gateway.log lines
@@ -7039,7 +7108,6 @@ def sync_telegram_from_gateway_log(
                 continue
             try:
                 store.ingest_channel_message(row)
-                ingested += 1
             except Exception as e:
                 # One malformed row must not poison the rest of the tail.
                 log.debug(
@@ -7047,6 +7115,25 @@ def sync_telegram_from_gateway_log(
                     "%s: %s", row.get("id"), e,
                 )
                 continue
+            # Dual-write: also enqueue the events-table projection so
+            # /api/brain-history surfaces the message. ingest_many goes
+            # through the ring buffer / flusher so this is cheap.
+            events_batch.append(
+                _telegram_outbound_event_row(row, node_id=node_id)
+            )
+            ingested += 1
+
+        if events_batch:
+            try:
+                store.ingest_many(events_batch)
+            except Exception as e:
+                # Brain rendering will lag by one cycle but the
+                # channel_messages rows already landed — we keep the
+                # progress and let the next cycle retry.
+                log.debug(
+                    "telegram-gw-log: events ingest failed for %d row(s): %s",
+                    len(events_batch), e,
+                )
 
         offsets[key] = new_offset
         if ingested:
