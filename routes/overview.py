@@ -116,7 +116,7 @@ def _is_heartbeat_event(ev):
 
 
 def _compute_overview_heartbeat(now=None, expected_seconds=_HEARTBEAT_EXPECTED_SECONDS):
-    """Build the `heartbeat` block for /api/overview from DuckDB events.
+    """Build the `heartbeat` block for /api/overview from DuckDB.
 
     Returns a dict with:
       expected_cadence_seconds — the configured cadence (default 1800)
@@ -130,6 +130,16 @@ def _compute_overview_heartbeat(now=None, expected_seconds=_HEARTBEAT_EXPECTED_S
                                  "amber"  if 1.5×–3×
                                  "red"    if >3×
                                  None     if no heartbeats observed
+
+    Source priority:
+      1. `events` table — OpenClaw gateway heartbeat *sessions* (replies
+         with HEARTBEAT_OK / action). Carries the OK-ratio signal.
+      2. `heartbeats` table — sync-daemon liveness pings (one per
+         interval). No OK-ratio (every row is "alive"), but proves the
+         agent is reachable. This is the only signal when the gateway
+         isn't running but the daemon is — which is the common case for
+         Cloud-Free / OSS users post-install (regression #1228: dashboard
+         showed `sample_size: 0` despite hundreds of fresh daemon pings).
     """
     if now is None:
         now = _time.time()
@@ -146,18 +156,29 @@ def _compute_overview_heartbeat(now=None, expected_seconds=_HEARTBEAT_EXPECTED_S
     # Read events from DuckDB. Pull a generous window (200) and filter
     # client-side — there is no SQL filter on data.session_type today, and
     # heartbeats are sparse (~48/day) so 200 covers >4 days.
+    #
+    # Cross-process safety (#1228): the sync daemon owns DuckDB's
+    # exclusive lock, which blocks even RO opens cross-process. Route
+    # through the daemon's local_query proxy first; fall back to direct
+    # RO open in single-process / dev mode.
+    rows = None
     try:
-        from clawmetry import local_store
-        store = local_store.get_store(read_only=True)
-        rows = store.query_events(agent_id="main", limit=200)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon(
+            "query_events", agent_id="main", limit=200,
+        )
     except Exception:
-        return out
-
-    if not rows:
-        return out
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_events(agent_id="main", limit=200)
+        except Exception:
+            rows = []
 
     heartbeats = []
-    for ev in rows:
+    for ev in (rows or []):
         if not _is_heartbeat_event(ev):
             continue
         ts_epoch = _parse_iso_to_epoch(ev.get("ts"))
@@ -165,6 +186,32 @@ def _compute_overview_heartbeat(now=None, expected_seconds=_HEARTBEAT_EXPECTED_S
             continue
         outcome = _classify_heartbeat_outcome(ev.get("data"))
         heartbeats.append({"ts": ts_epoch, "outcome": outcome})
+
+    # Fallback: if no gateway-heartbeat events found, read sync-daemon
+    # liveness rows from the dedicated `heartbeats` table. These don't
+    # carry an OK/action outcome (the daemon only writes when alive), so
+    # ok_ratio stays None — but `last_heartbeat_ts`, `gap_seconds`, and
+    # `status` populate correctly, which is what the UI cares about.
+    if not heartbeats:
+        hb_rows = None
+        try:
+            from routes.local_query import local_store_via_daemon
+            hb_rows = local_store_via_daemon("query_heartbeats", limit=20)
+        except Exception:
+            hb_rows = None
+        if hb_rows is None:
+            try:
+                from clawmetry import local_store
+                store = local_store.get_store(read_only=True)
+                hb_rows = store.query_heartbeats(limit=20)
+            except Exception:
+                hb_rows = []
+        for hb in (hb_rows or []):
+            ts_epoch = _parse_iso_to_epoch(hb.get("ts"))
+            if ts_epoch <= 0:
+                continue
+            # No outcome signal — leave ok_ratio None (sentinel).
+            heartbeats.append({"ts": ts_epoch, "outcome": None})
 
     if not heartbeats:
         return out
@@ -176,8 +223,13 @@ def _compute_overview_heartbeat(now=None, expected_seconds=_HEARTBEAT_EXPECTED_S
     gap = max(0.0, now - last_ts)
 
     last_20 = heartbeats[:20]
-    ok_count = sum(1 for h in last_20 if h["outcome"] == "ok")
-    ratio = round(ok_count / len(last_20), 3) if last_20 else None
+    classified = [h for h in last_20 if h["outcome"] in ("ok", "action")]
+    if classified:
+        ok_count = sum(1 for h in classified if h["outcome"] == "ok")
+        ratio = round(ok_count / len(classified), 3)
+    else:
+        # All sync-daemon liveness rows — no OK/action signal available.
+        ratio = None
 
     if gap < 1.5 * expected_seconds:
         status = "green"
@@ -251,26 +303,32 @@ def _detect_anthropic_oauth(limit=50):
     """
     result = {"using_oauth": False, "last_seen_ts": None}
 
-    # Read events from *both* the daemon-proxied store (the standard install's
-    # writer) and the local-process store (tests + dev mode). Either path may
-    # legitimately be empty; if both are unreachable we return the default.
+    # Read events from the daemon-proxied store first (standard install).
+    # Only fall back to direct local-process open when the proxy returns
+    # None (daemon down / single-process dev mode). Calling BOTH on every
+    # /api/overview was the dominant source of dashboard slowness pre-#1228:
+    # the direct RO open burns DuckDB's ~2.5s lock-retry budget on every
+    # request when the daemon owns the writer lock cross-process.
     rows: list = []
+    daemon_hit = False
     try:
         from routes.local_query import local_store_via_daemon
         d = local_store_via_daemon("query_events", limit=int(limit))
-        if d:
+        if d is not None:
+            daemon_hit = True
             rows.extend(d)
     except Exception:
         pass
-    try:
-        from clawmetry import local_store
-        direct = local_store.get_store(read_only=True).query_events(
-            limit=int(limit)
-        )
-        if direct:
-            rows.extend(direct)
-    except Exception:
-        pass
+    if not daemon_hit:
+        try:
+            from clawmetry import local_store
+            direct = local_store.get_store(read_only=True).query_events(
+                limit=int(limit)
+            )
+            if direct:
+                rows.extend(direct)
+        except Exception:
+            pass
     if not rows:
         return result
 

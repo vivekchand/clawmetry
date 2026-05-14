@@ -427,12 +427,24 @@ def _try_local_store_memory_files():
       - the memory_blobs table is empty
       - any unexpected error happens (we'd rather degrade than 500)
     """
+    # CRITICAL (regression #1228): the sync daemon (separate process)
+    # holds DuckDB's exclusive lock — even RO opens block on macOS, which
+    # is why the Memory tab spinner stuck on "Loading…". Route through
+    # the daemon's local_query proxy first; fall back to direct open in
+    # single-process boots.
+    rows = None
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-        rows = store.query_memory_blobs(limit=500)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_memory_blobs", limit=500)
     except Exception:
-        return None
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_memory_blobs(limit=500)
+        except Exception:
+            return None
     if not rows:
         return None
     out = []
@@ -464,16 +476,25 @@ def _try_local_store_file(path: str):
       - no memory_blobs row matches the requested path
       - the blob payload isn't UTF-8 text (rare; punt to disk path)
     """
+    # See #1228 — proxy through the daemon when present (cross-process
+    # DuckDB lock blocks even RO opens), fall back to direct read.
+    rows = None
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-        # query_memory_blobs has no exact-path filter (path_prefix is the
-        # closest), so use prefix=path to narrow then exact-match in Python.
-        # path_prefix="MEMORY.md" matches "MEMORY.md" exactly AND any
-        # accidental "MEMORY.md.bak" — the in-memory filter resolves it.
-        rows = store.query_memory_blobs(path_prefix=path, limit=50)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon(
+            "query_memory_blobs", path_prefix=path, limit=50,
+        )
     except Exception:
-        return None
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            # query_memory_blobs has no exact-path filter (path_prefix is the
+            # closest), so use prefix=path to narrow then exact-match below.
+            rows = store.query_memory_blobs(path_prefix=path, limit=50)
+        except Exception:
+            return None
     for r in rows:
         if (r.get("path") or "") != path:
             continue

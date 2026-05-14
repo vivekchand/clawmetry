@@ -1582,7 +1582,8 @@ def _try_local_store_service_status():
     """
     try:
         from clawmetry import local_store
-        store = local_store.get_store()
+        # CRITICAL: read_only=True — see #1228.
+        store = local_store.get_store(read_only=True)
         hb_rows = store.query_heartbeats(limit=1)
     except Exception:
         return None
@@ -1803,15 +1804,29 @@ def _try_local_store_heartbeat_status(node_id=None):
     persists its own heartbeat row, but ``_last_heartbeat_ts`` lives in
     dashboard memory and only sees what the local websocket emitted).
     """
+    # CRITICAL (regression #1228): the sync daemon (separate process)
+    # holds DuckDB's exclusive lock on clawmetry.duckdb. Even read-only
+    # opens block on it — direct ``get_store()`` here can hang for the full
+    # retry budget (~2.5s) and then return None, leaving the dashboard
+    # panel stuck on "No heartbeats yet". Route through the daemon's
+    # local_query proxy first; only fall back to direct open in the
+    # single-process / dev-mode case where the daemon isn't running.
+    rows = None
     try:
-        from clawmetry import local_store
+        from routes.local_query import local_store_via_daemon
+        kwargs = {"limit": 1}
+        if node_id:
+            kwargs["node_id"] = node_id
+        rows = local_store_via_daemon("query_heartbeats", **kwargs)
     except Exception:
-        return None
-    try:
-        store = local_store.get_store()
-        rows = store.query_heartbeats(limit=1, node_id=node_id) if node_id else store.query_heartbeats(limit=1)
-    except Exception:
-        return None
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_heartbeats(limit=1, node_id=node_id) if node_id else store.query_heartbeats(limit=1)
+        except Exception:
+            return None
     if not rows:
         return None
 
