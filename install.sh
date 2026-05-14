@@ -16,6 +16,94 @@ echo -e "  ${BOLD}🦞 ClawMetry${NC}  ${DIM}AI Observability for OpenClaw${NC}"
 echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
 
+# Overall wall-clock so the final "✓ installed" line can show "(Xs total)".
+_T0=$(date +%s)
+
+# ── Spinner helper for silent stages ────────────────────────────────────────
+# Curl-bash users used to stare at "Installing clawmetry from PyPI…" for 5+
+# seconds with no feedback while pip ran. ``_step`` wraps any silent command
+# with a labeled spinner that shows elapsed-vs-expected seconds, surfaces
+# captured stdout+stderr if the command fails, and obeys ``set -e``.
+#
+# Usage: ``_step "Label" <expected_seconds> cmd args...``
+# (Note: no ``--`` separator — args are passed through as-is, so unset
+# variables like an empty $USE_SUDO flatten cleanly via word-splitting at
+# the call site, then ``"$@"`` inside the function preserves quoting.)
+#
+# Non-TTY (CI, logfile redirect): degrades to a plain echo + foreground run.
+_step() {
+  local label="$1"; shift
+  local expected="$1"; shift
+  local logfile
+  logfile=$(mktemp -t clawmetry-step.XXXXXX 2>/dev/null || mktemp)
+
+  # Non-interactive output: plain log line, foreground exec, no spinner.
+  if ! [ -t 1 ]; then
+    echo "  → ${label}..."
+    if "$@" >"$logfile" 2>&1; then
+      rm -f "$logfile"
+      return 0
+    else
+      local _rc=$?
+      echo "  ✗ ${label} (exit ${_rc})" >&2
+      cat "$logfile" >&2
+      rm -f "$logfile"
+      return "$_rc"
+    fi
+  fi
+
+  # Interactive: run the command in the background, redraw a spinner line
+  # every 100ms. Frames cycle through Braille dots; pct climbs toward 95%
+  # using the caller-supplied ``expected`` budget, then we switch to a
+  # neutral "still working…" once we overshoot so we never lie about 99%.
+  local frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  local frame_count=${#frames}
+  local i=0
+  local start_ms
+  start_ms=$(date +%s)
+
+  ( "$@" >"$logfile" 2>&1 ) &
+  local pid=$!
+
+  # Spin until the worker exits. ``kill -0`` is the cheap "is it alive?"
+  # probe; busy-loop is fine at 10Hz.
+  while kill -0 "$pid" 2>/dev/null; do
+    local now elapsed pct frame
+    now=$(date +%s)
+    elapsed=$(( now - start_ms ))
+    frame="${frames:$(( i % frame_count )):1}"
+    if [ "$elapsed" -lt "$expected" ]; then
+      # Cap displayed pct at 95 so we never claim 100% before we're done.
+      pct=$(( elapsed * 95 / (expected > 0 ? expected : 1) ))
+      [ "$pct" -gt 95 ] && pct=95
+      printf "\r  → %s %s %ds/~%ds (%d%%)        " "$label" "$frame" "$elapsed" "$expected" "$pct"
+    else
+      printf "\r  → %s %s %ds (still working…)        " "$label" "$frame" "$elapsed"
+    fi
+    i=$(( i + 1 ))
+    sleep 0.1 2>/dev/null || sleep 1  # POSIX sleep fallback
+  done
+
+  # Reap the worker so $? reflects its exit code (set -e wants this clean).
+  if wait "$pid"; then
+    local total
+    total=$(( $(date +%s) - start_ms ))
+    # Pad with spaces to overwrite the longest possible spinner line.
+    printf "\r  ${GREEN}✓${NC} %s ${DIM}(%ds)${NC}%-40s\n" "$label" "$total" ""
+    rm -f "$logfile"
+    return 0
+  else
+    local _rc=$?
+    local total
+    total=$(( $(date +%s) - start_ms ))
+    printf "\r  ${RED}✗${NC} %s ${DIM}(%ds, exit %d)${NC}%-30s\n" "$label" "$total" "$_rc" "" >&2
+    # Surface captured output so users see the actual error, not a vague spinner.
+    cat "$logfile" >&2
+    rm -f "$logfile"
+    return "$_rc"
+  fi
+}
+
 # ── Pre-flight: detect existing daemon ──────────────────────────────────────
 # Re-running ``curl install.sh | bash`` against an already-installed copy used
 # to leave the OLD pip-launched daemon (running stale code) alive next to the
@@ -26,8 +114,14 @@ echo ""
 # pre-existing daemon here so the post-install cleanup block (further down)
 # can ``pkill -f`` it after the new code is in place.
 CLAWMETRY_RESTART_AFTER=0
-if pgrep -f "clawmetry\.sync|clawmetry --port|clawmetry$" >/dev/null 2>&1; then
-  echo -e "  ${DIM}↻ Existing clawmetry daemon detected — will restart it after upgrade${NC}"
+_existing_pids=$(pgrep -f "clawmetry\.sync|clawmetry --port|clawmetry$" 2>/dev/null || true)
+if [ -n "$_existing_pids" ]; then
+  _count=$(echo "$_existing_pids" | wc -l | tr -d ' ')
+  echo -e "  ${DIM}↻ Detected ${_count} existing clawmetry process(es) — will restart after upgrade:${NC}"
+  for _p in $_existing_pids; do
+    _cmd=$(ps -p "$_p" -o command= 2>/dev/null | cut -c1-90 || echo "(gone)")
+    echo -e "    ${DIM}  pid $_p: $_cmd${NC}"
+  done
   CLAWMETRY_RESTART_AFTER=1
 fi
 
@@ -91,23 +185,31 @@ $USE_SUDO rm -rf "$INSTALL_DIR"
 # Bootstrap a copy if missing; on any failure, silently fall back to pip so
 # corporate proxies / restrictive networks still work.
 if ! command -v uv >/dev/null 2>&1; then
-  echo -e "  → Bootstrapping uv (faster installer)..."
-  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || true
+  # Bootstrapping uv ships ~12MB; ~4s on a warm connection. ``|| true`` so
+  # network blockage falls through to the pip path below instead of aborting.
+  _step "Bootstrapping uv (faster installer)" 4 \
+    bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh' || true
   # uv installs to ~/.local/bin (default) or ~/.cargo/bin (older)
   export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 fi
 
 if command -v uv >/dev/null 2>&1; then
-  echo -e "  → Creating virtual environment (uv)..."
-  $USE_SUDO uv venv "$INSTALL_DIR" --quiet
-  echo -e "  → Installing clawmetry from PyPI (uv)..."
-  $USE_SUDO uv pip install --python "$INSTALL_DIR/bin/python3" --quiet --upgrade clawmetry
+  # Estimates from observed timings on PyPI cold-cache + Apple Silicon /
+  # mid-range Linux. uv handles the heavy lifting; --quiet suppresses uv's
+  # native progress bar so OUR spinner is the only thing on screen.
+  _step "Creating virtual environment (uv)" 2 \
+    $USE_SUDO uv venv "$INSTALL_DIR" --quiet
+  _step "Installing clawmetry from PyPI (uv)" 5 \
+    $USE_SUDO uv pip install --python "$INSTALL_DIR/bin/python3" --quiet --upgrade clawmetry
 else
-  echo -e "  → Bootstrapping pip fallback (this is slower)..."
-  $USE_SUDO python3 -m venv "$INSTALL_DIR"
-  $USE_SUDO "$INSTALL_DIR/bin/pip" install --upgrade pip >/dev/null 2>&1
-  echo -e "  → Installing clawmetry from PyPI (pip)..."
-  $USE_SUDO "$INSTALL_DIR/bin/pip" install --no-cache-dir --upgrade clawmetry >/dev/null 2>&1
+  # pip path is much slower (~30s for the install alone) — make sure the
+  # spinner conveys that so users don't think the script is wedged.
+  _step "Bootstrapping pip fallback venv" 5 \
+    $USE_SUDO python3 -m venv "$INSTALL_DIR"
+  _step "Upgrading pip" 5 \
+    $USE_SUDO "$INSTALL_DIR/bin/pip" install --upgrade pip
+  _step "Installing clawmetry from PyPI (pip)" 30 \
+    $USE_SUDO "$INSTALL_DIR/bin/pip" install --no-cache-dir --upgrade clawmetry
 fi
 
 # Restore config if it was backed up
@@ -133,6 +235,7 @@ CLAWMETRY_VERSION=$("$INSTALL_DIR/bin/python3" -c "import importlib.metadata; pr
 # (e.g. a previous Homebrew clawmetry or ~/.local) and rewrite it to the
 # fresh venv binary so the next reboot picks up the right interpreter.
 if [ "$OS" = "Darwin" ]; then
+  echo -e "  → Refreshing macOS launchd jobs..."
   _LA_DIR="$HOME/Library/LaunchAgents"
   _UID=$(id -u)
   _DARWIN_PLIST_FOUND=0
@@ -171,6 +274,10 @@ if [ "$OS" = "Darwin" ]; then
     launchctl kickstart -k "gui/$_UID/$_label" >/dev/null 2>&1 || true
   done
 
+  if [ "$_DARWIN_PLIST_FOUND" = "1" ]; then
+    echo -e "  ${DIM}  ↺ launchd jobs restarted${NC}"
+  fi
+
   # Cross-platform sanity: no plist means user installed via pip directly
   # without running `clawmetry connect`, so there is no managed daemon to
   # restart. Print a manual hint instead of staying silent.
@@ -185,6 +292,7 @@ fi
 # registered as `clawmetry-sync.service` (see clawmetry/cli.py::_register_systemd).
 # WSL ships without systemd by default, so we fall back to a pkill hint.
 if [ "$OS" = "Linux" ]; then
+  echo -e "  → Refreshing systemd user services..."
   _IS_WSL=0
   if grep -qi microsoft /proc/version 2>/dev/null; then
     _IS_WSL=1
@@ -228,15 +336,17 @@ fi
 # there when the installer started — that case would either (a) be the
 # launchctl/systemd job we just kickstarted, or (b) be unrelated.
 if [ "$CLAWMETRY_RESTART_AFTER" = "1" ]; then
+  echo -e "  → Killing stray pre-existing daemon(s)..."
   pkill -f "clawmetry\.sync" >/dev/null 2>&1 || true
   # Wait briefly for the kernel to release the DuckDB write lock so the
   # next ``clawmetry`` invocation doesn't immediately race the dying pid.
   sleep 1
-  echo -e "  ${DIM}↺ Killed stray pre-existing daemon (lock released)${NC}"
+  echo -e "  ${DIM}  ↺ Lock released${NC}"
 fi
 
 echo ""
-echo -e "  ${GREEN}${BOLD}✓ ClawMetry $CLAWMETRY_VERSION installed${NC}"
+_ELAPSED=$(( $(date +%s) - _T0 ))
+echo -e "  ${GREEN}${BOLD}✓ ClawMetry $CLAWMETRY_VERSION installed${NC} ${DIM}(${_ELAPSED}s total)${NC}"
 echo ""
 echo -e "  $(printf '%.0s─' {1..50})"
 echo ""
