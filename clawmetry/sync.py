@@ -2472,6 +2472,390 @@ def sync_claude_cli_sessions(config: dict, state: dict, paths: dict) -> int:
     return total
 
 
+# ── Sync: OpenClaw → Claude Code session JSONL (process-discovered) ──────────
+#
+# OpenClaw delegates execution to a ``claude`` CLI subprocess. Claude Code
+# writes its session transcript to:
+#
+#     ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
+#
+# where ``<encoded-cwd>`` is the agent's working directory with ``/`` and ``.``
+# both replaced by ``-``. The user observed that Telegram conversations
+# weren't appearing in Brain even though the file
+# (``-Users-vivek--openclaw-workspace/49f1d9fc-….jsonl``) was being actively
+# written. The legacy ``sync_claude_cli_sessions`` path covers most cases, but
+# only when ``~/.openclaw/agents/main/sessions/sessions.json`` carries the
+# ``claudeCliSessionId`` binding for that session — which is missing for any
+# session that was started before OpenClaw wrote its binding, or where the
+# binding was lost on a crash. This complementary, defense-in-depth path
+# discovers the live session file by inspecting the running ``claude``
+# subprocess directly, so capture is independent of OpenClaw's index file.
+#
+# Discovery works on macOS, Linux, and Windows because Claude Code uses the
+# same ``~/.claude/projects/`` layout everywhere; the encoding is uniform.
+#
+# Default: ON. Escape hatch: ``CLAWMETRY_DISABLE_CLAUDE_SESSION_INGEST=1``.
+# Per the DuckDB-first / never-default-off-a-MOAT-capability rule
+# (feedback_local_store_default_off_killed_moat 2026-05-13).
+
+
+def _encode_cwd_for_claude_projects(cwd: str) -> str:
+    """Reproduce Claude Code's project-dir naming convention.
+
+    Claude Code derives the ``~/.claude/projects/<dir>`` slug by replacing
+    both ``/`` and ``.`` with ``-`` in the agent's CWD. So
+    ``/Users/vivek/.openclaw/workspace`` → ``-Users-vivek--openclaw-workspace``
+    (the leading ``-`` comes from the absolute path's leading ``/``; the
+    consecutive ``--`` comes from ``/.`` collapsing).
+    """
+    return (cwd or "").replace("/", "-").replace(".", "-")
+
+
+def _looks_like_openclaw_process(proc) -> bool:
+    """True if a psutil.Process appears to be a claude-cli subprocess
+    spawned by OpenClaw.
+
+    Heuristics (any one is sufficient):
+      * cmdline contains ``--mcp-config`` whose argument lives under
+        ``~/.openclaw/`` (OpenClaw passes its own MCP config in)
+      * cwd is under ``~/.openclaw/`` (the agent's working directory
+        is the OpenClaw workspace)
+      * any ancestor process name/exe matches ``openclaw`` or
+        ``openclaw-gateway``
+
+    All access is wrapped because psutil throws ``AccessDenied`` /
+    ``NoSuchProcess`` freely on macOS sandbox-restricted processes.
+    """
+    oc_dir = os.path.realpath(_get_openclaw_dir())
+    try:
+        cmdline = proc.cmdline() or []
+    except Exception:
+        cmdline = []
+    # --mcp-config <path-under-~/.openclaw/>
+    for i, tok in enumerate(cmdline):
+        if tok in ("--mcp-config", "--mcp_config") and i + 1 < len(cmdline):
+            try:
+                mcp_path = os.path.realpath(os.path.expanduser(cmdline[i + 1]))
+                if mcp_path.startswith(oc_dir):
+                    return True
+            except Exception:
+                pass
+    # cwd under ~/.openclaw/
+    try:
+        cwd = os.path.realpath(proc.cwd())
+        if cwd.startswith(oc_dir):
+            return True
+    except Exception:
+        pass
+    # ancestor named openclaw* — walk up at most 6 hops to bound cost
+    try:
+        cur = proc
+        for _ in range(6):
+            cur = cur.parent()
+            if cur is None:
+                break
+            try:
+                name = (cur.name() or "").lower()
+            except Exception:
+                name = ""
+            if "openclaw" in name:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _discover_openclaw_claude_session_files() -> list[tuple[str, str]]:
+    """Return ``[(session_id, jsonl_path), …]`` for live Claude Code
+    sessions whose owning ``claude`` CLI process appears to belong to
+    OpenClaw.
+
+    Best-effort. Returns ``[]`` if psutil is unavailable, no claude
+    processes are running, or all paths are unreadable. Never raises.
+
+    Discovery flow (per running ``claude`` process):
+      1. argv must contain ``--resume`` (Claude Code's session-resume flag).
+         Sessions without ``--resume`` are one-shot scratch invocations
+         we don't need to capture.
+      2. Process must look like an OpenClaw subprocess
+         (``_looks_like_openclaw_process``).
+      3. Read the cwd via ``psutil.Process.cwd()`` and the session-id
+         from the next argv token after ``--resume``.
+      4. Construct ``~/.claude/projects/<encoded-cwd>/<session-id>.jsonl``
+         and verify it exists and is readable.
+
+    On macOS where ``psutil.cwd()`` may be blocked by SIP / sandboxing,
+    fall back to scanning ``~/.claude/projects/*/<session-id>.jsonl`` for
+    the discovered session-id (since the slug is derived from cwd, we
+    can't reconstruct it without cwd, but a file named
+    ``<session-id>.jsonl`` is unique across all project dirs).
+    """
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return []
+    projects_root = _claude_projects_root()
+    if not projects_root.is_dir():
+        return []
+    discovered: dict[str, str] = {}  # session_id → jsonl path
+    try:
+        proc_iter = psutil.process_iter(["name", "cmdline"])
+    except Exception:
+        return []
+    for proc in proc_iter:
+        try:
+            name = (proc.info.get("name") or "").lower()
+            cmdline = proc.info.get("cmdline") or []
+        except Exception:
+            continue
+        # The CLI binary is usually exactly "claude" or contains "claude"
+        # in argv[0]; node-shim invocations can also surface as "node
+        # /usr/local/bin/claude" so we sniff the full cmdline too.
+        joined = " ".join(cmdline) if cmdline else ""
+        if "claude" not in name and "claude" not in joined.lower():
+            continue
+        # Need --resume <id>
+        sess_id: str | None = None
+        for i, tok in enumerate(cmdline):
+            if tok in ("--resume", "-r") and i + 1 < len(cmdline):
+                cand = cmdline[i + 1]
+                # session-id looks like a UUID; tolerate non-UUID for
+                # non-OpenClaw forks but require dash-separated hex blob.
+                if cand and "-" in cand and len(cand) >= 16:
+                    sess_id = cand
+                    break
+        if not sess_id:
+            continue
+        if not _looks_like_openclaw_process(proc):
+            continue
+        # Try cwd-based path first
+        jsonl_path: str | None = None
+        try:
+            cwd = proc.cwd()
+            slug = _encode_cwd_for_claude_projects(cwd)
+            cand_path = projects_root / slug / f"{sess_id}.jsonl"
+            if cand_path.is_file() and os.access(cand_path, os.R_OK):
+                jsonl_path = str(cand_path)
+        except Exception:
+            pass
+        # Fallback: scan all project dirs for <session-id>.jsonl
+        if jsonl_path is None:
+            try:
+                for proj_dir in projects_root.iterdir():
+                    if not proj_dir.is_dir():
+                        continue
+                    cand_path = proj_dir / f"{sess_id}.jsonl"
+                    if cand_path.is_file() and os.access(cand_path, os.R_OK):
+                        jsonl_path = str(cand_path)
+                        break
+            except OSError:
+                pass
+        if jsonl_path:
+            discovered[sess_id] = jsonl_path
+    return [(sid, path) for sid, path in discovered.items()]
+
+
+def _openclaw_claude_session_offset_key(jsonl_path: str) -> str:
+    """Per-file offset key under ``state['claude_session_byte_offsets']``.
+
+    Keying by absolute realpath so a workspace switch (different
+    OpenClaw cwd → different encoded slug → different file) starts a
+    fresh tail rather than reusing a stale offset.
+    """
+    return os.path.realpath(jsonl_path)
+
+
+def _translate_claude_session_line(
+    obj: dict, *, session_id: str, node_id: str, line_no: int,
+) -> dict | None:
+    """Map a Claude Code session JSONL line onto an ``events`` row.
+
+    Returns ``None`` for lines we can't map (missing timestamp,
+    non-dict). Never raises.
+
+    Field mapping:
+      * ``id``         ← ``f"openclaw-cc:{session_id}:{uuid_or_lineno}"``
+      * ``agent_type`` ← ``"openclaw"`` (so Brain's per-agent filters
+                         still match — this transcript belongs to the
+                         OpenClaw agent that spawned the claude CLI)
+      * ``agent_id``   ← ``"main"``
+      * ``session_id`` ← Claude Code session UUID (from filename)
+      * ``event_type`` ← Claude Code ``type`` field (user / assistant /
+                         system / queue-operation / attachment / …)
+      * ``ts``         ← Claude Code ``timestamp``
+      * ``data``       ← the full JSON line (verbatim — Brain's
+                         ``_extract_brain_detail`` walks several
+                         alternative paths to find the rendered text)
+
+    Cost / token / model fields ride along when the line carries them
+    (assistant messages with ``message.usage.*``); legacy
+    ``_extract_cost_tokens_model`` already handles that shape.
+    """
+    if not isinstance(obj, dict):
+        return None
+    ts = obj.get("timestamp") or obj.get("ts")
+    if not ts:
+        return None
+    evt_type = str(obj.get("type") or "unknown")
+    # Stable id: prefer Claude Code's ``uuid`` / ``id``; otherwise compose
+    # from session+line so re-reads after a state-loss don't dupe.
+    eid_inner = obj.get("uuid") or obj.get("id") or f"line:{line_no}"
+    cost_usd, token_count, model = _extract_cost_tokens_model(obj)
+    return {
+        "id": f"openclaw-cc:{session_id}:{eid_inner}",
+        "node_id": node_id,
+        "agent_type": "openclaw",
+        "agent_id": "main",
+        "session_id": session_id,
+        "workspace_id": obj.get("cwd") or obj.get("workspace_id"),
+        "event_type": evt_type,
+        "ts": str(ts),
+        "data": obj,
+        "cost_usd": cost_usd,
+        "token_count": token_count,
+        "model": model,
+    }
+
+
+# Hard cap — never read more than this many *new* lines from a single
+# file in one cycle, so a freshly discovered multi-MB file doesn't stall
+# the cycle. The next cycle picks up where this one left off.
+_OC_CC_MAX_LINES_PER_FILE_PER_CYCLE = 5000
+
+
+def sync_openclaw_claude_sessions(
+    config: dict | None,
+    state: dict,
+    paths: dict | None = None,
+) -> int:
+    """Discover OpenClaw-spawned ``claude`` CLI session files via process
+    inspection and tail their newly-appended bytes into the local DuckDB
+    ``events`` table.
+
+    Returns the number of events ingested this call. Designed to be
+    called once per daemon sync cycle. All failure modes are swallowed
+    and logged at WARN — this is best-effort observability, not a
+    correctness path for OpenClaw itself.
+
+    Default: ON. Set ``CLAWMETRY_DISABLE_CLAUDE_SESSION_INGEST=1`` to
+    disable (escape hatch only — every previous "off by default" rollout
+    of a MOAT capability has bitten us in production).
+
+    State layout (stored in ``state`` so it survives daemon restarts):
+
+        state['claude_session_byte_offsets'] = {
+            '/abs/path/to/session.jsonl': 12345,   # bytes consumed
+            …
+        }
+
+    Idempotency: writes go through ``local_store.ingest_many`` which
+    upserts on the events table's ``(agent_type, id)`` PRIMARY KEY,
+    so re-reading a line is a no-op. Byte offsets are still tracked so
+    the steady-state cycle reads only the tail.
+    """
+    if os.environ.get("CLAWMETRY_DISABLE_CLAUDE_SESSION_INGEST", "").strip() in (
+        "1", "true", "yes", "on",
+    ):
+        return 0
+    try:
+        if not _sync_allowed():
+            return 0
+    except Exception:
+        pass  # _sync_allowed only matters in the cloud-sync path
+
+    node_id = (config or {}).get("node_id") or "local"
+
+    try:
+        targets = _discover_openclaw_claude_session_files()
+    except Exception as e:
+        log.debug("openclaw-cc discovery failed (non-fatal): %s", e)
+        return 0
+    if not targets:
+        return 0
+
+    offsets: dict = state.setdefault("claude_session_byte_offsets", {})
+    rows: list[dict] = []
+    files_touched: list[str] = []
+
+    for sess_id, jsonl_path in targets:
+        key = _openclaw_claude_session_offset_key(jsonl_path)
+        try:
+            cur_size = os.path.getsize(jsonl_path)
+        except OSError:
+            continue
+        last_off = int(offsets.get(key, 0) or 0)
+        # File rotated / truncated — re-read from start. Cheap because
+        # ingest_many is idempotent on the row id.
+        if last_off > cur_size:
+            last_off = 0
+        if last_off >= cur_size:
+            # No new bytes; nothing to do but record discovery for the
+            # state file so a daemon restart doesn't re-read the world.
+            offsets[key] = cur_size
+            continue
+        try:
+            with open(jsonl_path, "rb") as f:
+                f.seek(last_off)
+                # Read up to a hard cap so a multi-MB cold file doesn't
+                # stall this cycle. The remainder rolls into the next
+                # cycle on the same offset key.
+                lines_read = 0
+                buf_lines: list[str] = []
+                for raw in f:
+                    lines_read += 1
+                    if lines_read > _OC_CC_MAX_LINES_PER_FILE_PER_CYCLE:
+                        break
+                    buf_lines.append(raw.decode("utf-8", errors="replace"))
+                # Track exact byte position of the last fully-read newline
+                # so a partial trailing line on the next cycle resumes
+                # from the correct offset. ``f.tell()`` after iteration
+                # is the byte index AFTER the last line we consumed.
+                new_off = f.tell()
+        except OSError as e:
+            log.debug("openclaw-cc read error %s (non-fatal): %s", jsonl_path, e)
+            continue
+
+        for i, raw_line in enumerate(buf_lines):
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                obj = json.loads(stripped)
+            except Exception:
+                # Skip malformed JSON; advance offset so we don't re-try
+                # forever on a known-bad line.
+                continue
+            row = _translate_claude_session_line(
+                obj,
+                session_id=sess_id,
+                node_id=node_id,
+                line_no=last_off + i,  # rough — only used for fallback id
+            )
+            if row is not None:
+                rows.append(row)
+
+        offsets[key] = new_off
+        files_touched.append(jsonl_path)
+
+    if rows:
+        try:
+            from clawmetry import local_store
+            local_store.get_store().ingest_many(rows)
+        except Exception as e:
+            log.warning(
+                "openclaw-cc local-store ingest failed (non-fatal): %s", e,
+            )
+            return 0
+
+    if files_touched and rows:
+        log.debug(
+            "openclaw-cc: ingested %d events from %d file(s): %s",
+            len(rows), len(files_touched),
+            ", ".join(os.path.basename(p) for p in files_touched),
+        )
+    return len(rows)
+
+
 # ── Sync: channel-adapter transcripts (Telegram, Signal, WhatsApp, …) ────────
 #
 # OpenClaw's chat-channel adapters persist inbound/outbound messages to a
@@ -6679,6 +7063,23 @@ def run_daemon() -> None:
 
             ev = sync_sessions(config, state, paths)
             ev += sync_claude_cli_sessions(config, state, paths)
+            # Process-discovered Claude Code session JSONLs (PR
+            # release/openclaw-claude-session-ingest, 2026-05-14). The legacy
+            # ``sync_claude_cli_sessions`` above only fires when
+            # ``sessions.json`` carries the ``claudeCliSessionId`` binding —
+            # any session started before OpenClaw wrote that binding (or where
+            # the binding was lost on a crash) is invisible to it. This
+            # complementary path inspects running ``claude`` subprocesses
+            # directly and tails their session files, so capture is
+            # independent of OpenClaw's index. Failure is non-fatal.
+            try:
+                oc_cc = sync_openclaw_claude_sessions(config, state, paths)
+                ev += oc_cc
+            except Exception as _occ_e:
+                log.debug(
+                    "openclaw-cc sync error (non-fatal): %s", _occ_e,
+                )
+                oc_cc = 0
             # Tail ~/.openclaw/<channel>/*.jsonl (Telegram, Signal, WhatsApp,
             # Discord, Slack, …). Until 2026-05-13 this watch path was missing
             # entirely — the user observed "I message Diya on Telegram and
@@ -6724,9 +7125,9 @@ def run_daemon() -> None:
 
             state["last_sync"] = datetime.now(timezone.utc).isoformat()
             save_state(state)
-            if ev or lg or mem or crons or sm or snap or cron_runs or tg:
+            if ev or lg or mem or crons or sm or snap or cron_runs or tg or oc_cc:
                 log.info(
-                    f"Synced {ev} events, {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows, {tg} telegram-out ({enc})"
+                    f"Synced {ev} events ({oc_cc} from claude-cc), {lg} log lines, {mem} memory files, {crons} crons, {cron_runs} cron-runs, {sm} session rows, {tg} telegram-out ({enc})"
                 )
 
             # ── Alerts evaluator (PRD #779 PR-D pt2, audit P0 #1 + #2) ──
