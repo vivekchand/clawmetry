@@ -166,7 +166,21 @@ case "$OS" in
     echo -e "${RED}  ✗ Unsupported OS: $OS (macOS and Linux only)${NC}"
     exit 1
     ;;
-esac
+esac 
+
+# ── Early exit: already up to date ──────────────────────────────────────────
+if [ -x "$INSTALL_DIR/bin/clawmetry" ]; then
+  _CURRENT=$("$INSTALL_DIR/bin/clawmetry" --version 2>/dev/null | awk '{print $NF}')
+  _LATEST=$("$INSTALL_DIR/bin/python3" -c "
+import json, urllib.request
+r = urllib.request.urlopen('https://pypi.org/pypi/clawmetry/json')
+print(json.loads(r.read())['info']['version'])
+" 2>/dev/null)
+  if [ -n "$_CURRENT" ] && [ "$_CURRENT" = "$_LATEST" ] && [ -n "$_existing_pids" ]; then
+    echo -e "  ${GREEN}${BOLD}✓ ClawMetry $_CURRENT already up to date${NC}"
+    exit 0
+  fi
+fi
 
 # ── Install into venv ────────────────────────────────────────────────────────
 
