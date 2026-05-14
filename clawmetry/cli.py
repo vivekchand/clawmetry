@@ -157,6 +157,21 @@ def _is_sync_running() -> bool:
     return False
 
 
+def _count_sync_daemons() -> int:
+    """Return number of running clawmetry.sync processes (best-effort)."""
+    import subprocess as _sp
+    try:
+        r = _sp.run(
+            ["pgrep", "-f", "clawmetry.sync"],
+            capture_output=True, text=True, check=False,
+        )
+        if r.returncode == 0:
+            return len([l for l in r.stdout.splitlines() if l.strip()])
+    except Exception:
+        pass
+    return 0
+
+
 def _kill_sync_daemon() -> None:
     """Kill clawmetry.sync processes — no pkill needed."""
     import os
@@ -187,6 +202,15 @@ def _kill_sync_daemon() -> None:
                 pass
     except Exception:
         pass
+    # macOS without psutil + no /proc — fall back to pkill (universally
+    # available on Darwin/Linux/BSD).
+    import shutil as _sh
+    import subprocess as _sp2
+    if _sh.which("pkill"):
+        _sp2.run(
+            ["pkill", "-f", "clawmetry.sync"],
+            check=False, capture_output=True,
+        )
 
 
 def _stop_existing_daemon() -> None:
@@ -1164,6 +1188,15 @@ def _cmd_uninstall() -> None:
             )
             plist.unlink()
             print("  ✅  Stopped and removed launchd daemon")
+        # Belt-and-suspenders: kill any sync daemons started by hand (not via
+        # launchd). Without this, install.sh's pkill is the only thing that takes
+        # them down, which surfaces to the user as "Killed stray pre-existing
+        # daemon" right after a 'clean' uninstall — undermining trust that
+        # uninstall actually worked.
+        _stray = _count_sync_daemons()
+        if _stray > 0:
+            _kill_sync_daemon()
+            print(f"  ✅  Killed {_stray} stray sync process(es)")
     elif system == "Linux":
         svc = home / ".config" / "systemd" / "user" / "clawmetry-sync.service"
         if shutil.which("systemctl"):
@@ -1172,10 +1205,11 @@ def _cmd_uninstall() -> None:
                 check=False,
                 capture_output=True,
             )
+        _stray = _count_sync_daemons()
         _kill_sync_daemon()
         if svc.exists():
             svc.unlink()
-        print("  ✅  Stopped and removed sync daemon")
+        print("  ✅  Stopped and removed sync daemon" + (f" + {_stray} stray process(es)" if _stray else ""))
 
     # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
     print("  ⏳  Uninstalling pip package...")
