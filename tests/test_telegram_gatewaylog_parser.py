@@ -321,3 +321,104 @@ def test_ingest_is_idempotent_on_state_loss(store, tmp_path, monkeypatch):
         "SELECT COUNT(*) FROM channel_messages WHERE provider='telegram'"
     ).fetchone()[0]
     assert n == 3  # not 6
+
+
+# ── REGRESSION: telegram outbound MUST also reach the events table ─────
+
+
+def test_outbound_messages_reach_events_table_for_brain_feed(
+    store, tmp_path, monkeypatch,
+):
+    """P0 regression guard for the 2026-05-14 incident.
+
+    The Brain tab reads from ``LocalStore.query_events`` (the ``events``
+    table). Until the dual-write fix, ``sync_telegram_from_gateway_log``
+    only wrote to ``channel_messages`` — Brain showed an empty Telegram
+    channel even when the parser successfully ingested every line.
+
+    This test pins both halves of the dual-write so future refactors
+    can't silently regress to a channel_messages-only path.
+    """
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_path = logs_dir / "gateway.log"
+    _write_log(log_path, SAMPLE_LINES)
+
+    monkeypatch.setenv("CLAWMETRY_OPENCLAW_DIR", str(tmp_path))
+    from clawmetry import sync
+    importlib.reload(sync)
+
+    state = _make_state()
+    n = sync.sync_telegram_from_gateway_log(
+        config={"node_id": "test-node"}, state=state,
+    )
+    assert n == 3
+
+    # Drain the ring buffer so the rows are visible to a synchronous
+    # query. The flusher fires every ~50ms in the test fixture but we
+    # don't want the assertion to race it.
+    store._flush_now()
+
+    # ── channel_messages assertions (existing contract) ─────────────────
+    cm_rows = store._conn.execute(
+        "SELECT id FROM channel_messages WHERE provider='telegram' "
+        "ORDER BY id"
+    ).fetchall()
+    assert len(cm_rows) == 3
+
+    # ── events assertions (the REGRESSION FIX) ──────────────────────────
+    ev_rows = store._conn.execute(
+        "SELECT id, node_id, event_type, ts FROM events "
+        "WHERE event_type='channel.out' ORDER BY id"
+    ).fetchall()
+    assert len(ev_rows) == 3, (
+        "telegram outbound rows landed in channel_messages but NOT in "
+        "events — Brain feed will be silently empty."
+    )
+    # Same id on both tables → easy 1:1 join + idempotent re-ingest.
+    cm_ids = {r[0] for r in cm_rows}
+    ev_ids = {r[0] for r in ev_rows}
+    assert cm_ids == ev_ids
+    # node_id stamped through from config (Brain filters by node).
+    assert all(r[1] == "test-node" for r in ev_rows)
+    # event_type matches the prefix the brain renderer dispatches on
+    # (routes/brain.py L260: ``if evt_type.startswith("CHANNEL.")``).
+    assert all(r[2] == "channel.out" for r in ev_rows)
+
+    # ── full read-path: query_events returns the rows brain consumes ────
+    api_rows = store.query_events(event_type="channel.out", limit=50)
+    assert len(api_rows) == 3
+    # Brain enrichment expects provider/chat_id under data.
+    for row in api_rows:
+        data = row.get("data") or {}
+        assert data.get("provider") == "telegram"
+        assert data.get("direction") == "out"
+        assert data.get("chat_id")  # non-empty
+
+
+def test_events_dual_write_is_idempotent_across_state_loss(
+    store, tmp_path, monkeypatch,
+):
+    """The events-table dual-write must be idempotent the same way
+    channel_messages is — INSERT OR IGNORE on the shared id column."""
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_path = logs_dir / "gateway.log"
+    _write_log(log_path, SAMPLE_LINES)
+
+    monkeypatch.setenv("CLAWMETRY_OPENCLAW_DIR", str(tmp_path))
+    from clawmetry import sync
+    importlib.reload(sync)
+
+    sync.sync_telegram_from_gateway_log(
+        config={"node_id": "n1"}, state=_make_state(),
+    )
+    sync.sync_telegram_from_gateway_log(
+        config={"node_id": "n1"}, state=_make_state(),
+    )
+    store._flush_now()
+
+    n = store._conn.execute(
+        "SELECT COUNT(*) FROM events WHERE event_type='channel.out'"
+    ).fetchone()[0]
+    assert n == 3  # not 6
