@@ -6469,6 +6469,19 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning("local query server: failed to start: %s", _e)
 
+    # ── Live gateway WS tap (capture in-memory channel messages) ────────
+    # OpenClaw stores Telegram + sibling-channel chats entirely in
+    # memory; gateway.log only carries outbound ACKs (no body), and no
+    # JSONL is written for inbound. Without this tap, ClawMetry can
+    # NEVER show real Telegram conversations on the Brain tab.
+    # Default-ON per the MOAT mandate; opt out via
+    # CLAWMETRY_DISABLE_WS_TAP=1.
+    try:
+        from clawmetry import gateway_tap as _gw_tap
+        _gw_tap.start(config)
+    except Exception as _e:
+        log.warning("gateway WS tap: failed to start: %s", _e)
+
     state = load_state()
 
     # Always sync recent events first (last hour) — makes the dashboard
