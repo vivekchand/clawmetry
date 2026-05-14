@@ -581,9 +581,34 @@ def _to_blob(value: Any) -> bytes | None:
 
 
 def _open_connection(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
-    """Open a DuckDB connection at DB_PATH, creating the directory if needed."""
+    """Open a DuckDB connection at DB_PATH, creating the directory if needed.
+
+    Retries briefly on "Conflicting lock is held" — that error fires when an
+    older sync daemon hasn't fully released the file lock yet (e.g. moments
+    after install.sh's ``pkill -f clawmetry.sync``). install.sh used to
+    ``sleep 1`` defensively; we now retry here so install.sh can return to
+    the prompt immediately and the lock-release race is owned by the
+    daemon-side code that actually cares about it. (#1215)
+    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(str(DB_PATH), read_only=read_only)
+    # 5 attempts × 0.5s = 2.5s budget. Beats a fixed install.sh sleep
+    # because (a) most opens succeed on the first try and pay zero, and (b)
+    # if the conflicting holder is genuinely stuck we surface the real
+    # DuckDB error instead of silently sleeping past it.
+    last_exc: Exception | None = None
+    for attempt in range(5):
+        try:
+            return duckdb.connect(str(DB_PATH), read_only=read_only)
+        except duckdb.IOException as exc:
+            msg = str(exc)
+            if "Conflicting lock" not in msg and "could not set lock" not in msg:
+                raise
+            last_exc = exc
+            time.sleep(0.5)
+    # Out of retries — re-raise the last lock error so the caller sees it.
+    if last_exc is not None:
+        raise last_exc
+    return duckdb.connect(str(DB_PATH), read_only=read_only)  # unreachable
 
 
 # ── Singleton store ─────────────────────────────────────────────────────────

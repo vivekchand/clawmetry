@@ -268,17 +268,31 @@ if [ "$OS" = "Darwin" ]; then
     esac
   done
 
-  # Step 2: kickstart any registered com.clawmetry.* job. `|| true` so
-  # systems without launchd running (CI containers, Linux subprocess) don't
-  # abort the installer.
+  # Step 2: kickstart any registered com.clawmetry.* job in the BACKGROUND.
+  #
+  # ``launchctl kickstart -k`` is *synchronous* — it blocks until the daemon
+  # process is alive again. For NemoClaw sandbox plists that run
+  # ``docker exec <container> kubectl exec ...``, "alive" means the docker+
+  # kubectl handshake has completed, which routinely costs 30-50s per plist.
+  # On a machine with two sandbox plists installed that's 60-100s of dead
+  # time install.sh used to wait for. The user's job here is to put fresh
+  # files on disk; the daemon respawn is best-effort and doesn't need to
+  # block the prompt return. (#1215)
+  #
+  # `|| true` so systems without launchd running (CI containers, Linux
+  # subprocess) don't abort the installer.
   for _plist in "$_LA_DIR"/com.clawmetry.*.plist; do
     [ -f "$_plist" ] || continue
     _label=$(basename "$_plist" .plist)
-    launchctl kickstart -k "gui/$_UID/$_label" >/dev/null 2>&1 || true
+    ( launchctl kickstart -k "gui/$_UID/$_label" >/dev/null 2>&1 || true ) &
   done
+  # Detach the backgrounded kicks so install.sh can exit without waiting
+  # for them. ``disown -a`` clears bash's job table; the kernel keeps the
+  # children alive (their parent reparents to launchd/init).
+  disown -a 2>/dev/null || true
 
   if [ "$_DARWIN_PLIST_FOUND" = "1" ]; then
-    echo -e "  ${DIM}  ↺ launchd jobs restarted${NC}"
+    echo -e "  ${DIM}  ↺ launchd jobs restarting in background${NC}"
   fi
 
   # Cross-platform sanity: no plist means user installed via pip directly
@@ -305,11 +319,17 @@ if [ "$OS" = "Linux" ]; then
   # Prefer systemd --user when both systemctl is present AND a clawmetry unit
   # is registered. `list-unit-files` enumerates installed units even when none
   # are running, which is what we want here.
+  #
+  # ``systemctl --user restart`` blocks until the unit reports active, which
+  # for the sync daemon means DuckDB open + cloud heartbeat round-trip
+  # (5-30s on slow networks). We background it with ``--no-block`` so
+  # install.sh doesn't stall on daemon startup — matches the macOS launchd
+  # fire-and-forget pattern. (#1215)
   if [ "$_IS_WSL" = "0" ] && command -v systemctl >/dev/null 2>&1; then
     if systemctl --user list-unit-files 2>/dev/null | grep -q '^clawmetry-sync\.service'; then
       systemctl --user daemon-reload >/dev/null 2>&1 || true
-      if systemctl --user restart clawmetry-sync.service >/dev/null 2>&1; then
-        echo -e "  ${DIM}↺ Restarted clawmetry-sync systemd user service${NC}"
+      if systemctl --user restart --no-block clawmetry-sync.service >/dev/null 2>&1; then
+        echo -e "  ${DIM}↺ clawmetry-sync restarting in background${NC}"
         _RESTARTED=1
       fi
     fi
@@ -341,10 +361,10 @@ fi
 if [ "$CLAWMETRY_RESTART_AFTER" = "1" ]; then
   echo -e "  → Killing stray pre-existing daemon(s)..."
   pkill -f "clawmetry\.sync" >/dev/null 2>&1 || true
-  # Wait briefly for the kernel to release the DuckDB write lock so the
-  # next ``clawmetry`` invocation doesn't immediately race the dying pid.
-  sleep 1
-  echo -e "  ${DIM}  ↺ Lock released${NC}"
+  # No sleep here — the freshly-spawned daemon's DuckDB open already retries
+  # on lock contention (clawmetry/local_store.py), so install.sh doesn't
+  # need to babysit the kernel. Saves 1s of fixed dead time. (#1215)
+  echo -e "  ${DIM}  ↺ Stray daemon(s) signalled${NC}"
 fi
 
 echo ""
