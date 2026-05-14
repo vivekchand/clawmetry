@@ -2899,7 +2899,10 @@ function renderBrainStream(events) {
         escHtml(ev.__collapsedCount + ' consecutive outbound ACKs from this chat — bodies not captured (collapsed for readability)') +
         '">↪ ' + ev.__collapsedCount + ' outbound</span>';
       if (rangeLabel) {
-        html += '<span class="brain-collapsed-range" style="color:var(--text-muted);font-size:10px;flex-shrink:0;white-space:nowrap;">' + escHtml(rangeLabel) + '</span>';
+        // rangeLabel is trusted HTML built from formatBrainTime() output
+        // (which wraps the date prefix in a styled <span>) joined with
+        // a literal " → "; do NOT escHtml or the markup renders as text.
+        html += '<span class="brain-collapsed-range" style="color:var(--text-muted);font-size:10px;flex-shrink:0;white-space:nowrap;">' + rangeLabel + '</span>';
       }
       html += '<span class="brain-collapsed-note" style="color:var(--text-muted);font-size:10px;font-style:italic;flex-shrink:0;white-space:nowrap;">(bodies not captured)</span>';
       // Expand affordance — small text button, monospace arrow.
