@@ -194,13 +194,16 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 if command -v uv >/dev/null 2>&1; then
+  # Capture full path so `sudo uv` works even when sudo uses a restricted
+  # PATH that doesn't include ~/.local/bin (the default uv install location).
+  _UV_BIN="$(command -v uv)"
   # Estimates from observed timings on PyPI cold-cache + Apple Silicon /
   # mid-range Linux. uv handles the heavy lifting; --quiet suppresses uv's
   # native progress bar so OUR spinner is the only thing on screen.
   _step "Creating virtual environment (uv)" 2 \
-    $USE_SUDO uv venv "$INSTALL_DIR" --quiet
+    $USE_SUDO "$_UV_BIN" venv "$INSTALL_DIR" --quiet
   _step "Installing clawmetry from PyPI (uv)" 5 \
-    $USE_SUDO uv pip install --python "$INSTALL_DIR/bin/python3" --quiet --upgrade clawmetry
+    $USE_SUDO "$_UV_BIN" pip install --python "$INSTALL_DIR/bin/python3" --quiet --upgrade clawmetry
 else
   # pip path is much slower (~30s for the install alone) — make sure the
   # spinner conveys that so users don't think the script is wedged.
