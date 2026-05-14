@@ -2067,15 +2067,23 @@ def _local_ingest_session_batch(
                 rows.append(row)
             continue
 
-        # Stable per-event id: prefer an explicit id from the transcript, then
-        # the openclaw eventId, else compose from session_id + timestamp +
-        # message-id-ish hint. INSERT OR IGNORE makes re-delivery harmless.
-        eid = (
-            obj.get("id")
-            or obj.get("eventId")
-            or obj.get("messageId")
-            or f"{session_id}:{obj.get('timestamp','?')}:{obj.get('type','?')}"
-        )
+        # Stable per-event id. For Claude Code-sourced events (legacy
+        # ``sync_claude_cli_sessions`` path #1) we route through the unified
+        # ``_canonical_event_id`` helper so the id is identical to whatever
+        # paths #2 and #3 would compute for the same source line — that's
+        # the dedup contract that lets ``INSERT OR IGNORE`` collapse the
+        # 2x/3x duplicate writes the user reported (#1232). For non-CC
+        # events we keep the legacy composition (eventId / messageId / fallback)
+        # which was already stable per source.
+        if obj.get("_cc_source"):
+            eid = _canonical_event_id(obj, session_id=session_id)
+        else:
+            eid = (
+                obj.get("id")
+                or obj.get("eventId")
+                or obj.get("messageId")
+                or f"{session_id}:{obj.get('timestamp','?')}:{obj.get('type','?')}"
+            )
         ts = obj.get("timestamp") or obj.get("ts") or ""
         if not ts:
             # Skip events with no timestamp — the local store's index assumes
@@ -2087,6 +2095,12 @@ def _local_ingest_session_batch(
         # ``tokens`` only appear in synthesised events (e.g. our own tests).
         # See MOAT_E2E_REPORT_2026-05-13 root-cause #4.
         cost_usd, token_count, model = _extract_cost_tokens_model(obj)
+        # Strip the internal _cc_source marker so it never reaches the
+        # stored ``data`` BLOB (it's a routing hint, not part of the event).
+        if obj.get("_cc_source"):
+            data_payload = {k: v for k, v in obj.items() if k != "_cc_source"}
+        else:
+            data_payload = obj
         rows.append({
             "id": str(eid),
             "node_id": node_id,
@@ -2095,7 +2109,7 @@ def _local_ingest_session_batch(
             "workspace_id": obj.get("workspace") or obj.get("workspace_id"),
             "event_type": str(obj.get("type") or obj.get("event_type") or "unknown"),
             "ts": str(ts),
-            "data": obj,
+            "data": data_payload,
             "cost_usd": cost_usd,
             "token_count": token_count,
             "model": model,
@@ -2331,6 +2345,95 @@ def _claude_projects_root() -> Path:
     return Path(os.path.expanduser("~/.claude/projects"))
 
 
+# ── Canonical Claude Code event id derivation (#1232) ────────────────────────
+#
+# Background: three independent ingest paths converge on the same logical
+# Claude Code message but used to compute three different ``events.id`` values,
+# defeating the ``INSERT OR IGNORE`` dedup at the local store boundary:
+#
+#   path #1  sync_claude_cli_sessions        →  bare uuid              (legacy)
+#   path #2  sync_openclaw_claude_sessions   →  openclaw-cc:<cc>:top:<uuid>
+#   path #3  sync_openclaw_claude_sessions_via_index
+#                                            →  openclaw-cc:<oc>:top:<uuid> | line:N
+#
+# The user observed 2x and 3x duplicate rows in Brain. PR #1227's
+# ``skip_claude_ids`` short-circuit only suppresses path #2 vs #3 collisions —
+# path #1 (legacy) was always free to re-write the same logical event under a
+# different id, and historical data already carries the dupes regardless.
+#
+# Fix: every Claude Code-derived event flows through ``_canonical_event_id`` so
+# all three paths produce IDENTICAL ids for identical source lines. The store's
+# existing PRIMARY KEY then dedups for free on subsequent re-reads. Subagent /
+# tool-result rows keep their path-scoped id schemes — those aren't dupes
+# (each file/uuid pair is genuinely unique).
+def _canonical_event_id(
+    obj: dict,
+    *,
+    session_id: str,
+    line_no: int | None = None,
+) -> str:
+    """Stable, path-independent id for a Claude Code event.
+
+    Deterministic — three different ingest paths reading the same source jsonl
+    line MUST return the same id. The local store keys ``events`` by id, so
+    matching ids → ``INSERT OR IGNORE`` collapses re-writes silently.
+
+    Strategy:
+      1. If the source line carries a ``uuid`` (or pre-translated ``id``) that
+         looks like a UUID, use ``cc-msg:<uuid>``. Top-level Claude Code
+         messages always have this; assistant / user / attachment / system
+         events all qualify.
+      2. Otherwise (queue-operation, summary, and other synthesised types
+         that carry no per-event uuid), compose a content-stable hash from
+         the few fields that survive across all three paths: session, ts,
+         type, and an MD5 of the canonical body. ``line_no`` is intentionally
+         NOT part of this — the same line read twice from two byte offsets
+         (path #2 vs #3) would otherwise produce different ids.
+
+    Returns a string suitable for use as ``events.id``. Never raises.
+    """
+    raw_uuid = obj.get("uuid") or obj.get("id")
+    if isinstance(raw_uuid, str):
+        s = raw_uuid.strip().lower()
+        # 36-char canonical UUID form: 8-4-4-4-12 hex with dashes.
+        if (
+            len(s) == 36
+            and s[8] == "-" and s[13] == "-" and s[18] == "-" and s[23] == "-"
+            and all(c in "0123456789abcdef-" for c in s)
+        ):
+            return f"cc-msg:{s}"
+    # Fallback: synthesise a deterministic id from the body. We compute the
+    # hash over a normalised projection of the event so injected metadata
+    # (added by _translate_claude_session_line: _claude_session_id,
+    # _openclaw_session_id, _oc_cc_kind, _subagent_file, parentUuid renamed
+    # to parentId, etc.) doesn't change the digest. The keys we keep are
+    # everything except the small set of wrapper/cross-ref fields that
+    # differ per-path.
+    import hashlib
+    skip_keys = {
+        "_claude_session_id",
+        "_openclaw_session_id",
+        "_oc_cc_kind",
+        "_subagent_file",
+        "parentUuid",
+        "parentId",
+        "uuid",
+        "id",
+    }
+    canonical = {
+        k: v for k, v in obj.items()
+        if k not in skip_keys
+    }
+    try:
+        body = json.dumps(canonical, sort_keys=True, separators=(",", ":"), default=str)
+    except Exception:
+        body = repr(sorted(canonical.items()))
+    digest = hashlib.md5(body.encode("utf-8", errors="replace")).hexdigest()[:16]
+    ts = obj.get("timestamp") or obj.get("ts") or "?"
+    evt_type = obj.get("type") or "unknown"
+    return f"cc-derived:{session_id}:{ts}:{evt_type}:{digest}"
+
+
 def _translate_claude_cli_event(obj: dict) -> dict:
     """Map claude-cli jsonl event keys onto OpenClaw event keys.
 
@@ -2338,12 +2441,17 @@ def _translate_claude_cli_event(obj: dict) -> dict:
     and 'message'. Claude CLI uses 'uuid' / 'parentUuid' for the first two;
     everything else lines up. We rename in-place and pass the rest through
     so cost/usage/tool fields survive without per-version translation.
+
+    Tags the result with ``_cc_source: True`` so the downstream local-ingest
+    helper knows to compute a canonical Claude Code event id (#1232) instead
+    of falling back to its legacy session+ts+type composition.
     """
     out = dict(obj)
     if "uuid" in out and "id" not in out:
         out["id"] = out.pop("uuid")
     if "parentUuid" in out and "parentId" not in out:
         out["parentId"] = out.pop("parentUuid")
+    out["_cc_source"] = True
     return out
 
 
@@ -2720,14 +2828,22 @@ def _translate_claude_session_line(
     evt_type = str(obj.get("type") or "unknown")
     if kind == "subagent":
         evt_type = f"subagent:{evt_type}"
-    # Stable id: prefer Claude Code's ``uuid`` / ``id``; otherwise compose
-    # from session+line so re-reads after a state-loss don't dupe. When
-    # this line is from a subagent file, scope the id with the file basename
-    # so the same uuid/line-number across multiple subagents stays unique.
-    eid_inner = obj.get("uuid") or obj.get("id") or f"line:{line_no}"
-    if subagent_file:
-        eid_inner = f"{subagent_file}:{eid_inner}"
     join_id = openclaw_session_id or session_id
+    # Stable id (#1232): top-level events use the canonical CC id derivation
+    # so they collide with the legacy path #1 writes (sync_claude_cli_sessions)
+    # and the process-inspection path #2. Subagent rows keep the
+    # path-scoped scheme — different subagent files can legitimately reuse
+    # the same uuid/line-number, so the file basename must scope the id.
+    if kind == "subagent":
+        eid_inner = obj.get("uuid") or obj.get("id") or f"line:{line_no}"
+        if subagent_file:
+            eid_inner = f"{subagent_file}:{eid_inner}"
+        eid = f"openclaw-cc:{join_id}:{kind}:{eid_inner}"
+    else:
+        # ``kind="top"`` (and any future top-level-equivalent kind) flows
+        # through the canonical CC id — see the comment block above
+        # ``_canonical_event_id`` for the full design rationale.
+        eid = _canonical_event_id(obj, session_id=join_id)
     cost_usd, token_count, model = _extract_cost_tokens_model(obj)
     # Embed cross-ref metadata in data so Brain / debugging can correlate
     # the OpenClaw side ↔ Claude CLI side without a schema change. We copy
@@ -2741,7 +2857,7 @@ def _translate_claude_session_line(
     if subagent_file:
         out_data["_subagent_file"] = subagent_file
     return {
-        "id": f"openclaw-cc:{join_id}:{kind}:{eid_inner}",
+        "id": eid,
         "node_id": node_id,
         "agent_type": "openclaw",
         "agent_id": "main",

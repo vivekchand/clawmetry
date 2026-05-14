@@ -117,7 +117,7 @@ LOCAL_MAX_BYTES = int(
     float(os.environ.get("CLAWMETRY_LOCAL_MAX_GB", "5.0")) * 1024 * 1024 * 1024
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -156,6 +156,10 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_events_agent_ts    ON events(agent_id, ts)",
     "CREATE INDEX IF NOT EXISTS idx_events_type_ts     ON events(event_type, ts)",
     "CREATE INDEX IF NOT EXISTS idx_events_atype_ts    ON events(agent_type, ts)",
+    # Speeds up the v7 dedup migration (#1232) and any future analytical
+    # query that wants to scan a single session's timeline by event_type
+    # without hitting the full ts index.
+    "CREATE INDEX IF NOT EXISTS idx_events_session_ts_type ON events(session_id, ts, event_type)",
     """
     CREATE TABLE IF NOT EXISTS sessions (
         agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
@@ -564,6 +568,92 @@ def _apply_migrations(conn) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
 
+# ── v7 dedup migration (#1232) ───────────────────────────────────────────────
+#
+# Three independent ingest paths used to write the same logical Claude Code
+# event under three different ids (see ``_canonical_event_id`` in
+# ``clawmetry/sync.py`` for the full diagnosis). The unified id derivation
+# fixes future writes; this migration cleans the historical mess.
+#
+# Strategy: collapse rows that share ``(session_id, ts, event_type, dedup_key)``,
+# where ``dedup_key`` is the underlying event uuid when extractable, or an
+# MD5 of the body otherwise. We keep the smallest ``rowid`` per group. The
+# rowid is opaque to DuckDB user-visible queries, but it's the only stable
+# tie-breaker for "the row that was inserted first" — which is the right
+# semantics here (preserve the original row, drop the later re-writes).
+#
+# The id-tail extraction handles all three id schemes the bug created:
+#   bare 36-char uuid                            → uuid:<uuid>
+#   openclaw-cc:<sess>:top:<uuid>                → uuid:<uuid>
+#   openclaw-cc:<sess>:top:line:<N>              → body:<md5(data)>
+#   <sess>:<ts>:<type>                           → body:<md5(data)>
+#   cc-msg:<uuid>                                → uuid:<uuid>
+#   cc-derived:<sess>:<ts>:<type>:<digest>       → derived:<digest>
+#
+# Idempotent: running it twice is a no-op (the second pass sees one row per
+# group, deletes nothing). Gated by ``schema_version`` so it only fires on
+# the v6→v7 transition; subsequent daemon starts skip it.
+
+_DEDUP_KEY_SQL = """
+    CASE
+        WHEN regexp_matches(id, '^cc-msg:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+            THEN 'uuid:' || regexp_extract(id, '^cc-msg:(.+)$', 1)
+        WHEN regexp_matches(id, '^cc-derived:')
+            THEN 'derived:' || regexp_extract(id, ':([0-9a-f]{16})$', 1)
+        WHEN regexp_matches(id, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+            THEN 'uuid:' || id
+        WHEN regexp_matches(id, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+            THEN 'uuid:' || regexp_extract(id, '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$', 1)
+        ELSE 'body:' || COALESCE(md5(data::VARCHAR), '')
+    END
+"""
+
+
+def _run_dedup_migration_v7(conn) -> int:
+    """One-time pass to collapse pre-#1232 duplicate rows in ``events``.
+
+    Returns the number of rows deleted. Safe to call on a fresh store
+    (no events → no deletions). Safe to call repeatedly (no remaining
+    dupes after a successful first pass → no deletions).
+    """
+    # Confirm the events table exists — fresh stores get the v7 stamp without
+    # ever having had v6 data, so there's nothing to dedup.
+    has_events = conn.execute(
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_schema='main' AND table_name='events'"
+    ).fetchone()[0]
+    if not has_events:
+        return 0
+    # Materialise the (rowid, dedup_key) projection so DuckDB doesn't have to
+    # re-evaluate the regex twice (once to find dupes, once to delete them).
+    delete_sql = f"""
+        DELETE FROM events
+        WHERE rowid IN (
+            SELECT rowid FROM (
+                SELECT
+                    rowid,
+                    MIN(rowid) OVER (
+                        PARTITION BY session_id, ts, event_type, ({_DEDUP_KEY_SQL})
+                    ) AS keep_rowid
+                FROM events
+            )
+            WHERE rowid != keep_rowid
+        )
+    """
+    cur = conn.execute(delete_sql)
+    # DuckDB's executemany doesn't surface affected-row count cleanly; do a
+    # follow-up COUNT to compute a delta. The DELETE is the slow part; this
+    # extra COUNT is cheap.
+    # We capture the delta by counting rows touched: a simpler alternative is
+    # to read changes() but DuckDB doesn't expose it on Python's connection.
+    # Caller's COUNT(*) before/after is the canonical truth — this return
+    # value is best-effort for logging only.
+    try:
+        return int(cur.fetchone()[0]) if cur.description else 0
+    except Exception:
+        return 0
+
+
 def _to_blob(value: Any) -> bytes | None:
     """Coerce arbitrary value (dict / list / str / bytes / None) to a BLOB
     suitable for DuckDB. Used by the non-event ingest helpers (sessions,
@@ -717,13 +807,17 @@ class LocalStore:
             self._migrate()
 
     def _migrate(self) -> None:
-        """Bring the store schema up to v2. Order matters:
+        """Bring the store schema up to current SCHEMA_VERSION. Order matters:
           1. v1→v2 column-add migrations (only do anything on legacy stores
              that pre-date agent_type) — must run BEFORE the DDL because the
              new `idx_events_atype_ts` index references agent_type.
           2. Full v2 DDL — CREATE TABLE/INDEX IF NOT EXISTS, no-op on
              already-migrated tables, creates the new tables on fresh stores.
-          3. Stamp the schema_version row.
+          3. Version-gated data migrations (v6→v7 dedup, etc.) — only run on
+             stores that haven't seen this version yet. Idempotent at the
+             SQL level too, but the version gate makes the common (already-
+             migrated) case a single SELECT.
+          4. Stamp the schema_version row.
         """
         with self._write_lock:
             # Step 1: column-add migrations for legacy v1 stores. Tolerant
@@ -738,10 +832,42 @@ class LocalStore:
             # (only creates the new tables that didn't exist).
             for stmt in _DDL:
                 self._conn.execute(stmt)
-            # Step 3: stamp the version.
+            # Step 3: version-gated data migrations.
             cur = self._conn.execute("SELECT MAX(version) AS v FROM schema_version")
             row = cur.fetchone()
             current = row[0] if row and row[0] is not None else 0
+            if current < 7:
+                # v6 → v7: collapse Claude Code event duplicates the three
+                # ingest paths used to produce (#1232). Wrapped in try/except
+                # so a regex/lock issue doesn't brick daemon startup — the
+                # write-side fix in sync.py is the real correctness path; this
+                # cleanup is opportunistic.
+                try:
+                    before = self._conn.execute(
+                        "SELECT COUNT(*) FROM events"
+                    ).fetchone()[0]
+                    _run_dedup_migration_v7(self._conn)
+                    after = self._conn.execute(
+                        "SELECT COUNT(*) FROM events"
+                    ).fetchone()[0]
+                    deleted = max(0, before - after)
+                    if deleted:
+                        log.info(
+                            "local store: v7 dedup migration removed %d "
+                            "duplicate event row(s) (%d → %d)",
+                            deleted, before, after,
+                        )
+                    else:
+                        log.debug(
+                            "local store: v7 dedup migration found no dupes (rows=%d)",
+                            after,
+                        )
+                except Exception:
+                    log.exception(
+                        "local store: v7 dedup migration failed (continuing — "
+                        "future writes still dedup via canonical id)"
+                    )
+            # Step 4: stamp the version.
             if current < SCHEMA_VERSION:
                 self._conn.execute(
                     "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
