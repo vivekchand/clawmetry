@@ -20,8 +20,8 @@ What this pins
    same ``(provider, chat_id, message_id)`` already exists — the
    COALESCE upsert in ``ingest_channel_message`` makes the body
    stick.
-6. ``CLAWMETRY_DISABLE_WS_TAP=1`` short-circuits ``start()`` to a
-   no-op (escape-hatch behavior).
+6. ``start()`` is a no-op by default; set ``CLAWMETRY_ENABLE_WS_TAP=1``
+   to opt in.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def tap_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(duck))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
     monkeypatch.setenv("CLAWMETRY_OPENCLAW_DIR", str(oc_home))
-    monkeypatch.delenv("CLAWMETRY_DISABLE_WS_TAP", raising=False)
+    monkeypatch.delenv("CLAWMETRY_ENABLE_WS_TAP", raising=False)
     monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
 
     import clawmetry.local_store as ls
@@ -432,8 +432,19 @@ def test_full_loop_against_stubbed_websocket(tap_env, monkeypatch):
 
 
 def test_disable_env_var_short_circuits_start(tap_env, monkeypatch):
-    monkeypatch.setenv("CLAWMETRY_DISABLE_WS_TAP", "1")
+    """start() returns None by default (tap is opt-in)."""
+    monkeypatch.delenv("CLAWMETRY_ENABLE_WS_TAP", raising=False)
     res = tap_env["tap"].start({"node_id": "n"})
+    assert res is None
+
+
+def test_enable_env_var_allows_start(tap_env, monkeypatch):
+    """When CLAWMETRY_ENABLE_WS_TAP=1, start() proceeds past the gate
+    (returns None here only because no gateway endpoint is configured)."""
+    monkeypatch.setenv("CLAWMETRY_ENABLE_WS_TAP", "1")
+    res = tap_env["tap"].start({"node_id": "n"})
+    # No gateway configured in test env → still None, but for a
+    # different reason (missing URL/token, not the env-var gate).
     assert res is None
 
 

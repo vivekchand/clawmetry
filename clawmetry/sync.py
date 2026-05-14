@@ -6474,8 +6474,8 @@ def run_daemon() -> None:
     # memory; gateway.log only carries outbound ACKs (no body), and no
     # JSONL is written for inbound. Without this tap, ClawMetry can
     # NEVER show real Telegram conversations on the Brain tab.
-    # Default-ON per the MOAT mandate; opt out via
-    # CLAWMETRY_DISABLE_WS_TAP=1.
+    # Default-OFF until upstream grants scopes; opt in via
+    # CLAWMETRY_ENABLE_WS_TAP=1.
     try:
         from clawmetry import gateway_tap as _gw_tap
         _gw_tap.start(config)

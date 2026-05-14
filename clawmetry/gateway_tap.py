@@ -48,10 +48,9 @@ Failure modes
 Disable
 -------
 
-Set ``CLAWMETRY_DISABLE_WS_TAP=1`` in the environment to opt out
-entirely (escape hatch). Default is ON per the MOAT-mandate
-"DuckDB fast paths must default-on" rule (memory note
-``feedback_local_store_default_off_killed_moat``).
+Set ``CLAWMETRY_ENABLE_WS_TAP=1`` in the environment to opt in.
+Default is OFF until the upstream OpenClaw server grants the
+required ``operator.read`` scope.
 """
 
 from __future__ import annotations
@@ -108,8 +107,8 @@ _BACKOFF_INITIAL_SEC = 2.0
 _BACKOFF_MAX_SEC = 60.0
 
 
-# Disable env var (escape hatch — feature is default-ON).
-_DISABLE_ENV = "CLAWMETRY_DISABLE_WS_TAP"
+# Enable env var (feature is default-OFF until upstream grants scopes).
+_ENABLE_ENV = "CLAWMETRY_ENABLE_WS_TAP"
 
 
 # ── Frame normalization ─────────────────────────────────────────────────
@@ -587,8 +586,8 @@ def start(config: dict) -> GatewayTap | None:
     from the live OpenClaw config (mirroring dashboard's
     ``_detect_gateway_token`` / ``_detect_gateway_port``).
     """
-    if os.environ.get(_DISABLE_ENV, "").strip() in ("1", "true", "TRUE", "yes"):
-        log.info("gateway WS tap disabled (%s=1)", _DISABLE_ENV)
+    if os.environ.get(_ENABLE_ENV, "").strip() not in ("1", "true", "yes"):
+        log.debug("gateway WS tap disabled (set CLAWMETRY_ENABLE_WS_TAP=1 to enable)")
         return None
 
     url, token = _detect_gateway_endpoint()
