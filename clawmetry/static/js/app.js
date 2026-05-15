@@ -601,7 +601,7 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'overview') loadAll();
-  if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
+  if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(loadTokenVelocity, 30000); }
   if (name === 'usage') loadUsage();
   if (name === 'skills') loadSkills();
   if (name === 'crons') loadCrons();
@@ -624,7 +624,7 @@ function switchTab(name) {
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
-  if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
+  if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = visibilitySetInterval(loadSubagents, 5000); }
   if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
 }
 
@@ -2166,7 +2166,7 @@ async function loadActiveTasks() {
 function startActiveTasksRefresh() {
   loadActiveTasks();
   if (_activeTasksTimer) clearInterval(_activeTasksTimer);
-  _activeTasksTimer = setInterval(loadActiveTasks, 30000);
+  _activeTasksTimer = visibilitySetInterval(loadActiveTasks, 30000);
 }
 
 async function loadToolActivity() {
@@ -3842,7 +3842,7 @@ var _ncApprovalsTimer = null;
 function _startNcApprovalsAutoRefresh() {
   if (_ncApprovalsTimer) return;
   loadNemoClawApprovals();
-  _ncApprovalsTimer = setInterval(loadNemoClawApprovals, 15000);
+  _ncApprovalsTimer = visibilitySetInterval(loadNemoClawApprovals, 15000);
 }
 function _stopNcApprovalsAutoRefresh() {
   if (_ncApprovalsTimer) { clearInterval(_ncApprovalsTimer); _ncApprovalsTimer = null; }
@@ -4590,7 +4590,7 @@ function toggleCronAutoRefresh() {
   var cb = document.getElementById('cron-auto-refresh');
   if (!cb) return;
   if (cb.checked) {
-    if (!_cronAutoRefreshTimer) _cronAutoRefreshTimer = setInterval(loadCrons, 30000);
+    if (!_cronAutoRefreshTimer) _cronAutoRefreshTimer = visibilitySetInterval(loadCrons, 30000);
   } else {
     if (_cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   }
@@ -4620,7 +4620,7 @@ async function loadCrons() {
   // Start auto-refresh if checkbox is checked and timer not running
   var cb = document.getElementById('cron-auto-refresh');
   if (cb && cb.checked && !_cronAutoRefreshTimer) {
-    _cronAutoRefreshTimer = setInterval(loadCrons, 30000);
+    _cronAutoRefreshTimer = visibilitySetInterval(loadCrons, 30000);
   }
 }
 
@@ -6186,7 +6186,7 @@ async function _loadReliabilityWidget() {
 function startSystemHealthRefresh() {
   loadSystemHealth();
   if (window._sysHealthTimer) clearInterval(window._sysHealthTimer);
-  window._sysHealthTimer = setInterval(loadSystemHealth, 30000);
+  window._sysHealthTimer = visibilitySetInterval(loadSystemHealth, 30000);
 }
 
 async function loadDiagnostics() {
@@ -7672,7 +7672,7 @@ async function loadRateLimits() {
 
     // Auto-refresh every 30s while tab is active
     if (_rateLimitTimer) clearInterval(_rateLimitTimer);
-    _rateLimitTimer = setInterval(function() {
+    _rateLimitTimer = visibilitySetInterval(function() {
       var limitsPage = document.getElementById('page-limits');
       if (limitsPage && limitsPage.classList.contains('active')) loadRateLimits();
       else { clearInterval(_rateLimitTimer); _rateLimitTimer = null; }
@@ -7749,14 +7749,14 @@ var _overviewRefreshRunning = false;
 function startOverviewRefresh() {
   // Don't fire loadAll() immediately -- bootDashboard already called it
   if (window._overviewTimer) clearInterval(window._overviewTimer);
-  window._overviewTimer = setInterval(async function() {
+  window._overviewTimer = visibilitySetInterval(async function() {
     if (_overviewRefreshRunning) return;
     _overviewRefreshRunning = true;
     try { await loadAll(); } finally { _overviewRefreshRunning = false; }
   }, 10000);
   loadMainActivity();
   if (window._mainActivityTimer) clearInterval(window._mainActivityTimer);
-  window._mainActivityTimer = setInterval(loadMainActivity, 5000);
+  window._mainActivityTimer = visibilitySetInterval(loadMainActivity, 5000);
 }
 
 // Overview right-panel Brain stream: reuses /api/brain-history (same source as
@@ -9253,7 +9253,7 @@ async function loadOverviewTasks() {
 function startOverviewTasksRefresh() {
   loadOverviewTasks();
   if (_ovTasksTimer) clearInterval(_ovTasksTimer);
-  _ovTasksTimer = setInterval(loadOverviewTasks, 10000);
+  _ovTasksTimer = visibilitySetInterval(loadOverviewTasks, 10000);
 }
 
 // === Task Detail Modal ===
@@ -9411,7 +9411,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading TUI messages...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadTuiMessages(false);
-    window._tuiRefreshTimer = setInterval(function() { loadTuiMessages(true); }, 10000);
+    window._tuiRefreshTimer = visibilitySetInterval(function() { loadTuiMessages(true); }, 10000);
     return;
   }
 
@@ -9421,7 +9421,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading messages...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadTelegramMessages(false);
-    _tgRefreshTimer = setInterval(function() { loadTelegramMessages(true); }, 10000);
+    _tgRefreshTimer = visibilitySetInterval(function() { loadTelegramMessages(true); }, 10000);
     return;
   }
 
@@ -9429,7 +9429,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading iMessages...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadIMessageMessages(false);
-    _imsgRefreshTimer = setInterval(function() { loadIMessageMessages(true); }, 10000);
+    _imsgRefreshTimer = visibilitySetInterval(function() { loadIMessageMessages(true); }, 10000);
     return;
   }
 
@@ -9437,7 +9437,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading WhatsApp messages...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadWhatsAppMessages(false);
-    _waRefreshTimer = setInterval(function() { loadWhatsAppMessages(true); }, 10000);
+    _waRefreshTimer = visibilitySetInterval(function() { loadWhatsAppMessages(true); }, 10000);
     return;
   }
 
@@ -9445,7 +9445,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Signal messages...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadSignalMessages(false);
-    _sigRefreshTimer = setInterval(function() { loadSignalMessages(true); }, 10000);
+    _sigRefreshTimer = visibilitySetInterval(function() { loadSignalMessages(true); }, 10000);
     return;
   }
 
@@ -9453,7 +9453,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Discord messages...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadDiscordMessages(false);
-    _discordRefreshTimer = setInterval(function() { loadDiscordMessages(true); }, 10000);
+    _discordRefreshTimer = visibilitySetInterval(function() { loadDiscordMessages(true); }, 10000);
     return;
   }
 
@@ -9461,7 +9461,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Slack messages...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadSlackMessages(false);
-    _slackRefreshTimer = setInterval(function() { loadSlackMessages(true); }, 10000);
+    _slackRefreshTimer = visibilitySetInterval(function() { loadSlackMessages(true); }, 10000);
     return;
   }
 
@@ -9469,7 +9469,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Google Chat messages...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadGoogleChatMessages(false);
-    _gcRefreshTimer = setInterval(function() { loadGoogleChatMessages(true); }, 10000);
+    _gcRefreshTimer = visibilitySetInterval(function() { loadGoogleChatMessages(true); }, 10000);
     return;
   }
 
@@ -9477,7 +9477,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading MS Teams messages...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadMSTeamsMessages(false);
-    _mstRefreshTimer = setInterval(function() { loadMSTeamsMessages(true); }, 10000);
+    _mstRefreshTimer = visibilitySetInterval(function() { loadMSTeamsMessages(true); }, 10000);
     return;
   }
 
@@ -9485,7 +9485,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Mattermost messages...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadMattermostMessages(false);
-    _mmRefreshTimer = setInterval(function() { loadMattermostMessages(true); }, 10000);
+    _mmRefreshTimer = visibilitySetInterval(function() { loadMattermostMessages(true); }, 10000);
     return;
   }
 
@@ -9493,7 +9493,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading WebChat...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadWebchatMessages(false);
-    _webchatRefreshTimer = setInterval(function() { loadWebchatMessages(true); }, 12000);
+    _webchatRefreshTimer = visibilitySetInterval(function() { loadWebchatMessages(true); }, 12000);
     return;
   }
 
@@ -9501,7 +9501,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div class="irc-loading">*** Connecting to IRC log... ***</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadIRCMessages(false);
-    _ircRefreshTimer = setInterval(function() { loadIRCMessages(true); }, 15000);
+    _ircRefreshTimer = visibilitySetInterval(function() { loadIRCMessages(true); }, 15000);
     return;
   }
 
@@ -9509,7 +9509,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading BlueBubbles...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadBlueBubblesMessages(false);
-    _bbRefreshTimer = setInterval(function() { loadBlueBubblesMessages(true); }, 12000);
+    _bbRefreshTimer = visibilitySetInterval(function() { loadBlueBubblesMessages(true); }, 12000);
     return;
   }
 
@@ -9523,7 +9523,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading ' + c.name + '...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadGenericChannelData(nodeId, c.chKey, c, false);
-    window._genericChannelTimer = setInterval(function() { loadGenericChannelData(nodeId, c.chKey, c, true); }, 15000);
+    window._genericChannelTimer = visibilitySetInterval(function() { loadGenericChannelData(nodeId, c.chKey, c, true); }, 15000);
     return;
   }
 
@@ -9531,7 +9531,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading gateway data...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadGatewayData(false);
-    _gwRefreshTimer = setInterval(function() { loadGatewayData(true); }, 10000);
+    _gwRefreshTimer = visibilitySetInterval(function() { loadGatewayData(true); }, 10000);
     return;
   }
 
@@ -9540,7 +9540,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-overlay').classList.add('open');
     _brainPage = 0;
     loadBrainData(false);
-    _brainRefreshTimer = setInterval(function() { loadBrainData(true); }, 10000);
+    _brainRefreshTimer = visibilitySetInterval(function() { loadBrainData(true); }, 10000);
     return;
   }
 
@@ -9548,7 +9548,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Analyzing costs...</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadCostOptimizerData(false);
-    _costOptimizerRefreshTimer = setInterval(function() { loadCostOptimizerData(true); }, 15000);
+    _costOptimizerRefreshTimer = visibilitySetInterval(function() { loadCostOptimizerData(true); }, 15000);
     return;
   }
 
@@ -9565,7 +9565,7 @@ function openCompModal(nodeId) {
     } else {
       loadToolData(toolKey, c, false);
     }
-    _toolRefreshTimer = setInterval(function() { loadToolData(toolKey, c, true); }, 10000);
+    _toolRefreshTimer = visibilitySetInterval(function() { loadToolData(toolKey, c, true); }, 10000);
     return;
   }
 
@@ -11384,7 +11384,7 @@ function openTaskModal(sessionId, taskName, sessionKey) {
   // and their data is immutable — refreshing just causes flicker. The user
   // can re-enable via the checkbox if needed.
   if (_modalAutoRefresh && sessionId) {
-    _modalRefreshTimer = setInterval(loadModalTranscript, 4000);
+    _modalRefreshTimer = visibilitySetInterval(loadModalTranscript, 4000);
   } else {
     // Reflect the disabled state in the checkbox so the UX matches.
     var cb = document.getElementById('modal-auto-refresh-cb');
@@ -11406,7 +11406,7 @@ function toggleModalAutoRefresh() {
   _modalAutoRefresh = document.getElementById('modal-auto-refresh-cb').checked;
   if (_modalRefreshTimer) { clearInterval(_modalRefreshTimer); _modalRefreshTimer = null; }
   if (_modalAutoRefresh && _modalSessionId) {
-    _modalRefreshTimer = setInterval(loadModalTranscript, 4000);
+    _modalRefreshTimer = visibilitySetInterval(loadModalTranscript, 4000);
   }
 }
 
