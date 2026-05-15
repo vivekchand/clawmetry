@@ -10697,7 +10697,7 @@ function loadBrainData(isRefresh) {
     if (msg.toLowerCase().includes('abort')) {
       msg = 'Request timed out. The brain panel is heavy; please retry in 2-3 seconds.';
     }
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load brain data: ' + msg + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = _compModalError('loadBrainData', 'brain data', { message: msg });
   });
 }
 
@@ -10847,7 +10847,7 @@ function loadCostOptimizerData(isRefresh) {
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
-      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load cost optimizer: ' + e.message + '</div>';
+      document.getElementById('comp-modal-body').innerHTML = _compModalError('loadCostOptimizerData', 'cost optimizer', e);
     }
   });
 }
@@ -11182,7 +11182,7 @@ function loadGatewayData(isRefresh) {
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
-      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load gateway data</div>';
+      document.getElementById('comp-modal-body').innerHTML = _compModalError('loadGatewayData', 'gateway data', null);
     }
   });
 }
