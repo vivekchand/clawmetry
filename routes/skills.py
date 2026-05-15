@@ -16,6 +16,7 @@ Blueprints: bp_skills
 import json
 import os
 import time
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify
 
@@ -23,6 +24,116 @@ bp_skills = Blueprint("skills", __name__)
 
 # Subdirectory names that count as linked-file directories
 _LINKED_DIRS = frozenset({"scripts", "references", "assets"})
+
+
+# ── DuckDB Tier-1 fast path (issue #1364) ────────────────────────────────────
+
+
+def _try_local_store_read_tool_calls(*, since_ts: float):
+    """Tier-1 DuckDB fast-path for /api/skills fidelity counts.
+
+    Replaces ``_scan_fidelity_events``'s 7d × N-session JSONL walk with
+    a single SQL pull from the ``events`` table. Returns a list of
+    ``{ts, session_id, file_path}`` rows on success — the caller does
+    the per-skill bucketing in-process (it already has the skill-paths
+    map in memory; no point round-tripping it to the daemon).
+
+    Returns ``None`` on any miss (daemon down + direct open failed,
+    method not allowlisted, etc.) so the caller falls through to the
+    legacy JSONL scanner unchanged.
+
+    ``since_ts`` is a Unix timestamp; we project it to ISO-8601 (the
+    on-the-wire shape the events table indexes on).
+    """
+    since_iso = datetime.fromtimestamp(since_ts, tz=timezone.utc).isoformat()
+    rows = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon(
+            "query_recent_read_tool_calls",
+            since=since_iso,
+            limit=50_000,
+        )
+    except Exception:
+        rows = None
+    if rows is None:
+        # Single-process fallback (tests + dev mode have no daemon).
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_recent_read_tool_calls(
+                since=since_iso,
+                limit=50_000,
+            )
+        except Exception:
+            return None
+    if not isinstance(rows, list):
+        return None
+    return rows
+
+
+def _bucket_read_calls_per_skill(rows, skill_dirs_map):
+    """Bucket ``query_recent_read_tool_calls`` rows into the per-skill
+    fidelity stats shape ``_scan_fidelity_events`` produces.
+
+    Counts a Read targeting ``<skill_dir>/SKILL.md`` as a body fetch and
+    a Read under ``<skill_dir>/{scripts,references,assets}/...`` as a
+    linked-file read — same matching rules as the legacy JSONL scanner,
+    case-insensitive + slash-normalised so Windows paths still hit.
+    """
+    stats = {
+        name: {
+            "body_fetch_count_7d":       0,
+            "linked_file_read_count_7d": 0,
+            "last_used_ts":              0.0,
+        }
+        for name in skill_dirs_map
+    }
+
+    skill_md_lower: dict = {}
+    linked_prefix_lower: dict = {}
+    for skill_name, skill_dir in skill_dirs_map.items():
+        sm_path = os.path.join(skill_dir, "SKILL.md")
+        skill_md_lower[sm_path.lower().replace("\\", "/")] = skill_name
+        for ldir in _LINKED_DIRS:
+            ldir_path = os.path.join(skill_dir, ldir)
+            linked_prefix_lower[ldir_path.lower().replace("\\", "/")] = skill_name
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        fp = row.get("file_path") or ""
+        if not isinstance(fp, str) or not fp:
+            continue
+        ts_raw = row.get("ts") or ""
+        ev_ts = _ts_to_epoch(ts_raw)
+
+        fp_lower = fp.lower().replace("\\", "/")
+
+        for sm_norm, skill_name in skill_md_lower.items():
+            if fp_lower.endswith(sm_norm) or sm_norm in fp_lower:
+                stats[skill_name]["body_fetch_count_7d"] += 1
+                if ev_ts > stats[skill_name]["last_used_ts"]:
+                    stats[skill_name]["last_used_ts"] = ev_ts
+
+        for lp_norm, skill_name in linked_prefix_lower.items():
+            if lp_norm in fp_lower:
+                stats[skill_name]["linked_file_read_count_7d"] += 1
+                if ev_ts > stats[skill_name]["last_used_ts"]:
+                    stats[skill_name]["last_used_ts"] = ev_ts
+
+    return stats
+
+
+def _ts_to_epoch(ts_raw: str) -> float:
+    """Best-effort ISO-8601 → Unix epoch. Returns 0.0 on parse fail."""
+    if not ts_raw or not isinstance(ts_raw, str):
+        return 0.0
+    s = ts_raw.replace("Z", "+00:00") if ts_raw.endswith("Z") else ts_raw
+    try:
+        return datetime.fromisoformat(s).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _get_skills_dir():
@@ -264,9 +375,26 @@ def api_skills():
     cutoff_7d = now_ts - 7 * 86400
     cutoff_30d = now_ts - 30 * 86400
 
-    # Scan session transcripts for fidelity events
-    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
-    fidelity_stats = _scan_fidelity_events(sessions_dir, skill_dirs_map, cutoff_7d)
+    # Scan session transcripts for fidelity events.
+    #
+    # Fast path: pull recent Read tool-call rows from DuckDB and bucket
+    # them in-process. Falls through to the legacy JSONL walker if the
+    # local store isn't enabled / has no rows / the daemon isn't
+    # reachable — same shape, same numbers, just faster (avoids a
+    # 50-200+ JSONL re-walk on every render).
+    fidelity_stats = None
+    try:
+        from clawmetry.config import is_local_store_read_enabled
+        if is_local_store_read_enabled():
+            rows = _try_local_store_read_tool_calls(since_ts=cutoff_7d)
+            if rows is not None:
+                fidelity_stats = _bucket_read_calls_per_skill(rows, skill_dirs_map)
+    except Exception:
+        fidelity_stats = None
+
+    if fidelity_stats is None:
+        sessions_dir = _d.SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
+        fidelity_stats = _scan_fidelity_events(sessions_dir, skill_dirs_map, cutoff_7d)
 
     skills_out = []
     total_header_tokens = 0
@@ -380,8 +508,20 @@ def api_skill_detail(skill_name):
         os.path.isdir(os.path.join(skill_dir, ldir)) for ldir in _LINKED_DIRS
     )
 
-    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
-    fidelity_stats = _scan_fidelity_events(sessions_dir, {skill_name: skill_dir}, cutoff_7d)
+    skill_dirs_map = {skill_name: skill_dir}
+    fidelity_stats = None
+    try:
+        from clawmetry.config import is_local_store_read_enabled
+        if is_local_store_read_enabled():
+            rows = _try_local_store_read_tool_calls(since_ts=cutoff_7d)
+            if rows is not None:
+                fidelity_stats = _bucket_read_calls_per_skill(rows, skill_dirs_map)
+    except Exception:
+        fidelity_stats = None
+
+    if fidelity_stats is None:
+        sessions_dir = _d.SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
+        fidelity_stats = _scan_fidelity_events(sessions_dir, skill_dirs_map, cutoff_7d)
     fev = fidelity_stats.get(skill_name, {
         "body_fetch_count_7d": 0,
         "linked_file_read_count_7d": 0,

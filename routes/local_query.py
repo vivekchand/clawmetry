@@ -340,6 +340,12 @@ _DAEMON_METHODS = frozenset({
     # transition aggregator. Replaces a JSONL walker that opened up to 100
     # transcript files per request — multi-second on a busy workspace.
     "query_model_fallbacks",
+    # Issue #1364 (MOAT Tier-1): /api/skills fidelity counts. Replaces a
+    # 7d × N-session JSONL scan (re-walks every transcript on every
+    # /api/skills render). Returns Read-tool calls so the route can
+    # bucket per-skill body-fetch + linked-file-read counts via the
+    # in-memory skill-paths map.
+    "query_recent_read_tool_calls",
     "health",
 })
 
