@@ -67,12 +67,23 @@ def _try_local_store_approvals():
       - the ``approvals`` table is empty (fresh install / no pending rows)
       - any unexpected error happens (we'd rather degrade than 500)
     """
+    # Issue #1282 / memory `feedback_daemon_proxy_pattern.md`: writable
+    # ``get_store`` raced the sync daemon's exclusive DuckDB writer lock
+    # on multi-process installs (launchd/systemd). Try the daemon HTTP
+    # proxy first; fall back to a direct read-only open for single-process
+    # boots (tests, dev mode).
     try:
-        from clawmetry import local_store
-        store = local_store.get_store(read_only=False)
-        rows = store.query_approvals(status="pending", limit=500)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_approvals", status="pending", limit=500)
     except Exception:
-        return None
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_approvals(status="pending", limit=500)
+        except Exception:
+            return None
     if not rows:
         return None
     approvals = []
