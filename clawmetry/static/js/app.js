@@ -1677,17 +1677,54 @@ function formatTime(ms) {
   return new Date(ms).toLocaleString('en-GB', {hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'});
 }
 
+// Inflight dedup: 5 long-lived SSE EventSources (brain, flow-brain,
+// flow-events, health, logs) eat 5/6 slots in the browser's HTTP/1.1
+// per-origin connection budget. Pollers firing every 5–10s with no dedup
+// then stack 10+ identical fetches into the last slot and starve every new
+// request into "(pending)" forever — the surface symptom is "Failed to
+// load: timeout" on Brain. Collapsing duplicate URLs keeps inflight to ~1
+// per endpoint regardless of how often the cadence fires.
+var _inflightJsonFetches = {};
 async function fetchJsonWithTimeout(url, timeoutMs) {
+  if (_inflightJsonFetches[url]) return _inflightJsonFetches[url];
   var ctrl = new AbortController();
   var to = setTimeout(function() { ctrl.abort('timeout'); }, timeoutMs);
-  try {
-    var r = await fetch(url, {signal: ctrl.signal});
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return await r.json();
-  } finally {
-    clearTimeout(to);
-  }
+  var p = (async function() {
+    try {
+      var r = await fetch(url, {signal: ctrl.signal});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } finally {
+      clearTimeout(to);
+      delete _inflightJsonFetches[url];
+    }
+  })();
+  _inflightJsonFetches[url] = p;
+  return p;
 }
+
+// Same root cause as above — when the browser tab is hidden the 5 SSE are
+// useless yet still hold connection slots. Close them on hidden; the tab-
+// change handlers re-open the one needed when the user returns (each guards
+// on readyState===CLOSED, so this is idempotent).
+(function _installSSEVisibilityGuard() {
+  if (typeof document === 'undefined' || !document.addEventListener) return;
+  function _closeAllSSE() {
+    ['_brainSSE', '_flowBrainSse', '_flowSse', 'healthStream', 'logStream'].forEach(function(key) {
+      try {
+        var es = window[key];
+        if (es && typeof es.close === 'function') {
+          es.close();
+          window[key] = null;
+        }
+      } catch(e) {}
+    });
+  }
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) _closeAllSSE();
+  });
+  window.addEventListener('pagehide', _closeAllSSE);
+})();
 
 async function resolvePrimaryModelFallback() {
   try {
