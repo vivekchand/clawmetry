@@ -105,30 +105,45 @@ def _get_channel_context_map(session_ids=None):
     caller treats an empty dict as "nothing to merge", which preserves the
     pre-existing metadata-blob channel inference unchanged.
     """
+    # Issue #1277: route through daemon HTTP proxy. Direct
+    # local_store.get_store() raises IOException on multi-process installs
+    # (DuckDB process-level file lock), and even when the exception is
+    # caught the singleton ends up in a degraded state — surfaces as the
+    # 3–10 s cumulative latency on /api/sessions despite the underlying
+    # DuckDB query being 6 ms. Same root cause as the #1256 endpoint family.
+    #
+    # Plus: even on the happy path, query_channels(session_id=X) was
+    # invoked N times in a loop. Switch to a single full-table fetch (the
+    # in-line dict-build below scopes the result to the requested ids
+    # client-side). Channels table is always small (one row per channel
+    # per session — capped well under the 2000 limit), so a full scan is
+    # cheaper than N proxy round-trips even at small N.
+    rows = None
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-        if session_ids is not None:
-            ids = [s for s in session_ids if s]
-            if not ids:
-                return {}
-            rows = []
-            # query_channels supports one session_id at a time; for the typical
-            # /api/sessions response (≤200 rows) one full-table scan is cheaper
-            # than N round-trips.
-            if len(ids) > 20:
-                rows = store.query_channels(limit=2000)
-            else:
-                for sid in ids:
-                    rows.extend(store.query_channels(session_id=sid, limit=1))
-        else:
-            rows = store.query_channels(limit=2000)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_channels", limit=2000)
     except Exception:
-        return {}
+        rows = None
+    if rows is None:
+        # Single-process fallback (tests + dev mode).
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_channels(limit=2000)
+        except Exception:
+            return {}
+    # Scope the full-table result to requested session_ids client-side.
+    wanted = None
+    if session_ids is not None:
+        wanted = {s for s in session_ids if s}
+        if not wanted:
+            return {}
     out = {}
-    for r in rows:
+    for r in (rows or []):
         sid = r.get("session_id")
         if not sid:
+            continue
+        if wanted is not None and sid not in wanted:
             continue
         out[sid] = {
             "channel":      r.get("channel") or "",
