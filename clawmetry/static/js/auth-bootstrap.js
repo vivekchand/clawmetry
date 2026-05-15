@@ -1,29 +1,53 @@
 (function(){
   var stored = localStorage.getItem('clawmetry-token');
-  fetch('/api/auth/check' + (stored ? '?token=' + encodeURIComponent(stored) : ''))
-    .then(function(r){return r.json()})
-    .then(function(d){
-      if(d.needsSetup){
-        // No gateway token configured -- show mandatory gateway setup wizard
-        document.getElementById('login-overlay').style.display='none';
-        var overlay=document.getElementById('gw-setup-overlay');
-        overlay.dataset.mandatory='true';
-        document.getElementById('gw-setup-close').style.display='none';
-        overlay.style.display='flex';
-        return;
-      }
-      if(!d.authRequired){
-        document.getElementById('login-overlay').style.display='none';
-        return;
-      }
-      if(d.valid){
-        document.getElementById('login-overlay').style.display='none';
-        var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
-        return;
-      }
-      localStorage.removeItem('cm-token');localStorage.removeItem('clawmetry-token');sessionStorage.removeItem('cm-token');document.getElementById('login-overlay').style.display='flex';
-    })
-    .catch(function(){document.getElementById('login-overlay').style.display='none';});
+
+  // Zero-click localhost auto-login: if no token in localStorage, ask the
+  // server for the on-disk token (only returned on loopback). If we get one,
+  // persist it and reload so the rest of the app boots logged-in. Falls back
+  // to the manual login overlay on any error / 403 / 404 (endpoint may not be
+  // deployed yet, or the request isn't from localhost).
+  if(!stored){
+    fetch('/api/auth/detected-token')
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){
+        if(d && d.token){
+          localStorage.setItem('clawmetry-token', d.token);
+          location.reload();
+        } else {
+          checkAuth(null);
+        }
+      })
+      .catch(function(){ checkAuth(null); });
+  } else {
+    checkAuth(stored);
+  }
+
+  function checkAuth(tok){
+    fetch('/api/auth/check' + (tok ? '?token=' + encodeURIComponent(tok) : ''))
+      .then(function(r){return r.json()})
+      .then(function(d){
+        if(d.needsSetup){
+          // No gateway token configured -- show mandatory gateway setup wizard
+          document.getElementById('login-overlay').style.display='none';
+          var overlay=document.getElementById('gw-setup-overlay');
+          overlay.dataset.mandatory='true';
+          document.getElementById('gw-setup-close').style.display='none';
+          overlay.style.display='flex';
+          return;
+        }
+        if(!d.authRequired){
+          document.getElementById('login-overlay').style.display='none';
+          return;
+        }
+        if(d.valid){
+          document.getElementById('login-overlay').style.display='none';
+          var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
+          return;
+        }
+        localStorage.removeItem('cm-token');localStorage.removeItem('clawmetry-token');sessionStorage.removeItem('cm-token');document.getElementById('login-overlay').style.display='flex';
+      })
+      .catch(function(){document.getElementById('login-overlay').style.display='none';});
+  }
 })();
 function clawmetryLogin(){
   var tok=document.getElementById('login-token').value.trim();
