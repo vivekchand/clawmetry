@@ -1327,6 +1327,10 @@ def api_system_health():
             "service_status": service_status,
             "daemon": daemon_health,
             "gateway": gateway_health,
+            # Issue #1310 follow-up — per-provider channel ingest summary
+            # so operators see whether the gateway WS tap is actually
+            # writing Telegram/Signal/Slack/etc. messages to DuckDB.
+            "channel_ingest": _channel_ingest_recent(),
             "_source": top_source,
         }
     )
@@ -1393,6 +1397,67 @@ def _query_gateway_metric_history(hours: int):
             "cpu_pct": data.get("cpu_pct"),
         })
     out.sort(key=lambda r: r.get("ts") or "")
+    return out
+
+
+def _channel_ingest_recent():
+    """Per-provider channel-ingest summary for the System Health UI
+    (#1310 follow-up). Returns a list of dicts:
+
+        [{"provider": "telegram", "total": 654, "msg_in": 600,
+          "msg_out": 54, "last_ts": "2026-05-15T11:30:00Z",
+          "mins_ago": 2}, ...]
+
+    Reads ``query_channel_summary`` via the daemon HTTP proxy so it
+    works under the standard install where the dashboard process can't
+    open DuckDB directly. Returns ``[]`` on any failure (this is a
+    decorative panel; never block /api/system-health on it).
+
+    The ``mins_ago`` field is the operator-felt signal: if it's a small
+    number for a given provider, the gateway WS tap is hot for that
+    channel. If it's "never" or huge, the tap is off OR there's been
+    no traffic — the UI distinguishes those by also showing total>0.
+    """
+    rows = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_channel_summary")
+    except Exception:
+        rows = None
+    if rows is None:
+        # Single-process fallback (tests/dev with no sync daemon).
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_channel_summary()
+        except Exception:
+            return []
+    if not rows:
+        return []
+
+    now = datetime.now(timezone.utc)
+    out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        last_ts = r.get("last_ts")
+        mins_ago = None
+        if last_ts:
+            try:
+                ts = datetime.fromisoformat(str(last_ts).replace("Z", "+00:00"))
+                mins_ago = max(0, int((now - ts).total_seconds() / 60))
+            except Exception:
+                mins_ago = None
+        out.append({
+            "provider": r.get("provider") or "?",
+            "total":    int(r.get("total") or 0),
+            "msg_in":   int(r.get("msg_in") or 0),
+            "msg_out":  int(r.get("msg_out") or 0),
+            "last_ts":  last_ts,
+            "mins_ago": mins_ago,
+        })
+    # Most-recently-active provider first.
+    out.sort(key=lambda r: r.get("mins_ago") if r.get("mins_ago") is not None else 1e9)
     return out
 
 
