@@ -5215,7 +5215,7 @@ async function loadCronRuns(jobId) {
         h += '<div style="color:var(--text-error);font-size:11px;padding:2px 0 4px 8px;border-left:2px solid var(--text-error);margin-left:4px;">' + escHtml(r.error).substring(0,200) + '</div>';
       }
     });
-    el.innerHTML = (timelineHtml || '') + h;
+    el.innerHTML = timelineRuns.length > 0 ? timelineHtml : h;
   } catch(e) {
     var el = document.getElementById('cron-runs-' + jobId);
     if (el) el.innerHTML = '<div style="color:var(--text-error);">Could not load run history (' + escHtml(String(e.message||e)) + '). The endpoint may be unreachable or your gateway is offline.</div>';
