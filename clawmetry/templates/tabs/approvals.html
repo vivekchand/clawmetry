@@ -398,35 +398,58 @@
     } catch(e) { alert('Failed: ' + e); }
   };
 
-  /* ── Approval row renderer (kept from v1) ── */
+  /* ── Approval row renderer ──
+   * Phase 1.2 (#1343): richer per-row context.
+   *   - Pretty-printed args (2-space indent, capped at 800 chars vs old 200)
+   *   - Session/node chips for spotting "always the same source" patterns
+   *   - Decision-reason input on pending rows; surfaced from history rows
+   */
   function _renderRow(r, pending) {
     var statusColors = {pending:'#f59e0b', approved:'#22c55e', denied:'#ef4444',
                         timeout:'#6b7280', expired:'#6b7280'};
     var c = statusColors[r.status] || '#6b7280';
-    var argsPreview = '';
-    try { argsPreview = JSON.stringify(r.args || {}).slice(0, 200); } catch(e) {}
+    var argsPretty = '';
+    try {
+      argsPretty = JSON.stringify(r.args || {}, null, 2);
+      if (argsPretty.length > 800) argsPretty = argsPretty.slice(0, 800) + '\n…';
+    } catch(e) {
+      try { argsPretty = JSON.stringify(r.args || {}).slice(0, 800); } catch(e2) {}
+    }
     var when = (r.requested_at || '').replace('T',' ').slice(0,19);
     var html = '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-left:3px solid ' + c + ';border-radius:8px;padding:12px 14px;margin-bottom:8px;">';
-    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">';
+    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap;">';
     html += '<span style="font-weight:700;color:var(--text-primary);font-size:13px;">' + escHtml(r.tool_name || '?') + '</span>';
     html += '<span style="background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(r.status) + '</span>';
     if (r.policy_name) {
       html += '<span style="color:var(--text-muted);font-size:11px;">rule: ' + escHtml(r.policy_name) + '</span>';
+    }
+    if (r.session_id) {
+      html += '<span style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:1px 6px;border-radius:4px;font-size:10px;font-family:var(--font-mono,monospace);">sess ' + escHtml(String(r.session_id).slice(0,8)) + '</span>';
+    }
+    if (r.node_id) {
+      html += '<span style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:1px 6px;border-radius:4px;font-size:10px;font-family:var(--font-mono,monospace);">node ' + escHtml(String(r.node_id).slice(0,8)) + '</span>';
     }
     html += '<span style="color:var(--text-faint);font-size:10px;margin-left:auto;">' + escHtml(when) + '</span>';
     html += '</div>';
     if (r.context) {
       html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">' + escHtml(r.context) + '</div>';
     }
-    html += '<pre style="margin:0;padding:8px 10px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;max-height:120px;color:var(--text-secondary);">' + escHtml(argsPreview) + '</pre>';
+    html += '<pre style="margin:0;padding:8px 10px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;max-height:200px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word;">' + escHtml(argsPretty) + '</pre>';
     if (pending) {
-      html += '<div style="display:flex;gap:8px;margin-top:10px;">';
+      html += '<div style="margin-top:10px;">';
+      html += '<input type="text" id="dec-reason-' + escHtml(r.id) + '" placeholder="Reason (optional — recorded in audit log)" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">';
+      html += '</div>';
+      html += '<div style="display:flex;gap:8px;margin-top:8px;">';
       html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" style="background:#22c55e;color:#062614;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Approve</button>';
       html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:#ef4444;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Deny</button>';
       html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
       html += '</div>';
     } else if (r.decided_by) {
-      html += '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Decided by ' + escHtml(r.decided_by) + ' at ' + escHtml((r.decided_at||'').slice(11,19)) + '</div>';
+      html += '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Decided by ' + escHtml(r.decided_by) + ' at ' + escHtml((r.decided_at||'').slice(11,19));
+      if (r.decision_reason) {
+        html += ' — <span style="font-style:italic;">' + escHtml(r.decision_reason) + '</span>';
+      }
+      html += '</div>';
     }
     html += '</div>';
     return html;
@@ -592,10 +615,18 @@
 
   /* ── Decide (approve/deny) ── */
   window.decideApproval = async function(id, action) {
+    // Phase 1.2 (#1343): pick up the optional decision-reason input rendered
+    // alongside each pending row. Backend stores it in the existing
+    // ``decision_reason`` column so the audit trail captures WHY, not just
+    // who+when. Empty input → omit field (preserves backward compat).
+    var reasonEl = document.getElementById('dec-reason-' + id);
+    var reason = reasonEl && reasonEl.value ? reasonEl.value.trim() : '';
+    var body = {action: action};
+    if (reason) body.decision_reason = reason;
     try {
       var r = await fetch('/api/cloud/approvals/' + encodeURIComponent(id) + '/decide', {
         method: 'POST', headers: _authHeaders(),
-        body: JSON.stringify({action: action})
+        body: JSON.stringify(body)
       });
       var d = await r.json();
       if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
