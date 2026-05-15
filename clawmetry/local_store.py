@@ -2348,6 +2348,77 @@ class LocalStore:
                 })
         return out
 
+    def query_tool_call_invocations(
+        self,
+        *,
+        since: str | None = None,
+        limit: int = 50_000,
+    ) -> list[dict[str, Any]]:
+        """Tier-1 MOAT: /api/plugins fast-path.
+
+        Returns one row per tool invocation since ``since`` (ISO-8601
+        timestamp), shape ``{ts, name}``. Used by ``routes/plugins.py`` to
+        count per-plugin invocations over the last 30d without re-walking
+        every session JSONL on every Plugins-tab render (the legacy scanner
+        re-opens up to 60 files per request and parses every line).
+
+        Tool-call shapes covered (matches :func:`_iter_tool_invocation_names`):
+          * Top-level events with ``event_type`` in
+            ``{'tool.call', 'toolCall', 'tool_use'}`` — uses ``data.name``.
+          * Assistant ``message`` events with
+            ``data.toolMetas[*].name`` (PR #1132 trajectory parser shape).
+          * Legacy assistant message events whose
+            ``data.message.content[*]`` carries raw
+            ``{type:'toolCall'|'tool_use', name}`` blocks (older OpenClaw
+            transcripts that pre-date PR #1132's trajectory projection).
+
+        Tool name is returned verbatim (lower-cased by the caller). Rows
+        with no extractable name are dropped.
+
+        ``limit`` clamps total returned rows; defaults to 50k which covers
+        a busy agent-month worth of tool calls. Callers should pass a 30d
+        ``since`` to keep the result set bounded.
+        """
+        try:
+            lim = int(limit)
+        except (TypeError, ValueError):
+            lim = 50_000
+        lim = max(1, min(200_000, lim))
+
+        clauses: list[str] = [
+            "(event_type IN ('tool.call', 'toolCall', 'tool_use')"
+            " OR event_type = 'message')"
+        ]
+        params: list[Any] = []
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT ts, event_type, data
+            FROM events
+            {where}
+            ORDER BY ts DESC
+            LIMIT ?
+        """
+        params.append(lim)
+
+        out: list[dict[str, Any]] = []
+        for ts, ev_type, raw in self._fetch(sql, params):
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    continue
+
+            for name in _iter_tool_invocation_names(ev_type, data):
+                out.append({"ts": ts, "name": name})
+        return out
+
     # ── flush ───────────────────────────────────────────────────────────
 
     def _flusher_loop(self) -> None:
@@ -4027,6 +4098,60 @@ def _iter_read_tool_paths(event_type: str | None, data: dict) -> Iterable[str]:
                 p = _path_from_input(blk.get("input") or blk.get("arguments"))
                 if p:
                     yield p
+
+
+def _iter_tool_invocation_names(event_type: str | None, data: dict) -> Iterable[str]:
+    """Yield the tool ``name`` for every tool invocation described by
+    ``data``. Mirrors the three on-the-wire shapes
+    :func:`_iter_read_tool_paths` handles, but for ALL tool names — used
+    by :meth:`LocalStore.query_tool_call_invocations` to power the
+    /api/plugins per-plugin invocation counter.
+
+    Yields the raw name string (caller lower-cases for matching). Yields
+    nothing when the event isn't a tool call shape we recognise.
+    """
+    if not isinstance(data, dict):
+        return
+
+    et = (event_type or "").lower()
+
+    # Shape 1: top-level tool.call / toolCall / tool_use event.
+    if et in ("tool.call", "toolcall", "tool_use"):
+        name = data.get("name") or data.get("tool")
+        if isinstance(name, str) and name:
+            yield name
+        return
+
+    # Shape 2: assistant ``message`` event with ``toolMetas`` projection
+    # (PR #1132 trajectory parser shape).
+    metas = data.get("toolMetas")
+    if isinstance(metas, list):
+        for m in metas:
+            if not isinstance(m, dict):
+                continue
+            name = m.get("name") or m.get("tool")
+            if isinstance(name, str) and name:
+                yield name
+
+    # Shape 3: legacy assistant message events whose
+    # ``data.message.content`` still carries raw
+    # ``{type:'toolCall'|'tool_use'}`` blocks. Note: the legacy
+    # `_count_invocations` in routes/plugins.py only checked
+    # `block.type == 'tool_use'` (PR-#1132 shape pre-projection). We
+    # also count `toolCall` here so the fast-path matches OpenClaw's
+    # current on-disk shape — strict superset of the legacy count.
+    msg = data.get("message")
+    if isinstance(msg, dict) and msg.get("role") == "assistant":
+        content = msg.get("content")
+        if isinstance(content, list):
+            for blk in content:
+                if not isinstance(blk, dict):
+                    continue
+                if blk.get("type") not in ("toolCall", "tool_use"):
+                    continue
+                name = blk.get("name") or blk.get("tool")
+                if isinstance(name, str) and name:
+                    yield name
 
 
 def _decode_data_blob_rows(rows: Iterable[tuple], cols: list[str]) -> list[dict[str, Any]]:

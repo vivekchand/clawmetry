@@ -342,6 +342,11 @@ _DAEMON_METHODS = frozenset({
     # bucket per-skill body-fetch + linked-file-read counts via the
     # in-memory skill-paths map.
     "query_recent_read_tool_calls",
+    # Issue #1364 (MOAT Tier-1): /api/plugins per-plugin invocation
+    # counts. Replaces a 60-file × all-lines JSONL walk on every
+    # Plugins-tab render. Returns one row per tool-call so the route can
+    # bucket per-plugin counts via substring matching.
+    "query_tool_call_invocations",
     "health",
 })
 
