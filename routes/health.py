@@ -2253,12 +2253,19 @@ def _try_local_store_sandbox_status():
     Returns ``None`` if the local_store module is missing, no snapshot of
     kind 'sandbox' exists, or the row's payload doesn't decode.
     """
+    # Issue #1282: daemon-proxy first, read-only fallback for single-process boots.
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-        rows = store.query_system_snapshots(kind="sandbox", limit=1)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_system_snapshots", kind="sandbox", limit=1)
     except Exception:
-        return None
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_system_snapshots(kind="sandbox", limit=1)
+        except Exception:
+            return None
     if not rows:
         return None
     payload = rows[0].get("data")
@@ -2468,17 +2475,30 @@ def _try_local_store_loop_detection(window: int, min_repeats: int):
     Returns ``None`` when local_store is missing or no tool_call events
     exist. ``checked`` is the count of distinct sessions inspected.
     """
+    # Issue #1282: daemon-proxy first, read-only fallback for single-process boots.
+    rows: list = []
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-        rows = []
+        from routes.local_query import local_store_via_daemon
         for et in ("tool_call", "toolCall"):
             try:
-                rows.extend(store.query_events(event_type=et, limit=10000))
+                proxy_rows = local_store_via_daemon("query_events", event_type=et, limit=10000)
+                if proxy_rows:
+                    rows.extend(proxy_rows)
             except Exception:
                 continue
     except Exception:
-        return None
+        rows = []
+    if not rows:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            for et in ("tool_call", "toolCall"):
+                try:
+                    rows.extend(store.query_events(event_type=et, limit=10000))
+                except Exception:
+                    continue
+        except Exception:
+            return None
     if not rows:
         return None
 
@@ -2757,12 +2777,19 @@ def _try_local_store_mcp_stats():
     Returns ``None`` when the local_store module is missing or no
     ``mcp_call`` events exist.
     """
+    # Issue #1282: daemon-proxy first, read-only fallback for single-process boots.
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-        rows = store.query_events(event_type="mcp_call", limit=10000)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_events", event_type="mcp_call", limit=10000)
     except Exception:
-        return None
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_events(event_type="mcp_call", limit=10000)
+        except Exception:
+            return None
     if not rows:
         return None
 
