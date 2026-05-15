@@ -590,7 +590,49 @@ async function testTelegram() {
   }
 }
 
+// Issue #1252 Phase 3 — defer SSE openings until tab dwell > 2 s.
+//
+// Before: every switchTab into 'brain' or 'logs' opened the SSE handshake
+// immediately. Users flicking through tabs to look around paid for handshakes
+// they never saw, and dangling EventSource connections piled up against the
+// browser's 6-conn-per-origin budget.
+//
+// After: dwellOpenSSE(tabName, openFn) waits 2 s before opening; if the user
+// switches AWAY from the tab in that window (cancelAllPendingSSEDwell fires
+// at the top of switchTab), the open never happens.
+//
+// Boot-time SSE opens (line ~12414) are intentionally NOT routed through
+// here — Phase 1+2 cover the "don't fetch what user can't see" case for
+// page load; Phase 3 only addresses tab-switch flicker.
+var _pendingSSEDwell = {};
+var SSE_DWELL_MS = 2000;
+
+function dwellOpenSSE(tabName, openFn, dwellMs) {
+  if (typeof dwellMs !== 'number') dwellMs = SSE_DWELL_MS;
+  if (_pendingSSEDwell[tabName]) {
+    clearTimeout(_pendingSSEDwell[tabName]);
+    _pendingSSEDwell[tabName] = null;
+  }
+  // visibilitychange handler manages backgrounded-tab SSE re-open separately.
+  if (document.hidden) return;
+  _pendingSSEDwell[tabName] = setTimeout(function() {
+    _pendingSSEDwell[tabName] = null;
+    try { openFn(); } catch (e) {}
+  }, dwellMs);
+}
+
+function cancelAllPendingSSEDwell() {
+  Object.keys(_pendingSSEDwell).forEach(function(k) {
+    if (_pendingSSEDwell[k]) {
+      clearTimeout(_pendingSSEDwell[k]);
+      _pendingSSEDwell[k] = null;
+    }
+  });
+}
+
 function switchTab(name) {
+  // Phase 3: kill any pending SSE-open dwell from the tab we're leaving.
+  cancelAllPendingSSEDwell();
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   var page = document.getElementById('page-' + name);
@@ -620,7 +662,15 @@ function switchTab(name) {
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
   if (name === 'actions') loadQAHistory();
-  if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
+  if (name === 'logs') {
+    // Phase 3 (#1252): defer the SSE handshake until the user actually
+    // dwells on the Logs tab for ≥2 s. Initial loadLogs() still fires
+    // immediately so the page paints content from cache.
+    if (!logStream || logStream.readyState === EventSource.CLOSED) {
+      dwellOpenSSE('logs', startLogStream);
+    }
+    loadLogs();
+  }
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
@@ -3627,9 +3677,11 @@ async function loadBrainPage(silent) {
       }
     }
   }
-  // After initial load, start SSE for live updates instead of polling
+  // After initial load, start SSE for live updates instead of polling.
+  // Phase 3 (#1252): defer the handshake until the user dwells on the
+  // Brain tab for ≥2 s — switching away cancels the pending open.
   if (!_brainSSE && !_brainSSEConnected) {
-    _startBrainSSE();
+    dwellOpenSSE('brain', _startBrainSSE);
   }
   // Only poll as fallback if SSE is not connected
   if (_brainRefreshTimer) clearTimeout(_brainRefreshTimer);
