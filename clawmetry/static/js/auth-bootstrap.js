@@ -3,16 +3,23 @@
 
   // Zero-click localhost auto-login: if no token in localStorage, ask the
   // server for the on-disk token (only returned on loopback). If we get one,
-  // persist it and reload so the rest of the app boots logged-in. Falls back
-  // to the manual login overlay on any error / 403 / 404 (endpoint may not be
-  // deployed yet, or the request isn't from localhost).
+  // persist it and continue inline by re-entering checkAuth with the token.
+  // Falls back to the manual login overlay on any error / 403 / 404 (endpoint
+  // may not be deployed yet, or the request isn't from localhost).
+  //
+  // No location.reload() — the fetch shim below pulls the token from
+  // localStorage on the next /api/* call, so subsequent fetches authenticate
+  // without restarting the page. Reloading here also breaks Playwright/E2E
+  // harnesses, which observe the load event before the bootstrap's async
+  // fetch resolves and then crash when the navigation fires under their feet
+  // ("Execution context was destroyed").
   if(!stored){
     fetch('/api/auth/detected-token')
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(d){
         if(d && d.token){
           localStorage.setItem('clawmetry-token', d.token);
-          location.reload();
+          checkAuth(d.token);
         } else {
           checkAuth(null);
         }
