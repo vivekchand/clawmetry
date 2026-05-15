@@ -1,4 +1,4 @@
-.PHONY: test test-api test-e2e test-fast test-e2e-duckdb dev lint
+.PHONY: test test-api test-e2e test-fast test-e2e-duckdb dev lint lint-daemon-allowlist
 
 dev:
 	OPENCLAW_GATEWAY_TOKEN=dev-token python3 dashboard.py --port 8900
@@ -19,7 +19,16 @@ test-e2e:
 test-e2e-duckdb:
 	python3 -m pytest tests/test_e2e_duckdb_relay.py -v
 
-lint: lint-py lint-js
+lint: lint-py lint-js lint-daemon-allowlist
+
+# Issue #1267: every `local_store_via_daemon("X")` / `_ls_call("X")` call
+# in routes/ must reference a method that's in the daemon's allowlist
+# (routes/local_query.py:_DAEMON_METHODS). Catches the gap that produced
+# the 3-PR cascade #1258 → #1260 → #1266 (forgot to add new methods to
+# the allowlist; daemon returned 400; fast-paths fell through to slow
+# legacy paths; surfaced as 6 s timeouts).
+lint-daemon-allowlist:
+	@python3 scripts/lint_daemon_allowlist.py
 
 lint-py:
 	python3 -c "import ast; ast.parse(open('dashboard.py').read()); print('Python syntax OK')"
@@ -40,4 +49,4 @@ lint-js:
 	    echo "WARN: node not installed — skipping JS syntax check (CI installs node automatically)"; \
 	fi
 
-.PHONY: lint lint-py lint-js
+.PHONY: lint lint-py lint-js lint-daemon-allowlist
