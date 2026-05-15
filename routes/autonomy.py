@@ -293,12 +293,16 @@ def _try_local_store_autonomy() -> dict | None:
         from clawmetry import local_store
     except Exception:
         return None
+    # Issue #1256: route through daemon HTTP proxy. Direct get_store()
+    # raises IOException on multi-process installs (DuckDB's file lock is
+    # exclusive across processes; read_only=True doesn't bypass it).
     try:
-        # read_only=True — see crons.py for the same fix. Writable open from
-        # dashboard blocks on the sync daemon's exclusive writer lock and
-        # surfaces as the 6 s timeout cliff for /api/autonomy.
-        store = local_store.get_store(read_only=True)
-        rows = store.query_events(event_type="message", limit=5000)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_events", event_type="message", limit=5000)
+        if rows is None:
+            # Daemon unreachable → single-process fallback (tests/dev mode).
+            store = local_store.get_store(read_only=True)
+            rows = store.query_events(event_type="message", limit=5000)
     except Exception:
         return None
     if not rows:

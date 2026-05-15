@@ -67,13 +67,17 @@ def _try_local_store_alert_rules():
     Tagged with ``_source: "local_store"`` so callers (browser, integration
     tests, the cloud relay) can tell which path served them.
     """
+    # Issue #1256: route through daemon HTTP proxy. Direct get_store()
+    # raises IOException on multi-process installs (DuckDB's file lock is
+    # exclusive across processes; read_only=True doesn't bypass it).
     try:
-        from clawmetry import local_store
-        # read_only=True — see crons.py for the same fix. Writable open from
-        # dashboard blocks on the sync daemon's exclusive writer lock and
-        # surfaces as the 6 s timeout cliff for /api/alerts/rules.
-        store = local_store.get_store(read_only=True)
-        rows = store.query_alert_rules(limit=500)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_alert_rules", limit=500)
+        if rows is None:
+            # Daemon unreachable → single-process fallback (tests/dev mode).
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_alert_rules(limit=500)
     except Exception:
         return None
     if not rows:

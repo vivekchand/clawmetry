@@ -1162,14 +1162,17 @@ def _try_local_store_component_brain(limit: int, offset: int):
       - the events table is empty / no qualifying calls today
       - any unexpected error happens (we'd rather degrade than 500)
     """
+    # Issue #1256: route through daemon HTTP proxy. Direct get_store()
+    # raises IOException on multi-process installs (DuckDB's file lock is
+    # exclusive across processes; read_only=True doesn't bypass it).
     try:
-        from clawmetry import local_store
-    except Exception:
-        return None
-    try:
-        store = local_store.get_store()
-        # Pull a generous window — events are filtered down by ts/usage below.
-        rows = store.query_events(event_type="message", limit=2000)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_events", event_type="message", limit=2000)
+        if rows is None:
+            # Daemon unreachable → single-process fallback (tests/dev mode).
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_events(event_type="message", limit=2000)
     except Exception:
         return None
     if not rows:

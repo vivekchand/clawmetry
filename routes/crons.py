@@ -175,15 +175,12 @@ def _try_local_store_crons():
     dashboard JS treats missing/zero costs as "not yet attributed" and
     renders fine.
     """
-    try:
-        from clawmetry import local_store
-        # read_only=True — the sync daemon holds an exclusive writer lock on
-        # the DuckDB file. Opening writable from the dashboard process blocks
-        # indefinitely (surfaces as the 6 s timeout cliff per Engineer #1's
-        # MOAT trace). Read-only opens succeed even while the writer is active.
-        store = local_store.get_store(read_only=True)
-        rows = store.query_crons(limit=500)
-    except Exception:
+    # Issue #1256: route through _ls_call (daemon HTTP proxy first, direct
+    # open as single-process fallback). Direct get_store() always raised
+    # IOException on multi-process installs because DuckDB's file lock is
+    # exclusive across processes — the read_only=True hint doesn't help.
+    rows = _ls_call("query_crons", limit=500)
+    if rows is None:
         return None
     if not rows:
         return None
@@ -213,15 +210,9 @@ def _try_local_store_cron_runs(job_id):
 
     Returns ``None`` to defer to the legacy gateway/transcript fallback.
     """
-    try:
-        from clawmetry import local_store
-        # read_only=True — the sync daemon holds an exclusive writer lock on
-        # the DuckDB file. Opening writable from the dashboard process blocks
-        # indefinitely (surfaces as the 6 s timeout cliff per Engineer #1's
-        # MOAT trace). Read-only opens succeed even while the writer is active.
-        store = local_store.get_store(read_only=True)
-        evs = store.query_events(event_type="cron_run", limit=500)
-    except Exception:
+    # Issue #1256: route through _ls_call (see _try_local_store_crons).
+    evs = _ls_call("query_events", event_type="cron_run", limit=500)
+    if evs is None:
         return None
     if not evs:
         return None
@@ -259,15 +250,9 @@ def _try_local_store_cron_health_summary():
 
     Returns ``None`` on empty/missing store.
     """
-    try:
-        from clawmetry import local_store
-        # read_only=True — the sync daemon holds an exclusive writer lock on
-        # the DuckDB file. Opening writable from the dashboard process blocks
-        # indefinitely (surfaces as the 6 s timeout cliff per Engineer #1's
-        # MOAT trace). Read-only opens succeed even while the writer is active.
-        store = local_store.get_store(read_only=True)
-        rows = store.query_crons(limit=500)
-    except Exception:
+    # Issue #1256: route through _ls_call (see _try_local_store_crons).
+    rows = _ls_call("query_crons", limit=500)
+    if rows is None:
         return None
     if not rows:
         return None
