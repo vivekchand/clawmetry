@@ -17,8 +17,10 @@ Blueprint: bp_plugins
 import json
 import os
 import time
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify
+from clawmetry.config import is_local_store_read_enabled
 
 bp_plugins = Blueprint("plugins", __name__)
 
@@ -225,6 +227,93 @@ def _count_invocations(plugin_keys: frozenset, cutoff_ts: float) -> dict:
     return result
 
 
+# ── DuckDB fast-path (Tier-1 MOAT, issue #1364) ───────────────────────────
+
+
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback.
+
+    Mirrors :func:`routes.sessions._ls_call` — daemon HTTP proxy first
+    (cross-process safe; tests/dev mode without a daemon fall through to
+    a direct read-only DuckDB open). Returns ``None`` when neither path
+    can answer, so the caller defers to the legacy JSONL walker.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
+def _try_local_store_invocations(plugin_keys: frozenset, cutoff_ts: float):
+    """Tier-1 DuckDB fast path for plugin invocation counts.
+
+    Replaces the legacy JSONL walker (60 files × every line) with a
+    single SQL pull from the events table. Returns the same
+    ``{key: {count, last_ts}}`` shape :func:`_count_invocations` returns
+    (``last_ts`` in seconds-since-epoch, ``count`` only counts events
+    whose ts ≥ ``cutoff_ts``).
+
+    Returns ``None`` to defer to the legacy walker if:
+      * the daemon proxy is unreachable AND direct DuckDB open fails
+      * the events table has no tool_call rows in the 30d window
+      * any unexpected error happens (we'd rather degrade than 500)
+    """
+    if not plugin_keys:
+        return {k: {"count": 0, "last_ts": 0.0} for k in plugin_keys}
+
+    # 30d window matches the legacy ``cutoff_ts`` exactly. We pull a
+    # little extra (32d) to give last_used_ts the same "any historical
+    # invocation" semantics the JSONL walker provides — invocations
+    # outside the 30d window still update last_ts but don't contribute
+    # to the count.
+    since_dt = datetime.fromtimestamp(cutoff_ts - 2 * 86400, tz=timezone.utc)
+    since_iso = since_dt.isoformat().replace("+00:00", "Z")
+    rows = _ls_call("query_tool_call_invocations", since=since_iso, limit=50_000)
+    if rows is None:
+        return None
+
+    # Empty-shell pattern (#1266 lesson): even when the events table has
+    # no tool calls, return a populated result so the route returns
+    # ``invocations_30d=0`` instantly instead of falling through to the
+    # 5-7s JSONL walker for the same answer.
+    out = {k: {"count": 0, "last_ts": 0.0} for k in plugin_keys}
+
+    def _ts_to_seconds(ts) -> float:
+        if not ts:
+            return 0.0
+        if isinstance(ts, (int, float)):
+            return float(ts) / 1000.0 if ts > 1e12 else float(ts)
+        try:
+            return datetime.fromisoformat(
+                str(ts).replace("Z", "+00:00")
+            ).timestamp()
+        except (ValueError, TypeError):
+            return 0.0
+
+    for r in rows:
+        name = (r.get("name") or "").lower()
+        if not name:
+            continue
+        ts_secs = _ts_to_seconds(r.get("ts"))
+        for pkey in plugin_keys:
+            if pkey in name:
+                if ts_secs >= cutoff_ts:
+                    out[pkey]["count"] += 1
+                if ts_secs > out[pkey]["last_ts"]:
+                    out[pkey]["last_ts"] = ts_secs
+
+    return out
+
+
 # ── Route ─────────────────────────────────────────────────────────────────
 
 @bp_plugins.route("/api/plugins")
@@ -245,7 +334,19 @@ def api_plugins():
     now = time.time()
     cutoff_30d = now - 30 * 86400
 
-    invocations = _count_invocations(frozenset(plugins), cutoff_30d)
+    # Tier-1 DuckDB fast path (issue #1364) — opt-in via
+    # CLAWMETRY_LOCAL_STORE_READ=1. Skips the 60-file × every-line JSONL
+    # walk by reading tool-call rows from DuckDB. Falls through to the
+    # legacy walker on miss.
+    invocations = None
+    source = "jsonl_walker"
+    if is_local_store_read_enabled():
+        fast = _try_local_store_invocations(frozenset(plugins), cutoff_30d)
+        if fast is not None:
+            invocations = fast
+            source = "local_store"
+    if invocations is None:
+        invocations = _count_invocations(frozenset(plugins), cutoff_30d)
 
     result = []
     for key, info in plugins.items():
@@ -274,4 +375,5 @@ def api_plugins():
         "total": len(result),
         "unused_count": sum(1 for p in result if p["unused"]),
         "by_type": by_type,
+        "_source": source,
     })
