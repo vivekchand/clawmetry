@@ -2375,9 +2375,90 @@ function formatBrainTime(isoStr) {
   } catch(e) { return isoStr || ''; }
 }
 
+// ── Provenance pill (PR feat/brain-tab-hide-plumbing) ──────────────────
+// User messages from channel adapters arrive prefixed with a JSON block
+// like:
+//
+//     Sender (untrusted metadata):
+//     ```json
+//     {"chat_id":"telegram:...","sender":"Vivek Chand","timestamp":...}
+//     ```
+//     <real message body>
+//
+// Showing the raw JSON 3+ times per message buries the actual conversation.
+// This helper detects the prefix, parses the JSON, and renders a small
+// channel pill (📱 Telegram · Vivek Chand · 22:15  ⓘ) followed by the
+// message body. The ⓘ button toggles the original JSON inline so
+// debuggability is preserved.
+function _provenancePillHtml(meta, bodyHtml) {
+  var chatId = String(meta.chat_id || '').toLowerCase();
+  var icon = '💬';
+  var providerLabel = '';
+  // chat_id format: "<provider>:<id>"  (e.g. "telegram:8517")
+  var prov = chatId.indexOf(':') > 0 ? chatId.split(':')[0] : '';
+  if (prov && _channelIcons && _channelIcons[prov]) {
+    icon = _channelIcons[prov];
+    providerLabel = (typeof _channelDisplayName === 'function')
+      ? _channelDisplayName(prov)
+      : (prov.charAt(0).toUpperCase() + prov.slice(1));
+  }
+  var sender = meta.sender ? String(meta.sender) : '';
+  var ts = meta.timestamp;
+  var tStr = '';
+  if (ts) {
+    try {
+      var d = (typeof ts === 'number') ? new Date(ts * (ts > 1e12 ? 1 : 1000)) : new Date(ts);
+      if (!isNaN(d.getTime())) {
+        tStr = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      }
+    } catch(e) {}
+  }
+  var pillId = 'prov-' + Math.random().toString(36).slice(2, 9);
+  var parts = [icon];
+  if (providerLabel) parts.push(escHtml(providerLabel));
+  if (sender) parts.push(escHtml(sender));
+  if (tStr) parts.push(escHtml(tStr));
+  var pill =
+    '<span class="brain-provenance-pill" style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-tertiary,#1a1a2e);border:1px solid var(--border,#333);color:var(--text-muted);padding:2px 8px;border-radius:10px;font-size:10px;font-weight:500;margin-bottom:4px;font-family:ui-sans-serif,system-ui,sans-serif;">' +
+    parts.join(' · ') +
+    ' <button type="button" onclick="event.stopPropagation();var el=document.getElementById(\'' + pillId + '\');if(el){el.style.display=el.style.display===\'none\'?\'block\':\'none\';}" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:0 2px;font-size:11px;line-height:1;" title="Show raw provenance JSON">ⓘ</button>' +
+    '</span>';
+  var rawJson = '<pre id="' + pillId + '" style="display:none;background:var(--bg-tertiary,#1a1a2e);border:1px solid var(--border-primary,#333);border-radius:6px;padding:6px 10px;margin:4px 0;font-size:10px;color:var(--text-muted);overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:160px;">' + escHtml(JSON.stringify(meta, null, 2)) + '</pre>';
+  return '<div class="brain-provenance-row">' + pill + rawJson + '</div>' + (bodyHtml || '');
+}
+
+// Detects the "Sender (untrusted metadata)" / "Conversation info ..." JSON
+// prefix that channel adapters prepend to user messages. Returns
+// { meta:{...}, body:"<remaining text>" } or null.
+function _parseProvenancePrefix(s) {
+  if (!s || typeof s !== 'string') return null;
+  // Match: optional "<label> (untrusted metadata):" header, then a ```json
+  // block, then the rest is the real body. Header is optional because some
+  // payloads ship just the json fence at the top.
+  var m = s.match(/^(?:[^\n]*\(untrusted metadata\)[^\n]*\n)?\s*```json\s*([\s\S]*?)```\s*([\s\S]*)$/);
+  if (!m) return null;
+  try {
+    var meta = JSON.parse(m[1]);
+    if (!meta || typeof meta !== 'object') return null;
+    // Require at least one provenance-y key so we don't eat unrelated json.
+    if (meta.chat_id == null && meta.sender == null && meta.message_id == null) {
+      return null;
+    }
+    return { meta: meta, body: (m[2] || '').trim() };
+  } catch(e) { return null; }
+}
+
 function renderBrainDetail(detail) {
   if (!detail) return '';
   var s = detail.trim();
+  // Provenance prefix → channel pill + body
+  var prov = _parseProvenancePrefix(s);
+  if (prov) {
+    var bodyHtml = prov.body
+      ? '<span style="white-space:pre-wrap;word-break:break-word;">' + escHtml(prov.body) + '</span>'
+      : '<span style="color:var(--text-muted);font-style:italic;font-size:11px;">(no message body)</span>';
+    return _provenancePillHtml(prov.meta, bodyHtml);
+  }
   // Try JSON rendering
   var jsonMatch = s.match(/^```json\s*([\s\S]*?)```$/) || s.match(/^(\{[\s\S]*\}|\[[\s\S]*\])$/);
   if (jsonMatch) {
@@ -2829,6 +2910,20 @@ function _toggleBrainCollapsedRun(btn, key) {
   if (event && event.stopPropagation) event.stopPropagation();
 }
 
+// Plumbing event types: internal queue housekeeping that's noise to anyone
+// debugging an actual conversation. Hidden by default; toggle in the Brain
+// header reveals them. Match is case-insensitive on type AND detail to
+// catch QUEUE-OPERATION / queue_operation / "queue-operation" alike.
+function _isPlumbingEvent(ev) {
+  if (!ev) return false;
+  var t = String(ev.type || '').toLowerCase().replace(/[_-]/g, '');
+  if (t === 'queueoperation') return true;
+  // Belt-and-suspenders: some ingests stuff "queue-operation" into role/detail
+  var role = String(ev.role || '').toLowerCase().replace(/[_-]/g, '');
+  if (role === 'queueoperation') return true;
+  return false;
+}
+
 function renderBrainStream(events) {
   var el = document.getElementById('brain-stream');
   if (!el) return;
@@ -2838,6 +2933,19 @@ function renderBrainStream(events) {
   }
   if (_brainChannelFilter !== 'all') {
     filtered = filtered.filter(function(ev) { return (ev.channel || '') === _brainChannelFilter; });
+  }
+  // Plumbing toggle: hide QUEUE-OPERATION rows unless user opted in.
+  // Updates the "Show plumbing (N hidden)" label as a side-effect so the
+  // count stays in sync with whatever the current filter set surfaces.
+  var plumbingCount = filtered.filter(_isPlumbingEvent).length;
+  var countEl = document.getElementById('brain-plumbing-count');
+  if (countEl) {
+    countEl.textContent = plumbingCount > 0
+      ? (window._brainShowPlumbing ? '(' + plumbingCount + ' shown)' : '(' + plumbingCount + ' hidden)')
+      : '';
+  }
+  if (!window._brainShowPlumbing) {
+    filtered = filtered.filter(function(ev) { return !_isPlumbingEvent(ev); });
   }
   filtered = filtered.slice().sort(function(a,b){
     var ta = a.time ? new Date(a.time).getTime() : 0;
@@ -3045,7 +3153,14 @@ function renderBrainStream(events) {
       html += '</div>';
       return;  // collapsed row replaces the whole event div — no detail/turnTimeline
     }
-    html += '<div class="brain-event' + _evExpCls + '" data-evkey="' + escHtml(_evKey) + '" onclick="_toggleBrainEvent(this, this.dataset.evkey)">';
+    // Row-level visual classes: plumbing rows are de-emphasized when shown,
+    // and outbound channel rows with no body captured collapse to a thin
+    // grey one-liner ("📱 Telegram → agent (relayed)") instead of looking
+    // like the bot replied with nothing.
+    var rowCls = '';
+    if (_isPlumbingEvent(ev)) rowCls += ' brain-plumbing';
+    if (chInfo && chInfo.bodyMissing) rowCls += ' brain-relay-only';
+    html += '<div class="brain-event' + _evExpCls + rowCls + '" data-evkey="' + escHtml(_evKey) + '" onclick="_toggleBrainEvent(this, this.dataset.evkey)">';
     html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
     if (chInfo) {
