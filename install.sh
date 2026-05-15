@@ -216,8 +216,14 @@ if command -v uv >/dev/null 2>&1; then
   # native progress bar so OUR spinner is the only thing on screen.
   _step "Creating virtual environment (uv)" 2 \
     $USE_SUDO "$_UV_BIN" venv "$INSTALL_DIR" --quiet
+  # --refresh forces uv to re-fetch the PyPI index even if a cached copy
+  # exists. Without this, running install.sh seconds after a [RELEASE]
+  # auto-publish silently no-ops ("already at latest" against a stale
+  # index that doesn't list the just-published version), leaving the
+  # daemon on the OLD wheel even after the launchctl kicks below fire.
+  # Verified locally on 2026-05-15 via PR #1260 → 0.12.197 publish race.
   _step "Installing clawmetry from PyPI (uv)" 5 \
-    $USE_SUDO "$_UV_BIN" pip install --python "$INSTALL_DIR/bin/python3" --quiet --upgrade clawmetry
+    $USE_SUDO "$_UV_BIN" pip install --python "$INSTALL_DIR/bin/python3" --quiet --upgrade --refresh clawmetry
 else
   # pip path is much slower (~30s for the install alone) — make sure the
   # spinner conveys that so users don't think the script is wedged.
