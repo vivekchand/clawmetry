@@ -3696,6 +3696,90 @@ async function loadBrainPage(silent) {
 }
 
 
+// ── OTel Spans panel (MOAT issue #1364) ────────────────────────────────────
+// Lightweight read-side surface for spans we already store in DuckDB via
+// the /v1/traces OTLP receiver. Flat table — no tree, no charts. Toggle is
+// hidden until the user clicks the "Spans" button on the Brain tab; first
+// click triggers the fetch. Subsequent clicks just toggle visibility.
+var _spansPanelLoaded = false;
+function toggleSpansPanel() {
+  var panel = document.getElementById('spans-panel');
+  if (!panel) return;
+  var visible = panel.style.display !== 'none';
+  panel.style.display = visible ? 'none' : 'block';
+  if (!visible && !_spansPanelLoaded) {
+    loadSpansPanel();
+  }
+}
+
+function _spansFmtTime(unixSec) {
+  if (!unixSec) return '—';
+  try {
+    var d = new Date(Number(unixSec) * 1000);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleTimeString();
+  } catch (e) { return '—'; }
+}
+
+function _spansFmtDur(ms) {
+  if (ms == null) return '—';
+  var n = Number(ms);
+  if (!isFinite(n)) return '—';
+  if (n < 1) return '<1ms';
+  if (n < 1000) return n.toFixed(0) + 'ms';
+  return (n / 1000).toFixed(2) + 's';
+}
+
+function _spansEsc(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+async function loadSpansPanel() {
+  var wrap = document.getElementById('spans-table-wrap');
+  var countEl = document.getElementById('spans-count');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:12px;">Loading spans...</div>';
+  try {
+    var resp = await fetch('/api/spans?limit=100');
+    var data = await resp.json();
+    _spansPanelLoaded = true;
+    var spans = (data && data.spans) || [];
+    if (countEl) countEl.textContent = String(spans.length);
+    if (!spans.length) {
+      var hint = (data && data._source === 'unavailable')
+        ? 'Local store unavailable — start the sync daemon or restart with CLAWMETRY_LOCAL_STORE_READ=1.'
+        : 'No OTel spans yet. Wire an OTLP exporter to <code>/v1/traces</code> on this dashboard\'s port to start capturing.';
+      wrap.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:12px;text-align:center;line-height:1.6;">' + hint + '</div>';
+      return;
+    }
+    var rowsHtml = spans.map(function(s) {
+      var sess = s.session_id || '';
+      var sessShort = sess ? (sess.length > 12 ? sess.slice(0, 12) + '…' : sess) : '—';
+      return '<tr style="border-bottom:1px solid var(--border);">'
+        + '<td style="padding:6px 8px;color:var(--text-tertiary);font-family:monospace;white-space:nowrap;">' + _spansEsc(_spansFmtTime(s.start_time)) + '</td>'
+        + '<td style="padding:6px 8px;color:var(--text-primary);">' + _spansEsc(s.name || '—') + '</td>'
+        + '<td style="padding:6px 8px;color:var(--text-secondary);text-align:right;font-family:monospace;white-space:nowrap;">' + _spansEsc(_spansFmtDur(s.duration_ms)) + '</td>'
+        + '<td style="padding:6px 8px;color:var(--text-secondary);font-family:monospace;font-size:11px;" title="' + _spansEsc(sess) + '">' + _spansEsc(sessShort) + '</td>'
+        + '<td style="padding:6px 8px;color:var(--text-tertiary);font-size:11px;">' + _spansEsc(s.kind || '—') + '</td>'
+        + '</tr>';
+    }).join('');
+    wrap.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+      + '<thead><tr style="text-align:left;color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid var(--border);">'
+      +   '<th style="padding:4px 8px;font-weight:600;">Time</th>'
+      +   '<th style="padding:4px 8px;font-weight:600;">Name</th>'
+      +   '<th style="padding:4px 8px;font-weight:600;text-align:right;">Duration</th>'
+      +   '<th style="padding:4px 8px;font-weight:600;">Session</th>'
+      +   '<th style="padding:4px 8px;font-weight:600;">Kind</th>'
+      + '</tr></thead><tbody>' + rowsHtml + '</tbody></table>';
+  } catch (e) {
+    wrap.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:12px;">Failed to load spans: ' + _spansEsc(String(e)) + '</div>';
+  }
+}
+
+
 // ── Security Threat Detection ──────────────────────────────────────────────
 var _securityFilter = 'all';
 var _securityAllThreats = [];

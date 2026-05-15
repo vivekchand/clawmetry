@@ -325,6 +325,9 @@ _DAEMON_METHODS = frozenset({
     # in routes/nemoclaw.py — collided with the daemon's writer lock.
     # Routed through proxy so /api/nemoclaw/pending-approvals stays fast.
     "query_approvals",
+    # Issue #1364 (MOAT 1.b): surface OTel spans we already persist.
+    # Powers /api/spans + the Brain-tab "Spans" table.
+    "query_recent_spans",
     "health",
 })
 

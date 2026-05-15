@@ -2050,6 +2050,58 @@ class LocalStore:
             out.append(d)
         return out
 
+    def query_recent_spans(
+        self,
+        *,
+        limit: int = 50,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """MOAT issue #1364: read-side surface for spans we already store.
+
+        Thin convenience wrapper over :meth:`query_spans` returning the most
+        recent spans (``start_ts DESC``) optionally filtered by session.
+        Shape is purpose-built for the dashboard ``/api/spans`` endpoint and
+        the Brain-tab "Spans" table — only the columns the table renders are
+        guaranteed to be present, so we don't promise BLOB fidelity here
+        (callers wanting full ``input/output/attrs`` should hit
+        :meth:`query_spans` directly).
+
+        Args:
+          limit: Max rows to return (clamped 1-500 by the route layer).
+          session_id: Optional session filter — when set, returns spans for
+            that one OpenClaw session.
+        """
+        rows = self.query_spans(
+            session_id=session_id,
+            limit=int(limit),
+        )
+        # Project to the contract the UI table reads. Keep the BLOB columns
+        # present (already decoded by query_spans) so a future detail-drawer
+        # has them without a second round-trip.
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            out.append({
+                "span_id":         r.get("span_id"),
+                "parent_span_id":  r.get("parent_span_id"),
+                "trace_id":        r.get("trace_id"),
+                "name":            r.get("name"),
+                "kind":            r.get("kind"),
+                "session_id":      r.get("session_id"),
+                "service_name":    r.get("service_name"),
+                "start_time":      r.get("start_ts"),
+                "end_time":        r.get("end_ts"),
+                "duration_ms":     r.get("duration_ms"),
+                "status":          r.get("status"),
+                "model":           r.get("model"),
+                "tool_name":       r.get("tool_name"),
+                "cost_usd":        r.get("cost_usd"),
+                "tokens_input":    r.get("tokens_input"),
+                "tokens_output":   r.get("tokens_output"),
+                "attrs":           r.get("attributes"),
+                "events":          r.get("events"),
+            })
+        return out
+
     # ── flush ───────────────────────────────────────────────────────────
 
     def _flusher_loop(self) -> None:
