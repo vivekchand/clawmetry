@@ -3231,9 +3231,9 @@ function _buildSourcesList(events) {
 async function loadContextInspector() {
   try {
     // Fetch overview for model + token info
-    var ov = await fetch('/api/overview').then(function(r){return r.json();}).catch(function(){return {};});
+    var ov = await fetchJsonWithTimeout('/api/overview', 5000).catch(function(){return {};});
     // Fetch brain history for compaction events + turn count
-    var brain = await fetch('/api/brain-history?limit=300').then(function(r){return r.json();}).catch(function(){return {events:[]};});
+    var brain = await fetchJsonWithTimeout('/api/brain-history?limit=300', 8000).catch(function(){return {events:[]};});
     // Fetch skills for header token count. /api/skills is cloud-disabled
     // (410 Gone) — skip the network call in cloud mode and use empty totals.
     var skills = window.CLOUD_MODE
@@ -8227,7 +8227,7 @@ function initFlow() {
   // Hide unconfigured channels in the flow SVG
   hideUnconfiguredChannels(document);
 
-  fetch('/api/overview').then(function(r){return r.json();}).then(async function(d) {
+  fetchJsonWithTimeout('/api/overview', 5000).then(async function(d) {
     if (!d.model || d.model === 'unknown') {
       var fm = await resolvePrimaryModelFallback();
       if (fm && fm !== 'unknown') d.model = fm;
@@ -8424,7 +8424,7 @@ function updateFlowStats() {
   var el3 = document.getElementById('flow-active-tools');
   if (el3) el3.textContent = names.length > 0 ? names.join(', ') : '\u2014';
   if (flowStats.events % 15 === 0) {
-    fetch('/api/overview').then(function(r){return r.json();}).then(function(d) {
+    fetchJsonWithTimeout('/api/overview', 5000).then(function(d) {
       var tok = document.getElementById('flow-tokens');
       if (tok) tok.textContent = (d.mainTokens / 1000).toFixed(0) + 'K';
     }).catch(function(){});

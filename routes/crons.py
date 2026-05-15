@@ -177,7 +177,11 @@ def _try_local_store_crons():
     """
     try:
         from clawmetry import local_store
-        store = local_store.get_store()
+        # read_only=True — the sync daemon holds an exclusive writer lock on
+        # the DuckDB file. Opening writable from the dashboard process blocks
+        # indefinitely (surfaces as the 6 s timeout cliff per Engineer #1's
+        # MOAT trace). Read-only opens succeed even while the writer is active.
+        store = local_store.get_store(read_only=True)
         rows = store.query_crons(limit=500)
     except Exception:
         return None
@@ -211,7 +215,11 @@ def _try_local_store_cron_runs(job_id):
     """
     try:
         from clawmetry import local_store
-        store = local_store.get_store()
+        # read_only=True — the sync daemon holds an exclusive writer lock on
+        # the DuckDB file. Opening writable from the dashboard process blocks
+        # indefinitely (surfaces as the 6 s timeout cliff per Engineer #1's
+        # MOAT trace). Read-only opens succeed even while the writer is active.
+        store = local_store.get_store(read_only=True)
         evs = store.query_events(event_type="cron_run", limit=500)
     except Exception:
         return None
@@ -253,7 +261,11 @@ def _try_local_store_cron_health_summary():
     """
     try:
         from clawmetry import local_store
-        store = local_store.get_store()
+        # read_only=True — the sync daemon holds an exclusive writer lock on
+        # the DuckDB file. Opening writable from the dashboard process blocks
+        # indefinitely (surfaces as the 6 s timeout cliff per Engineer #1's
+        # MOAT trace). Read-only opens succeed even while the writer is active.
+        store = local_store.get_store(read_only=True)
         rows = store.query_crons(limit=500)
     except Exception:
         return None

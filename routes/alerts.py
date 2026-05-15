@@ -69,7 +69,10 @@ def _try_local_store_alert_rules():
     """
     try:
         from clawmetry import local_store
-        store = local_store.get_store()
+        # read_only=True — see crons.py for the same fix. Writable open from
+        # dashboard blocks on the sync daemon's exclusive writer lock and
+        # surfaces as the 6 s timeout cliff for /api/alerts/rules.
+        store = local_store.get_store(read_only=True)
         rows = store.query_alert_rules(limit=500)
     except Exception:
         return None
