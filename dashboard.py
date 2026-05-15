@@ -143,7 +143,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.224"
+__version__ = "0.12.226"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -1057,7 +1057,7 @@ def _pause_gateway():
     if sys.platform != 'win32':
         try:
             result = subprocess.run(
-                ["pgrep", "-f", "openclaw-gatewa"],
+                ["pgrep", "-f", "openclaw-gateway"],
                 capture_output=True,
                 text=True,
                 timeout=3,
@@ -1085,7 +1085,7 @@ def _resume_gateway():
     if sys.platform != "win32":
         try:
             result = subprocess.run(
-                ["pgrep", "-f", "openclaw-gatewa"],
+                ["pgrep", "-f", "openclaw-gateway"],
                 capture_output=True,
                 text=True,
                 timeout=3,
@@ -2536,7 +2536,7 @@ def _detect_gateway_token():
         import subprocess as _sp
 
         result = _sp.run(
-            ["pgrep", "-f", "openclaw-gatewa"],
+            ["pgrep", "-f", "openclaw-gateway"],
             capture_output=True,
             text=True,
             timeout=3,
@@ -9761,7 +9761,7 @@ def _detect_gateway_token():
     # 2. Try reading from running gateway process env (Linux only)
     try:
         import subprocess as _sp
-        result = _sp.run(['pgrep', '-f', 'openclaw-gatewa'], capture_output=True, text=True, timeout=3)
+        result = _sp.run(['pgrep', '-f', 'openclaw-gateway'], capture_output=True, text=True, timeout=3)
         for pid in result.stdout.strip().split('\n'):
             pid = pid.strip()
             if pid:
@@ -16123,6 +16123,10 @@ def cmd_uninstall(args):
     print("[ok] ClawMetry service removed.")
 
 
+_SERVER_HOST = None  # populated by _run_server; routes/meta.py reads this for the
+                     # /api/auth/detected-token bind-host gate.
+
+
 def _print_login_url_banner(port, host, token):
     """Print a one-click /auth?token= URL when GATEWAY_TOKEN is set (#1356 PR-D).
 
@@ -16143,6 +16147,8 @@ def _print_login_url_banner(port, host, token):
 
 
 def _run_server(args):
+    global _SERVER_HOST
+    _SERVER_HOST = getattr(args, "host", None)
     import sys as _sys
 
     # Windows: guard against closed/detached stdout/stderr before Flask or

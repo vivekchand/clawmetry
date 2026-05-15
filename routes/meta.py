@@ -306,6 +306,151 @@ def api_auth_check():
     return jsonify({"authRequired": True, "valid": False})
 
 
+# Loopback addresses allowed to bootstrap their auth header via
+# /api/auth/detected-token. Anything else (LAN IP, public IP, proxied request)
+# is rejected with 403 to keep the GATEWAY_TOKEN from leaking off-box.
+_LOOPBACK_ADDRS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+# Host header values accepted by the bootstrap endpoint. A browser pointed at a
+# DNS-rebound name (evil.com → 127.0.0.1) will still send Host: evil.com, so we
+# reject anything outside this set even when remote_addr is loopback.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]", "::1"})
+
+
+def _is_loopback_request(req) -> bool:
+    """Return True iff *req* originates from this machine without a proxy.
+
+    Four checks must all hold:
+
+    1. ``REMOTE_ADDR`` (read from raw WSGI environ, not the Flask attribute,
+       so a future ProxyFix wrap can't silently invert this) is one of the
+       loopback aliases above.
+    2. ``Host:`` header (sans port) is also a loopback alias — defends
+       against DNS rebinding where remote_addr is genuinely loopback but
+       the page origin is attacker-controlled.
+    3. No ``X-Forwarded-For`` / ``X-Real-IP`` / ``Forwarded`` header is
+       present. Their presence means *something* on the path declared
+       this request was proxied; even on a loopback peer we must assume
+       the original client could be remote.
+    4. The dashboard was started bound to a loopback host. If the operator
+       passed ``--host 0.0.0.0`` (LAN exposure), refuse to hand out the
+       token at all — we cannot tell from a single request whether the
+       browser is on this box or on the LAN.
+    """
+    raw_addr = (req.environ.get("REMOTE_ADDR") or "").strip().lower()
+    if raw_addr not in _LOOPBACK_ADDRS:
+        return False
+    host = (req.host or "").strip().lower()
+    if host.startswith("["):
+        # Bracketed IPv6: "[::1]" or "[::1]:8900" -> "[::1]"
+        end = host.find("]")
+        if end != -1:
+            host = host[: end + 1]
+    elif ":" in host:
+        # IPv4 / hostname with port -> strip port
+        host = host.rsplit(":", 1)[0]
+    if host not in _LOOPBACK_HOSTS:
+        return False
+    if req.headers.get("X-Forwarded-For", "").strip():
+        return False
+    if req.headers.get("X-Real-IP", "").strip():
+        return False
+    if req.headers.get("Forwarded", "").strip():
+        return False
+    if not _server_bound_loopback():
+        return False
+    return True
+
+
+def _server_bound_loopback() -> bool:
+    """Did we boot bound to a loopback host? Defaults to True when unknown.
+
+    The dashboard records its bind address in ``_d._SERVER_HOST`` when
+    served via ``cli.serve()``. If that attribute is missing (pytest /
+    ad-hoc imports), assume loopback — the test harness drives requests
+    from the same process anyway.
+    """
+    import dashboard as _d
+    bind = getattr(_d, "_SERVER_HOST", None)
+    if not bind:
+        return True
+    bind = str(bind).strip().lower()
+    return bind in _LOOPBACK_ADDRS or bind in {"", "localhost"}
+
+
+def _detected_token_source(token: str):
+    """Best-effort label for where ``token`` was sourced from.
+
+    Re-walks the same locations as ``dashboard._detect_gateway_token``
+    (env var → running gateway process → openclaw.json) and returns the
+    first match. ``"process"`` is the Linux ``/proc/<pid>/environ`` path
+    that lets us read the live gateway's env vars even when the user
+    never exported ``OPENCLAW_GATEWAY_TOKEN`` in their own shell.
+
+    Falls back to ``"openclaw.json"`` if no source can be confirmed —
+    that's the most common origin in practice and the label only drives
+    a UI hint, never a security decision.
+    """
+    import dashboard as _d
+    if not token:
+        return "openclaw.json"
+    env_token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+    if env_token and env_token == token:
+        return "env"
+    # Linux /proc-based discovery from the running openclaw-gateway process.
+    try:
+        import subprocess as _sp
+
+        result = _sp.run(
+            ["pgrep", "-f", "openclaw-gateway"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        for pid in (result.stdout or "").strip().split("\n"):
+            pid = pid.strip()
+            if not pid:
+                continue
+            try:
+                with open(f"/proc/{pid}/environ", "r") as f:
+                    env_data = f.read()
+            except (PermissionError, FileNotFoundError, OSError):
+                continue
+            for entry in env_data.split("\0"):
+                if entry.startswith("OPENCLAW_GATEWAY_TOKEN="):
+                    if entry.split("=", 1)[1] == token:
+                        return "process"
+    except Exception:
+        pass
+    # Fall through: assume openclaw.json (or one of the other config files
+    # _detect_gateway_token scans). We don't re-read the file just to
+    # confirm — the label is informational, and `_d.GATEWAY_TOKEN` being
+    # populated already proves *some* discovery path succeeded.
+    return "openclaw.json"
+
+
+@bp_auth.route("/api/auth/detected-token")
+def api_auth_detected_token():
+    """Return the locally-detected gateway token to bootstrap the dashboard.
+
+    Solves a chicken-and-egg problem: the dashboard JS needs the token
+    *before* it can send any authenticated request, but the token lives
+    in OpenClaw's config — not in the browser. This endpoint hands the
+    token back to the page on first load, but ONLY when the request is
+    provably loopback-local and unproxied. Anything else gets 403.
+
+    Intentionally callable without an Authorization header — this IS
+    the bootstrap.
+    """
+    import dashboard as _d
+    if not _is_loopback_request(request):
+        return jsonify({"error": "localhost only"}), 403
+    token = getattr(_d, "GATEWAY_TOKEN", None)
+    if not token:
+        return jsonify({"error": "no token detected"}), 404
+    return jsonify({"token": token, "source": _detected_token_source(token)})
+
+
 @bp_auth.route("/auth")
 def auth_token():
     """Accept ?token=XXX, store in localStorage via JS, redirect to /.
