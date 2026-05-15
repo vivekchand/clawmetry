@@ -2086,6 +2086,20 @@ class LocalStore:
                 if self._ring:
                     self._ring.popleft()
         self._last_flush_ts = time.monotonic()
+        # Issue #1343 Phase 2.2 — kick the approvals watcher when a tool_call
+        # row just landed. The watcher_loop reads from DuckDB; the COMMIT
+        # above is what makes the row visible to it. Kicking before the
+        # commit would race the watcher to an empty read. Coalesces inside
+        # approvals._kick_event so a 50-event burst → 1 wakeup.
+        for e in batch:
+            et = e.get("event_type")
+            if et == "tool_call" or et == "toolCall":
+                try:
+                    from clawmetry import approvals as _approvals
+                    _approvals.watcher_kick()
+                except Exception:
+                    pass  # partial install / approvals.py not importable
+                break  # one kick per batch; coalesces N events into 1 wake
         return len(rows)
 
     # ── queries ─────────────────────────────────────────────────────────
