@@ -321,6 +321,10 @@ _DAEMON_METHODS = frozenset({
     "query_channel_messages",
     "query_channel_threads",
     "query_channel_summary",
+    # Issue #1282: NeMoClaw approvals fast-path was opening DuckDB writable
+    # in routes/nemoclaw.py — collided with the daemon's writer lock.
+    # Routed through proxy so /api/nemoclaw/pending-approvals stays fast.
+    "query_approvals",
     "health",
 })
 
