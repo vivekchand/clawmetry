@@ -9862,9 +9862,9 @@ DASHBOARD_HTML = r"""
 <link rel="icon" href="/static/img/logo.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
-<script src="{{ url_for('static', filename='js/nav-dropdown.js') }}"></script>
-<script src="{{ url_for('static', filename='js/alerts.js') }}" defer></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=version) }}">
+<script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -9985,7 +9985,7 @@ DASHBOARD_HTML = r"""
 
 {% include 'tabs/logs.html' %}
 
-<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
 
 <!-- Component Detail Modal -->
@@ -10072,7 +10072,7 @@ DASHBOARD_HTML = r"""
   </div>
 </div>
 
-<script src="{{ url_for('static', filename='js/gw-setup.js') }}"></script>
+<script src="{{ url_for('static', filename='js/gw-setup.js', v=version) }}"></script>
 
 </body>
 </html>
