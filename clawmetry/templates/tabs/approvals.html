@@ -15,13 +15,35 @@
     </div>
   </div>
 
-  <!-- ═══ SECTION 1: Pending Queue (always visible at top) ═══ -->
+  <!-- 2-column layout (#1343): LEFT = review (queue + history),
+       RIGHT = configure (rules + notifications). Collapses to single
+       column below 900px so narrow viewports keep working. -->
+  <div class="approvals-2col" style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;align-items:start;">
+  <style>@media (max-width: 900px) { .approvals-2col { grid-template-columns: 1fr !important; } }</style>
+
+  <!-- ═══ LEFT COLUMN — Review (queue + history) ═══ -->
+  <div>
+
+  <!-- ═══ SECTION 1: Pending Queue (top of LEFT col) ═══ -->
   <div id="approvals-pending-section" style="margin-bottom:16px;">
     <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Pending Approvals</div>
     <div id="approvals-pending-list">
       <div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">Loading...</div>
     </div>
   </div>
+
+  <!-- ═══ SECTION 4: Recent Decisions (bottom of LEFT col) ═══ -->
+  <div>
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Recent Decisions</div>
+    <div id="approvals-history-list">
+      <div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">No history yet.</div>
+    </div>
+  </div>
+
+  </div><!-- end LEFT column -->
+
+  <!-- ═══ RIGHT COLUMN — Configure (rules + notifications) ═══ -->
+  <div>
 
   <!-- ═══ SECTION 2: Protection Rules (visual policy builder) ═══ -->
   <div style="margin-bottom:16px;">
@@ -99,13 +121,8 @@
     </div>
   </div>
 
-  <!-- ═══ SECTION 4: Recent Decisions ═══ -->
-  <div>
-    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;">Recent Decisions</div>
-    <div id="approvals-history-list">
-      <div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">No history yet.</div>
-    </div>
-  </div>
+  </div><!-- end RIGHT column -->
+  </div><!-- end .approvals-2col grid -->
 
   <!-- ═══ Upgrade Modal ═══ -->
   <div id="approvals-upgrade-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;" onclick="if(event.target===this)closeUpgradeModal()">
