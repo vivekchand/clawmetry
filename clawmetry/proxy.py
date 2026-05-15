@@ -678,6 +678,24 @@ class LoopDetector:
                 f"Loop detected: {match_count} identical requests from session "
                 f"'{session_id}' in the last {self.config.window_seconds}s"
             )
+            # Issue #1364: also persist to the shared DuckDB local store so
+            # the dashboard can surface a "Loops detected" badge. Best-effort
+            # — the proxy typically runs as its own process and the daemon
+            # owns DuckDB's writer lock; in that case the open will fail and
+            # we keep the legacy SQLite + log path. When proxy and daemon
+            # share a process (single-process dev mode, tests), the row
+            # lands in clawmetry.duckdb and the badge lights up.
+            try:
+                from clawmetry import local_store as _ls
+                _ls.get_store().ingest_loop_signal(
+                    session_id=session_id,
+                    signature=request_hash,
+                    repeat_count=match_count,
+                    severity="warning",
+                    details={"window_seconds": self.config.window_seconds},
+                )
+            except Exception as exc:  # noqa: BLE001 — never break detection
+                logger.debug("loop signal duckdb ingest skipped: %s", exc)
             return True, reason
 
         return False, ""

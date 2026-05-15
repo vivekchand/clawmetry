@@ -519,6 +519,31 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_spans_session     ON spans(session_id, start_ts)",
     "CREATE INDEX IF NOT EXISTS idx_spans_agent_ts    ON spans(agent_type, start_ts)",
     "CREATE INDEX IF NOT EXISTS idx_spans_ts          ON spans(ts)",
+    # Issue #1364 — loop-detection signals from clawmetry/proxy.py's
+    # ``LoopDetector``. Today the detector logs + writes to its private
+    # SQLite (``~/.clawmetry/proxy.db``); the dashboard had no view into
+    # those events. Persisting them here surfaces capability 2.f
+    # ("agent looping / stalling detection") in the Monte Carlo framework
+    # via /api/loop-signals + the Brain tab badge.
+    #
+    # PK is (session_id, signature) so re-detection of the same loop in
+    # the same session is an UPSERT (we keep the running ``repeat_count``
+    # and update ``last_seen``). Different sessions hitting the same
+    # signature are independent rows — looping is a per-session pathology.
+    """
+    CREATE TABLE IF NOT EXISTS loop_signals (
+        session_id     VARCHAR NOT NULL,
+        signature      VARCHAR NOT NULL,
+        repeat_count   INTEGER NOT NULL DEFAULT 1,
+        first_seen     TIMESTAMP NOT NULL,
+        last_seen      TIMESTAMP NOT NULL,
+        severity       VARCHAR DEFAULT 'warning',
+        agent_type     VARCHAR DEFAULT 'openclaw',
+        details        BLOB,
+        PRIMARY KEY (session_id, signature)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_loop_signals_last_seen ON loop_signals(last_seen DESC)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -1342,6 +1367,143 @@ class LocalStore:
                   float(sa.get("cost_usd") or 0),
                   int(sa.get("token_count") or 0),
                   data_blob, now_ms])
+
+    def ingest_loop_signal(
+        self,
+        session_id: str,
+        signature: str,
+        repeat_count: int,
+        first_seen: str | None = None,
+        last_seen: str | None = None,
+        severity: str = "warning",
+        agent_type: str = "openclaw",
+        details: Any = None,
+    ) -> None:
+        """Upsert one loop-detection signal (issue #1364).
+
+        Called from ``clawmetry.proxy.LoopDetector`` whenever a request
+        pattern repeats often enough within the configured window to
+        flag a loop. PK is ``(session_id, signature)`` so the same
+        loop pattern recurring in the same session bumps ``repeat_count``
+        and refreshes ``last_seen`` instead of creating a new row —
+        callers pass the latest cumulative count.
+
+        ``first_seen`` / ``last_seen`` accept ISO-8601 strings; if absent
+        we stamp ``time.time()`` for both. ``details`` is any
+        JSON-friendly value (e.g. ``{"model": "...", "request_hash": ...}``)
+        and is stored as a BLOB so the route can hydrate it back into the
+        UI without a fixed schema.
+
+        Permissive — never raises on bad input; we drop the write rather
+        than crash the proxy. The detector is on the request hot path."""
+        if not session_id or not signature:
+            return
+        try:
+            count = int(repeat_count or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count <= 0:
+            return
+        # Use local-naive time so the value compares apples-to-apples with
+        # ``current_timestamp - INTERVAL`` in ``query_recent_loop_signals``
+        # (DuckDB's TIMESTAMP column has no zone; mixing UTC strings with
+        # TZ-aware ``current_timestamp`` shifts rows out of the window on
+        # any host whose local TZ != UTC).
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        first = first_seen or now_iso
+        last = last_seen or now_iso
+        sev = (severity or "warning").strip()[:32]
+        atype = (agent_type or "openclaw").strip()[:64]
+        details_blob = _to_blob(details) if details is not None else None
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO loop_signals (
+                    session_id, signature, repeat_count,
+                    first_seen, last_seen, severity, agent_type, details
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (session_id, signature) DO UPDATE SET
+                    repeat_count = GREATEST(loop_signals.repeat_count, excluded.repeat_count),
+                    last_seen    = GREATEST(loop_signals.last_seen, excluded.last_seen),
+                    first_seen   = LEAST(loop_signals.first_seen, excluded.first_seen),
+                    severity     = excluded.severity,
+                    agent_type   = excluded.agent_type,
+                    details      = COALESCE(excluded.details, loop_signals.details)
+            """, [
+                str(session_id)[:128],
+                str(signature)[:256],
+                count,
+                first,
+                last,
+                sev,
+                atype,
+                details_blob,
+            ])
+
+    def query_recent_loop_signals(
+        self,
+        *,
+        limit: int = 20,
+        since_minutes: int = 60,
+    ) -> list[dict[str, Any]]:
+        """Return recent loop-detection signals, newest first (issue #1364).
+
+        Filters to rows whose ``last_seen`` falls within the last
+        ``since_minutes`` minutes; pass ``since_minutes <= 0`` to disable
+        the window and return any row regardless of age. ``limit`` is
+        clamped to ``[1, 200]``."""
+        try:
+            lim = int(limit)
+        except (TypeError, ValueError):
+            lim = 20
+        lim = max(1, min(200, lim))
+        try:
+            window_min = int(since_minutes)
+        except (TypeError, ValueError):
+            window_min = 60
+        clauses: list[str] = []
+        params: list[Any] = []
+        if window_min > 0:
+            # Cast both sides to naive TIMESTAMP so the comparison stays in
+            # local wall-clock — same convention the writer uses.
+            clauses.append(
+                "last_seen >= (current_timestamp::TIMESTAMP - INTERVAL (? * 60) SECOND)"
+            )
+            params.append(window_min)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT session_id, signature, repeat_count,
+                   first_seen, last_seen, severity, agent_type, details
+            FROM loop_signals
+            {where}
+            ORDER BY last_seen DESC, session_id, signature
+            LIMIT ?
+        """
+        params.append(lim)
+        cols = ["session_id", "signature", "repeat_count",
+                "first_seen", "last_seen", "severity", "agent_type", "details"]
+        out: list[dict[str, Any]] = []
+        for r in self._fetch(sql, params):
+            d = dict(zip(cols, r))
+            # Stringify timestamps so JSON serialisation is trivial — DuckDB
+            # returns ``datetime.datetime`` objects which Flask's jsonify
+            # handles, but downstream JS expects ISO strings everywhere
+            # else in the codebase.
+            for tcol in ("first_seen", "last_seen"):
+                v = d.get(tcol)
+                if hasattr(v, "isoformat"):
+                    d[tcol] = v.isoformat()
+            raw = d.get("details")
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    try:
+                        d["details"] = json.loads(text)
+                    except (ValueError, TypeError):
+                        d["details"] = text
+                except UnicodeDecodeError:
+                    d["details"] = None
+            out.append(d)
+        return out
 
     def ingest_alert_rule(self, rule: dict[str, Any]) -> None:
         """Upsert one alert rule. Required: ``id``.
