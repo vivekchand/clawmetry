@@ -1059,7 +1059,7 @@ def api_system_health():
     # --- CRON JOBS ---
     # Issue #1256: the legacy ``_gw_invoke("cron", ...)`` round-trips to the
     # OpenClaw gateway via HTTP (10s urllib timeout) and falls through to
-    # docker-exec (15s timeout) when that fails. On any user whose gateway
+# docker-exec (15s timeout) when that fails. On any user whose gateway
     # is unreachable (no OpenClaw, gateway crashed, port firewalled) the
     # whole /api/system-health request hangs ~7-25s.
     #

@@ -172,7 +172,7 @@ def _gw_invoke(tool, args=None):
         except Exception:
             pass
 
-    # Fallback: docker exec (for Hostinger/Docker installs where gateway binds to loopback)
+# Fallback: docker exec (for Hostinger/Docker installs where gateway binds to loopback)
     if token:
         result = _gw_invoke_docker(tool, args, token)
         if result:
@@ -182,7 +182,7 @@ def _gw_invoke(tool, args=None):
 
 
 def _gw_invoke_docker(tool, args=None, token=None):
-    """Invoke gateway API via docker exec (when gateway is inside Docker)."""
+"""Invoke gateway API via docker exec (when gateway is inside Docker)."""
     try:
         container_id = (
             subprocess.check_output(
