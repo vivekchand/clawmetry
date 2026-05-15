@@ -3443,6 +3443,135 @@ class LocalStore:
                     }
         return {"input_tokens": 0}
 
+    def query_model_fallbacks(
+        self,
+        *,
+        session_limit: int = 100,
+        top: int = 10,
+    ) -> dict[str, Any]:
+        """Aggregate model/provider fallbacks across recent sessions.
+
+        Drives ``/api/fallbacks`` (Tier-1 MOAT migration). Replaces the legacy
+        path that opened up to ``session_limit`` JSONL files from disk and
+        walked them line-by-line with a Python state machine — at 100 sessions
+        × ~5 MB transcripts that's a multi-second probe even with warm cache.
+
+        Algorithm: pull every ``message`` row whose ``message.role='assistant'``
+        for the most-recent ``session_limit`` sessions (ordered by latest
+        event ts), walk each session's turns in chronological order, and
+        emit a transition each time ``model`` or ``provider`` differs from
+        the previous assistant turn. Aggregate by (from_model, from_provider,
+        to_model, to_provider) and rank by count.
+
+        Returns a payload identical to what the legacy route assembled:
+        ``{scanned, sessions_affected, top_transitions:[{from_model,
+        to_model, from_provider, to_provider, count, sessions:[sid,…]}]}``.
+
+        Empty workspace → ``{scanned:0, sessions_affected:0,
+        top_transitions:[]}`` with no exception. Caller treats that as a
+        miss and may fall through to the legacy walker (though for an
+        empty DuckDB the legacy walker also returns empty).
+        """
+        try:
+            sl = max(1, min(500, int(session_limit)))
+        except (TypeError, ValueError):
+            sl = 100
+        try:
+            tn = max(1, min(50, int(top)))
+        except (TypeError, ValueError):
+            tn = 10
+
+        # Step 1: pick the N most-recent sessions that have at least one
+        # assistant message. CTE keeps this a single round-trip.
+        sql = """
+            WITH recent_sessions AS (
+                SELECT session_id, MAX(ts) AS last_ts
+                FROM events
+                WHERE event_type = 'message' AND session_id IS NOT NULL
+                GROUP BY session_id
+                ORDER BY last_ts DESC
+                LIMIT ?
+            )
+            SELECT e.session_id, e.ts, e.data
+            FROM events e
+            INNER JOIN recent_sessions r ON e.session_id = r.session_id
+            WHERE e.event_type = 'message'
+            ORDER BY e.session_id, e.ts ASC, e.id ASC
+        """
+        rows = self._fetch(sql, [sl])
+
+        # Step 2: walk per-session in Python. DuckDB JSON extract on a
+        # nested path varies across versions; the deserialise+walk loop
+        # is unambiguous and stays under millisecond per session.
+        scanned_sids: set[str] = set()
+        affected_sids: set[str] = set()
+        pair_counts: dict[tuple, dict] = {}
+        prev_model: str | None = None
+        prev_provider: str | None = None
+        prev_sid: str | None = None
+
+        for sid, ts, raw in rows:
+            scanned_sids.add(sid)
+            if sid != prev_sid:
+                # New session — reset state machine.
+                prev_model = None
+                prev_provider = None
+                prev_sid = sid
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    continue
+            msg = data.get("message") if isinstance(data.get("message"), dict) else data
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") != "assistant":
+                continue
+            model = (msg.get("model") or "").strip()
+            provider = (msg.get("provider") or "").strip()
+            if prev_model is not None and model and (
+                model != prev_model or provider != prev_provider
+            ):
+                key = (prev_model, prev_provider, model, provider)
+                bucket = pair_counts.get(key)
+                if bucket is None:
+                    bucket = {"count": 0, "sessions": []}
+                    pair_counts[key] = bucket
+                bucket["count"] += 1
+                if sid not in bucket["sessions"]:
+                    bucket["sessions"].append(sid)
+                affected_sids.add(sid)
+            if model:
+                prev_model = model
+                prev_provider = provider
+            elif prev_model is None:
+                prev_model = ""
+                prev_provider = ""
+
+        ranked = sorted(
+            pair_counts.items(), key=lambda x: x[1]["count"], reverse=True
+        )[:tn]
+        top_transitions = [
+            {
+                "from_model":    k[0],
+                "from_provider": k[1],
+                "to_model":      k[2],
+                "to_provider":   k[3],
+                "count":         v["count"],
+                "sessions":      v["sessions"][:10],
+            }
+            for k, v in ranked
+        ]
+        return {
+            "scanned":           len(scanned_sids),
+            "sessions_affected": len(affected_sids),
+            "top_transitions":   top_transitions,
+        }
+
     def query_session_model_journey(
         self,
         *,

@@ -3927,6 +3927,28 @@ def api_session_model_transitions(sid):
     )
 
 
+def _try_local_store_fallbacks(limit: int, top: int):
+    """Tier-1 DuckDB fast path for /api/fallbacks.
+
+    Routes the model/provider transition aggregator through the daemon
+    LocalStore proxy (``query_model_fallbacks``). Returns the response
+    payload on success, ``None`` to defer to the legacy JSONL walker
+    when the store is empty or unreachable.
+
+    "Empty workspace" is intentionally a defer (None), not an empty
+    payload — on first install the DuckDB has zero events but the
+    legacy walker can still find rows via the on-disk JSONL files,
+    which is the more useful default while the daemon backfills.
+    """
+    payload = _ls_call("query_model_fallbacks", session_limit=limit, top=top)
+    if not isinstance(payload, dict):
+        return None
+    if not payload.get("scanned"):
+        return None
+    payload["_source"] = "local_store"
+    return payload
+
+
 @bp_sessions.route("/api/fallbacks")
 def api_fallbacks():
     """Aggregate model/provider fallback summary across recent sessions.
@@ -3947,6 +3969,14 @@ def api_fallbacks():
         top = max(1, min(50, int(request.args.get("top", 10))))
     except (TypeError, ValueError):
         top = 10
+
+    # Tier-1 DuckDB fast path — opt-in via CLAWMETRY_LOCAL_STORE_READ=1.
+    # Falls through to the legacy JSONL walker when the store is empty
+    # / unreachable, so first-install dashboards never go blank.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_fallbacks(limit, top)
+        if fast is not None:
+            return jsonify(fast)
 
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
