@@ -175,17 +175,45 @@ def _try_local_store_heartbeat(interval, now):
     as outcome="ok". The session-transcript fallback retains its richer
     ok/action classification when the daemon isn't writing local rows.
     """
+    # Issue #1291 cliff #5 (final): route through daemon HTTP proxy. The
+    # previous direct ``local_store.get_store()`` open collided with the
+    # sync daemon's exclusive DuckDB lock under standard installs (per
+    # memory `reference_duckdb_process_lock.md`), forcing fall-through to
+    # the legacy session-transcript scanner → 2.9s p95 the latency probe
+    # (#1287) surfaced for ``heartbeat.api_heartbeat``.
+    rows = None
     try:
-        from clawmetry import local_store
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_heartbeats", limit=500)
     except Exception:
-        return None
-    try:
-        store = local_store.get_store()
-        rows = store.query_heartbeats(limit=500)
-    except Exception:
-        return None
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_heartbeats(limit=500)
+        except Exception:
+            return None
     if not rows:
-        return None
+        # Empty heartbeats table is a legitimate "daemon hasn't pinged
+        # yet" — don't fall through to the legacy scanner; surface "never"
+        # via the populated shell so the UI knows to show no-data state.
+        return {
+            "status":            "never",
+            "interval_seconds":  interval,
+            "last_heartbeat_ts": 0,
+            "age_seconds":       None,
+            "last_outcome":      None,
+            "expected_beats":    max(1, 86400 // interval) if interval > 0 else 48,
+            "actual_beats":      0,
+            "on_time_ratio":     0.0,
+            "beats_24h":         0,
+            "ok_count":          0,
+            "action_count":      0,
+            "ok_ratio":          1.0,
+            "recent_beats":      [],
+            "_source":           "local_store",
+        }
 
     cutoff_24h = now - 86400
     beats = []
