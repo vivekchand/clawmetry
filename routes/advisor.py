@@ -113,15 +113,25 @@ def _try_local_store_advisor_context(limit_events: int = MAX_CONTEXT_EVENTS) -> 
       - the events table is empty
       - any unexpected error happens (we'd rather degrade than 500)
     """
+    # Issue #1282 / memory `feedback_daemon_proxy_pattern.md`: the sync
+    # daemon holds an exclusive writer lock on the DuckDB file in the
+    # multi-process install case (launchd/systemd), so a direct
+    # ``local_store.get_store()`` open here races the daemon and either
+    # raises ``IOException`` or hangs. Ask the daemon over HTTP first;
+    # fall back to a direct read-only open for single-process boots
+    # (tests, dev mode).
     try:
-        from clawmetry import local_store
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_events", limit=limit_events)
     except Exception:
-        return None
-    try:
-        store = local_store.get_store()
-        rows = store.query_events(limit=limit_events)
-    except Exception:
-        return None
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_events(limit=limit_events)
+        except Exception:
+            return None
     if not rows:
         return None
 
@@ -443,11 +453,18 @@ def _try_local_store_advisor_status() -> dict | None:
 
     Returns ``None`` to defer when local_store import fails or any error.
     """
+    # Issue #1282: read-only smoke probe. Daemon-proxy first (no lock
+    # contention with the writer); direct read-only open as fallback for
+    # single-process boots.
     try:
-        from clawmetry import local_store
-        local_store.get_store()  # smoke check — raises if DuckDB inaccessible
+        from routes.local_query import local_store_via_daemon
+        local_store_via_daemon("query_events", limit=1)
     except Exception:
-        return None
+        try:
+            from clawmetry import local_store
+            local_store.get_store(read_only=True)
+        except Exception:
+            return None
     mode, credential = _load_anthropic_auth()
     return {
         "available": bool(credential),
