@@ -60,12 +60,47 @@ _CLUSTER_CACHE_TTL_SECONDS = 120
 # ────────────────────────────────────────────────────────────────────────────
 
 
+class _DaemonProxyStore:
+    """Drop-in shim that mimics the LocalStore .query_* API by forwarding
+    each call through ``local_store_via_daemon``. Used so the 7 callers in
+    this module that do ``store = _ls_get_store(); store.query_X(...)``
+    don't each need their own daemon-proxy plumbing.
+
+    Issue #1291 cliff #3: a writable ``get_store()`` collided with the
+    sync daemon's exclusive DuckDB lock — the entire usage module was
+    silently falling through to the legacy sqlite scanners (the 6.6s p95
+    the latency probe surfaced for ``usage.api_anomalies``).
+    """
+    def __getattr__(self, method_name):
+        # Only proxy ``query_*`` methods (the read-side surface).
+        if not method_name.startswith("query_"):
+            raise AttributeError(method_name)
+        from routes.local_query import local_store_via_daemon
+
+        def _call(**kwargs):
+            return local_store_via_daemon(method_name, **kwargs)
+        return _call
+
+
 def _ls_get_store():
-    """Lazy-import the local store. Centralised so a missing duckdb wheel
-    only blows up once (and we swallow it gracefully)."""
+    """Return a store-like object backed by the daemon HTTP proxy when
+    the daemon is reachable; fall back to a single-process direct open
+    for tests/dev mode where no daemon is running.
+
+    Returns ``None`` if neither path is available.
+    """
+    # Prefer the daemon proxy under standard installs (daemon owns the
+    # writer lock; direct opens fail with IOException).
+    try:
+        from routes.local_query import _cached_discovery
+        if _cached_discovery():
+            return _DaemonProxyStore()
+    except Exception:
+        pass
+    # Single-process fallback (tests / dev mode without a sync daemon).
     try:
         from clawmetry import local_store
-        return local_store.get_store()
+        return local_store.get_store(read_only=True)
     except Exception:
         return None
 
