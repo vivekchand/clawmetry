@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+### MOAT batch: 7 user-visible Tier-1 bypasses → DuckDB fast-path (2026-05-15)
+Single-day push that pulls seven dashboard surfaces off the JSONL/process-stat path and onto the daemon-proxy DuckDB read path. Each migration ships with a synthetic-event E2E test that proves the round-trip (LocalStore.ingest → DuckDB → endpoint returns the expected shape). All seven are paired with `_try_local_store_*` early-returns plus the legacy fallback verbatim — no behavior regression, just latency.
+
+- **`/api/context-anatomy` Session-history bucket → DuckDB** (#1370). Replaces a 5×N JSONL scan with one indexed SQL aggregate; ~200-800ms → <5ms on busy workspaces. Drive-by: also accepts OpenClaw-native `usage.input` token shape so non-Anthropic-SDK nodes stop silent-zeroing.
+- **`/api/spans` surfaces OTel spans we already persist** (#1372 — MOAT cap 1.b structured event capture). New Brain-tab `📐 Spans` toggle, lazy-loaded from the existing `spans` table. No new ingestion — pure exposure of what the OTLP receiver was already capturing.
+- **`/api/loop-signals` exposes LoopDetector signals from clawmetry/proxy.py** (#1373 — MOAT cap 2.f loop/stall detection). New `loop_signals` DuckDB table with `(session_id, signature)` PK + upsert semantics; Brain-tab badge hidden until count > 0.
+- **Brain tab UX clean-up** (#1375). `Show plumbing` toggle (default off) hides QUEUE-OPERATION rows; provenance JSON blocks (`Conversation info (untrusted metadata): {...}`) collapse to inline channel pills (`📱 Telegram · Vivek Chand · 22:15  ⓘ`) with click-to-expand JSON. ~8 rows/Telegram-message → 2-3 rows.
+- **`/api/skills` fidelity counts → DuckDB** (#1378). Replaces a 7d × N-session JSONL scan with one SQL aggregate over `events`. New `query_recent_read_tool_calls()` handles all three on-the-wire shapes (v3 `tool.call`, trajectory `toolMetas`, legacy `data.message.content`).
+- **`/api/fallbacks` model-transition aggregator → DuckDB** (#1380). Replaces opening up to 100 transcript files per request with one CTE+walk over `events`; multi-second → ms.
+
+### Login flow hardening (issue #1356, 2026-05-15)
+- **`pgrep -f "openclaw-gatewa"` typo fix** (#1357). Four callsites in `dashboard.py` had the trailing `y` truncated, so process-env auto-detection silently returned no token; on systems without `OPENCLAW_GATEWAY_TOKEN` env var or matching config-file fallback, `GATEWAY_TOKEN` stayed `None` and `/api/auth/check` rejected every input. +4 bytes.
+- **`/api/auth/detected-token` localhost-only bootstrap endpoint** (#1359 PR-B). Returns the on-disk gateway token to a loopback caller so the dashboard JS can self-bootstrap without a 48-char manual paste. Hardened with four stacked defenses: raw WSGI `REMOTE_ADDR` (not Flask attribute, defends against future ProxyFix wrap), Host-header allowlist (DNS rebinding), reject any `Forwarded`/`X-Forwarded-*`/`X-Real-IP` (proxy markers), refuse to register when bound to non-loopback host (`--host 0.0.0.0`). 27 unit tests.
+- **Zero-click bootstrap JS** (#1358 PR-C). `auth-bootstrap.js` checks `localStorage` first; if empty, fetches `/api/auth/detected-token`, stores the result, and re-enters `checkAuth()` inline (no `location.reload()` — that broke Playwright E2E with "Execution context was destroyed", fixed in followup #1363).
+- **CLI startup banner prints one-click `/auth?token=` URL** (#1360 PR-D). When `GATEWAY_TOKEN` is detected at startup, prints `-> http://localhost:8900/auth?token=<TOKEN>  (one-click sign-in)` next to the dashboard URL. `--host 0.0.0.0` is reframed as `localhost` so the link only works from the local machine.
+- **Playwright E2E coverage for the zero-click flow** (#1361 PR-E).
+- **Hotfix: drop `location.reload()` from PR-C** (#1363). The bootstrap-IIFE-reload anti-pattern caught the entire E2E suite ERRORing at setup; re-entering `checkAuth(token)` inline keeps the token in `localStorage` for the fetch shim without pulling the navigation context out from under the fixture. P0 issue #1368 filed for a fast lint guard.
+
 ### Browser-level regression sweep (2026-05-12 evening)
 - **getattr guards for 3 endpoints returning 500** (#1077). `_estimate_usd_per_token` (routes/sessions.py: `/api/delegation-tree`), `AgentReliabilityScorer` (routes/health.py: `/api/reliability`), `_build_clusters` (routes/meta.py: `/api/clusters`). All three returned `AttributeError` 500s when the underlying helper hadn't shipped; now degrade to `{...empty data, _missing: true}` so the dashboard renders cleanly. Caught by a real-browser audit that scraped DevTools console for cloud users; complements PR clawmetry-cloud#750 which suppresses harmless 410/404 calls.
 
