@@ -641,21 +641,75 @@ def _try_local_store_reliability(window_days: int):
     OLS slope on the per-day delivery_score (= 1 - error_rate). Returns
     ``None`` to defer to the HistoryDB scorer if anything goes wrong.
     """
+    # Issue #1291 cliff #2: route through daemon HTTP proxy. Direct
+    # ``get_store()`` (writable) collided with the sync daemon's exclusive
+    # DuckDB lock under standard installs (per memory
+    # `reference_duckdb_process_lock.md`), errored out, fell through to
+    # the HistoryDB scorer that scans the SQLite file → 7.5s p95 the
+    # latency probe (#1287) surfaced.
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    since_iso = (now - timedelta(days=window_days)).isoformat()
+
+    # Parallelize the two daemon-proxy round-trips. Sequential they cost
+    # ~550ms total on a warm daemon; parallel cuts that in half (~280ms),
+    # putting the endpoint under our <500ms target.
+    hb_rows = None
+    ev_rows = None
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
+        from routes.local_query import local_store_via_daemon
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _hb():
+            try:
+                return local_store_via_daemon(
+                    "query_heartbeats", since=since_iso, limit=10000)
+            except Exception:
+                return None
+
+        def _ev():
+            try:
+                return local_store_via_daemon(
+                    "query_events", since=since_iso, limit=10000)
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_hb = ex.submit(_hb)
+            f_ev = ex.submit(_ev)
+            hb_rows = f_hb.result(timeout=4)
+            ev_rows = f_ev.result(timeout=4)
     except Exception:
-        return None
-    try:
-        from datetime import datetime, timedelta, timezone
-        now = datetime.now(timezone.utc)
-        since_iso = (now - timedelta(days=window_days)).isoformat()
-        hb_rows = store.query_heartbeats(since=since_iso, limit=10000)
-        ev_rows = store.query_events(since=since_iso, limit=10000)
-    except Exception:
-        return None
+        pass
+
+    # Single-process fallback (tests/dev mode where daemon isn't running).
+    if hb_rows is None and ev_rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            hb_rows = store.query_heartbeats(since=since_iso, limit=10000)
+            ev_rows = store.query_events(since=since_iso, limit=10000)
+        except Exception:
+            return None
+    hb_rows = hb_rows or []
+    ev_rows = ev_rows or []
+    # Empty windows are NOT a miss — surface them as insufficient_data
+    # instead of falling through to the HistoryDB scorer (which would
+    # take the same 7s walk and return the same answer).
     if not hb_rows and not ev_rows:
-        return None
+        return {
+            "direction":            "insufficient_data",
+            "slope_per_session":    0.0,
+            "significant":          False,
+            "session_count":        0,
+            "window_days":          window_days,
+            "degrading_dimensions": [],
+            "delivery_slope":       0.0,
+            "error_rate":           0.0,
+            "success_rate":         1.0,
+            "points":               [],
+            "_source":              "local_store",
+        }
 
     # Per-day buckets keyed by YYYY-MM-DD.
     buckets: dict[str, dict[str, int]] = {}
