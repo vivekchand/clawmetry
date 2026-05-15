@@ -333,6 +333,9 @@ _DAEMON_METHODS = frozenset({
     # dashboard. Read by routes/health.py:/api/loop-signals via the daemon
     # proxy so the dashboard process never opens DuckDB writable.
     "query_recent_loop_signals",
+    # Issue #1364 (MOAT 1.b): surface OTel spans we already persist.
+    # Powers /api/spans + the Brain-tab "Spans" table.
+    "query_recent_spans",
     "health",
 })
 

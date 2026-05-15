@@ -4872,7 +4872,26 @@ function clawmetryLogout(){
           <span id="brain-loops-badge-count">0</span> loops
         </button>
       </div>
-      <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <!-- MOAT #1364: surface OTel spans we already persist. Toggles the
+             #spans-panel below; defers fetch until first click so the
+             default Brain-tab paint stays unchanged for users with no
+             OTLP exporter wired up. -->
+        <button id="spans-toggle-btn" class="refresh-btn" onclick="toggleSpansPanel()" title="OpenTelemetry spans from local DuckDB">📐 Spans</button>
+        <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
+      </div>
+    </div>
+    <!-- Spans panel — hidden until the user clicks the toggle. Flat table
+         (Time | Name | Duration | Session | Kind), sorted newest-first
+         by the API. No charts, no tree — that's a follow-up surface. -->
+    <div id="spans-panel" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-size:11px;color:var(--text-muted);">OTel spans (newest first) — <span id="spans-count">0</span></span>
+        <button class="refresh-btn" onclick="loadSpansPanel()" style="font-size:10px;padding:2px 8px;">↻</button>
+      </div>
+      <div id="spans-table-wrap" style="max-height:400px;overflow-y:auto;">
+        <div style="color:var(--text-muted);padding:20px;font-size:12px;">Loading spans...</div>
+      </div>
     </div>
     <!-- Loop signals list — collapsed until the badge is clicked. -->
     <div id="brain-loops-panel" style="display:none;background:var(--bg-secondary);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:10px 14px;margin-bottom:12px;">

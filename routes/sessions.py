@@ -4000,3 +4000,62 @@ def api_fallbacks():
             "top_transitions": top_transitions,
         }
     )
+
+
+# ── /api/spans — surface OTel spans we already store (issue #1364) ─────────
+#
+# MOAT capability 1.b ("structured event capture per agent step") was
+# already half-built: routes/meta.py /v1/traces ingests OTLP into the
+# DuckDB ``spans`` table via dashboard._process_otlp_traces →
+# clawmetry.local_store.put_span. The READ side never shipped, so the
+# data sat dark. This endpoint is the smallest possible surface that
+# makes those rows visible to a human — no fancy tree, just a list — so
+# the next iteration can build a span-detail drawer on top of it.
+#
+# Daemon-proxy first, direct read fallback, empty list on total failure
+# (Steve-Jobs-style: dashboard never goes blank, never 500s on missing
+# OTLP data). A span-less workspace is a perfectly valid empty result.
+
+@bp_sessions.route("/api/spans")
+def api_spans():
+    """Return recent OTel spans from the local DuckDB ``spans`` table.
+
+    Query params:
+      * ``limit`` — max rows (default 50, clamped 1-500)
+      * ``session_id`` — optional session filter
+
+    Response shape::
+
+        {
+          "spans":   [ {span_id, parent_span_id, trace_id, name, kind,
+                        session_id, service_name, start_time, end_time,
+                        duration_ms, status, model, tool_name, cost_usd,
+                        tokens_input, tokens_output}, ... ],
+          "count":   <int>,
+          "_source": "local_store"
+        }
+
+    Graceful fallback: when the local store / daemon is unreachable we
+    return ``{"spans": [], "count": 0, "_source": "unavailable"}`` with
+    HTTP 200 so the UI table renders an empty state instead of an error
+    banner.
+    """
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(500, limit))
+    session_id = (request.args.get("session_id") or "").strip() or None
+
+    rows = _ls_call(
+        "query_recent_spans",
+        limit=limit,
+        session_id=session_id,
+    )
+    if rows is None:
+        return jsonify({"spans": [], "count": 0, "_source": "unavailable"})
+    return jsonify({
+        "spans":   rows,
+        "count":   len(rows),
+        "_source": "local_store",
+    })
