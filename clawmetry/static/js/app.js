@@ -3584,7 +3584,11 @@ async function loadBrainPage(silent) {
   if (window.CLOUD_MODE) {
     var cloudEl = document.getElementById('brain-stream');
     if (cloudEl && /Loading/i.test(cloudEl.innerText || '')) {
-      cloudEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">Live event stream is local-only. Open the dashboard on the host running OpenClaw to view brain activity.</div>';
+      cloudEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' +
+  '<div style="font-size:15px;font-weight:600;margin-bottom:6px;">🔒 Brain activity stays local — by design.</div>' +
+  '<div style="margin-bottom:8px;">Your prompts, tool calls, and reasoning never leave your machine. We only see aggregated counts.</div>' +
+  '<a href="#local-first" style="color:var(--text-link, #60a5fa);text-decoration:none;">Why local-first →</a>' + 
+  '</div>';
     }
     return;
   }
