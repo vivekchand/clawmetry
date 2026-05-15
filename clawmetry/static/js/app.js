@@ -171,7 +171,10 @@ async function loadAlertRules() {
     });
     document.getElementById('alert-rules-list').innerHTML = html;
   } catch(e) {
-    document.getElementById('alert-rules-list').textContent = 'Failed to load';
+    // Issue #1257: replace silent "Failed to load" text with an actionable
+    // Failed-to-load + Retry pattern. Mirror loadCrons / loadAutonomy / loadSystemHealth.
+    var el = document.getElementById('alert-rules-list');
+    if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">Failed to load: ' + escHtml(String(e)) + ' &nbsp;<button onclick="loadAlertRules()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button></div>';
   }
 }
 
@@ -267,7 +270,9 @@ async function loadAlertHistory() {
     });
     document.getElementById('alert-history-list').innerHTML = html;
   } catch(e) {
-    document.getElementById('alert-history-list').textContent = 'Failed to load';
+    // Issue #1257: Failed-to-load + Retry button pattern (mirror #1314/#1316).
+    var el = document.getElementById('alert-history-list');
+    if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">Failed to load: ' + escHtml(String(e)) + ' &nbsp;<button onclick="loadAlertHistory()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button></div>';
   }
 }
 
