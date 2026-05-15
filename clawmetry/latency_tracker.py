@@ -14,7 +14,18 @@ from __future__ import annotations
 import threading
 import time
 from collections import defaultdict, deque
-from typing import Any
+from typing import Any 
+
+def humanise_endpoint(raw: str) -> str:
+    """'components.api_component_tool' -> 'Components > Component Tool'."""
+    parts = raw.split(".", 1)
+    if len(parts) == 2:
+        module, func = parts
+        func = func.removeprefix("api_")
+        return (module.replace("_", " ").title()
+                + " \u203a "
+                + func.replace("_", " ").title())
+    return raw.replace("_", " ").title()
 
 _MAX_PER_ENDPOINT = 200
 _WINDOW_SECONDS = 5 * 60
@@ -55,6 +66,7 @@ def get_stats(top_n: int = 20, slow_threshold_ms: float = 500.0) -> dict[str, An
         avg = sum(ordered) / len(ordered)
         out.append({
             "endpoint": endpoint,
+            "label": humanise_endpoint(endpoint),
             "count": len(ordered),
             "p50_ms": round(p50, 1),
             "p95_ms": round(p95, 1),

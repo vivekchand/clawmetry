@@ -69,3 +69,27 @@ def test_ignores_negative_or_empty():
     latency_tracker.record("api_x", -1.0)
     stats = latency_tracker.get_stats()
     assert stats["endpoint_count"] == 0
+
+def test_humanise_known_transforms():
+    from clawmetry.latency_tracker import humanise_endpoint
+    assert humanise_endpoint("components.api_component_tool") == "Components \u203a Component Tool"
+    assert humanise_endpoint("usage.api_anomalies") == "Usage \u203a Anomalies"
+    assert humanise_endpoint("overview.api_overview") == "Overview \u203a Overview"
+
+
+def test_humanise_unknown_endpoint():
+    from clawmetry.latency_tracker import humanise_endpoint
+    assert humanise_endpoint("some_new_mod.api_fancy_thing") == "Some New Mod \u203a Fancy Thing"
+
+
+def test_humanise_no_dot_fallback():
+    from clawmetry.latency_tracker import humanise_endpoint
+    assert humanise_endpoint("standalone_func") == "Standalone Func"
+
+
+def test_get_stats_includes_label():
+    latency_tracker.record("components.api_component_tool", 100.0)
+    stats = latency_tracker.get_stats()
+    row = stats["endpoints"][0]
+    assert row["endpoint"] == "components.api_component_tool"
+    assert row["label"] == "Components \u203a Component Tool"
