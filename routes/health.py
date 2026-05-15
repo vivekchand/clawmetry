@@ -83,6 +83,46 @@ def _default_daemon_log_path():
     return os.path.join(home, "sync.log")
 
 
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback.
+
+    Mirror of ``routes/crons.py:_ls_call``. Issue #1256: the dashboard's
+    direct ``get_store().query_*`` opens raise ``IOException: Could not
+    set lock`` on the standard install (daemon owns the writer lock), so
+    we route through the daemon's HTTP proxy first and only fall back to
+    a direct open for single-process boots (tests + dev mode). Returns
+    ``None`` on miss so callers can defer to the legacy gateway path.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
+def _parse_iso_to_epoch(ts):
+    """Best-effort ISO-8601 / numeric → epoch seconds. Returns 0 on any failure."""
+    if not ts:
+        return 0
+    if isinstance(ts, (int, float)):
+        # Heuristic: values >1e12 are ms, otherwise seconds.
+        return float(ts) / 1000.0 if ts > 1e12 else float(ts)
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0
+    return 0
+
+
 def _tail_lines(path, n=DAEMON_LOG_TAIL_LINES):
     """Return the last ``n`` lines of ``path`` (or [] if missing/unreadable).
 
@@ -1017,47 +1057,96 @@ def api_system_health():
             pass
 
     # --- CRON JOBS ---
-    gw_cron_data = _d._gw_invoke("cron", {"action": "list", "includeDisabled": True})
-    crons = (
-        gw_cron_data.get("jobs", [])
-        if gw_cron_data and "jobs" in gw_cron_data
-        else _d._get_crons()
-    )
-    cron_enabled = len([j for j in crons if j.get("enabled", True)])
+    # Issue #1256: the legacy ``_gw_invoke("cron", ...)`` round-trips to the
+    # OpenClaw gateway via HTTP (10s urllib timeout) and falls through to
+    # docker-exec (15s timeout) when that fails. On any user whose gateway
+    # is unreachable (no OpenClaw, gateway crashed, port firewalled) the
+    # whole /api/system-health request hangs ~7-25s.
+    #
+    # Fast path: daemon-proxy → DuckDB query_crons. Treat ANY non-None
+    # response (including empty list) as authoritative — falling back to
+    # the gateway when DuckDB is "just empty" defeats the entire purpose.
+    # Same daemon-proxy + single-process fallback wrapper as routes/
+    # crons.py:_ls_call (shipped in PR #1258).
+    now_ts = time.time()
+    cron_source = None
+    cron_enabled = 0
     cron_ok_24h = 0
     cron_failed = []
-    now_ts = time.time()
-    for j in crons:
-        last = j.get("lastRun", {})
-        if not last:
-            continue
-        run_ts = last.get("timestamp", 0)
-        if isinstance(run_ts, str):
-            try:
-                run_ts = datetime.fromisoformat(
-                    run_ts.replace("Z", "+00:00")
-                ).timestamp()
-            except Exception:
-                run_ts = 0
-        if run_ts and (now_ts - run_ts) < 86400:
-            if last.get("exitCode", last.get("exit", 0)) == 0 and not last.get("error"):
-                cron_ok_24h += 1
-            else:
-                cron_failed.append(j.get("name", j.get("id", "unknown")))
+    crons_raw = _ls_call("query_crons", limit=500)
+    if crons_raw is not None:
+        cron_source = "daemon_proxy"
+        for r in crons_raw:
+            if r.get("enabled", True):
+                cron_enabled += 1
+            last_run_ts = _parse_iso_to_epoch(r.get("last_run_at"))
+            if last_run_ts and (now_ts - last_run_ts) < 86400:
+                status = (r.get("last_status") or "").lower()
+                if status in ("ok", "success", "completed", "done", ""):
+                    cron_ok_24h += 1
+                else:
+                    cron_failed.append(r.get("name") or r.get("cron_id") or "unknown")
+    else:
+        # Legacy gateway/file path. Only reached when the daemon proxy is
+        # unreachable AND a direct DuckDB open fails (e.g. truly fresh
+        # install with no daemon running). Bounded by the underlying
+        # _gw_invoke 10s timeout — slow but correct.
+        cron_source = "gateway"
+        gw_cron_data = _d._gw_invoke("cron", {"action": "list", "includeDisabled": True})
+        crons = (
+            gw_cron_data.get("jobs", [])
+            if gw_cron_data and "jobs" in gw_cron_data
+            else _d._get_crons()
+        )
+        cron_enabled = len([j for j in crons if j.get("enabled", True)])
+        for j in crons:
+            last = j.get("lastRun", {})
+            if not last:
+                continue
+            run_ts = last.get("timestamp", 0)
+            if isinstance(run_ts, str):
+                try:
+                    run_ts = datetime.fromisoformat(
+                        run_ts.replace("Z", "+00:00")
+                    ).timestamp()
+                except Exception:
+                    run_ts = 0
+            if run_ts and (now_ts - run_ts) < 86400:
+                if last.get("exitCode", last.get("exit", 0)) == 0 and not last.get("error"):
+                    cron_ok_24h += 1
+                else:
+                    cron_failed.append(j.get("name", j.get("id", "unknown")))
 
     # --- SUB-AGENTS (24H) ---
-    sessions = _d._get_sessions()
+    # Same daemon-proxy first / gateway-fallback ordering as crons above so
+    # we don't pay a 5-10s _gw_ws_rpc("sessions.list") penalty per request
+    # when the gateway is unreachable. Empty response from the daemon is
+    # authoritative (no sessions in the last 24h is a valid answer).
+    sessions_source = None
     sa_runs = 0
     sa_success = 0
-    for s in sessions:
-        mtime = s.get("updatedAt", 0)
-        if isinstance(mtime, (int, float)) and mtime > 1e12:
-            mtime = mtime / 1000
-        if mtime and (now_ts - mtime) < 86400:
-            sid = s.get("sessionId", "")
+    since_24h_iso = datetime.fromtimestamp(
+        now_ts - 86400, tz=timezone.utc
+    ).isoformat()
+    sess_rows = _ls_call("query_sessions", since=since_24h_iso, limit=500)
+    if sess_rows is not None:
+        sessions_source = "daemon_proxy"
+        for s in sess_rows:
+            sid = s.get("session_id") or ""
             if "subagent" in sid:
                 sa_runs += 1
                 sa_success += 1  # We don't track failure in session files currently
+    else:
+        sessions_source = "gateway"
+        for s in _d._get_sessions():
+            mtime = s.get("updatedAt", 0)
+            if isinstance(mtime, (int, float)) and mtime > 1e12:
+                mtime = mtime / 1000
+            if mtime and (now_ts - mtime) < 86400:
+                sid = s.get("sessionId", "")
+                if "subagent" in sid:
+                    sa_runs += 1
+                    sa_success += 1  # We don't track failure in session files currently
 
     sa_pct = round((sa_success / sa_runs * 100) if sa_runs > 0 else 100, 0)
 
@@ -1122,6 +1211,18 @@ def api_system_health():
             "avg_rss_mb": None,
         }
 
+    # Per-section _source markers help operators see which path served the
+    # data without changing the legacy JSON shape (top-level _source is
+    # "local_store" only when EVERY DuckDB-eligible block came from the
+    # daemon; mixed responses fall back to "mixed").
+    sources = {s for s in (cron_source, sessions_source) if s}
+    if sources == {"daemon_proxy"}:
+        top_source = "daemon_proxy"
+    elif sources:
+        top_source = "mixed"
+    else:
+        top_source = "gateway"
+
     return jsonify(
         {
             "services": services,
@@ -1131,8 +1232,13 @@ def api_system_health():
                 "enabled": cron_enabled,
                 "ok24h": cron_ok_24h,
                 "failed": cron_failed,
+                "_source": cron_source or "gateway",
             },
-            "subagents": {"runs": sa_runs, "successPct": sa_pct},
+            "subagents": {
+                "runs": sa_runs,
+                "successPct": sa_pct,
+                "_source": sessions_source or "gateway",
+            },
             "heartbeat": _d._get_heartbeat_status(),
             "sandbox": _d._detect_sandbox_metadata(),
             "inference": _d._detect_inference_metadata(),
@@ -1140,6 +1246,7 @@ def api_system_health():
             "service_status": service_status,
             "daemon": daemon_health,
             "gateway": gateway_health,
+            "_source": top_source,
         }
     )
 
@@ -1175,25 +1282,26 @@ def _query_gateway_metric_history(hours: int):
     Each row: ``{"ts": ISO8601, "rss_mb": float|None, "cpu_pct": float|None}``.
     No DuckDB / no events → empty list (NOT an error; fresh installs have no
     history yet).
+
+    Issue #1256: routes through ``_ls_call`` so the read goes via the
+    daemon's HTTP proxy under the standard install. Direct ``get_store
+    (read_only=True)`` was hanging ~2.5s waiting for the writer lock the
+    daemon already holds, which dominated the /api/system-health latency
+    even after the cron + sessions fast paths landed.
     """
-    try:
-        from clawmetry import local_store
-        store = local_store.get_store(read_only=True)
-    except Exception:
-        return []
-    try:
-        since_iso = (
-            datetime.now(timezone.utc) - timedelta(hours=int(hours))
-        ).isoformat()
-        # ``query_events`` defaults to DESC + LIMIT 500. A day at 30s with
-        # max dedupe relaxation is ≤ 2,880 rows; in practice (dedupe) we see
-        # ~50-300/day, but we ask for 10,000 to be safe and sort ASC here.
-        rows = store.query_events(
-            event_type="gateway.metric",
-            since=since_iso,
-            limit=10000,
-        )
-    except Exception:
+    since_iso = (
+        datetime.now(timezone.utc) - timedelta(hours=int(hours))
+    ).isoformat()
+    # ``query_events`` defaults to DESC + LIMIT 500. A day at 30s with max
+    # dedupe relaxation is ≤ 2,880 rows; in practice (dedupe) we see
+    # ~50-300/day, but we ask for 10,000 to be safe and sort ASC here.
+    rows = _ls_call(
+        "query_events",
+        event_type="gateway.metric",
+        since=since_iso,
+        limit=10000,
+    )
+    if rows is None:
         return []
     out = []
     for r in rows:
