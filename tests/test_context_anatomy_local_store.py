@@ -201,3 +201,87 @@ def test_query_context_window_peek_returns_session_id_and_ts(app):
     assert result["input_tokens"] == 42_000
     assert result["session_id"] == "sess-x"
     assert result["ts"] == "2026-05-15T13:00:00Z"
+
+
+# ── v3 real-shape regression (issue #1385) ────────────────────────────────
+
+
+def test_query_context_window_peek_v3_assistant_event(app):
+    """v3 real-shape regression (#1385): real OpenClaw v3 emits
+    ``event_type='assistant'`` (not ``'message'``) for the parent
+    agent turn. The token count lives at
+    ``data.message.usage.input_tokens`` — same as the legacy shape —
+    but the predicate must also accept the new event_type. Fixture
+    extracted from ``/Users/vivek/.clawmetry/clawmetry.duckdb`` on
+    2026-05-15.
+    """
+    _a, ls = app
+    store = ls.get_store()
+    store.ingest({
+        "id":         "v3-assistant-1",
+        "node_id":    "agent+Macbook-Pro-2-local",
+        "agent_id":   "main",
+        "session_id": "575597e9-f609-4e88-9c12-055392f1c107",
+        "event_type": "assistant",
+        "ts":         "2026-05-15T22:22:09.768Z",
+        # Real OpenClaw v3 ``assistant`` event payload (truncated).
+        "data": {
+            "type":     "assistant",
+            "version":  3,
+            "message": {
+                "role":  "assistant",
+                "model": "claude-opus-4-7",
+                "usage": {
+                    "input_tokens":              6,
+                    "output_tokens":             108,
+                    "cache_read_input_tokens":   18498,
+                    "cache_creation_input_tokens": 19325,
+                },
+            },
+        },
+        "model": "claude-opus-4-7",
+    })
+    _wait_flush(store)
+
+    result = store.query_context_window_peek(scan_sessions=5)
+    assert result["input_tokens"] == 6, (
+        f"v3 assistant event was not counted; result={result}"
+    )
+    assert result["session_id"] == "575597e9-f609-4e88-9c12-055392f1c107"
+
+
+def test_query_context_window_peek_v3_model_completed_event(app):
+    """v3 real-shape regression (#1385): OpenClaw v3 also emits a
+    parallel ``model.completed`` event whose token count lives at
+    ``data.promptCache.lastCallUsage.input`` — a path the legacy
+    ``data.message.usage.input_tokens`` walker missed entirely.
+    Fixture extracted from
+    ``/Users/vivek/.clawmetry/clawmetry.duckdb`` on 2026-05-15.
+    """
+    _a, ls = app
+    store = ls.get_store()
+    store.ingest({
+        "id":         "v3-mcp-1",
+        "node_id":    "agent+Macbook-Pro-2-local",
+        "agent_id":   "main",
+        "session_id": "575597e9-f609-4e88-9c12-055392f1c107",
+        "event_type": "model.completed",
+        "ts":         "2026-05-15T22:22:09.768Z",
+        # Real OpenClaw v3 ``model.completed`` event payload (verbatim).
+        "data": {
+            "type":      "model.completed",
+            "modelId":   "claude-opus-4-7",
+            "provider":  "claude-cli",
+            "promptCache": {
+                "lastCallUsage": {"input": 6, "output": 108, "total": 114},
+            },
+            "stopReason": "stop",
+        },
+        "model": "claude-opus-4-7",
+    })
+    _wait_flush(store)
+
+    result = store.query_context_window_peek(scan_sessions=5)
+    assert result["input_tokens"] == 6, (
+        f"v3 model.completed event was not counted; result={result}"
+    )

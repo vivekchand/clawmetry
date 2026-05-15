@@ -2310,10 +2310,17 @@ class LocalStore:
             lim = 50_000
         lim = max(1, min(200_000, lim))
 
-        clauses: list[str] = [
-            "(event_type IN ('tool.call', 'toolCall', 'tool_use')"
-            " OR event_type = 'message')"
-        ]
+        # Issue #1385: real OpenClaw v3 emits ``assistant`` /
+        # ``subagent:assistant`` (not bare ``message``) for the host
+        # event whose content blocks include the Read tool_use. The
+        # previous predicate matched ``message`` only, so v3 nodes
+        # silently returned zero rows. Widen to cover both legacy + v3
+        # hosts plus the standalone tool.call/toolCall/tool_use
+        # top-level events.
+        host_in = _sql_in_clause(
+            _TOOL_CALL_HOST_EVENT_TYPES + _TOOL_CALL_TOPLEVEL_EVENT_TYPES
+        )
+        clauses: list[str] = [f"event_type IN {host_in}"]
         params: list[Any] = []
         if since:
             clauses.append("ts >= ?")
@@ -2385,10 +2392,17 @@ class LocalStore:
             lim = 50_000
         lim = max(1, min(200_000, lim))
 
-        clauses: list[str] = [
-            "(event_type IN ('tool.call', 'toolCall', 'tool_use')"
-            " OR event_type = 'message')"
-        ]
+        # Issue #1385: real OpenClaw v3 emits ``assistant`` /
+        # ``subagent:assistant`` (not bare ``message``) for the host
+        # event whose content blocks include tool_use. The previous
+        # predicate matched ``message`` only, so v3 nodes silently
+        # returned zero rows for /api/plugins. Widen to cover both
+        # legacy + v3 hosts plus the standalone tool.call/toolCall/
+        # tool_use top-level events.
+        host_in = _sql_in_clause(
+            _TOOL_CALL_HOST_EVENT_TYPES + _TOOL_CALL_TOPLEVEL_EVENT_TYPES
+        )
+        clauses: list[str] = [f"event_type IN {host_in}"]
         params: list[Any] = []
         if since:
             clauses.append("ts >= ?")
@@ -3534,12 +3548,19 @@ class LocalStore:
         # Step 1: most-recent N sessions ordered by last activity. The
         # session table has updated_at; we use events for the same answer
         # so a single index lookup on ts handles it.
+        #
+        # Issue #1385: real OpenClaw v3 doesn't emit ``message``-typed
+        # events; it emits ``assistant`` and ``model.completed``. The
+        # previous filter was legacy-shape only, so v3 nodes silently
+        # returned ``input_tokens=0`` and the dashboard's
+        # /api/context-anatomy "Session history" bucket vanished.
+        ev_in = _sql_in_clause(_ASSISTANT_EVENT_TYPES)
         recent_sessions = self._fetch(
-            """
+            f"""
             SELECT session_id, MAX(ts) AS last_ts
             FROM events
             WHERE session_id IS NOT NULL
-              AND event_type = 'message'
+              AND event_type IN {ev_in}
             GROUP BY session_id
             ORDER BY last_ts DESC
             LIMIT ?
@@ -3550,14 +3571,14 @@ class LocalStore:
             sid, _last_ts = sid_row[0], sid_row[1]
             if not sid:
                 continue
-            # Step 2: walk this session's message events newest-first
-            # until we find the first non-zero reading.
+            # Step 2: walk this session's assistant-turn events
+            # newest-first until we find the first non-zero reading.
             rows = self._fetch(
-                """
+                f"""
                 SELECT ts, data
                 FROM events
                 WHERE session_id = ?
-                  AND event_type = 'message'
+                  AND event_type IN {ev_in}
                 ORDER BY ts DESC, id DESC
                 """,
                 [sid],
@@ -3572,24 +3593,7 @@ class LocalStore:
                             data = parsed
                     except (ValueError, TypeError, UnicodeDecodeError):
                         continue
-                msg = data.get("message") if isinstance(data.get("message"), dict) else {}
-                usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
-                # Sometimes OpenClaw nests usage at top level — fall through
-                if not usage:
-                    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-                if not usage:
-                    continue
-                # OpenClaw native field: "input"; Anthropic SDK echo: "input_tokens"
-                tok = (
-                    usage.get("input_tokens")
-                    or usage.get("inputTokens")
-                    or usage.get("input")
-                    or 0
-                )
-                try:
-                    tok = int(tok)
-                except (TypeError, ValueError):
-                    tok = 0
+                tok = _extract_input_tokens(data)
                 if tok > 0:
                     return {
                         "session_id":   sid,
@@ -3638,19 +3642,26 @@ class LocalStore:
 
         # Step 1: pick the N most-recent sessions that have at least one
         # assistant message. CTE keeps this a single round-trip.
-        sql = """
+        #
+        # Issue #1385: real OpenClaw v3 emits ``assistant`` /
+        # ``model.completed`` (not ``message``) for the parent agent
+        # turn. We deliberately exclude ``subagent:assistant`` — the
+        # parent-vs-subagent model difference is intentional (Task tool
+        # spawns a haiku worker from an opus parent), not a fallback.
+        ev_in = _sql_in_clause(_ASSISTANT_EVENT_TYPES)
+        sql = f"""
             WITH recent_sessions AS (
                 SELECT session_id, MAX(ts) AS last_ts
                 FROM events
-                WHERE event_type = 'message' AND session_id IS NOT NULL
+                WHERE event_type IN {ev_in} AND session_id IS NOT NULL
                 GROUP BY session_id
                 ORDER BY last_ts DESC
                 LIMIT ?
             )
-            SELECT e.session_id, e.ts, e.data
+            SELECT e.session_id, e.ts, e.data, e.event_type, e.model
             FROM events e
             INNER JOIN recent_sessions r ON e.session_id = r.session_id
-            WHERE e.event_type = 'message'
+            WHERE e.event_type IN {ev_in}
             ORDER BY e.session_id, e.ts ASC, e.id ASC
         """
         rows = self._fetch(sql, [sl])
@@ -3665,7 +3676,7 @@ class LocalStore:
         prev_provider: str | None = None
         prev_sid: str | None = None
 
-        for sid, ts, raw in rows:
+        for sid, ts, raw, ev_type, ev_model in rows:
             scanned_sids.add(sid)
             if sid != prev_sid:
                 # New session — reset state machine.
@@ -3681,15 +3692,43 @@ class LocalStore:
                         data = parsed
                 except (ValueError, TypeError, UnicodeDecodeError):
                     continue
-            msg = data.get("message") if isinstance(data.get("message"), dict) else data
-            if not isinstance(msg, dict):
+
+            # Issue #1385 — v3 ``model.completed`` events don't carry a
+            # ``data.message`` envelope, but they DO have a top-level
+            # ``modelId`` + ``provider``. Treat those as assistant turns;
+            # legacy ``message`` events keep the old ``data.message``
+            # walker. We also fall back to the row-level ``model`` column
+            # (populated by the ingestor) so router-style sessions where
+            # only the column was set still produce transitions.
+            model = ""
+            provider = ""
+            msg = data.get("message") if isinstance(data.get("message"), dict) else None
+            if msg is not None:
+                if msg.get("role") != "assistant":
+                    continue
+                model = (msg.get("model") or "").strip()
+                provider = (msg.get("provider") or "").strip()
+            elif ev_type in ("model.completed", "assistant"):
+                model = (data.get("modelId") or data.get("model") or "").strip()
+                provider = (data.get("provider") or "").strip()
+            else:
                 continue
-            if msg.get("role") != "assistant":
-                continue
-            model = (msg.get("model") or "").strip()
-            provider = (msg.get("provider") or "").strip()
+            if not model and ev_model:
+                model = str(ev_model).strip()
+            # Issue #1385: a provider-only change WITH AN EMPTY SIDE is
+            # almost always a metadata-emission inconsistency between
+            # v3 ``assistant`` (carries provider) and v3
+            # ``model.completed`` (sometimes doesn't), not a real
+            # router fallback. Skip those to avoid spurious
+            # "opus → opus (anthropic→'')" pairs in the UI. Two
+            # explicit providers (openai → openrouter) still count.
+            same_model = (model == prev_model)
+            empty_provider_flip = (
+                same_model and (not provider or not prev_provider)
+            )
             if prev_model is not None and model and (
-                model != prev_model or provider != prev_provider
+                model != prev_model
+                or (provider != prev_provider and not empty_provider_flip)
             ):
                 key = (prev_model, prev_provider, model, provider)
                 bucket = pair_counts.get(key)
@@ -4154,6 +4193,121 @@ def _duration_seconds(start_iso: str, end_iso: str) -> float:
         return max(0.0, (b - a).total_seconds())
     except (TypeError, ValueError):
         return 0.0
+
+
+# Event-type sets — issue #1385.
+#
+# Real OpenClaw v3 installs emit ``assistant`` / ``subagent:assistant`` /
+# ``model.completed`` (plus ``user``/``subagent:user``) for what the
+# legacy code generically calls a ``message``. Earlier ClawMetry
+# fast-paths filtered on ``event_type='message'`` exclusively, so on
+# v3 boxes they returned silent zeros while the legacy JSONL walker
+# masked the regression. Centralising the sets here keeps the four
+# affected query methods consistent.
+#
+# Three sets, narrowing in scope:
+#  * ``_ASSISTANT_EVENT_TYPES`` — events that carry an assistant turn we
+#    want to inspect for usage / model attribution. Excludes
+#    ``subagent:assistant`` so per-session model-fallback detection
+#    doesn't fire on parent→subagent model differences (those are
+#    intentional, not a fallback).
+#  * ``_TOOL_CALL_HOST_EVENT_TYPES`` — events whose ``data`` may contain
+#    tool invocations (assistant content blocks, ``toolMetas``, or a
+#    top-level ``tool.call``-shaped payload). Subagent assistant rows
+#    DO call tools and should count toward ``/api/skills`` and
+#    ``/api/plugins`` fidelity, so they're included here.
+#  * ``_TOOL_CALL_TOPLEVEL_EVENT_TYPES`` — top-level ``tool.call`` shape
+#    only (i.e. ``data.name`` + ``data.input`` directly, not nested in a
+#    message envelope).
+_ASSISTANT_EVENT_TYPES = (
+    "message",            # legacy / synthetic
+    "assistant",          # OpenClaw v3 main agent turn
+    "model.completed",    # OpenClaw v3 model-completion record
+)
+_TOOL_CALL_HOST_EVENT_TYPES = (
+    "message",
+    "assistant",
+    "subagent:assistant",
+    "model.completed",
+)
+_TOOL_CALL_TOPLEVEL_EVENT_TYPES = (
+    "tool.call", "toolCall", "tool_use", "tool_call",
+)
+
+
+def _sql_in_clause(values: tuple[str, ...]) -> str:
+    """Render a fixed list of literal event_type strings as a SQL IN(...)
+    clause. The values are module-level constants — never user input —
+    so it's safe to interpolate them directly. Centralised so the four
+    fast-path methods can keep their predicates in sync."""
+    return "(" + ", ".join("'" + v.replace("'", "''") + "'" for v in values) + ")"
+
+
+def _extract_input_tokens(data: dict) -> int:
+    """Pull the ``input_tokens`` count from any of the OpenClaw v3 event
+    shapes seen in the wild. Returns 0 when nothing recognisable is
+    found — caller treats that as "skip this row".
+
+    Issue #1385: ``query_context_window_peek`` was reading
+    ``data.message.usage.input_tokens`` only, which works for the
+    legacy ``message``-typed event AND for v3 ``assistant`` events
+    (which carry the same Anthropic-SDK message envelope). It does
+    NOT work for v3 ``model.completed`` events, whose token count
+    lives at ``data.promptCache.lastCallUsage.input``. This helper
+    walks every shape so the same call site handles all of them.
+
+    Shapes covered (probed in this order):
+      1. ``data.message.usage.{input_tokens,inputTokens,input}`` — both
+         the legacy synthetic ``message`` events and v3 ``assistant``
+         events carry this Anthropic-SDK message envelope.
+      2. ``data.usage.{input_tokens,inputTokens,input}`` — some
+         OpenClaw provider adapters lift ``usage`` to the data root.
+      3. ``data.promptCache.lastCallUsage.{input,input_tokens}`` —
+         OpenClaw v3 ``model.completed`` event shape.
+      4. ``data.assistantMessage.usage.{input,input_tokens}`` — drive-by
+         shape noted in PR #1370 (rare; some forked agents emit it).
+    """
+    if not isinstance(data, dict):
+        return 0
+
+    def _read_usage(usage: Any) -> int:
+        if not isinstance(usage, dict):
+            return 0
+        for key in ("input_tokens", "inputTokens", "input"):
+            v = usage.get(key)
+            if v is None:
+                continue
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                continue
+            if iv > 0:
+                return iv
+        return 0
+
+    msg = data.get("message")
+    if isinstance(msg, dict):
+        n = _read_usage(msg.get("usage"))
+        if n > 0:
+            return n
+
+    n = _read_usage(data.get("usage"))
+    if n > 0:
+        return n
+
+    pc = data.get("promptCache")
+    if isinstance(pc, dict):
+        n = _read_usage(pc.get("lastCallUsage"))
+        if n > 0:
+            return n
+
+    am = data.get("assistantMessage")
+    if isinstance(am, dict):
+        n = _read_usage(am.get("usage"))
+        if n > 0:
+            return n
+
+    return 0
 
 
 _READ_TOOL_NAMES = frozenset({"read", "readfile", "read_file"})

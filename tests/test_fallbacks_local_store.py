@@ -259,6 +259,162 @@ def test_api_fallbacks_returns_rows_from_local_store(fresh_store, monkeypatch):
     assert t["count"] == 1
 
 
+# ── v3 real-shape regression (issue #1385) ────────────────────────────────
+
+
+def _ingest_v3_assistant(
+    store, *, session_id: str, ts: str, model: str, provider: str = "anthropic"
+):
+    """Insert a real OpenClaw v3 ``event_type='assistant'`` row.
+    Same Anthropic-SDK message envelope as legacy, just under a
+    different event_type name. Fixture distilled from
+    ``/Users/vivek/.clawmetry/clawmetry.duckdb`` on 2026-05-15."""
+    store.ingest({
+        "id":         str(uuid.uuid4()),
+        "node_id":    "test-node",
+        "agent_id":   "test-agent",
+        "session_id": session_id,
+        "event_type": "assistant",
+        "ts":         ts,
+        "data": json.dumps({
+            "type":    "assistant",
+            "version": 3,
+            "message": {
+                "role":     "assistant",
+                "model":    model,
+                "provider": provider,
+                "usage":    {"input_tokens": 100, "output_tokens": 50},
+                "content":  [],
+            },
+        }),
+        "model": model,
+    })
+
+
+def _ingest_v3_model_completed(
+    store, *, session_id: str, ts: str, model: str, provider: str = "claude-cli"
+):
+    """Insert a real OpenClaw v3 ``event_type='model.completed'`` row.
+    No ``data.message`` envelope; carries ``modelId``/``provider`` at
+    the data root and ``promptCache.lastCallUsage`` for tokens."""
+    store.ingest({
+        "id":         str(uuid.uuid4()),
+        "node_id":    "test-node",
+        "agent_id":   "test-agent",
+        "session_id": session_id,
+        "event_type": "model.completed",
+        "ts":         ts,
+        "data": json.dumps({
+            "type":     "model.completed",
+            "modelId":  model,
+            "provider": provider,
+            "promptCache": {
+                "lastCallUsage": {"input": 100, "output": 50, "total": 150},
+            },
+            "stopReason": "stop",
+        }),
+        "model": model,
+    })
+
+
+def test_query_model_fallbacks_v3_assistant_event_shape(fresh_store):
+    """v3 real-shape regression (#1385): real OpenClaw v3 emits
+    ``event_type='assistant'`` (not ``'message'``). The previous
+    predicate filtered ``= 'message'`` and silently returned
+    ``scanned=0`` on every live install. Widened predicate must
+    detect the v3 transition."""
+    ls, store = fresh_store
+    sid = "v3-sess-1"
+    _ingest_v3_assistant(store, session_id=sid, ts="2026-05-15T10:00:00",
+                         model="claude-opus-4-7")
+    _ingest_v3_assistant(store, session_id=sid, ts="2026-05-15T10:01:00",
+                         model="claude-opus-4-7")
+    _ingest_v3_assistant(store, session_id=sid, ts="2026-05-15T10:02:00",
+                         model="claude-sonnet-4-7")
+    store._flush_now()
+
+    out = store.query_model_fallbacks(session_limit=10, top=10)
+    assert out["scanned"] == 1, f"v3 assistant rows ignored: {out}"
+    assert out["sessions_affected"] == 1
+    assert len(out["top_transitions"]) == 1
+    t = out["top_transitions"][0]
+    assert t["from_model"] == "claude-opus-4-7"
+    assert t["to_model"] == "claude-sonnet-4-7"
+    assert t["count"] == 1
+
+
+def test_query_model_fallbacks_v3_model_completed_shape(fresh_store):
+    """v3 real-shape regression (#1385): ``model.completed`` events
+    don't carry a ``data.message`` envelope — model lives at
+    ``data.modelId`` / ``data.provider``. Widened walker must read
+    those fields, otherwise sessions where ONLY model.completed
+    rows exist (no parallel ``assistant`` event) report no model
+    information at all."""
+    ls, store = fresh_store
+    sid = "v3-mcp-sess"
+    _ingest_v3_model_completed(store, session_id=sid,
+                               ts="2026-05-15T10:00:00",
+                               model="claude-opus-4-7",
+                               provider="claude-cli")
+    _ingest_v3_model_completed(store, session_id=sid,
+                               ts="2026-05-15T10:01:00",
+                               model="claude-haiku-4-7",
+                               provider="claude-cli")
+    store._flush_now()
+
+    out = store.query_model_fallbacks(session_limit=10, top=10)
+    assert out["scanned"] == 1
+    assert out["sessions_affected"] == 1
+    assert len(out["top_transitions"]) == 1
+    t = out["top_transitions"][0]
+    assert t["from_model"] == "claude-opus-4-7"
+    assert t["to_model"] == "claude-haiku-4-7"
+    assert t["from_provider"] == "claude-cli"
+
+
+def test_query_model_fallbacks_excludes_subagent_assistant(fresh_store):
+    """v3 real-shape regression (#1385): parent agent calling Task
+    spawns a ``subagent:assistant`` row with a different model
+    (often haiku from an opus parent). That's intentional — NOT a
+    fallback. The widened predicate must exclude
+    ``subagent:assistant`` so we don't fire false positives."""
+    ls, store = fresh_store
+    sid = "v3-mixed"
+    _ingest_v3_assistant(store, session_id=sid, ts="2026-05-15T10:00:00",
+                         model="claude-opus-4-7")
+    # Subagent emission with a different model — must be IGNORED.
+    store.ingest({
+        "id":         str(uuid.uuid4()),
+        "node_id":    "test-node",
+        "agent_id":   "test-agent",
+        "session_id": sid,
+        "event_type": "subagent:assistant",
+        "ts":         "2026-05-15T10:00:30",
+        "data": json.dumps({
+            "type":    "assistant",
+            "version": 3,
+            "message": {
+                "role":     "assistant",
+                "model":    "claude-haiku-4-5",
+                "provider": "anthropic",
+                "usage":    {"input_tokens": 100},
+                "content":  [],
+            },
+        }),
+        "model": "claude-haiku-4-5",
+    })
+    _ingest_v3_assistant(store, session_id=sid, ts="2026-05-15T10:01:00",
+                         model="claude-opus-4-7")
+    store._flush_now()
+
+    out = store.query_model_fallbacks(session_limit=10, top=10)
+    # Only opus→opus seen at the parent level; no transition.
+    assert out["sessions_affected"] == 0, (
+        f"subagent:assistant leaked into transitions: {out}"
+    )
+    assert out["top_transitions"] == []
+
+
 def test_api_fallbacks_defers_to_legacy_when_store_empty(
     fresh_store, monkeypatch, tmp_path
 ):
