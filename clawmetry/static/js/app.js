@@ -9873,6 +9873,22 @@ function openCompModal(nodeId) {
   document.getElementById('comp-modal-overlay').classList.add('open');
 }
 
+// Issue #1338: shared helper for channel-modal error renders. Mirrors the
+// Failed-to-load + Retry pattern from PRs #1314/#1316/#1337 (panel loaders),
+// adapted for the modal-body shape used by per-channel loaders.
+//   retryFn: name string of the function to invoke (becomes onclick="retryFn()")
+//   label:   human-friendly channel/feature name (e.g. 'Telegram', 'Slack')
+//   err:     thrown Error or string
+function _compModalError(retryFn, label, err) {
+  var msg = err && err.message ? err.message : String(err || '');
+  var btn = retryFn
+    ? ' <button onclick="' + retryFn + '()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button>'
+    : '';
+  var labelPart = label ? ' ' + escapeHtml(label) : '';
+  var msgPart   = msg ? ': ' + escapeHtml(msg) : '';
+  return '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load' + labelPart + msgPart + btn + '</div>';
+}
+
 function loadTelegramMessages(isRefresh) {
   var expectedNodeId = 'node-telegram';
   var url = '/api/channel/telegram?limit=50&offset=0';
@@ -9905,7 +9921,7 @@ function loadTelegramMessages(isRefresh) {
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
-      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load messages</div>';
+      document.getElementById('comp-modal-body').innerHTML = _compModalError('loadTelegramMessages', 'Telegram messages', null);
     }
   });
 }
@@ -10036,7 +10052,7 @@ function loadIMessageMessages(isRefresh) {
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
-      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load iMessages: ' + escapeHtml(e.message) + '</div>';
+      document.getElementById('comp-modal-body').innerHTML = _compModalError('loadIMessageMessages', 'iMessages', e);
     }
   });
 }
@@ -10070,7 +10086,7 @@ function loadWhatsAppMessages(isRefresh) {
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
-      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load WhatsApp messages</div>';
+      document.getElementById('comp-modal-body').innerHTML = _compModalError('loadWhatsAppMessages', 'WhatsApp messages', null);
     }
   });
 }
@@ -10104,7 +10120,7 @@ function loadSignalMessages(isRefresh) {
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
-      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load Signal messages</div>';
+      document.getElementById('comp-modal-body').innerHTML = _compModalError('loadSignalMessages', 'Signal messages', null);
     }
   });
 }
@@ -10194,7 +10210,7 @@ function loadDiscordMessages(isRefresh) {
     document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load Discord: ' + escapeHtml(e.message) + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = _compModalError('loadDiscordMessages', 'Discord', e);
   });
 }
 
@@ -10237,7 +10253,7 @@ function loadSlackMessages(isRefresh) {
     document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load Slack: ' + escapeHtml(e.message) + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = _compModalError('loadSlackMessages', 'Slack', e);
   });
 }
 
