@@ -8277,7 +8277,14 @@ function initFlow() {
   _backfillFlowFromBrain();
   _startFlowBrainStream();
 
-  setInterval(updateFlowStats, updateInterval);
+  // Lazy-load Phase 2 follow-up: this used to be a raw `setInterval(...)`
+  // unassigned to any timer var, so initFlow() leaked one new interval per
+  // visit. Capture the handle on `window._flowStatsTimer` so subsequent
+  // tab navigations can clear it (mirroring the per-tab timer pattern at
+  // app.js:606 etc.) and use visibilitySetInterval so the poll pauses when
+  // the browser tab is hidden — completes Phase 2 coverage.
+  if (window._flowStatsTimer) { try { clearInterval(window._flowStatsTimer); } catch(e){} }
+  window._flowStatsTimer = visibilitySetInterval(updateFlowStats, updateInterval);
 }
 
 // Map brain-history event types → Flow's active-tool buckets (exec/browser/
@@ -11366,7 +11373,11 @@ function _prefetchToolData() {
 }
 document.addEventListener('DOMContentLoaded', function() {
   setTimeout(_prefetchToolData, 2000); // prefetch 2s after load
-  setInterval(_prefetchToolData, 30000); // refresh cache every 30s
+  // visibilitySetInterval (PR #1270) so the cache-refresh poll pauses
+  // when the browser tab is hidden — completes the lazy-load Phase 2
+  // sweep this PR is closing out. Page-load fires once so no-leak risk
+  // (no per-visit re-arming), but the visibility-gate is still the win.
+  visibilitySetInterval(_prefetchToolData, 30000); // refresh cache every 30s
 });
 
 function openTaskModal(sessionId, taskName, sessionKey) {
