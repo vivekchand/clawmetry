@@ -69,3 +69,37 @@ def test_ignores_negative_or_empty():
     latency_tracker.record("api_x", -1.0)
     stats = latency_tracker.get_stats()
     assert stats["endpoint_count"] == 0
+
+
+def test_humanise_endpoint_static_overrides():
+    # Curated map wins over mechanical transform.
+    assert latency_tracker.humanise_endpoint(
+        "components.api_component_tool") == "Tool detail panel"
+    assert latency_tracker.humanise_endpoint(
+        "health.api_system_health") == "System health"
+    assert latency_tracker.humanise_endpoint(
+        "usage.api_anomalies") == "Cost anomalies"
+
+
+def test_humanise_endpoint_mechanical_fallback():
+    # Unknown endpoint: drop api_ prefix, ›-separated, title-cased.
+    assert latency_tracker.humanise_endpoint(
+        "newblueprint.api_something_new") == "Newblueprint › Something New"
+    # Endpoint without api_ prefix: keep func words as-is.
+    assert latency_tracker.humanise_endpoint(
+        "myblue.helper_method") == "Myblue › Helper Method"
+
+
+def test_humanise_endpoint_edge_cases():
+    # No dot at all: return as-is.
+    assert latency_tracker.humanise_endpoint("static") == "static"
+    # Empty input: return as-is.
+    assert latency_tracker.humanise_endpoint("") == ""
+
+
+def test_get_stats_includes_humanised_label():
+    latency_tracker.record("components.api_component_tool", 50.0)
+    stats = latency_tracker.get_stats()
+    row = stats["endpoints"][0]
+    assert row["endpoint"] == "components.api_component_tool"  # raw preserved
+    assert row["label"] == "Tool detail panel"  # humanised added

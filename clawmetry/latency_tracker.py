@@ -39,6 +39,62 @@ def _percentile(sorted_values: list[float], pct: float) -> float:
     return sorted_values[k]
 
 
+# Issue #1290 — humanise raw Flask blueprint:func identifiers so the
+# operator dashboard reads "Components › Component Tool" instead of the
+# unreadable internal name "components.api_component_tool". Static map
+# wins for the common dashboard surfaces (~30 endpoints); mechanical
+# transform handles the long tail without per-endpoint maintenance.
+_LABEL_OVERRIDES: dict[str, str] = {
+    "overview.api_overview":              "Main dashboard",
+    "sessions.api_sessions":              "Sessions list",
+    "sessions.api_transcript":            "Session transcript",
+    "sessions.api_subagents":             "Sub-agent tracker",
+    "components.api_component_tool":      "Tool detail panel",
+    "components.api_component_runtime":   "Runtime panel",
+    "components.api_component_machine":   "Machine panel",
+    "components.api_component_gateway":   "Gateway panel",
+    "components.api_component_brain":     "Brain panel",
+    "health.api_system_health":           "System health",
+    "health.api_reliability":             "Reliability trend",
+    "health.api_heartbeat_status":        "Heartbeat status",
+    "health.api_diagnostics":             "Diagnostics",
+    "health.api_handler_latency":         "Handler latency (this panel)",
+    "usage.api_usage":                    "Token & cost usage",
+    "usage.api_anomalies":                "Cost anomalies",
+    "usage.api_usage_anomalies":          "Usage anomalies",
+    "brain.api_brain_history":            "Brain feed (history)",
+    "brain.api_brain_stream":             "Brain feed (live)",
+    "crons.api_crons":                    "Cron jobs",
+    "alerts.api_alert_rules":             "Alert rules",
+    "channels.api_channels":              "Chat channels",
+    "heartbeat.api_heartbeat":            "Heartbeat ping (POST)",
+}
+
+
+def humanise_endpoint(endpoint: str) -> str:
+    """Convert a Flask ``blueprint.func`` identifier into a user-readable label.
+
+    1. Exact match in ``_LABEL_OVERRIDES`` wins (curated for the common
+       dashboard surfaces — most readable, zero-cost lookup).
+    2. Otherwise, mechanical transform: drop ``api_`` prefix, replace ``_``
+       with spaces, title-case each word, separate blueprint from func with
+       ``›``. Unknown endpoints get readable fallback like "Components ›
+       Component Tool" without per-endpoint maintenance.
+    3. If the endpoint doesn't have a ``.``, return as-is (already readable
+       e.g. ``static`` or a path-string fallback).
+    """
+    if not endpoint:
+        return endpoint
+    if endpoint in _LABEL_OVERRIDES:
+        return _LABEL_OVERRIDES[endpoint]
+    if "." not in endpoint:
+        return endpoint
+    bp, func = endpoint.split(".", 1)
+    func = func[4:] if func.startswith("api_") else func
+    pretty_func = " ".join(p.capitalize() for p in func.split("_") if p)
+    return f"{bp.capitalize()} › {pretty_func}"
+
+
 def get_stats(top_n: int = 20, slow_threshold_ms: float = 500.0) -> dict[str, Any]:
     """Return rolling-window stats per endpoint, sorted by p95 desc."""
     cutoff = time.time() - _WINDOW_SECONDS
@@ -55,12 +111,13 @@ def get_stats(top_n: int = 20, slow_threshold_ms: float = 500.0) -> dict[str, An
         avg = sum(ordered) / len(ordered)
         out.append({
             "endpoint": endpoint,
-            "count": len(ordered),
-            "p50_ms": round(p50, 1),
-            "p95_ms": round(p95, 1),
-            "avg_ms": round(avg, 1),
-            "max_ms": round(ordered[-1], 1),
-            "is_slow": p95 > slow_threshold_ms,
+            "label":    humanise_endpoint(endpoint),
+            "count":    len(ordered),
+            "p50_ms":   round(p50, 1),
+            "p95_ms":   round(p95, 1),
+            "avg_ms":   round(avg, 1),
+            "max_ms":   round(ordered[-1], 1),
+            "is_slow":  p95 > slow_threshold_ms,
         })
     out.sort(key=lambda r: r["p95_ms"], reverse=True)
     return {
