@@ -477,6 +477,31 @@ _state: dict = {
 }
 _state_lock = threading.Lock()
 
+# Issue #1343 Phase 2 — event-driven kick.
+#
+# Today the watcher_loop polls every 2 s. That's wasted work when the agent
+# is idle, AND it means a tool_call event sitting in DuckDB waits up to 2 s
+# before the policy engine sees it. Real fix: any code that ingests a
+# ``tool_call`` event (sync.py mappers, gateway tap, claude_code adapter)
+# calls ``watcher_kick()`` after the row lands; the watcher_loop wakes
+# immediately and processes.
+#
+# Kept as a separate sentinel so multiple kicks coalesce into one wakeup —
+# ingesting 50 tool_calls in a burst should not 50× trigger watch_iteration.
+_kick_event = threading.Event()
+
+
+def watcher_kick():
+    """Wake the policy watcher from its current sleep so it processes
+    queued tool_call events immediately. Safe to call from any thread; calls
+    coalesce until the watcher consumes them.
+
+    Callers: sync.py mappers, gateway tap, claude_code adapter, anywhere
+    a fresh ``tool_call`` row lands in the local DuckDB. No-op when the
+    watcher isn't running.
+    """
+    _kick_event.set()
+
 # Where the watermark lives on disk. Co-located with the daemon's other state
 # (``sync-state.json``) so an ops engineer who pokes around ``~/.clawmetry``
 # doesn't have to learn a second file. We use the same key namespace the
@@ -747,8 +772,18 @@ def watch_iteration(api_key: str, node_id: str,
 def watcher_loop(api_key: str, node_id: str,
                  interval_sec: float = 2.0, stop_event: Optional[threading.Event] = None):
     """Long-running loop. Reloads policies on disk every iteration so users
-    don't need to restart the daemon to add/remove rules."""
-    log.info(f"approvals watcher started (poll {interval_sec}s) for node {node_id}")
+    don't need to restart the daemon to add/remove rules.
+
+    Phase 2 (#1343): the inter-iteration sleep now uses ``_kick_event.wait()``
+    instead of ``time.sleep()``. ``interval_sec`` becomes the FALLBACK
+    heartbeat — the watcher still wakes on schedule even if nothing kicked
+    it (defends against a kick caller bug, and gives policies-on-disk
+    reloads their guaranteed cadence). Any caller that ingests a
+    ``tool_call`` event can call ``watcher_kick()`` to wake immediately;
+    p99 detection latency drops from interval_sec → ~0 ms in the wired
+    paths.
+    """
+    log.info(f"approvals watcher started (kick + {interval_sec}s heartbeat) for node {node_id}")
     while True:
         if stop_event and stop_event.is_set():
             log.info("approvals watcher stop signal received")
@@ -760,4 +795,7 @@ def watcher_loop(api_key: str, node_id: str,
                 log.debug(f"approvals: scanned {n} new toolCalls")
         except Exception as e:
             log.warning(f"approvals watcher iteration error: {e}")
-        time.sleep(interval_sec)
+        # Wait for kick OR fallback heartbeat. Clear before re-checking so
+        # we don't process the same kick twice.
+        _kick_event.wait(timeout=interval_sec)
+        _kick_event.clear()
