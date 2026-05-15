@@ -2366,14 +2366,40 @@ def _try_local_store_transcript(session_id: str):
       lives in nested fields (``data.finalPromptText``, ``data.assistantTexts``,
       ``data.toolMetas``…), tokens in ``data.promptCache.lastCallUsage``.
     """
+    # Issue #1291 cliff #4: route through daemon HTTP proxy. The previous
+    # direct ``local_store.get_store()`` open collided with the sync
+    # daemon's exclusive DuckDB lock under standard installs (per memory
+    # `reference_duckdb_process_lock.md`), forced fall-through to the JSONL
+    # walker → 5.5s p95 the latency probe (#1287) surfaced for
+    # ``sessions.api_transcript``.
+    rows = None
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-        rows = store.query_events(session_id=session_id, limit=10000)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon(
+            "query_events", session_id=session_id, limit=10000)
     except Exception:
-        return None
+        rows = None
+    if rows is None:
+        # Single-process fallback (tests/dev with no sync daemon).
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_events(session_id=session_id, limit=10000)
+        except Exception:
+            return None
     if not rows:
-        return None
+        # Empty is a legitimate "no events for this session yet" — return a
+        # populated shell so the JSONL walker doesn't get a second chance
+        # to do the same 5.5s walk for the same empty answer (PR #1266
+        # pattern). Caller decorates with `_source: "local_store"`.
+        return {
+            "messages":     [],
+            "model":        None,
+            "total_tokens": 0,
+            "first_ts":     None,
+            "last_ts":      None,
+            "_source":      "local_store",
+        }
     # query_events returns DESC by ts; transcripts read forward.
     rows = list(reversed(rows))
     messages: list[dict] = []
