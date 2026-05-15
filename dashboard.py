@@ -1057,7 +1057,7 @@ def _pause_gateway():
     if sys.platform != 'win32':
         try:
             result = subprocess.run(
-                ["pgrep", "-f", "openclaw-gatewa"],
+                ["pgrep", "-f", "openclaw-gateway"],
                 capture_output=True,
                 text=True,
                 timeout=3,
@@ -1085,7 +1085,7 @@ def _resume_gateway():
     if sys.platform != "win32":
         try:
             result = subprocess.run(
-                ["pgrep", "-f", "openclaw-gatewa"],
+                ["pgrep", "-f", "openclaw-gateway"],
                 capture_output=True,
                 text=True,
                 timeout=3,
@@ -2536,7 +2536,7 @@ def _detect_gateway_token():
         import subprocess as _sp
 
         result = _sp.run(
-            ["pgrep", "-f", "openclaw-gatewa"],
+            ["pgrep", "-f", "openclaw-gateway"],
             capture_output=True,
             text=True,
             timeout=3,
@@ -9761,7 +9761,7 @@ def _detect_gateway_token():
     # 2. Try reading from running gateway process env (Linux only)
     try:
         import subprocess as _sp
-        result = _sp.run(['pgrep', '-f', 'openclaw-gatewa'], capture_output=True, text=True, timeout=3)
+        result = _sp.run(['pgrep', '-f', 'openclaw-gateway'], capture_output=True, text=True, timeout=3)
         for pid in result.stdout.strip().split('\n'):
             pid = pid.strip()
             if pid:
