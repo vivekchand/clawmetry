@@ -315,6 +315,10 @@ _DAEMON_METHODS = frozenset({
     "query_compactions",
     "query_cost_split",
     "query_session_model_journey",
+    # Tier-1 (2026-05-15): /api/context-anatomy session-history bucket
+    # off the JSONL scanner. Returns last non-zero usage.input_tokens
+    # from the most-recent active session.
+    "query_context_window_peek",
     # Phase 4 (issue #1088 follow-up, 2026-05-13): channel-message
     # foundation. Three helpers proved out the schema; the remaining 18
     # per-provider channel routes follow once these go green.

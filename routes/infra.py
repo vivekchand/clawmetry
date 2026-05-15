@@ -1071,6 +1071,41 @@ def api_automation_analysis():
         })
 
 
+def _try_local_store_session_history_tokens():
+    """Tier-1 DuckDB fast path for /api/context-anatomy session-history bucket.
+
+    Replaces a 5-file × N-line JSONL scan (the single hottest blocking
+    read in this endpoint) with a single SQL aggregate over the events
+    table. Returns the most recent non-zero ``usage.input_tokens``
+    reading from the latest active session, mirroring the legacy
+    behaviour exactly. Returns ``None`` to defer to the JSONL scanner if:
+      * the daemon proxy isn't reachable AND direct open fails
+      * the events table has no message events with non-zero usage yet
+    """
+    result = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon("query_context_window_peek", scan_sessions=5)
+    except Exception:
+        result = None
+    if result is None:
+        # Single-process boots (tests, dev mode) never hit the daemon —
+        # open the local store directly.
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            result = store.query_context_window_peek(scan_sessions=5)
+        except Exception:
+            return None
+    if not isinstance(result, dict):
+        return None
+    tok = result.get("input_tokens") or 0
+    try:
+        return int(tok)
+    except (TypeError, ValueError):
+        return None
+
+
 @bp_config.route("/api/context-anatomy")
 def api_context_anatomy():
     """Estimate context window consumption broken down by source (#566).
@@ -1148,7 +1183,14 @@ def api_context_anatomy():
 
     # Session history: total input_tokens from last active session minus known static
     session_history_tokens = 0
-    if sessions_dir and os.path.isdir(sessions_dir):
+    fast_tok = None
+    if is_local_store_read_enabled():
+        fast_tok = _try_local_store_session_history_tokens()
+    if fast_tok is not None and fast_tok > 0:
+        session_history_tokens = fast_tok
+    elif sessions_dir and os.path.isdir(sessions_dir):
+        # Legacy JSONL fallback — preserved verbatim so endpoint stays
+        # working when the local store hasn't been ingested yet.
         try:
             files = sorted(
                 [

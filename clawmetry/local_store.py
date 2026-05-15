@@ -3126,6 +3126,109 @@ class LocalStore:
             return out
         return out[:int(limit)]
 
+    def query_context_window_peek(
+        self,
+        *,
+        scan_sessions: int = 5,
+    ) -> dict[str, Any]:
+        """Peak context-window measurement for the latest active session.
+
+        Mirrors the legacy ``/api/context-anatomy`` JSONL scanner that
+        walks the most-recent N session files looking for the last
+        non-zero ``usage.input_tokens`` reading from a ``message`` event.
+        That number represents the live conversation's running context
+        size as observed by the model on its most recent turn.
+
+        Why a dedicated query: the existing ``query_cost_split`` returns
+        SUMMED input_tokens across the whole session, which is the wrong
+        number for a "current context size" gauge — a session with 50
+        turns adding 5K each shows 250K (over the 200K window), when
+        the actual prompt context never exceeded 50K. The right number
+        is the LAST per-turn ``input_tokens`` value the model reported.
+
+        Field-name compatibility: OpenClaw's native JSONL emits
+        ``usage.input`` while the Anthropic SDK echo uses
+        ``usage.input_tokens``. We accept either, mirroring
+        ``clawmetry/sync.py`` and the legacy ``routes/infra.py`` scanner
+        (which checked only ``input_tokens`` — fixing that latent gap
+        is a free side-effect of the migration).
+
+        Returns ``{"session_id": str, "input_tokens": int, "ts": str}``
+        for the most-recent active session that has at least one
+        non-zero reading. Returns ``{"input_tokens": 0}`` if nothing is
+        observable (fresh DB, no message events yet).
+
+        Args:
+            scan_sessions: How many most-recent sessions to walk before
+                giving up. Matches the legacy file-scan budget of 5.
+        """
+        # Step 1: most-recent N sessions ordered by last activity. The
+        # session table has updated_at; we use events for the same answer
+        # so a single index lookup on ts handles it.
+        recent_sessions = self._fetch(
+            """
+            SELECT session_id, MAX(ts) AS last_ts
+            FROM events
+            WHERE session_id IS NOT NULL
+              AND event_type = 'message'
+            GROUP BY session_id
+            ORDER BY last_ts DESC
+            LIMIT ?
+            """,
+            [int(scan_sessions)],
+        )
+        for sid_row in recent_sessions:
+            sid, _last_ts = sid_row[0], sid_row[1]
+            if not sid:
+                continue
+            # Step 2: walk this session's message events newest-first
+            # until we find the first non-zero reading.
+            rows = self._fetch(
+                """
+                SELECT ts, data
+                FROM events
+                WHERE session_id = ?
+                  AND event_type = 'message'
+                ORDER BY ts DESC, id DESC
+                """,
+                [sid],
+            )
+            for ts, raw in rows:
+                data: dict[str, Any] = {}
+                if raw is not None:
+                    try:
+                        text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                        parsed = json.loads(text) if text else {}
+                        if isinstance(parsed, dict):
+                            data = parsed
+                    except (ValueError, TypeError, UnicodeDecodeError):
+                        continue
+                msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+                usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+                # Sometimes OpenClaw nests usage at top level — fall through
+                if not usage:
+                    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+                if not usage:
+                    continue
+                # OpenClaw native field: "input"; Anthropic SDK echo: "input_tokens"
+                tok = (
+                    usage.get("input_tokens")
+                    or usage.get("inputTokens")
+                    or usage.get("input")
+                    or 0
+                )
+                try:
+                    tok = int(tok)
+                except (TypeError, ValueError):
+                    tok = 0
+                if tok > 0:
+                    return {
+                        "session_id":   sid,
+                        "input_tokens": tok,
+                        "ts":           ts,
+                    }
+        return {"input_tokens": 0}
+
     def query_session_model_journey(
         self,
         *,
