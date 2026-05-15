@@ -798,6 +798,16 @@ def _try_local_store_reliability(window_days: int):
     }
 
 
+# Issue #1291 cliff #2 follow-up: 30-second TTL cache on reliability
+# response. The endpoint returns a 30-DAY rolling window — the underlying
+# data changes at most once per minute (one heartbeat per ~minute when
+# the daemon is up). PR #1293 took it 7.5s → 550ms via daemon-proxy +
+# parallel queries; the TTL cache takes repeat calls to ~5ms so the
+# Reliability tab is instant on every navigation.
+_RELIABILITY_CACHE: dict = {}
+_RELIABILITY_TTL_SECS = 30.0
+
+
 @bp_health.route("/api/reliability")
 def api_reliability():
     """Cross-session behavioral reliability trend (AgentReliabilityScorer)."""
@@ -807,12 +817,23 @@ def api_reliability():
         window = max(1, min(window, 90))
     except (TypeError, ValueError):
         window = 30
+
+    # TTL cache key is the window — different window sizes get separate
+    # cache slots. Tiny memory footprint (<10 keys ever).
+    cache_key = ("reliability", window)
+    cached = _RELIABILITY_CACHE.get(cache_key)
+    if cached is not None:
+        cached_at, payload = cached
+        if (time.time() - cached_at) < _RELIABILITY_TTL_SECS:
+            return jsonify(payload)
+
     # Epic #964 fast path — only when explicitly opted in. Falls through
     # to the HistoryDB scorer on any failure so behaviour is identical
     # for users without local_store data.
     if is_local_store_read_enabled():
         fast = _try_local_store_reliability(window)
         if fast is not None:
+            _RELIABILITY_CACHE[cache_key] = (time.time(), fast)
             return jsonify(fast)
     # Cloud's dashboard.py is a different module than OSS's; AgentReliabilityScorer
     # only lives in OSS. Use getattr so we degrade to a 200 "insufficient_data"
