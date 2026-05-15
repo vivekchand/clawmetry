@@ -4597,30 +4597,54 @@ function toggleCronAutoRefresh() {
 }
 
 async function loadCrons() {
-  var data = await fetch('/api/crons').then(r => r.json());
-  _cronJobs = data.jobs || [];
-  // Cron actions (create / pause / fix / kill-all) hit the local OpenClaw
-  // gateway, which is always reachable from the OSS dashboard but is
-  // cloud-disabled from the iframe. Default to true for the OSS-dashboard
-  // case so the "+ New Job" button is actually visible — the empty-state
-  // copy says to click it. Cloud-iframe stays false so we don't dangle
-  // controls that 410 when used.
-  _cronActionsAvailable = !window.CLOUD_MODE;
-  // Show/hide cron action buttons based on gateway availability
-  document.querySelectorAll('.cron-action-btn').forEach(function(btn) {
-    btn.style.display = _cronActionsAvailable ? '' : 'none';
-  });
-  renderCrons();
-  // Load cron health summary panel
-  loadCronHealth();
-  // Load multi-node cron status from fleet nodes
-  loadCronsMultiNode();
-  // Load cron health monitor (GH #302)
-  loadCronHealth();
-  // Start auto-refresh if checkbox is checked and timer not running
-  var cb = document.getElementById('cron-auto-refresh');
-  if (cb && cb.checked && !_cronAutoRefreshTimer) {
-    _cronAutoRefreshTimer = visibilitySetInterval(loadCrons, 30000);
+  // Issue #1257 — wrap in try/catch with explicit Failed-to-load + Retry,
+  // mirroring the Brain pattern from PR #1239 (app.js:3614). Previously
+  // this function had NO error handling — a flaky /api/crons call would
+  // crash the function, leave the spinner forever, and silently break
+  // the auto-refresh timer rebind below.
+  try {
+    var data = await (typeof fetchJsonWithTimeout === 'function'
+      ? fetchJsonWithTimeout('/api/crons', 8000)
+      : fetch('/api/crons').then(r => r.json()));
+    _cronJobs = data.jobs || [];
+    // Cron actions (create / pause / fix / kill-all) hit the local OpenClaw
+    // gateway, which is always reachable from the OSS dashboard but is
+    // cloud-disabled from the iframe. Default to true for the OSS-dashboard
+    // case so the "+ New Job" button is actually visible — the empty-state
+    // copy says to click it. Cloud-iframe stays false so we don't dangle
+    // controls that 410 when used.
+    _cronActionsAvailable = !window.CLOUD_MODE;
+    // Show/hide cron action buttons based on gateway availability
+    document.querySelectorAll('.cron-action-btn').forEach(function(btn) {
+      btn.style.display = _cronActionsAvailable ? '' : 'none';
+    });
+    renderCrons();
+    // Load cron health summary panel
+    loadCronHealth();
+    // Load multi-node cron status from fleet nodes
+    loadCronsMultiNode();
+    // Load cron health monitor (GH #302)
+    loadCronHealth();
+    // Start auto-refresh if checkbox is checked and timer not running
+    var cb = document.getElementById('cron-auto-refresh');
+    if (cb && cb.checked && !_cronAutoRefreshTimer) {
+      _cronAutoRefreshTimer = visibilitySetInterval(loadCrons, 30000);
+    }
+  } catch (e) {
+    // Find the cron list container and replace its spinner with the
+    // Failed-to-load + Retry pattern. Container ID is `cron-jobs-list`
+    // (matches `renderCrons()` in this file).
+    var listEl = document.getElementById('cron-jobs-list')
+              || document.getElementById('cron-jobs')
+              || document.getElementById('crons-list');
+    var msg = '<div style="padding:16px;color:var(--text-error);font-size:13px;">'
+            + 'Failed to load crons: ' + escHtml(String(e && e.message || e))
+            + ' <button onclick="loadCrons()" title="Server slow — usually clears within 30 s" '
+            + 'style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);'
+            + 'color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button>'
+            + '</div>';
+    if (listEl) listEl.innerHTML = msg;
+    console.warn('loadCrons failed', e);
   }
 }
 
