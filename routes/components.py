@@ -116,25 +116,38 @@ def _try_local_store_component_tool(name: str):
       - the events table is empty / has no matching tool-call blocks
       - any unexpected error happens (we'd rather degrade than 500)
     """
+    # Issue #1291: route through daemon HTTP proxy. The previous direct
+    # ``local_store.get_store()`` open collided with the sync daemon's
+    # exclusive DuckDB lock (per memory `reference_duckdb_process_lock.md`),
+    # forcing the call to error out → fall through to the slow JSONL
+    # walker → 7s p95 the latency probe (#1287) surfaced.
+    rows: list = []
     try:
-        from clawmetry import local_store
-    except Exception:
-        return None
-    try:
-        store = local_store.get_store()
-        # Fetch a generous window of both event types we know wrap
-        # tool-call blocks. Two queries instead of one OR-filter because
-        # ``query_events`` only takes a single event_type.
-        rows = []
+        from routes.local_query import local_store_via_daemon
         for et in ("message", "assistant"):
             try:
-                rows.extend(store.query_events(event_type=et, limit=2000))
+                got = local_store_via_daemon("query_events", event_type=et, limit=2000)
+                if got:
+                    rows.extend(got)
             except Exception:
                 continue
     except Exception:
-        return None
+        rows = []
+
+    # Single-process fallback (only when daemon proxy returns nothing — eg
+    # local pytest run with no sync daemon). NEVER on a paired install:
+    # daemon is the gatekeeper.
     if not rows:
-        return None
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            for et in ("message", "assistant"):
+                try:
+                    rows.extend(store.query_events(event_type=et, limit=2000))
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     tool_names = set(_TOOL_MAP.get(name, [name]))
     today = datetime.now().strftime("%Y-%m-%d")
@@ -186,9 +199,11 @@ def _try_local_store_component_tool(name: str):
                 evt["action"] = tn
             events.append(evt)
 
-    if not events:
-        return None
-
+    # Issue #1291 / PR #1266 pattern: an empty result is NOT a miss — it's
+    # a legitimate "no tool calls today for this tool family." Returning
+    # None here would fall through to the 7s JSONL walker for every empty
+    # tool, which is what the latency probe caught at p95=7.3s. Return a
+    # populated shell instead.
     events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
     events = events[:50]
     return {
