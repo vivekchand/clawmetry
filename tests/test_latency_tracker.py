@@ -90,6 +90,13 @@ def test_humanise_endpoint_mechanical_fallback():
         "myblue.helper_method") == "Myblue › Helper Method"
 
 
+def test_humanise_endpoint_multiword_blueprint():
+    # PR #1290 follow-up: multi-word blueprints (snake_case) used to
+    # render as "Version_impact"; now correctly "Version Impact".
+    assert latency_tracker.humanise_endpoint(
+        "some_long_blueprint.api_some_func") == "Some Long Blueprint › Some Func"
+
+
 def test_humanise_endpoint_edge_cases():
     # No dot at all: return as-is.
     assert latency_tracker.humanise_endpoint("static") == "static"

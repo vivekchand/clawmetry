@@ -68,6 +68,20 @@ _LABEL_OVERRIDES: dict[str, str] = {
     "alerts.api_alert_rules":             "Alert rules",
     "channels.api_channels":              "Chat channels",
     "heartbeat.api_heartbeat":            "Heartbeat ping (POST)",
+    "crons.api_cron_runs":                "Cron run history",
+    "fleet.api_nodes":                    "Multi-node fleet",
+    "history.api_history":                "Time-series history",
+    "alerts.api_alerts":                  "Alert center",
+    "alerts.api_alerts_evaluate":         "Alert evaluator",
+    "budget.api_budget":                  "Budget panel",
+    "memory.api_memory":                  "Memory inspector",
+    "security.api_security":              "Security posture",
+    "logs.api_logs":                      "Log stream",
+    "selfevolve.api_selfevolve":          "Self-evolve loop",
+    "advisor.api_advisor":                "Advisor (Q&A)",
+    "version_impact.api_version_impact":  "Version impact",
+    "skills.api_skills":                  "Skills browser",
+    "channels.api_channels_status":       "Channel status",
 }
 
 
@@ -82,6 +96,10 @@ def humanise_endpoint(endpoint: str) -> str:
        Component Tool" without per-endpoint maintenance.
     3. If the endpoint doesn't have a ``.``, return as-is (already readable
        e.g. ``static`` or a path-string fallback).
+
+    Both halves get word-splitting (PR #1290 follow-up): multi-word
+    blueprint names like ``version_impact`` previously rendered as
+    ``Version_impact``; now correctly ``Version Impact``.
     """
     if not endpoint:
         return endpoint
@@ -91,8 +109,9 @@ def humanise_endpoint(endpoint: str) -> str:
         return endpoint
     bp, func = endpoint.split(".", 1)
     func = func[4:] if func.startswith("api_") else func
+    pretty_bp   = " ".join(p.capitalize() for p in bp.split("_") if p)
     pretty_func = " ".join(p.capitalize() for p in func.split("_") if p)
-    return f"{bp.capitalize()} › {pretty_func}"
+    return f"{pretty_bp} › {pretty_func}"
 
 
 def get_stats(top_n: int = 20, slow_threshold_ms: float = 500.0) -> dict[str, Any]:
