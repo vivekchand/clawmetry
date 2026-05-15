@@ -308,8 +308,29 @@ async function ackAllAlerts() {
   } catch(e) {}
 }
 
+// PRD #1252 Phase 1 — visibility-gated setInterval. The 5 module-init
+// pollers below (alerts, anomalies×2, heartbeat, paused-banner) fire on
+// every page load REGARDLESS of which tab is visible to the user. With
+// the user away from the browser for hours, these still hit the daemon
+// every 15-300s for nothing.
+//
+// User feedback (verbatim, 2026-05-15): "the browser seem to make a ton
+// of requests in one go". This helper kills background polling when the
+// tab is hidden — a no-op when document.visibilityState === 'hidden',
+// resumes immediately on visibilitychange. Per-tab pollers (loadCrons
+// 30s when on Crons tab, etc.) keep their existing tab-name gates.
+//
+// Function declaration, NOT var, so the hoist makes it available to the
+// module-init `setInterval` callers below at parse time.
+function visibilitySetInterval(fn, ms) {
+  return setInterval(function() {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    try { fn(); } catch (e) {}
+  }, ms);
+}
+
 // Check alerts every 30s
-setInterval(checkActiveAlerts, 30000);
+visibilitySetInterval(checkActiveAlerts, 30000);
 setTimeout(checkActiveAlerts, 3000);
 
 // === Anomaly Detection Banner ===
@@ -364,7 +385,7 @@ async function checkAnomalies() {
 }
 
 // Check anomalies every 5 minutes
-setInterval(checkAnomalies, 300000);
+visibilitySetInterval(checkAnomalies, 300000);
 setTimeout(checkAnomalies, 8000);
 
 // === Anomaly Detection Panel (GH #304) ===
@@ -468,7 +489,7 @@ async function ackAnomaly(id) {
 
 // Load anomaly panel on overview and refresh every 2 minutes
 setTimeout(loadAnomalyPanel, 4000);
-setInterval(loadAnomalyPanel, 120000);
+visibilitySetInterval(loadAnomalyPanel, 120000);
 
 // === Heartbeat Gap Alerting ===
 async function checkHeartbeatStatus() {
@@ -493,7 +514,7 @@ async function checkHeartbeatStatus() {
     }
   } catch(e) {}
 }
-setInterval(checkHeartbeatStatus, 30000);
+visibilitySetInterval(checkHeartbeatStatus, 30000);
 setTimeout(checkHeartbeatStatus, 5000);
 
 function dismissPausedBanner() {
@@ -522,7 +543,7 @@ async function refreshPausedBanner() {
     banner.style.display = 'flex';
   } catch(e) {}
 }
-setInterval(refreshPausedBanner, 15000);
+visibilitySetInterval(refreshPausedBanner, 15000);
 setTimeout(refreshPausedBanner, 1500);
 
 // === Telegram Config Functions ===
