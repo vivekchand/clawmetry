@@ -3509,7 +3509,19 @@ window.selfevolveRun = async function () {
 };
 
 async function loadBrainPage(silent) {
-  if (window.CLOUD_MODE) return;
+  // Cloud iframe doesn't proxy /api/brain-history (live event stream is
+  // local-only). Without this branch, `loadBrainPage` returned silently and
+  // left the inline `Loading...` placeholder in `#brain-stream` forever
+  // (P0 follow-up to #1235). Replace the spinner with an explicit
+  // empty-state so cloud users understand the surface is local-only and
+  // the spinner stops misrepresenting the load state.
+  if (window.CLOUD_MODE) {
+    var cloudEl = document.getElementById('brain-stream');
+    if (cloudEl && /Loading/i.test(cloudEl.innerText || '')) {
+      cloudEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">Live event stream is local-only. Open the dashboard on the host running OpenClaw to view brain activity.</div>';
+    }
+    return;
+  }
   if (!silent) { advisorProbe(); selfevolveProbe(); }
   try {
     var data = await fetchJsonWithTimeout('/api/brain-history?limit=300', 20000);
@@ -3534,9 +3546,15 @@ async function loadBrainPage(silent) {
     var wasAtTop = !streamEl || streamEl.scrollTop < 40;
     renderBrainStream(events);
   } catch(e) {
-    if (!silent) {
-      var el = document.getElementById('brain-stream');
-      if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px">Failed to load: ' + escHtml(String(e)) + '</div>';
+    // Always replace the spinner on error -- previously this only fired
+    // when `silent=false`, so a silent retry that errored left the prior
+    // `Loading...` placeholder in place forever (P0 follow-up to #1235).
+    var el = document.getElementById('brain-stream');
+    if (el) {
+      var stillLoading = /Loading/i.test(el.innerText || '');
+      if (!silent || stillLoading) {
+        el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">Failed to load: ' + escHtml(String(e)) + ' &nbsp;<button onclick="loadBrainPage()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button></div>';
+      }
     }
   }
   // After initial load, start SSE for live updates instead of polling
