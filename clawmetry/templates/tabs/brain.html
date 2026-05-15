@@ -6,7 +6,7 @@
         display:flex;
         align-items:center;
         gap:8px;
-        "><span id="brain-live-indicator"></span><button id="brain-focus-btn" class="refresh-btn" onclick="toggleBrainFocus()" title="Focus mode: hide everything except the event stream">⛶ Focus</button><button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button></div>
+        "><span id="brain-live-indicator"></span><button id="brain-plumbing-btn" class="refresh-btn" onclick="toggleBrainPlumbing()" title="Show internal queue/dequeue events (hidden by default — they're plumbing, not content)" style="font-weight:500;"><span id="brain-plumbing-state">○</span> Show plumbing <span id="brain-plumbing-count" style="opacity:0.7;font-size:11px;"></span></button><button id="brain-focus-btn" class="refresh-btn" onclick="toggleBrainFocus()" title="Focus mode: hide everything except the event stream">⛶ Focus</button><button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button></div>
     </div>
     <style>
       /* Focus mode: hide chrome, expand event stream to viewport */
@@ -23,6 +23,19 @@
         var on = document.body.classList.toggle('brain-focus');
         var btn = document.getElementById('brain-focus-btn');
         if (btn) btn.textContent = on ? '✕ Exit focus' : '⛶ Focus';
+      };
+      // Plumbing toggle: hide QUEUE-OPERATION rows by default. They're
+      // internal queue housekeeping (dequeue/enqueue), not agent activity.
+      // Default OFF (hidden) per UX feedback — non-technical users see only
+      // real conversation turns. Count of hidden rows shows next to label.
+      window._brainShowPlumbing = false;
+      window.toggleBrainPlumbing = function() {
+        window._brainShowPlumbing = !window._brainShowPlumbing;
+        var state = document.getElementById('brain-plumbing-state');
+        if (state) state.textContent = window._brainShowPlumbing ? '●' : '○';
+        if (typeof renderBrainStream === 'function' && window._brainAllEvents) {
+          renderBrainStream(window._brainAllEvents);
+        }
       };
     </script>
     <!-- Advisor: ask questions about your agent's activity -->
