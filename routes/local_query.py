@@ -295,6 +295,14 @@ _DAEMON_METHODS = frozenset({
     "query_aggregates",
     "query_heartbeats",
     "query_channels",
+    # Issue #1256 follow-up: alert_rules + channel_config_status. PR #1258
+    # routed /api/alerts/rules and /api/channels/status through the daemon
+    # proxy but missed adding the methods to the allowlist — every call
+    # 400'd, fell back to direct DuckDB open (lock contention), then to
+    # gateway RPC (down), surfacing as the same 6 s timeout the PR was
+    # supposed to fix. Adding both here closes the loop.
+    "query_alert_rules",
+    "query_channel_config_status",
     "query_crons",
     # Issue #605 DuckDB follow-up: per-job cron-run timeline. Read by
     # ``routes/crons.py:_cron_runs_from_duckdb`` via the daemon proxy.
