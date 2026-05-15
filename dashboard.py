@@ -10405,6 +10405,33 @@ def _auto_discover_gateway(token):
 
 
 @app.before_request
+def _latency_probe_start():
+    """Issue #1283: per-endpoint p50/p95 timing for /api/handler-latency."""
+    try:
+        from flask import g
+        import time as _t
+        g._lat_start = _t.perf_counter()
+    except Exception:
+        pass
+
+
+@app.after_request
+def _latency_probe_record(response):
+    try:
+        from flask import g, request
+        import time as _t
+        start = getattr(g, "_lat_start", None)
+        path = request.path or ""
+        if start is not None and path.startswith("/api/"):
+            elapsed_ms = (_t.perf_counter() - start) * 1000.0
+            from clawmetry import latency_tracker as _lt
+            _lt.record(request.endpoint or path, elapsed_ms)
+    except Exception:
+        pass
+    return response
+
+
+@app.before_request
 def _check_auth():
     """Require valid gateway token for all /api/* routes when GATEWAY_TOKEN is set."""
     if request.path == "/api/auth/check":

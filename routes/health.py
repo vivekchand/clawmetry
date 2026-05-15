@@ -2702,3 +2702,29 @@ def api_mcp_stats():
             pass
 
     return jsonify({"checked": checked, "tools": tools})
+
+
+@bp_health.route("/api/handler-latency")
+def api_handler_latency():
+    """Issue #1283 — per-endpoint p50/p95 from a 5-minute rolling buffer.
+
+    Operator dashboard for ClawMetry's own handler latency. Lets us catch
+    the next /api/sessions-class regression in seconds, not weeks.
+    """
+    try:
+        from clawmetry import latency_tracker
+    except Exception:
+        return jsonify({"endpoints": [], "endpoint_count": 0, "_source": "unavailable"})
+
+    try:
+        top_n = max(1, min(100, int(request.args.get("top", 20))))
+    except (TypeError, ValueError):
+        top_n = 20
+    try:
+        slow_ms = float(request.args.get("slow_ms", 500.0))
+    except (TypeError, ValueError):
+        slow_ms = 500.0
+
+    stats = latency_tracker.get_stats(top_n=top_n, slow_threshold_ms=slow_ms)
+    stats["_source"] = "in_memory"
+    return jsonify(stats)

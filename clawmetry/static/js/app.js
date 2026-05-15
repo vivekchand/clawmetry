@@ -5975,6 +5975,41 @@ async function loadSystemHealth() {
       }
     } catch(e) {}
 
+    // Handler latency (#1283) — top-N slowest /api/* endpoints, 5-min rolling p50/p95.
+    // Surfaces /api/sessions-class regressions in seconds, not weeks.
+    try {
+      var latData = await fetchJsonWithTimeout('/api/handler-latency?top=10', 3000);
+      var latWrap = document.getElementById('sh-latency-wrap');
+      var latEl = document.getElementById('sh-latency');
+      var endpoints = (latData && Array.isArray(latData.endpoints)) ? latData.endpoints : [];
+      if (latEl && latWrap) {
+        if (endpoints.length === 0) {
+          latWrap.style.display = 'none';
+        } else {
+          latWrap.style.display = '';
+          var slowThr = latData.slow_threshold_ms || 500;
+          var lhtml = '';
+          endpoints.forEach(function(ep) {
+            var p95 = ep.p95_ms || 0;
+            var p50 = ep.p50_ms || 0;
+            var bad = ep.is_slow || p95 > slowThr;
+            var bg = bad ? 'var(--bg-error,rgba(220,38,38,0.08))' : 'var(--bg-secondary)';
+            var border = bad ? 'rgba(220,38,38,0.3)' : 'var(--border-secondary)';
+            var p95Color = bad ? 'var(--text-error,#dc2626)' : 'var(--text-primary)';
+            var p95Str = p95 >= 1000 ? (p95/1000).toFixed(2) + 's' : Math.round(p95) + 'ms';
+            var p50Str = p50 >= 1000 ? (p50/1000).toFixed(2) + 's' : Math.round(p50) + 'ms';
+            lhtml += '<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:' + bg + ';border-radius:6px;border:1px solid ' + border + ';font-size:12px;margin-bottom:4px;">'
+              + '<span style="font-family:monospace;color:var(--text-primary);font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(ep.endpoint) + '</span>'
+              + '<span style="color:var(--text-muted);font-size:10px;">n=' + ep.count + '</span>'
+              + '<span style="color:var(--text-muted);font-size:11px;">p50 ' + p50Str + '</span>'
+              + '<span style="color:' + p95Color + ';font-weight:600;font-size:11px;">p95 ' + p95Str + '</span>'
+              + '</div>';
+          });
+          latEl.innerHTML = lhtml;
+        }
+      }
+    } catch(e) { /* latency panel optional */ }
+
     // Daemon health (PRD #1133 layer 4) — surface sync.log error rate so
     // the silent-NameError class of bug stops slipping past users.
     var dmWrap = document.getElementById('sh-daemon-wrap');
