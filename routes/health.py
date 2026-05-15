@@ -798,14 +798,20 @@ def _try_local_store_reliability(window_days: int):
     }
 
 
-# Issue #1291 cliff #2 follow-up: 30-second TTL cache on reliability
-# response. The endpoint returns a 30-DAY rolling window — the underlying
-# data changes at most once per minute (one heartbeat per ~minute when
-# the daemon is up). PR #1293 took it 7.5s → 550ms via daemon-proxy +
-# parallel queries; the TTL cache takes repeat calls to ~5ms so the
-# Reliability tab is instant on every navigation.
+# Issue #1291 cliff #2 follow-up: window-scaled TTL cache on
+# reliability response. The endpoint returns an N-DAY rolling window —
+# 1-day windows benefit from fresher data, 90-day windows can cache for
+# longer since a single new heartbeat is statistically invisible.
+# PR #1304 originally used a flat 30s; PR #1304 review's product P1
+# pointed out scaling the TTL with the window is sharper UX.
 _RELIABILITY_CACHE: dict = {}
-_RELIABILITY_TTL_SECS = 30.0
+
+
+def _reliability_ttl(window_days: int) -> float:
+    """TTL scales with window: 1-day → 10s, 30-day → 30s, 90-day → 60s.
+    Floor at 10s (avoid hot-loop refreshes), ceiling at 60s (no point
+    caching a yearly trend longer than a minute under any plausible UX)."""
+    return float(min(60, max(10, window_days)))
 
 
 @bp_health.route("/api/reliability")
@@ -824,7 +830,7 @@ def api_reliability():
     cached = _RELIABILITY_CACHE.get(cache_key)
     if cached is not None:
         cached_at, payload = cached
-        if (time.time() - cached_at) < _RELIABILITY_TTL_SECS:
+        if (time.time() - cached_at) < _reliability_ttl(window):
             return jsonify(payload)
 
     # Epic #964 fast path — only when explicitly opted in. Falls through
