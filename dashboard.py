@@ -16123,6 +16123,25 @@ def cmd_uninstall(args):
     print("[ok] ClawMetry service removed.")
 
 
+def _print_login_url_banner(port, host, token):
+    """Print a one-click /auth?token= URL when GATEWAY_TOKEN is set (#1356 PR-D).
+
+    Behavior:
+      - If token is empty/None -> no-op (preserves prior banner output).
+      - If host binds publicly (0.0.0.0 / ::), still print but reference
+        ``localhost`` so the link only works from the local machine.
+      - Always uses the URL framing (never logs the bare token alone).
+    """
+    if not token:
+        return
+    # Always frame the token inside the /auth URL; never print the bare token.
+    # 0.0.0.0 / :: are bind-all sentinels; the user clicks from localhost.
+    public_binds = ("0.0.0.0", "::", "")
+    display_host = "localhost" if host in public_binds else host
+    url = f"http://{display_host}:{port}/auth?token={token}"
+    print(f"  -> {url}  (one-click sign-in)")
+
+
 def _run_server(args):
     import sys as _sys
 
@@ -16306,6 +16325,16 @@ def _run_server(args):
             )
         if _HAS_OTEL_PROTO:
             print(f"  -> OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
+        # One-click login URL when gateway token was detected (#1356 PR-D).
+        # Defense against shoulder-surfing screenshots: only the framed URL is
+        # printed (never the bare token), and only on the interactive startup
+        # banner (stdout). We never log this line to /tmp/clawmetry.log because
+        # the daemon-mode launcher redirects only the noisy server output, not
+        # this one-shot banner that runs before serve().
+        try:
+            _print_login_url_banner(args.port, args.host, GATEWAY_TOKEN)
+        except Exception:
+            pass  # Never let banner printing break the dashboard
         print()
         # Cloud nudge — only if not already connected
         _already_connected = bool(
