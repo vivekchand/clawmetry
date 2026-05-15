@@ -736,7 +736,7 @@ def _try_local_store_overview():
     if sess_rows is None:
         try:
             from clawmetry import local_store
-            sess_rows = local_store.get_store().query_sessions_table(limit=200)
+            sess_rows = local_store.get_store(read_only=True).query_sessions_table(limit=200)
         except Exception:
             return None
     if not sess_rows:
@@ -783,7 +783,7 @@ def _try_local_store_overview():
         if evs is None:
             try:
                 from clawmetry import local_store
-                evs = local_store.get_store().query_events(limit=20)
+                evs = local_store.get_store(read_only=True).query_events(limit=20)
             except Exception:
                 evs = []
         for e in (evs or []):
