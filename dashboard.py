@@ -16123,7 +16123,13 @@ def cmd_uninstall(args):
     print("[ok] ClawMetry service removed.")
 
 
+_SERVER_HOST = None  # populated by _run_server; routes/meta.py reads this for the
+                     # /api/auth/detected-token bind-host gate.
+
+
 def _run_server(args):
+    global _SERVER_HOST
+    _SERVER_HOST = getattr(args, "host", None)
     import sys as _sys
 
     # Windows: guard against closed/detached stdout/stderr before Flask or

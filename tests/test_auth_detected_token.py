@@ -199,3 +199,96 @@ def test_endpoint_does_not_require_authorization_header(client):
         # no Authorization header at all
     )
     assert r.status_code == 200
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 403: DNS-rebinding defence (Host header check)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "host_header",
+    [
+        "evil.com",
+        "evil.com:8900",
+        "internal.corp",
+        "192.168.1.5:8900",   # LAN IP via DNS
+    ],
+)
+def test_rejects_non_loopback_host_header(client, host_header):
+    """DNS rebinding: attacker resolves evil.com -> 127.0.0.1 in the
+    victim's browser. remote_addr is loopback, but the JS origin is
+    evil.com — so the page that reads the response is hostile. The
+    Host header still says 'evil.com', which is what we reject on."""
+    r = client.get(
+        "/api/auth/detected-token",
+        environ_overrides={"REMOTE_ADDR": "127.0.0.1", "HTTP_HOST": host_header},
+    )
+    assert r.status_code == 403, (host_header, r.get_data(as_text=True))
+    assert r.get_json() == {"error": "localhost only"}
+
+
+@pytest.mark.parametrize(
+    "host_header",
+    [
+        "localhost",
+        "localhost:8900",
+        "127.0.0.1",
+        "127.0.0.1:8900",
+        "[::1]",
+        "[::1]:8900",
+    ],
+)
+def test_accepts_loopback_host_header_variants(client, host_header):
+    """All standard loopback Host header forms (with and without port)
+    must be accepted — otherwise we'd lock out the common case."""
+    r = client.get(
+        "/api/auth/detected-token",
+        environ_overrides={"REMOTE_ADDR": "127.0.0.1", "HTTP_HOST": host_header},
+    )
+    assert r.status_code == 200, (host_header, r.get_data(as_text=True))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 403: Forwarded header (RFC 7239) defence
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_rejects_loopback_with_rfc7239_forwarded_header(client):
+    """RFC 7239 Forwarded: header is the canonical proxy marker; defend
+    against it as well as the legacy X-Forwarded-For."""
+    r = client.get(
+        "/api/auth/detected-token",
+        environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+        headers={"Forwarded": "for=203.0.113.5;proto=https"},
+    )
+    assert r.status_code == 403
+    assert r.get_json() == {"error": "localhost only"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 403: dashboard bound to non-loopback host (--host 0.0.0.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_rejects_when_server_bound_to_wildcard_host(monkeypatch, app):
+    """When the operator passed --host 0.0.0.0 (LAN exposure), refuse
+    to hand out the token at all. We can't tell from a single request
+    whether the browser is on this box or on the same Wi-Fi network."""
+    monkeypatch.setattr(dashboard, "_SERVER_HOST", "0.0.0.0", raising=False)
+    r = app.test_client().get(
+        "/api/auth/detected-token",
+        environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+    )
+    assert r.status_code == 403, r.get_data(as_text=True)
+    assert r.get_json() == {"error": "localhost only"}
+
+
+def test_accepts_when_server_bound_to_loopback(monkeypatch, app):
+    """Explicit --host 127.0.0.1 (default) keeps the endpoint open."""
+    monkeypatch.setattr(dashboard, "_SERVER_HOST", "127.0.0.1", raising=False)
+    r = app.test_client().get(
+        "/api/auth/detected-token",
+        environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
+    )
+    assert r.status_code == 200

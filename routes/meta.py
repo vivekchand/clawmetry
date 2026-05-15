@@ -311,29 +311,71 @@ def api_auth_check():
 # is rejected with 403 to keep the GATEWAY_TOKEN from leaking off-box.
 _LOOPBACK_ADDRS = frozenset({"127.0.0.1", "::1", "localhost"})
 
+# Host header values accepted by the bootstrap endpoint. A browser pointed at a
+# DNS-rebound name (evil.com → 127.0.0.1) will still send Host: evil.com, so we
+# reject anything outside this set even when remote_addr is loopback.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]", "::1"})
+
 
 def _is_loopback_request(req) -> bool:
     """Return True iff *req* originates from this machine without a proxy.
 
-    Two checks must both hold:
+    Four checks must all hold:
 
-    1. ``request.remote_addr`` is one of the loopback aliases above. (Flask
-       reports the immediate TCP peer here unless ProxyFix has rewritten
-       it — and ClawMetry intentionally does not install ProxyFix on the
-       OSS dashboard.)
-    2. The request carries no ``X-Forwarded-For`` / ``X-Real-IP`` header.
-       Their presence means *something* on the path declared this request
-       was proxied; even on a loopback peer we must assume the original
-       client could be remote and refuse to hand out the token.
+    1. ``REMOTE_ADDR`` (read from raw WSGI environ, not the Flask attribute,
+       so a future ProxyFix wrap can't silently invert this) is one of the
+       loopback aliases above.
+    2. ``Host:`` header (sans port) is also a loopback alias — defends
+       against DNS rebinding where remote_addr is genuinely loopback but
+       the page origin is attacker-controlled.
+    3. No ``X-Forwarded-For`` / ``X-Real-IP`` / ``Forwarded`` header is
+       present. Their presence means *something* on the path declared
+       this request was proxied; even on a loopback peer we must assume
+       the original client could be remote.
+    4. The dashboard was started bound to a loopback host. If the operator
+       passed ``--host 0.0.0.0`` (LAN exposure), refuse to hand out the
+       token at all — we cannot tell from a single request whether the
+       browser is on this box or on the LAN.
     """
-    addr = (req.remote_addr or "").strip().lower()
-    if addr not in _LOOPBACK_ADDRS:
+    raw_addr = (req.environ.get("REMOTE_ADDR") or "").strip().lower()
+    if raw_addr not in _LOOPBACK_ADDRS:
+        return False
+    host = (req.host or "").strip().lower()
+    if host.startswith("["):
+        # Bracketed IPv6: "[::1]" or "[::1]:8900" -> "[::1]"
+        end = host.find("]")
+        if end != -1:
+            host = host[: end + 1]
+    elif ":" in host:
+        # IPv4 / hostname with port -> strip port
+        host = host.rsplit(":", 1)[0]
+    if host not in _LOOPBACK_HOSTS:
         return False
     if req.headers.get("X-Forwarded-For", "").strip():
         return False
     if req.headers.get("X-Real-IP", "").strip():
         return False
+    if req.headers.get("Forwarded", "").strip():
+        return False
+    if not _server_bound_loopback():
+        return False
     return True
+
+
+def _server_bound_loopback() -> bool:
+    """Did we boot bound to a loopback host? Defaults to True when unknown.
+
+    The dashboard records its bind address in ``_d._SERVER_HOST`` when
+    served via ``cli.serve()``. If that attribute is missing (pytest /
+    ad-hoc imports), assume loopback — the test harness drives requests
+    from the same process anyway.
+    """
+    import dashboard as _d
+    bind = getattr(_d, "_SERVER_HOST", None)
+    if not bind:
+        return True
+    bind = str(bind).strip().lower()
+    return bind in _LOOPBACK_ADDRS or bind in {"", "localhost"}
 
 
 def _detected_token_source(token: str):
@@ -360,7 +402,7 @@ def _detected_token_source(token: str):
         import subprocess as _sp
 
         result = _sp.run(
-            ["pgrep", "-f", "openclaw-gatewa"],
+            ["pgrep", "-f", "openclaw-gateway"],
             capture_output=True,
             text=True,
             timeout=3,
