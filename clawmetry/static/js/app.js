@@ -6007,6 +6007,59 @@ async function loadSystemHealth() {
       }
     } catch(e) {}
 
+    // Channel ingest (#1310 follow-up) — per-provider message counts so
+    // operators see whether the gateway WS tap is actually writing
+    // Telegram/Signal/Slack/etc. messages to DuckDB. Closes the user-felt
+    // loop on PR #1313 (the env-var fix): if Telegram appears here with a
+    // recent mins_ago, the tap is hot. If "never" / very stale, daemon
+    // didn't pick up the env var and Brain feed will look empty too.
+    try {
+      var ingest = (d && Array.isArray(d.channel_ingest)) ? d.channel_ingest : [];
+      var ciWrap = document.getElementById('sh-channel-ingest-wrap');
+      var ciEl = document.getElementById('sh-channel-ingest');
+      if (ciEl && ciWrap) {
+        if (ingest.length === 0) {
+          ciWrap.style.display = 'none';
+        } else {
+          ciWrap.style.display = '';
+          var emoji = function(p) {
+            return p === 'telegram' ? '✈️'
+                 : p === 'signal'   ? '📡'
+                 : p === 'slack'    ? '💬'
+                 : p === 'discord'  ? '🎮'
+                 : p === 'whatsapp' ? '🟢'
+                 : p === 'imessage' ? '🍎'
+                 : p === 'webchat'  ? '🌐'
+                 : p === 'irc'      ? '#'
+                 : '📨';
+          };
+          var fmtMins = function(m) {
+            if (m == null) return 'never';
+            if (m < 1) return 'just now';
+            if (m < 60) return m + 'm ago';
+            if (m < 1440) return Math.floor(m/60) + 'h ago';
+            return Math.floor(m/1440) + 'd ago';
+          };
+          var cihtml = '';
+          ingest.forEach(function(row) {
+            var mins = row.mins_ago;
+            // Hot < 10m → green, warm < 60m → amber, stale → muted.
+            var dotColor = (mins != null && mins < 10) ? '#16a34a'
+                         : (mins != null && mins < 60) ? '#d97706'
+                         : '#6b7280';
+            var border = (mins != null && mins < 10) ? 'rgba(22,163,74,0.3)' : 'var(--border-secondary)';
+            cihtml += '<div title="total ' + row.total + ' (' + (row.msg_in||0) + ' in / ' + (row.msg_out||0) + ' out)" '
+              + 'style="display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg-secondary);border-radius:8px;border:1px solid ' + border + ';font-size:12px;margin-bottom:4px;">'
+              + '<span style="width:9px;height:9px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;display:inline-block;"></span>'
+              + emoji(row.provider) + ' <span style="font-weight:600;color:var(--text-primary);">' + escHtml(row.provider) + '</span>'
+              + '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">' + fmtMins(mins) + ' &middot; ' + row.total + ' total</span>'
+              + '</div>';
+          });
+          ciEl.innerHTML = cihtml;
+        }
+      }
+    } catch(e) { /* channel-ingest panel optional */ }
+
     // Handler latency (#1283) — top-N slowest /api/* endpoints, 5-min rolling p50/p95.
     // Surfaces /api/sessions-class regressions in seconds, not weeks.
     try {

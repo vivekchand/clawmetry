@@ -203,6 +203,20 @@
           margin-bottom:6px;
           ">Heartbeat</div>
         <div id="sh-heartbeat" style="margin-bottom:14px;"></div>
+        <!-- 📨 Channel ingest (#1310 follow-up) — per-provider message
+             counts so operators see whether the gateway WS tap is actually
+             writing channel messages to DuckDB. Hidden until first sample. -->
+        <div id="sh-channel-ingest-wrap" style="display:none;">
+          <div style="
+            font-size:11px;
+            text-transform:uppercase;
+            letter-spacing:1.5px;
+            color:var(--text-muted);
+            font-weight:600;
+            margin-bottom:6px;
+            ">📨 Channel ingest</div>
+          <div id="sh-channel-ingest" style="margin-bottom:14px;"></div>
+        </div>
         <!-- ⏱️ Handler latency (#1283) — p50/p95 per /api/* endpoint, 5-min rolling -->
         <div id="sh-latency-wrap" style="display:none;">
           <div style="
