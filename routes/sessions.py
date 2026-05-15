@@ -406,48 +406,48 @@ def _try_local_store_sessions_by_type(type_filter: str = ""):
       - the sessions table is empty (fresh install / non-OpenClaw user)
       - any unexpected error happens (we'd rather degrade than 500)
     """
+    # Issue #1282 (final callsite): replace the inline raw ``_fetch`` SELECT —
+    # which forced a writable ``get_store()`` open and raced the sync daemon's
+    # exclusive DuckDB writer lock — with ``query_sessions_table`` via the
+    # daemon HTTP proxy. ``query_sessions_table`` already in
+    # ``_DAEMON_METHODS`` allowlist; returns dict-shaped rows with metadata
+    # JSON-decoded so we can drop the manual tuple-indexing + bytes-decode.
+    rows = None
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-        rows = store._fetch("""
-            SELECT agent_type, session_id, agent_id, title, started_at,
-                   last_active_at, ended_at, status, total_tokens, cost_usd,
-                   message_count, metadata
-            FROM sessions
-            ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
-            LIMIT 200
-        """, [])
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_sessions_table", limit=200)
     except Exception:
-        return None
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_sessions_table(limit=200)
+        except Exception:
+            return None
     if not rows:
         return None
 
     sessions = []
     explicit_types: dict[str, str] = {}
     for r in rows:
-        meta = {}
-        if r[11]:
-            try:
-                import json as _j
-                meta = _j.loads(bytes(r[11]).decode("utf-8"))
-            except Exception:
-                pass
+        meta = r.get("metadata") if isinstance(r.get("metadata"), dict) else {}
         s = {
-            "agent_type":     r[0],
-            "session_id":     r[1],
-            "agent_id":       r[2],
-            "title":          r[3] or "",
-            "started_at":     r[4] or "",
-            "updated_at":     r[5] or "",
-            "ended_at":       r[6] or "",
-            "status":         r[7] or "",
-            "total_tokens":   int(r[8] or 0),
-            "total_cost":     float(r[9] or 0.0),
-            "message_count":  int(r[10] or 0),
+            "agent_type":     r.get("agent_type"),
+            "session_id":     r.get("session_id"),
+            "agent_id":       r.get("agent_id"),
+            "title":          r.get("title") or "",
+            "started_at":     r.get("started_at") or "",
+            "updated_at":     r.get("last_active_at") or "",
+            "ended_at":       r.get("ended_at") or "",
+            "status":         r.get("status") or "",
+            "total_tokens":   int(r.get("total_tokens") or 0),
+            "total_cost":     float(r.get("cost_usd") or 0.0),
+            "message_count":  int(r.get("message_count") or 0),
             "channel":        meta.get("channel", ""),
             "chat_type":      meta.get("chat_type", ""),
-            "subject":        r[3] or meta.get("subject", ""),
-            "displayName":    r[3] or "",
+            "subject":        r.get("title") or meta.get("subject", ""),
+            "displayName":    r.get("title") or "",
             "kind":           meta.get("kind", ""),
             "_source":        "local_store",
         }
