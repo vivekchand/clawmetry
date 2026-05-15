@@ -173,7 +173,7 @@ if [ -x "$INSTALL_DIR/bin/clawmetry" ]; then
   _CURRENT=$("$INSTALL_DIR/bin/clawmetry" --version 2>/dev/null | awk '{print $NF}')
   _LATEST=$("$INSTALL_DIR/bin/python3" -c "
 import json, urllib.request
-r = urllib.request.urlopen('https://pypi.org/pypi/clawmetry/json')
+r = urllib.request.urlopen('https://pypi.org/pypi/clawmetry/json', timeout=2)
 print(json.loads(r.read())['info']['version'])
 " 2>/dev/null)
   if [ -n "$_CURRENT" ] && [ "$_CURRENT" = "$_LATEST" ] && [ -n "$_existing_pids" ]; then
