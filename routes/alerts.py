@@ -80,9 +80,12 @@ def _try_local_store_alert_rules():
             rows = store.query_alert_rules(limit=500)
     except Exception:
         return None
-    if not rows:
-        return None
-    return {"rules": rows, "_source": "local_store"}
+    # Issue #1265: an EMPTY result set is a successful local-store hit
+    # (user has no alert rules configured yet). Returning None here makes
+    # the handler fall through to the legacy fleet-DB path, which hangs
+    # ~3 s on this user's box. Return [] tagged with the local_store
+    # source instead — the dashboard JS handles an empty list cleanly.
+    return {"rules": rows or [], "_source": "local_store"}
 
 
 # ── Budget API Routes ───────────────────────────────────────────────────

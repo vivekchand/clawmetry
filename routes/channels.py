@@ -75,30 +75,27 @@ def _channel_config_status_from_local_store(provider: str):
     """Read the non-secret status summary for ``provider`` from DuckDB.
 
     Returns the row dict tagged with ``_source: "local_store"`` on hit, or
-    ``None`` on miss / store unavailable. NEVER returns the encrypted blob —
-    HTTP responses must never carry ciphertext to keep the cloud surface
+    ``None`` on store unavailable. NEVER returns the encrypted blob — HTTP
+    responses must never carry ciphertext to keep the cloud surface
     plaintext-free at every layer of defense."""
+    # Issue #1256 + #1265: route through daemon proxy (DuckDB process-level
+    # lock blocks direct opens from the dashboard process when sync daemon
+    # owns the writer).
+    rows = None
     try:
-        from clawmetry import local_store
-    except Exception:
-        return None
-    store = None
-    try:
-        store = local_store.get_store(read_only=True)
-    except Exception:
-        # Fresh install with no daemon writes yet — DuckDB can't open RO on a
-        # missing file. Try opening writable so the schema is created;
-        # subsequent reads return [] (treated as "unconfigured" below).
-        try:
-            store = local_store.get_store(read_only=False)
-        except Exception as e:
-            _log.debug("channel_config local-store open failed: %s", e)
-            return None
-    try:
-        rows = store.query_channel_config_status(provider=provider)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_channel_config_status", provider=provider)
     except Exception as e:
-        _log.debug("channel_config local-store read failed (provider=%s): %s", provider, e)
-        return None
+        _log.debug("channel_config daemon proxy failed (provider=%s): %s", provider, e)
+    if rows is None:
+        # Single-process fallback (tests + dev mode).
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_channel_config_status(provider=provider)
+        except Exception as e:
+            _log.debug("channel_config direct open failed (provider=%s): %s", provider, e)
+            return None
     if not rows:
         # Provider hasn't been configured yet — still serve from the local
         # store with explicit "unconfigured" status so the cloud UI renders
@@ -162,14 +159,25 @@ def api_channels_status_all():
         from clawmetry import local_store
     except Exception:
         return jsonify({"channels": [], "_source": "fallback"})
+    # Issue #1265 + #1256: route through daemon proxy (DuckDB process lock
+    # blocks direct opens) and treat an empty result as a successful hit
+    # rather than a miss-that-falls-through.
+    rows = None
     try:
-        store = local_store.get_store(read_only=True)
-        rows = store.query_channel_config_status()
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_channel_config_status")
     except Exception as e:
-        _log.debug("channels/status local-store read failed: %s", e)
-        return jsonify({"channels": [], "_source": "fallback"})
+        _log.debug("channels/status daemon proxy failed: %s", e)
+    if rows is None:
+        # Single-process fallback (tests + dev mode).
+        try:
+            store = local_store.get_store(read_only=True)
+            rows = store.query_channel_config_status()
+        except Exception as e:
+            _log.debug("channels/status direct open failed: %s", e)
+            return jsonify({"channels": [], "_source": "fallback"})
     out = []
-    for r in rows:
+    for r in (rows or []):
         d = dict(r); d["configured"] = True; out.append(d)
     return jsonify({"channels": out, "_source": "local_store"})
 
