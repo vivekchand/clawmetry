@@ -10090,7 +10090,7 @@ function openCompModal(nodeId) {
     document.getElementById('comp-modal-overlay').classList.add('open');
     if (typeof loadAutomationAdvisorDataWithTime === 'function') {
       try { loadAutomationAdvisorDataWithTime(); } catch (e) {
-        document.getElementById('comp-modal-body').innerHTML = '<div style="padding:20px;color:var(--text-error);">Failed to load: ' + e.message + '</div>';
+        document.getElementById('comp-modal-body').innerHTML = _compModalError(null, 'automation data', e);
       }
     }
     return;
@@ -10118,7 +10118,7 @@ function openCompModal(nodeId) {
       document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
     }).catch(function(e) {
       if (!isCompModalActive(nodeId)) return;
-      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load: ' + e.message + '</div>';
+      document.getElementById('comp-modal-body').innerHTML = _compModalError('loadComponentWithTimeContext(\'' + nodeId + '\')', c.name, e);
     });
     return;
   }
@@ -10136,8 +10136,9 @@ function openCompModal(nodeId) {
 //   err:     thrown Error or string
 function _compModalError(retryFn, label, err) {
   var msg = err && err.message ? err.message : String(err || '');
-  var btn = retryFn
-    ? ' <button onclick="' + retryFn + '()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button>'
+  var call = retryFn ? (retryFn.indexOf('(') !== -1 ? retryFn : retryFn + '()') : '';
+  var btn = call
+    ? ' <button onclick="' + call + '" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button>'
     : '';
   var labelPart = label ? ' ' + escapeHtml(label) : '';
   var msgPart   = msg ? ': ' + escapeHtml(msg) : '';
@@ -10243,11 +10244,10 @@ function loadTuiMessages(isRefresh) {
     var f = document.getElementById('comp-modal-footer');
     if (f) f.textContent = 'Last updated: ' + new Date().toLocaleTimeString() +
       ' - ' + (data.total || msgs.length) + ' total TUI messages';
-  }).catch(function() {
+  }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
     if (!isRefresh) {
-      document.getElementById('comp-modal-body').innerHTML =
-        '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load TUI messages</div>';
+      document.getElementById('comp-modal-body').innerHTML = _compModalError('loadTuiMessages', 'TUI messages', e);
     }
   });
 }
@@ -10552,11 +10552,7 @@ function loadGenericChannelData(nodeId, chKey, comp, isRefresh) {
     document.getElementById('comp-modal-footer').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(nodeId)) return;
-    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);">'
-      + '<div style="font-size:36px;margin-bottom:12px;">' + comp.icon + '</div>'
-      + '<div style="font-weight:600;margin-bottom:6px;">' + escapeHtml(comp.name) + '</div>'
-      + '<div style="font-size:13px;">Could not fetch channel data.</div>'
-      + '</div>';
+    body.innerHTML = _compModalError(null, comp.name, e);
   });
 }
 
@@ -10605,7 +10601,7 @@ function loadWebchatMessages(isRefresh) {
     document.getElementById('comp-modal-footer').textContent = 'WebChat - Last updated: ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
-    body.innerHTML = '<div style="text-align:center;padding:24px;color:#6b7280;">Could not fetch WebChat data.</div>';
+    body.innerHTML = _compModalError('loadWebchatMessages', 'WebChat', e);
   });
 }
 
@@ -10654,7 +10650,7 @@ function loadIRCMessages(isRefresh) {
     document.getElementById('comp-modal-footer').textContent = 'IRC - ' + (channels.join(', ') || 'no channels') + ' - ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
-    body.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;font-family:monospace;">*** Could not fetch IRC data ***</div>';
+    body.innerHTML = _compModalError('loadIRCMessages', 'IRC', e);
   });
 }
 
@@ -10703,7 +10699,7 @@ function loadBlueBubblesMessages(isRefresh) {
     document.getElementById('comp-modal-footer').textContent = 'BlueBubbles - ' + escapeHtml(status) + ' - ' + new Date().toLocaleTimeString();
   }).catch(function(e) {
     if (!isCompModalActive(expectedNodeId)) return;
-    body.innerHTML = '<div style="text-align:center;padding:24px;color:#6b7280;">Could not fetch BlueBubbles data.</div>';
+    body.innerHTML = _compModalError('loadBlueBubblesMessages', 'BlueBubbles', e);
   });
 }
 
@@ -10746,9 +10742,9 @@ function loadGoogleChatMessages(isRefresh) {
     }
     body.innerHTML = html;
     document.getElementById('comp-modal-footer').textContent = 'Google Chat - Last updated: ' + new Date().toLocaleTimeString();
-  }).catch(function() {
+  }).catch(function(e) {
     if (!isCompModalActive(nodeId)) return;
-    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">💬</div><div style="font-weight:600;color:#1a73e8;">Google Chat</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
+    body.innerHTML = _compModalError('loadGoogleChatMessages', 'Google Chat', e);
   });
 }
 
@@ -10791,9 +10787,9 @@ function loadMSTeamsMessages(isRefresh) {
     }
     body.innerHTML = html;
     document.getElementById('comp-modal-footer').textContent = 'Microsoft Teams - Last updated: ' + new Date().toLocaleTimeString();
-  }).catch(function() {
+  }).catch(function(e) {
     if (!isCompModalActive(nodeId)) return;
-    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">👔</div><div style="font-weight:600;color:#6264A7;">Microsoft Teams</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
+    body.innerHTML = _compModalError('loadMSTeamsMessages', 'Microsoft Teams', e);
   });
 }
 
@@ -10836,9 +10832,9 @@ function loadMattermostMessages(isRefresh) {
     }
     body.innerHTML = html;
     document.getElementById('comp-modal-footer').textContent = 'Mattermost - Last updated: ' + new Date().toLocaleTimeString();
-  }).catch(function() {
+  }).catch(function(e) {
     if (!isCompModalActive(nodeId)) return;
-    body.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);"><div style="font-size:36px;margin-bottom:12px;">⚓</div><div style="font-weight:600;color:#0058CC;">Mattermost</div><div style="font-size:13px;margin-top:8px;">Could not fetch channel data.</div></div>';
+    body.innerHTML = _compModalError('loadMattermostMessages', 'Mattermost', e);
   });
 }
 
@@ -11776,7 +11772,7 @@ function loadToolData(toolKey, comp, isRefresh) {
   }).catch(function(e) {
     if (!isCompModalActive(_expectedNodeId)) return;
     if (!isRefresh) {
-      document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-error);">Failed to load data: ' + e + '</div>';
+      document.getElementById('comp-modal-body').innerHTML = _compModalError(null, 'tool data', e);
     }
   });
 }
