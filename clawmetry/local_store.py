@@ -2264,6 +2264,90 @@ class LocalStore:
             })
         return out
 
+    def query_recent_read_tool_calls(
+        self,
+        *,
+        since: str | None = None,
+        limit: int = 50_000,
+    ) -> list[dict[str, Any]]:
+        """Tier-1 MOAT (issue #1364): /api/skills fidelity fast-path.
+
+        Returns one row per Read-tool invocation since ``since`` (ISO-8601
+        timestamp), shape ``{ts, session_id, file_path}``. Used by
+        ``routes/skills.py`` to count "body fetched" + "linked file read"
+        events per skill without walking every session JSONL on disk
+        (the legacy scanner re-opens 50-200+ files on every page render).
+
+        Tool-call shapes covered (all three appear in the wild):
+          * v3 top-level events with ``event_type`` in
+            ``{'tool.call', 'toolCall', 'tool_use'}`` — read from
+            ``data.input.file_path`` / ``data.arguments.file_path``.
+          * Assistant ``message`` events with
+            ``data.toolMetas[*].input.file_path`` (PR #1132 trajectory
+            parser shape).
+          * Legacy assistant message events whose
+            ``data.message.content[*]`` still carries raw
+            ``{type:'toolCall'|'tool_use', name, input/arguments}`` blocks
+            (older OpenClaw transcripts that pre-date PR #1132's
+            trajectory projection).
+
+        Tool name is matched case-insensitively against
+        ``{'read', 'readfile', 'read_file'}`` — same set the legacy
+        ``_scan_fidelity_events`` checked. The ``file_path`` argument is
+        pulled from the first non-empty of ``file_path`` / ``path`` /
+        ``filename`` (Anthropic SDK + OpenClaw both shapes seen).
+
+        Rows where no Read-tool path can be extracted are dropped so the
+        caller iterates only useful events.
+
+        ``limit`` clamps total returned rows; defaults to 50k which is
+        ~1 million-token agent-week worth of Read calls. Callers should
+        pass a 7d ``since`` to keep the result set bounded.
+        """
+        try:
+            lim = int(limit)
+        except (TypeError, ValueError):
+            lim = 50_000
+        lim = max(1, min(200_000, lim))
+
+        clauses: list[str] = [
+            "(event_type IN ('tool.call', 'toolCall', 'tool_use')"
+            " OR event_type = 'message')"
+        ]
+        params: list[Any] = []
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT ts, session_id, event_type, data
+            FROM events
+            {where}
+            ORDER BY ts DESC
+            LIMIT ?
+        """
+        params.append(lim)
+
+        out: list[dict[str, Any]] = []
+        for ts, sid, ev_type, raw in self._fetch(sql, params):
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    continue
+
+            for path in _iter_read_tool_paths(ev_type, data):
+                out.append({
+                    "ts":         ts,
+                    "session_id": sid,
+                    "file_path":  path,
+                })
+        return out
+
     # ── flush ───────────────────────────────────────────────────────────
 
     def _flusher_loop(self) -> None:
@@ -3870,6 +3954,79 @@ def _duration_seconds(start_iso: str, end_iso: str) -> float:
         return max(0.0, (b - a).total_seconds())
     except (TypeError, ValueError):
         return 0.0
+
+
+_READ_TOOL_NAMES = frozenset({"read", "readfile", "read_file"})
+
+
+def _iter_read_tool_paths(event_type: str | None, data: dict) -> Iterable[str]:
+    """Yield ``file_path`` arguments for every Read-like tool invocation
+    described by ``data``. Handles all three on-the-wire shapes the
+    OpenClaw + trajectory-projection pipeline emits — see
+    :meth:`LocalStore.query_recent_read_tool_calls` for the full list.
+
+    Yields nothing for non-Read tool calls or when no path argument can
+    be extracted; the caller treats absence as "skip this row".
+    """
+    if not isinstance(data, dict):
+        return
+
+    def _path_from_input(inp: Any) -> str:
+        if isinstance(inp, str):
+            try:
+                inp = json.loads(inp)
+            except (ValueError, TypeError):
+                return ""
+        if not isinstance(inp, dict):
+            return ""
+        for key in ("file_path", "path", "filename"):
+            v = inp.get(key)
+            if isinstance(v, str) and v:
+                return v
+        return ""
+
+    et = (event_type or "").lower()
+
+    # Shape 1: top-level tool.call / toolCall / tool_use event.
+    if et in ("tool.call", "toolcall", "tool_use"):
+        name = (data.get("name") or "").lower()
+        if name in _READ_TOOL_NAMES:
+            p = _path_from_input(data.get("input") or data.get("arguments"))
+            if p:
+                yield p
+        return
+
+    # Shape 2: assistant ``message`` event with ``toolMetas`` projection
+    # (PR #1132 trajectory parser shape).
+    metas = data.get("toolMetas")
+    if isinstance(metas, list):
+        for m in metas:
+            if not isinstance(m, dict):
+                continue
+            if (m.get("name") or "").lower() not in _READ_TOOL_NAMES:
+                continue
+            p = _path_from_input(m.get("input"))
+            if p:
+                yield p
+
+    # Shape 3: legacy assistant message events whose
+    # ``data.message.content`` still carries raw
+    # ``{type:'toolCall'|'tool_use'}`` blocks (older transcripts that
+    # pre-date PR #1132's trajectory projection).
+    msg = data.get("message")
+    if isinstance(msg, dict) and msg.get("role") == "assistant":
+        content = msg.get("content")
+        if isinstance(content, list):
+            for blk in content:
+                if not isinstance(blk, dict):
+                    continue
+                if blk.get("type") not in ("toolCall", "tool_use"):
+                    continue
+                if (blk.get("name") or "").lower() not in _READ_TOOL_NAMES:
+                    continue
+                p = _path_from_input(blk.get("input") or blk.get("arguments"))
+                if p:
+                    yield p
 
 
 def _decode_data_blob_rows(rows: Iterable[tuple], cols: list[str]) -> list[dict[str, Any]]:

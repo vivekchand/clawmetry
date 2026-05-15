@@ -336,6 +336,12 @@ _DAEMON_METHODS = frozenset({
     # Issue #1364 (MOAT 1.b): surface OTel spans we already persist.
     # Powers /api/spans + the Brain-tab "Spans" table.
     "query_recent_spans",
+    # Issue #1364 (MOAT Tier-1): /api/skills fidelity counts. Replaces a
+    # 7d × N-session JSONL scan (re-walks every transcript on every
+    # /api/skills render). Returns Read-tool calls so the route can
+    # bucket per-skill body-fetch + linked-file-read counts via the
+    # in-memory skill-paths map.
+    "query_recent_read_tool_calls",
     "health",
 })
 
