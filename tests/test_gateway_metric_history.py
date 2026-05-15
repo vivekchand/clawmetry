@@ -94,8 +94,22 @@ def fresh_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def health_app(fresh_store, monkeypatch):
+def health_app(fresh_store, tmp_path, monkeypatch):
     """Flask app with ``bp_health`` registered against the fresh DuckDB."""
+    # Force daemon-discovery path to a non-existent file so
+    # ``local_store_via_daemon`` always punts to the in-process store
+    # instead of crossing the wire to a developer's locally-running
+    # ClawMetry daemon (which would have different data). Mirrors the
+    # pattern documented in tests/test_moat_send_message_e2e.py.
+    sys.modules.pop("routes.local_query", None)
+    import routes.local_query as lq
+    importlib.reload(lq)
+    monkeypatch.setattr(
+        lq, "_DISCOVERY_PATH", str(tmp_path / "no-such-discovery.json"),
+        raising=True,
+    )
+    lq._invalidate_daemon_cache()
+
     # Ensure routes.health doesn't accidentally find a stale local_store
     # module pointing at the previous DB file.
     sys.modules.pop("routes.health", None)
