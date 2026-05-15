@@ -286,6 +286,18 @@ if [ "$OS" = "Darwin" ]; then
         fi
         ;;
     esac
+
+    # Issue #1310 — ensure CLAWMETRY_ENABLE_WS_TAP=1 is set on the sync
+    # plist so Telegram/Signal/Slack channel messages reach DuckDB. The
+    # gateway WS tap was flipped opt-in by PR #1228 (gateway_tap.py:589
+    # gated on this env var); without it operators see an empty Brain
+    # feed despite active channel traffic. Idempotent — Add fails if the
+    # key already exists, then Set updates it. Sync plist only.
+    if [ "$_label" = "com.clawmetry.sync" ]; then
+      /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables dict" "$_plist" 2>/dev/null || true
+      /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:CLAWMETRY_ENABLE_WS_TAP string 1" "$_plist" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:CLAWMETRY_ENABLE_WS_TAP 1" "$_plist" 2>/dev/null || true
+    fi
   done
 
   # Step 2: kickstart any registered com.clawmetry.* job in the BACKGROUND.

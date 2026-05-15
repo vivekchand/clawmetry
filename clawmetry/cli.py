@@ -807,6 +807,16 @@ def _register_launchd(config: dict) -> None:
         <string>-m</string>
         <string>clawmetry.sync</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Issue #1310: gateway WS tap is opt-in (PR #1228) because
+             OpenClaw upstream may not grant operator.read scope. Default
+             ON in the daemon plist so Telegram/Signal/Slack channel
+             messages reach DuckDB on a fresh install; the tap silently
+             no-ops on scope rejection (with a single warning) so this
+             can't make things worse. -->
+        <key>CLAWMETRY_ENABLE_WS_TAP</key><string>1</string>
+    </dict>
     <key>RunAtLoad</key>         <true/>
     <key>KeepAlive</key>         <true/>
     <key>StandardOutPath</key>   <string>{LOG_FILE}</string>
@@ -854,6 +864,9 @@ After=network.target
 
 [Service]
 ExecStart={python} -m clawmetry.sync
+# Issue #1310 — gateway WS tap default-on so Telegram/Signal/Slack
+# channel messages reach DuckDB. Tap silently no-ops on scope rejection.
+Environment=CLAWMETRY_ENABLE_WS_TAP=1
 Restart=always
 RestartSec=30
 StandardOutput=append:{LOG_FILE}
