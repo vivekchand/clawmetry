@@ -2625,6 +2625,59 @@ def api_loop_detection():
 
 
 # ---------------------------------------------------------------------------
+# Loop-detection signals from clawmetry/proxy.py LoopDetector (issue #1364)
+#
+# Distinct from /api/loop-detection above (which scans tool_call sequences
+# in session JSONL). This endpoint serves the persisted signals that the
+# enforcement proxy emits whenever a request hash repeats often enough to
+# trip ``LoopDetectionConfig.max_similar`` in a window. Backed by the
+# DuckDB ``loop_signals`` table; gracefully returns ``[]`` when the local
+# store is unreachable so the Brain badge fails closed (no badge) rather
+# than blowing up the page.
+# ---------------------------------------------------------------------------
+
+
+@bp_health.route("/api/loop-signals")
+def api_loop_signals():
+    """Return recent LoopDetector signals for the dashboard's Brain badge.
+
+    Query params (all optional):
+      limit          — max rows (default 20, clamp 1..200)
+      since_minutes  — last-N minute window (default 60, <=0 disables)
+
+    Response:
+      {
+        "signals": [
+          {"session_id": str, "signature": str, "repeat_count": int,
+           "first_seen": str, "last_seen": str, "severity": str,
+           "agent_type": str, "details": dict|str|None}
+        ],
+        "count": <int>
+      }
+
+    Empty-list fallback (HTTP 200) on any error so the badge never breaks
+    the page.
+    """
+    try:
+        limit = int(request.args.get("limit", 20))
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        since_minutes = int(request.args.get("since_minutes", 60))
+    except (TypeError, ValueError):
+        since_minutes = 60
+
+    rows = _ls_call(
+        "query_recent_loop_signals",
+        limit=limit,
+        since_minutes=since_minutes,
+    )
+    if rows is None:
+        rows = []
+    return jsonify({"signals": rows, "count": len(rows)})
+
+
+# ---------------------------------------------------------------------------
 # MCP tool call observability (#850)
 # ---------------------------------------------------------------------------
 

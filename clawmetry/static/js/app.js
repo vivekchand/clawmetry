@@ -3693,6 +3693,62 @@ async function loadBrainPage(silent) {
   if (!_brainSSEConnected && document.getElementById('page-brain') && document.getElementById('page-brain').classList.contains('active')) {
     _brainRefreshTimer = setTimeout(function() { loadBrainPage(true); }, 5000);
   }
+  // Loop-signals badge (#1364) — fire-and-forget; never blocks the Brain tab.
+  loadLoopSignals();
+}
+
+
+// ── LoopDetector signals badge (#1364) ─────────────────────────────────────
+// Backed by /api/loop-signals → DuckDB ``loop_signals`` table populated by
+// clawmetry/proxy.py's LoopDetector. Hidden when the count is 0; clicking
+// expands a flat table (Time | Session | Pattern | Repeat).
+var _loopSignalsExpanded = false;
+
+async function loadLoopSignals() {
+  if (window.CLOUD_MODE) return;
+  var badge = document.getElementById('brain-loops-badge');
+  var countEl = document.getElementById('brain-loops-badge-count');
+  var tableEl = document.getElementById('brain-loops-table');
+  if (!badge || !countEl || !tableEl) return;
+  try {
+    var data = await fetchJsonWithTimeout('/api/loop-signals?limit=20', 5000);
+    var rows = (data && data.signals) || [];
+    if (!rows.length) {
+      badge.style.display = 'none';
+      tableEl.innerHTML = '';
+      return;
+    }
+    badge.style.display = '';
+    countEl.textContent = String(rows.length);
+    // Render table — keep it dead simple: Time | Session | Pattern | Repeat.
+    var head = '<div style="display:grid;grid-template-columns:130px 160px 1fr 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
+      + '<div>Last seen</div><div>Session</div><div>Pattern</div><div style="text-align:right;">Repeats</div></div>';
+    var body = rows.map(function(r) {
+      var ts = r.last_seen || r.first_seen || '';
+      try { ts = new Date(ts).toLocaleString(); } catch (e) {}
+      var sid = String(r.session_id || '').slice(0, 16);
+      var sig = String(r.signature || '');
+      if (sig.length > 60) sig = sig.slice(0, 57) + '...';
+      var rc = r.repeat_count != null ? r.repeat_count : '-';
+      return '<div style="display:grid;grid-template-columns:130px 160px 1fr 70px;gap:10px;padding:5px 0;border-bottom:1px solid var(--border-secondary);">'
+        + '<div style="color:var(--text-muted);">' + escHtml(ts) + '</div>'
+        + '<div style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.session_id || '')) + '">' + escHtml(sid) + '</div>'
+        + '<div style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.signature || '')) + '">' + escHtml(sig) + '</div>'
+        + '<div style="text-align:right;color:#ef4444;font-weight:700;">' + escHtml(String(rc)) + '</div>'
+        + '</div>';
+    }).join('');
+    tableEl.innerHTML = head + body;
+  } catch (e) {
+    // Fail closed: hide the badge so we don't show a stale or wrong count.
+    badge.style.display = 'none';
+  }
+}
+
+function toggleLoopSignalsList() {
+  var panel = document.getElementById('brain-loops-panel');
+  if (!panel) return;
+  _loopSignalsExpanded = !_loopSignalsExpanded;
+  panel.style.display = _loopSignalsExpanded ? '' : 'none';
 }
 
 

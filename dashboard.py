@@ -4865,7 +4865,13 @@ function clawmetryLogout(){
 <div class="page" id="page-brain">
   <div style="padding:12px 0 8px 0;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
+        <!-- Loop-signals badge (#1364): hidden until /api/loop-signals returns >0 rows. -->
+        <button id="brain-loops-badge" type="button" onclick="toggleLoopSignalsList()" style="display:none;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:10px;padding:2px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;" title="LoopDetector signals from clawmetry/proxy.py">
+          <span id="brain-loops-badge-count">0</span> loops
+        </button>
+      </div>
       <div style="display:flex;gap:6px;align-items:center;">
         <!-- MOAT #1364: surface OTel spans we already persist. Toggles the
              #spans-panel below; defers fetch until first click so the
@@ -4886,6 +4892,14 @@ function clawmetryLogout(){
       <div id="spans-table-wrap" style="max-height:400px;overflow-y:auto;">
         <div style="color:var(--text-muted);padding:20px;font-size:12px;">Loading spans...</div>
       </div>
+    </div>
+    <!-- Loop signals list — collapsed until the badge is clicked. -->
+    <div id="brain-loops-panel" style="display:none;background:var(--bg-secondary);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-size:11px;font-weight:600;color:#ef4444;text-transform:uppercase;letter-spacing:1px;">Loops detected (proxy)</span>
+        <span style="font-size:10px;color:var(--text-muted);">From clawmetry proxy LoopDetector — last 60 min</span>
+      </div>
+      <div id="brain-loops-table" style="font-size:11px;font-family:'JetBrains Mono','SF Mono',monospace;color:var(--text-secondary);"></div>
     </div>
     <!-- Context Window Anatomy (#566) -->
     <div id="ctx-anatomy-wrap" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:none;">
