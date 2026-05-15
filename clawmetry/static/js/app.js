@@ -792,7 +792,15 @@ async function loadAutonomy() {
   } catch(e) {
     console.warn('autonomy load failed', e);
     if (labelEl) labelEl.textContent = '—';
-    if (gapEl) gapEl.textContent = 'Couldn\u2019t load right now.';
+    // Issue #1257 part 2 — replace silent failure with explicit
+    // Failed-to-load + Retry. Mirrors Brain pattern (PR #1239).
+    if (gapEl) {
+      gapEl.innerHTML = '<span style="color:var(--text-error);">Failed to load: '
+        + escHtml(String(e && e.message || e)) + '</span> '
+        + '<button onclick="loadAutonomy()" title="Server slow \u2014 usually clears within 30 s" '
+        + 'style="margin-left:6px;background:transparent;border:1px solid var(--border-primary);'
+        + 'color:var(--text-secondary);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;">Retry</button>';
+    }
   }
 }
 
@@ -6192,8 +6200,16 @@ async function loadSystemHealth() {
 
     return true;
   } catch(e) {
+    // Issue #1257 part 3 — replace static "Unable to load right now"
+    // with Failed-to-load + Retry. Mirrors Brain pattern (PR #1239).
     console.error('System health load failed', e);
-    var msg = '<div style="padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;font-size:12px;color:var(--text-muted);">Unable to load right now</div>';
+    var errMsg = escHtml(String(e && e.message || e));
+    var msg = '<div style="padding:8px 10px;background:var(--bg-error,rgba(220,38,38,0.08));border:1px solid rgba(220,38,38,0.3);border-radius:8px;font-size:12px;color:var(--text-error,#dc2626);">'
+      + 'Failed to load: ' + errMsg
+      + ' <button onclick="loadSystemHealth()" title="Server slow \u2014 usually clears within 30 s" '
+      + 'style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);'
+      + 'color:var(--text-secondary);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;">Retry</button>'
+      + '</div>';
     document.getElementById('sh-services').innerHTML = msg;
     document.getElementById('sh-disks').innerHTML = msg;
     document.getElementById('sh-crons').innerHTML = msg;
