@@ -534,5 +534,78 @@ console.log('_collapseBodylessOutbound (P1 follow-up to #1205 — collapse outbo
   eq(out8[2].type, 'EXEC', 'EXEC preserved');
 }
 
+// ── Test anon auth-fail funnel-loss ping helpers (issue #1365) ─────────
+// The bootstrap path must fire a ping ONLY when:
+//   - localStorage has no prior token (first-load reject, not session timeout)
+//   - /api/auth/check returned {authRequired:true, valid:false}
+//   - NOT in the needsSetup branch (separate funnel; not our target)
+// And the UA bucketer must squash everything into chrome/safari/firefox/other
+// without leaking version numbers / OS strings into analytics cardinality.
+console.log('anon auth-fail ping helpers (issue #1365)');
+{
+  const sandbox = { Date: Date };
+  vm.createContext(sandbox);
+  const code = extractFunction('_uaClass') + '\n' +
+               extractFunction('_shouldPingAuthFailFirstLoad') + '\n' +
+               'this.api = { _uaClass: _uaClass, _should: _shouldPingAuthFailFirstLoad };';
+  vm.runInContext(code, sandbox);
+  const api = sandbox.api;
+
+  // _uaClass buckets.
+  // Real Chrome UA on Mac:
+  eq(api._uaClass(
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+    '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+  ), 'chrome', 'Mac Chrome → chrome');
+  // Real Safari UA (no "Chrome" token, has "Safari").
+  eq(api._uaClass(
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 ' +
+    '(KHTML, like Gecko) Version/17.4 Safari/605.1.15'
+  ), 'safari', 'Mac Safari → safari');
+  // Real Firefox UA.
+  eq(api._uaClass(
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:125.0) Gecko/20100101 Firefox/125.0'
+  ), 'firefox', 'Mac Firefox → firefox');
+  // Edge embeds Chrome — must bucket as chrome (close enough; we only
+  // want browser-engine cardinality, not vendor).
+  eq(api._uaClass(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+    '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0'
+  ), 'chrome', 'Edge (Chromium) → chrome bucket');
+  // curl / scripts / unknowns.
+  eq(api._uaClass('curl/8.7.1'), 'other', 'curl → other');
+  eq(api._uaClass(''), 'other', 'empty UA → other');
+  eq(api._uaClass(null), 'other', 'null UA → other');
+  eq(api._uaClass(undefined), 'other', 'undefined UA → other');
+
+  // _shouldPingAuthFailFirstLoad gating matrix.
+  const FAIL = { authRequired: true, valid: false };
+  const OK = { authRequired: true, valid: true };
+  const SETUP = { needsSetup: true, authRequired: true, valid: false };
+
+  // True only for: no stored token AND a fresh auth-fail response.
+  eq(api._should(null, FAIL), true, 'no token + auth fail → fire ping');
+  eq(api._should('', FAIL), true, 'empty token + auth fail → fire ping');
+
+  // Stored token = session-timeout or rotated token, NOT a fresh-install
+  // funnel drop. Polluting the signal would defeat the purpose.
+  eq(api._should('cm_abc', FAIL), false,
+     'stored token + auth fail → suppress (session timeout, not first-load)');
+
+  // Successful auth must never trigger a ping.
+  eq(api._should(null, OK), false, 'no token + auth OK → no ping');
+  eq(api._should('cm_abc', OK), false, 'stored token + auth OK → no ping');
+
+  // needsSetup is a separate funnel (gateway not running at all). Don't
+  // mix it into the "valid token rejected" signal we're trying to surface.
+  eq(api._should(null, SETUP), false, 'needsSetup → suppress (separate funnel)');
+
+  // Defensive: malformed authData must never throw.
+  eq(api._should(null, null), false, 'null authData → no ping');
+  eq(api._should(null, {}), false, 'empty authData → no ping');
+  eq(api._should(null, { authRequired: false }), false,
+     'authRequired:false → no ping');
+}
+
 console.log('\n' + (failed === 0 ? 'PASS' : 'FAIL') + ' — ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed === 0 ? 0 : 1);

@@ -474,6 +474,138 @@ def api_auth_detected_token():
     return jsonify({"token": token, "source": _detected_token_source(token)})
 
 
+# ── Anonymous funnel-loss instrumentation (issue #1365) ──────────────────────
+# Allowed event names. Keep this tiny — every new value is an analytics
+# schema commitment. Today we only ship the one funnel we got burned on
+# in #1357 (typo'd pgrep killed auto-detect).
+_ANON_ALLOWED_EVENTS = frozenset({"auth_fail_first_load"})
+_ANON_ALLOWED_UA = frozenset({"chrome", "safari", "firefox", "other"})
+_ANON_LOG_PATH = os.path.expanduser("~/.clawmetry/anon_events.jsonl")
+# Hard caps: defence in depth against anything that slips past the JS
+# helpers and posts pathological payloads.
+_ANON_VERSION_MAX = 32
+_ANON_EVENT_MAX = 64
+_ANON_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB rolling cap — older entries pruned.
+
+# Fields that MUST NEVER appear in a body — defense against accidental PII
+# leak if a future caller forgets the schema. Server rejects 400 on any.
+_ANON_FORBIDDEN_FIELDS = frozenset({
+    "token", "auth", "authorization", "bearer", "password", "secret",
+    "ip", "remote_addr", "x_forwarded_for", "user_id", "email", "username",
+    "session_id", "cookie",
+})
+
+
+def _anon_append_local(payload: dict) -> None:
+    """Append ``payload`` as a JSONL line to the local durable log.
+
+    Local DuckDB is process-locked (see memory: DuckDB locks at PROCESS
+    level — daemon owns the writer). We don't want to add a daemon-proxy
+    hop for a fire-and-forget telemetry ping, so we use a plain JSONL
+    file as the durable record. The daemon can flush it to cloud later;
+    losing a few lines on crash is acceptable for a counter ping.
+    """
+    try:
+        os.makedirs(os.path.dirname(_ANON_LOG_PATH), exist_ok=True)
+        # Rolling cap: if the file is over the limit, truncate. We could
+        # do a proper rotate, but this is a counter ping — keeping the
+        # most recent 5 MB is more than enough for funnel-loss analysis.
+        try:
+            if os.path.getsize(_ANON_LOG_PATH) > _ANON_LOG_MAX_BYTES:
+                with open(_ANON_LOG_PATH, "w"):
+                    pass
+        except OSError:
+            pass
+        with open(_ANON_LOG_PATH, "a") as fh:
+            fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    except Exception:
+        # Telemetry must never break the dashboard. Eat all errors.
+        pass
+
+
+def _anon_forward_cloud(payload: dict) -> None:
+    """Best-effort POST to the cloud analytics ingest. Fail-silent.
+
+    The cloud endpoint may not exist yet — that's fine, the local JSONL
+    is the durable record. We try anyway so once cloud catches up, the
+    OSS side starts feeding live data without another release.
+    """
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(
+            "https://app.clawmetry.com/api/admin/anon-event",
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        # Short timeout — never block the OSS request thread on the cloud.
+        _ur.urlopen(req, timeout=2).close()
+    except Exception:
+        pass
+
+
+@bp_auth.route("/api/anon-auth-fail-ping", methods=["POST"])
+def api_anon_auth_fail_ping():
+    """Receive an anonymous funnel-loss ping from the dashboard JS.
+
+    Triggered by the OSS dashboard's bootstrap path when ``/api/auth/check``
+    rejects on first page-load with no prior token in localStorage. The
+    typo regression of #1357 was completely invisible to us because no
+    such ping existed; this is the early-warning canary so we catch the
+    next one within a day instead of a week.
+
+    Strict allowlist on schema — any unexpected field, any token-like
+    name, any unbucketed UA class is a 400. We default-deny to keep the
+    "anonymous only" invariant verifiable from a single function.
+    """
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"error": "body must be a JSON object"}), 400
+
+    # Defense in depth: reject any forbidden field before parsing the
+    # allowed ones. If a future client (or attacker) tries to sneak
+    # ``{event: ..., token: "leak"}`` past us, we'd rather 400 than
+    # silently drop the token and persist the rest.
+    for key in body.keys():
+        if str(key).strip().lower() in _ANON_FORBIDDEN_FIELDS:
+            return jsonify({"error": "forbidden field in body"}), 400
+
+    event = str(body.get("event") or "").strip()
+    version = str(body.get("version") or "").strip()
+    ua_class = str(body.get("user_agent_class") or "").strip().lower()
+
+    if event not in _ANON_ALLOWED_EVENTS:
+        return jsonify({"error": "unknown event"}), 400
+    if ua_class not in _ANON_ALLOWED_UA:
+        return jsonify({"error": "unknown user_agent_class"}), 400
+    if not version or len(version) > _ANON_VERSION_MAX:
+        return jsonify({"error": "invalid version"}), 400
+    if len(event) > _ANON_EVENT_MAX:
+        return jsonify({"error": "event too long"}), 400
+
+    # Build the durable record. Server stamps ``ts`` (UTC seconds) so the
+    # client clock can't pollute the time series. No IP, no user id, no
+    # token — explicitly so.
+    payload = {
+        "ts": int(time.time()),
+        "event": event,
+        "version": version,
+        "user_agent_class": ua_class,
+    }
+    # Both helpers swallow their own errors, but we wrap defensively
+    # too: if a future refactor accidentally lets an exception escape,
+    # we still return 200 to the dashboard instead of breaking boot.
+    try:
+        _anon_append_local(payload)
+    except Exception:
+        pass
+    try:
+        _anon_forward_cloud(payload)
+    except Exception:
+        pass
+    return jsonify({"ok": True})
+
+
 @bp_auth.route("/auth")
 def auth_token():
     """Accept ?token=XXX, store in localStorage via JS, redirect to /.
