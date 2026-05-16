@@ -22,8 +22,31 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
+from clawmetry.risk import compute_hallucination_risk, is_llm_event
 
 bp_brain = Blueprint('brain', __name__)
+
+
+def _annotate_risk(events):
+    """Stamp each LLM-call event in ``events`` with a ``risk`` field.
+
+    Issue #567 (Hallucination Risk Indicator). Mutates ``events`` in
+    place and returns it for chaining. Non-LLM events (USER/EXEC/READ/…)
+    are left untouched so the dashboard renderer can cheaply branch on
+    ``ev.risk`` presence to decide whether to paint the small risk pill.
+    """
+    if not events:
+        return events
+    for ev in events:
+        try:
+            if is_llm_event(ev):
+                ev["risk"] = compute_hallucination_risk(ev)
+        except Exception:
+            # Never crash on bad input — the dashboard renders thousands
+            # of these per page-load and any one mis-shaped event must
+            # not poison the whole feed (per CLAUDE.md "graceful fallbacks").
+            pass
+    return events
 
 
 _BRAIN_HISTORY_CACHE = {}
@@ -315,6 +338,16 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
                     chat_id = data["chat"].get("id") or ""
                 if chat_id:
                     row["chat_id"] = str(chat_id)[:80]
+        # Issue #567 — Hallucination Risk Indicator. Compute the score
+        # from the RAW DuckDB row (which still carries ``data.params`` /
+        # ``data.usage``), then stamp it onto the trimmed output row.
+        # is_llm_event() filters non-assistant rows so we don't pay the
+        # extraction cost on every tool result / channel turn.
+        try:
+            if is_llm_event(r):
+                row["risk"] = compute_hallucination_risk(r)
+        except Exception:
+            pass
         out.append(row)
     return {
         "events":        out,
@@ -979,6 +1012,15 @@ def api_brain_history():
         ch = ev.get("channel", "")
         if ch:
             channel_counts[ch] = channel_counts.get(ch, 0) + 1
+
+    # Issue #567 — Hallucination Risk Indicator. Stamp every LLM-call
+    # event with a {risk_level, risk_explanation} dict so the Brain
+    # renderer can paint the small pill next to AGENT / THINK chips.
+    # JSONL-sourced events don't carry temperature / usage today so they
+    # fall through to "no risk signals available" — the contract is
+    # stable either way, and the local-store fast path above already
+    # picked up the rich rows.
+    _annotate_risk(events)
 
     try:
         _d._ext_emit("brain.event", {"count": len(events)})
