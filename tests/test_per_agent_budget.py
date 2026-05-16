@@ -321,3 +321,96 @@ def test_override_takes_precedence_over_global(dashboard_module):
     # Monthly side falls back to global because override is None.
     assert status["monthly_limit"] == 999.0
     assert status["monthly_limit_source"] == "global"
+
+
+# ── 6. Pro-tier gate on Telegram dispatch (issue #1168) ──────────────────────
+#
+# Per-agent LIMITS are OSS table-stakes (cost control). Per-agent Telegram
+# DISPATCH is Cloud-Pro only. These tests assert that an OSS user (no
+# ``cm_`` token, no Pro plan) crossing 80% / 100% on a per-agent budget
+# does NOT trigger ``_send_telegram_alert`` even though the banner +
+# alert-history row still fire.
+
+
+@pytest.fixture
+def telegram_spy(dashboard_module, monkeypatch):
+    """Replace ``_send_telegram_alert`` with a counting spy."""
+    _d = dashboard_module
+    calls = []
+    monkeypatch.setattr(_d, "_send_telegram_alert",
+                        lambda msg: calls.append(msg))
+    return _d, calls
+
+
+def test_oss_user_does_not_trigger_telegram_on_per_agent_warning(telegram_spy,
+                                                                  monkeypatch):
+    """Regression for #1168: OSS user with per-agent budget at 80%
+    must NOT fire Telegram dispatch (banner + history row are fine)."""
+    _d, calls = telegram_spy
+    # OSS = not Pro (no cm_ token, no cached plan).
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+
+    _d._set_agent_budget("oss-warn", daily_limit_usd=10.0)
+    _add_cost(_d, "oss-warn", 8.0)  # 80%
+    _d._budget_check()
+
+    # Banner / history row still fires — limits are free, visualisation is free.
+    assert _count_alerts_for(_d, "oss-warn") >= 1
+    # Telegram dispatch is gated.
+    assert calls == [], (
+        "OSS user should not trigger Telegram on per-agent threshold "
+        f"(got {len(calls)} dispatch(es))"
+    )
+
+
+def test_oss_user_does_not_trigger_telegram_on_per_agent_critical(telegram_spy,
+                                                                   monkeypatch):
+    """Same gate at the 100% / critical tier — banner + auto-pause still
+    work (those are free), but Telegram fan-out is Pro-only."""
+    _d, calls = telegram_spy
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+    _d._set_budget_config({"auto_pause_enabled": True})
+    _d._set_agent_budget("oss-crit", daily_limit_usd=10.0)
+    _add_cost(_d, "oss-crit", 12.0)  # 120%
+    _d._budget_check()
+
+    assert _count_alerts_for(_d, "oss-crit") >= 1
+    # Auto-pause is a free cost-control feature, must still trigger.
+    assert _d._budget_paused is True
+    # Telegram dispatch is gated.
+    assert calls == []
+
+
+def test_pro_user_still_triggers_telegram_on_per_agent_warning(telegram_spy,
+                                                                monkeypatch):
+    """Cloud-Pro user gets the same alert PLUS Telegram dispatch."""
+    _d, calls = telegram_spy
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
+    _d._set_agent_budget("pro-warn", daily_limit_usd=10.0)
+    _add_cost(_d, "pro-warn", 8.0)
+    _d._budget_check()
+
+    assert _count_alerts_for(_d, "pro-warn") >= 1
+    assert len(calls) >= 1, (
+        "Cloud-Pro user should receive Telegram dispatch on per-agent threshold"
+    )
+
+
+def test_api_budget_root_surfaces_pro_dispatch_flag(dashboard_module,
+                                                     monkeypatch):
+    """``/api/budget`` advertises ``pro_dispatch_enabled`` so the UI can
+    render the inline upsell instead of pretending alerts will fire."""
+    _d = dashboard_module
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+    client = _make_client(_d)
+    r = client.get("/api/budget")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert "pro_dispatch_enabled" in body
+    assert body["pro_dispatch_enabled"] is False
+
+    # Flip to Pro and confirm the flag propagates.
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+    r2 = client.get("/api/budget")
+    assert r2.get_json()["pro_dispatch_enabled"] is True
