@@ -12794,6 +12794,57 @@ function _withTimeout(promise, ms, label) {
   ]);
 }
 
+// ── Anonymous auth-fail-on-first-load instrumentation (issue #1365) ──────
+// The `pgrep openclaw-gatewa` typo in #1357 silently killed gateway-token
+// auto-detect for every fresh install without OPENCLAW_GATEWAY_TOKEN set.
+// We had no way to spot the regression because nothing pinged when first
+// boot rejected the locally-valid token. These pure helpers + the gated
+// emit inside bootDashboard() let us quantify the funnel loss next time.
+// NO token content, NO IP — see /api/anon-auth-fail-ping on the server.
+function _uaClass(ua) {
+  // Bucket the UA into 4 buckets so cardinality stays tiny in analytics.
+  // Order matters: Edge and Opera embed "Chrome" in their UA, so we test
+  // those exclusion-style before falling through to Chrome.
+  var s = String(ua || '').toLowerCase();
+  if (s.indexOf('firefox') !== -1) return 'firefox';
+  // Safari ships "Safari" + "Version/" but Chrome ALSO ships "Safari".
+  // Detect Safari by "safari" present AND "chrome"/"chromium" absent.
+  if (s.indexOf('safari') !== -1 && s.indexOf('chrome') === -1 && s.indexOf('chromium') === -1) return 'safari';
+  if (s.indexOf('chrome') !== -1 || s.indexOf('chromium') !== -1) return 'chrome';
+  return 'other';
+}
+
+function _shouldPingAuthFailFirstLoad(storedToken, authData) {
+  // Fire ONLY when this is genuinely a first-load reject — i.e. the user
+  // has no prior token in localStorage. A 401 with a stored token is a
+  // session timeout / rotated token, not a fresh-install funnel drop, and
+  // would pollute the signal we're trying to measure.
+  if (storedToken) return false;
+  if (!authData) return false;
+  if (authData.needsSetup) return false;  // separate funnel; not our target.
+  return !!(authData.authRequired && !authData.valid);
+}
+
+function _pingAuthFailFirstLoad() {
+  // Fire-and-forget. Never blocks boot, never surfaces errors. The server
+  // logs to local DuckDB/JSONL and best-effort forwards to cloud.
+  try {
+    var badge = document.getElementById('version-badge');
+    var version = badge ? String(badge.textContent || '').replace(/^v/, '').trim() : 'unknown';
+    var body = JSON.stringify({
+      event: 'auth_fail_first_load',
+      version: version || 'unknown',
+      user_agent_class: _uaClass(navigator && navigator.userAgent),
+    });
+    fetch('/api/anon-auth-fail-ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body,
+      keepalive: true,
+    }).catch(function() { /* fail-silent by design */ });
+  } catch (e) { /* never crash boot on telemetry */ }
+}
+
 async function bootDashboard() {
   // Hard floor: dismiss overlay after BOOT_HARD_TIMEOUT_MS no matter what.
   // The dashboard stays usable with partial data; individual panels show
@@ -12819,6 +12870,11 @@ async function bootDashboard() {
       return;
     }
     if (authData.authRequired && !authData.valid) {
+      // Anonymous funnel-loss ping (issue #1365). Gated on "no prior token"
+      // so we measure fresh-install rejects, not session timeouts.
+      if (_shouldPingAuthFailFirstLoad(stored, authData)) {
+        _pingAuthFailFirstLoad();
+      }
       document.getElementById('login-overlay').style.display = 'flex';
       _safeFinishBoot();
       return;
