@@ -38,6 +38,13 @@ def app(tmp_path, monkeypatch):
     import routes.infra as infra_mod
     importlib.reload(infra_mod)
 
+    # The pre-#1173 aggregation tests seed historical timestamps that fall
+    # outside the OSS 24h retention cap. Default the fixture to a Pro user
+    # so those assertions still pass; tests that exercise the cap itself
+    # monkeypatch ``_is_pro_user`` explicitly.
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
     a = Flask(__name__)
     a.register_blueprint(infra_mod.bp_logs)
     yield a, ls
@@ -210,3 +217,62 @@ def test_flow_runs_empty_store_returns_empty_list(app):
     assert body["runs"] == []
     assert body["count"] == 0
     assert body["_source"] == "empty"
+
+
+# ── Retention cap (issue #1173) ─────────────────────────────────────────────
+#
+# OSS / Cloud-Free users get capped to the last 24h of started_at; Cloud-Pro
+# users (gated by ``dashboard._is_pro_user``) bypass the cap. The response
+# always carries a ``capped_at_24h`` boolean so the UI can render the upgrade
+# CTA when the cap kicks in.
+
+
+def _seed_old_and_recent(store):
+    """One ancient session (8 days old) + one fresh session (now)."""
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    old_ts = (now - _dt.timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_ts = (now - _dt.timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    store.ingest({
+        "id": "old-1", "node_id": "n1", "agent_id": "main",
+        "session_id": "sess-old", "event_type": "message",
+        "ts": old_ts, "data": {"role": "user"},
+        "cost_usd": 0.10, "token_count": 100, "model": "claude-opus-4-7",
+    })
+    store.ingest({
+        "id": "new-1", "node_id": "n1", "agent_id": "main",
+        "session_id": "sess-new", "event_type": "message",
+        "ts": new_ts, "data": {"role": "user"},
+        "cost_usd": 0.05, "token_count": 50, "model": "claude-opus-4-7",
+    })
+    _wait_flush(store)
+
+
+def test_flow_runs_oss_capped_to_24h(app, monkeypatch):
+    a, ls = app
+    _seed_old_and_recent(ls.get_store())
+    # Force OSS (non-Pro) path.
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+
+    r = a.test_client().get("/api/flow/runs?limit=10")
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    body = r.get_json()
+    assert body["capped_at_24h"] is True
+    sids = {row["session_id"] for row in body["runs"]}
+    # Old session (8 days back) must be excluded; only the fresh one shows.
+    assert sids == {"sess-new"}
+
+
+def test_flow_runs_pro_bypasses_cap(app, monkeypatch):
+    a, ls = app
+    _seed_old_and_recent(ls.get_store())
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
+    r = a.test_client().get("/api/flow/runs?limit=10")
+    body = r.get_json()
+    assert body["capped_at_24h"] is False
+    sids = {row["session_id"] for row in body["runs"]}
+    # Pro users see the full history including the 8-day-old run.
+    assert sids == {"sess-old", "sess-new"}

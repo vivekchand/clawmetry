@@ -8626,9 +8626,11 @@ function loadFlowRuns() {
     .then(function(r) { return r.json(); })
     .then(function(d) {
       var runs = (d && d.runs) || [];
+      var cappedAt24h = !!(d && d.capped_at_24h);
       if (countEl) countEl.textContent = runs.length + ' run' + (runs.length === 1 ? '' : 's');
       if (!runs.length) {
-        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">No historical flow runs yet — the live Flow view will populate this once a session completes.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">No historical flow runs yet. The live Flow view will populate this once a session completes.</td></tr>';
+        _renderFlowRunsCap(cappedAt24h);
         return;
       }
       var rows = runs.map(function(r) {
@@ -8654,10 +8656,38 @@ function loadFlowRuns() {
           + '</tr>';
       }).join('');
       tbody.innerHTML = rows;
+      _renderFlowRunsCap(cappedAt24h);
     })
     .catch(function() {
       tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:#ef4444;font-size:12px;">Failed to load flow runs.</td></tr>';
     });
+}
+
+// Render a small CTA row below the Flow Runs table when the OSS retention
+// cap kicked in (issue #1173). Lives in its own footer container so the
+// table tbody stays purely tabular.
+function _renderFlowRunsCap(capped) {
+  var foot = document.getElementById('flow-runs-cap-cta');
+  if (!foot) {
+    var tbl = document.getElementById('flow-runs-tbody');
+    if (!tbl || !tbl.parentElement) return;
+    foot = document.createElement('div');
+    foot.id = 'flow-runs-cap-cta';
+    foot.style.cssText = 'padding:10px 14px;font-size:12px;color:var(--text-muted);border-top:1px solid var(--border-secondary,#2a2a4a);display:none;';
+    var host = tbl.closest('table');
+    if (host && host.parentElement) {
+      host.parentElement.appendChild(foot);
+    } else {
+      tbl.parentElement.appendChild(foot);
+    }
+  }
+  if (capped) {
+    foot.style.display = '';
+    foot.innerHTML = 'Showing the last 24 hours. <a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;">Upgrade to Cloud-Pro for unlimited history</a>';
+  } else {
+    foot.style.display = 'none';
+    foot.innerHTML = '';
+  }
 }
 
 function showFlowRunDetail(sid) {

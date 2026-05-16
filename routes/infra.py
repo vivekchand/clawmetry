@@ -29,7 +29,7 @@ import os
 import select
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
@@ -328,9 +328,15 @@ def api_flow_runs():
       ``since``  — ISO timestamp lower-bound on event ts
       ``until``  — ISO timestamp upper-bound
 
-    Returns ``{runs: [...], _source: "local_store"|"empty"}``. Never raises
-    — on any store failure we return an empty list with the legacy tag so
-    the Flow tab degrades gracefully.
+    Returns ``{runs: [...], _source: "local_store"|"empty",
+    capped_at_24h: bool}``. Never raises — on any store failure we return
+    an empty list with the legacy tag so the Flow tab degrades gracefully.
+
+    Retention gating (issue #1173): OSS / Cloud-Free users are capped to
+    the last 24 hours of ``started_at``. Cloud-Pro users (validated by
+    ``dashboard._is_pro_user``) get unlimited history. When the cap is
+    enforced we set ``capped_at_24h=true`` so the UI can surface the
+    Cloud-Pro upgrade CTA.
     """
     try:
         limit_raw = int(request.args.get("limit", 30))
@@ -340,6 +346,25 @@ def api_flow_runs():
     since = request.args.get("since") or None
     until = request.args.get("until") or None
     agent_id = request.args.get("agent_id") or None
+
+    # OSS retention cap (issue #1173). Pro users bypass the cap entirely;
+    # everyone else gets clamped to last 24h of started_at.
+    capped_at_24h = False
+    try:
+        import dashboard as _d
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
+    if not is_pro:
+        cap_iso = (
+            datetime.now(timezone.utc) - timedelta(hours=24)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # If caller asked for a window older than the cap (or no `since`
+        # at all), clamp to the cap and flag the response so the UI can
+        # render the upgrade CTA.
+        if not since or since < cap_iso:
+            since = cap_iso
+            capped_at_24h = True
 
     runs: list = []
     source = "empty"
@@ -355,7 +380,12 @@ def api_flow_runs():
         runs = []
         source = "empty"
 
-    return jsonify({"runs": runs, "count": len(runs), "_source": source})
+    return jsonify({
+        "runs": runs,
+        "count": len(runs),
+        "_source": source,
+        "capped_at_24h": capped_at_24h,
+    })
 
 
 @bp_logs.route("/api/logs-stream")
