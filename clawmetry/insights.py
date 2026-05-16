@@ -595,10 +595,29 @@ _scheduler_lock = _threading.Lock()
 
 
 def start_weekly_scheduler() -> bool:
-    """Idempotent. True if a new thread started; False if running or gated off."""
+    """Idempotent. True if a new thread started; False if running or gated off.
+
+    Tier split (#1420 P0a): the cron is Cloud-Pro only. Free / OSS users
+    still get the weekly digest on demand via ``/api/insights/preview``
+    (cached 6h) but never pay the cost of unattended dispatch. The
+    ``CLAWMETRY_INSIGHTS=1`` env-var remains as an explicit-on override
+    so CI and emergency kill-switch behaviour is preserved.
+    """
     global _scheduler_started
-    if os.environ.get("CLAWMETRY_INSIGHTS", "").strip() != "1":
-        return False
+    env_override = os.environ.get("CLAWMETRY_INSIGHTS", "").strip() == "1"
+    if not env_override:
+        # Pro check — fail-closed if the dashboard import fails (OSS,
+        # standalone insights process, etc.). TODO #1420 P0b: when the
+        # cloud-relayed Anthropic key lands, the scheduler should also
+        # tick for Free users if they explicitly opt in (subsidised
+        # dashboard refresh only, no dispatch). Today: Free = on-demand
+        # only, Pro = cron + dispatch.
+        try:
+            import dashboard as _d
+            if not _d._is_pro_user():
+                return False
+        except Exception:
+            return False
     with _scheduler_lock:
         if _scheduler_started:
             return False

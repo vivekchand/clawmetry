@@ -140,28 +140,70 @@ def test_save_and_load_config_round_trip(fresh_insights):
 # ── 5. Routes feature gate ─────────────────────────────────────────────────
 
 
-def test_routes_return_404_when_flag_off(fresh_insights, monkeypatch):
+def test_view_endpoints_open_for_free_tier_with_upsell(
+    fresh_insights, monkeypatch
+):
+    """Tier split (#1420 P0a): view endpoints (preview + /insights HTML)
+    are universal — Free / OSS callers see the dashboard digest plus an
+    ``_upgrade_cta`` field pointing them at Cloud-Pro for dispatch. The
+    legacy ``CLAWMETRY_INSIGHTS=1`` env-var stays as an explicit-on
+    override, but is no longer required to read the digest."""
     monkeypatch.delenv("CLAWMETRY_INSIGHTS", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    sys.modules.pop("routes.insights", None)
     from flask import Flask
     from routes.insights import bp_insights
     app = Flask(__name__)
     app.register_blueprint(bp_insights)
     client = app.test_client()
     r = client.get("/api/insights/preview")
-    assert r.status_code == 404
-    assert r.get_json()["error"] == "feature_disabled"
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert "insights" in body
+    # Free tier carries the upsell envelope so the UI can render a
+    # conversion CTA instead of failing silently.
+    assert body.get("_upgrade_cta", "").startswith("Want this delivered")
+    assert body.get("_tier") == "free"
+    assert body.get("_upgrade_url") == "/cloud/billing"
     r2 = client.get("/insights")
-    assert r2.status_code == 404
+    assert r2.status_code == 200, r2.data
 
 
-def test_config_get_returns_200_with_enabled_flag_when_flag_off(
+def test_send_now_pro_paywall_for_free_tier(fresh_insights, monkeypatch):
+    """Dispatch is Cloud-Pro only. Free / OSS callers get a 402 with the
+    upsell envelope so the UI can route them to billing instead of a
+    silent failure (project_free_plan_upsell.md, project_alerts_pro_feature.md).
+    """
+    monkeypatch.delenv("CLAWMETRY_INSIGHTS", raising=False)
+    sys.modules.pop("routes.insights", None)
+    from flask import Flask
+    from routes.insights import bp_insights
+    app = Flask(__name__)
+    app.register_blueprint(bp_insights)
+    client = app.test_client()
+    r = client.post("/api/insights/send-now")
+    assert r.status_code == 402, r.data
+    body = r.get_json()
+    assert body["error"] == "pro_required"
+    assert "Upgrade to Cloud-Pro" in body["_upgrade_cta"]
+    # POST /api/insights/config also paywalled (writes touch dispatch).
+    r2 = client.post(
+        "/api/insights/config",
+        data=json.dumps({"channel": "slack"}),
+        content_type="application/json",
+    )
+    assert r2.status_code == 402, r2.data
+
+
+def test_config_get_returns_200_with_upsell_for_free_tier(
     fresh_insights, monkeypatch
 ):
     """/api/insights/config GET is the dashboard's nav-tab-reveal probe.
     Returning 404 there caused the browser to console.error on every page
-    load, tripping cloud-contract gates (#1431). Now: always 200, with
-    `enabled: false` when feature off (cheap signal for the probe without
-    leaking config payload), `enabled: true + full config` when on."""
+    load, tripping cloud-contract gates (#1431). Under the tier split
+    (#1420 P0a) GET is now universal — Free / OSS get the full config
+    plus an upsell envelope so the nav tab reveals itself and the page
+    can render the conversion CTA. POST stays Pro-gated (402)."""
     monkeypatch.delenv("CLAWMETRY_INSIGHTS", raising=False)
     sys.modules.pop("routes.insights", None)
     from flask import Flask
@@ -172,14 +214,16 @@ def test_config_get_returns_200_with_enabled_flag_when_flag_off(
     r = client.get("/api/insights/config")
     assert r.status_code == 200, r.data
     body = r.get_json()
-    assert body == {"enabled": False}, body
-    # POST still 404 when off — writes only make sense when feature is on.
+    assert body.get("enabled") is True, body
+    assert body.get("_tier") == "free"
+    assert "Upgrade to Cloud-Pro" in body["_upgrade_cta"]
+    # POST is Pro-only: writes touch dispatch settings.
     r2 = client.post(
         "/api/insights/config",
         data=json.dumps({"channel": "slack"}),
         content_type="application/json",
     )
-    assert r2.status_code == 404, r2.data
+    assert r2.status_code == 402, r2.data
 
 
 def test_routes_serve_when_flag_on(fresh_insights, monkeypatch):
