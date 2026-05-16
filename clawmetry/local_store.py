@@ -4114,17 +4114,61 @@ class LocalStore:
             clauses.append("ts <= ?")
             params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        # Same dedupe shape as ``query_sessions`` (PR #1462). On real v3
+        # OpenClaw installs each LLM turn emits BOTH an ``assistant`` row
+        # AND a sibling ``model.completed`` row ~100 ms apart, both
+        # stamped with the same ``token_count`` + ``cost_usd``. A naive
+        # SUM over the raw events table doubles every billable turn.
+        # ``event_count`` stays RAW (row count, not turn count); only
+        # cost_usd + token_count come from the deduped CTE.
         sql = f"""
+            WITH ranked AS (
+              SELECT
+                id, session_id, agent_id, ts, cost_usd, token_count,
+                event_type,
+                substr(ts, 1, 10) AS day,
+                CASE event_type
+                  WHEN 'assistant'        THEN 2
+                  WHEN 'message'          THEN 2
+                  WHEN 'model.completed'  THEN 1
+                  ELSE 0
+                END AS envelope_rank,
+                CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT)
+                                                 AS ts_sec
+              FROM events
+              {where}
+            ),
+            bucket_max AS (
+              SELECT session_id, ts_sec, MAX(envelope_rank) AS max_rank
+              FROM ranked
+              GROUP BY session_id, ts_sec
+            ),
+            deduped AS (
+              -- Drop the slim ``model.completed`` sibling ONLY when an
+              -- ``assistant``/``message`` (rank=2) exists in the same
+              -- (session_id, ts_sec) bucket.
+              SELECT r.* FROM ranked r
+              JOIN bucket_max bm USING (session_id, ts_sec)
+              WHERE NOT (r.envelope_rank = 1 AND bm.max_rank = 2)
+            ),
+            deduped_sums AS (
+              SELECT day, agent_id,
+                     COALESCE(SUM(cost_usd), 0)    AS cost_usd_d,
+                     COALESCE(SUM(token_count), 0) AS token_count_d
+              FROM deduped
+              GROUP BY day, agent_id
+            )
             SELECT
-              substr(ts, 1, 10)            AS day,
-              agent_id,
-              COUNT(*)                     AS event_count,
-              COALESCE(SUM(cost_usd), 0)   AS cost_usd,
-              COALESCE(SUM(token_count), 0) AS token_count
-            FROM events
-            {where}
-            GROUP BY day, agent_id
-            ORDER BY day DESC
+              r.day,
+              r.agent_id,
+              COUNT(r.id)                   AS event_count,
+              COALESCE(ds.cost_usd_d, 0)    AS cost_usd,
+              COALESCE(ds.token_count_d, 0) AS token_count
+            FROM ranked r
+            LEFT JOIN deduped_sums ds
+              ON ds.day = r.day AND ds.agent_id IS NOT DISTINCT FROM r.agent_id
+            GROUP BY r.day, r.agent_id, ds.cost_usd_d, ds.token_count_d
+            ORDER BY r.day DESC
         """
         return [_row_to_dict(r, ["day","agent_id","event_count","cost_usd","token_count"])
                 for r in self._fetch(sql, params)]

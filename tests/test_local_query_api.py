@@ -111,6 +111,49 @@ def test_sessions_endpoint(client):
     assert round(by_sid["X"]["cost_usd"], 4) == 0.30
 
 
+def test_aggregates_endpoint_dedupes_v3_sibling_pairs(client):
+    """Same dedupe contract as ``test_sessions_endpoint_dedupes_v3_sibling_pairs``,
+    one level up at the daily-aggregate layer. Issue: ``query_aggregates``
+    used to SUM(cost_usd) + SUM(token_count) over the raw events table,
+    doubling every billable turn on real v3 installs. The SQL CTE now
+    drops the slim sibling ONLY when an assistant/message rank-2 row
+    exists in the same (session_id, ts_sec) bucket.
+
+    ``event_count`` stays RAW so debug surfaces see all the rows.
+    """
+    c, ls = client
+    store = ls.get_store()
+    ts = "2026-05-16T10:00:00Z"
+    # Sibling pair = 1 deduped turn @ 150 tokens / $0.005
+    store.ingest(_ev(id="agg-assist", session_id="sess-pair",
+                     event_type="assistant", ts=ts,
+                     cost_usd=0.005, token_count=150))
+    store.ingest(_ev(id="agg-mc", session_id="sess-pair",
+                     event_type="model.completed", ts=ts,
+                     cost_usd=0.005, token_count=150))
+    # Two tool_calls sharing ts_sec are NOT siblings - both count
+    store.ingest(_ev(id="agg-t1", session_id="sess-tools",
+                     event_type="tool_call", ts=ts,
+                     cost_usd=0.10, token_count=12))
+    store.ingest(_ev(id="agg-t2", session_id="sess-tools",
+                     event_type="tool_call", ts=ts,
+                     cost_usd=0.20, token_count=33))
+    _wait(store)
+    r = c.get("/api/local/aggregates")
+    body = r.get_json()
+    by_day = {row["day"]: row for row in body["rows"]}
+    row = by_day["2026-05-16"]
+    assert row["event_count"] == 4, "raw event_count should report all 4 rows"
+    assert row["token_count"] == 195, (
+        f"dedupe wrong: expected 150 (deduped sibling) + 12 + 33 = 195 tokens, "
+        f"got {row['token_count']}"
+    )
+    assert round(row["cost_usd"], 4) == 0.305, (
+        f"dedupe wrong: expected $0.005 (deduped sibling) + $0.10 + $0.20 = $0.305, "
+        f"got {round(row['cost_usd'], 4)}"
+    )
+
+
 def test_sessions_endpoint_dedupes_v3_sibling_pairs(client):
     """Issue #1460: on real OpenClaw v3 installs each LLM turn emits BOTH
     an ``assistant`` row AND a sibling ``model.completed`` row ~100 ms
