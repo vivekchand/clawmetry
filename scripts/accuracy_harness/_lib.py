@@ -13,6 +13,7 @@ Public surface:
     daemon_call (generic ``__local_query__/<method>`` proxy)
     drive_openclaw_message, extract_openclaw_usage
     file_drift_issue_per_endpoint, format_drift_issue_body
+    file_consolidated_issue (meta-runner roll-up — one issue per day, idempotent)
 """
 from __future__ import annotations
 
@@ -340,3 +341,233 @@ def format_drift_issue_body(endpoint: str, cs: list) -> str:
             f"±{getattr(c, 'tolerance', 0)} |"
         )
     return "\n".join(lines)
+
+
+# ─── Consolidated meta-runner issue (one per day, idempotent) ────────────────
+
+CONSOLIDATED_LABEL = "accuracy-meta"
+CONSOLIDATED_TITLE_PREFIX = "[accuracy-audit"  # full prefix: f"[accuracy-audit {today}]"
+
+# Reproducer command per harness — surfaced in the issue body so the
+# auto-fixer cron (and humans) can reproduce a drift in one paste.
+REPRODUCER_COMMANDS = {
+    "tokens":    "python3 scripts/accuracy_harness/tokens.py",
+    "approvals": "python3 scripts/accuracy_harness/approvals.py",
+    "alerts":    "CLAWMETRY_HARNESS_HOOKS=1 python3 scripts/accuracy_harness/alerts.py",
+}
+
+
+def _find_open_consolidated_issue(today: str) -> int | None:
+    """Return the issue number of today's open consolidated issue, or None.
+
+    Searches for an OPEN issue with the ``accuracy-meta`` label whose title
+    starts with ``[accuracy-audit YYYY-MM-DD]``. Date prefix in the title
+    is the dedup key — re-running the meta on the same day must EDIT not
+    create. Failures (network, gh missing, parse error) return None so the
+    caller falls through to ``create`` rather than silently skipping.
+    """
+    if not shutil.which("gh"):
+        return None
+    try:
+        proc = subprocess.run(
+            ["gh", "issue", "list",
+             "--repo", GH_REPO,
+             "--state", "open",
+             "--label", CONSOLIDATED_LABEL,
+             "--search", f"{CONSOLIDATED_TITLE_PREFIX} {today}] in:title",
+             "--json", "number,title",
+             "--limit", "10"],
+            check=True, capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.CalledProcessError, OSError, subprocess.TimeoutExpired):
+        return None
+    try:
+        rows = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError:
+        return None
+    needle = f"{CONSOLIDATED_TITLE_PREFIX} {today}]"
+    for row in rows:
+        if str(row.get("title", "")).startswith(needle):
+            try:
+                return int(row.get("number"))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _format_consolidated_body(results: list, today: str) -> str:
+    """Build the markdown body for the consolidated meta issue.
+
+    ``results`` is duck-typed (anything with ``.name``, ``.status``,
+    ``.pass_count``, ``.drift_count``, ``.exit_code``, ``.note``, and
+    optionally ``.stdout``) so ``_lib.py`` doesn't import ``all.py``'s
+    ``HarnessResult`` dataclass — that would create a circular import.
+    """
+    n_h = len(results)
+    n_drift_h = sum(1 for r in results if getattr(r, "status", "") == "drift")
+    n_err_h = sum(1 for r in results if getattr(r, "status", "") == "error")
+    n_drifts_total = sum(max(getattr(r, "drift_count", 0) or 0, 0) for r in results)
+
+    lines = [
+        f"## Accuracy meta-harness — {today}",
+        "",
+        "Auto-filed by `scripts/accuracy_harness/all.py`. This issue is "
+        "**idempotent per UTC date**: re-running the meta-runner edits this "
+        "body in place rather than opening a duplicate.",
+        "",
+        f"- Harnesses run: **{n_h}**",
+        f"- Harnesses with drift: **{n_drift_h}**",
+        f"- Harnesses errored / timed out: **{n_err_h}**",
+        f"- Total drifted (window, metric) pairs: **{n_drifts_total}**",
+        "",
+        "### Scoreboard",
+        "| harness | status | pass | drift | exit | note |",
+        "|---|---|---:|---:|---:|---|",
+    ]
+    for r in results:
+        p = getattr(r, "pass_count", -1)
+        d = getattr(r, "drift_count", -1)
+        p_s = str(p) if isinstance(p, int) and p >= 0 else "?"
+        d_s = str(d) if isinstance(d, int) and d >= 0 else "?"
+        # Pipes in notes break Markdown tables — replace defensively.
+        note = str(getattr(r, "note", "") or "").replace("|", "\\|")
+        lines.append(
+            f"| {getattr(r, 'name', '?')} "
+            f"| {str(getattr(r, 'status', '?')).upper()} "
+            f"| {p_s} | {d_s} "
+            f"| {getattr(r, 'exit_code', '?')} "
+            f"| {note} |"
+        )
+
+    lines += ["", "### Per-harness detail"]
+    for r in results:
+        name = getattr(r, "name", "?")
+        status = str(getattr(r, "status", "?")).upper()
+        if status == "PASS":
+            continue
+        repro = REPRODUCER_COMMANDS.get(name, f"python3 scripts/accuracy_harness/{name}.py")
+        lines += [
+            "",
+            f"#### `{name}` — {status}",
+            "",
+            f"Reproducer:",
+            "",
+            "```bash",
+            repro,
+            "```",
+        ]
+        # Include the harness's own drift/error tail so the auto-fixer cron
+        # has the same evidence a human would see locally. Cap at 60 lines
+        # to keep the issue body well under GitHub's 65 KB limit even when
+        # all 3 harnesses error out together.
+        stdout = getattr(r, "stdout", "") or ""
+        if stdout:
+            tail = stdout.strip().splitlines()[-60:]
+            lines += ["", "<details><summary>Harness tail (last 60 lines)</summary>",
+                      "", "```", *tail, "```", "</details>"]
+        stderr = getattr(r, "stderr", "") or ""
+        if stderr.strip():
+            tail_e = stderr.strip().splitlines()[-30:]
+            lines += ["", "<details><summary>stderr (last 30 lines)</summary>",
+                      "", "```", *tail_e, "```", "</details>"]
+
+    lines += [
+        "",
+        "---",
+        "",
+        "When this issue is closed, the cloud auto-fixer cron treats the "
+        "drift as resolved for the day. Re-runs that find no drifts will "
+        "**not** reopen this issue — the meta only files when "
+        "`overall_exit_code != 0`.",
+    ]
+    return "\n".join(lines)
+
+
+def file_consolidated_issue(results: list) -> str | None:
+    """File (or edit) ONE consolidated GitHub issue summarising every
+    harness in this meta-run. Returns the issue URL on success, None on
+    failure (or when nothing actionable to file).
+
+    Idempotency: searches for an OPEN issue with the ``accuracy-meta``
+    label whose title starts with ``[accuracy-audit YYYY-MM-DD]``. If
+    found, the body is REWRITTEN in place via ``gh issue edit``; if not,
+    a new issue is created via ``gh issue create``. Re-running on the
+    same UTC date never duplicates.
+
+    The caller is responsible for skipping the call when ``--no-issue``
+    is set or when overall exit code is 0 (all PASS) — the meta runner
+    in ``all.py`` enforces both conditions.
+    """
+    if not shutil.which("gh"):
+        print("[meta] `gh` CLI not on PATH; cannot file consolidated issue.",
+              file=sys.stderr)
+        return None
+    if not results:
+        print("[meta] no harness results to summarise; skipping file.",
+              file=sys.stderr)
+        return None
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    n_h = len(results)
+    n_drift_h = sum(1 for r in results if getattr(r, "status", "") == "drift")
+    n_err_h = sum(1 for r in results if getattr(r, "status", "") == "error")
+    n_drifts_total = sum(max(getattr(r, "drift_count", 0) or 0, 0) for r in results)
+    n_actionable = n_drift_h + n_err_h
+    title = (f"{CONSOLIDATED_TITLE_PREFIX} {today}] meta-run: "
+             f"{n_drifts_total} drifts across {n_actionable} harness(es)")
+    body = _format_consolidated_body(results, today)
+
+    existing = _find_open_consolidated_issue(today)
+    if existing is not None:
+        # EDIT in place — same date prefix → same issue.
+        try:
+            proc = subprocess.run(
+                ["gh", "issue", "edit", str(existing),
+                 "--repo", GH_REPO,
+                 "--title", title,
+                 "--body", body],
+                check=True, capture_output=True, text=True, timeout=20,
+            )
+            url = (proc.stdout or "").strip().splitlines()[-1] if proc.stdout else ""
+            if not url:
+                url = f"https://github.com/{GH_REPO}/issues/{existing}"
+            print(f"[meta] edited consolidated issue #{existing}: {url}")
+            return url
+        except subprocess.CalledProcessError as e:
+            print(f"[meta] FAILED to edit issue #{existing}: "
+                  f"{(e.stderr or '')[:300]}", file=sys.stderr)
+            return None
+
+    # CREATE — first run today.
+    cmd = ["gh", "issue", "create",
+           "--repo", GH_REPO,
+           "--title", title,
+           "--body", body,
+           "--label", CONSOLIDATED_LABEL]
+    try:
+        proc = subprocess.run(cmd, check=True, capture_output=True, text=True,
+                              timeout=20)
+        url = (proc.stdout or "").strip().splitlines()[-1] if proc.stdout else ""
+        print(f"[meta] filed consolidated issue: {url}")
+        return url or None
+    except subprocess.CalledProcessError as e:
+        # Most common cause: label missing on the repo. Retry without it
+        # so we still get the issue filed (humans can re-label later).
+        err = (e.stderr or "")[:300]
+        if "label" in err.lower() or "not found" in err.lower():
+            try:
+                proc = subprocess.run(
+                    ["gh", "issue", "create", "--repo", GH_REPO,
+                     "--title", title, "--body", body],
+                    check=True, capture_output=True, text=True, timeout=20,
+                )
+                url = (proc.stdout or "").strip().splitlines()[-1] if proc.stdout else ""
+                print(f"[meta] filed (no label — please add `{CONSOLIDATED_LABEL}` "
+                      f"to repo): {url}")
+                return url or None
+            except subprocess.CalledProcessError as e2:
+                print(f"[meta] FAILED to file consolidated issue (no-label retry): "
+                      f"{(e2.stderr or '')[:300]}", file=sys.stderr)
+                return None
+        print(f"[meta] FAILED to file consolidated issue: {err}", file=sys.stderr)
+        return None

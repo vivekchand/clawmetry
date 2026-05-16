@@ -95,11 +95,55 @@ Exit codes:
 | 1 | at least one drift, no errors |
 | 2 | at least one harness errored or timed out |
 
-The consolidated GitHub-issue filer is intentionally **not** implemented
-in this PR — `file_consolidated_issue` only PRINTS what it would file
-(`Would file consolidated issue: N drifts across M harnesses`). Live
-filing lands in the follow-up iteration once the runner is proven in
-production. Wire to a cloud cron once that lands.
+The consolidated GitHub-issue filer is implemented in `_lib.py`
+(`file_consolidated_issue`). When the meta detects drift or harness
+errors, it files **ONE** issue per UTC date with the
+`accuracy-meta` label, titled `[accuracy-audit YYYY-MM-DD] meta-run: N
+drifts across M harnesses`. The body includes the scoreboard, a
+reproducer command per harness, and the last 60 lines of each drifted
+harness's stdout. **Idempotent per UTC date** — re-runs EDIT today's
+issue in place rather than open a duplicate.
+
+Skip with `--no-issue` for local debugging; PASS-runs (overall exit
+code = 0) never file.
+
+### Continuous loop (closed-loop drift → fix)
+
+The intended deployment is a recurring schedule that closes the loop:
+
+```
+   ┌─────────────────────────────────────────────────────────────────┐
+   │  every N hours                                                  │
+   │   ▼                                                             │
+   │  scripts/accuracy_harness/all.py                                │
+   │   │  (drives ground truth → asserts dashboard → exit 0/1/2)     │
+   │   ▼                                                             │
+   │  drift detected → file_consolidated_issue() → GitHub issue      │
+   │   │  (label: accuracy-meta, idempotent per UTC date)            │
+   │   ▼                                                             │
+   │  cloud auto-fixer cron `trig_01XaWFNf9ZH7uWu2hxSXQAuW`          │
+   │   │  picks up open accuracy-meta issues every N hours,          │
+   │   │  reads body (scoreboard + tail + reproducer), opens a fix   │
+   │   │  PR (or comments "needs human" if it can't)                 │
+   │   ▼                                                             │
+   │  merged fix → release-on-merge → next harness run goes green    │
+   │   │  (exit 0 → no new issue filed → loop closes)                │
+   └─────────────────────────────────────────────────────────────────┘
+```
+
+Local cron / launchd example (every 6h):
+
+```cron
+0 */6 * * * cd ~/projects/clawmetry && \
+  python3 scripts/accuracy_harness/all.py >> ~/.clawmetry/meta.log 2>&1
+```
+
+Cloud cron (driven by `trig_01XaWFNf9ZH7uWu2hxSXQAuW` — the auto-fixer
+trigger we wired earlier) reads OPEN issues with the `accuracy-meta`
+label, parses the per-harness reproducer block out of the body, runs
+that reproducer, drafts a fix PR. When the fix lands and the next meta
+run goes green, the issue can be closed (manually or by the auto-fixer
+once a green run confirms the same harness now passes).
 
 ### Prerequisites
 
