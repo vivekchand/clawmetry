@@ -219,7 +219,11 @@ def _try_local_store_brain(limit: int, include_artifacts: bool):
     if rows is None:
         try:
             from clawmetry import local_store
-            store = local_store.get_store()
+            # Issue #1240: read_only=True so the single-process fallback
+            # doesn't pay DuckDB's writer-lock-retry tax under the standard
+            # install (daemon proxy above is the happy path; this fallback
+            # only fires in tests / dev mode).
+            store = local_store.get_store(read_only=True)
             rows = store.query_events(limit=limit)
         except Exception:
             return None
