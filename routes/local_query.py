@@ -170,6 +170,34 @@ def _safe_int(v: Any, *, default: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, n))
 
 
+def _apply_24h_cap(args: dict) -> bool:
+    """OSS / Cloud-Free retention cap for raw event reads (issue #1448).
+
+    Mutates ``args`` in-place: when the caller is not a Pro user we clamp
+    ``since`` to ``now - 24h``. Returns True when the cap was enforced so
+    the response can surface the upgrade CTA. Pro users (validated via
+    ``dashboard._is_pro_user``) bypass the cap entirely. Any failure
+    fail-closes to non-Pro — we never leak unlimited history on a missing
+    signal.
+    """
+    try:
+        import dashboard as _d
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
+    if is_pro:
+        return False
+    from datetime import datetime, timedelta, timezone
+    cap_iso = (
+        datetime.now(timezone.utc) - timedelta(hours=24)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = args.get("since") or ""
+    if not since or since < cap_iso:
+        args["since"] = cap_iso
+        return True
+    return False
+
+
 def _dispatch(shape: str, args: dict) -> dict:
     """Single-source-of-truth shape→method bridge. Both the HTTP and (future)
     WS transports call this. Returns a JSON-friendly dict ready to ship.
@@ -219,7 +247,13 @@ def http_health():
 def http_events():
     try:
         args = _coerce_args("events", request.args.to_dict())
-        return jsonify(_dispatch("events", args))
+        # Issue #1448 surface 4 — OSS / Cloud-Free users get capped to
+        # the last 24h of raw events. Pro users bypass entirely. Mirrors
+        # the pattern PR #1445 set on /api/flow/runs.
+        capped_at_24h = _apply_24h_cap(args)
+        body = _dispatch("events", args)
+        body["capped_at_24h"] = capped_at_24h
+        return jsonify(body)
     except Exception as e:
         return jsonify({"error": str(e)[:300]}), 500
 
