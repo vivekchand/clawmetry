@@ -187,6 +187,57 @@ def _decorate_with_channel_context(sessions):
     return sessions
 
 
+def _session_last_active_epoch(s: dict):
+    """Extract a unix-second timestamp for a session row, tolerant of the
+    many shapes the gateway / local-store / JSONL paths produce.
+
+    Returns ``None`` when no usable timestamp is present (in which case
+    the row stays visible — we never drop on missing data, only on data
+    that *proves* the session is older than the cap).
+    """
+    # epoch-millis fields (gateway, unregistered-JSONL backfill)
+    for k in ("updatedAt", "lastActivityAt", "last_active_at_ms"):
+        v = s.get(k)
+        if isinstance(v, (int, float)) and v > 0:
+            return float(v) / 1000.0 if v > 1e12 else float(v)
+    # ISO-8601 fields (local-store path)
+    for k in ("last_active_at", "updated_at", "started_at"):
+        v = s.get(k)
+        if isinstance(v, str) and v:
+            try:
+                iso = v.replace("Z", "+00:00")
+                return datetime.fromisoformat(iso).timestamp()
+            except (ValueError, TypeError):
+                continue
+    return None
+
+
+def _apply_24h_retention_cap(sessions: list) -> bool:
+    """Drop sessions older than 24h for OSS / Cloud-Free callers (issue #1448).
+
+    Cloud-Pro users (validated by ``dashboard._is_pro_user``) bypass the cap.
+    Mutates ``sessions`` in place. Returns ``True`` when the cap kicked in
+    (i.e. caller was non-Pro) so the UI can render the upgrade CTA.
+
+    Mirrors the gating pattern introduced for /api/flow/runs in PR #1445.
+    """
+    try:
+        import dashboard as _d
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
+    if is_pro:
+        return False
+    cap_floor = time.time() - 24 * 3600
+    kept = []
+    for s in sessions:
+        ts = _session_last_active_epoch(s)
+        if ts is None or ts >= cap_floor:
+            kept.append(s)
+    sessions[:] = kept
+    return True
+
+
 @bp_sessions.route("/api/sessions")
 def api_sessions():
     import dashboard as _d
@@ -199,6 +250,8 @@ def api_sessions():
         fast = _try_local_store_sessions()
         if fast is not None:
             _merge_unregistered_jsonls(fast["sessions"])
+            capped = _apply_24h_retention_cap(fast["sessions"])
+            fast["capped_at_24h"] = capped
             return jsonify(fast)
     gw_data = _d._gw_invoke("sessions_list", {"limit": 20, "messageLimit": 0})
     if gw_data and "sessions" in gw_data:
@@ -221,7 +274,8 @@ def api_sessions():
     # registrar runs). Without this merge those sessions stay invisible until
     # the registrar catches up — see MOAT_E2E_REPORT_2026-05-13 root-cause #3.
     _merge_unregistered_jsonls(sessions)
-    return jsonify({"sessions": sessions})
+    capped = _apply_24h_retention_cap(sessions)
+    return jsonify({"sessions": sessions, "capped_at_24h": capped})
 
 
 def _merge_unregistered_jsonls(sessions: list) -> None:

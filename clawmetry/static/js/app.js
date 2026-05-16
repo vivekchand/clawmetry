@@ -4880,12 +4880,36 @@ async function loadSessions() {
   }
 
   document.getElementById('sessions-list').innerHTML = html || '<div style="padding:16px;color:var(--text-muted);">No sessions found</div>';
+  _renderSessionsRetentionCta(!!(sessData && sessData.capped_at_24h));
   mainSessions.forEach(function(s, i) {
     var canvas = document.querySelectorAll('#sessions-list canvas')[i];
     if (!canvas) return;
     var pts = Array.isArray(s.burnSeries) ? s.burnSeries : [];
     drawSessionSparkline(canvas, pts);
   });
+}
+
+// Issue #1448: surface the OSS 24h retention cap as an upgrade CTA above
+// the Sessions list when /api/sessions returns capped_at_24h=true. Cloud-Pro
+// bypasses the cap server-side so this CTA stays hidden for paid users.
+function _renderSessionsRetentionCta(capped) {
+  var list = document.getElementById('sessions-list');
+  if (!list || !list.parentElement) return;
+  var cta = document.getElementById('sessions-retention-cta');
+  if (!cta) {
+    cta = document.createElement('div');
+    cta.id = 'sessions-retention-cta';
+    cta.style.cssText = 'padding:10px 14px;margin-bottom:10px;font-size:12px;color:var(--text-muted);background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;display:none;';
+    list.parentElement.insertBefore(cta, list);
+  }
+  if (capped) {
+    cta.style.display = '';
+    cta.innerHTML = 'Sessions older than 24 hours are available on Cloud-Pro. '
+      + '<a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;">Upgrade for full history.</a>';
+  } else {
+    cta.style.display = 'none';
+    cta.innerHTML = '';
+  }
 }
 
 async function stopSession(sessionId) {
