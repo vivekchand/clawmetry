@@ -152,3 +152,48 @@ def test_api_spans_limit_clamped(app):
     r = c.get("/api/spans?limit=garbage")
     assert r.status_code == 200
     assert r.get_json()["count"] == 5
+
+
+# ── Retention cap (issue #1374) ─────────────────────────────────────────────
+#
+# OSS / Cloud-Free callers are clamped to the last 24 h of ``start_ts``;
+# Cloud-Pro users (gated by ``dashboard._is_pro_user``) bypass the cap. The
+# response always carries a ``capped_at_24h`` boolean so the Brain-tab UI
+# can render the upgrade CTA when the cap kicks in.
+
+
+def _seed_old_and_recent_spans(store):
+    """One ancient span (8 days old) + one fresh span (5 min ago)."""
+    now = time.time()
+    store.put_span(_span("span-old", now - 8 * 86400, name="ancient"))
+    store.put_span(_span("span-new", now - 300, name="fresh"))
+
+
+def test_api_spans_oss_capped_to_24h(app, monkeypatch):
+    """Non-Pro users see only spans newer than now-24h; flag set."""
+    a, ls = app
+    _seed_old_and_recent_spans(ls.get_store())
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+
+    r = a.test_client().get("/api/spans?limit=10")
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    body = r.get_json()
+    assert body["capped_at_24h"] is True
+    sids = {s["span_id"] for s in body["spans"]}
+    # The 8-day-old span must be excluded; only the fresh one shows.
+    assert sids == {"span-new"}
+
+
+def test_api_spans_pro_bypasses_cap(app, monkeypatch):
+    """Pro users get the full history, unflagged."""
+    a, ls = app
+    _seed_old_and_recent_spans(ls.get_store())
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
+    r = a.test_client().get("/api/spans?limit=10")
+    body = r.get_json()
+    assert body["capped_at_24h"] is False
+    sids = {s["span_id"] for s in body["spans"]}
+    assert sids == {"span-old", "span-new"}

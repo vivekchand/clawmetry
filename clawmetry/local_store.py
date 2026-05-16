@@ -2233,6 +2233,7 @@ class LocalStore:
         *,
         limit: int = 50,
         session_id: str | None = None,
+        since: float | None = None,
     ) -> list[dict[str, Any]]:
         """MOAT issue #1364: read-side surface for spans we already store.
 
@@ -2248,9 +2249,12 @@ class LocalStore:
           limit: Max rows to return (clamped 1-500 by the route layer).
           session_id: Optional session filter — when set, returns spans for
             that one OpenClaw session.
+          since: Optional unix-second floor on ``start_ts``. Used by issue
+            #1374 to enforce the OSS 24h retention cap (Cloud-Pro bypasses).
         """
         rows = self.query_spans(
             session_id=session_id,
+            since=since,
             limit=int(limit),
         )
         # Project to the contract the UI table reads. Keep the BLOB columns

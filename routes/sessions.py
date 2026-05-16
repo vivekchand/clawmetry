@@ -4103,6 +4103,11 @@ def api_spans():
     Query params:
       * ``limit`` — max rows (default 50, clamped 1-500)
       * ``session_id`` — optional session filter
+      * ``since`` — optional unix-second floor on ``start_ts``. Issue #1374:
+        OSS / Cloud-Free callers are clamped to ``now - 24h``; Cloud-Pro
+        users (validated by ``dashboard._is_pro_user``) get unlimited
+        history. Response carries ``capped_at_24h`` so the UI can render
+        the upgrade CTA.
 
     Response shape::
 
@@ -4112,13 +4117,14 @@ def api_spans():
                         duration_ms, status, model, tool_name, cost_usd,
                         tokens_input, tokens_output}, ... ],
           "count":   <int>,
-          "_source": "local_store"
+          "_source": "local_store",
+          "capped_at_24h": <bool>
         }
 
     Graceful fallback: when the local store / daemon is unreachable we
-    return ``{"spans": [], "count": 0, "_source": "unavailable"}`` with
-    HTTP 200 so the UI table renders an empty state instead of an error
-    banner.
+    return ``{"spans": [], "count": 0, "_source": "unavailable",
+    "capped_at_24h": <bool>}`` with HTTP 200 so the UI table renders an
+    empty state instead of an error banner.
     """
     try:
         limit = int(request.args.get("limit", 50))
@@ -4127,15 +4133,45 @@ def api_spans():
     limit = max(1, min(500, limit))
     session_id = (request.args.get("session_id") or "").strip() or None
 
+    # Optional unix-second floor (caller-supplied).
+    since_raw = (request.args.get("since") or "").strip()
+    since: float | None
+    try:
+        since = float(since_raw) if since_raw else None
+    except (TypeError, ValueError):
+        since = None
+
+    # OSS retention cap (issue #1374). Cloud-Pro bypasses; everyone else
+    # gets clamped to the last 24 h of ``start_ts``. Mirrors the pattern
+    # used by /api/flow/runs (issue #1173).
+    capped_at_24h = False
+    try:
+        import dashboard as _d
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
+    if not is_pro:
+        cap_floor = time.time() - 24 * 3600
+        if since is None or since < cap_floor:
+            since = cap_floor
+            capped_at_24h = True
+
     rows = _ls_call(
         "query_recent_spans",
         limit=limit,
         session_id=session_id,
+        since=since,
     )
     if rows is None:
-        return jsonify({"spans": [], "count": 0, "_source": "unavailable"})
+        return jsonify({
+            "spans": [],
+            "count": 0,
+            "_source": "unavailable",
+            "capped_at_24h": capped_at_24h,
+        })
     return jsonify({
         "spans":   rows,
         "count":   len(rows),
         "_source": "local_store",
+        "capped_at_24h": capped_at_24h,
     })

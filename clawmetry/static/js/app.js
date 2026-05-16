@@ -3939,12 +3939,14 @@ async function loadSpansPanel() {
     var data = await resp.json();
     _spansPanelLoaded = true;
     var spans = (data && data.spans) || [];
+    var cappedAt24h = !!(data && data.capped_at_24h);
     if (countEl) countEl.textContent = String(spans.length);
     if (!spans.length) {
       var hint = (data && data._source === 'unavailable')
-        ? 'Local store unavailable — start the sync daemon or restart with CLAWMETRY_LOCAL_STORE_READ=1.'
+        ? 'Local store unavailable. Start the sync daemon or restart with CLAWMETRY_LOCAL_STORE_READ=1.'
         : 'No OTel spans yet. Wire an OTLP exporter to <code>/v1/traces</code> on this dashboard\'s port to start capturing.';
       wrap.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:12px;text-align:center;line-height:1.6;">' + hint + '</div>';
+      _renderSpansCap(cappedAt24h);
       return;
     }
     var rowsHtml = spans.map(function(s) {
@@ -3966,8 +3968,32 @@ async function loadSpansPanel() {
       +   '<th style="padding:4px 8px;font-weight:600;">Session</th>'
       +   '<th style="padding:4px 8px;font-weight:600;">Kind</th>'
       + '</tr></thead><tbody>' + rowsHtml + '</tbody></table>';
+    _renderSpansCap(cappedAt24h);
   } catch (e) {
     wrap.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:12px;">Failed to load spans: ' + _spansEsc(String(e)) + '</div>';
+  }
+}
+
+// Render a small CTA row below the Spans table when the OSS retention cap
+// kicked in (issue #1374). Mirrors _renderFlowRunsCap; lives in its own
+// footer container appended inside #spans-panel so the table itself stays
+// purely tabular.
+function _renderSpansCap(capped) {
+  var foot = document.getElementById('spans-cap-cta');
+  if (!foot) {
+    var panel = document.getElementById('spans-panel');
+    if (!panel) return;
+    foot = document.createElement('div');
+    foot.id = 'spans-cap-cta';
+    foot.style.cssText = 'padding:10px 0 2px 0;font-size:12px;color:var(--text-muted);border-top:1px solid var(--border);margin-top:8px;display:none;';
+    panel.appendChild(foot);
+  }
+  if (capped) {
+    foot.style.display = '';
+    foot.innerHTML = 'Showing the last 24 hours. <a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;">Upgrade to Cloud-Pro for unlimited history</a>';
+  } else {
+    foot.style.display = 'none';
+    foot.innerHTML = '';
   }
 }
 
