@@ -3905,6 +3905,45 @@ function _showBrainToast(msg) {
 // clawmetry/proxy.py's LoopDetector. Hidden when the count is 0; clicking
 // expands a flat table (Time | Session | Pattern | Repeat).
 var _loopSignalsExpanded = false;
+// Issue #1377: fire a browser notification on the FIRST detection per
+// dashboard session — the highest-intent moment a user has for noticing the
+// alerts feature. Tracks the most recent signature we've already alerted on
+// so we don't re-notify on every poll. Reset on page reload (intentional —
+// we re-alert if the user comes back fresh and a loop is still active).
+var _loopSignalsNotifiedSig = null;
+var _loopSignalsPermissionAsked = false;
+
+function _loopSignalsMaybeNotify(rows) {
+  if (!rows || !rows.length) return;
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  // Pick the newest signature (rows arrive newest-first from the API).
+  var top = rows[0] || {};
+  var sig = String(top.signature || '');
+  if (!sig || sig === _loopSignalsNotifiedSig) return;
+  _loopSignalsNotifiedSig = sig;
+  // TODO #1377: Cloud-Free upsell modal here when CLOUD_MODE && tier === 'free'.
+  // Plain copy, no em-dashes — keeps the message readable to non-tech users
+  // (memory: feedback_no_em_dashes_in_user_facing_copy.md).
+  var title = 'Loop detected in your agent';
+  var body  = 'Loop detected, agent is repeating itself and burning tokens. Open the Brain tab to see why.';
+  function _fire() {
+    try {
+      var n = new Notification(title, { body: body, tag: 'clawmetry-loop' });
+      // Focus the dashboard tab if the user clicks the notification.
+      n.onclick = function() { try { window.focus(); n.close(); } catch (e) {} };
+    } catch (e) { /* notification creation failed — silently ignore */ }
+  }
+  try {
+    if (Notification.permission === 'granted') {
+      _fire();
+    } else if (Notification.permission !== 'denied' && !_loopSignalsPermissionAsked) {
+      _loopSignalsPermissionAsked = true;
+      Notification.requestPermission().then(function(perm) {
+        if (perm === 'granted') _fire();
+      }).catch(function() { /* ignore — older browsers reject promise */ });
+    }
+  } catch (e) { /* Notification API unavailable — silently ignore */ }
+}
 
 async function loadLoopSignals() {
   if (window.CLOUD_MODE) return;
@@ -3926,6 +3965,11 @@ async function loadLoopSignals() {
     }
     badge.style.display = '';
     countEl.textContent = String(totalCount);
+    // Issue #1377: first-detection-per-session browser notification.
+    // Fired here so any tab (Brain or otherwise) that has triggered the
+    // loop-signal poll sees the notification — the highest-intent moment
+    // for an alerts upsell.
+    _loopSignalsMaybeNotify(rows);
     // Render table — keep it dead simple: Time | Session | Pattern | Repeat.
     var head = '<div style="display:grid;grid-template-columns:130px 160px 1fr 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
       + '<div>Last seen</div><div>Session</div><div>Pattern</div><div style="text-align:right;">Repeats</div></div>';

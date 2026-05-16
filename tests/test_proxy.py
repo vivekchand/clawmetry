@@ -544,6 +544,53 @@ class TestLoopDetector:
         is_loop, _ = loop_detector.check("", "same")
         assert is_loop is False
 
+    def test_loop_emits_alert_event(self, loop_detector, proxy_db, monkeypatch):
+        """Issue #1377: a positive LoopDetector.check() must also push a
+        ``loop_detected`` event into local_store.ingest() so the daemon's
+        alert evaluator (clawmetry/alert_evaluator.py) can fire matching
+        Cloud-Pro rules. This is the only OSS-side hook the alert pipeline
+        needs — the daemon then walks DuckDB + cached rules and dispatches.
+        """
+        captured: list[dict] = []
+
+        class _FakeStore:
+            def ingest(self, event):
+                captured.append(event)
+
+            def ingest_loop_signal(self, **kwargs):
+                # Existing badge write — not what this test cares about, but
+                # we still accept the call so the detector's first try-block
+                # doesn't raise.
+                pass
+
+        fake = _FakeStore()
+        # Patch get_store at the module the detector imports lazily.
+        from clawmetry import local_store as _ls
+        monkeypatch.setattr(_ls, "get_store", lambda: fake)
+
+        for _ in range(4):
+            proxy_db.record_usage(
+                provider="anthropic",
+                model="test",
+                input_tokens=100,
+                output_tokens=50,
+                cost_usd=0.01,
+                session_id="s-1377",
+                request_hash="loop-sig-1377",
+            )
+        is_loop, _ = loop_detector.check("s-1377", "loop-sig-1377")
+        assert is_loop is True
+
+        # Exactly one loop_detected event was emitted with the expected shape.
+        loop_events = [e for e in captured if e.get("event_type") == "loop_detected"]
+        assert len(loop_events) == 1
+        evt = loop_events[0]
+        assert evt["session_id"] == "s-1377"
+        assert evt["agent_id"] == "clawmetry-proxy"
+        assert evt["data"]["signature"] == "loop-sig-1377"
+        assert evt["data"]["repeat_count"] >= 3
+        assert "id" in evt and "ts" in evt and "node_id" in evt
+
 
 # ── Model Router ───────────────────────────────────────────────────────
 
