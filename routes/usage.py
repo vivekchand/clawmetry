@@ -238,18 +238,30 @@ def _try_local_store_usage():
         if cost_from_split > 0 and daily_cost.get(d, 0.0) <= 0:
             daily_cost[d] = cost_from_split
 
-    # Issue #1394: prefer the deduped (input+output) total over the raw
-    # ``token_count`` aggregate when splits are available. The raw
-    # column counts BOTH the ``assistant`` and the sibling
-    # ``model.completed`` event for each LLM turn (different log
-    # writers race-emit them ~100-300ms apart) — sums end up roughly
-    # 2× the real billable total. The deduped splits already collapsed
-    # those sibling pairs, so adding their input+output is the
-    # billable-token answer the harness compares against.
+    # Issue #1394 + MOAT regression 2026-05-16: raw ``token_count`` aggregate
+    # counts BOTH the ``assistant`` and the sibling ``model.completed`` event
+    # for each LLM turn (different writers race ~100-300ms apart) AND any
+    # non-billable-turn rows with a token_count column (tool_call rows in
+    # synthetic harnesses, retries, etc.). The splits walker dedupes the
+    # sibling pair but ignores non-message rows entirely, so blindly
+    # overwriting raw with deduped silently drops those tokens.
+    #
+    # Decision: if raw >= 2*deduped, the sibling-doubling bug dominates →
+    # subtract the doubled half and add any residual non-message tokens
+    # back on top. If raw < 2*deduped, no full sibling pair exists for that
+    # day (synthetic / partial install) → keep whichever is larger so we
+    # don't lose data either way.
     for d in set(list(daily_input.keys()) + list(daily_output.keys())):
         deduped_total = int(daily_input.get(d, 0)) + int(daily_output.get(d, 0))
-        if deduped_total > 0:
-            daily_tokens[d] = deduped_total
+        if deduped_total <= 0:
+            continue
+        raw_total = int(daily_tokens.get(d, 0))
+        sibling_doubled = 2 * deduped_total
+        if raw_total >= sibling_doubled:
+            non_msg = raw_total - sibling_doubled
+            daily_tokens[d] = deduped_total + non_msg
+        else:
+            daily_tokens[d] = max(raw_total, deduped_total)
 
     if (
         not daily_tokens and not daily_cost
