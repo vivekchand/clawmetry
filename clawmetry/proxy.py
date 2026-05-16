@@ -696,6 +696,36 @@ class LoopDetector:
                 )
             except Exception as exc:  # noqa: BLE001 — never break detection
                 logger.debug("loop signal duckdb ingest skipped: %s", exc)
+            # Issue #1377: also emit a ``loop_detected`` event row so the
+            # existing alert pipeline (``clawmetry/alert_evaluator.py`` driven
+            # by ``clawmetry/sync.py::evaluate_alerts``) can fire a Cloud-Pro
+            # rule of type ``count_over_threshold`` / ``event_type=loop_detected``
+            # and fan out to Slack/email/PagerDuty. Same best-effort guard as
+            # the badge write above — never let the alert hop break detection
+            # or block the proxy hot path. Done inline (not threaded) because
+            # ``LocalStore.ingest`` itself only appends to an in-memory ring
+            # buffer and returns in microseconds; the actual DuckDB write is
+            # already async on the flusher thread.
+            try:
+                from clawmetry import local_store as _ls
+                import uuid as _uuid
+                _ls.get_store().ingest({
+                    "id":         _uuid.uuid4().hex,
+                    "node_id":    os.environ.get("CLAWMETRY_NODE_ID") or "local",
+                    "agent_id":   "clawmetry-proxy",
+                    "agent_type": "openclaw",
+                    "event_type": "loop_detected",
+                    "ts":         datetime.now(timezone.utc).isoformat(),
+                    "session_id": session_id,
+                    "data": {
+                        "signature":      request_hash,
+                        "repeat_count":   match_count,
+                        "window_seconds": self.config.window_seconds,
+                        "reason":         reason,
+                    },
+                })
+            except Exception as exc:  # noqa: BLE001 — never break detection
+                logger.debug("loop_detected alert event skipped: %s", exc)
             return True, reason
 
         return False, ""
