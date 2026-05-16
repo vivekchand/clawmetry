@@ -3174,18 +3174,58 @@ def _walk_openclaw_session_bindings(sessions_dir: str) -> list[dict]:
     return out
 
 
-def _claude_session_dir(workspace_dir: str, claude_session_id: str) -> Path:
+# INVARIANT: ``claude_session_id`` MUST originate from sessions.json's
+# ``claudeCliSessionId`` field — never from globbing/listing the parent dir.
+# The encoded-cwd slug under ``~/.claude/projects/`` is shared by EVERY
+# ``claude`` invocation the user ever ran from the OpenClaw workspace,
+# including personal chats the user did not intend to observe. The
+# ``allowed_claude_session_ids`` allowlist (built from sessions.json by the
+# caller) is the only thing keeping us from sweeping those into the cloud-
+# sync pipeline. Future refactors: keep this gate or replicate it; do NOT
+# loosen it to "all sessions in this workspace". See issue #1231.
+def _assert_claude_session_allowed(
+    claude_session_id: str, allowed_claude_session_ids: set[str],
+) -> None:
+    """Privacy gate. Raise ``PermissionError`` if ``claude_session_id`` was
+    not harvested from OpenClaw's sessions.json — i.e. it is not a Claude
+    CLI session OpenClaw bound to one of its own OpenClaw sessions.
+
+    A plain ``assert`` would be stripped by ``python -O``; this raises
+    unconditionally because the boundary is privacy-critical.
+    """
+    if claude_session_id not in allowed_claude_session_ids:
+        raise PermissionError(
+            "refusing to walk ~/.claude/projects for session "
+            f"{claude_session_id!r}: not in sessions.json allowlist "
+            f"(size={len(allowed_claude_session_ids)})"
+        )
+
+
+def _claude_session_dir(
+    workspace_dir: str,
+    claude_session_id: str,
+    allowed_claude_session_ids: set[str],
+) -> Path:
     """Return ``~/.claude/projects/<encoded-cwd>/<claude-session-id>/`` —
     the directory that holds the subagents/ and tool-results/ subdirs.
+
+    ``allowed_claude_session_ids`` MUST be the set of Claude CLI session
+    UUIDs harvested from ``sessions.json``. See the invariant comment
+    above ``_assert_claude_session_allowed``.
     """
+    _assert_claude_session_allowed(claude_session_id, allowed_claude_session_ids)
     slug = _encode_cwd_for_claude_projects(workspace_dir)
     return _claude_projects_root() / slug / claude_session_id
 
 
 def _claude_session_top_level_path(
-    workspace_dir: str, claude_session_id: str,
+    workspace_dir: str,
+    claude_session_id: str,
+    allowed_claude_session_ids: set[str],
 ) -> Path:
-    """Return the top-level ``<claude-id>.jsonl`` path."""
+    """Return the top-level ``<claude-id>.jsonl`` path. Guarded by the
+    sessions.json allowlist — see ``_assert_claude_session_allowed``."""
+    _assert_claude_session_allowed(claude_session_id, allowed_claude_session_ids)
     slug = _encode_cwd_for_claude_projects(workspace_dir)
     return _claude_projects_root() / slug / f"{claude_session_id}.jsonl"
 
@@ -3424,6 +3464,16 @@ def sync_openclaw_claude_sessions_via_index(
     if not bindings:
         return 0, set()
 
+    # PRIVACY GATE (issue #1231): build the allowlist of Claude CLI session
+    # UUIDs once, from sessions.json, and pass it through to every helper
+    # that constructs a ``~/.claude/projects/...`` path. This is the only
+    # thing preventing a refactor from silently sweeping personal
+    # (non-OpenClaw) Claude chats out of the encoded-cwd dir into cloud
+    # sync. Never derive the path from a glob of the parent dir.
+    allowed_claude_ids: set[str] = {
+        b["claude_session_id"] for b in bindings if b.get("claude_session_id")
+    }
+
     rows: list[dict] = []
     handled: set[str] = set()
     files_touched: list[str] = []
@@ -3434,8 +3484,12 @@ def sync_openclaw_claude_sessions_via_index(
         oc_id = binding["openclaw_session_id"]
         workspace = binding["workspace_dir"]
 
-        top_path = _claude_session_top_level_path(workspace, claude_id)
-        sess_dir = _claude_session_dir(workspace, claude_id)
+        top_path = _claude_session_top_level_path(
+            workspace, claude_id, allowed_claude_ids,
+        )
+        sess_dir = _claude_session_dir(
+            workspace, claude_id, allowed_claude_ids,
+        )
         # If neither the top-level file nor the subdir exists, this binding
         # points at a Claude session that hasn't started writing — skip it
         # this cycle, the daemon will re-check next cycle.
