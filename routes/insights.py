@@ -127,18 +127,34 @@ def api_send_now():
 
 @bp_insights.route("/api/insights/config", methods=["GET", "POST"])
 def api_config():
-    gated = _gated()
-    if gated is not None:
-        return gated
+    # GET always returns 200 with `{enabled: bool, ...}` so the dashboard's
+    # nav-tab-reveal probe (`app.js` IIFE checking /api/insights/config) can
+    # render the tab in either an active or a Pro-locked state without the
+    # browser console-erroring on a 404. POSTs (writes) still 404 when the
+    # feature flag is off — writes only make sense when the feature is on.
+    #
+    # Fixes #1431 (Pro-locked vs invisible-when-off) AND removes the need
+    # for the cloud-contract 404 allowlist entry from PR #1435.
     from clawmetry.insights import load_config, save_config
+    enabled = _feature_enabled()
     if request.method == "POST":
+        if not enabled:
+            return jsonify({
+                "error": "feature_disabled",
+                "hint": "Set CLAWMETRY_INSIGHTS=1 to enable Weekly Insights Digest.",
+            }), 404
         data = request.get_json(silent=True) or {}
         cfg = save_config(data)
-        return jsonify({"ok": True, "config": cfg})
+        return jsonify({"ok": True, "enabled": True, "config": cfg})
+    # GET: always 200. When disabled, return only the enabled flag (no
+    # config payload — nothing to expose to a viewer who hasn't opted in).
+    if not enabled:
+        return jsonify({"enabled": False})
     cfg = load_config()
     # Don't leak the API key back to the browser — return only a presence flag.
     cfg_safe = dict(cfg)
     cfg_safe["anthropic_api_key"] = "***" if cfg_safe.get("anthropic_api_key") else ""
+    cfg_safe["enabled"] = True
     return jsonify(cfg_safe)
 
 

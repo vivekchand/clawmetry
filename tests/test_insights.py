@@ -154,6 +154,34 @@ def test_routes_return_404_when_flag_off(fresh_insights, monkeypatch):
     assert r2.status_code == 404
 
 
+def test_config_get_returns_200_with_enabled_flag_when_flag_off(
+    fresh_insights, monkeypatch
+):
+    """/api/insights/config GET is the dashboard's nav-tab-reveal probe.
+    Returning 404 there caused the browser to console.error on every page
+    load, tripping cloud-contract gates (#1431). Now: always 200, with
+    `enabled: false` when feature off (cheap signal for the probe without
+    leaking config payload), `enabled: true + full config` when on."""
+    monkeypatch.delenv("CLAWMETRY_INSIGHTS", raising=False)
+    sys.modules.pop("routes.insights", None)
+    from flask import Flask
+    from routes.insights import bp_insights
+    app = Flask(__name__)
+    app.register_blueprint(bp_insights)
+    client = app.test_client()
+    r = client.get("/api/insights/config")
+    assert r.status_code == 200, r.data
+    body = r.get_json()
+    assert body == {"enabled": False}, body
+    # POST still 404 when off — writes only make sense when feature is on.
+    r2 = client.post(
+        "/api/insights/config",
+        data=json.dumps({"channel": "slack"}),
+        content_type="application/json",
+    )
+    assert r2.status_code == 404, r2.data
+
+
 def test_routes_serve_when_flag_on(fresh_insights, monkeypatch):
     monkeypatch.setenv("CLAWMETRY_INSIGHTS", "1")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
