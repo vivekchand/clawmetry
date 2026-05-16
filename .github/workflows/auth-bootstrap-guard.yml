@@ -1,0 +1,94 @@
+name: Auth Bootstrap Guard
+
+on:
+  pull_request:
+    paths:
+      - "clawmetry/static/js/*.js"
+      - ".github/workflows/auth-bootstrap-guard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  auth-bootstrap-guard:
+    name: Auth bootstrap no-reload smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check auth-bootstrap.js syntax
+        run: node --check clawmetry/static/js/auth-bootstrap.js
+
+      - name: Guard bootstrap IIFE does not reload
+        run: |
+          awk '1; /^\}\)\(\);$/ { exit }' clawmetry/static/js/auth-bootstrap.js | grep -v '^[[:space:]]*//' | \
+            node -e "const fs=require('fs'); const s=fs.readFileSync(0,'utf8'); if (/location\\.reload\\s*\\(/.test(s) || /window\\.location\\.reload\\s*\\(/.test(s)) { console.error('auth bootstrap IIFE must not call location.reload()'); process.exit(1); }"
+
+      - name: Install runtime deps
+        run: |
+          pip install flask requests waitress cryptography
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Start dashboard
+        run: |
+          OPENCLAW_GATEWAY_TOKEN=ci-test-token python3 dashboard.py --host 127.0.0.1 --port 8900 --no-debug > /tmp/clawmetry.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer ci-test-token" http://127.0.0.1:8900/api/health && exit 0
+            sleep 1
+          done
+          cat /tmp/clawmetry.log
+          exit 1
+
+      - name: Smoke test zero-click bootstrap does not reload
+        run: |
+          node <<'NODE'
+          const { chromium } = require('playwright');
+
+          (async () => {
+            const browser = await chromium.launch();
+            const page = await browser.newPage();
+
+            await page.goto('http://127.0.0.1:8900/', {
+              waitUntil: 'load',
+              timeout: 10000,
+            });
+
+            await page.waitForTimeout(2000);
+
+            const result = await page.evaluate(() => ({
+              readyState: document.readyState,
+              navType: performance.getEntriesByType('navigation')[0]?.type,
+              token: localStorage.getItem('clawmetry-token'),
+            }));
+
+            await browser.close();
+
+            if (result.readyState !== 'complete') {
+              throw new Error(`document.readyState was ${result.readyState}, expected complete`);
+            }
+
+            if (result.navType === 'reload') {
+              throw new Error('page reloaded during bootstrap');
+            }
+
+            if (result.token !== 'ci-test-token') {
+              throw new Error(`bootstrap token was not stored correctly: ${result.token}`);
+            }
+
+            console.log('auth bootstrap smoke passed');
+          })().catch((err) => {
+            console.error(err);
+            process.exit(1);
+          });
+          NODE
