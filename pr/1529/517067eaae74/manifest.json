@@ -1,0 +1,200 @@
+[
+  {
+    "view": "desktop",
+    "tab": "overview",
+    "slug": "root",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "desktop",
+    "tab": "flow",
+    "slug": "flow",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "desktop",
+    "tab": "brain",
+    "slug": "brain",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "desktop",
+    "tab": "approvals",
+    "slug": "approvals",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "desktop",
+    "tab": "alerts",
+    "slug": "alerts",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "desktop",
+    "tab": "notifications",
+    "slug": "notifications",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "desktop",
+    "tab": "context",
+    "slug": "context",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "desktop",
+    "tab": "usage",
+    "slug": "usage",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "desktop",
+    "tab": "crons",
+    "slug": "crons",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "desktop",
+    "tab": "memory",
+    "slug": "memory",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "desktop",
+    "tab": "security",
+    "slug": "security",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "overview",
+    "slug": "root",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "flow",
+    "slug": "flow",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "brain",
+    "slug": "brain",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "approvals",
+    "slug": "approvals",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "alerts",
+    "slug": "alerts",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "notifications",
+    "slug": "notifications",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "context",
+    "slug": "context",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "usage",
+    "slug": "usage",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "crons",
+    "slug": "crons",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "memory",
+    "slug": "memory",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  },
+  {
+    "view": "mobile",
+    "tab": "security",
+    "slug": "security",
+    "diffPct": 0,
+    "hasDiff": false,
+    "baseOk": true,
+    "headOk": true
+  }
+]
