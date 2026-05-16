@@ -2375,6 +2375,28 @@ function formatBrainTime(isoStr) {
   } catch(e) { return isoStr || ''; }
 }
 
+// Plain-text variant of formatBrainTime — returns "Today 14:23:45" with no
+// HTML tags so callers can safely pass the result through escHtml() or
+// concatenate it into a plain-text context without worrying about double-escaping.
+function _formatBrainTimePlain(isoStr) {
+  try {
+    var d = new Date(isoStr);
+    var now = new Date();
+    var sameDay = d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
+    var sameYear = d.getFullYear()===now.getFullYear();
+    var time = d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    var prefix;
+    if (sameDay) {
+      prefix = 'Today';
+    } else if (sameYear) {
+      prefix = d.toLocaleDateString('en-GB', {day:'numeric',month:'short'});
+    } else {
+      prefix = d.toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'});
+    }
+    return prefix + ' ' + time;
+  } catch(e) { return isoStr || ''; }
+}
+
 // ── Provenance pill (PR feat/brain-tab-hide-plumbing) ──────────────────
 // User messages from channel adapters arrive prefixed with a JSON block
 // like:
@@ -3114,8 +3136,10 @@ function renderBrainStream(events) {
       var run = ev.__collapsedRun;
       // Times are sorted newest-first from the upstream sort, so the
       // last event in the run is the oldest. Format "oldest → newest".
-      var newestT = run[0] && run[0].time ? formatBrainTime(run[0].time) : '';
-      var oldestT = run[run.length - 1] && run[run.length - 1].time ? formatBrainTime(run[run.length - 1].time) : '';
+      // Use the plain-text variant so rangeLabel is safe to pass through
+      // escHtml() — avoids the double-escape bug fixed in PR #1215.
+      var newestT = run[0] && run[0].time ? _formatBrainTimePlain(run[0].time) : '';
+      var oldestT = run[run.length - 1] && run[run.length - 1].time ? _formatBrainTimePlain(run[run.length - 1].time) : '';
       var rangeLabel = oldestT && newestT && oldestT !== newestT
         ? oldestT + ' → ' + newestT
         : (newestT || oldestT || '');
@@ -3128,10 +3152,7 @@ function renderBrainStream(events) {
         escHtml(ev.__collapsedCount + ' consecutive outbound ACKs from this chat — bodies not captured (collapsed for readability)') +
         '">↪ ' + ev.__collapsedCount + ' outbound</span>';
       if (rangeLabel) {
-        // rangeLabel is trusted HTML built from formatBrainTime() output
-        // (which wraps the date prefix in a styled <span>) joined with
-        // a literal " → "; do NOT escHtml or the markup renders as text.
-        html += '<span class="brain-collapsed-range" style="color:var(--text-muted);font-size:10px;flex-shrink:0;white-space:nowrap;">' + rangeLabel + '</span>';
+        html += '<span class="brain-collapsed-range" style="color:var(--text-muted);font-size:10px;flex-shrink:0;white-space:nowrap;">' + escHtml(rangeLabel) + '</span>';
       }
       html += '<span class="brain-collapsed-note" style="color:var(--text-muted);font-size:10px;font-style:italic;flex-shrink:0;white-space:nowrap;">(bodies not captured)</span>';
       // Expand affordance — small text button, monospace arrow.
