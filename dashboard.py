@@ -4456,15 +4456,32 @@ function clawmetryLogout(){
   <div id="cost-warnings" style="display:none; margin-bottom: 16px;"></div>
 
 
-  <!-- One-time banner: token splits now accurate (issue #1401) -->
-  <div id="tokens-fix-banner" style="display:none;margin-bottom:16px;padding:10px 14px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:13px;color:#60ff80;display:flex;align-items:center;justify-content:space-between;">
-    <span>&#128200; Token splits now include cache reads/writes &mdash; numbers are accurate from this version. <a href="https://github.com/vivekchand/clawmetry/issues/1394" target="_blank" rel="noopener" style="color:#60ff80;text-decoration:underline;">See issue #1394</a></span>
-    <button onclick="document.getElementById('tokens-fix-banner').style.display='none';localStorage.setItem('clawmetry_tokens_fix_banner_v1','1');" style="background:transparent;border:none;cursor:pointer;font-size:16px;color:#60ff80;padding:0 0 0 12px;">&times;</button>
+  <!-- One-time banner: token attribution upgrade announcement (issue #1430) -->
+  <!-- Gated on /api/install-age so fresh installs (post 0.12.230) never see -->
+  <!-- a fix-announcement for a bug they never experienced. Mirrors the -->
+  <!-- maybeShowBrainRestorationToast() pattern from PR #1467. -->
+  <div id="tokens-fix-banner" style="display:none;margin-bottom:16px;padding:10px 14px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:13px;color:#60ff80;align-items:center;justify-content:space-between;">
+    <span>&#128200; Token attribution upgraded. Your dashboard now tracks cache reads and writes for the full picture. <a href="https://github.com/vivekchand/clawmetry/issues/1394" target="_blank" rel="noopener" style="color:#60ff80;text-decoration:underline;">See issue #1394</a></span>
+    <button onclick="document.getElementById('tokens-fix-banner').style.display='none';localStorage.setItem('clawmetry_tokens_attribution_banner_shown_v1','1');" style="background:transparent;border:none;cursor:pointer;font-size:16px;color:#60ff80;padding:0 0 0 12px;">&times;</button>
   </div>
   <script>
   (function(){
-    var b = document.getElementById('tokens-fix-banner');
-    if(b && !localStorage.getItem('clawmetry_tokens_fix_banner_v1')) b.style.display='flex';
+    // Cutoff epoch: 2026-05-15 00:00 UTC, day 0.12.230 shipped.
+    var TOKENS_CUTOFF_EPOCH = 1778803200;
+    var FLAG = 'clawmetry_tokens_attribution_banner_shown_v1';
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage.getItem(FLAG) === '1') return;
+    } catch (_e) { return; }
+    fetch('/api/install-age').then(function(r){ return r.json(); }).then(function(d){
+      try {
+        // No config (fresh install with no daemon) OR ctime newer than cutoff:
+        // never saw the buggy state, skip the banner entirely.
+        if (!d || !d.exists || !d.ctime) return;
+        if (d.ctime >= TOKENS_CUTOFF_EPOCH) return;
+        var b = document.getElementById('tokens-fix-banner');
+        if (b) b.style.display = 'flex';
+      } catch (_inner) {}
+    }).catch(function(){ /* fail closed: never show on endpoint error */ });
   })();
   </script>
 
