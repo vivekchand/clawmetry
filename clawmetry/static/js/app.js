@@ -2954,6 +2954,58 @@ function _toggleBrainCollapsedRun(btn, key) {
   if (event && event.stopPropagation) event.stopPropagation();
 }
 
+// Hallucination Risk Indicator (issue #567).
+// Backend stamps each LLM-call event with {risk_level, risk_explanation}.
+// We paint a tiny coloured pill next to the chip type. Tooltip explains
+// which signals tripped the band so a developer can act on it without
+// needing to crack open the raw event JSON.
+// Plain copy, no em-dashes (memory: feedback_no_em_dashes_in_user_facing_copy.md).
+var _riskBadgeStyles = {
+  low:    { dot: '🟢', label: 'Low risk',    color: '#16a34a', bg: 'rgba(22,163,74,0.12)' },
+  medium: { dot: '🟡', label: 'Medium risk', color: '#d97706', bg: 'rgba(217,119,6,0.14)' },
+  high:   { dot: '🔴', label: 'High risk',   color: '#dc2626', bg: 'rgba(220,38,38,0.16)' }
+};
+
+function renderRiskBadge(ev) {
+  if (!ev || typeof ev !== 'object') return '';
+  var risk = ev.risk;
+  if (!risk || typeof risk !== 'object') return '';
+  var lvl = String(risk.risk_level || '').toLowerCase();
+  var cfg = _riskBadgeStyles[lvl];
+  if (!cfg) return '';
+  var explanation = String(risk.risk_explanation || cfg.label);
+  // Title attr is plain text; escHtml double-escapes when interpolated
+  // inside an attribute, so we use escHtml exactly once.
+  var tip = cfg.label + '. ' + explanation;
+  return '<span class="brain-risk brain-risk-' + lvl + '" ' +
+    'data-risk-level="' + lvl + '" ' +
+    'style="display:inline-flex;align-items:center;gap:3px;background:' + cfg.bg +
+    ';color:' + cfg.color + ';padding:1px 6px;border-radius:3px;font-size:10px;' +
+    'font-weight:600;flex-shrink:0;white-space:nowrap;" ' +
+    'title="' + escHtml(tip) + '">' + cfg.dot + ' ' + cfg.label + '</span>';
+}
+
+// Walk a Brain event list and return true when any LLM-call event hit
+// the "high" band. Drives the session-row warning icon (issue #567).
+function sessionHasHighRisk(events, sessionId) {
+  if (!events || !events.length || !sessionId) return false;
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i];
+    if (!ev || !ev.risk) continue;
+    var lvl = String(ev.risk.risk_level || '').toLowerCase();
+    if (lvl !== 'high') continue;
+    // Match by sessionId, src, or source — Brain events tag via different
+    // fields depending on the source path (local-store vs JSONL parser).
+    var sid = ev.sessionId || ev.src || ev.source || '';
+    if (!sid) continue;
+    // Allow suffix match: sessions list often shortens to gateway key.
+    if (sid === sessionId || sessionId.indexOf(sid) >= 0 || sid.indexOf(sessionId) >= 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Plumbing event types: internal queue housekeeping that's noise to anyone
 // debugging an actual conversation. Hidden by default; toggle in the Brain
 // header reveals them. Match is case-insensitive on type AND detail to
@@ -3056,6 +3108,11 @@ function renderBrainStream(events) {
         taskBadge = '<span class="brain-task-type" style="color:' + _ttCfg[1] + ';font-size:10px;flex-shrink:0;white-space:nowrap;" title="Task type: ' + _ttCfg[2] + '">' + _ttCfg[0] + ' ' + _ttCfg[2] + '</span>';
       }
     }
+    // Hallucination risk badge (issue #567). Only painted on LLM-call
+    // chips that the backend stamped with a {risk_level, risk_explanation}
+    // dict. Green/yellow/red dot + tooltip — readable without ML internals
+    // per feedback_simple_ui_for_nontechnical.md.
+    var riskBadge = renderRiskBadge(ev);
     // Build turn timeline for USER events (Phase 4: Agent Runtime Timeline)
     var turnTimeline = '';
     if (evType === 'USER') {
@@ -3215,6 +3272,7 @@ function renderBrainStream(events) {
     }
     html += skillBadge;
     html += taskBadge;
+    html += riskBadge;
     html += '</div>';
     html += '<span class="brain-detail">' + renderBrainDetail(ev.detail || '') + '</span>';
     html += turnTimeline;
@@ -4757,12 +4815,17 @@ async function loadSessions() {
     // In cloud mode: /api/sessions and /api/subagents already handle CLOUD_MODE server-side
     // fetch interceptor appends node_id+token so these hit the cloud endpoints correctly
   }
-  var [sessData, saData, anomalyData, costData, chainData] = await Promise.all([
+  var [sessData, saData, anomalyData, costData, chainData, riskBrain] = await Promise.all([
     fetch('/api/sessions').then(r => r.json()).catch(function() { return {sessions:[]}; }),
     fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; }),
     fetch('/api/usage/anomalies').then(r => r.json()).catch(function() { return {anomalies:[]}; }),
     fetch('/api/sessions/cost-breakdown').then(r => r.json()).catch(function() { return {sessions:[]}; }),
-    fetch('/api/delegation-tree').then(r => r.json()).catch(function() { return {chains:[], total_subagents:0, total_chain_cost_usd:0}; })
+    fetch('/api/delegation-tree').then(r => r.json()).catch(function() { return {chains:[], total_subagents:0, total_chain_cost_usd:0}; }),
+    // Issue #567 — pull recent brain events so we can stamp a high-risk
+    // warning on any session whose latest LLM call tripped the band.
+    // 200 events is enough to cover the active window without blowing
+    // the page-load budget; the fast path serves this in <50 ms.
+    fetch('/api/brain-history?limit=200').then(r => r.json()).catch(function() { return {events:[]}; })
   ]);
   // Build cost lookup map by session_id suffix
   var costMap = {};
@@ -4775,6 +4838,17 @@ async function loadSessions() {
   });
   var anomalySet = {};
   (anomalyData.anomalies || []).forEach(function(a) { if (a && a.session_id) anomalySet[a.session_id] = a; });
+  // Per-session high-risk set for the session-row warning badge.
+  // Issue #567: a session is "high-risk" if ANY of its recent LLM calls
+  // scored "high". Build the lookup once so the per-row test is O(1).
+  var highRiskSessions = {};
+  ((riskBrain && riskBrain.events) || []).forEach(function(ev) {
+    if (!ev || !ev.risk) return;
+    if (String(ev.risk.risk_level || '').toLowerCase() !== 'high') return;
+    var sid = ev.sessionId || ev.src || ev.source || '';
+    if (!sid) return;
+    highRiskSessions[sid] = (highRiskSessions[sid] || 0) + 1;
+  });
   var html = '';
   // Main sessions (non-subagent)
   var mainSessions = sessData.sessions.filter(function(s) { return !(s.sessionId || '').includes('subagent'); });
@@ -4789,6 +4863,15 @@ async function loadSessions() {
     html += '<span>🖥️ ' + escHtml(s.displayName || s.key) + ' <span style="font-size:11px;color:var(--text-muted);font-weight:400;">Main Session</span>';
     if (anomaly) {
       html += '<span class="session-anomaly" title="Cost anomaly: $' + Number(anomaly.cost_usd || 0).toFixed(4) + ' (' + Number(anomaly.ratio || 0).toFixed(2) + 'x rolling avg)">&#9888;&#65039;</span>';
+    }
+    // Issue #567 — high-risk warning. One or more LLM calls in this
+    // session scored "high" on the Hallucination Risk Indicator.
+    var _hrCount = highRiskSessions[sid] || 0;
+    if (_hrCount > 0) {
+      html += '<span class="session-risk-warn" data-session-id="' + escHtml(sid) +
+        '" title="' + _hrCount + ' high-risk call' + (_hrCount > 1 ? 's' : '') +
+        ' in this session. Open the Brain tab for per-call detail."' +
+        ' style="margin-left:6px;color:#dc2626;font-size:13px;">&#9888;</span>';
     }
     html += '</span>';
     html += '<button onclick="event.stopPropagation();stopSession(\'' + escHtml(sid).replace(/'/g, "\\\\'") + '\')" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
