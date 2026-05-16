@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Alerts comms: PR #1410 ship moment for the no-OTLP cohort (issue #1419, 2026-05-16)
+- **Changelog callout.** Alert rules now fire on real OpenClaw spend, not just OTLP-fed installs. The ~99% of users without the `[otel]` extra had `daily_spent=0` forever, so "alert when spend > $X" rules never triggered until PR #1410 wired the DuckDB events fallback into `_get_budget_status`.
+- **Alerts tab banner.** When a user has 1+ rules, 0 historical fires, and the oldest rule is more than 24h old, `/api/alerts/rules` returns `_comms.show_alerts_comms_banner: true`. The Alerts tab renders a one-line notice that the previous rules should start triggering normally. Dismissible.
+- **Cloud-Pro CTA.** Same cohort, plus `cost_source == "duckdb"` (no OTLP) plus not already on Pro, surfaces a "richer telemetry plus 90-day retention" upsell inline in the banner.
+- **"Last fired" pill per rule.** Each rule card shows `Last fired: 5m ago` (green pill) when the rule has fired at least once, otherwise `Not yet fired` (muted pill). Converts the silent fix into a visible win the user can pin in muscle memory.
+
 ### MOAT batch: 7 user-visible Tier-1 bypasses → DuckDB fast-path (2026-05-15)
 Single-day push that pulls seven dashboard surfaces off the JSONL/process-stat path and onto the daemon-proxy DuckDB read path. Each migration ships with a synthetic-event E2E test that proves the round-trip (LocalStore.ingest → DuckDB → endpoint returns the expected shape). All seven are paired with `_try_local_store_*` early-returns plus the legacy fallback verbatim — no behavior regression, just latency.
 

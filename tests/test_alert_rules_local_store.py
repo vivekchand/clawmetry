@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import time
 
 import pytest
 
@@ -216,6 +217,72 @@ def test_api_alerts_rules_flag_off_uses_legacy(fresh_store, monkeypatch):
     body = resp.get_json()
     assert "_source" not in body, "flag-off path must not tag _source"
     assert body["rules"] == [{"id": "legacy-rule", "src": "fleet_db"}]
+
+
+# ── 2b. Issue #1419 PR #1410 comms envelope ────────────────────────────────
+
+
+def test_alerts_rules_comms_banner_for_stale_rule_cohort(monkeypatch):
+    """The /api/alerts/rules response carries _comms with show_alerts_comms_banner
+    when the user has 1+ rules, 0 fires, and the oldest rule is >24h old.
+
+    Mirrors the PR #1410 conversion cohort: rules configured pre-fix that
+    never triggered because daily_spent was stuck at 0 on no-OTLP installs.
+    """
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")  # force legacy path
+    sys.modules.pop("routes.alerts", None)
+    import routes.alerts as ra
+    importlib.reload(ra)
+
+    import types
+    fake_d = types.ModuleType("dashboard")
+    # 25h-old rule, never fired
+    fake_d._get_alert_rules = lambda: [
+        {"id": "stale-rule", "type": "threshold", "threshold": 5.0,
+         "created_at": time.time() - 90000}
+    ]
+    fake_d._get_alert_history = lambda limit=50: []
+    fake_d._get_budget_status = lambda: {"cost_source": "duckdb"}
+    fake_d._is_pro_user = lambda: False
+    monkeypatch.setitem(sys.modules, "dashboard", fake_d)
+
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(ra.bp_alerts)
+    body = app.test_client().get("/api/alerts/rules").get_json()
+    assert body["_comms"]["show_alerts_comms_banner"] is True, body["_comms"]
+    assert body["_comms"]["show_cloud_pro_cta"] is True, body["_comms"]
+    assert body["_comms"]["cost_source"] == "duckdb"
+
+
+def test_alerts_rules_comms_no_banner_when_rule_recently_fired(monkeypatch):
+    """If any rule has fired, suppress the banner — there's nothing to convert."""
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "0")
+    sys.modules.pop("routes.alerts", None)
+    import routes.alerts as ra
+    importlib.reload(ra)
+
+    import types, time as _t
+    fake_d = types.ModuleType("dashboard")
+    fake_d._get_alert_rules = lambda: [
+        {"id": "fired-rule", "type": "threshold", "threshold": 5.0,
+         "created_at": _t.time() - 90000}
+    ]
+    fake_d._get_alert_history = lambda limit=50: [
+        {"rule_id": "fired-rule", "fired_at": _t.time() - 300}
+    ]
+    fake_d._get_budget_status = lambda: {"cost_source": "duckdb"}
+    fake_d._is_pro_user = lambda: False
+    monkeypatch.setitem(sys.modules, "dashboard", fake_d)
+
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(ra.bp_alerts)
+    body = app.test_client().get("/api/alerts/rules").get_json()
+    assert body["_comms"]["show_alerts_comms_banner"] is False
+    assert body["_comms"]["show_cloud_pro_cta"] is False
+    # last_fired_at should be stamped onto the rule
+    assert body["rules"][0]["last_fired_at"] is not None
 
 
 # ── 3. Heartbeat cache push ─────────────────────────────────────────────────

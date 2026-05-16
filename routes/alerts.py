@@ -88,6 +88,93 @@ def _try_local_store_alert_rules():
     return {"rules": rows or [], "_source": "local_store"}
 
 
+# ── PR #1410 comms envelope (issue #1419) ─────────────────────────────────
+# Before PR #1410, the alert evaluator only saw ``daily_spent`` from the
+# OTLP metrics buffer — installs without ``[otel]`` had ``daily_spent=0``
+# forever, so "alert when spend > $X" rules never fired on real spend.
+# Now the evaluator falls back to DuckDB-aggregated events (cost_source=
+# "duckdb"). We piggyback three signals on the /api/alerts/rules GET
+# response so the dashboard can surface the silent fix as a visible win:
+#   - show_alerts_comms_banner: one-time "your rules will fire now" notice
+#   - show_cloud_pro_cta:       upsell when on the DuckDB path (lower fidelity)
+#   - per-rule last_fired_at:   "Last fired: 5m ago" pill or "Not yet fired"
+_RULE_AGE_THRESHOLD_SECS = 86400  # 24h
+
+
+def _enrich_rules_with_comms(rules):
+    """Decorate ``rules`` with ``last_fired_at`` and compute comms flags.
+
+    Returns ``(rules_with_last_fired, comms_dict)``. Never raises — bad
+    state degrades to empty comms (no banner, no CTA) so the legacy alerts
+    list keeps rendering.
+    """
+    import dashboard as _d
+    enriched = list(rules or [])
+    # Fan the alert_history table into a {rule_id: max(fired_at)} map. One
+    # query, then dict.get — keeps the per-rule path O(1).
+    last_fired = {}
+    try:
+        for hist in _d._get_alert_history(limit=500) or []:
+            rid = hist.get("rule_id")
+            ts = hist.get("fired_at")
+            if rid and ts and ts > last_fired.get(rid, 0):
+                last_fired[rid] = ts
+    except Exception:
+        last_fired = {}
+    for r in enriched:
+        rid = r.get("id")
+        if rid and rid in last_fired:
+            r["last_fired_at"] = last_fired[rid]
+        # Don't inject ``last_fired_at: None`` when the rule has never
+        # fired — keeps the legacy response shape byte-stable for callers
+        # that do strict-equality asserts (see test_alert_rules_local_store).
+
+    # Comms flags. All three predicates need to be True for the banner:
+    # 1+ rules configured, 0 historical fires across all of them, oldest
+    # rule is >24h old (so we're not nagging a user who just configured
+    # alerts five minutes ago).
+    now = time.time()
+    has_rules = len(enriched) > 0
+    has_any_fire = len(last_fired) > 0
+    oldest_rule_age = 0.0
+    for r in enriched:
+        created = r.get("created_at") or 0
+        try:
+            age = now - float(created)
+        except (TypeError, ValueError):
+            age = 0.0
+        if age > oldest_rule_age:
+            oldest_rule_age = age
+    is_stale_rule_cohort = (
+        has_rules and not has_any_fire and oldest_rule_age > _RULE_AGE_THRESHOLD_SECS
+    )
+
+    # cost_source comes from /api/budget/status (set in dashboard.py:799).
+    # "duckdb" = no OTLP installed — the cohort PR #1410 unbroke and the
+    # right audience for the Cloud-Pro telemetry upsell.
+    cost_source = "unknown"
+    try:
+        cost_source = str(_d._get_budget_status().get("cost_source") or "unknown")
+    except Exception:
+        pass
+
+    is_pro = False
+    try:
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
+
+    show_cloud_pro_cta = (
+        is_stale_rule_cohort and cost_source == "duckdb" and not is_pro
+    )
+
+    return enriched, {
+        "show_alerts_comms_banner": is_stale_rule_cohort,
+        "show_cloud_pro_cta": show_cloud_pro_cta,
+        "cost_source": cost_source,
+    }
+
+
 # ── Budget API Routes ───────────────────────────────────────────────────
 
 
@@ -354,8 +441,16 @@ def api_alert_rules():
                     fast["rules"] = list(fast.get("rules") or []) + local_only
             except Exception:
                 pass
+            # Issue #1419: enrich with last_fired + comms flags so the
+            # Alerts UI can render the PR #1410 "your rules will fire now"
+            # banner and per-rule "Last fired" pills.
+            enriched, comms = _enrich_rules_with_comms(fast.get("rules") or [])
+            fast = dict(fast)
+            fast["rules"] = enriched
+            fast["_comms"] = comms
             return jsonify(fast)
-    return jsonify({"rules": _d._get_alert_rules()})
+    enriched, comms = _enrich_rules_with_comms(_d._get_alert_rules())
+    return jsonify({"rules": enriched, "_comms": comms})
 
 
 @bp_alerts.route("/api/alerts/rules/<rule_id>", methods=["PUT", "DELETE"])
