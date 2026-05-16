@@ -13194,3 +13194,18 @@ function _ncEsc(s) {
   } catch(e) {}
 })();
 } } // end if(false) stub */
+
+// On page load: reveal Insights tab if the feature flag is on. Insights endpoints
+// 404 with `{"error":"feature_disabled"}` when CLAWMETRY_INSIGHTS=1 is unset, so
+// a fast HEAD-style probe of /api/insights/config keeps the tab hidden by default
+// (no surface for users who haven't opted in yet) without leaking a spurious 200.
+(function() {
+  try {
+    fetch('/api/insights/config').then(function(r) {
+      if (r.ok) {
+        var t = document.getElementById('insights-tab');
+        if (t) t.style.display = '';
+      }
+    }).catch(function(){});
+  } catch(e) {}
+})();
