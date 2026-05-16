@@ -3806,6 +3806,20 @@ async function loadBrainPage(silent) {
     var streamEl = document.getElementById('brain-stream');
     var wasAtTop = !streamEl || streamEl.scrollTop < 40;
     renderBrainStream(events);
+    // Issue #1195 — One-time "Live event details restored" toast for users
+    // who lived through the 0.12.182 empty-detail regression. Fires only if
+    // (a) at least one event has a non-empty detail, (b) the user hasn't
+    // already seen the toast (localStorage flag), and (c) the install
+    // pre-dates the regression cutoff (epoch derived from config.json
+    // ctime). Fresh installs and repeat visits skip silently.
+    try {
+      var hasDetail = false;
+      for (var _i = 0; _i < events.length; _i++) {
+        var _d = events[_i] && (events[_i].detail || events[_i].text || events[_i].content);
+        if (_d && String(_d).trim() !== '') { hasDetail = true; break; }
+      }
+      if (hasDetail) maybeShowBrainRestorationToast();
+    } catch (_toastErr) { /* never block render */ }
   } catch(e) {
     // Always replace the spinner on error -- previously this only fired
     // when `silent=false`, so a silent retry that errored left the prior
@@ -3831,6 +3845,58 @@ async function loadBrainPage(silent) {
   }
   // Loop-signals badge (#1364) — fire-and-forget; never blocks the Brain tab.
   loadLoopSignals();
+}
+
+
+// ── Brain restoration toast (issue #1195) ─────────────────────────────────
+// One-time "Live event details restored" toast for installs that lived
+// through the 0.12.182 empty-detail regression (shipped 2026-05-12, fixed
+// in #1190 / 0.12.183+). Gating logic:
+//   1. localStorage flag stops re-fire across navigations & daemon restarts.
+//   2. /api/install-age tells us when the config file was first created;
+//      installs that were created AFTER the regression cutoff are fresh
+//      installs that never saw broken Brain, so they get no toast.
+//   3. Fires once per first non-empty Brain load that satisfies (1)+(2).
+var _brainRestorationToastInflight = false;
+// Unix epoch for 2026-05-12 00:00 UTC (regression ship date for 0.12.182).
+var _BRAIN_REGRESSION_CUTOFF_EPOCH = 1778544000;
+var _BRAIN_TOAST_FLAG = 'clawmetry_brain_restoration_toast_shown_v1';
+
+function maybeShowBrainRestorationToast() {
+  try {
+    if (_brainRestorationToastInflight) return;
+    if (window.CLOUD_MODE) return;
+    if (typeof localStorage === 'undefined') return;
+    if (localStorage.getItem(_BRAIN_TOAST_FLAG) === '1') return;
+    _brainRestorationToastInflight = true;
+    fetchJsonWithTimeout('/api/install-age', 4000).then(function(d) {
+      try {
+        // Fresh install OR config newer than regression cutoff: don't toast.
+        // Pre-existing install (ctime older than 2026-05-12): show toast once.
+        if (!d || !d.exists || !d.ctime) return;
+        if (d.ctime >= _BRAIN_REGRESSION_CUTOFF_EPOCH) return;
+        try { localStorage.setItem(_BRAIN_TOAST_FLAG, '1'); } catch (_e) {}
+        _showBrainToast('Live event details restored. Brain stream is back to normal.');
+      } catch (_inner) {}
+    }).catch(function() {
+      // /api/install-age failed (offline daemon, 404 on older builds, etc.).
+      // Fail closed: do nothing so we never spam the toast on errors.
+    });
+  } catch (_outer) {}
+}
+
+function _showBrainToast(msg) {
+  try {
+    var t = document.createElement('div');
+    t.className = 'cron-toast';
+    t.setAttribute('role', 'status');
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(function() {
+      t.style.opacity = '0';
+      setTimeout(function() { try { t.remove(); } catch (_e) {} }, 300);
+    }, 5000);
+  } catch (_e) {}
 }
 
 

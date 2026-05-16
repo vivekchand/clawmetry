@@ -132,6 +132,29 @@ def api_update():
     return {"ok": True, "old_version": old_version, "new_version": new_version}
 
 
+@bp_version.route("/api/install-age")
+def api_install_age():
+    """Return the ctime of ``~/.clawmetry/config.json`` as a Unix epoch.
+
+    Used by the Brain restoration toast (issue #1195) to distinguish
+    fresh installs from upgrades across the 0.12.182 empty-detail
+    regression window. Returns ``{exists: false, ctime: null}`` when the
+    config file is missing (fresh install with no prior daemon).
+    """
+    cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+    try:
+        st = os.stat(cfg_path)
+        # Prefer ctime (inode creation) over mtime, since `clawmetry connect`
+        # rewrites the file on every key change. ctime is closer to "first
+        # ever install" than mtime.
+        return {"exists": True, "ctime": int(st.st_ctime), "mtime": int(st.st_mtime)}
+    except FileNotFoundError:
+        return {"exists": False, "ctime": None, "mtime": None}
+    except Exception:
+        # Never crash on bad filesystem state; treat as fresh-install.
+        return {"exists": False, "ctime": None, "mtime": None}
+
+
 # ── Gateway proxy routes ──────────────────────────────────────────────────────
 
 
