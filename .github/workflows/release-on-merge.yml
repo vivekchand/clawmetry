@@ -28,6 +28,118 @@ jobs:
       - name: Install build tools
         run: pip install build twine
 
+      # ─── Accuracy meta-harness gate (closes #1396) ────────────────────────
+      # Hard-gates [RELEASE] PRs on `scripts/accuracy_harness/all.py`. The
+      # full harness drives REAL openclaw turns + LLM calls + a live sync
+      # daemon, none of which exist on a vanilla GH runner — so CI runs
+      # the meta-runner in `--dry-run --no-issue` mode (proves the runner
+      # skeleton + every sub-harness path resolves) AND a structural import
+      # gate (proves `tokens.py` / `approvals.py` / `alerts.py` modules are
+      # importable + the HARNESSES registry in `all.py` matches reality).
+      # Together this catches the silent-zero class of bug (#1394) where a
+      # sub-harness vanishes from the registry, an import breaks, or `all.py`
+      # itself crashes — all of which would silently let a broken release
+      # ship if we trusted production-only validation.
+      #
+      # Live ground-truth runs (sub-harnesses against a real OpenClaw + LLM
+      # API key) belong in a periodic cloud cron once the consolidated
+      # GitHub-issue filer in `all.py` is wired against staging; that
+      # follow-up is tracked against #1396. Until then this gate covers the
+      # failure class that previously let #1394's 85K-token cache_read
+      # drift ship silently.
+      - name: Accuracy meta-harness — structural gate
+        id: accuracy_gate
+        run: |
+          set +e
+          # 1. Structural: every registered harness module imports without
+          # side effects, and `all.py`'s HARNESSES registry points at real
+          # files. Catches deletions / renames / import-time NameErrors.
+          python3 - <<'PY'
+          import importlib.util, sys, pathlib
+          root = pathlib.Path(".").resolve()
+          # Must be in sync with the registry inside scripts/accuracy_harness/all.py
+          REGISTRY = ["tokens", "approvals", "alerts"]
+          # `_lib` is shared, must import too.
+          MODULES = ["_lib"] + REGISTRY
+          # Make `from _lib import …` resolve when sub-harnesses import.
+          sys.path.insert(0, str(root / "scripts" / "accuracy_harness"))
+
+          def load(modname, filename):
+              # Register in sys.modules BEFORE exec — required so Python 3.9
+              # dataclass type-resolution (sys.modules[cls.__module__].__dict__)
+              # works on modules loaded by file path.
+              path = root / "scripts" / "accuracy_harness" / filename
+              if not path.exists():
+                  raise FileNotFoundError(str(path))
+              spec = importlib.util.spec_from_file_location(modname, path)
+              mod = importlib.util.module_from_spec(spec)
+              sys.modules[modname] = mod
+              spec.loader.exec_module(mod)
+              return mod
+
+          failed = []
+          for name in MODULES:
+              try:
+                  load(name, f"{name}.py")
+              except Exception as e:
+                  failed.append(f"{name} import: {type(e).__name__}: {e}")
+          # Cross-check that all.py's registry only references files we just verified.
+          try:
+              _all = load("_acc_all_runner", "all.py")
+          except Exception as e:
+              failed.append(f"all.py import: {type(e).__name__}: {e}")
+          else:
+              registered = {n for n, _ in _all.HARNESSES}
+              expected = set(REGISTRY)
+              if registered != expected:
+                  failed.append(f"all.py registry drift: registered={registered} expected={expected}")
+          if failed:
+              print("STRUCTURAL GATE FAILED:")
+              for f in failed: print("  -", f)
+              sys.exit(1)
+          print("structural gate OK: registry + module imports clean")
+          PY
+          STRUCT_RC=$?
+          # 2. Smoke the meta-runner in --dry-run --no-issue mode. This
+          # exercises argument parsing, scoreboard formatting, and the exit
+          # code path. Sub-harnesses don't run (they need OpenClaw); their
+          # contract is asserted by step 1.
+          python3 scripts/accuracy_harness/all.py --dry-run --no-issue \
+            > /tmp/acc-harness.log 2>&1
+          DRY_RC=$?
+          cat /tmp/acc-harness.log
+          if [ "$STRUCT_RC" -ne 0 ] || [ "$DRY_RC" -ne 0 ]; then
+            echo ""
+            echo "❌ Accuracy meta-harness gate FAILED"
+            echo "   structural rc=$STRUCT_RC  dry-run rc=$DRY_RC"
+            echo ""
+            echo "This gate hard-blocks PyPI publish for [RELEASE] PRs."
+            echo "Reproduce locally:"
+            echo "  python3 scripts/accuracy_harness/all.py --dry-run --no-issue"
+            echo ""
+            {
+              echo "## Accuracy meta-harness gate: FAIL"
+              echo ""
+              echo "- structural-import rc: \`$STRUCT_RC\`"
+              echo "- meta-runner dry-run rc: \`$DRY_RC\`"
+              echo ""
+              echo '<details><summary>meta-runner output</summary>'
+              echo ''
+              echo '```'
+              tail -60 /tmp/acc-harness.log
+              echo '```'
+              echo '</details>'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          {
+            echo "## Accuracy meta-harness gate: PASS"
+            echo ""
+            echo '```'
+            tail -20 /tmp/acc-harness.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Bump patch version
         id: bump
         run: |
