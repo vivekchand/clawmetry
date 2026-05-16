@@ -6828,21 +6828,40 @@ async function loadSystemHealth() {
       var ciWrap = document.getElementById('sh-channel-ingest-wrap');
       var ciEl = document.getElementById('sh-channel-ingest');
       if (ciEl && ciWrap) {
+        // Always show the wrap — even empty state is diagnostic (#1321).
+        ciWrap.style.display = '';
+        var emoji = function(p) {
+          return p === 'telegram'        ? '✈️'
+               : p === 'signal'         ? '📡'
+               : p === 'slack'          ? '💼'
+               : p === 'discord'        ? '🎮'
+               : p === 'whatsapp'       ? '🟢'
+               : p === 'imessage'       ? '🍎'
+               : p === 'webchat'        ? '🌐'
+               : p === 'irc'            ? '#️⃣'
+               : p === 'googlechat'     ? '💬'
+               : p === 'bluebubbles'    ? '🫧'
+               : p === 'msteams'        ? '🏢'
+               : p === 'tui'            ? '⌨️'
+               : p === 'matrix'         ? '🔷'
+               : p === 'mattermost'     ? '📢'
+               : p === 'line'           ? '🟩'
+               : p === 'nostr'          ? '⚡'
+               : p === 'twitch'         ? '🟣'
+               : p === 'feishu'         ? '🪶'
+               : p === 'zalo'           ? '🔵'
+               : p === 'tlon'           ? '🌊'
+               : p === 'synology-chat'  ? '🖥️'
+               : p === 'nextcloud-talk' ? '☁️'
+               : '📨';
+        };
         if (ingest.length === 0) {
-          ciWrap.style.display = 'none';
+          ciEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">'
+            + 'No channel activity yet. '
+            + '<a href="#" onclick="switchTab(\'flow\');return false;" '
+            + 'style="color:var(--accent-primary,#3b82f6);text-decoration:underline;">Connect a channel →</a>'
+            + '</div>';
         } else {
-          ciWrap.style.display = '';
-          var emoji = function(p) {
-            return p === 'telegram' ? '✈️'
-                 : p === 'signal'   ? '📡'
-                 : p === 'slack'    ? '💬'
-                 : p === 'discord'  ? '🎮'
-                 : p === 'whatsapp' ? '🟢'
-                 : p === 'imessage' ? '🍎'
-                 : p === 'webchat'  ? '🌐'
-                 : p === 'irc'      ? '#'
-                 : '📨';
-          };
           var fmtMins = function(m) {
             if (m == null) return 'never';
             if (m < 1) return 'just now';
@@ -6859,7 +6878,11 @@ async function loadSystemHealth() {
                          : '#6b7280';
             var border = (mins != null && mins < 10) ? 'rgba(22,163,74,0.3)' : 'var(--border-secondary)';
             cihtml += '<div title="total ' + row.total + ' (' + (row.msg_in||0) + ' in / ' + (row.msg_out||0) + ' out)" '
-              + 'style="display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg-secondary);border-radius:8px;border:1px solid ' + border + ';font-size:12px;margin-bottom:4px;">'
+              + 'onclick="switchTab(\'flow\')" '
+              + 'onmouseover="this.style.background=\'var(--bg-primary)\'" '
+              + 'onmouseout="this.style.background=\'var(--bg-secondary)\'" '
+              + 'style="display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg-secondary);'
+              + 'border-radius:8px;border:1px solid ' + border + ';font-size:12px;margin-bottom:4px;cursor:pointer;">'
               + '<span style="width:9px;height:9px;border-radius:50%;background:' + dotColor + ';flex-shrink:0;display:inline-block;"></span>'
               + emoji(row.provider) + ' <span style="font-weight:600;color:var(--text-primary);">' + escHtml(row.provider) + '</span>'
               + '<span style="color:var(--text-muted);font-size:11px;margin-left:auto;">' + fmtMins(mins) + ' &middot; ' + row.total + ' total</span>'
