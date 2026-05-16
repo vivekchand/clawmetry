@@ -111,6 +111,47 @@ def test_sessions_endpoint(client):
     assert round(by_sid["X"]["cost_usd"], 4) == 0.30
 
 
+def test_sessions_endpoint_dedupes_v3_sibling_pairs(client):
+    """Issue #1460: on real OpenClaw v3 installs each LLM turn emits BOTH
+    an ``assistant`` row AND a sibling ``model.completed`` row ~100 ms
+    apart, both stamped with the same ``token_count`` + ``cost_usd``.
+    The SQL fix in ``query_sessions`` must dedupe at the SQL layer so all
+    consumers (cluster aggregator, anomaly detector, this endpoint, etc.)
+    return the single billable turn — not 2× of it.
+
+    ``event_count`` stays RAW (it is the row-count, not the turn-count) so
+    debug surfaces can still tell you both rows did arrive.
+    """
+    c, ls = client
+    store = ls.get_store()
+    store.ingest(_ev(
+        id="assist-1", session_id="sess-pair",
+        event_type="assistant",
+        ts="2026-05-16T10:00:00Z",
+        cost_usd=0.005, token_count=150,
+    ))
+    store.ingest(_ev(
+        id="mc-1", session_id="sess-pair",
+        event_type="model.completed",
+        ts="2026-05-16T10:00:00Z",
+        cost_usd=0.005, token_count=150,
+    ))
+    _wait(store)
+    r = c.get("/api/local/sessions")
+    body = r.get_json()
+    by_sid = {s["session_id"]: s for s in body["rows"]}
+    row = by_sid["sess-pair"]
+    assert row["event_count"] == 2, "raw event_count should still report both rows"
+    assert row["token_count"] == 150, (
+        f"sibling pair must dedupe to 1 turn = 150 tokens, got "
+        f"{row['token_count']} (regression: SQL layer not deduping)"
+    )
+    assert round(row["cost_usd"], 4) == 0.005, (
+        f"sibling pair must dedupe to 1 turn = $0.005, got "
+        f"{round(row['cost_usd'], 4)}"
+    )
+
+
 def test_aggregates_endpoint(client):
     c, ls = client
     store = ls.get_store()

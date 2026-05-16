@@ -2565,18 +2565,69 @@ class LocalStore:
             clauses.append("ts <= ?")
             params.append(until)
         where = "WHERE " + " AND ".join(clauses)
+        # Issue #1460: on real OpenClaw v3 installs each LLM turn emits BOTH
+        # an ``assistant`` row AND a sibling ``model.completed`` row ~100 ms
+        # apart, both stamped with the same ``token_count`` + ``cost_usd``.
+        # A naive SUM() over the raw events table doubles every billable
+        # turn. The 5 Python fast paths from #1451 worked around this with
+        # a 2-pass walker (``routes/_dedupe.py``); fixing it here closes
+        # the bug class for ALL consumers (cluster aggregator, anomaly
+        # detector, anyone else who reads ``query_sessions().token_count``).
+        #
+        # Approach: dedupe at the SQL layer by (session_id, ts-rounded-to-
+        # second) bucket, picking the richer envelope (assistant/message >
+        # model.completed). ``event_count`` stays RAW (it's "how many rows
+        # did we record", not "how many billable turns") — only cost_usd
+        # + token_count come from the deduped CTE.
         sql = f"""
+            WITH ranked AS (
+              SELECT
+                id, agent_id, session_id, ts, cost_usd, token_count,
+                event_type,
+                CASE event_type
+                  WHEN 'assistant'        THEN 2
+                  WHEN 'message'          THEN 2
+                  WHEN 'model.completed'  THEN 1
+                  ELSE 0
+                END AS envelope_rank,
+                CAST(EXTRACT(EPOCH FROM CAST(ts AS TIMESTAMP)) AS BIGINT)
+                                                 AS ts_sec
+              FROM events
+              {where}
+            ),
+            bucket_max AS (
+              SELECT session_id, ts_sec, MAX(envelope_rank) AS max_rank
+              FROM ranked
+              GROUP BY session_id, ts_sec
+            ),
+            deduped AS (
+              -- Drop the slim ``model.completed`` sibling ONLY when an
+              -- ``assistant``/``message`` (rank=2) exists in the same
+              -- (session_id, ts_sec) bucket. Other event types (rank=0
+              -- tool_calls, etc.) are NEVER dropped — they may legitimately
+              -- share a ts_sec without being sibling pairs.
+              SELECT r.* FROM ranked r
+              JOIN bucket_max bm USING (session_id, ts_sec)
+              WHERE NOT (r.envelope_rank = 1 AND bm.max_rank = 2)
+            ),
+            deduped_sums AS (
+              SELECT session_id,
+                     COALESCE(SUM(cost_usd), 0)    AS cost_usd_d,
+                     COALESCE(SUM(token_count), 0) AS token_count_d
+              FROM deduped
+              GROUP BY session_id
+            )
             SELECT
-              session_id,
-              MIN(agent_id)               AS agent_id,
-              MIN(ts)                     AS started_at,
-              MAX(ts)                     AS updated_at,
-              COUNT(*)                    AS event_count,
-              COALESCE(SUM(cost_usd), 0)  AS cost_usd,
-              COALESCE(SUM(token_count), 0) AS token_count
-            FROM events
-            {where}
-            GROUP BY session_id
+              r.session_id,
+              MIN(r.agent_id)               AS agent_id,
+              MIN(r.ts)                     AS started_at,
+              MAX(r.ts)                     AS updated_at,
+              COUNT(r.id)                   AS event_count,
+              COALESCE(ds.cost_usd_d, 0)    AS cost_usd,
+              COALESCE(ds.token_count_d, 0) AS token_count
+            FROM ranked r
+            LEFT JOIN deduped_sums ds USING (session_id)
+            GROUP BY r.session_id, ds.cost_usd_d, ds.token_count_d
             ORDER BY updated_at DESC
             LIMIT ?
         """
