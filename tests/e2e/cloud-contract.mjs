@@ -82,11 +82,19 @@ function isHarmlessConsoleError(e) {
     // shape: new OSS endpoint, returns 404 on cloud. Filtering
     // them here matches the existing /api/skills 410 pattern.
     (/\/api\/diagnostics/.test(e) && /\b410\b/.test(e)) ||
-    (/\/api\/config-diagnostics/.test(e) && /\b404\b/.test(e))
-    // Note: /api/insights/config 404 allowlist (added in PR #1435) was
-    // removed when issue #1431 landed — the endpoint now returns 200
-    // {enabled: false} when CLAWMETRY_INSIGHTS=1 is unset, so the probe
-    // succeeds cleanly without console.error.
+    (/\/api\/config-diagnostics/.test(e) && /\b404\b/.test(e)) ||
+    // Temporarily restored. PR #1437 changed /api/insights/config to return
+    // 200 {enabled: false} instead of 404 and removed this allowlist entry
+    // — but the contract spec runs against PROD (https://app.clawmetry.com),
+    // which is still pinned to a clawmetry version BEFORE #1437. So the
+    // pre-publish gate sees the old 404 and blocks #1437 from publishing.
+    // Classic chicken-and-egg: the OSS fix can't ship until cloud has it,
+    // and cloud can't get it until OSS ships.
+    //
+    // Keep this allowlist entry until cloud Dockerfile is pinned to
+    // clawmetry>=0.12.236 (the version that includes #1437's server-side
+    // fix). After that, remove this and PR #1435's stopgap in one go.
+    (/\/api\/insights\/config/.test(e) && /\b404\b/.test(e))
   );
 }
 
