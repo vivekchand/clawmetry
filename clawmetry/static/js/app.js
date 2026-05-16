@@ -5470,29 +5470,27 @@ function _renderCronRunTimeline(jobId, runs, jobJobs) {
   runs.slice(0, 30).forEach(function(r) {
     var when = r.ts ? new Date(r.ts).toLocaleString() : '-';
     var dur = r.duration_ms ? (r.duration_ms/1000).toFixed(2) + 's' : '-';
-    var statusCls = (r.status === 'ok' || r.status === 'success' || r.status === 'completed') ? 'run-status-ok'
-                  : (r.status === 'error' || r.status === 'failed' || r.status === 'failure') ? 'run-status-error'
-                  : '';
-    var err = r.error ? escHtml(String(r.error).substring(0,200)) : '';
-    var delivered = r.delivered_at
-      ? '<span title="Delivered at ' + escHtml(new Date(r.delivered_at).toLocaleString()) + '" style="color:#4ade80;">&#x2713;</span>'
-      : '<span style="color:var(--text-muted);">-</span>';
+    var isOk  = (r.status === 'ok' || r.status === 'success' || r.status === 'completed');
+    var isErr = (r.status === 'error' || r.status === 'failed' || r.status === 'failure');
+    var pillBg    = isOk ? '#166534' : isErr ? '#7f1d1d' : '#78350f';
+    var pillColor = isOk ? '#4ade80' : isErr ? '#f87171' : '#fbbf24';
+    var pillLabel = isOk ? (r.delivered_at ? 'OK ✓' : 'OK') : isErr ? 'FAIL' : escHtml(r.status || '?');
+    var tipParts  = [r.status || '?'];
+    if (r.delivered_at) tipParts.push('Delivered ' + new Date(r.delivered_at).toLocaleString());
+    if (r.error) tipParts.push('Error: ' + String(r.error).substring(0, 300));
+    var pill = '<span title="' + escHtml(tipParts.join(' · ')) + '" style="display:inline-block;padding:2px 8px;border-radius:999px;background:' + pillBg + ';color:' + pillColor + ';font-size:10px;font-weight:700;white-space:nowrap;">' + pillLabel + '</span>';
     rows += '<tr>'
+      + '<td style="padding:3px 8px;">' + pill + '</td>'
       + '<td style="padding:3px 8px;white-space:nowrap;">' + escHtml(when) + '</td>'
       + '<td style="padding:3px 8px;">' + escHtml(dur) + '</td>'
-      + '<td style="padding:3px 8px;" class="' + statusCls + '">' + escHtml(r.status || '?') + '</td>'
-      + '<td style="padding:3px 8px;color:var(--text-error);font-size:10px;max-width:240px;overflow:hidden;text-overflow:ellipsis;" title="' + err + '">' + err + '</td>'
-      + '<td style="padding:3px 8px;text-align:center;">' + delivered + '</td>'
       + '</tr>';
   });
   var table = '<div style="max-height:240px;overflow:auto;border:1px solid var(--border-secondary);border-radius:4px;margin-top:6px;">'
     + '<table style="width:100%;font-size:11px;border-collapse:collapse;">'
     + '<thead style="position:sticky;top:0;background:var(--bg-secondary);"><tr style="text-align:left;color:var(--text-muted);">'
+    + '<th style="padding:4px 8px;font-weight:600;">Status</th>'
     + '<th style="padding:4px 8px;font-weight:600;">When</th>'
     + '<th style="padding:4px 8px;font-weight:600;">Duration</th>'
-    + '<th style="padding:4px 8px;font-weight:600;">Status</th>'
-    + '<th style="padding:4px 8px;font-weight:600;">Error</th>'
-    + '<th style="padding:4px 8px;font-weight:600;text-align:center;">Delivered</th>'
     + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 
   return '<div class="cron-run-timeline" data-job-id="' + escHtml(jobId) + '">'
