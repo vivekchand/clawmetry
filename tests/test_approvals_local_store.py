@@ -346,6 +346,62 @@ def test_dispatch_pending_queries_applies_approval_decision(fast_path_app):
     assert by_id["app-2"]["status"] == "pending"
 
 
+# ── 9. issue #1328: Cloud-Pro upsell CTA flag on the queue response ────────
+#
+# OSS / Cloud-Free callers with >=1 pending approval get
+# ``pro_gated_upsell=true`` so the dashboard renders the Slack/PagerDuty/email
+# notifications CTA. Cloud-Pro callers never see the flag. Empty queue never
+# triggers the CTA (we don't want to pollute the clean empty state).
+
+
+def test_pending_approvals_pro_gated_upsell_for_oss_user(fast_path_app, monkeypatch):
+    """OSS / Cloud-Free user with pending approvals: response includes
+    ``pro_gated_upsell=true`` + ``pending_count`` so the JS can render the
+    upsell CTA above the queue table."""
+    _app, ls, _nm = fast_path_app
+    _seed_two_pending(ls.get_store())
+
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+
+    body = _app.test_client().get("/api/nemoclaw/pending-approvals").get_json()
+    assert body.get("pro_gated_upsell") is True
+    assert body.get("pending_count") == 2
+    # The queue itself is still served — gating only adds the CTA flag.
+    assert len(body.get("approvals") or []) == 2
+
+
+def test_pending_approvals_no_upsell_for_pro_user(fast_path_app, monkeypatch):
+    """Cloud-Pro user with pending approvals: ``pro_gated_upsell`` is False
+    so the upsell CTA never renders. Count still surfaces (harmless metadata).
+    """
+    _app, ls, _nm = fast_path_app
+    _seed_two_pending(ls.get_store())
+
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
+    body = _app.test_client().get("/api/nemoclaw/pending-approvals").get_json()
+    assert body.get("pro_gated_upsell") is False
+    assert body.get("pending_count") == 2
+    assert len(body.get("approvals") or []) == 2
+
+
+def test_pending_approvals_empty_queue_never_upsells(no_flag_app, monkeypatch):
+    """Empty queue must NOT trigger the CTA — issue #1328 ask #2 explicitly
+    says don't pollute the empty state."""
+    _app, _ls, _nm = no_flag_app
+
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+
+    body = _app.test_client().get("/api/nemoclaw/pending-approvals").get_json()
+    # Legacy path with no openshell binary returns installed=False, [].
+    # Either way, the upsell must be off when the queue is empty.
+    assert body.get("pro_gated_upsell") is False
+    assert body.get("pending_count") == 0
+
+
 def test_dispatch_pending_queries_approval_decision_missing_id_is_noop(fast_path_app):
     """A malformed approval_decision entry (no id) must NOT crash dispatch
     and must NOT touch the store."""
