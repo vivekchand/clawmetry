@@ -531,6 +531,15 @@ def _get_budget_config():
         "warning_threshold_pct": 80,
         "telegram_bot_token": "",
         "telegram_chat_id": "",
+        # Issue #555 Phase 1 — hard budget cap. Distinct from
+        # ``*_limit`` (soft, warning-thresholded). When ``*_cap_usd`` is
+        # > 0 and current spend meets/exceeds it, ``_is_over_cap()``
+        # returns True and the dashboard banner shows the resume CTA.
+        # ``session_cap_usd`` is accepted now and consumed by per-session
+        # accounting in Phase 2.
+        "daily_cap_usd": 0.0,
+        "monthly_cap_usd": 0.0,
+        "session_cap_usd": 0.0,
     }
     try:
         with _fleet_db_lock:
@@ -823,6 +832,52 @@ def _get_budget_status():
         # aggregate fallback. Both are accurate; the field is for diagnostics.
         "cost_source": cost_source,
     }
+
+
+# ── Hard budget cap (issue #555 — Phase 1) ─────────────────────────────
+#
+# ``_is_over_cap(scope)`` compares the configured ``<scope>_cap_usd`` against
+# the matching spend bucket from ``_get_budget_status()``. Scopes:
+#   - "daily"   → ``daily_cap_usd``   vs ``daily_spent``
+#   - "monthly" → ``monthly_cap_usd`` vs ``monthly_spent``
+# Per-session accounting (``session_cap_usd`` vs running session spend)
+# lands in Phase 2 alongside the gateway-RPC pause path.
+#
+# Returns ``(tripped: bool, info: dict)``. ``info`` always includes ``cap``
+# and ``spent`` so callers can render a banner like "$10.50 of $10 cap".
+# A cap of ``0`` or missing/non-numeric value is treated as "no cap
+# configured" and returns ``(False, ...)`` — never trip on the default.
+def _is_over_cap(scope: str):
+    """Return whether the configured cap for ``scope`` has been hit.
+
+    Phase 1: ``daily`` and ``monthly`` scopes only. ``session`` is
+    accepted to keep the API stable (returns ``(False, ...)``) so the
+    Phase 2 per-session work doesn't need a signature change.
+    """
+    scope = (scope or "").strip().lower()
+    if scope not in ("daily", "monthly", "session"):
+        return False, {"scope": scope, "cap": 0.0, "spent": 0.0,
+                       "error": "unknown scope"}
+    try:
+        cfg = _get_budget_config()
+        status = _get_budget_status()
+    except Exception:
+        # Never crash the budget check — fall back to "not over cap".
+        return False, {"scope": scope, "cap": 0.0, "spent": 0.0}
+    try:
+        cap = float(cfg.get(f"{scope}_cap_usd", 0) or 0)
+    except (TypeError, ValueError):
+        cap = 0.0
+    if scope == "session":
+        # Phase 2: aggregate per-session spend from the sessions table.
+        # For now we don't have a per-session running total wired into
+        # the budget path, so return False with the cap echoed back.
+        return False, {"scope": "session", "cap": cap, "spent": 0.0}
+    spent = float(status.get(f"{scope}_spent", 0) or 0)
+    if cap <= 0:
+        # 0 (or unset) means "no cap configured" — never trip.
+        return False, {"scope": scope, "cap": 0.0, "spent": spent}
+    return spent >= cap, {"scope": scope, "cap": cap, "spent": spent}
 
 
 # ── Pro-tier gate (issue #1168) ────────────────────────────────────────
@@ -5683,10 +5738,18 @@ async function saveBudgetConfig() {
 }
 
 async function resumeGateway() {
-  await fetch('/api/budget/resume', {method:'POST'});
+  // Issue #555: prefer the new /resume-gateway alias so the cap-banner
+  // path is unambiguous. Falls back to the legacy /resume on any error
+  // (older daemons that haven't picked up the new endpoint yet).
+  try {
+    var r = await fetch('/api/budget/resume-gateway', {method:'POST'});
+    if(!r.ok) throw new Error('resume-gateway failed');
+  } catch(e) {
+    try { await fetch('/api/budget/resume', {method:'POST'}); } catch(_) {}
+  }
   document.getElementById('alert-banner').style.display = 'none';
   document.getElementById('alert-resume-btn').style.display = 'none';
-  loadBudgetStatus();
+  if(typeof loadBudgetStatus === 'function') loadBudgetStatus();
 }
 
 function showAddAlertForm() {
@@ -5857,17 +5920,31 @@ async function checkActiveAlerts() {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
     var alerts = data.alerts || [];
     var banner = document.getElementById('alert-banner');
+    var msgEl = document.getElementById('alert-banner-msg');
+    var resumeBtn = document.getElementById('alert-resume-btn');
+    // Issue #555 Phase 1: when the budget cap has paused the gateway,
+    // the banner shows a fixed cap-reached message and the resume CTA
+    // regardless of whether any alert_history rows exist. Without this
+    // an empty alerts table would hide the banner even though the
+    // gateway is paused, which is the dangerous state the cap exists
+    // to surface.
+    var status = await fetch('/api/budget/status').then(function(r){return r.json();});
+    if(status && status.paused) {
+      msgEl.textContent = 'Budget cap reached, gateway paused. Tap to resume.';
+      resumeBtn.style.display = '';
+      banner.style.display = 'flex';
+      return;
+    }
     if(alerts.length === 0) {
       banner.style.display = 'none';
+      resumeBtn.style.display = 'none';
       return;
     }
     // Show most recent alert
     var latest = alerts[0];
-    document.getElementById('alert-banner-msg').textContent = latest.message;
+    msgEl.textContent = latest.message;
     banner.style.display = 'flex';
-    // Show resume button if gateway is paused
-    var status = await fetch('/api/budget/status').then(function(r){return r.json();});
-    document.getElementById('alert-resume-btn').style.display = status.paused ? '' : 'none';
+    resumeBtn.style.display = 'none';
   } catch(e) {}
 }
 
@@ -8267,6 +8344,15 @@ def _get_budget_config():
         "warning_threshold_pct": 80,
         "telegram_bot_token": "",
         "telegram_chat_id": "",
+        # Issue #555 Phase 1 — hard budget cap. Distinct from
+        # ``*_limit`` (soft, warning-thresholded). When ``*_cap_usd`` is
+        # > 0 and current spend meets/exceeds it, ``_is_over_cap()``
+        # returns True and the dashboard banner shows the resume CTA.
+        # ``session_cap_usd`` is accepted now and consumed by per-session
+        # accounting in Phase 2.
+        "daily_cap_usd": 0.0,
+        "monthly_cap_usd": 0.0,
+        "session_cap_usd": 0.0,
     }
     try:
         with _fleet_db_lock:

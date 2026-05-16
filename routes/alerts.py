@@ -195,6 +195,10 @@ def api_budget_config():
             "warning_threshold_pct",
             "telegram_bot_token",
             "telegram_chat_id",
+            # Issue #555 Phase 1 — hard budget cap fields.
+            "daily_cap_usd",
+            "monthly_cap_usd",
+            "session_cap_usd",
         ]
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:
@@ -249,6 +253,51 @@ def api_budget_resume():
     import dashboard as _d
     _d._resume_gateway()
     return jsonify({"ok": True, "paused": False})
+
+
+# ── Hard budget cap endpoints (issue #555 Phase 1) ─────────────────────
+# Distinct from ``/pause`` / ``/resume`` above (which the dashboard's
+# Telegram banner button already uses) so the cap-banner POST target is
+# unambiguous and Phase 2 can swap the body for gateway-RPC without
+# touching the existing manual-pause flow.
+
+
+@bp_budget.route("/api/budget/pause-gateway", methods=["POST"])
+def api_budget_pause_gateway():
+    """Set the daemon-level paused flag for the cap-reached banner.
+
+    Phase 1: only persists the paused state so the banner renders.
+    Phase 2 will wire the actual gateway-RPC stop.
+    """
+    import dashboard as _d
+    data = request.get_json(silent=True) or {}
+    reason = str(data.get("reason") or "Budget cap reached, gateway paused.")
+    _d._budget_paused = True
+    _d._budget_paused_at = time.time()
+    _d._budget_paused_reason = reason
+    return jsonify({"ok": True, "paused": True, "reason": reason})
+
+
+@bp_budget.route("/api/budget/resume-gateway", methods=["POST"])
+def api_budget_resume_gateway():
+    """Clear the daemon-level paused flag and reach into the gateway-stop
+    fallback in case the user's tap is recovering from an auto-pause.
+    """
+    import dashboard as _d
+    _d._resume_gateway()
+    return jsonify({"ok": True, "paused": False})
+
+
+@bp_budget.route("/api/budget/is-over-cap")
+def api_budget_is_over_cap():
+    """Reflect ``_is_over_cap(scope)`` so the dashboard banner can decide
+    whether to render without recomputing the cap math in JS."""
+    import dashboard as _d
+    scope = (request.args.get("scope") or "daily").strip().lower()
+    tripped, info = _d._is_over_cap(scope)
+    out = {"over_cap": bool(tripped)}
+    out.update(info)
+    return jsonify(out)
 
 
 # ── Per-agent budget overrides (issue #951) ────────────────────────────
