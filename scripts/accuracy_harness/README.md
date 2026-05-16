@@ -1,8 +1,9 @@
 # Accuracy Harness
 
 Synthetic ground-truth verifiers for ClawMetry features. **Tokens** was the
-proof-of-concept (PR #1395); **approvals** is the second harness, and the
-same shape extends to alerts / channels / crons next.
+proof-of-concept (PR #1395); **approvals** is the second harness;
+**alerts** is the third, and the same shape extends to channels / crons
+next.
 
 ## Why
 
@@ -43,6 +44,13 @@ python3 scripts/accuracy_harness/tokens.py
 # Approvals: drives 1 approve + 1 deny round
 python3 scripts/accuracy_harness/approvals.py
 
+# Alerts: drives 1 threshold rule + verifies fire + dispatch round-trip.
+# The natural eval cadence is 60s and the evaluator reads an OTLP-fed
+# in-memory buffer, NOT DuckDB — so the harness installs a synchronous
+# test hook (gated by CLAWMETRY_HARNESS_HOOKS=1) that injects a cost
+# entry + runs one eval pass immediately.
+CLAWMETRY_HARNESS_HOOKS=1 python3 scripts/accuracy_harness/alerts.py
+
 # Custom message count + URL
 CLAWMETRY_URL=http://localhost:8903 \
   python3 scripts/accuracy_harness/tokens.py --messages 5
@@ -50,6 +58,7 @@ CLAWMETRY_URL=http://localhost:8903 \
 # File a GitHub issue per drift (default: print only)
 python3 scripts/accuracy_harness/tokens.py --file-issues
 python3 scripts/accuracy_harness/approvals.py --file-issues
+CLAWMETRY_HARNESS_HOOKS=1 python3 scripts/accuracy_harness/alerts.py --file-issues
 ```
 
 ### Prerequisites
@@ -58,6 +67,10 @@ python3 scripts/accuracy_harness/approvals.py --file-issues
 - ClawMetry dashboard running locally (any of ports 8900/8903/8905)
 - Sync daemon running (so DuckDB gets the new events) — discovery file
   at `~/.clawmetry/local_query.json`
+- For `alerts.py`: dashboard must be started with
+  `CLAWMETRY_HARNESS_HOOKS=1` so the synchronous test hook
+  (`/api/_harness/inject-cost`) is wired. Without it the harness falls
+  back to the 90s natural eval cadence (still works, just slower).
 - For `--file-issues`: `gh` CLI authenticated to `vivekchand/clawmetry`
 
 ### What it costs
@@ -100,6 +113,24 @@ Tolerance: ±1 token per metric; ±3 for cache splits (rounding).
 Two rounds per run — one `approve`, one `deny`. The synthetic row uses
 `action='harness:noop'` and an `harness-AUDIT_<run_id>-…` id so it can't
 collide with a real approval policy or with another harness run.
+
+### Alerts (`alerts.py`)
+
+| surface | stage | assertions |
+|---|---|---|
+| `POST /api/alerts/rules` | create | rule id surfaces back in `GET /api/alerts/rules`; `type`, `threshold` (±0.001), `enabled` round-trip |
+| `GET /api/budget/status` | spend_visibility | `daily_spent` reflects the real openclaw turn we just drove (≥50% of estimated cost). Asserts the OTLP→evaluator pipeline. |
+| `POST /api/_harness/inject-cost` (gated hook) | trip | injects $0.01 + runs ONE synchronous eval pass; bypasses the natural 60s `_budget_monitor_loop` tick |
+| `GET /api/alerts/history` | fire | row appears with matching `rule_id` / `type='threshold'` / `channel ∈ {banner, webhook}` / message mentions `$0.00` threshold / `triggered_value` within ±5% of the captured `daily_spent` / `fired_at` within 60s of now |
+| local webhook listener | dispatch | the generic webhook POST landed with `type='threshold'`, non-empty `message`, severity in `{warning, info, critical}` |
+| `DELETE /api/alerts/rules/<id>` | cleanup | rule absent from `GET` after delete (idempotent re-runs) |
+
+The synthetic rule uses a unique UUID-tagged `rule_name_tag`
+(`ACCURACY_AUDIT_<run_id>_alert`) and a 1-min cooldown so back-to-back
+runs don't suppress each other. The webhook target is a localhost
+listener (random port, started in-thread, torn down on exit) — NEVER a
+real Slack/Discord/PagerDuty — and the prior webhook config is restored
+on every run.
 
 ## What's NOT covered yet (next iteration)
 
@@ -154,6 +185,42 @@ collide with a real approval policy or with another harness run.
   reason renders in any UI surface, because there's no dashboard tab
   that shows decided approvals today.
 
+### Alerts
+
+- **POST→GET schema split** — `POST /api/alerts/rules` writes to the
+  fleet-DB (`SQLite alert_rules` table); `GET /api/alerts/rules` reads
+  from the local DuckDB fast path when `CLAWMETRY_LOCAL_STORE_READ=1`.
+  Rules created via POST silently vanish from the listing on those
+  installs. **Product gap surfaced** by this harness (drift on
+  `create/row_present` when LOCAL_STORE_READ=1).
+- **OTLP-only evaluator input** — the alert evaluator reads
+  `metrics_store["cost"]`, an in-process ring buffer fed ONLY by OTLP
+  ingestion. Installs without OTLP traffic flowing have `daily_spent=0`
+  forever, so no `threshold` rule can ever fire on real spend.
+  **Product gap surfaced** as `spend_visibility/real_spend_visible`
+  drift. The fix is to mirror DuckDB cost rows into `metrics_store` on
+  a tick.
+- **No `alert_dispatch_attempts` table** — webhook dispatch is fire-and-
+  forget (`urllib.request.urlopen` wrapped in `except: pass`). There's
+  no persistent log of "we tried to POST this payload to this URL at
+  this time"; failures are silent. Harness verifies dispatch via a
+  local capture listener, but a real audit log would let users debug
+  Slack/Discord delivery problems.
+- **`spike` and `token_spike` rule types** — only `threshold` is
+  exercised today; `spike` needs hourly cost history and `token_spike`
+  needs the velocity sliding window. Both can be force-tripped via
+  extensions to the harness hook.
+- **Cooldown semantics drift** — `_fire_alert` enforces a hard-coded
+  1800s cooldown that's distinct from the per-rule `cooldown_min`
+  field. The harness uses fresh UUIDs each run so it never hits the
+  cooldown; a separate test should exercise the cooldown path
+  explicitly.
+- **Severity + per-type webhook filters** — `_dispatch_alert` checks
+  `_severity_passes_filter` and `_should_send_webhook_for_type` before
+  POSTing. Harness uses default config (warning passes); a matrix run
+  with `min_severity=critical` should assert the filter actually
+  suppresses.
+
 ## Idempotency
 
 Safe to re-run. Each run uses a fresh `ACCURACY_AUDIT_<uuid>` tag, so:
@@ -171,7 +238,8 @@ scripts/accuracy_harness/
 ├── __init__.py     # package marker
 ├── _lib.py         # shared discovery + HTTP + drift-issue helpers
 ├── tokens.py       # tokens harness (PR #1395)
-└── approvals.py    # approvals queue harness (this PR)
+├── approvals.py    # approvals queue harness (PR #1397)
+└── alerts.py       # alert-rule round-trip harness (this PR)
 ```
 
 Shared shims live in `_lib.py` (`discover_dashboard_url`,
@@ -182,7 +250,6 @@ single self-contained file. Refactor: extract another helper into
 
 Future:
 ```
-├── alerts.py       # same shape, trips a known threshold
 ├── crons.py        # same shape, schedules + verifies a run
 └── channels.py     # same shape, drives a channel send + flow
 ```

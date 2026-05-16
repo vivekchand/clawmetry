@@ -537,3 +537,81 @@ def api_alert_channels_test():
     if not sent:
         return jsonify({"ok": False, "error": "No configured webhook URL for selected target"}), 400
     return jsonify({"ok": True, "sent": sent})
+
+
+# ── Harness hook (gated) ────────────────────────────────────────────────
+# Used by scripts/accuracy_harness/alerts.py to inject a synthetic cost
+# entry into the in-process metrics_store AND trigger a single eval pass
+# without waiting the natural 60s budget-monitor tick. The dashboard's
+# alert evaluator reads metrics_store["cost"] (NOT DuckDB), which on
+# most installs is only populated by OTLP traffic — so verifying the
+# rule→fire→dispatch pipeline end-to-end requires either real OTLP or
+# this hook. Gated on CLAWMETRY_HARNESS_HOOKS=1 to keep it out of the
+# default surface.
+
+
+@bp_alerts.route("/api/_harness/inject-cost", methods=["POST"])
+def api_harness_inject_cost():
+    """Inject a synthetic cost entry + run one alert-eval pass.
+
+    Body: {"usd": <float>, "model": <str>, "provider": <str>}. Returns
+    the post-injection daily_spent and the alert-history count delta so
+    the harness can assert the rule fired without polling on a 60s loop.
+    """
+    if os.environ.get("CLAWMETRY_HARNESS_HOOKS", "") != "1":
+        return jsonify({"ok": False, "error": "harness hooks disabled "
+                        "(set CLAWMETRY_HARNESS_HOOKS=1 to enable)"}), 403
+    import dashboard as _d
+    data = request.get_json(silent=True) or {}
+    try:
+        usd = float(data.get("usd") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "usd must be a number"}), 400
+    if usd <= 0:
+        return jsonify({"ok": False, "error": "usd must be > 0"}), 400
+    model = str(data.get("model") or "harness-synthetic")
+    provider = str(data.get("provider") or "harness")
+    history_before = len(_d._get_alert_history(limit=500))
+    _d._add_metric("cost", {
+        "timestamp": time.time(),
+        "usd": usd,
+        "model": model,
+        "provider": provider,
+        "agent": "main",
+        "_harness": True,
+    })
+    # Force one synchronous alert-rule eval pass. The natural loop sleeps
+    # 60s; inlining the rule check avoids that wait. We bypass cooldown
+    # by clearing _budget_alert_cooldowns for any harness-tagged rule
+    # the caller created in this run — caller passes rule_ids to clear.
+    rule_ids_to_uncool = data.get("clear_cooldown_for") or []
+    if isinstance(rule_ids_to_uncool, list):
+        for rid in rule_ids_to_uncool:
+            _d._budget_alert_cooldowns.pop(str(rid), None)
+    status = _d._get_budget_status()
+    now = time.time()
+    rules_fired = []
+    for rule in _d._get_alert_rules():
+        if not rule.get("enabled"):
+            continue
+        if rule["type"] != "threshold":
+            continue
+        if status["daily_spent"] >= rule["threshold"]:
+            channels = json.loads(rule.get("channels", '["banner"]'))
+            cooldown = rule.get("cooldown_min", 30) * 60
+            last_fired = _d._budget_alert_cooldowns.get(rule["id"], 0)
+            if now - last_fired < cooldown:
+                continue
+            msg = (f"Daily spending ${status['daily_spent']:.2f} exceeded "
+                   f"threshold ${rule['threshold']:.2f}")
+            _d._fire_alert(rule_id=rule["id"], alert_type="threshold",
+                           message=msg, channels=channels)
+            rules_fired.append(rule["id"])
+    history_after = len(_d._get_alert_history(limit=500))
+    return jsonify({
+        "ok": True,
+        "daily_spent": status["daily_spent"],
+        "history_before": history_before,
+        "history_after": history_after,
+        "rules_fired": rules_fired,
+    })

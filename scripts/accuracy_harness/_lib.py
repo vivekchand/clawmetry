@@ -60,6 +60,51 @@ def http_post_json(url: str, body: dict | None = None,
         return json.loads(resp.read().decode("utf-8"))
 
 
+def http_delete_json(url: str, headers: dict | None = None,
+                     timeout: float = 10.0) -> Any:
+    """DELETE shim used for harness cleanup. Returns parsed JSON or None on
+    empty bodies (DELETE handlers sometimes return ``""`` / 204)."""
+    h = {"Accept": "application/json"}
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, headers=h, method="DELETE")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8") or ""
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+# ─── Polling ────────────────────────────────────────────────────────────────
+
+def wait_for_event(predicate, *, timeout: float = 30.0,
+                   interval: float = 0.5,
+                   description: str = "event") -> Any:
+    """Call ``predicate()`` every ``interval`` seconds until it returns a
+    truthy value or ``timeout`` elapses. Returns whatever the predicate
+    returns (truthy value on success, last falsy value on timeout).
+
+    ``predicate`` should swallow its own transient exceptions and return
+    a falsy sentinel — re-raises propagate out and abort the poll.
+
+    Used by harnesses that need to wait on an async sink (alert eval
+    tick, daemon DuckDB write, webhook listener receive) without
+    duplicating the deadline/sleep boilerplate.
+    """
+    import time as _time
+    deadline = _time.time() + timeout
+    last = None
+    while _time.time() < deadline:
+        last = predicate()
+        if last:
+            return last
+        _time.sleep(interval)
+    return last
+
+
 # ─── Discovery ──────────────────────────────────────────────────────────────
 
 def _port_listening(port: int, host: str = "127.0.0.1") -> bool:
