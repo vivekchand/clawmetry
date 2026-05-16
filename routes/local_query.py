@@ -329,6 +329,14 @@ _DAEMON_METHODS = frozenset({
     # in routes/nemoclaw.py — collided with the daemon's writer lock.
     # Routed through proxy so /api/nemoclaw/pending-approvals stays fast.
     "query_approvals",
+    # Accuracy-harness #1395 follow-up (approvals): drives ground truth
+    # by calling LocalStore.ingest_approval / update_approval_decision via
+    # the daemon proxy (the daemon owns the writer lock — same reason
+    # query_approvals was added). Both methods are read-then-write under
+    # the daemon's _write_lock, so concurrent dashboard / cloud-relay
+    # decisions stay serialized.
+    "ingest_approval",
+    "update_approval_decision",
     # Issue #1364: surface clawmetry/proxy.py LoopDetector signals on the
     # dashboard. Read by routes/health.py:/api/loop-signals via the daemon
     # proxy so the dashboard process never opens DuckDB writable.
