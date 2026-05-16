@@ -13195,14 +13195,17 @@ function _ncEsc(s) {
 })();
 } } // end if(false) stub */
 
-// On page load: reveal Insights tab if the feature flag is on. Insights endpoints
-// 404 with `{"error":"feature_disabled"}` when CLAWMETRY_INSIGHTS=1 is unset, so
-// a fast HEAD-style probe of /api/insights/config keeps the tab hidden by default
-// (no surface for users who haven't opted in yet) without leaking a spurious 200.
+// On page load: reveal Insights tab when the feature flag is on. The endpoint
+// always returns 200 (since #1431/PR closing); when disabled it returns
+// `{enabled: false}`, when enabled it returns the full config + `enabled: true`.
+// Probing by JSON flag instead of HTTP status keeps the browser console clean
+// on cloud-rendered dashboards where CLAWMETRY_INSIGHTS=1 is unset.
 (function() {
   try {
     fetch('/api/insights/config').then(function(r) {
-      if (r.ok) {
+      return r.ok ? r.json() : null;
+    }).then(function(d) {
+      if (d && d.enabled === true) {
         var t = document.getElementById('insights-tab');
         if (t) t.style.display = '';
       }
