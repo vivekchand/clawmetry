@@ -182,7 +182,17 @@ def _try_local_store_usage():
     aggregating ``daily_aggregates`` (with a ``query_events`` fallback if
     the aggregates table is empty). Returns the same shape as the legacy
     handler: days[], today/week/month, todayCost/weekCost/monthCost,
-    modelBreakdown, etc. Returns None to defer."""
+    modelBreakdown, etc. Returns None to defer.
+
+    Issue #1394: the fast-path used to set every per-day input/output/
+    cache_read/cache_write split to 0 because ``query_aggregates`` only
+    returns the coarse SUM(token_count) column. We now also call
+    ``query_daily_usage_splits``, which walks each ``assistant`` /
+    ``model.completed`` event blob and pulls the v3 Anthropic-SDK
+    cache-token keys (``cache_read_input_tokens`` /
+    ``cache_creation_input_tokens``) so the Tokens tab actually shows
+    the breakdown on real OpenClaw installs.
+    """
     # Pull pre-rolled day buckets first — these are the "blessed" data
     # the daemon writes once per ingest. Falls back to live event scan
     # when aggregates are empty (e.g. fresh install, only events seeded).
@@ -208,7 +218,44 @@ def _try_local_store_usage():
                 continue
             daily_tokens[day] = daily_tokens.get(day, 0) + int(ev.get("token_count") or 0)
             daily_cost[day] = daily_cost.get(day, 0.0) + float(ev.get("cost_usd") or 0.0)
-    if not daily_tokens and not daily_cost:
+
+    # Issue #1394: per-day input/output/cache_read/cache_write split. We
+    # build this from the assistant-event blob walker so we don't have
+    # to wait for the daemon to backfill split columns. Empty list is
+    # fine (caller renders zeros for the missing days).
+    splits_rows = _ls_call("query_daily_usage_splits") or []
+    daily_input = {r["day"]: int(r.get("input_tokens") or 0) for r in splits_rows}
+    daily_output = {r["day"]: int(r.get("output_tokens") or 0) for r in splits_rows}
+    daily_cache_read = {r["day"]: int(r.get("cache_read_tokens") or 0) for r in splits_rows}
+    daily_cache_write = {r["day"]: int(r.get("cache_write_tokens") or 0) for r in splits_rows}
+    # Also fill in cost from splits_rows when query_aggregates' cost_usd
+    # column was empty for that day (real-data common case — sync.py
+    # only stamps cost_usd when ``usage.cost.total`` is present at
+    # ingest time, which Anthropic-SDK echo events omit).
+    for r in splits_rows:
+        d = r["day"]
+        cost_from_split = float(r.get("cost_usd") or 0.0)
+        if cost_from_split > 0 and daily_cost.get(d, 0.0) <= 0:
+            daily_cost[d] = cost_from_split
+
+    # Issue #1394: prefer the deduped (input+output) total over the raw
+    # ``token_count`` aggregate when splits are available. The raw
+    # column counts BOTH the ``assistant`` and the sibling
+    # ``model.completed`` event for each LLM turn (different log
+    # writers race-emit them ~100-300ms apart) — sums end up roughly
+    # 2× the real billable total. The deduped splits already collapsed
+    # those sibling pairs, so adding their input+output is the
+    # billable-token answer the harness compares against.
+    for d in set(list(daily_input.keys()) + list(daily_output.keys())):
+        deduped_total = int(daily_input.get(d, 0)) + int(daily_output.get(d, 0))
+        if deduped_total > 0:
+            daily_tokens[d] = deduped_total
+
+    if (
+        not daily_tokens and not daily_cost
+        and not daily_input and not daily_output
+        and not daily_cache_read and not daily_cache_write
+    ):
         return None
 
     today = datetime.now()
@@ -220,10 +267,10 @@ def _try_local_store_usage():
             "date": ds,
             "tokens": int(daily_tokens.get(ds, 0)),
             "cost": round(float(daily_cost.get(ds, 0.0)), 6),
-            "inputTokens": 0,
-            "outputTokens": 0,
-            "cacheReadTokens": 0,
-            "cacheWriteTokens": 0,
+            "inputTokens": int(daily_input.get(ds, 0)),
+            "outputTokens": int(daily_output.get(ds, 0)),
+            "cacheReadTokens": int(daily_cache_read.get(ds, 0)),
+            "cacheWriteTokens": int(daily_cache_write.get(ds, 0)),
         })
 
     today_str = today.strftime("%Y-%m-%d")

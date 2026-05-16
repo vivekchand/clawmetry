@@ -293,6 +293,10 @@ _DAEMON_METHODS = frozenset({
     "query_sessions",
     "query_sessions_table",
     "query_aggregates",
+    # Issue #1394: per-day input/output/cache-read/cache-write token
+    # split for the Tokens-tab daily chart. Replaces the legacy fast-path
+    # that returned 0 for every split on real OpenClaw v3 installs.
+    "query_daily_usage_splits",
     "query_heartbeats",
     "query_channels",
     # Issue #1256 follow-up: alert_rules + channel_config_status. PR #1258
