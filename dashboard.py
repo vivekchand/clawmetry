@@ -4384,7 +4384,7 @@ function clawmetryLogout(){
 
   <!-- One-time banner: token splits now accurate (issue #1401) -->
   <div id="tokens-fix-banner" style="display:none;margin-bottom:16px;padding:10px 14px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:13px;color:#60ff80;display:flex;align-items:center;justify-content:space-between;">
-    <span>&#128200; Token splits now include cache reads/writes &mdash; numbers are accurate from this version. <a href="#" onclick="event.preventDefault();" style="color:#60ff80;text-decoration:underline;">See CHANGELOG #1394</a></span>
+    <span>&#128200; Token splits now include cache reads/writes &mdash; numbers are accurate from this version. <a href="https://github.com/vivekchand/clawmetry/issues/1394" target="_blank" rel="noopener" style="color:#60ff80;text-decoration:underline;">See issue #1394</a></span>
     <button onclick="document.getElementById('tokens-fix-banner').style.display='none';localStorage.setItem('clawmetry_tokens_fix_banner_v1','1');" style="background:transparent;border:none;cursor:pointer;font-size:16px;color:#60ff80;padding:0 0 0 12px;">&times;</button>
   </div>
   <script>
