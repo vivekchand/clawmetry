@@ -638,8 +638,81 @@ def _dispatch_configured_webhooks(alert_type, payload):
         _send_webhook_alert(discord_url, payload, payload_type="discord")
 
 
+# ── DuckDB cost fallback (issue #1404) ────────────────────────────────
+# OTLP is the *cheap* aggregation path: ``metrics_store["cost"]`` is a
+# pre-summed in-process buffer the evaluator reads in O(N) without touching
+# DuckDB. But the typical OSS install never wires an OTLP exporter (it's
+# explicitly optional — ``pip install clawmetry[otel]`` is opt-in), so on
+# the vast majority of nodes that buffer stays empty and threshold rules
+# silently never fire on real spend.
+#
+# This helper recomputes daily/weekly/monthly spend by aggregating the
+# billable-turn rows the sync daemon already persists into DuckDB. We only
+# invoke it when OTLP is empty/stale (see ``_otel_cost_is_fresh``) so
+# OTLP-fed installs keep their fast path.
+_OTLP_FRESH_WINDOW_SEC = 300  # 5 min — matches AGENT_DOWN threshold
+
+
+def _otel_cost_is_fresh(since_ts: float) -> bool:
+    """True iff ``metrics_store['cost']`` has at least one entry timestamped
+    within the last ``_OTLP_FRESH_WINDOW_SEC`` seconds (i.e. an OTLP exporter
+    is actively pushing cost data). When False, the evaluator falls back to
+    DuckDB so threshold rules can still fire on real OpenClaw spend.
+
+    ``since_ts`` is the earliest period start we care about (e.g. today_start
+    for daily rules). Even one fresh OTLP row covering the period means the
+    in-memory buffer is the source of truth — DuckDB fallback is unnecessary.
+    """
+    cutoff = time.time() - _OTLP_FRESH_WINDOW_SEC
+    with _metrics_lock:
+        for entry in metrics_store["cost"]:
+            ts = entry.get("timestamp", 0)
+            if ts >= cutoff and ts >= since_ts:
+                return True
+    return False
+
+
+def _duckdb_cost_since(since_iso: str) -> float:
+    """Sum billable-turn USD over the ``events`` table since ``since_iso``.
+
+    Reuses the v3-aware helpers from ``clawmetry.local_store`` so every
+    OpenClaw envelope shape (Anthropic-SDK ``message``, v3 ``assistant``,
+    ``subagent:assistant``, slim ``model.completed``) is covered. Never
+    raises — returns 0.0 on any error so the evaluator still gets a number.
+
+    Issue #1404: without this, ~99% of OSS installs see a zero spend metric
+    inside the alert evaluator and no real-spend rule ever fires.
+    """
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        # ``query_aggregates`` is a per-day SUM(cost_usd) rollup keyed by
+        # ``substr(ts, 1, 10)`` — exactly the shape we need to roll back up
+        # into daily / weekly / monthly totals. Cheap on DuckDB (columnar
+        # SUM over a single column with a ts range scan).
+        rows = store.query_aggregates(since=since_iso)
+    except Exception:
+        return 0.0
+    total = 0.0
+    for r in rows or []:
+        try:
+            total += float(r.get("cost_usd") or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 def _get_budget_status():
-    """Calculate current spending vs budget limits."""
+    """Calculate current spending vs budget limits.
+
+    Priority order (issue #1404 fix):
+      1. If OTLP cost is fresh (any entry within the last 5 min that also
+         falls inside the daily window), use ``metrics_store['cost']``.
+      2. Else, fall back to a DuckDB aggregate over ``events.cost_usd`` for
+         the same time windows. Installs without an OTLP exporter (the
+         common case) finally get a real ``daily_spent`` number — threshold
+         rules can fire on real spend instead of silently never tripping.
+    """
     global _budget_paused, _budget_paused_at, _budget_paused_reason
     config = _get_budget_config()
     now = time.time()
@@ -660,6 +733,7 @@ def _get_budget_status():
     daily_spent = 0.0
     weekly_spent = 0.0
     monthly_spent = 0.0
+    cost_source = "otlp"
 
     with _metrics_lock:
         for entry in metrics_store["cost"]:
@@ -671,6 +745,32 @@ def _get_budget_status():
                     weekly_spent += usd
                     if ts >= today_start:
                         daily_spent += usd
+
+    # Issue #1404: when no OTLP exporter is wired (the common OSS case), the
+    # in-memory buffer above stays empty and ``daily_spent`` is locked at 0
+    # — alert threshold rules then NEVER fire on real spend. Detect that
+    # state (no fresh OTLP row covering the daily window) and recompute
+    # from DuckDB, which the sync daemon populates for every OpenClaw turn
+    # regardless of OTLP configuration.
+    if daily_spent == 0.0 and not _otel_cost_is_fresh(today_start):
+        try:
+            daily_iso   = datetime.fromtimestamp(today_start, tz=timezone.utc).isoformat()
+            weekly_iso  = datetime.fromtimestamp(week_start,  tz=timezone.utc).isoformat()
+            monthly_iso = datetime.fromtimestamp(month_start, tz=timezone.utc).isoformat()
+            duck_daily   = _duckdb_cost_since(daily_iso)
+            duck_weekly  = _duckdb_cost_since(weekly_iso)
+            duck_monthly = _duckdb_cost_since(monthly_iso)
+            # Only switch sources when DuckDB has *something* to report.
+            # An empty store on a brand-new install should look the same as
+            # an empty OTLP buffer (daily_spent=0), not crash the evaluator.
+            if duck_monthly > 0 or duck_weekly > 0 or duck_daily > 0:
+                daily_spent   = duck_daily
+                weekly_spent  = duck_weekly
+                monthly_spent = duck_monthly
+                cost_source = "duckdb"
+        except Exception:
+            # Never crash the budget path — graceful fallback per CLAUDE.md.
+            pass
 
     daily_limit = config.get("daily_limit", 0)
     weekly_limit = config.get("weekly_limit", 0)
@@ -699,6 +799,11 @@ def _get_budget_status():
         "auto_pause_threshold_usd": config.get("auto_pause_threshold_usd", 0),
         "auto_pause_action": config.get("auto_pause_action", "pause"),
         "warning_threshold_pct": config.get("warning_threshold_pct", 80),
+        # Issue #1404: surface which path computed daily_spent so the alerts
+        # accuracy harness can verify the DuckDB fallback fired on no-OTLP
+        # installs. "otlp" = metrics_store buffer (fast), "duckdb" = events
+        # aggregate fallback. Both are accurate; the field is for diagnostics.
+        "cost_source": cost_source,
     }
 
 
