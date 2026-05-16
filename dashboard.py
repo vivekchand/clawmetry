@@ -3974,7 +3974,6 @@ function clawmetryLogout(){
       <div class="modal-tab active" onclick="switchBudgetTab('limits',this)">Budget Limits</div>
       <div class="modal-tab" onclick="switchBudgetTab('alerts',this)">Alert Rules</div>
       <div class="modal-tab" onclick="switchBudgetTab('telegram',this)">Telegram</div>
-      <div class="modal-tab" onclick="switchBudgetTab('agents',this)">Per-Agent</div>
       <div class="modal-tab" onclick="switchBudgetTab('history',this)">History</div>
     </div>
     <!-- Budget Limits Tab -->
@@ -4005,6 +4004,23 @@ function clawmetryLogout(){
       <div id="budget-status-display" style="margin-top:16px;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;">
         <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Current Spending</div>
         <div id="budget-status-content" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
+      </div>
+      <div style="margin-top:16px;border-top:1px solid var(--border-primary);padding-top:12px;">
+        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px;">Per-Agent Overrides</div>
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.5;margin-bottom:12px;">Override global limits per agent. Leave blank to fall back to global. Alerts fire at 80% (warning) and 100% (critical).</div>
+        <div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
+          <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Add / Update Override</div>
+          <div style="display:grid;gap:8px;">
+            <input id="agent-budget-id" type="text" placeholder="Agent ID (e.g. main, my-subagent)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <input id="agent-budget-daily" type="number" step="0.01" min="0" placeholder="Daily limit USD (blank = global)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <input id="agent-budget-monthly" type="number" step="0.01" min="0" placeholder="Monthly limit USD (blank = global)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
+            <div style="display:flex;gap:8px;">
+              <button onclick="saveAgentBudget()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save Override</button>
+              <span id="agent-budget-status" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;"></span>
+            </div>
+          </div>
+        </div>
+        <div id="agent-budget-list" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
       </div>
     </div>
     <!-- Alert Rules Tab -->
@@ -4088,25 +4104,6 @@ function clawmetryLogout(){
         </div>
         <div id="tg-status" style="font-size:12px;color:var(--text-muted);"></div>
       </div>
-    </div>
-    <!-- Per-Agent Tab (issue #951) -->
-    <div id="budget-tab-agents" style="display:none;">
-      <div style="font-size:12px;color:var(--text-muted);line-height:1.5;margin-bottom:12px;">
-        Override the global daily / monthly limits for a specific agent. Leave a field blank to fall back to the global limit. Tiered alerts fire at 80% (warning) and 100% (critical) of whichever limit applies.
-      </div>
-      <div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Add / Update Override</div>
-        <div style="display:grid;gap:8px;">
-          <input id="agent-budget-id" type="text" placeholder="Agent ID (e.g. main, my-subagent)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <input id="agent-budget-daily" type="number" step="0.01" min="0" placeholder="Daily limit USD (blank = global)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <input id="agent-budget-monthly" type="number" step="0.01" min="0" placeholder="Monthly limit USD (blank = global)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <div style="display:flex;gap:8px;">
-            <button onclick="saveAgentBudget()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save Override</button>
-            <span id="agent-budget-status" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;"></span>
-          </div>
-        </div>
-      </div>
-      <div id="agent-budget-list" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
     </div>
     <!-- History Tab -->
     <div id="budget-tab-history" style="display:none;">
@@ -4380,7 +4377,7 @@ function clawmetryLogout(){
   
   <!-- Cost Warnings -->
   <div id="cost-warnings" style="display:none; margin-bottom: 16px;"></div>
-  
+
   <!-- Main Usage Stats -->
   <div class="grid">
     <div class="card">
@@ -5415,18 +5412,18 @@ function openBudgetModal() {
   document.getElementById('budget-modal').style.display = 'flex';
   loadBudgetConfig();
   loadBudgetStatus();
+  loadAgentBudgets();
 }
 
 function switchBudgetTab(tab, el) {
   document.querySelectorAll('#budget-modal-tabs .modal-tab').forEach(function(t){t.classList.remove('active');});
   if(el) el.classList.add('active');
-  ['limits','alerts','telegram','agents','history'].forEach(function(t){
+  ['limits','alerts','telegram','history'].forEach(function(t){
     var d = document.getElementById('budget-tab-'+t);
     if(d) d.style.display = t===tab ? 'block' : 'none';
   });
   if(tab==='alerts') { loadAlertRules(); loadWebhookConfig(); }
   if(tab==='telegram') loadTelegramConfig();
-  if(tab==='agents') loadAgentBudgets();
   if(tab==='history') loadAlertHistory();
 }
 
