@@ -367,6 +367,40 @@ def test_cost_comparison_legacy_when_env_unset(legacy_path_app):
     assert body.get("_source") != "local_store"
 
 
+def test_cost_comparison_does_not_double_count_v3_sibling_pairs(fast_path_app):
+    """Regression: on real v3 installs every billable turn emits both an
+    ``assistant`` row AND a slim ``model.completed`` sibling ~100 ms later.
+    The cost-comparison fast path used to sum ``token_count`` across every
+    event row, doubling actual tokens + cost on real data and making the
+    "savings vs alternative" $ amounts look 2× as good as truth. We now
+    skip the slimmer sibling when the assistant exists for the same
+    (session_id, ts ±1 s) bucket.
+    """
+    app, ls, _u = fast_path_app
+    store = ls.get_store()
+    # One LLM turn within the 30-day window: 100 in + 50 out = 150 tokens.
+    # Both writers race-emit so two rows land at the same ts.
+    ts_iso = _iso(time.time() - 86400)
+    _ingest_v3_assistant(
+        store, sid="sess-dup", ts=ts_iso, ev_id="ev-assistant",
+        input_tokens=100, output_tokens=50, cache_read=0, cache_write=0,
+    )
+    _ingest_v3_model_completed(
+        store, sid="sess-dup", ts=ts_iso, ev_id="ev-modelcompleted",
+        input_tokens=100, output_tokens=50,
+    )
+    _wait_flush(store)
+
+    body = app.test_client().get("/api/usage/cost-comparison").get_json()
+    assert body["_source"] == "local_store"
+    # The pair represents ONE LLM turn = 150 tokens. Anything > 150 means
+    # the sibling-dedup regressed and we're double-counting again.
+    assert body["actual"]["tokens"] == 150, (
+        f"cost-comparison double-counted sibling pair: "
+        f"got {body['actual']['tokens']}, expected 150 (one deduped turn)"
+    )
+
+
 # ── /api/model-attribution ─────────────────────────────────────────────────
 
 def test_model_attribution_fast_path(fast_path_app):

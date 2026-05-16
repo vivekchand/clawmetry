@@ -608,7 +608,19 @@ def _try_local_store_cost_comparison():
     """Fast path for /api/usage/cost-comparison. Sums actual tokens/cost
     over the past 30 days from the local store, then projects costs against
     a fixed alternatives table. Mirrors ``dashboard._build_cost_comparison``
-    output shape exactly."""
+    output shape exactly.
+
+    MOAT 2026-05-16: the old implementation blindly summed ``token_count``
+    across every event row. On real v3 installs the dual-writer pattern
+    (``assistant`` + sibling ``model.completed``) double-counts every
+    billable turn, inflating ``actual.tokens`` + ``actual.cost_usd`` ~2×
+    and making the "savings vs alternative" dollar amounts look twice as
+    big as truth. We now skip the slimmer ``model.completed`` row when an
+    ``assistant``/``message`` sibling exists for the same
+    (session_id, ts ±1 s) bucket — matches the dedup approach in
+    ``query_daily_usage_splits``. Non-billable-turn rows (tool_call etc.)
+    keep their tokens since they don't have a sibling.
+    """
     store = _ls_get_store()
     if store is None:
         return None
@@ -623,14 +635,54 @@ def _try_local_store_cost_comparison():
     cutoff = datetime.now() - timedelta(days=30)
     cutoff_iso = cutoff.strftime("%Y-%m-%d")
 
-    actual_tokens = 0
-    actual_cost = 0.0
-    model_token_map: dict = {}
-    saw_any = False
+    # Sibling-dedup: per (session_id, ts_sec, ±1 s) bucket, keep only the
+    # richest-envelope row. `assistant`/`message` outrank `model.completed`
+    # for the same turn (writer race emits both ~100 ms apart). Two passes
+    # because `query_events` returns DESC and we'd otherwise count both when
+    # the slim sibling lands first.
+    _RICHER = {"assistant": 2, "message": 2, "model.completed": 1}
+
+    def _ts_sec(ts_str: str) -> int:
+        if not ts_str:
+            return 0
+        try:
+            return int(datetime.fromisoformat(
+                ts_str.replace("Z", "+00:00")).timestamp())
+        except Exception:
+            return 0
+
+    # Pass 1: compute richest rank per (sid, sec) bucket across the ±1 s
+    # writer-race window.
+    bucket_max: dict = {}
+    in_window: list = []
     for ev in evs:
         ts = ev.get("ts", "") or ""
         if ts < cutoff_iso:
             continue
+        in_window.append(ev)
+        et = (ev.get("event_type") or "").strip()
+        if et not in _RICHER:
+            continue
+        sid_v = ev.get("session_id") or ""
+        sec = _ts_sec(ts)
+        rank = _RICHER[et]
+        for key in ((sid_v, sec - 1), (sid_v, sec), (sid_v, sec + 1)):
+            if bucket_max.get(key, 0) < rank:
+                bucket_max[key] = rank
+
+    # Pass 2: count tokens, skipping any sibling whose rank is strictly less
+    # than the richest in its (sid, sec±1) bucket.
+    actual_tokens = 0
+    actual_cost = 0.0
+    model_token_map: dict = {}
+    saw_any = False
+    for ev in in_window:
+        et = (ev.get("event_type") or "").strip()
+        if et in _RICHER:
+            sid_v = ev.get("session_id") or ""
+            sec = _ts_sec(ev.get("ts") or "")
+            if bucket_max.get((sid_v, sec), 0) > _RICHER[et]:
+                continue
         saw_any = True
         tok = int(ev.get("token_count") or 0)
         actual_tokens += tok
