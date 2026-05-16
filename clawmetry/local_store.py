@@ -843,9 +843,11 @@ class LocalStore:
           2. Full v2 DDL — CREATE TABLE/INDEX IF NOT EXISTS, no-op on
              already-migrated tables, creates the new tables on fresh stores.
           3. Version-gated data migrations (v6→v7 dedup, etc.) — only run on
-             stores that haven't seen this version yet. Idempotent at the
-             SQL level too, but the version gate makes the common (already-
-             migrated) case a single SELECT.
+             stores that haven't seen this version yet. Wrapped in an explicit
+             DuckDB transaction so concurrent daemon + dashboard processes
+             can't both pass the version gate: the second process blocks on
+             BEGIN TRANSACTION until the first commits, then re-reads the
+             committed stamp and skips the migration body.
           4. Stamp the schema_version row.
         """
         with self._write_lock:
@@ -861,47 +863,57 @@ class LocalStore:
             # (only creates the new tables that didn't exist).
             for stmt in _DDL:
                 self._conn.execute(stmt)
-            # Step 3: version-gated data migrations.
-            cur = self._conn.execute("SELECT MAX(version) AS v FROM schema_version")
-            row = cur.fetchone()
-            current = row[0] if row and row[0] is not None else 0
-            if current < 7:
-                # v6 → v7: collapse Claude Code event duplicates the three
-                # ingest paths used to produce (#1232). Wrapped in try/except
-                # so a regex/lock issue doesn't brick daemon startup — the
-                # write-side fix in sync.py is the real correctness path; this
-                # cleanup is opportunistic.
-                try:
-                    before = self._conn.execute(
-                        "SELECT COUNT(*) FROM events"
-                    ).fetchone()[0]
-                    _run_dedup_migration_v7(self._conn)
-                    after = self._conn.execute(
-                        "SELECT COUNT(*) FROM events"
-                    ).fetchone()[0]
-                    deleted = max(0, before - after)
-                    if deleted:
-                        log.info(
-                            "local store: v7 dedup migration removed %d "
-                            "duplicate event row(s) (%d → %d)",
-                            deleted, before, after,
+            # Steps 3 + 4: version-gated migration + stamp inside an explicit
+            # transaction.  DuckDB serialises writers at the file level, so
+            # the second concurrent process blocks here until the first
+            # commits; it then re-reads schema_version and sees the already-
+            # stamped version, skipping the migration body entirely.
+            self._conn.execute("BEGIN TRANSACTION")
+            try:
+                cur = self._conn.execute("SELECT MAX(version) AS v FROM schema_version")
+                row = cur.fetchone()
+                current = row[0] if row and row[0] is not None else 0
+                if current < 7:
+                    # v6 → v7: collapse Claude Code event duplicates the three
+                    # ingest paths used to produce (#1232). Wrapped in try/except
+                    # so a regex/lock issue doesn't brick daemon startup — the
+                    # write-side fix in sync.py is the real correctness path; this
+                    # cleanup is opportunistic.
+                    try:
+                        before = self._conn.execute(
+                            "SELECT COUNT(*) FROM events"
+                        ).fetchone()[0]
+                        _run_dedup_migration_v7(self._conn)
+                        after = self._conn.execute(
+                            "SELECT COUNT(*) FROM events"
+                        ).fetchone()[0]
+                        deleted = max(0, before - after)
+                        if deleted:
+                            log.info(
+                                "local store: v7 dedup migration removed %d "
+                                "duplicate event row(s) (%d → %d)",
+                                deleted, before, after,
+                            )
+                        else:
+                            log.debug(
+                                "local store: v7 dedup migration found no dupes (rows=%d)",
+                                after,
+                            )
+                    except Exception:
+                        log.exception(
+                            "local store: v7 dedup migration failed (continuing — "
+                            "future writes still dedup via canonical id)"
                         )
-                    else:
-                        log.debug(
-                            "local store: v7 dedup migration found no dupes (rows=%d)",
-                            after,
-                        )
-                except Exception:
-                    log.exception(
-                        "local store: v7 dedup migration failed (continuing — "
-                        "future writes still dedup via canonical id)"
+                # Step 4: stamp the version.
+                if current < SCHEMA_VERSION:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+                        [SCHEMA_VERSION, int(time.time() * 1000)],
                     )
-            # Step 4: stamp the version.
-            if current < SCHEMA_VERSION:
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
-                    [SCHEMA_VERSION, int(time.time() * 1000)],
-                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
