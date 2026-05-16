@@ -57,7 +57,14 @@ def fresh_store(tmp_path, monkeypatch):
 def dashboard_module(fresh_store, monkeypatch, tmp_path):
     """Reload dashboard.py so ``_duckdb_cost_since`` resolves to the fresh
     local_store. Also drop the in-process cost buffer to simulate a
-    no-OTLP install (the common OSS case)."""
+    no-OTLP install (the common OSS case).
+
+    Issue #1453: stub out the daemon-proxy by default so tests don't leak
+    into the developer's real running sync daemon (which holds the writer
+    lock on the user's actual DuckDB at ~/.clawmetry/events.duckdb).
+    Individual tests that want to exercise the proxy path override this
+    via their own ``monkeypatch.setattr``.
+    """
     sys.modules.pop("dashboard", None)
     import dashboard as _d
     _d.FLEET_DB_PATH = str(tmp_path / "fleet.db")
@@ -68,6 +75,12 @@ def dashboard_module(fresh_store, monkeypatch, tmp_path):
         _d._budget_init_db()
     except Exception:
         pass
+    # Force-disable the daemon proxy: pretend no daemon is reachable, so
+    # ``_duckdb_cost_since`` falls through to the direct read-only open
+    # against ``fresh_store``'s tmp DuckDB. Tests that need to exercise
+    # the proxy path opt-in with their own monkeypatch.
+    import routes.local_query as _lq
+    monkeypatch.setattr(_lq, "local_store_via_daemon", lambda *a, **kw: None)
     yield _d
 
 
@@ -225,3 +238,147 @@ def test_evaluator_empty_store_returns_zero(dashboard_module):
     assert status["daily_spent"] == 0.0
     # cost_source stays "otlp" since we never switched (no DuckDB rows).
     assert status["cost_source"] == "otlp"
+
+
+# ── Issue #1453 — /api/budget/status daemon-proxy regression ───────────────
+#
+# Background: the API-latency smoke gate (PR #1452) caught
+# /api/budget/status at p50 7.6 s / p95 9.5 s / max 10 s timeout under the
+# realistic two-process shape (sync daemon holds the DuckDB writer lock,
+# dashboard tries to open the same file as a reader). ``_duckdb_cost_since``
+# called ``local_store.get_store()`` three times (daily / weekly / monthly
+# windows), each blocking on the writer lock — total 7-10 s, stalling the
+# Budget panel on every dashboard load.
+#
+# Fix: route through ``local_store_via_daemon`` first (cross-process HTTP
+# proxy into the daemon's local_server, which already holds the lock).
+# Fall back to ``get_store(read_only=True)`` only for single-process boots.
+#
+# Regression contract:
+#   1. When the daemon-proxy is reachable, ``_duckdb_cost_since`` must call
+#      it and NOT touch ``local_store.get_store()``.
+#   2. When the daemon-proxy returns slow/error (timeout, daemon down), the
+#      direct read-only fallback must still produce a correct answer.
+#   3. End-to-end: ``_get_budget_status`` must complete in < 500 ms even
+#      when the direct ``get_store()`` path is artificially slow (proxy
+#      short-circuits the lock-wait).
+
+
+def test_duckdb_cost_since_prefers_daemon_proxy(
+    fresh_store, dashboard_module, monkeypatch,
+):
+    """When ``local_store_via_daemon`` returns rows, ``_duckdb_cost_since``
+    must use them and NOT fall through to direct ``get_store()`` (which
+    would race the daemon's writer lock under the standard install)."""
+    _d = dashboard_module
+    canned_rows = [
+        {"day": "2026-05-16", "agent_id": "main", "cost_usd": 3.50,
+         "token_count": 1000, "event_count": 1},
+    ]
+    calls = {"proxy": 0, "direct": 0}
+
+    def fake_proxy(method_name, **kwargs):
+        calls["proxy"] += 1
+        assert method_name == "query_aggregates"
+        assert "since" in kwargs
+        return canned_rows
+
+    import routes.local_query as lq
+    monkeypatch.setattr(lq, "local_store_via_daemon", fake_proxy)
+
+    # If the proxy works, get_store() must NOT be called. Wrap it to count.
+    import clawmetry.local_store as _ls
+    real_get_store = _ls.get_store
+    def counting_get_store(*a, **kw):
+        calls["direct"] += 1
+        return real_get_store(*a, **kw)
+    monkeypatch.setattr(_ls, "get_store", counting_get_store)
+
+    total = _d._duckdb_cost_since("2026-05-16T00:00:00+00:00")
+    assert abs(total - 3.50) <= 0.01, f"expected $3.50 from proxy rows, got {total}"
+    assert calls["proxy"] == 1, "daemon proxy was not consulted"
+    assert calls["direct"] == 0, (
+        f"direct get_store() called {calls['direct']}× — daemon-proxy fast "
+        f"path should have short-circuited"
+    )
+
+
+def test_budget_status_stays_fast_when_direct_path_is_slow(
+    fresh_store, dashboard_module, monkeypatch,
+):
+    """Headline /api/budget/status latency contract (issue #1453).
+
+    Simulates the real production failure: the sync daemon holds the DuckDB
+    writer lock, so a direct ``get_store()`` open blocks for ~2.5 s. With
+    three calls (daily/weekly/monthly) that compounds to 7-10 s p50 — the
+    Budget panel stalls on every dashboard load.
+
+    The fix routes through ``local_store_via_daemon`` (fast HTTP roundtrip
+    into the daemon, < 50 ms). This test monkeypatches the proxy to return
+    instantly AND the direct path to sleep 3 s — if the route correctly
+    prefers the proxy, total wall-clock for ``_get_budget_status`` stays
+    well under 500 ms. If it falls through to the slow path on any of the
+    three windows we'd see 3+ s.
+    """
+    _d = dashboard_module
+
+    def fast_proxy(method_name, **kwargs):
+        assert method_name == "query_aggregates"
+        return [
+            {"day": "2026-05-16", "agent_id": "main", "cost_usd": 0.50,
+             "token_count": 100, "event_count": 1},
+        ]
+
+    import routes.local_query as lq
+    monkeypatch.setattr(lq, "local_store_via_daemon", fast_proxy)
+
+    # Booby-trap the direct path: if the route ever falls through here,
+    # this sleep would blow the latency budget loudly.
+    import clawmetry.local_store as _ls
+    def slow_get_store(*a, **kw):
+        time.sleep(3.0)
+        raise RuntimeError("should not be reached — daemon proxy fast path "
+                           "should have answered all three windows")
+    monkeypatch.setattr(_ls, "get_store", slow_get_store)
+
+    started = time.monotonic()
+    status = _d._get_budget_status()
+    elapsed_ms = (time.monotonic() - started) * 1000
+
+    assert elapsed_ms < 500, (
+        f"/api/budget/status equivalent took {elapsed_ms:.0f} ms — issue "
+        f"#1453 contract is p50 < 200 ms / p95 < 500 ms. Daemon-proxy "
+        f"likely not short-circuiting the slow direct path."
+    )
+    # Sanity: the proxy answer was actually used.
+    assert status["cost_source"] == "duckdb"
+    assert status["daily_spent"] > 0
+
+
+def test_duckdb_cost_since_falls_back_when_daemon_unreachable(
+    fresh_store, dashboard_module, monkeypatch,
+):
+    """Single-process boot (tests, dev mode, daemon down): the proxy
+    returns ``None`` and we must fall back to the read-only direct open,
+    NOT crash or return 0."""
+    ls, store = fresh_store
+    _d = dashboard_module
+
+    # Seed one event so the direct fallback has something real to sum.
+    today_iso = datetime.now(timezone.utc).replace(
+        hour=12, minute=0, second=0, microsecond=0
+    ).isoformat()
+    store.ingest(_model_completed_event(cost_usd_total=2.25, ts=today_iso))
+    store._flush_now()
+
+    # Force the proxy to act as if the daemon were unreachable.
+    import routes.local_query as lq
+    monkeypatch.setattr(lq, "local_store_via_daemon", lambda *a, **kw: None)
+
+    daily_iso = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).isoformat()
+    total = _d._duckdb_cost_since(daily_iso)
+    assert abs(total - 2.25) <= 0.01, (
+        f"direct fallback should sum $2.25 from DuckDB; got {total}"
+    )
