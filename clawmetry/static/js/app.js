@@ -7060,6 +7060,10 @@ async function loadUsage() {
       chartHtml += '<div class="usage-bar-wrap"><div class="usage-bar" style="height:' + pct + '%"><div class="usage-bar-value">' + (d.tokens > 0 ? val : '') + '</div></div><div class="usage-bar-label">' + label + '</div></div>';
     });
     document.getElementById('usage-chart').innerHTML = chartHtml;
+    // Issue #1448 surface 2 — OSS / Cloud-Free callers get clamped to 24h
+    // of history; render the upgrade CTA above the chart so users see why
+    // the chart is mostly empty.
+    _renderUsageCapCTA(!!data.capped_at_24h);
     // Cost table
     var usageInfoIcon = document.getElementById('usage-cost-info-icon');
     if (usageInfoIcon) {
@@ -7129,6 +7133,32 @@ async function loadUsage() {
     loadCacheAnalytics();
   } catch(e) {
     document.getElementById('usage-chart').innerHTML = '<span style="color:#555">No usage data available</span>';
+  }
+}
+
+// Issue #1448 surface 2 — render the OSS / Cloud-Free retention upsell
+// row above the Token Usage chart when /api/usage reports capped_at_24h.
+// Sibling of _renderFlowRunsCap (PR #1445).
+function _renderUsageCapCTA(capped) {
+  var hostChart = document.getElementById('usage-chart');
+  if (!hostChart || !hostChart.parentElement) return;
+  var foot = document.getElementById('usage-cap-cta');
+  if (!foot) {
+    foot = document.createElement('div');
+    foot.id = 'usage-cap-cta';
+    foot.style.cssText = 'padding:10px 14px;margin-bottom:10px;font-size:12px;color:var(--text-muted);border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;display:none;';
+    // Insert just before the chart card (parent is the .card wrapper).
+    var card = hostChart.closest('.card') || hostChart.parentElement;
+    if (card && card.parentElement) {
+      card.parentElement.insertBefore(foot, card);
+    }
+  }
+  if (capped) {
+    foot.style.display = '';
+    foot.innerHTML = 'Usage history older than 24 hours is on Cloud-Pro. <a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;">Upgrade for the full 90-day picture.</a>';
+  } else {
+    foot.style.display = 'none';
+    foot.innerHTML = '';
   }
 }
 

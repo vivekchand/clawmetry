@@ -221,6 +221,53 @@ def test_usage_legacy_when_env_unset(legacy_path_app):
     assert body.get("_source") != "local_store"
 
 
+# ── /api/usage 24h retention cap (issue #1448 surface 2) ─────────────────
+#
+# OSS / Cloud-Free callers get clamped to the last 24h of the 14-day chart;
+# Cloud-Pro callers (gated by ``dashboard._is_pro_user``) keep the full
+# window. Response always carries ``capped_at_24h`` so the UI can render
+# the upgrade CTA.
+
+
+def test_api_usage_caps_14d_to_24h_for_free(fast_path_app, monkeypatch):
+    app, ls, _u = fast_path_app
+    # Seed events across 7 days; the cap should zero out everything except
+    # today + yesterday for non-Pro callers.
+    _seed_events(ls.get_store(), n=14, base_tokens=100)
+
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+
+    body = app.test_client().get("/api/usage").get_json()
+    assert body["capped_at_24h"] is True
+    # Chart still has 14 slots so the UI shape is unchanged.
+    assert isinstance(body["days"], list) and len(body["days"]) == 14
+    # Buckets older than today/yesterday must be zeroed.
+    older = body["days"][:-2]
+    for d in older:
+        assert d["tokens"] == 0, f"older bucket {d['date']} leaked tokens"
+        assert d["cost"] == 0
+
+
+def test_api_usage_no_cap_for_pro(fast_path_app, monkeypatch):
+    app, ls, _u = fast_path_app
+    _seed_events(ls.get_store(), n=14, base_tokens=100)
+
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
+    body = app.test_client().get("/api/usage").get_json()
+    assert body["capped_at_24h"] is False
+    # Pro callers see the full 14-day window with seeded tokens spread
+    # across the whole period (events seeded at day_offset = i % 7).
+    assert isinstance(body["days"], list) and len(body["days"]) == 14
+    # At least one bucket older than yesterday must carry tokens.
+    older = body["days"][:-2]
+    assert any(d["tokens"] > 0 for d in older), (
+        "pro caller should see historical tokens beyond 24h window"
+    )
+
+
 # ── /api/usage/anomalies ───────────────────────────────────────────────────
 
 def test_usage_anomalies_fast_path(fast_path_app):

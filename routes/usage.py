@@ -875,6 +875,49 @@ def _try_local_store_skill_attribution():
     }
 
 
+def _apply_oss_24h_cap(result):
+    """Issue #1448 surface 2 — clamp /api/usage history to the last 24h for
+    OSS / Cloud-Free callers. Cloud-Pro users (gated by
+    ``dashboard._is_pro_user``) get the full 14-day chart.
+
+    Returns a (possibly copied) result dict that always carries
+    ``capped_at_24h`` so the UI can render the upsell row. Crucially this
+    runs AFTER ``_usage_cache`` / fast-path dedupe (see
+    ``feedback_usage_dedupe_pattern``) so cached aggregates are never
+    double-truncated; we shallow-copy + rewrite ``days`` so the long-lived
+    cache stays full-fidelity.
+    """
+    try:
+        import dashboard as _d
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
+    if is_pro:
+        result["capped_at_24h"] = False
+        return result
+    # Shallow-copy so we don't mutate the cached object; ``days`` is the
+    # only field we rewrite so a list slice is enough.
+    capped = dict(result)
+    days = list(capped.get("days") or [])
+    # 24h window = today's bucket + yesterday's bucket (covers any clock
+    # crossing midnight). Keep the trailing 2 entries, zero the rest so
+    # the bar chart still renders 14 slots without leaking history.
+    if days:
+        head = max(0, len(days) - 2)
+        for i in range(head):
+            d = dict(days[i])
+            d["tokens"] = 0
+            d["cost"] = 0
+            d["inputTokens"] = 0
+            d["outputTokens"] = 0
+            d["cacheReadTokens"] = 0
+            d["cacheWriteTokens"] = 0
+            days[i] = d
+        capped["days"] = days
+    capped["capped_at_24h"] = True
+    return capped
+
+
 @bp_usage.route("/api/usage")
 def api_usage():
     """Token/cost tracking from transcript files - Enhanced OTLP workaround."""
@@ -886,14 +929,14 @@ def api_usage():
     if is_local_store_read_enabled():
         fast = _try_local_store_usage()
         if fast is not None:
-            return jsonify(fast)
+            return jsonify(_apply_oss_24h_cap(fast))
 
     now = _time.time()
     if (
         _d._usage_cache["data"] is not None
         and (now - _d._usage_cache["ts"]) < _d._USAGE_CACHE_TTL
     ):
-        return jsonify(_d._usage_cache["data"])
+        return jsonify(_apply_oss_24h_cap(_d._usage_cache["data"]))
 
     # Prefer OTLP data when available
     if _d._has_otel_data():
@@ -904,7 +947,7 @@ def api_usage():
             _d._ext_emit("usage.compiled", {"ok": True})
         except Exception:
             pass
-        return jsonify(result)
+        return jsonify(_apply_oss_24h_cap(result))
 
     analytics = _d._compute_transcript_analytics()
     daily_tokens = analytics.get("daily_tokens", {})
@@ -1016,7 +1059,7 @@ def api_usage():
 
     _d._usage_cache["data"] = result
     _d._usage_cache["ts"] = _time.time()
-    return jsonify(result)
+    return jsonify(_apply_oss_24h_cap(result))
 
 
 @bp_usage.route("/api/usage/anomalies")
