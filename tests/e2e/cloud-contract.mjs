@@ -82,7 +82,15 @@ function isHarmlessConsoleError(e) {
     // shape: new OSS endpoint, returns 404 on cloud. Filtering
     // them here matches the existing /api/skills 410 pattern.
     (/\/api\/diagnostics/.test(e) && /\b410\b/.test(e)) ||
-    (/\/api\/config-diagnostics/.test(e) && /\b404\b/.test(e))
+    (/\/api\/config-diagnostics/.test(e) && /\b404\b/.test(e)) ||
+    // /api/insights/config returns 404 when CLAWMETRY_INSIGHTS=1 is unset
+    // (the common case on cloud — feature is OSS-only soak per PR #1417).
+    // The IIFE probe in app.js intentionally swallows the failure via
+    // `if (r.ok)` to keep the Insights tab hidden, but the browser still
+    // logs the 404 as console.error which we can't suppress from JS.
+    // Issue #1431 will fix this properly by returning 200 {enabled:false}
+    // instead of 404; until then, allowlist matches the existing pattern.
+    (/\/api\/insights\/config/.test(e) && /\b404\b/.test(e))
   );
 }
 
