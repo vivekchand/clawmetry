@@ -4262,7 +4262,21 @@ async function loadNemoClawApprovals() {
       listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;text-align:center;">✓ No pending requests</div>';
       return;
     }
+    // Cloud-Pro upsell CTA (issue #1328): backend stamps ``pro_gated_upsell``
+    // when the queue has >=1 pending row AND the caller is not on Cloud-Pro.
+    // Pro users never see this — OSS / Cloud-Free do. Surface the pending
+    // count in the copy because a specific number ("get pinged on your 3
+    // pending approvals") converts harder than a generic ask.
     var html = '';
+    if (data.pro_gated_upsell) {
+      var count = (typeof data.pending_count === 'number') ? data.pending_count : approvals.length;
+      var label = count + ' pending ' + (count === 1 ? 'approval' : 'approvals');
+      html += '<div style="margin-bottom:10px;padding:10px 12px;border:1px dashed rgba(124,92,255,0.5);border-radius:6px;background:rgba(124,92,255,0.06);font-size:12px;color:var(--text-secondary);line-height:1.5;">'
+        + 'Get pinged on your ' + escHtml(label) + ' the moment they land. '
+        + 'Send instant Slack, PagerDuty, or email alerts so you never miss a request. '
+        + '<a href="https://app.clawmetry.com/upgrade?source=approvals" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;text-decoration:none;">Start your 7-day free trial</a>'
+        + '</div>';
+    }
     approvals.forEach(function(a) {
       var ruleDisplay = '';
       if (a.host) {

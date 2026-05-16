@@ -304,6 +304,43 @@ def api_nemoclaw_reject():
     return jsonify({'ok': r.returncode == 0, 'output': r.stdout or r.stderr})
 
 
+# ── Cloud-Pro upsell flag (issue #1328) ────────────────────────────────────
+#
+# OSS users can SEE the approvals queue grow but get zero notification surface
+# (Slack / PagerDuty / email dispatch lives in Cloud-Pro per memory
+# ``project_alerts_pro_feature.md``). The dashboard JS renders an inline CTA
+# above the queue table whenever this flag is true: queue has >=1 pending row
+# AND the caller is NOT a Cloud-Pro user. Pro users never see the CTA.
+#
+# Same pattern as ``capped_pro_gated`` on /api/loop-signals (issue #1376):
+# decision lives on the server so the dashboard does not have to re-implement
+# the Pro check. Fails closed (treats any error as "not pro") so we never
+# accidentally suppress the upsell on a free node.
+def _annotate_pro_upsell(payload):
+    """Stamp ``pro_gated_upsell`` + ``pending_count`` on the response when the
+    queue has rows and the caller is NOT Cloud-Pro. No-op on empty queues so
+    the empty-state stays clean."""
+    try:
+        approvals = payload.get("approvals") or []
+        pending_count = len(approvals)
+        payload["pending_count"] = pending_count
+        if pending_count <= 0:
+            payload["pro_gated_upsell"] = False
+            return payload
+        try:
+            import dashboard as _d
+            is_pro = bool(_d._is_pro_user())
+        except Exception:
+            is_pro = False
+        payload["pro_gated_upsell"] = (not is_pro)
+    except Exception:
+        # Never let the CTA flag-stamping break the response — the queue
+        # itself is the load-bearing thing here.
+        payload.setdefault("pro_gated_upsell", False)
+        payload.setdefault("pending_count", 0)
+    return payload
+
+
 @bp_nemoclaw.route('/api/nemoclaw/pending-approvals')
 def api_nemoclaw_pending_approvals():
     """Return pending egress approval requests from openshell.
@@ -312,14 +349,18 @@ def api_nemoclaw_pending_approvals():
     local DuckDB ``approvals`` table has pending rows, serve from there
     and tag ``_source: "local_store"``. Otherwise fall through to the
     legacy ``openshell draft get`` CLI path (response is unchanged).
+
+    Issue #1328: every return path is annotated with ``pro_gated_upsell``
+    + ``pending_count`` so the dashboard JS can render the Cloud-Pro
+    notifications upsell CTA without re-deriving tier on the client.
     """
     if is_local_store_read_enabled():
         fast = _try_local_store_approvals()
         if fast is not None:
-            return jsonify(fast)
+            return jsonify(_annotate_pro_upsell(fast))
     import shutil as _shutil
     if not _shutil.which('openshell'):
-        return jsonify({'installed': False, 'approvals': []})
+        return jsonify(_annotate_pro_upsell({'installed': False, 'approvals': []}))
     try:
         # Get sandbox names
         import subprocess as _sp
@@ -383,6 +424,6 @@ def api_nemoclaw_pending_approvals():
                             'status': 'pending',
                             'ts': None,
                         })
-        return jsonify({'installed': True, 'approvals': approvals})
+        return jsonify(_annotate_pro_upsell({'installed': True, 'approvals': approvals}))
     except Exception as e:
-        return jsonify({'installed': True, 'approvals': [], 'error': str(e)})
+        return jsonify(_annotate_pro_upsell({'installed': True, 'approvals': [], 'error': str(e)}))
