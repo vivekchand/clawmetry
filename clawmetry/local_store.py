@@ -649,6 +649,10 @@ def _run_dedup_migration_v7(conn) -> int:
     ).fetchone()[0]
     if not has_events:
         return 0
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS events_pre_v7_dedup AS
+        SELECT * FROM events
+    """)
     # Materialise the (rowid, dedup_key) projection so DuckDB doesn't have to
     # re-evaluate the regex twice (once to find dupes, once to delete them).
     delete_sql = f"""
