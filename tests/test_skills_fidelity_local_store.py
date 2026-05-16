@@ -261,6 +261,142 @@ def test_query_recent_read_tool_calls_respects_since(app):
     assert rows[0]["session_id"] == "new"
 
 
+# ── v3 real-shape regression (issue #1385) ────────────────────────────────
+
+
+def test_query_recent_read_tool_calls_v3_assistant_event(app):
+    """v3 real-shape regression (#1385): real OpenClaw v3 emits the
+    parent agent's tool-use blocks under ``event_type='assistant'``
+    (not ``'message'``). The previous predicate matched
+    ``message`` only, so v3 nodes silently returned zero Read calls
+    and ``/api/skills`` body_fetch counts went to 0 across the
+    fleet. Fixture distilled from a real
+    ``data.message.content[*]`` block extracted from
+    ``/Users/vivek/.clawmetry/clawmetry.duckdb`` on 2026-05-15."""
+    _a, ls, _sd = app
+    store = ls.get_store()
+    store.ingest({
+        "id":         "v3-asst-read-1",
+        "node_id":    "agent+test",
+        "agent_id":   "main",
+        "session_id": "v3-real",
+        "event_type": "assistant",
+        "ts":         "2026-05-15T22:22:09.768Z",
+        # Real v3 ``assistant`` event payload — content list with a
+        # tool_use block (the same shape Anthropic's SDK echoes).
+        "data": {
+            "type":    "assistant",
+            "version": 3,
+            "message": {
+                "role":  "assistant",
+                "model": "claude-opus-4-7",
+                "content": [
+                    {"type": "thinking", "thinking": "..."},
+                    {
+                        "type": "tool_use",
+                        "id":   "toolu_01abc",
+                        "name": "Read",
+                        "input": {"file_path": "/abs/SKILL.md"},
+                    },
+                ],
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            },
+        },
+        "model": "claude-opus-4-7",
+    })
+    _wait_flush(store)
+
+    rows = store.query_recent_read_tool_calls(since="2026-05-01T00:00:00Z")
+    assert len(rows) == 1, f"v3 assistant tool_use ignored; rows={rows}"
+    assert rows[0]["file_path"] == "/abs/SKILL.md"
+    assert rows[0]["session_id"] == "v3-real"
+
+
+def test_query_recent_read_tool_calls_v3_subagent_assistant_event(app):
+    """v3 real-shape regression (#1385): subagents call Read too
+    (Task → haiku worker scanning files). The widened predicate
+    must include ``subagent:assistant`` so /api/skills credits
+    reads done by subagents (which is the majority of skill-content
+    fetches in real-world OpenClaw sessions)."""
+    _a, ls, _sd = app
+    store = ls.get_store()
+    store.ingest({
+        "id":         "v3-sub-read-1",
+        "node_id":    "agent+test",
+        "agent_id":   "main",
+        "session_id": "v3-real",
+        "event_type": "subagent:assistant",
+        "ts":         "2026-05-15T22:23:00.000Z",
+        "data": {
+            "type":    "assistant",
+            "version": 3,
+            "message": {
+                "role":  "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id":   "toolu_subagent",
+                        "name": "Read",
+                        "input": {"file_path": "/abs/scripts/run.py"},
+                    },
+                ],
+            },
+        },
+        "model": "claude-haiku-4-5",
+    })
+    _wait_flush(store)
+
+    rows = store.query_recent_read_tool_calls(since="2026-05-01T00:00:00Z")
+    assert len(rows) == 1, f"v3 subagent:assistant ignored; rows={rows}"
+    assert rows[0]["file_path"] == "/abs/scripts/run.py"
+
+
+def test_query_tool_call_invocations_v3_assistant_event(app):
+    """v3 real-shape regression (#1385): /api/plugins fast-path
+    (``query_tool_call_invocations``) also filtered on
+    ``event_type='message'`` — same bug, same fix. After the
+    widening, every tool_use block in a v3 ``assistant`` event must
+    contribute one row to the per-plugin invocation counter."""
+    _a, ls, _sd = app
+    store = ls.get_store()
+    store.ingest({
+        "id":         "v3-asst-multitool",
+        "node_id":    "agent+test",
+        "agent_id":   "main",
+        "session_id": "v3-real-2",
+        "event_type": "assistant",
+        "ts":         "2026-05-15T22:30:00.000Z",
+        # Real v3 shape — assistant content list with three tool_use
+        # blocks (verbatim names observed on this box: Bash, Write,
+        # Glob, WebSearch, Read, etc.).
+        "data": {
+            "type":    "assistant",
+            "version": 3,
+            "message": {
+                "role":  "assistant",
+                "model": "claude-opus-4-7",
+                "content": [
+                    {"type": "tool_use", "name": "Bash",
+                     "input": {"command": "ls"}},
+                    {"type": "tool_use", "name": "Write",
+                     "input": {"file_path": "/x", "content": "y"}},
+                    {"type": "tool_use", "name": "Read",
+                     "input": {"file_path": "/x"}},
+                ],
+            },
+        },
+        "model": "claude-opus-4-7",
+    })
+    _wait_flush(store)
+
+    rows = store.query_tool_call_invocations(since="2026-05-01T00:00:00Z")
+    names = sorted(r["name"] for r in rows)
+    assert names == ["Bash", "Read", "Write"], (
+        f"v3 assistant tool_use names lost; rows={rows}"
+    )
+
+
 # ── Daemon-call mocking: route hits the proxy, not direct open ─────────────
 
 
