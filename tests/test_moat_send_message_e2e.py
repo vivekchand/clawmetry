@@ -483,11 +483,7 @@ def test_tool_call_event_surfaces_everywhere(env):
 
     # 4) /api/local/transcript/<sid> — session transcript via local-query
     #    relay shape. Reads the events table directly so it works on any
-    #    event_type. (We deliberately skip /api/session-tools here: that
-    #    endpoint only fires on legacy ``event_type=='message'`` rows with
-    #    nested ``data.message.content[].toolCall`` blocks — neither the v3
-    #    parser NOR the synthetic shape used here produce that combination.
-    #    See routes/sessions.py:_try_local_store_session_tools.)
+    #    event_type.
     r = client.get(f"/api/local/transcript/{SESSION_ID}?limit=100")
     assert r.status_code == 200, r.get_data(as_text=True)
     body = r.get_json()
@@ -500,6 +496,27 @@ def test_tool_call_event_surfaces_everywhere(env):
     rendered = json.dumps(body)
     assert "Bash" in rendered, "Bash tool call missing from /api/local/transcript"
     assert "Read" in rendered, "Read tool call missing from /api/local/transcript"
+
+    # 4b) /api/session-tools — session detail page's "Tools" panel.
+    #     v3 standalone ``event_type='tool_call'`` rows must surface here.
+    #     Before the 2026-05-16 fix this endpoint walked only legacy
+    #     ``event_type='message'`` rows with nested
+    #     ``data.message.content[].toolCall`` blocks, returning 0 tools for
+    #     real v3 installs. Now should return both Bash + Read.
+    r = client.get(f"/api/session-tools?session_id={SESSION_ID}&include_unpaired=1")
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body.get("_source") == "local_store", (
+        f"session-tools fast path didn't engage; _source={body.get('_source')!r}"
+    )
+    tool_names = sorted({t.get("tool_name") for t in body.get("tools", [])})
+    assert tool_names == ["Bash", "Read"], (
+        f"/api/session-tools: expected ['Bash', 'Read'] tool names, got {tool_names}"
+    )
+    assert body.get("stats", {}).get("total_calls") == EXPECTED_TOOL_CALLS, (
+        f"/api/session-tools: got {body.get('stats', {}).get('total_calls')} "
+        f"total_calls, expected {EXPECTED_TOOL_CALLS}"
+    )
 
     # 5) /api/usage — token + cost analytics. Costs we injected:
     #    0.0010 + 0.0008 + 0.005 = 0.0068, tokens: 42+33+150 = 225.

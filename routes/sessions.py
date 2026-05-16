@@ -675,15 +675,65 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
     calls: dict = {}
     result_by_id: dict = {}
     turn_index = 0
-    saw_message = False
+    saw_any = False
     for ev in rows:
-        if ev.get("event_type") != "message":
-            continue
-        saw_message = True
+        et = ev.get("event_type")
         data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        ev_ts_ms = _parse_ts(
+            (data.get("timestamp") if isinstance(data, dict) else None)
+            or ev.get("ts")
+        )
+
+        # v3 standalone tool_call row: self-contained call+result pair.
+        # Real OpenClaw v3 emits these instead of the legacy nested
+        # ``data.message.content[].toolCall`` blocks. Synthesize a tcid
+        # from the event id so the pairing logic below treats it as
+        # an immediately-resolved call.
+        if et == "tool_call":
+            saw_any = True
+            turn_index += 1
+            tcid = ev.get("id") or f"tc-{ev_ts_ms}-{len(calls)}"
+            tool_name = ""
+            args_val = None
+            result_val = None
+            is_error = False
+            if isinstance(data, dict):
+                tool_name = (data.get("tool") or data.get("tool_name")
+                             or data.get("name") or "")
+                args_val = (data.get("args") if data.get("args") is not None
+                            else data.get("arguments"))
+                result_val = data.get("result")
+                is_error = bool(data.get("is_error") or data.get("isError")
+                                or data.get("error"))
+            calls[tcid] = {
+                "tool_call_id":     tcid,
+                "tool_name":        tool_name,
+                "arguments":        _truncate(args_val, args_chars),
+                "start_ms":         ev_ts_ms,
+                "turn_index":       turn_index,
+                "model":            ev.get("model") or "",
+                "provider":         (data.get("provider") if isinstance(data, dict) else "") or "",
+                "message_cost_usd": float(ev.get("cost_usd") or 0.0),
+            }
+            if result_val is not None or is_error:
+                try:
+                    rs = len(json.dumps(result_val, separators=(",", ":")))
+                except Exception:
+                    rs = len(str(result_val or ""))
+                result_by_id[tcid] = {
+                    "end_ms":         ev_ts_ms,
+                    "is_error":       is_error,
+                    "result_size":    rs,
+                    "result_preview": _truncate(result_val, result_chars),
+                }
+            continue
+
+        # Legacy: nested toolCall / toolResult inside message blobs.
+        if et != "message":
+            continue
+        saw_any = True
         msg = data.get("message") if isinstance(data.get("message"), dict) else {}
         role = msg.get("role", "")
-        ev_ts_ms = _parse_ts(data.get("timestamp") or ev.get("ts"))
         if role == "assistant":
             turn_index += 1
             content = msg.get("content") or []
@@ -721,7 +771,7 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                 "result_size":    len(json.dumps(details)) if details is not None else 0,
                 "result_preview": _truncate(details, result_chars),
             }
-    if not saw_message:
+    if not saw_any:
         return None
 
     tools: list = []
