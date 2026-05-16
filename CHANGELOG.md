@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### MOAT smoke regression hotfix + sweeper batch (2026-05-16)
+- **Widen DuckDB fast-path event_type predicates to OpenClaw v3** (#1386, closes #1385). Yesterday's 7 MOAT migrations all filtered `event_type = 'message'` but real OpenClaw v3 emits `model.completed`, `assistant`, `subagent:assistant`, `tool-result`, `tool.result`. Synthetic-event unit tests passed; real-data smoke (sent message via `openclaw agent --message ...`) showed 3 of 7 endpoints returning silent zeros: `/api/context-anatomy` returned `input_tokens:0`, `/api/fallbacks` 0 transitions (JSONL fallback masked it), `/api/plugins` 0 invocations despite 169 real `tool-result` rows. Predicate widening + new `_extract_input_tokens()` helper that walks both `data.message.usage` (legacy/Anthropic SDK echo) and `data.assistantMessage.usage` (OpenClaw-native v3). 8 new "v3 real-shape regression" tests use fixtures pulled verbatim from the live DuckDB. Verified live BEFORE merge: `query_context_window_peek` 0→6, `query_recent_read_tool_calls` 0→24 rows, `query_tool_call_invocations` 0→169 rows.
+- **`[RELEASE]` re-tag** (this PR) — yesterday's #1386 lost its `[RELEASE]` prefix during squash-merge so 0.12.229 didn't auto-publish. This CHANGELOG-only PR re-fires the workflow.
+- **Sweeper batch (4 PRs closing old P0s)**:
+  - **Cron run row collapsed 5 status indicators into one pill** (#1387, closes #1165). The row used to show colour-coded background + leading dot + state pill + tail emoji + tooltip — five competing affordances for the same datum. Now: one canonical pill.
+  - **Brain collapsed-run range label uses plain-text time** (#1388, closes #1222). Replaces a raw HTML string-concat that briefly rendered as escaped markup.
+  - **Snapshot events before v7 dedup DELETE** (#1389, closes #1236). The dedup migration deleted user data without backup; +4 lines write a `events_pre_v7` snapshot table first.
+  - **Wrap schema_version migration in DuckDB transaction** (#1390, closes #1237). Race between concurrent daemons could half-apply schema bumps; transaction-wrapping makes it atomic.
+
 ### MOAT batch: 7 user-visible Tier-1 bypasses → DuckDB fast-path (2026-05-15)
 Single-day push that pulls seven dashboard surfaces off the JSONL/process-stat path and onto the daemon-proxy DuckDB read path. Each migration ships with a synthetic-event E2E test that proves the round-trip (LocalStore.ingest → DuckDB → endpoint returns the expected shape). All seven are paired with `_try_local_store_*` early-returns plus the legacy fallback verbatim — no behavior regression, just latency.
 
