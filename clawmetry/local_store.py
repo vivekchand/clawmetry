@@ -3846,6 +3846,198 @@ class LocalStore:
                 })
         return out
 
+    def query_daily_usage_splits(
+        self,
+        *,
+        agent_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit_events: int = 50000,
+    ) -> list[dict[str, Any]]:
+        """Per-day input/output/cache_read/cache_write token + cost split.
+
+        Issue #1394: drives the Tokens-tab daily chart on real OpenClaw v3
+        installs. The legacy ``_try_local_store_usage`` fast-path was
+        building the chart from ``query_aggregates`` (which only sums the
+        coarse ``token_count`` + ``cost_usd`` columns the daemon writes
+        per row), then setting all four splits to 0. On v3 the splits are
+        stamped into the event's ``data`` blob (Anthropic-SDK keys on
+        ``assistant`` events; ``promptCache.lastCallUsage`` on
+        ``model.completed`` events). This helper walks every assistant
+        turn in range, decodes the blob, and aggregates per-day so the
+        chart actually breaks tokens down.
+
+        Returns ``[{day:'YYYY-MM-DD', input_tokens, output_tokens,
+        cache_read_tokens, cache_write_tokens, cost_usd, event_count}]``
+        sorted by ``day`` desc. Empty list when no assistant events
+        match (e.g. fresh install) — caller may fall back to
+        ``query_aggregates`` for a coarse total.
+
+        Dedup note: real OpenClaw v3 emits BOTH an ``assistant`` (full
+        Anthropic envelope, has cache splits) and a sibling
+        ``model.completed`` event (slimmer, no cache) for the same turn.
+        Counting both would double the splits. We pick the
+        ``assistant``/``message`` shape per (session_id, ts) pair when
+        present and fall back to ``model.completed`` only when neither
+        Anthropic-shape sibling exists for that timestamp.
+        """
+        # Step 1: pull every billable-turn event in range, ordered so
+        # we can pick the richer envelope first per (session, ts).
+        clauses: list[str] = [f"event_type IN {_sql_in_clause(_BILLABLE_TURN_EVENT_TYPES)}"]
+        params: list[Any] = []
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        if until:
+            clauses.append("ts <= ?")
+            params.append(until)
+        where = "WHERE " + " AND ".join(clauses)
+        sql = f"""
+            SELECT id, ts, session_id, event_type, data, cost_usd
+            FROM events
+            {where}
+            ORDER BY ts ASC, id ASC
+            LIMIT ?
+        """
+        params.append(int(max(1, limit_events)))
+        rows = self._fetch(sql, params)
+
+        # Per-day buckets keyed by YYYY-MM-DD.
+        day_bucket: dict[str, dict[str, Any]] = {}
+
+        # Dedup: real OpenClaw + Claude Code installs emit both an
+        # ``assistant`` (Anthropic-SDK envelope, has cache splits) and a
+        # ``model.completed`` (slim ``promptCache.lastCallUsage`` only) for
+        # the SAME LLM turn — typically ~100-200 ms apart because they
+        # come from different log writers. Counting both inflates the
+        # input + output buckets by 2× and silently drops cache splits
+        # whenever the slim sibling wins the dedup race.
+        #
+        # Strategy: bucket events by (session_id, ts-rounded-to-second).
+        # When two events hash to the same bucket OR one second apart
+        # (sibling writers race, ~100-300 ms drift seen in the wild),
+        # prefer the richer envelope (assistant/message > model.completed).
+        # ±1 s is wide enough to catch the writer race without colliding
+        # turns: model-completion latency on a hot Anthropic call is
+        # consistently ≥ 2 s, so two distinct LLM turns never round to
+        # adjacent integer seconds in practice.
+        DEDUP_WINDOW_S = 1
+
+        def _priority(et: str | None) -> int:
+            et = (et or "").lower()
+            if et in ("assistant", "subagent:assistant", "message"):
+                return 2  # full Anthropic envelope
+            if et == "model.completed":
+                return 1  # slim sibling
+            return 0
+
+        def _ts_to_epoch_s(ts_str: str) -> int | None:
+            """ISO-8601 → integer seconds since epoch. Returns None on
+            parse failure (caller treats as "skip dedup, count it")."""
+            if not ts_str:
+                return None
+            try:
+                from datetime import datetime as _dt
+                s = ts_str.replace("Z", "+00:00") if ts_str.endswith("Z") else ts_str
+                return int(_dt.fromisoformat(s).timestamp())
+            except (TypeError, ValueError):
+                return None
+
+        # First pass: parse + dedup. Build a map of
+        # (sid, window_start) -> {priority, splits, cost, day, etype, ts}
+        # so we can collapse sibling events deterministically before
+        # bucketing.
+        chosen: dict[tuple[str, int], dict[str, Any]] = {}
+        loose: list[dict[str, Any]] = []  # rows we couldn't dedup-key
+
+        for ev_id, ts, sid, etype, raw, col_cost in rows:
+            data: dict[str, Any] = {}
+            if raw is not None:
+                try:
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(text) if text else {}
+                    if isinstance(parsed, dict):
+                        data = parsed
+                except (ValueError, TypeError, UnicodeDecodeError):
+                    continue
+            splits = _extract_usage_splits(data)
+            if splits["input_tokens"] <= 0 and splits["output_tokens"] <= 0:
+                # Skip rows with no recoverable usage — the daemon writes
+                # session.started / model.changed / tool.call rows with
+                # the same event_type net but no usage payload.
+                continue
+
+            day = (ts or "")[:10]
+            if not day:
+                continue
+
+            try:
+                cost_val = float(col_cost or 0.0)
+            except (TypeError, ValueError):
+                cost_val = 0.0
+            if cost_val <= 0:
+                cost_val = _extract_usage_cost(data)
+
+            this_pri = _priority(etype)
+            payload = {
+                "priority":    this_pri,
+                "splits":      splits,
+                "cost_usd":    cost_val,
+                "day":         day,
+                "etype":       etype,
+                "ts":          ts,
+            }
+
+            epoch_s = _ts_to_epoch_s(ts)
+            if epoch_s is None or not sid:
+                # No usable dedup key — keep the row but don't dedup it.
+                loose.append(payload)
+                continue
+
+            # Probe the ±DEDUP_WINDOW_S range for an existing sibling.
+            # First match wins; we keep the higher-priority of the two.
+            collision_key: tuple[str, int] | None = None
+            for delta in range(-DEDUP_WINDOW_S, DEDUP_WINDOW_S + 1):
+                k = (sid, epoch_s + delta)
+                if k in chosen:
+                    collision_key = k
+                    break
+
+            if collision_key is None:
+                chosen[(sid, epoch_s)] = payload
+                continue
+
+            existing = chosen[collision_key]
+            if this_pri > existing["priority"]:
+                # Richer envelope wins — replace the slim one.
+                chosen[collision_key] = payload
+
+        # Second pass: aggregate the deduped picks into per-day buckets.
+        for payload in list(chosen.values()) + loose:
+            day = payload["day"]
+            splits = payload["splits"]
+            cost_val = payload["cost_usd"]
+            bucket = day_bucket.setdefault(day, {
+                "day": day,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "cost_usd": 0.0,
+                "event_count": 0,
+            })
+            bucket["input_tokens"]       += splits["input_tokens"]
+            bucket["output_tokens"]      += splits["output_tokens"]
+            bucket["cache_read_tokens"]  += splits["cache_read_tokens"]
+            bucket["cache_write_tokens"] += splits["cache_write_tokens"]
+            bucket["cost_usd"]           += cost_val
+            bucket["event_count"]        += 1
+
+        return sorted(day_bucket.values(), key=lambda r: r["day"], reverse=True)
+
     def query_aggregates(
         self,
         *,
@@ -4246,6 +4438,17 @@ _TOOL_CALL_HOST_EVENT_TYPES = (
     "subagent:assistant",
     "model.completed",
 )
+# Issue #1394: token-usage aggregation MUST count subagent turns (they
+# spend real money for the user even though they're spawned by the
+# parent agent). Distinct from ``_ASSISTANT_EVENT_TYPES`` — that set
+# excludes subagents to keep parent→subagent model differences out of
+# the fallback-detector's noise floor.
+_BILLABLE_TURN_EVENT_TYPES = (
+    "message",
+    "assistant",
+    "subagent:assistant",
+    "model.completed",
+)
 _TOOL_CALL_TOPLEVEL_EVENT_TYPES = (
     "tool.call", "toolCall", "tool_use", "tool_call",
 )
@@ -4283,47 +4486,186 @@ def _extract_input_tokens(data: dict) -> int:
       4. ``data.assistantMessage.usage.{input,input_tokens}`` — drive-by
          shape noted in PR #1370 (rare; some forked agents emit it).
     """
+    splits = _extract_usage_splits(data)
+    return int(splits.get("input_tokens", 0))
+
+
+# Issue #1394: per-metric key sets for ``_extract_usage_splits``. Centralised
+# so cache-read / cache-write probes line up with the SDK + OpenClaw v3
+# vocabulary we have to swallow. Order within each tuple matters — first
+# non-zero wins (e.g. Anthropic SDK's ``cache_read_input_tokens`` beats
+# OpenClaw's bundled ``cacheRead`` when both appear in the same envelope).
+_USAGE_KEYS_INPUT = (
+    "input_tokens", "inputTokens", "input",
+)
+_USAGE_KEYS_OUTPUT = (
+    "output_tokens", "outputTokens", "output",
+)
+_USAGE_KEYS_CACHE_READ = (
+    # Anthropic SDK echo (v3 ``assistant`` event in Claude Code installs).
+    "cache_read_input_tokens", "cacheReadInputTokens",
+    # OpenClaw v3 native ``usage.cacheRead``.
+    "cacheRead", "cache_read",
+    # Legacy snake_case sometimes emitted by alert evaluator helpers.
+    "cache_read_tokens",
+)
+_USAGE_KEYS_CACHE_WRITE = (
+    # Anthropic SDK echo.
+    "cache_creation_input_tokens", "cacheCreationInputTokens",
+    # OpenClaw v3 native.
+    "cacheWrite", "cache_write",
+    # Legacy snake_case.
+    "cache_write_tokens", "cache_creation_tokens",
+)
+
+
+def _read_usage_int(usage: Any, keys: tuple[str, ...]) -> int:
+    """First non-zero ``int(usage[key])`` across ``keys``. Tolerates None,
+    string-ints, and missing keys. Returns 0 on every failure mode.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    for k in keys:
+        v = usage.get(k)
+        if v is None:
+            continue
+        try:
+            iv = int(v)
+        except (TypeError, ValueError):
+            continue
+        if iv > 0:
+            return iv
+    return 0
+
+
+def _extract_usage_splits(data: dict) -> dict[str, int]:
+    """Pull a full ``{input, output, cache_read, cache_write}`` token split
+    out of an event ``data`` blob — handles every OpenClaw + Claude Code
+    SDK shape we've seen on real installs.
+
+    Issue #1394: ``_try_local_store_usage`` was returning 0 for all four
+    splits on every install because the legacy fast-path filled them in
+    from synthetic ``data.message.usage.{input_tokens,output_tokens,
+    cache_read_tokens,cache_write_tokens}`` only. Real OpenClaw v3 uses
+    ``cache_read_input_tokens`` / ``cache_creation_input_tokens`` (the
+    Anthropic SDK names) on ``assistant`` events, and a stripped-down
+    ``promptCache.lastCallUsage.{input,output}`` on ``model.completed``
+    events. This helper walks every shape, returning a fully-populated
+    dict so the caller can update four per-day buckets in one pass.
+
+    Shape priority (first source with a non-zero ``input`` wins):
+      1. ``data.message.usage.*`` — Anthropic SDK envelope used by both
+         legacy ``message`` events AND v3 ``assistant`` events. The v3
+         ``assistant`` rows are the only place ``cache_*_input_tokens``
+         splits exist as Anthropic-native keys.
+      2. ``data.usage.*`` — bare ``usage`` at the root of ``data`` (some
+         OpenClaw provider adapters lift it out of ``message``).
+      3. ``data.promptCache.lastCallUsage.*`` — OpenClaw v3
+         ``model.completed`` shape. NOTE: this envelope only carries
+         ``input`` / ``output`` / ``total`` (no cache split), so the
+         cache buckets will be 0 unless an earlier shape filled them.
+      4. ``data.assistantMessage.usage.*`` — rare; some forked agents.
+
+    Returns ``{input_tokens, output_tokens, cache_read_tokens,
+    cache_write_tokens}`` (all int, all ≥ 0). Caller treats absence as
+    "no usage on this event" and skips bucketing.
+    """
+    out = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+    }
     if not isinstance(data, dict):
-        return 0
+        return out
 
-    def _read_usage(usage: Any) -> int:
-        if not isinstance(usage, dict):
-            return 0
-        for key in ("input_tokens", "inputTokens", "input"):
-            v = usage.get(key)
-            if v is None:
-                continue
-            try:
-                iv = int(v)
-            except (TypeError, ValueError):
-                continue
-            if iv > 0:
-                return iv
-        return 0
-
+    # Walk shapes in priority order; stop at the first envelope that
+    # carries a non-zero ``input`` (the canonical "this row has usage"
+    # signal — matches what ``_extract_input_tokens`` historically did).
+    candidates: list[dict[str, Any] | None] = []
     msg = data.get("message")
     if isinstance(msg, dict):
-        n = _read_usage(msg.get("usage"))
-        if n > 0:
-            return n
-
-    n = _read_usage(data.get("usage"))
-    if n > 0:
-        return n
-
+        candidates.append(msg.get("usage"))
+    candidates.append(data.get("usage"))
     pc = data.get("promptCache")
     if isinstance(pc, dict):
-        n = _read_usage(pc.get("lastCallUsage"))
-        if n > 0:
-            return n
-
+        candidates.append(pc.get("lastCallUsage"))
     am = data.get("assistantMessage")
     if isinstance(am, dict):
-        n = _read_usage(am.get("usage"))
-        if n > 0:
-            return n
+        candidates.append(am.get("usage"))
 
-    return 0
+    for u in candidates:
+        if not isinstance(u, dict):
+            continue
+        inp = _read_usage_int(u, _USAGE_KEYS_INPUT)
+        if inp <= 0:
+            continue
+        out["input_tokens"]       = inp
+        out["output_tokens"]      = _read_usage_int(u, _USAGE_KEYS_OUTPUT)
+        out["cache_read_tokens"]  = _read_usage_int(u, _USAGE_KEYS_CACHE_READ)
+        out["cache_write_tokens"] = _read_usage_int(u, _USAGE_KEYS_CACHE_WRITE)
+        return out
+
+    return out
+
+
+def _extract_usage_cost(data: dict) -> float:
+    """Best-effort ``cost.total`` extraction from an event ``data`` blob.
+
+    Mirrors ``_extract_usage_splits`` — walks ``data.message.usage.cost``,
+    ``data.usage.cost``, ``data.promptCache.lastCallUsage.cost`` (rare)
+    and returns the first non-zero ``cost.total`` (or ``cost.input +
+    cost.output`` when total is absent). Returns 0.0 on any failure.
+
+    Issue #1394: real OpenClaw v3 emits ``usage.cost`` as a nested dict
+    ``{input, output, cacheRead, cacheWrite, total}``. The legacy
+    aggregate fast-path only summed the ``cost_usd`` column, which the
+    sync daemon populates only when ``cost.total`` is present at ingest
+    time. This helper lets the fast-path recompute from the data blob
+    when the column is zero.
+    """
+    if not isinstance(data, dict):
+        return 0.0
+    candidates: list[Any] = []
+    msg = data.get("message")
+    if isinstance(msg, dict):
+        u = msg.get("usage")
+        if isinstance(u, dict):
+            candidates.append(u.get("cost"))
+    u2 = data.get("usage")
+    if isinstance(u2, dict):
+        candidates.append(u2.get("cost"))
+    pc = data.get("promptCache")
+    if isinstance(pc, dict):
+        lcu = pc.get("lastCallUsage")
+        if isinstance(lcu, dict):
+            candidates.append(lcu.get("cost"))
+    for cost in candidates:
+        if isinstance(cost, dict):
+            v = cost.get("total")
+            if v is None:
+                # OpenClaw sometimes emits a per-key cost without ``total``
+                # — fall back to input+output+cacheRead+cacheWrite.
+                try:
+                    parts = [
+                        float(cost.get(k) or 0)
+                        for k in ("input", "output", "cacheRead", "cacheWrite")
+                    ]
+                    s = sum(parts)
+                    if s > 0:
+                        return s
+                except (TypeError, ValueError):
+                    continue
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if fv > 0:
+                return fv
+        elif isinstance(cost, (int, float)) and cost > 0:
+            return float(cost)
+    return 0.0
 
 
 _READ_TOOL_NAMES = frozenset({"read", "readfile", "read_file"})
