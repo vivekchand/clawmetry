@@ -7,6 +7,14 @@ dist/
 build/
 *.egg
 
+# v2 React bundle — pre-built and committed so pip installs ship the SPA
+# without users needing Node. The generic `dist/` rule above would hide it.
+!clawmetry/static/v2/dist/
+!clawmetry/static/v2/dist/**
+
+# TypeScript incremental build state — never commit
+frontend/tsconfig.tsbuildinfo
+
 # Virtual environments
 venv/
 .venv/

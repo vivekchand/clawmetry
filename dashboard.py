@@ -9971,6 +9971,20 @@ def detect_config(args=None):
     app.register_blueprint(bp_bootstrap)
     app.register_blueprint(bp_insights)
 
+    # ── v2 React SPA (opt-in) ───────────────────────────────────────────────
+    # Default OFF so existing v1 users notice nothing. Enabled when the user
+    # passes `--v2` to the CLI or sets CLAWMETRY_V2=1. See clawmetry/v2/.
+    if os.environ.get("CLAWMETRY_V2") == "1":
+        try:
+            from clawmetry.v2.routes import bp_v2 as _bp_v2
+            app.register_blueprint(_bp_v2)
+        except Exception as _v2_err:  # pragma: no cover - defensive
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "CLAWMETRY_V2=1 set but v2 blueprint failed to register: %s",
+                _v2_err,
+            )
+
     # Register built-in agent adapters. External plugins can register more
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
     from clawmetry.adapters import registry as _adapter_registry
