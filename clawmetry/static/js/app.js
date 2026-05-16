@@ -8881,6 +8881,31 @@ function _renderFlowRunsCap(capped) {
   }
 }
 
+// Issue #1448 surface 4 — OSS / Cloud-Free retention CTA for any UI
+// pane that consumes /api/local/events. Pass the response body and a
+// mount element (any container above the events list/feed); we render a
+// one-line upgrade CTA when ``capped_at_24h`` is truthy. Used by future
+// raw-event panes in the dashboard.
+function _renderLocalEventsCap(respBody, mountEl) {
+  if (!mountEl) return;
+  var capped = !!(respBody && respBody.capped_at_24h);
+  var host = mountEl.querySelector(':scope > .local-events-cap-cta');
+  if (!host) {
+    if (!capped) return;
+    host = document.createElement('div');
+    host.className = 'local-events-cap-cta';
+    host.style.cssText = 'padding:10px 14px;margin-bottom:8px;font-size:12px;color:var(--text-muted);border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-secondary,rgba(124,92,255,0.06));';
+    mountEl.insertBefore(host, mountEl.firstChild);
+  }
+  if (capped) {
+    host.style.display = '';
+    host.innerHTML = 'Raw events older than 24 hours are on Cloud-Pro. <a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;">Upgrade for full history.</a>';
+  } else {
+    host.style.display = 'none';
+    host.innerHTML = '';
+  }
+}
+
 function showFlowRunDetail(sid) {
   var box = document.getElementById('flow-runs-detail');
   var title = document.getElementById('flow-runs-detail-title');

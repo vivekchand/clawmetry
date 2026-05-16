@@ -24,6 +24,13 @@ def client(tmp_path, monkeypatch):
     import routes.local_query as lq
     importlib.reload(lq)
 
+    # Pre-#1448 events tests seed historical timestamps that fall outside
+    # the OSS 24h retention cap. Default the fixture to Pro so those
+    # assertions still pass; the cap tests below monkeypatch
+    # ``_is_pro_user`` explicitly. Mirrors PR #1445's fixture pattern.
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
     app = Flask(__name__)
     app.register_blueprint(lq.bp_local_query)
     # Trigger store init + flusher start.
@@ -288,3 +295,53 @@ def test_relay_dispatch_rejects_unknown_shape():
     import routes.local_query as lq
     body = lq.relay_dispatch("nope", {})
     assert "error" in body
+
+
+# ── Retention cap (issue #1448 surface 4) ──────────────────────────────────
+#
+# OSS / Cloud-Free users get clamped to the last 24h of raw events on
+# /api/local/events. Cloud-Pro users (gated by ``dashboard._is_pro_user``)
+# bypass the cap. The response always carries ``capped_at_24h`` so the UI
+# can surface an upgrade CTA when the cap kicks in. Mirrors PR #1445's
+# pattern for /api/flow/runs.
+
+
+def _seed_old_and_recent(store):
+    """One ancient event (8 days old) + one fresh event (now)."""
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    old_ts = (now - _dt.timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_ts = (now - _dt.timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    store.ingest(_ev(id="cap-old", session_id="sess-cap", ts=old_ts))
+    store.ingest(_ev(id="cap-new", session_id="sess-cap", ts=new_ts))
+    _wait(store)
+
+
+def test_api_local_events_caps_24h_for_free(client, monkeypatch):
+    c, ls = client
+    _seed_old_and_recent(ls.get_store())
+    # Force OSS (non-Pro) path.
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+
+    r = c.get("/api/local/events?session_id=sess-cap&limit=10")
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    body = r.get_json()
+    assert body["capped_at_24h"] is True
+    ids = {row["id"] for row in body["rows"]}
+    # The 8-day-old event must be excluded; only the fresh one shows.
+    assert ids == {"cap-new"}
+
+
+def test_api_local_events_no_cap_for_pro(client, monkeypatch):
+    c, ls = client
+    _seed_old_and_recent(ls.get_store())
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
+    r = c.get("/api/local/events?session_id=sess-cap&limit=10")
+    body = r.get_json()
+    assert body["capped_at_24h"] is False
+    ids = {row["id"] for row in body["rows"]}
+    # Pro users see the full history including the 8-day-old event.
+    assert ids == {"cap-old", "cap-new"}
