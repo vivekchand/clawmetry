@@ -1,7 +1,8 @@
 # Accuracy Harness
 
-Synthetic ground-truth verifiers for ClawMetry features. **Tokens is the
-proof-of-concept**; the same shape extends to approvals and alerts next.
+Synthetic ground-truth verifiers for ClawMetry features. **Tokens** was the
+proof-of-concept (PR #1395); **approvals** is the second harness, and the
+same shape extends to alerts / channels / crons next.
 
 ## Why
 
@@ -36,8 +37,11 @@ threshold. Steps 1/3/4/5/6 stay identical — that's the harness shape.
 ## Running it
 
 ```bash
-# Default: 3 messages, auto-detect dashboard on 8900/8903/8905
+# Tokens: default 3 messages, auto-detect dashboard on 8900/8903/8905
 python3 scripts/accuracy_harness/tokens.py
+
+# Approvals: drives 1 approve + 1 deny round
+python3 scripts/accuracy_harness/approvals.py
 
 # Custom message count + URL
 CLAWMETRY_URL=http://localhost:8903 \
@@ -45,6 +49,7 @@ CLAWMETRY_URL=http://localhost:8903 \
 
 # File a GitHub issue per drift (default: print only)
 python3 scripts/accuracy_harness/tokens.py --file-issues
+python3 scripts/accuracy_harness/approvals.py --file-issues
 ```
 
 ### Prerequisites
@@ -71,6 +76,8 @@ per full run** on opus-4-7.
 
 ## What's covered today
 
+### Tokens (`tokens.py`)
+
 | endpoint | window | metrics |
 |---|---|---|
 | `/api/usage` | today | input / output / cacheRead / cacheWrite / total |
@@ -81,7 +88,22 @@ per full run** on opus-4-7.
 
 Tolerance: ±1 token per metric; ±3 for cache splits (rounding).
 
+### Approvals (`approvals.py`)
+
+| surface | stage | assertions |
+|---|---|---|
+| `daemon.query_approvals(status='pending')` | pending | row appears with matching `id`, `action`, `args`, `session_id`, `status='pending'`, `created_at` |
+| `/api/nemoclaw/pending-approvals` | pending | dashboard endpoint includes the row + same fields (legacy NemoClaw shape) |
+| `daemon.query_approvals(status='approved'\|'denied')` | decided | `status` flips, `decision` matches, `resolver` reflects caller, `decision_reason` round-trips, `resolved_at` is within 30s of now |
+| `/api/nemoclaw/pending-approvals` | post-decide | row no longer appears in pending list |
+
+Two rounds per run — one `approve`, one `deny`. The synthetic row uses
+`action='harness:noop'` and an `harness-AUDIT_<run_id>-…` id so it can't
+collide with a real approval policy or with another harness run.
+
 ## What's NOT covered yet (next iteration)
+
+### Tokens
 
 - **1-hour window** — `/api/usage` doesn't expose hourly granularity;
   Tokens tab only buckets per-day. To verify "last hour" you need
@@ -108,6 +130,30 @@ Tolerance: ±1 token per metric; ±3 for cache splits (rounding).
   variant that asserts the same numbers appear on the encrypted upload
   side within N minutes.
 
+### Approvals
+
+- **No `/api/approvals` endpoint** — the legacy `/api/nemoclaw/pending-approvals`
+  is the only public HTTP surface today, and it's `status=pending` only.
+  There's no public endpoint to list `decided` rows; the harness asserts
+  that path via the daemon proxy (`query_approvals`) instead. **Product
+  gap surfaced** by this harness.
+- **No `/api/approvals/decide` endpoint** — decisions are made via
+  cloud-relay heartbeat (cloud → daemon `_apply_approval_decision`) or
+  this harness (direct daemon-proxy `update_approval_decision`). There is
+  no OSS-side button for the user to decide an approval. **Product gap.**
+- **Policy-watcher trigger path** — the harness writes the approval row
+  directly via `ingest_approval`, bypassing `clawmetry/approvals.py`'s
+  policy-match → cloud-POST → poll loop. A separate harness needs to
+  drive a real policy match end-to-end.
+- **`decided_by`/`decided_at` field naming** — the spec uses these names
+  but the schema columns are `resolver`/`resolved_at`. Harness asserts
+  the schema names; if the dashboard ever exposes the spec names through
+  a renderer, add an assertion there.
+- **History-row `reason` rendering** — the harness verifies the
+  `decision_reason` column round-trips; it does not (yet) verify the
+  reason renders in any UI surface, because there's no dashboard tab
+  that shows decided approvals today.
+
 ## Idempotency
 
 Safe to re-run. Each run uses a fresh `ACCURACY_AUDIT_<uuid>` tag, so:
@@ -123,13 +169,20 @@ Safe to re-run. Each run uses a fresh `ACCURACY_AUDIT_<uuid>` tag, so:
 scripts/accuracy_harness/
 ├── README.md       # this file
 ├── __init__.py     # package marker
-└── tokens.py       # tokens-first harness (this PoC)
+├── _lib.py         # shared discovery + HTTP + drift-issue helpers
+├── tokens.py       # tokens harness (PR #1395)
+└── approvals.py    # approvals queue harness (this PR)
 ```
+
+Shared shims live in `_lib.py` (`discover_dashboard_url`,
+`discover_daemon`, `daemon_call`, `drive_openclaw_message`,
+`file_drift_issue_per_endpoint`, …) so each new harness can land in a
+single self-contained file. Refactor: extract another helper into
+`_lib.py` whenever a second harness needs it — no copy-paste.
 
 Future:
 ```
-├── approvals.py    # same shape, drives approval requests
-├── alerts.py       # same shape, trips known thresholds
-└── _common.py      # shared discovery + reporting helpers
-                    # (factor out once 2+ harnesses exist)
+├── alerts.py       # same shape, trips a known threshold
+├── crons.py        # same shape, schedules + verifies a run
+└── channels.py     # same shape, drives a channel send + flow
 ```

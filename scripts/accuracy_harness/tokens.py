@@ -35,33 +35,42 @@ Exit codes
 
 from __future__ import annotations
 
+import os as _os
+import sys as _sys
+# Allow ``python3 scripts/accuracy_harness/tokens.py`` AND ``python3 -m
+# scripts.accuracy_harness.tokens`` to both resolve ``_lib``. When run as a
+# script, the parent dir isn't on sys.path by default.
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+
 import argparse
 import json
-import os
-import shutil
-import socket
-import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-# ─── Config ─────────────────────────────────────────────────────────────────
+# Shared helpers extracted to _lib so other harnesses (approvals, alerts,
+# crons, …) reuse the same discovery + HTTP + drift-issue code paths.
+from _lib import (  # noqa: E402  (script entry-point, sys.path tweaked below)
+    DEFAULT_DASHBOARD_PORTS,
+    GH_REPO,
+    OPENCLAW_BIN,
+    daemon_event_count,
+    discover_daemon,
+    discover_dashboard_url,
+    drive_openclaw_message,
+    extract_openclaw_usage,
+    file_drift_issue_per_endpoint,
+    http_get_json,
+)
 
-DEFAULT_DASHBOARD_PORTS = (8900, 8903, 8905)
 DEFAULT_MESSAGE_TEXT = "Say PONG and nothing else."
 DEFAULT_MESSAGE_COUNT = 3
 TOLERANCE_TOKENS = 1  # cache splits can drift ±1 due to rounding
 FLUSH_TIMEOUT_S = 30
 FLUSH_POLL_INTERVAL_S = 1.0
-OPENCLAW_BIN = shutil.which("openclaw") or "openclaw"
-GH_REPO = "vivekchand/clawmetry"
-LOCAL_QUERY_DISCOVERY = Path.home() / ".clawmetry" / "local_query.json"
 
 
 # ─── Data classes ───────────────────────────────────────────────────────────
@@ -110,149 +119,16 @@ class CheckResult:
         return self.actual - self.ground
 
 
-# ─── Helpers: HTTP ──────────────────────────────────────────────────────────
-
-def _http_get_json(url: str, timeout: float = 10.0) -> Any:
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def _http_post_json(url: str, body: dict, headers: dict | None = None, timeout: float = 10.0) -> Any:
-    data = json.dumps(body).encode("utf-8")
-    h = {"Content-Type": "application/json", "Accept": "application/json"}
-    if headers:
-        h.update(headers)
-    req = urllib.request.Request(url, data=data, headers=h, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-# ─── Helpers: discovery ─────────────────────────────────────────────────────
-
-def _port_listening(port: int, host: str = "127.0.0.1") -> bool:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(0.2)
-    try:
-        return s.connect_ex((host, port)) == 0
-    finally:
-        s.close()
-
-
-def discover_dashboard_url(override: str | None) -> str:
-    if override:
-        return override.rstrip("/")
-    env = os.environ.get("CLAWMETRY_URL")
-    if env:
-        return env.rstrip("/")
-    for port in DEFAULT_DASHBOARD_PORTS:
-        if not _port_listening(port):
-            continue
-        url = f"http://localhost:{port}"
-        # Probe /api/usage to distinguish dashboard from other listeners.
-        try:
-            payload = _http_get_json(f"{url}/api/usage", timeout=3.0)
-            if isinstance(payload, dict) and "days" in payload:
-                return url
-        except (urllib.error.URLError, urllib.error.HTTPError, ValueError, TimeoutError):
-            continue
-    raise RuntimeError(
-        f"could not find a ClawMetry dashboard on any of {DEFAULT_DASHBOARD_PORTS}. "
-        f"Set CLAWMETRY_URL or pass --dashboard-url."
-    )
-
-
-def discover_daemon() -> dict | None:
-    """Return ``{port, token}`` for the daemon proxy, or None if unavailable."""
-    try:
-        with open(LOCAL_QUERY_DISCOVERY) as fh:
-            d = json.load(fh)
-        if not (d.get("port") and d.get("token")):
-            return None
-        # Liveness check.
-        try:
-            os.kill(int(d.get("pid") or 0), 0)
-        except (OSError, ValueError):
-            return None
-        return {"port": int(d["port"]), "token": d["token"]}
-    except (FileNotFoundError, ValueError, OSError):
-        return None
-
-
-def daemon_event_count(daemon: dict) -> int | None:
-    """Return the daemon's total event count via /__local_query__/health.
-    Returns None if the daemon is unreachable."""
-    url = f"http://127.0.0.1:{daemon['port']}/__local_query__/health"
-    try:
-        body = _http_post_json(
-            url, body={},
-            headers={"Authorization": f"Bearer {daemon['token']}"},
-            timeout=3.0,
-        )
-        # Response: {"result": {"event_count": N, ...}}
-        result = body.get("result") if isinstance(body, dict) else None
-        if isinstance(result, dict):
-            ev = result.get("event_count")
-            return int(ev) if ev is not None else None
-        return None
-    except (urllib.error.URLError, urllib.error.HTTPError, ValueError, TimeoutError, OSError):
-        return None
-
-
-# ─── Helpers: driving openclaw ──────────────────────────────────────────────
-
-def drive_message(message: str, tag: str, timeout_s: int = 120) -> dict[str, Any]:
-    """Run ``openclaw agent --agent main --message <m> --json`` once.
-    Returns the parsed JSON (status + result + meta) — caller extracts usage.
-    Tag is embedded into the message for traceability (sessions list / DuckDB).
-    """
-    full_msg = f"{message} [{tag}]"
-    cmd = [OPENCLAW_BIN, "agent", "--agent", "main", "--message", full_msg, "--json"]
-    proc = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout_s, check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"openclaw agent exited {proc.returncode}\nstderr: {proc.stderr[:500]}"
-        )
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(
-            f"openclaw agent --json returned non-JSON: {e}\nfirst 300 bytes: {proc.stdout[:300]}"
-        )
-
-
-def extract_usage(agent_json: dict) -> dict[str, Any] | None:
-    """Pull the ``usage`` block out of an ``openclaw agent --json`` response.
-    Returns dict with input/output/cacheRead/cacheWrite/sessionId/model, or
-    None if the response didn't include billable usage (e.g. an error turn).
-    """
-    meta = (agent_json or {}).get("result", {}).get("meta", {}) or {}
-    agent_meta = meta.get("agentMeta") or {}
-    usage = agent_meta.get("usage") or {}
-    if not usage:
-        return None
-    return {
-        "input":      int(usage.get("input") or 0),
-        "output":     int(usage.get("output") or 0),
-        "cacheRead":  int(usage.get("cacheRead") or 0),
-        "cacheWrite": int(usage.get("cacheWrite") or 0),
-        "sessionId":  agent_meta.get("sessionId") or "",
-        "model":      agent_meta.get("model") or "",
-    }
-
-
 # ─── Endpoint scrapers ──────────────────────────────────────────────────────
 
 def fetch_api_usage(dashboard_url: str) -> dict:
     # /api/usage carries today/week/month + per-day breakdown. There is NO
     # ?window= parameter (Tokens tab derives every window from `days[]`).
-    return _http_get_json(f"{dashboard_url}/api/usage", timeout=15.0)
+    return http_get_json(f"{dashboard_url}/api/usage", timeout=15.0)
 
 
 def fetch_context_anatomy(dashboard_url: str) -> dict:
-    return _http_get_json(f"{dashboard_url}/api/context-anatomy", timeout=10.0)
+    return http_get_json(f"{dashboard_url}/api/context-anatomy", timeout=10.0)
 
 
 # ─── Window math ────────────────────────────────────────────────────────────
@@ -340,11 +216,11 @@ def run_harness(args: argparse.Namespace) -> int:
         tag = f"{tag_prefix}_msg{i+1}"
         t0 = time.time()
         try:
-            resp = drive_message(args.message_text, tag, timeout_s=args.openclaw_timeout)
+            resp = drive_openclaw_message(args.message_text, tag, timeout_s=args.openclaw_timeout)
         except Exception as e:
             print(f"  [msg {i+1}] FAILED to drive: {e}", file=sys.stderr)
             continue
-        usage = extract_usage(resp)
+        usage = extract_openclaw_usage(resp)
         elapsed = time.time() - t0
         if not usage:
             print(f"  [msg {i+1}] no usage in response (skipping); status={resp.get('status')}")
@@ -487,93 +363,20 @@ def run_harness(args: argparse.Namespace) -> int:
               f"(tol=±{c.tolerance})")
 
     if args.file_issues:
-        file_drift_issues(drifts, ground, tag_prefix, dashboard_url)
+        def _body_builder(endpoint: str, cs: list) -> str:
+            return _format_tokens_issue_body(endpoint, cs, ground, tag_prefix, dashboard_url)
+        file_drift_issue_per_endpoint(
+            harness_label="tokens", drifts=drifts, body_builder=_body_builder,
+        )
     else:
         print("[harness] (re-run with --file-issues to open GitHub issues)")
 
     return 1
 
 
-# ─── Issue filing ───────────────────────────────────────────────────────────
+# ─── Issue body builder (tokens-specific — drift table + ground-truth log) ──
 
-def _open_audit_issue_exists(endpoint: str, today: str) -> bool:
-    """Cheap dedup so we don't fill the tracker on repeat runs in one day."""
-    try:
-        proc = subprocess.run(
-            ["gh", "issue", "list",
-             "--repo", GH_REPO,
-             "--state", "open",
-             "--search", f"[accuracy-audit {today}] tokens drift: {endpoint} in:title",
-             "--json", "number"],
-            check=True, capture_output=True, text=True, timeout=15,
-        )
-        return bool(json.loads(proc.stdout or "[]"))
-    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError, subprocess.TimeoutExpired):
-        return False  # If dedup probe fails, let the file go through
-
-
-def file_drift_issues(
-    drifts: list[CheckResult],
-    ground: GroundTruth,
-    tag_prefix: str,
-    dashboard_url: str,
-) -> None:
-    """File one GitHub issue per drifted endpoint. All drifted (window, metric)
-    pairs for that endpoint collapse into one body so we don't fan out
-    N×M near-identical issues when the root cause is shared."""
-    if not shutil.which("gh"):
-        print("[harness] `gh` CLI not on PATH; cannot file issues. Skipping.")
-        return
-
-    # Group drifts by endpoint only — windows/metrics fan out from one root
-    # cause more often than not. If a future check has independent failures
-    # per window, the body table makes that obvious.
-    grouped: dict[str, list[CheckResult]] = {}
-    for c in drifts:
-        grouped.setdefault(c.endpoint, []).append(c)
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    for endpoint, cs in grouped.items():
-        # Title: pick the worst drift as the headline.
-        headline = max(cs, key=lambda c: abs(c.delta))
-        title = (
-            f"[accuracy-audit {today}] tokens drift: {endpoint} "
-            f"{headline.window_label}/{headline.metric} "
-            f"ground={headline.ground} actual={headline.actual} "
-            f"(delta={headline.delta:+d}; {len(cs)} drifts total)"
-        )
-        # Idempotency: skip if an open issue already covers this endpoint
-        # today. A new day → new issue (so weekly trends are visible).
-        if _open_audit_issue_exists(endpoint, today):
-            print(f"[harness] open issue for {endpoint} already exists today — skipping file")
-            continue
-        body = _format_issue_body(endpoint, cs, ground, tag_prefix, dashboard_url)
-        try:
-            subprocess.run(
-                ["gh", "issue", "create",
-                 "--repo", GH_REPO,
-                 "--title", title,
-                 "--body", body,
-                 "--label", "accuracy-audit,tokens,bug"],
-                check=True, capture_output=True, text=True,
-            )
-            print(f"[harness] filed issue: {title}")
-        except subprocess.CalledProcessError as e:
-            # Labels may not exist on the repo — retry without them.
-            try:
-                proc = subprocess.run(
-                    ["gh", "issue", "create",
-                     "--repo", GH_REPO,
-                     "--title", title,
-                     "--body", body],
-                    check=True, capture_output=True, text=True,
-                )
-                print(f"[harness] filed (no labels): {proc.stdout.strip()}")
-            except subprocess.CalledProcessError as e2:
-                print(f"[harness] FAILED to file issue: {e2.stderr[:300]}")
-
-
-def _format_issue_body(
+def _format_tokens_issue_body(
     endpoint: str,
     cs: list[CheckResult],
     ground: GroundTruth,
