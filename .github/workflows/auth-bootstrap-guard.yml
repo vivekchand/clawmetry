@@ -31,7 +31,7 @@ jobs:
 
       - name: Guard bootstrap IIFE does not reload
         run: |
-          sed -n '1,58p' clawmetry/static/js/auth-bootstrap.js | grep -v '^[[:space:]]*//' | \
+          awk '1; /^\}\)\(\);$/ { exit }' clawmetry/static/js/auth-bootstrap.js | grep -v '^[[:space:]]*//' | \
             node -e "const fs=require('fs'); const s=fs.readFileSync(0,'utf8'); if (/location\\.reload\\s*\\(/.test(s) || /window\\.location\\.reload\\s*\\(/.test(s)) { console.error('auth bootstrap IIFE must not call location.reload()'); process.exit(1); }"
 
       - name: Install runtime deps
@@ -68,8 +68,7 @@ jobs:
 
             const result = await page.evaluate(() => ({
               readyState: document.readyState,
-              navType: window.performance.navigation.type,
-              expectedNavType: window.performance.navigation.TYPE_NAVIGATE,
+              navType: performance.getEntriesByType('navigation')[0]?.type,
               token: localStorage.getItem('clawmetry-token'),
             }));
 
@@ -79,8 +78,8 @@ jobs:
               throw new Error(`document.readyState was ${result.readyState}, expected complete`);
             }
 
-            if (result.navType !== result.expectedNavType) {
-              throw new Error(`page reloaded during bootstrap: navigation.type=${result.navType}`);
+            if (result.navType === 'reload') {
+              throw new Error('page reloaded during bootstrap');
             }
 
             if (result.token !== 'ci-test-token') {
