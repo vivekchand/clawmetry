@@ -117,6 +117,38 @@ jobs:
           CLAWMETRY_TOKEN: ci-test-token
         run: python3 -m pytest tests/test_api.py -v --tb=short
 
+  # ── MOAT verifier (hermetic, hard-fail) ──────────────────────────────────
+  # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
+  # is caught BEFORE merge." These 8 files (58 tests) exercise the
+  # OpenClaw → DuckDB → API surface contract end-to-end, plus the lint
+  # guards that pin the chokepoint patterns. No live server, no gateway,
+  # no network — drives sync/local_store helpers + Flask test client.
+  # Runtime ~10s locally, ~15-20s on CI. HARD-FAIL: no continue-on-error.
+  moat-tests:
+    name: MOAT Verifier (58 tests)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install flask waitress cryptography duckdb pytest requests
+      - name: Run MOAT verifier suite
+        run: |
+          python3 -m pytest \
+            tests/test_moat_send_message_e2e.py \
+            tests/test_moat_e2e_regression_1129.py \
+            tests/test_e2e_real_openclaw_pipeline.py \
+            tests/test_duckdb_fastpath_v3_invariants.py \
+            tests/test_moat_cloud_roundtrip_e2e.py \
+            tests/test_channel_event_chokepoint.py \
+            tests/test_no_direct_get_store_in_routes.py \
+            tests/test_local_query_api.py \
+            -q
+
   # ── E2E Playwright tests (Linux only for speed, allowed to fail) ──────────
   e2e-tests:
     name: E2E Browser Tests
