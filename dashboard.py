@@ -116,6 +116,7 @@ from routes.local_query import bp_local_query
 from routes.update_check import bp_update_check, start_update_check_thread
 from routes.workspaces import bp_workspaces
 from routes.bootstrap import bp_bootstrap
+from routes.insights import bp_insights
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -9739,6 +9740,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_update_check)
     app.register_blueprint(bp_workspaces)
     app.register_blueprint(bp_bootstrap)
+    app.register_blueprint(bp_insights)
 
     # Register built-in agent adapters. External plugins can register more
     # via clawmetry.extensions entry points — see clawmetry/adapters/.
@@ -16415,6 +16417,14 @@ def _run_server(args):
     _start_budget_monitor_thread()
     _start_session_health_thread()
     start_update_check_thread()
+    # Weekly Insights Digest cron — gated by CLAWMETRY_INSIGHTS=1 (no-op
+    # when the flag is unset). Daemon thread, dies with the process.
+    try:
+        from clawmetry.insights import start_weekly_scheduler
+        if start_weekly_scheduler():
+            print("  Insights:   [ok] Weekly digest cron registered (Mon 9am local)")
+    except Exception as _ins_exc:
+        print(f"  Insights:   [warn] cron not started: {_ins_exc}")
 
     try:
         print(BANNER.format(version=__version__))

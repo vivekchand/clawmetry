@@ -363,6 +363,11 @@ _DAEMON_METHODS = frozenset({
     # Plugins-tab render. Returns one row per tool-call so the route can
     # bucket per-plugin counts via substring matching.
     "query_tool_call_invocations",
+    # Weekly Insights Digest (feat/insights-v1): one allowlisted entry-point
+    # for the 10 hand-authored canned-query templates in clawmetry/insights.py.
+    # SQL goes through clawmetry/dives_sql_safety.validate_sql() inside the
+    # method — SELECT/WITH only, no DDL/DML, no file/HTTP/attach functions.
+    "raw_select_safe",
     "health",
 })
 

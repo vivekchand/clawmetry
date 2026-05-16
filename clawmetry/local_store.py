@@ -4152,6 +4152,39 @@ class LocalStore:
             "reclaimed_bytes": max(0, before_size - after_size),
         }
 
+    # ── Insights fast path (feat/insights-v1) ──────────────────────────
+    # Single allowlisted entry-point for hand-authored SELECT templates in
+    # ``clawmetry/insights.py``. Two safety layers:
+    #   1. ``dives_sql_safety.validate_sql`` — SELECT/WITH only.
+    #   2. Hand-authored templates — no LLM-generated SQL in v1.
+    # Bind params use DuckDB ``$name`` syntax (no value interpolation).
+
+    def raw_select_safe(
+        self,
+        *,
+        sql: str,
+        params: dict | None = None,
+        timeout_secs: float = 5.0,
+    ) -> list[dict]:
+        """Run a hand-authored SELECT and return ``[dict, ...]``."""
+        from clawmetry.dives_sql_safety import validate_sql
+        ok, reason = validate_sql(sql)
+        if not ok:
+            raise ValueError(f"raw_select_safe: rejected by SQL safety: {reason}")
+        bind = dict(params or {})
+        try:
+            with self._write_lock:
+                cur = self._conn.execute(sql, bind)
+                cols = [d[0] for d in (cur.description or [])]
+                rows = cur.fetchall()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("raw_select_safe: %s", exc)
+            return []
+        out: list[dict] = []
+        for r in rows[:500]:  # soft cap — digests never need more
+            out.append({c: _coerce_value(v) for c, v in zip(cols, r)})
+        return out
+
     # ── internals ───────────────────────────────────────────────────────
 
     def _fetch(self, sql: str, params: list[Any]) -> list[tuple]:
@@ -4378,6 +4411,26 @@ def _row_to_event(row: tuple, cols: list[str]) -> dict[str, Any]:
 def _row_to_dict(row: tuple, cols: list[str]) -> dict[str, Any]:
     """Generic tuple-to-dict for non-event rows (sessions, aggregates)."""
     return dict(zip(cols, row))
+
+
+def _coerce_value(v: Any) -> Any:
+    """Make a single DuckDB cell JSON-safe for the ``raw_select_safe`` path.
+
+    Handles bytes (decoded → str), Decimal/datetime/date (→ str), and the
+    common scalar types (int/float/str/bool/None) which already round-trip.
+    Best-effort fallback: ``str(v)``.
+    """
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, (bytes, bytearray)):
+        try:
+            return v.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    try:
+        return str(v)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _duration_seconds(start_iso: str, end_iso: str) -> float:
