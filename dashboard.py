@@ -5712,19 +5712,41 @@ async function loadAlertRules() {
   try {
     var data = await fetch('/api/alerts/rules').then(function(r){return r.json();});
     var rules = data.rules || [];
+    // Issue #1419: PR #1410 comms envelope — banner + per-rule "Last fired" pill.
+    var comms = (data && data._comms) || {};
     if(rules.length === 0) {
       document.getElementById('alert-rules-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">No alert rules configured</div>';
       return;
     }
     var html = '';
+    if (comms.show_alerts_comms_banner) {
+      html += '<div id="alerts-comms-banner" style="padding:12px 14px;margin-bottom:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:3px solid #16a34a;border-radius:8px;font-size:13px;color:var(--text-primary);display:flex;align-items:flex-start;gap:10px;">';
+      html += '<span style="font-size:16px;line-height:1;">&#x2728;</span>';
+      html += '<div style="flex:1;">';
+      html += '<div style="font-weight:600;margin-bottom:2px;">Heads up: alert rules now fire on real OpenClaw spend.</div>';
+      html += '<div style="color:var(--text-secondary);font-size:12px;">Your previous rules should start triggering normally.';
+      if (comms.show_cloud_pro_cta) {
+        html += ' Want richer telemetry plus 90-day retention? <a href="/cloud/billing" style="color:var(--text-accent);text-decoration:underline;">Upgrade to Cloud-Pro.</a>';
+      }
+      html += '</div></div>';
+      html += '<span style="cursor:pointer;color:var(--text-muted);font-size:18px;line-height:1;" onclick="this.parentElement.style.display=\'none\';" title="Dismiss">&times;</span>';
+      html += '</div>';
+    }
     rules.forEach(function(r) {
       var channels = [];
       try { channels = JSON.parse(r.channels); } catch(e) { channels = [r.channels]; }
-      html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;">';
+      html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
       html += '<span style="font-weight:600;">' + escHtml(r.type) + '</span>';
       html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : (r.type==='token_spike' ? r.threshold.toLocaleString()+' tok/min' : '$'+r.threshold)) + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + channels.join(', ') + '</span>';
       html += '<span style="color:var(--text-muted);font-size:11px;">' + r.cooldown_min + 'min cooldown</span>';
+      if (r.last_fired_at) {
+        var _ago = Math.floor((Date.now()/1000 - r.last_fired_at));
+        var _label = _ago < 60 ? _ago + 's ago' : (_ago < 3600 ? Math.floor(_ago/60) + 'm ago' : (_ago < 86400 ? Math.floor(_ago/3600) + 'h ago' : Math.floor(_ago/86400) + 'd ago'));
+        html += '<span style="font-size:11px;padding:2px 6px;border-radius:10px;background:rgba(22,163,74,0.12);color:#16a34a;">Last fired: ' + _label + '</span>';
+      } else {
+        html += '<span style="font-size:11px;padding:2px 6px;border-radius:10px;background:var(--bg-tertiary);color:var(--text-muted);">Not yet fired</span>';
+      }
       html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-error);font-size:16px;" data-rule-id="'+r.id+'" onclick="deleteAlertRule(this.dataset.ruleId)" title="Delete">&#x1f5d1;</span>';
       html += '</div>';
     });
