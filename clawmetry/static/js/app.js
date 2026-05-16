@@ -3124,14 +3124,27 @@ function renderBrainStream(events) {
           turnTimeline += '<span style="color:var(--text-faint);min-width:50px;flex-shrink:0;">' + teTime + '</span>';
           turnTimeline += '<span style="color:' + teCol + ';min-width:55px;font-weight:600;flex-shrink:0;">' + teIcon + ' ' + te.type + '</span>';
           turnTimeline += '<span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(teDetail) + '</span>';
+          var _rcSid = te.source || 'main';
+          var _rcContainerId = null;
           if (te.type === 'THINK') {
-            var _rcSid = te.source || 'main';
-            var _rcContainerId = 'rc-' + _rcSid.slice(0, 8) + '-' + (te.time || '').replace(/[^0-9]/g, '').slice(-6);
+            _rcContainerId = 'rc-' + _rcSid.slice(0, 8) + '-' + (te.time || '').replace(/[^0-9]/g, '').slice(-6);
             turnTimeline += '<button onclick="event.stopPropagation();loadReasoningChain(\'' + escHtml(_rcSid) + '\',\'' + escHtml(_rcContainerId) + '\')" style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #6366f1;background:transparent;color:#818cf8;font-size:10px;cursor:pointer;white-space:nowrap;">&#129504; View chain</button>';
-            turnTimeline += '</div>';
+          }
+          // Issue #568: per-LLM-call Timeline button on AGENT / THINK rows.
+          // Only renders when the row carries an eventId (local-store fast
+          // path); falls back gracefully when older JSONL-only data lacks it.
+          var _tlContainerId = null;
+          if ((te.type === 'AGENT' || te.type === 'THINK') && te.eventId) {
+            var _tlSid = te.sessionId || te.source || '';
+            _tlContainerId = 'timeline-' + (te.eventId || '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+            turnTimeline += '<button onclick="event.stopPropagation();loadLlmCallTimeline(\'' + escHtml(te.eventId) + '\',\'' + escHtml(_tlSid) + '\',\'' + escHtml(_tlContainerId) + '\')" style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #22c55e;background:transparent;color:#22c55e;font-size:10px;cursor:pointer;white-space:nowrap;" title="Per-LLM-call lifecycle timeline">&#128202; Timeline</button>';
+          }
+          turnTimeline += '</div>';
+          if (_rcContainerId) {
             turnTimeline += '<div id="' + escHtml(_rcContainerId) + '" style="margin:2px 0 4px 56px;"></div>';
-          } else {
-            turnTimeline += '</div>';
+          }
+          if (_tlContainerId) {
+            turnTimeline += '<div id="' + escHtml(_tlContainerId) + '" class="llm-call-timeline-host" style="margin:2px 0 4px 56px;"></div>';
           }
         });
         if (currentSubagent) turnTimeline += '</div>'; // close last sub-agent group
@@ -3292,6 +3305,142 @@ function loadReasoningChain(sessionId, containerId) {
     })
     .catch(function(err) {
       container.innerHTML = '<span style="color:#ef4444;font-size:10px;">Error loading reasoning chain.</span>';
+    });
+}
+
+// ── Per-LLM-call lifecycle Timeline (issue #568) ──────────────────────────
+//
+// Renders an inline horizontal bar showing the 5 (reasoning) or 3 (non
+// reasoning) phase markers of one LLM call: prompt_received,
+// reasoning_started, reasoning_completed, first_output_token, completion.
+// Backend at /api/llm-call-timeline/<event_id> returns absolute ms offsets
+// from the prompt origin so the JS just needs to position absolute divs.
+// No chart library — pure DOM (per CLAUDE.md "no build step").
+
+var _llmTimelinePhaseColors = {
+  prompt_received:     '#60a5fa',  // blue: input
+  reasoning_started:   '#a78bfa',  // purple: thinking starts
+  reasoning_completed: '#8b5cf6',  // purple-dark: thinking ends
+  first_output_token:  '#22c55e',  // green: generation begins
+  completion:          '#10b981'   // green-dark: done
+};
+var _llmTimelinePhaseLabels = {
+  prompt_received:     'Prompt received',
+  reasoning_started:   'Reasoning started',
+  reasoning_completed: 'Reasoning completed',
+  first_output_token:  'First output token',
+  completion:          'Completion'
+};
+
+function _formatTimelineMs(ms) {
+  // Compact monospace label: 0ms / 150ms / 4.2s / 1m12s. Designed to fit
+  // under a marker without overflowing the bar.
+  if (ms == null) return '';
+  var n = Number(ms) || 0;
+  if (n < 1000) return n + 'ms';
+  if (n < 60000) return (n / 1000).toFixed(1) + 's';
+  var m = Math.floor(n / 60000);
+  var s = Math.floor((n % 60000) / 1000);
+  return m + 'm' + (s < 10 ? '0' : '') + s + 's';
+}
+
+function renderLlmCallTimeline(data) {
+  // Pure function — takes the /api/llm-call-timeline payload, returns HTML.
+  // Kept separate from loadLlmCallTimeline so unit tests can exercise it
+  // without faking fetch.
+  if (!data || !Array.isArray(data.phases) || data.phases.length === 0) {
+    return '<span style="color:var(--text-muted);font-size:10px;">No timeline data.</span>';
+  }
+  var total = Math.max(1, Number(data.total_ms) || 0);
+  var phases = data.phases;
+  var html = '';
+  html += '<div class="llm-call-timeline" style="margin:6px 0;padding:8px 10px;background:var(--bg-secondary,rgba(0,0,0,0.15));border:1px solid var(--border,rgba(255,255,255,0.08));border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">';
+  // Header: model + total span + reasoning flag.
+  html += '<div class="llm-call-timeline-header" style="display:flex;gap:10px;align-items:center;margin-bottom:8px;font-size:10px;color:var(--text-muted);flex-wrap:wrap;">';
+  if (data.model) {
+    html += '<span style="color:#a78bfa;">&#129302; ' + escHtml(data.model) + '</span>';
+  }
+  html += '<span>&#9202; total ' + _formatTimelineMs(total) + '</span>';
+  html += '<span>' + (data.reasoning ? '&#129504; reasoning' : 'no reasoning') + '</span>';
+  html += '<span>' + phases.length + ' phases</span>';
+  html += '</div>';
+  // The bar itself: absolute markers + a subtle baseline track.
+  html += '<div class="llm-call-timeline-bar" style="position:relative;height:14px;background:linear-gradient(90deg,rgba(96,165,250,0.10),rgba(16,185,129,0.10));border-radius:7px;margin-bottom:24px;">';
+  phases.forEach(function(p, idx) {
+    var pct = total > 0 ? (Number(p.ms) || 0) / total * 100 : 0;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    var col = _llmTimelinePhaseColors[p.phase] || '#888';
+    // Marker: 10x18 vertical pill centered on the percentage. Clamp the
+    // left % so the first/last marker don't get clipped at the bar edges.
+    var leftStyle = 'left:calc(' + pct.toFixed(2) + '% - 5px)';
+    var titleParts = [
+      _llmTimelinePhaseLabels[p.phase] || p.phase,
+      _formatTimelineMs(p.ms)
+    ];
+    if (p.tokens) titleParts.push(p.tokens + ' tokens');
+    if (p.estimated) titleParts.push('(estimated)');
+    html += '<div class="llm-call-timeline-marker" data-phase="' + escHtml(p.phase) +
+            '" title="' + escHtml(titleParts.join(' · ')) +
+            '" style="position:absolute;top:-2px;' + leftStyle +
+            ';width:10px;height:18px;background:' + col +
+            ';border-radius:3px;box-shadow:0 0 4px ' + col + '88;"></div>';
+    // ms label below the marker. Stagger odd indices down so labels
+    // overlapping in a tight cluster don't pile on top of each other.
+    var staggerTop = (idx % 2 === 0) ? '22px' : '34px';
+    html += '<div class="llm-call-timeline-label" style="position:absolute;top:' +
+            staggerTop + ';left:calc(' + pct.toFixed(2) + '% - 24px);width:48px;text-align:center;font-size:9px;color:' +
+            col + ';white-space:nowrap;">' + escHtml(_formatTimelineMs(p.ms));
+    if (p.estimated) html += '*';
+    html += '</div>';
+  });
+  html += '</div>';
+  // Legend row — one chip per phase so non-technical users can read the
+  // colour key without hovering. Kept terse: emoji + label, no jargon.
+  html += '<div class="llm-call-timeline-legend" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:9px;">';
+  phases.forEach(function(p) {
+    var col = _llmTimelinePhaseColors[p.phase] || '#888';
+    var lbl = _llmTimelinePhaseLabels[p.phase] || p.phase;
+    html += '<span style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:8px;background:' +
+            col + '22;color:' + col + ';">';
+    html += '<span style="width:7px;height:7px;border-radius:50%;background:' + col + ';display:inline-block;"></span>';
+    html += escHtml(lbl);
+    if (p.estimated) html += ' *';
+    html += '</span>';
+  });
+  html += '</div>';
+  if (phases.some(function(p) { return p.estimated; })) {
+    html += '<div style="margin-top:4px;font-size:9px;color:var(--text-muted);font-style:italic;">* estimated: first-token timing is inferred from completion size when the model did not emit a streaming marker.</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function loadLlmCallTimeline(eventId, sessionId, containerId) {
+  // Toggle pattern matches loadReasoningChain: second click clears.
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  if (container.dataset.loaded === '1') {
+    container.innerHTML = '';
+    container.dataset.loaded = '0';
+    return;
+  }
+  container.innerHTML = '<span style="color:var(--text-muted);font-size:10px;">Loading timeline…</span>';
+  var url = '/api/llm-call-timeline/' + encodeURIComponent(eventId);
+  if (sessionId) url += '?session_id=' + encodeURIComponent(sessionId);
+  fetch(url)
+    .then(function(r) {
+      if (!r.ok) {
+        return r.json().then(function(j) { throw new Error(j.error || ('HTTP ' + r.status)); });
+      }
+      return r.json();
+    })
+    .then(function(data) {
+      container.dataset.loaded = '1';
+      container.innerHTML = renderLlmCallTimeline(data);
+    })
+    .catch(function(err) {
+      container.innerHTML = '<span style="color:#ef4444;font-size:10px;">Timeline unavailable: ' + escHtml(String(err && err.message ? err.message : err)) + '</span>';
     });
 }
 

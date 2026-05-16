@@ -887,6 +887,111 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
   })();
 }
 
+// ── Per-LLM-call Timeline renderer (issue #568) ─────────────────────────
+//
+// Pure-function check: renderLlmCallTimeline takes the
+// /api/llm-call-timeline payload and returns HTML. We extract the function
+// + its two phase dictionaries from app.js, run it through node's vm with
+// a stub escHtml, and assert structural properties of the output. No DOM,
+// no fetch — just shape.
+console.log('renderLlmCallTimeline (issue #568 — per-LLM-call lifecycle bar)');
+{
+  const sandbox = { Date: Date, console: console };
+  const lines = src.split('\n');
+  const startMarker = 'var _llmTimelinePhaseColors';
+  const endMarker = 'function loadLlmCallTimeline(';
+  const startIdx = lines.findIndex(function(l) { return l.indexOf(startMarker) === 0; });
+  if (startIdx < 0) throw new Error('start marker not found in app.js');
+  const endIdx = lines.findIndex(function(l, i) { return i > startIdx && l.indexOf(endMarker) === 0; });
+  if (endIdx < 0) throw new Error('end marker not found in app.js');
+  // Slice covers _llmTimelinePhaseColors → _llmTimelinePhaseLabels →
+  // _formatTimelineMs → renderLlmCallTimeline. Stops before
+  // loadLlmCallTimeline (which uses fetch — we don't need it for this test).
+  let code = lines.slice(startIdx, endIdx).join('\n') + '\n';
+  // Stub escHtml — the real one lives elsewhere in app.js; pull it in.
+  code += extractFunction('escHtml') + '\n';
+  code += '\nthis.api = {' +
+          '  renderLlmCallTimeline: renderLlmCallTimeline,' +
+          '  _formatTimelineMs: _formatTimelineMs,' +
+          '  _llmTimelinePhaseColors: _llmTimelinePhaseColors,' +
+          '  _llmTimelinePhaseLabels: _llmTimelinePhaseLabels,' +
+          '};';
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox);
+  const api = sandbox.api;
+
+  // (1) _formatTimelineMs covers ms / s / mNNs branches.
+  eq(api._formatTimelineMs(0), '0ms', 'format 0 → "0ms"');
+  eq(api._formatTimelineMs(150), '150ms', 'format 150 → "150ms"');
+  eq(api._formatTimelineMs(4200), '4.2s', 'format 4200 → "4.2s"');
+  eq(api._formatTimelineMs(72500), '1m12s', 'format 72500 → "1m12s"');
+  eq(api._formatTimelineMs(null), '', 'format null → "" (safe)');
+
+  // (2) 5-phase reasoning payload renders 5 markers + legend.
+  const reasoningPayload = {
+    event_id: 'ev-1',
+    session_id: 'sess-r',
+    model: 'claude-opus-4-7',
+    reasoning: true,
+    phase_count: 5,
+    total_ms: 6750,
+    phases: [
+      { phase: 'prompt_received',     ts: '2026-05-13T12:00:00Z', ms: 0 },
+      { phase: 'reasoning_started',   ts: '2026-05-13T12:00:00.150Z', ms: 150 },
+      { phase: 'reasoning_completed', ts: '2026-05-13T12:00:04.350Z', ms: 4350 },
+      { phase: 'first_output_token',  ts: null, ms: 5550, estimated: true },
+      { phase: 'completion',          ts: '2026-05-13T12:00:06.750Z', ms: 6750, tokens: 240 },
+    ],
+  };
+  const html = api.renderLlmCallTimeline(reasoningPayload);
+  truthy(html.indexOf('llm-call-timeline') >= 0, 'wrapper class rendered');
+  truthy(html.indexOf('llm-call-timeline-bar') >= 0, 'bar rendered');
+  // One marker per phase
+  const markerCount = (html.match(/llm-call-timeline-marker/g) || []).length;
+  eq(markerCount, 5, '5 markers rendered for reasoning payload');
+  // Model + reasoning + total span in the header
+  truthy(html.indexOf('claude-opus-4-7') >= 0, 'model name in header');
+  truthy(html.indexOf('6.8s') >= 0 || html.indexOf('6.7s') >= 0, 'total span in header');
+  truthy(html.indexOf('reasoning') >= 0, 'reasoning flag in header');
+  // Estimated marker carries the "*" footnote
+  truthy(html.indexOf('*') >= 0, 'estimated phase carries footnote marker');
+  truthy(html.indexOf('estimated') >= 0, 'footnote line explains "estimated"');
+
+  // (3) 3-phase non-reasoning payload renders 3 markers and "no reasoning".
+  const flatPayload = {
+    event_id: 'ev-2',
+    session_id: 'sess-nr',
+    model: 'claude-haiku-3-5',
+    reasoning: false,
+    phase_count: 3,
+    total_ms: 1200,
+    phases: [
+      { phase: 'prompt_received',    ts: '2026-05-13T12:10:00Z', ms: 0 },
+      { phase: 'first_output_token', ts: null, ms: 840, estimated: true },
+      { phase: 'completion',         ts: '2026-05-13T12:10:01.200Z', ms: 1200, tokens: 8 },
+    ],
+  };
+  const html2 = api.renderLlmCallTimeline(flatPayload);
+  const markerCount2 = (html2.match(/llm-call-timeline-marker/g) || []).length;
+  eq(markerCount2, 3, '3 markers rendered for non-reasoning payload');
+  truthy(html2.indexOf('no reasoning') >= 0, '"no reasoning" label in header');
+  truthy(html2.indexOf('1.2s') >= 0, 'total span 1.2s in header');
+
+  // (4) Empty / malformed payload → graceful fallback (no throw).
+  eq(api.renderLlmCallTimeline(null).indexOf('No timeline data') >= 0, true,
+     'null payload → "No timeline data."');
+  eq(api.renderLlmCallTimeline({phases: []}).indexOf('No timeline data') >= 0, true,
+     'empty phases → "No timeline data."');
+
+  // (5) Marker left% values are positioned proportionally to total_ms.
+  // Marker 0 (prompt_received, ms=0) → "left:calc(0.00% - 5px)".
+  // Marker 4 (completion, ms=6750) → "left:calc(100.00% - 5px)".
+  truthy(html.indexOf('left:calc(0.00% - 5px)') >= 0,
+         'first marker positioned at 0%');
+  truthy(html.indexOf('left:calc(100.00% - 5px)') >= 0,
+         'last marker positioned at 100%');
+}
+
 // Auth-bootstrap scenarios above are async — wait for the microtask /
 // macrotask queue to drain before printing the summary. (The previous
 // synchronous test blocks all completed in-tick, so no wait was needed
