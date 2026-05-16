@@ -18,6 +18,7 @@ import glob
 import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
@@ -193,7 +194,7 @@ def _extract_brain_detail(row: dict) -> str:
     return ""
 
 
-def _try_local_store_brain(limit: int, include_artifacts: bool):
+def _try_local_store_brain(limit, include_artifacts, since=None):
     """Epic #964 phase 1b fast path. Returns a brain-history-shaped dict
     when CLAWMETRY_LOCAL_STORE_READ=1 AND the local DuckDB store has
     enough events to be useful. Returns ``None`` to defer to the JSONL
@@ -204,8 +205,14 @@ def _try_local_store_brain(limit: int, include_artifacts: bool):
     enriched here. The full read-path migration is a follow-up; this
     is a measurable proof that the local store is the right answer for
     the simple list-of-events case.
+
+    ``since`` is forwarded to ``query_events`` so the OSS 24h retention
+    cap (issue #1448) is enforced at the SQL layer.
     """
     rows = None
+    qkwargs = {"limit": limit}
+    if since:
+        qkwargs["since"] = since
     # Issue #1088: cross-process fast-path. The standard install runs daemon
     # + dashboard as separate processes and DuckDB's exclusive writer lock
     # blocks the dashboard from opening the file even read-only. Ask the
@@ -213,7 +220,7 @@ def _try_local_store_brain(limit: int, include_artifacts: bool):
     # boots (tests, dev mode).
     try:
         from routes.local_query import local_store_via_daemon
-        rows = local_store_via_daemon("query_events", limit=limit)
+        rows = local_store_via_daemon("query_events", **qkwargs)
     except Exception:
         rows = None
     if rows is None:
@@ -224,12 +231,23 @@ def _try_local_store_brain(limit: int, include_artifacts: bool):
             # install (daemon proxy above is the happy path; this fallback
             # only fires in tests / dev mode).
             store = local_store.get_store(read_only=True)
-            rows = store.query_events(limit=limit)
+            rows = store.query_events(**qkwargs)
         except Exception:
             return None
     if not rows:
         # Empty store → fall through to JSONL parser so a fresh install
         # without a populated local DB still gets a useful brain feed.
+        # Exception: when the OSS 24h cap (issue #1448) is active we MUST
+        # NOT fall through, otherwise the JSONL parser would happily serve
+        # unbounded history and defeat the retention gate.
+        if since:
+            return {
+                "events":        [],
+                "count":         0,
+                "_source":       "local_store",
+                "_shape":        "brain_history",
+                "capped_at_24h": True,
+            }
         return None
     # Translate the local-store row shape (id/node_id/agent_id/session_id/
     # event_type/ts/data/cost_usd/...) into the brain-history event shape
@@ -294,10 +312,11 @@ def _try_local_store_brain(limit: int, include_artifacts: bool):
                     row["chat_id"] = str(chat_id)[:80]
         out.append(row)
     return {
-        "events":  out,
-        "count":   len(out),
-        "_source": "local_store",
-        "_shape":  "brain_history",
+        "events":        out,
+        "count":         len(out),
+        "_source":       "local_store",
+        "_shape":        "brain_history",
+        "capped_at_24h": bool(since),
     }
 
 
@@ -344,15 +363,28 @@ def api_brain_history():
     include_artifacts = _brain_history_bool_arg(
         request.args.get("include_artifacts") or request.args.get("artifacts")
     )
+    # OSS / Cloud-Free 24h retention cap (issue #1448 surface 3). Pro
+    # users bypass entirely; everyone else gets clamped to the last 24h
+    # of ts. ``capped_at_24h`` is mirrored back so the UI can render the
+    # Cloud-Pro upgrade CTA above the brain stream.
+    try:
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
+    cap_since = None
+    if not is_pro:
+        cap_since = (
+            datetime.now(timezone.utc) - timedelta(hours=24)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Epic #964 phase 1b: opt-in local-store fast path. Skip the JSONL
     # parser entirely when CLAWMETRY_LOCAL_STORE_READ=1 AND the store
     # has data. Falls through to the full parser otherwise (so a fresh
     # install with an empty store still gets the rich brain feed).
     if is_local_store_read_enabled():
-        fast = _try_local_store_brain(limit, include_artifacts)
+        fast = _try_local_store_brain(limit, include_artifacts, since=cap_since)
         if fast is not None:
             return jsonify(fast)
-    cache_key = (limit, include_artifacts)
+    cache_key = (limit, include_artifacts, bool(cap_since))
     cached = _BRAIN_HISTORY_CACHE.get(cache_key)
     now_cache = time.time()
     if cached and now_cache - cached[0] < _BRAIN_HISTORY_CACHE_TTL_SECONDS:
@@ -926,6 +958,16 @@ def api_brain_history():
         if m:
             ev["skill"] = m.group(1)
 
+    # OSS 24h cap (issue #1448): drop any JSONL-sourced event older than
+    # the cap before we count + ship. CONTEXT pseudo-events have no
+    # meaningful ts so we keep them regardless (they describe the active
+    # window, not historical activity).
+    if cap_since:
+        events = [
+            ev for ev in events
+            if ev.get("type") == "CONTEXT" or (ev.get("time") or "") >= cap_since
+        ]
+
     # Build channel summary for filter chips
     channel_counts = {}
     for ev in events:
@@ -937,7 +979,13 @@ def api_brain_history():
         _d._ext_emit("brain.event", {"count": len(events)})
     except Exception:
         pass
-    payload = {"events": events, "total": len(events), "sources": sources_seen, "channels": channel_counts}
+    payload = {
+        "events":        events,
+        "total":         len(events),
+        "sources":       sources_seen,
+        "channels":      channel_counts,
+        "capped_at_24h": bool(cap_since),
+    }
     _BRAIN_HISTORY_CACHE[cache_key] = (time.time(), payload)
     if len(_BRAIN_HISTORY_CACHE) > 8:
         oldest_key = min(_BRAIN_HISTORY_CACHE, key=lambda k: _BRAIN_HISTORY_CACHE[k][0])

@@ -75,6 +75,10 @@ def fallback_app(tmp_path, monkeypatch):
     monkeypatch.setattr(_d, "_get_log_dirs", lambda: [str(log_dir)], raising=True)
     monkeypatch.setattr(_d, "SESSIONS_DIR", str(sessions_dir), raising=True)
     monkeypatch.setattr(_d, "_ext_emit", lambda *a, **k: None, raising=True)
+    # 2026-05-13 fixture timestamps fall outside the OSS 24h cap (#1448).
+    # Default to Pro so the BROWSER-classification assertion still sees
+    # the seeded log line.
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True, raising=True)
 
     # The route ALSO hard-codes a glob of ``/tmp/openclaw/openclaw-*.log`` and
     # then trims to the last 3 files. On a dev machine with real daemon logs
