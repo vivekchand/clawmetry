@@ -292,12 +292,20 @@ def test_transcript_renders_openclaw_event_shapes(isolated_store, monkeypatch):
 
     # Five OpenClaw-shape events. The first three should render as
     # transcript turns; the last two are plumbing and MUST be skipped.
+    # Shape note (per commit 9be80b5): the v3 sync parser stamps
+    # ``data.type`` at the top of the data blob AND nests the original
+    # OpenClaw payload under ``data.data``. The transcript helper reads
+    # content fields from that inner ``data`` dict. The fixture mirrors
+    # that real production shape so we exercise the same code path users hit.
     events = [
         {
             "id": "oc-1", "node_id": "n", "agent_id": "main",
             "session_id": sid, "event_type": "prompt.submitted",
             "ts": _ts(0),
-            "data": {"type": "prompt.submitted", "finalPromptText": "hi"},
+            "data": {
+                "type": "prompt.submitted",
+                "data": {"finalPromptText": "hi"},
+            },
         },
         {
             "id": "oc-2", "node_id": "n", "agent_id": "main",
@@ -306,9 +314,11 @@ def test_transcript_renders_openclaw_event_shapes(isolated_store, monkeypatch):
             "data": {
                 "type": "trace.artifacts",
                 "modelId": "claude-opus-4-7",
-                "assistantTexts": ["hello!"],
-                "promptCache": {
-                    "lastCallUsage": {"input": 50, "output": 30, "total": 80},
+                "data": {
+                    "assistantTexts": ["hello!"],
+                    "promptCache": {
+                        "lastCallUsage": {"input": 50, "output": 30, "total": 80},
+                    },
                 },
             },
         },
@@ -316,20 +326,23 @@ def test_transcript_renders_openclaw_event_shapes(isolated_store, monkeypatch):
             "id": "oc-3", "node_id": "n", "agent_id": "main",
             "session_id": sid, "event_type": "model.completed",
             "ts": _ts(2),
-            "data": {"type": "model.completed", "completionText": "more"},
+            "data": {
+                "type": "model.completed",
+                "data": {"completionText": "more"},
+            },
         },
         # Plumbing — must NOT appear in the transcript.
         {
             "id": "oc-4", "node_id": "n", "agent_id": "main",
             "session_id": sid, "event_type": "session.ended",
             "ts": _ts(3),
-            "data": {"type": "session.ended"},
+            "data": {"type": "session.ended", "data": {}},
         },
         {
             "id": "oc-5", "node_id": "n", "agent_id": "main",
             "session_id": sid, "event_type": "agent.heartbeat",
             "ts": _ts(4),
-            "data": {"type": "agent.heartbeat"},
+            "data": {"type": "agent.heartbeat", "data": {}},
         },
     ]
     for ev in events:
