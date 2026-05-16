@@ -1,0 +1,124 @@
+name: API Latency Smoke
+
+# Issue #1241 — catches "fast in CI, broken in real two-process install"
+# regressions like PR #1235 (3 endpoints were 7-15s under the sync-daemon
+# + dashboard contention). Single-process CI never sees DuckDB lock fights.
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  schedule:
+    - cron: "0 6 * * *"   # nightly PyPI-release run
+  workflow_dispatch:
+
+concurrency:
+  group: api-latency-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: ${{ matrix.source == 'pypi' && 'PyPI nightly' || 'PR build' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # PR + push runs the local-wheel slice only. Nightly schedule
+        # additionally exercises the published PyPI release.
+        source: ${{ github.event_name == 'schedule' && fromJSON('["wheel", "pypi"]') || fromJSON('["wheel"]') }}
+    env:
+      CLAWMETRY_TOKEN: ci-smoke-token
+      OPENCLAW_GATEWAY_TOKEN: ci-smoke-token
+      CLAWMETRY_LOCAL_STORE_PATH: ${{ github.workspace }}/.smoke/clawmetry.duckdb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel
+        if: matrix.source == 'wheel'
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+
+      - name: Install into isolated venv
+        run: |
+          python -m venv /tmp/vsmoke
+          /tmp/vsmoke/bin/pip install --upgrade pip
+          if [ "${{ matrix.source }}" = "pypi" ]; then
+            /tmp/vsmoke/bin/pip install --no-cache-dir clawmetry flask waitress cryptography duckdb requests
+          else
+            /tmp/vsmoke/bin/pip install dist/clawmetry-*.whl flask waitress cryptography duckdb requests
+          fi
+
+      - name: Write minimal daemon config
+        # The sync-daemon entry point refuses to start without an api_key,
+        # so we drop a fake one. Ingest URL points at a closed port so
+        # network POSTs fail-fast and don't hold up the loop — we only
+        # care about the daemon's local_query HTTP server here.
+        run: |
+          mkdir -p "$HOME/.clawmetry" .smoke
+          cat > "$HOME/.clawmetry/config.json" <<EOF
+          {
+            "node_id": "smoke-ci-node",
+            "api_key": "smoke-ci-fake",
+            "encryption_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "ingest_url": "http://127.0.0.1:9"
+          }
+          EOF
+          chmod 600 "$HOME/.clawmetry/config.json"
+
+      - name: Seed realistic-shape DuckDB fixture (1k events / 200 hb / 50 mem / 5 sess)
+        run: /tmp/vsmoke/bin/python scripts/seed_smoke_duckdb.py
+
+      - name: Start sync daemon (writer) + dashboard (reader)
+        # Daemon owns the DuckDB lock and publishes its local-query port to
+        # ~/.clawmetry/local_query.json. Dashboard proxies through that for
+        # /api/local/* reads. Both running = the contention shape we test.
+        env:
+          CLAWMETRY_INGEST_URL: http://127.0.0.1:9
+        run: |
+          nohup /tmp/vsmoke/bin/python -m clawmetry sync --foreground \
+            > .smoke/daemon.log 2>&1 &
+          echo $! > .smoke/daemon.pid
+          for i in $(seq 1 30); do
+            [ -f "$HOME/.clawmetry/local_query.json" ] && { echo "daemon up after ${i}s"; break; }
+            sleep 1
+          done
+          if [ ! -f "$HOME/.clawmetry/local_query.json" ]; then
+            echo "::error::daemon never published local_query.json"
+            tail -100 .smoke/daemon.log; exit 1
+          fi
+          nohup /tmp/vsmoke/bin/clawmetry --port 8900 --no-debug \
+            > .smoke/dashboard.log 2>&1 &
+          echo $! > .smoke/dashboard.pid
+          for i in $(seq 1 30); do
+            curl -sf -H "Authorization: Bearer $CLAWMETRY_TOKEN" \
+              http://localhost:8900/api/health > /dev/null && \
+              { echo "dashboard up after ${i}s"; break; }
+            sleep 1
+          done
+          curl -sf -H "Authorization: Bearer $CLAWMETRY_TOKEN" \
+            http://localhost:8900/api/health > /dev/null || {
+            echo "::error::dashboard /api/health never returned 200"
+            tail -100 .smoke/dashboard.log; exit 1; }
+
+      - name: Probe endpoints + assert p50/p95 budgets
+        env:
+          CLAWMETRY_URL: http://localhost:8900
+        run: /tmp/vsmoke/bin/python scripts/api_latency_probe.py
+
+      - name: Tail logs on failure
+        if: failure()
+        run: |
+          echo "── daemon.log ──"; tail -200 .smoke/daemon.log || true
+          echo "── dashboard.log ──"; tail -200 .smoke/dashboard.log || true
+
+      - name: Stop background processes
+        if: always()
+        run: |
+          for f in .smoke/dashboard.pid .smoke/daemon.pid; do
+            [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null || true
+          done
