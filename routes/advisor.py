@@ -140,6 +140,45 @@ def _try_local_store_advisor_context(limit_events: int = MAX_CONTEXT_EVENTS) -> 
     today_str = time.strftime("%Y-%m-%d")
     today_tokens = 0
 
+    # Issue #1451: dedupe sibling-doubled billable turns before counting
+    # tokens. On real OpenClaw v3 installs each LLM turn emits BOTH an
+    # ``assistant`` and a sibling ``model.completed`` row ~100 ms apart,
+    # both stamped with the same ``token_count`` value. Without dedup
+    # per-session totals + today_tokens come out 2× reality and the
+    # advisor's recommendations are based on inflated numbers. Same
+    # 2-pass approach as routes/usage.py:_try_local_store_cost_comparison.
+    _RICHER = {"assistant": 2, "message": 2, "model.completed": 1}
+
+    def _ts_sec(ts_str: str) -> int:
+        if not ts_str or not isinstance(ts_str, str):
+            return 0
+        try:
+            from datetime import datetime as _dt
+            return int(_dt.fromisoformat(
+                ts_str.replace("Z", "+00:00")).timestamp())
+        except Exception:
+            return 0
+
+    _bucket_max: dict = {}
+    for _r in rows:
+        _et = (_r.get("event_type") or "").strip()
+        if _et not in _RICHER:
+            continue
+        _sid = _r.get("session_id") or ""
+        _sec = _ts_sec(_r.get("ts") or "")
+        _rank = _RICHER[_et]
+        for _key in ((_sid, _sec - 1), (_sid, _sec), (_sid, _sec + 1)):
+            if _bucket_max.get(_key, 0) < _rank:
+                _bucket_max[_key] = _rank
+
+    def _is_sibling_dup(_r) -> bool:
+        _et = (_r.get("event_type") or "").strip()
+        if _et not in _RICHER:
+            return False
+        _sid = _r.get("session_id") or ""
+        _sec = _ts_sec(_r.get("ts") or "")
+        return _bucket_max.get((_sid, _sec), 0) > _RICHER[_et]
+
     for r in rows:
         t = (r.get("ts") or "")[:19]
         typ = r.get("event_type") or "?"
@@ -161,6 +200,11 @@ def _try_local_store_advisor_context(limit_events: int = MAX_CONTEXT_EVENTS) -> 
         events.append(f"[{t}] {sid[:12]} {typ}: {detail}")
 
         sid_key = r.get("session_id") or ""
+        # Issue #1451: skip token + cost accumulation when this row is the
+        # slim sibling of a richer envelope we already counted. We still
+        # populate sessions_seen metadata (model, started_at) since those
+        # are tag-set not totals.
+        _is_dup = _is_sibling_dup(r)
         if sid_key:
             entry = sessions_seen.setdefault(sid_key, {
                 "session_id": sid_key[:8],
@@ -169,16 +213,17 @@ def _try_local_store_advisor_context(limit_events: int = MAX_CONTEXT_EVENTS) -> 
                 "cost_usd": 0.0,
                 "started_at": t,
             })
-            entry["tokens"] += int(r.get("token_count") or 0)
-            try:
-                entry["cost_usd"] = round(entry["cost_usd"] + float(r.get("cost_usd") or 0), 4)
-            except Exception:
-                pass
+            if not _is_dup:
+                entry["tokens"] += int(r.get("token_count") or 0)
+                try:
+                    entry["cost_usd"] = round(entry["cost_usd"] + float(r.get("cost_usd") or 0), 4)
+                except Exception:
+                    pass
             if r.get("model") and not entry["model"]:
                 entry["model"] = r["model"]
             if t and (not entry["started_at"] or t < entry["started_at"]):
                 entry["started_at"] = t
-        if t.startswith(today_str):
+        if t.startswith(today_str) and not _is_dup:
             today_tokens += int(r.get("token_count") or 0)
 
     return {
