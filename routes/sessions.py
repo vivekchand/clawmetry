@@ -298,10 +298,14 @@ def _fetch_sessions_table_rows(limit: int = 200):
     except Exception:
         pass
     # 2. Single-process fallback: open the DuckDB ourselves. Only works
-    #    when no other process holds the writer lock.
+    #    when no other process holds the writer lock. Issue #1240: open
+    #    read-only so we don't pay DuckDB's ~2.5s writer-lock-retry budget
+    #    when the daemon does own the writer lock (the daemon proxy attempt
+    #    above will have already failed in that case, so we get here, and
+    #    the RO open shares the writer's connection cleanly).
     try:
         from clawmetry import local_store
-        return local_store.get_store().query_sessions_table(limit=limit)
+        return local_store.get_store(read_only=True).query_sessions_table(limit=limit)
     except Exception:
         return None
 
