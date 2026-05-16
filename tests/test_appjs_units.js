@@ -607,5 +607,299 @@ console.log('anon auth-fail ping helpers (issue #1365)');
      'authRequired:false → no ping');
 }
 
-console.log('\n' + (failed === 0 ? 'PASS' : 'FAIL') + ' — ' + passed + ' passed, ' + failed + ' failed');
-process.exit(failed === 0 ? 0 : 1);
+// ── Test auth-bootstrap.js — zero-click localhost auto-login (issue #1356) ──
+//
+// The first IIFE in auth-bootstrap.js owns the "first paint" auth flow:
+//   1. Read clawmetry-token from localStorage.
+//   2. If empty → fetch /api/auth/detected-token; on a token, stash it and
+//      call checkAuth(token).
+//   3. If present → call checkAuth(storedToken) directly.
+//   4. checkAuth calls /api/auth/check?token=…; on valid, hide the overlay;
+//      on invalid, wipe localStorage and show the login overlay.
+//
+// The whole point of #1356 is that step 2 produces a logged-in dashboard
+// without the user typing anything. This test exercises the IIFE in a
+// sandbox with stubs for fetch / localStorage / document, then asserts:
+//   * /api/auth/detected-token is the FIRST fetch on a fresh session.
+//   * Its response token gets persisted to localStorage under
+//     'clawmetry-token' (the exact key the fetch shim below reads).
+//   * checkAuth then calls /api/auth/check?token=… with the just-fetched
+//     value (not the empty stored value), and the login overlay is hidden
+//     when /api/auth/check returns {valid:true}.
+//   * On detected-token 403/404 (non-localhost peer, no token configured),
+//     the bootstrap falls through to the overlay path instead of throwing.
+//   * No `location.reload()` is ever called (see
+//     feedback_no_reload_in_bootstrap_e2e.md — Playwright dies on reload
+//     during page-load bootstrap).
+console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
+{
+  const BOOTSTRAP_JS = path.join(
+    __dirname, '..', 'clawmetry', 'static', 'js', 'auth-bootstrap.js'
+  );
+  const bootSrc = fs.readFileSync(BOOTSTRAP_JS, 'utf8');
+
+  // Extract just the FIRST IIFE — the one that owns the auto-detect +
+  // checkAuth flow. The file also defines clawmetryLogin / clawmetryLogout
+  // / fetch-shim / version-badge IIFEs after it, none of which are part of
+  // this test's scope.
+  const iifeMatch = bootSrc.match(/^\(function\(\)\{[\s\S]*?\n\}\)\(\);/m);
+  if (!iifeMatch) throw new Error('could not find bootstrap IIFE in auth-bootstrap.js');
+  const iifeSrc = iifeMatch[0];
+
+  // Build a sandbox runner. Each scenario re-builds the sandbox so state
+  // (localStorage, fetch-call log, overlay style) starts clean.
+  function runBootstrap(opts) {
+    const calls = []; // every fetch URL, in order
+    const lsStore = Object.assign({}, opts.initialLocalStorage || {});
+    const ssStore = {};
+    const overlayState = { display: '' };
+    const gwOverlayState = { display: '', dataset: {} };
+    const gwCloseState = { display: '' };
+    const logoutBtnState = { display: 'none' };
+    let reloadCount = 0;
+
+    const elements = {
+      'login-overlay': { style: overlayState },
+      'gw-setup-overlay': { style: gwOverlayState, dataset: gwOverlayState.dataset },
+      'gw-setup-close': { style: gwCloseState },
+      'logout-btn': { style: logoutBtnState },
+    };
+
+    const sandbox = {
+      localStorage: {
+        getItem: function(k) {
+          return Object.prototype.hasOwnProperty.call(lsStore, k) ? lsStore[k] : null;
+        },
+        setItem: function(k, v) { lsStore[k] = String(v); },
+        removeItem: function(k) { delete lsStore[k]; },
+      },
+      sessionStorage: {
+        getItem: function(k) {
+          return Object.prototype.hasOwnProperty.call(ssStore, k) ? ssStore[k] : null;
+        },
+        setItem: function(k, v) { ssStore[k] = String(v); },
+        removeItem: function(k) { delete ssStore[k]; },
+      },
+      document: {
+        getElementById: function(id) { return elements[id] || null; },
+      },
+      window: {
+        location: {
+          // Defensive: any reload attempt during bootstrap is a bug — the
+          // Playwright fixture in tests/e2e/zero-click-auth.mjs crashes
+          // with "Execution context was destroyed". We assert reloadCount
+          // stays 0 in every scenario.
+          reload: function() { reloadCount++; },
+        },
+      },
+      fetch: function(url) {
+        calls.push(url);
+        return Promise.resolve(opts.fetchHandler(url));
+      },
+      // Bare-bones Promise / setTimeout pulled from this realm; vm context
+      // sandboxes don't auto-inherit globals.
+      Promise: Promise,
+      setTimeout: setTimeout,
+    };
+    // `encodeURIComponent` is used inside the IIFE.
+    sandbox.encodeURIComponent = encodeURIComponent;
+
+    vm.createContext(sandbox);
+    vm.runInContext(iifeSrc, sandbox);
+
+    // The IIFE kicks off async work via Promises. Drain the microtask
+    // queue by awaiting a setImmediate-equivalent. Two ticks cover the
+    // detected-token → checkAuth → /api/auth/check chain.
+    return new Promise(function(resolve) {
+      setImmediate(function() {
+        setImmediate(function() {
+          setImmediate(function() {
+            resolve({
+              calls: calls,
+              lsStore: lsStore,
+              ssStore: ssStore,
+              overlayDisplay: overlayState.display,
+              gwOverlayDisplay: gwOverlayState.display,
+              logoutDisplay: logoutBtnState.display,
+              reloadCount: reloadCount,
+            });
+          });
+        });
+      });
+    });
+  }
+
+  // ── Scenario A: fresh tab, server has token, /api/auth/check says valid ──
+  //
+  // This is the happy path that #1356 exists to deliver. The bootstrap
+  // MUST hit /api/auth/detected-token first, stash the token, then call
+  // /api/auth/check?token=…, and hide the overlay.
+  (async function scenarioA() {
+    const DETECTED_TOKEN = 'deadbeef'.repeat(6); // 48 hex chars — same shape as a real openclaw token
+    const result = await runBootstrap({
+      initialLocalStorage: {}, // fresh tab
+      fetchHandler: function(url) {
+        if (url === '/api/auth/detected-token') {
+          return { ok: true, json: function() { return Promise.resolve({ token: DETECTED_TOKEN, source: 'openclaw.json' }); } };
+        }
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ authRequired: true, valid: true }); } };
+        }
+        throw new Error('unexpected fetch: ' + url);
+      },
+    });
+
+    truthy(result.calls.length >= 1, 'A: at least one fetch fires on boot');
+    eq(result.calls[0], '/api/auth/detected-token',
+       'A: /api/auth/detected-token is the FIRST fetch on a fresh tab');
+    eq(result.lsStore['clawmetry-token'], DETECTED_TOKEN,
+       'A: detected token persists into localStorage under clawmetry-token');
+    truthy(
+      result.calls[1] && result.calls[1].indexOf('/api/auth/check?token=' + DETECTED_TOKEN) === 0,
+      'A: /api/auth/check is called with the just-fetched token (not empty)'
+    );
+    eq(result.overlayDisplay, 'none',
+       'A: login overlay is hidden after valid auth — zero clicks needed');
+    eq(result.logoutDisplay, '',
+       'A: logout button is revealed after successful auth');
+    eq(result.reloadCount, 0,
+       'A: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+
+  // ── Scenario B: detected-token returns 403 (non-localhost) ──
+  //
+  // The bootstrap MUST NOT throw on a 403. It should fall through and
+  // call /api/auth/check with no token, surface the overlay (since
+  // /api/auth/check then returns {valid:false}).
+  (async function scenarioB() {
+    const result = await runBootstrap({
+      initialLocalStorage: {},
+      fetchHandler: function(url) {
+        if (url === '/api/auth/detected-token') {
+          return { ok: false, status: 403, json: function() { return Promise.resolve({ error: 'localhost only' }); } };
+        }
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ authRequired: true, valid: false }); } };
+        }
+        throw new Error('unexpected fetch: ' + url);
+      },
+    });
+
+    eq(result.calls[0], '/api/auth/detected-token',
+       'B: detected-token is still attempted (no token in localStorage)');
+    truthy(!result.lsStore['clawmetry-token'],
+       'B: no token persisted when detected-token returns 403');
+    truthy(
+      result.calls[1] === '/api/auth/check',
+      'B: checkAuth falls through with no token (no ?token= query)'
+    );
+    eq(result.overlayDisplay, 'flex',
+       'B: login overlay is shown when no token can be auto-detected');
+    eq(result.reloadCount, 0,
+       'B: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+
+  // ── Scenario C: detected-token returns 404 (server has no GATEWAY_TOKEN) ──
+  //
+  // Same as B but exercising the "no token detected" branch. Server should
+  // surface needsSetup via /api/auth/check, and the bootstrap must promote
+  // the gateway-setup overlay (not the login overlay).
+  (async function scenarioC() {
+    const result = await runBootstrap({
+      initialLocalStorage: {},
+      fetchHandler: function(url) {
+        if (url === '/api/auth/detected-token') {
+          return { ok: false, status: 404, json: function() { return Promise.resolve({ error: 'no token detected' }); } };
+        }
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ needsSetup: true, authRequired: true, valid: false }); } };
+        }
+        throw new Error('unexpected fetch: ' + url);
+      },
+    });
+
+    eq(result.calls[0], '/api/auth/detected-token',
+       'C: detected-token attempted even when server has no token');
+    eq(result.overlayDisplay, 'none',
+       'C: login overlay is hidden (gateway-setup overlay takes over)');
+    eq(result.gwOverlayDisplay, 'flex',
+       'C: gateway-setup overlay is shown when needsSetup=true');
+    eq(result.reloadCount, 0,
+       'C: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+
+  // ── Scenario D: stored token already in localStorage — skip auto-detect ──
+  //
+  // If a token was persisted on a prior visit, bootstrap MUST NOT hit
+  // /api/auth/detected-token at all — straight to /api/auth/check.
+  // Validates the `if(!stored)` guard.
+  (async function scenarioD() {
+    const STORED = 'cafebabe'.repeat(6);
+    const result = await runBootstrap({
+      initialLocalStorage: { 'clawmetry-token': STORED },
+      fetchHandler: function(url) {
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ authRequired: true, valid: true }); } };
+        }
+        // detected-token would be a regression — fail loud.
+        return { ok: false, status: 500, json: function() { return Promise.resolve({}); } };
+      },
+    });
+
+    eq(result.calls[0], '/api/auth/check?token=' + STORED,
+       'D: stored token short-circuits detected-token fetch entirely');
+    truthy(
+      result.calls.indexOf('/api/auth/detected-token') === -1,
+      'D: /api/auth/detected-token is NEVER called when localStorage has a token'
+    );
+    eq(result.overlayDisplay, 'none',
+       'D: overlay hidden after stored-token auth succeeds');
+    eq(result.reloadCount, 0,
+       'D: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+
+  // ── Scenario E: detected-token fetch rejects (network error) ──
+  //
+  // catch() branch must run checkAuth(null), not throw. Same end-state
+  // as scenario B from the user's perspective (overlay shows).
+  (async function scenarioE() {
+    const result = await runBootstrap({
+      initialLocalStorage: {},
+      fetchHandler: function(url) {
+        if (url === '/api/auth/detected-token') {
+          return Promise.reject(new Error('network down'));
+        }
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ authRequired: true, valid: false }); } };
+        }
+        throw new Error('unexpected fetch: ' + url);
+      },
+    });
+
+    eq(result.calls[0], '/api/auth/detected-token',
+       'E: detected-token attempted even when fetch will reject');
+    truthy(!result.lsStore['clawmetry-token'],
+       'E: no token persisted on fetch rejection');
+    eq(result.overlayDisplay, 'flex',
+       'E: overlay shown when network error prevents auto-detect');
+    eq(result.reloadCount, 0,
+       'E: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+}
+
+// Auth-bootstrap scenarios above are async — wait for the microtask /
+// macrotask queue to drain before printing the summary. (The previous
+// synchronous test blocks all completed in-tick, so no wait was needed
+// for them; ordering still holds.) Four setImmediate hops cover the
+// detected-token → checkAuth → /api/auth/check chain inside each
+// scenario's runBootstrap helper plus a buffer tick.
+setImmediate(function() {
+  setImmediate(function() {
+    setImmediate(function() {
+      setImmediate(function() {
+        console.log('\n' + (failed === 0 ? 'PASS' : 'FAIL') + ' — ' + passed + ' passed, ' + failed + ' failed');
+        process.exit(failed === 0 ? 0 : 1);
+      });
+    });
+  });
+});
