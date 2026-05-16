@@ -3849,13 +3849,17 @@ async function loadLoopSignals() {
   try {
     var data = await fetchJsonWithTimeout('/api/loop-signals?limit=20', 5000);
     var rows = (data && data.signals) || [];
-    if (!rows.length) {
+    // Pro gate (#1376): show the badge count from the unfiltered total so
+    // OSS users still see e.g. "5 loops" even when the table is 1 teaser row.
+    var totalCount = (data && typeof data.total_count === 'number') ? data.total_count : rows.length;
+    var cappedProGated = !!(data && data.capped_pro_gated);
+    if (!totalCount) {
       badge.style.display = 'none';
       tableEl.innerHTML = '';
       return;
     }
     badge.style.display = '';
-    countEl.textContent = String(rows.length);
+    countEl.textContent = String(totalCount);
     // Render table — keep it dead simple: Time | Session | Pattern | Repeat.
     var head = '<div style="display:grid;grid-template-columns:130px 160px 1fr 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
       + '<div>Last seen</div><div>Session</div><div>Pattern</div><div style="text-align:right;">Repeats</div></div>';
@@ -3873,7 +3877,22 @@ async function loadLoopSignals() {
         + '<div style="text-align:right;color:#ef4444;font-weight:700;">' + escHtml(String(rc)) + '</div>'
         + '</div>';
     }).join('');
-    tableEl.innerHTML = head + body;
+    // CTA appears on any non-Pro node once a loop has fired. The backend
+    // sends ``capped_pro_gated=true`` whenever the OSS row-cap dropped rows;
+    // we also surface the CTA on a single-row OSS response (teaser is the
+    // entire history they get locally). Plain copy, no em-dashes.
+    var cta = '';
+    if (cappedProGated) {
+      var extra = (totalCount > rows.length)
+        ? ('Showing 1 of ' + totalCount + ' recent loops. ')
+        : '';
+      cta = '<div style="margin-top:10px;padding:8px 10px;border:1px dashed rgba(239,68,68,0.4);border-radius:6px;background:rgba(239,68,68,0.05);font-size:11px;color:var(--text-secondary);line-height:1.5;">'
+        + extra
+        + 'Get full loop history plus Slack and PagerDuty alerts when your agent burns money in a loop. '
+        + '<a href="https://app.clawmetry.com/upgrade?ref=loops" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;text-decoration:none;">Unlock loop history and alerts in Cloud-Pro</a>'
+        + '</div>';
+    }
+    tableEl.innerHTML = head + body + cta;
   } catch (e) {
     // Fail closed: hide the badge so we don't show a stale or wrong count.
     badge.style.display = 'none';
