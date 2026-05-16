@@ -1,0 +1,264 @@
+name: PR Screenshots — Visual Diff
+
+# Spins the clawmetry dashboard twice (PR head + base branch) against the
+# same seeded synthetic DuckDB fixture, screenshots every nav tab on both,
+# pixel-diffs them, and posts a side-by-side table on the PR.
+#
+# Modeled on clawmetry-landing/.github/workflows/pr-screenshots.yml (PR #219).
+# Adaptations for OSS:
+#   - Tabs are JS-only (window.switchTab(name)), not URL routes, so the diff
+#     script navigates to "/" once per tab then calls switchTab() in-page.
+#   - Two dashboards on separate CLAWMETRY_LOCAL_STORE_PATH= DuckDB files
+#     (otherwise DuckDB process-locks fight). Seed once, copy to both.
+#   - continue-on-error: true on the diff step so a bot regression NEVER
+#     blocks merge while we're iterating. Comment posts unconditionally.
+
+on:
+  pull_request:
+    paths:
+      - "dashboard.py"
+      - "dashboard_claudecode.py"
+      - "routes/**"
+      - "clawmetry/static/**"
+      - "clawmetry/templates/**"
+      - "helpers/**"
+      - ".github/workflows/pr-screenshots.yml"
+      - ".github/scripts/visual-diff.mjs"
+      - ".github/scripts/post-visual-diff.mjs"
+
+permissions:
+  contents: write       # push to orphan pr-screenshots branch
+  pull-requests: write  # post comment
+
+concurrency:
+  group: pr-screenshots-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PR_SCREENSHOT_TABS: "overview,flow,brain,approvals,alerts,notifications,context,usage,crons,memory,security"
+  HEAD_PORT: "8082"
+  BASE_PORT: "8081"
+  # Local-store fast-paths must be on so the dashboard renders the seeded
+  # synthetic data instead of falling back to gateway/filesystem reads.
+  CLAWMETRY_LOCAL_STORE_READ: "1"
+
+jobs:
+  visual-diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Non-blocking: the bot is allowed to fail without holding up a merge.
+    continue-on-error: true
+
+    steps:
+      # ── 1. Check out PR head ────────────────────────────────────────────
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+
+      # ── 2. Check out PR base for "before" screenshots ───────────────────
+      - name: Checkout PR base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      # ── 3. Toolchains ───────────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # ── 4. Python deps (shared — both checkouts pin identical core libs) ─
+      # Install head's requirements; if base differs in a relevant way it
+      # still boots because dashboard.py only needs flask+waitress+duckdb.
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r head/requirements.txt
+          pip install duckdb requests
+
+      # ── 5. Node deps (Playwright + pixelmatch + pngjs) ──────────────────
+      - name: Install Node deps
+        working-directory: head
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --silent \
+            playwright@1.49.0 \
+            pixelmatch@5.3.0 \
+            pngjs@7.0.0
+          npx --yes playwright install --with-deps chromium
+
+      # ── 6. Seed a synthetic DuckDB fixture, then clone it per-server ────
+      # scripts/seed_smoke_duckdb.py (issue #1241) creates 1k events / 200
+      # heartbeats / 50 memory blobs / 5 sessions and releases the writer
+      # lock at the end so the dashboard processes can open it read-only.
+      # We seed once into /tmp/seed.duckdb then cp to base+head paths so
+      # each Flask process has its own file (DuckDB locks at process level).
+      - name: Seed synthetic DuckDB fixture
+        env:
+          CLAWMETRY_LOCAL_STORE_PATH: /tmp/seed.duckdb
+        working-directory: head
+        run: |
+          python scripts/seed_smoke_duckdb.py
+          cp /tmp/seed.duckdb /tmp/base.duckdb
+          cp /tmp/seed.duckdb /tmp/head.duckdb
+          ls -lh /tmp/*.duckdb
+
+      # ── 7. Boot both dashboards (background) ────────────────────────────
+      # Each on its own DuckDB path so they don't race on the process-level
+      # file lock. --no-debug disables flask reloader + sets waitress.
+      - name: Start BASE dashboard (port ${{ env.BASE_PORT }})
+        working-directory: base
+        env:
+          CLAWMETRY_LOCAL_STORE_PATH: /tmp/base.duckdb
+          CLAWMETRY_LOCAL_STORE_READ: "1"
+          OPENCLAW_GATEWAY_TOKEN: ""
+          CLAWMETRY_ANON: "1"
+        run: |
+          nohup python dashboard.py --port ${{ env.BASE_PORT }} --no-debug \
+            --host 127.0.0.1 > /tmp/base-server.log 2>&1 &
+          echo "BASE_PID=$!" >> $GITHUB_ENV
+
+      - name: Start HEAD dashboard (port ${{ env.HEAD_PORT }})
+        working-directory: head
+        env:
+          CLAWMETRY_LOCAL_STORE_PATH: /tmp/head.duckdb
+          CLAWMETRY_LOCAL_STORE_READ: "1"
+          OPENCLAW_GATEWAY_TOKEN: ""
+          CLAWMETRY_ANON: "1"
+        run: |
+          nohup python dashboard.py --port ${{ env.HEAD_PORT }} --no-debug \
+            --host 127.0.0.1 > /tmp/head-server.log 2>&1 &
+          echo "HEAD_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for both dashboards to respond
+        run: |
+          for url in "http://127.0.0.1:${BASE_PORT}/" "http://127.0.0.1:${HEAD_PORT}/"; do
+            ok=0
+            for i in $(seq 1 60); do
+              code=$(curl -s -o /dev/null -w "%{http_code}" "$url" || echo 000)
+              if echo "$code" | grep -qE "^(2|3)"; then
+                echo "OK: $url ($code after ${i}s)"
+                ok=1; break
+              fi
+              sleep 1
+            done
+            if [ "$ok" != "1" ]; then
+              echo "::error::Dashboard never came up at $url"
+              echo "── base log ──"; tail -200 /tmp/base-server.log || true
+              echo "── head log ──"; tail -200 /tmp/head-server.log || true
+              exit 1
+            fi
+          done
+
+      # ── 8. Capture + diff ───────────────────────────────────────────────
+      - name: Run visual-diff
+        working-directory: head
+        env:
+          BASE_URL: "http://127.0.0.1:${{ env.BASE_PORT }}"
+          HEAD_URL: "http://127.0.0.1:${{ env.HEAD_PORT }}"
+          OUT_DIR: "${{ github.workspace }}/screenshots"
+          PR_SCREENSHOT_TABS: ${{ env.PR_SCREENSHOT_TABS }}
+        run: node .github/scripts/visual-diff.mjs
+
+      # ── 9. Stop dashboards (best-effort) ────────────────────────────────
+      - name: Stop dashboards
+        if: always()
+        run: |
+          [ -n "${BASE_PID:-}" ] && kill "$BASE_PID" 2>/dev/null || true
+          [ -n "${HEAD_PID:-}" ] && kill "$HEAD_PID" 2>/dev/null || true
+
+      # ── 10. Publish PNGs to orphan pr-screenshots branch ────────────────
+      - name: Publish screenshots to pr-screenshots branch
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -e
+          if [ ! -f "${GITHUB_WORKSPACE}/screenshots/manifest.json" ]; then
+            echo "no manifest.json — skipping publish"
+            exit 0
+          fi
+          SHORT_SHA="${HEAD_SHA:0:12}"
+          DEST_DIR="pr/${PR_NUMBER}/${SHORT_SHA}"
+          PUB_DIR="$(mktemp -d)"
+          cd "$PUB_DIR"
+          git init -q -b _pub
+          git config user.email "visual-diff-bot@users.noreply.github.com"
+          git config user.name  "visual-diff-bot"
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$REMOTE" pr-screenshots >/dev/null 2>&1; then
+            git fetch --depth=1 "$REMOTE" pr-screenshots:pr-screenshots
+            git checkout pr-screenshots
+          else
+            git checkout --orphan pr-screenshots
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+          mkdir -p "$DEST_DIR"
+          cp "${GITHUB_WORKSPACE}/screenshots"/*.png "$DEST_DIR/"
+          cp "${GITHUB_WORKSPACE}/screenshots/manifest.json" "$DEST_DIR/manifest.json"
+          git add -A
+          git commit -m "visual diff: PR #${PR_NUMBER} @ ${SHORT_SHA}" || { echo "no changes"; exit 0; }
+          git push "$REMOTE" "HEAD:pr-screenshots"
+
+      # ── 11. Render and post the comment ─────────────────────────────────
+      - name: Render comment body
+        if: always()
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OUT_DIR: "${{ github.workspace }}/screenshots"
+          ALWAYS_POST: "1"
+        run: |
+          if [ ! -f "${OUT_DIR}/manifest.json" ]; then
+            echo "## Visual diff" > /tmp/visual-diff-body.md
+            echo "" >> /tmp/visual-diff-body.md
+            echo "Bot run failed before producing screenshots. Check the workflow logs." >> /tmp/visual-diff-body.md
+            echo "" >> /tmp/visual-diff-body.md
+            echo "_This check is non-blocking._" >> /tmp/visual-diff-body.md
+          else
+            node head/.github/scripts/post-visual-diff.mjs > /tmp/visual-diff-body.md
+          fi
+          cat /tmp/visual-diff-body.md
+
+      - name: Post / update PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          PR=${{ github.event.pull_request.number }}
+          MARKER="<!-- visual-diff-bot -->"
+          BODY="$(printf '%s\n\n%s' "$MARKER" "$(cat /tmp/visual-diff-body.md)")"
+          existing_id=$(gh api -X GET "repos/${{ github.repository }}/issues/${PR}/comments" --paginate \
+            --jq "map(select(.body | contains(\"${MARKER}\"))) | .[0].id // empty")
+          if [ -n "$existing_id" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing_id}" -f body="$BODY"
+          else
+            gh pr comment "$PR" --repo "${{ github.repository }}" --body "$BODY"
+          fi
+
+      # ── 12. Belt + suspenders: upload PNGs as artefact ──────────────────
+      - name: Upload screenshots artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-diff-pr-${{ github.event.pull_request.number }}
+          path: screenshots/
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ── 13. Tail server logs on failure ─────────────────────────────────
+      - name: Tail dashboard logs on failure
+        if: failure()
+        run: |
+          echo "── base server log ──"; tail -200 /tmp/base-server.log || true
+          echo "── head server log ──"; tail -200 /tmp/head-server.log || true
