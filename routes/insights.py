@@ -168,20 +168,40 @@ _INSIGHTS_HTML = """<!doctype html>
   button{background:#238636;border:0;color:#fff;padding:6px 12px;
          border-radius:6px;cursor:pointer;font:13px inherit}
   button.secondary{background:#21262d}
+  button:disabled{opacity:0.5;cursor:wait}
   .err{color:#f85149}
   .empty{color:#7d8590;font-style:italic}
+  /* Inline status feedback for the Send-to-channel button. Replaces the
+     debug-style alert(JSON.stringify(...)) that used to fire here. */
+  #toast{position:fixed;bottom:24px;right:24px;background:#161b22;
+         border:1px solid #30363d;border-radius:6px;padding:10px 14px;
+         font-size:13px;color:#e6edf3;box-shadow:0 4px 12px rgba(0,0,0,0.4);
+         opacity:0;transform:translateY(8px);
+         transition:opacity 180ms ease,transform 180ms ease;
+         pointer-events:none;max-width:340px}
+  #toast.show{opacity:1;transform:translateY(0)}
+  #toast.ok{border-color:#238636}
+  #toast.err{border-color:#f85149}
 </style></head><body>
 <h1>Weekly Insights</h1>
 <div class="meta" id="meta">Loading…</div>
 <div class="toolbar">
-  <button onclick="refresh(true)">Regenerate</button>
-  <button class="secondary" onclick="sendNow()">Send to channel</button>
+  <button id="btn-refresh" onclick="refresh(true)">Regenerate</button>
+  <button id="btn-send" class="secondary" onclick="sendNow()">Send to channel</button>
   <a href="/" style="color:#58a6ff;align-self:center;text-decoration:none;font-size:13px">
     &larr; Dashboard</a>
 </div>
 <div class="summary" id="summary">—</div>
 <div id="insights"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 <script>
+function showToast(msg, kind){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show ' + (kind === 'err' ? 'err' : 'ok');
+  clearTimeout(showToast._h);
+  showToast._h = setTimeout(function(){t.className = '';}, 4500);
+}
 async function refresh(force){
   const url='/api/insights/preview' + (force?'?refresh=1':'');
   document.getElementById('meta').textContent = 'Generating…';
@@ -211,9 +231,32 @@ async function refresh(force){
   }
 }
 async function sendNow(){
-  const r = await fetch('/api/insights/send-now', {method:'POST'});
-  const j = await r.json();
-  alert('Delivery: ' + JSON.stringify(j.delivery||{}));
+  const btn = document.getElementById('btn-send');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/insights/send-now', {method:'POST'});
+    if (!r.ok){ showToast('Send failed: HTTP ' + r.status, 'err'); return; }
+    const j = await r.json();
+    const d = (j && j.delivery) || {};
+    const sent = d.sent || [];
+    const errs = d.errors || [];
+    if (sent.length){
+      // Successful dispatch — name the channel so the user knows where it went.
+      showToast('Sent to ' + sent.map(c=>c[0].toUpperCase()+c.slice(1)).join(', ') + ' ✓', 'ok');
+    } else if (errs.length){
+      // Surface the first error verbatim — the deliver() shape already produces
+      // human-readable strings like "slack: no webhook configured".
+      showToast('Failed: ' + errs[0], 'err');
+    } else {
+      // Channel == "dashboard_only" — successful no-op. Tell the user instead
+      // of leaving them wondering whether the click did anything.
+      showToast('No channel configured — set one in /api/insights/config', 'err');
+    }
+  } catch(e){
+    showToast('Send failed: ' + (e && e.message || e), 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send to channel';
+  }
 }
 function escape(s){return (s||'').toString()
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
