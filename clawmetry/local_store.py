@@ -1167,6 +1167,96 @@ class LocalStore:
                 now_ms,
             ])
 
+    def ingest_channel_event(
+        self,
+        channel_msg: dict[str, Any],
+        *,
+        node_id: str,
+    ) -> None:
+        """Single chokepoint for any channel-scoped event (issue #1220).
+
+        Writes the message to BOTH ``channel_messages`` (for the per-channel
+        detail view) AND ``events`` (for the Brain feed + cross-channel
+        timeline). Callers that only wrote to one table — and dropped the
+        row from every downstream that reads the other — caused two P0
+        regressions in May 2026 (telegram→Brain in #1212 and the local-
+        store opt-in default in #1438). This helper is the contract.
+
+        ``channel_msg`` is the channel_messages row shape that
+        ``ingest_channel_message`` already accepts. ``node_id`` is required
+        because the events table demands it but channel_messages doesn't —
+        keyword-only so callers can't accidentally swap argument order.
+
+        Projection rules
+        ----------------
+        - ``event_type`` is always ``"channel.<direction>"`` (e.g.
+          ``channel.in`` / ``channel.out``). The Brain reader
+          (``routes/brain.py:_try_local_store_brain``) UPPER()s this and
+          matches the ``CHANNEL.`` prefix.
+        - ``session_id`` stays ``None``. Channel turns aren't tied to an
+          LLM session so per-session token rollups don't double-count.
+        - ``data`` carries the provider tag, channel/sender/chat ids, and
+          either the full payload (when ``raw_blob`` is a dict — JSONL +
+          WS-tap path) or a small breadcrumb (when only the parsed fields
+          exist — gateway-log telegram path).
+        - ``cost_usd``/``token_count``/``model`` are NULL. Channel turns
+          don't bill — the LLM turn that processed them does.
+
+        All 3 known callers MUST use this:
+            * ``sync.sync_channel_messages``       (JSONL → both tables)
+            * ``sync.sync_telegram_from_gateway_log`` (gateway.log → both)
+            * ``gateway_tap.GatewayTap._handle_frame``    (WS → both)
+        """
+        # Validate via ingest_channel_message (raises ValueError on bad
+        # input). We call the channel_messages write FIRST so a malformed
+        # row never partially-projects onto events.
+        self.ingest_channel_message(channel_msg)
+        # Build the events-table projection. The channel_messages write
+        # above has already coerced provider to lowercase and validated
+        # direction ∈ {"in","out"}; re-derive from the original dict so
+        # this helper stays a pure function of its argument.
+        direction = channel_msg.get("direction")
+        provider = str(channel_msg.get("provider") or "").lower().strip()
+        raw_blob = channel_msg.get("raw_blob")
+        # Flatten raw_blob into ``data`` when it's a dict (JSONL + WS-tap
+        # paths give us the full payload). Otherwise stamp a breadcrumb
+        # with the few fields the Brain renderer reads (gateway-log
+        # telegram path has only ACK metadata, no payload). Either way
+        # the Brain row stays browse-able.
+        if isinstance(raw_blob, dict):
+            data: dict[str, Any] = dict(raw_blob)
+            data.setdefault("provider", provider)
+            data.setdefault("channel_id", channel_msg.get("channel_id"))
+            data.setdefault("direction", direction)
+            if channel_msg.get("sender_name") is not None:
+                data.setdefault("sender_name", channel_msg.get("sender_name"))
+            if channel_msg.get("sender_id") is not None:
+                data.setdefault("sender_id", channel_msg.get("sender_id"))
+        else:
+            data = {
+                "provider": provider,
+                "channel_id": channel_msg.get("channel_id"),
+                "direction": direction,
+                "sender_id": channel_msg.get("sender_id"),
+                "sender_name": channel_msg.get("sender_name"),
+            }
+        events_row = {
+            "id": str(channel_msg["id"]),
+            "node_id": node_id,
+            "agent_type": "openclaw",
+            "agent_id": str(channel_msg.get("agent_id") or "main"),
+            "event_type": f"channel.{direction}",
+            "ts": str(channel_msg["ts"]),
+            # See docstring: session_id stays NULL on purpose.
+            "session_id": None,
+            "workspace_id": None,
+            "data": data,
+            "cost_usd": None,
+            "token_count": None,
+            "model": None,
+        }
+        self.ingest(events_row)
+
     def ingest_channel_config(
         self,
         provider: str,

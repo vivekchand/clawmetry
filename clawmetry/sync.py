@@ -3603,8 +3603,9 @@ def _list_channel_transcripts(channel_dir: str) -> list[str]:
 
 def _parse_channel_event(
     obj: dict, *, provider: str, channel_id: str
-) -> tuple[dict | None, dict | None]:
-    """Project one channel-jsonl line into (events_row, channel_messages_row).
+) -> dict | None:
+    """Project one channel-jsonl line into a ``channel_messages`` row dict
+    (issue #1220: single chokepoint).
 
     The provider/channel-id are taken from the file path (cheap, robust),
     and the per-event fields are read from a deliberately permissive set
@@ -3622,18 +3623,19 @@ def _parse_channel_event(
     * ts          — ``ts`` | ``timestamp`` | ``date`` (epoch-secs → ISO).
     * id          — ``id`` | ``message_id`` | ``update_id`` (uniqueness key).
 
-    Returns ``(None, None)`` for lines we can't pin to a timestamp — those
-    are usually heartbeat/keepalive plumbing the adapter writes between
-    real messages. Always returns the events_row when we have a ts (so the
-    Brain tab paints), even if the body is empty.
+    Returns ``None`` for lines we can't pin to a timestamp — those are
+    usually heartbeat/keepalive plumbing the adapter writes between real
+    messages. The caller passes the returned dict to
+    ``LocalStore.ingest_channel_event`` which fans it out onto BOTH the
+    ``channel_messages`` and ``events`` tables in one shot.
     """
     if not isinstance(obj, dict):
-        return None, None
+        return None
 
     # ── ts ───────────────────────────────────────────────────────────────
     raw_ts = obj.get("ts") or obj.get("timestamp") or obj.get("date")
     if not raw_ts:
-        return None, None
+        return None
     if isinstance(raw_ts, (int, float)):
         # Telegram/WhatsApp encode date as epoch seconds; coerce so all
         # downstream sorts work on ISO strings.
@@ -3642,7 +3644,7 @@ def _parse_channel_event(
                 float(raw_ts), tz=timezone.utc
             ).isoformat()
         except (ValueError, OSError, OverflowError):
-            return None, None
+            return None
     ts = str(raw_ts)
 
     # ── id (stable across re-ingest) ─────────────────────────────────────
@@ -3699,25 +3701,7 @@ def _parse_channel_event(
         or sender_block.get("name")
     )
 
-    events_row = {
-        "id": eid,
-        "agent_id": "main",
-        # Channel turns share the events table with session turns; the
-        # event_type lets the Brain/timeline filters distinguish them.
-        "event_type": f"channel.{direction}",
-        "ts": ts,
-        # session_id stays None — channel messages don't belong to an agent
-        # session (an LLM turn is a separate row). The session_key column
-        # on channel_messages handles correlation when the adapter writes
-        # one.
-        "session_id": None,
-        "workspace_id": None,
-        "data": obj,
-        "cost_usd": None,
-        "token_count": None,
-        "model": None,
-    }
-    channel_row = {
+    return {
         "id": eid,
         "agent_id": "main",
         "provider": provider,
@@ -3728,9 +3712,12 @@ def _parse_channel_event(
         "ts": ts,
         "direction": direction,
         "session_key": obj.get("session_id") or obj.get("session_key"),
+        # raw_blob carries the full source line. ``ingest_channel_event``
+        # flattens this dict into the events-table ``data`` blob so the
+        # Brain feed renders the same fields the per-channel detail view
+        # has — single source of truth, no drift.
         "raw_blob": obj,
     }
-    return events_row, channel_row
 
 
 def sync_channel_messages(config: dict, state: dict, paths: dict) -> int:
@@ -3769,7 +3756,6 @@ def sync_channel_messages(config: dict, state: dict, paths: dict) -> int:
             channel_id = fname.split(".jsonl", 1)[0]
             offset_key = f"{provider}/{fname}"
             offset = int(offsets.get(offset_key, 0))
-            events_batch: list[dict] = []
             channel_batch: list[dict] = []
 
             try:
@@ -3790,22 +3776,13 @@ def sync_channel_messages(config: dict, state: dict, paths: dict) -> int:
                             obj = json.loads(raw)
                         except Exception:
                             continue
-                        ev, ch = _parse_channel_event(
+                        ch = _parse_channel_event(
                             obj, provider=provider, channel_id=channel_id
                         )
-                        if ev is None:
+                        if ch is None:
                             continue
-                        # Stamp node_id + agent_type onto the events row
-                        # so the dashboard's per-node filters work. The
-                        # store layer fills agent_type='openclaw' by
-                        # default; we pass it explicitly for forward-
-                        # compat with other harnesses' channel adapters.
-                        ev["node_id"] = node_id
-                        ev["agent_type"] = "openclaw"
-                        events_batch.append(ev)
-                        if ch is not None:
-                            channel_batch.append(ch)
-                        if len(events_batch) >= BATCH_SIZE:
+                        channel_batch.append(ch)
+                        if len(channel_batch) >= BATCH_SIZE:
                             break
                     offsets[offset_key] = f.tell()
             except OSError as e:
@@ -3814,25 +3791,24 @@ def sync_channel_messages(config: dict, state: dict, paths: dict) -> int:
                 )
                 continue
 
-            if events_batch:
-                try:
-                    store.ingest_many(events_batch)
-                except Exception as e:
-                    log.warning(
-                        "channel events ingest failed (%s/%s): %s",
-                        provider, fname, e,
-                    )
+            # Issue #1220: single chokepoint writes channel_messages +
+            # events atomically per row. Replaces the prior split-write
+            # that batched events through ingest_many() and then looped
+            # ingest_channel_message() afterward — the two writers used
+            # to drift any time the projection logic was touched on one
+            # side and not the other (#1212 P0). Per-row try/except so
+            # a single malformed row can't take down the whole batch.
+            ingested = 0
             for ch in channel_batch:
                 try:
-                    store.ingest_channel_message(ch)
+                    store.ingest_channel_event(ch, node_id=node_id)
+                    ingested += 1
                 except Exception as e:
-                    # Per-row try/except so a malformed message can't take
-                    # down the whole batch — the events row already landed.
                     log.debug(
-                        "channel_message ingest skipped (%s/%s): %s",
+                        "channel_event ingest skipped (%s/%s): %s",
                         provider, fname, e,
                     )
-            total += len(events_batch)
+            total += ingested
 
     _record_sync_progress("channel_messages", total, total)
     return total
@@ -8028,52 +8004,6 @@ def parse_telegram_outbound_line(line: str) -> dict | None:
     }
 
 
-def _telegram_outbound_event_row(
-    msg: dict, *, node_id: str,
-) -> dict:
-    """Project a ``channel_messages`` row (from ``parse_telegram_outbound_line``)
-    onto the ``events`` table shape that the Brain feed reads.
-
-    The Brain tab calls ``LocalStore.query_events`` and surfaces rows whose
-    ``event_type`` starts with ``CHANNEL.`` (see ``routes/brain.py`` —
-    ``_try_local_store_brain``). Without this projection, telegram outbound
-    rows live ONLY in ``channel_messages`` and the Brain feed silently
-    omits them — exactly the P0 user-visible regression that motivated
-    this helper.
-
-    The ``id`` matches the ``channel_messages.id`` so the events row and
-    the channel_messages row are 1:1 — both use ``ingest_many`` /
-    ``ingest_channel_message``'s ``INSERT OR IGNORE`` / upsert semantics
-    so re-running the parser after a state-file loss is a no-op.
-    """
-    raw = msg.get("raw_blob") or {}
-    return {
-        "id": msg["id"],
-        "node_id": node_id,
-        "agent_type": "openclaw",
-        "agent_id": "main",
-        "event_type": "channel.out",
-        "ts": msg["ts"],
-        # Channel turns are NOT tied to an LLM session — leave session_id
-        # NULL so the per-session token/cost rollups don't double-count.
-        "session_id": None,
-        "workspace_id": None,
-        "data": {
-            "provider": _TELEGRAM_PROVIDER,
-            "channel_id": msg.get("channel_id"),
-            "chat_id": raw.get("chat_id"),
-            "message_id": raw.get("message_id"),
-            "method": raw.get("method"),
-            "direction": "out",
-            "body_capture": raw.get("body_capture"),
-            "source": raw.get("source") or "gateway.log",
-        },
-        "cost_usd": None,
-        "token_count": None,
-        "model": None,
-    }
-
-
 def _telegram_log_offset_key(log_path: str) -> str:
     """Per-log-path key under ``state['last_log_offsets']``.
 
@@ -8193,7 +8123,6 @@ def sync_telegram_from_gateway_log(
         )
 
         ingested = 0
-        events_batch: list[dict] = []
         for raw_line in complete.splitlines():
             if "[telegram]" not in raw_line:
                 # Cheap pre-filter — only ~0.005% of gateway.log lines
@@ -8203,33 +8132,20 @@ def sync_telegram_from_gateway_log(
             if not row:
                 continue
             try:
-                store.ingest_channel_message(row)
+                # Issue #1220: single chokepoint writes channel_messages +
+                # events atomically. Replaces the prior dual-write that
+                # hand-rolled an events projection here (the original
+                # P0 #1212 bug was forgetting to add that projection at
+                # all; the chokepoint makes it structurally impossible).
+                store.ingest_channel_event(row, node_id=node_id)
             except Exception as e:
                 # One malformed row must not poison the rest of the tail.
                 log.debug(
-                    "telegram-gw-log: ingest_channel_message failed for "
+                    "telegram-gw-log: ingest_channel_event failed for "
                     "%s: %s", row.get("id"), e,
                 )
                 continue
-            # Dual-write: also enqueue the events-table projection so
-            # /api/brain-history surfaces the message. ingest_many goes
-            # through the ring buffer / flusher so this is cheap.
-            events_batch.append(
-                _telegram_outbound_event_row(row, node_id=node_id)
-            )
             ingested += 1
-
-        if events_batch:
-            try:
-                store.ingest_many(events_batch)
-            except Exception as e:
-                # Brain rendering will lag by one cycle but the
-                # channel_messages rows already landed — we keep the
-                # progress and let the next cycle retry.
-                log.debug(
-                    "telegram-gw-log: events ingest failed for %d row(s): %s",
-                    len(events_batch), e,
-                )
 
         offsets[key] = new_offset
         if ingested:
