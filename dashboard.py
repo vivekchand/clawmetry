@@ -4009,7 +4009,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <a class="nav-tab" id="insights-tab" href="/insights" style="display:none;text-decoration:none;color:inherit;" title="Weekly LLM-over-DuckDB digest (set CLAWMETRY_INSIGHTS=1 to enable)">Insights</a>
+    <a class="nav-tab" id="insights-tab" href="/insights" style="display:none;text-decoration:none;color:inherit;" title="Weekly LLM-over-DuckDB digest (Cloud-Pro adds daily cron + dispatch)">Insights</a>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -10148,7 +10148,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <a class="nav-tab" id="insights-tab" href="/insights" style="display:none;text-decoration:none;color:inherit;" title="Weekly LLM-over-DuckDB digest (set CLAWMETRY_INSIGHTS=1 to enable)">Insights</a>
+    <a class="nav-tab" id="insights-tab" href="/insights" style="display:none;text-decoration:none;color:inherit;" title="Weekly LLM-over-DuckDB digest (Cloud-Pro adds daily cron + dispatch)">Insights</a>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>

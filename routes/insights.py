@@ -1,15 +1,23 @@
 """routes/insights.py — Weekly Insights Digest endpoints.
 
-Gated by ``CLAWMETRY_INSIGHTS=1`` (off for v1 soak).
+Tier split (#1420 P0a):
 
-  GET  /api/insights/preview         — latest digest (cached 6h)
-  GET  /api/insights/history?weeks=N — past N weeks
-  POST /api/insights/send-now        — dispatch via configured channel
-  GET/POST /api/insights/config      — insights_config.json
-  GET  /insights                     — HTML preview page
+  Cloud-Free / OSS-only: 1 weekly digest, dashboard view only, no dispatch.
+  Cloud-Pro            : daily/scheduled cron + Slack/Telegram/email dispatch.
+
+Both tiers also honour the legacy ``CLAWMETRY_INSIGHTS=1`` env-var as an
+explicit-on override (kept as an emergency kill switch for CI/tests). When
+the env-var is set every gate opens, matching pre-tier-split behaviour.
+
+  GET  /api/insights/preview         — latest digest (cached 6h) — ALL tiers
+  GET  /api/insights/history?weeks=N — past N weeks                — ALL tiers
+  POST /api/insights/send-now        — dispatch via channel        — Pro-only
+  GET/POST /api/insights/config      — insights_config.json        — GET all, POST Pro
+  GET  /insights                     — HTML preview page           — ALL tiers
 
 Heavy lifting in ``clawmetry/insights.py``. Per
-``project_alerts_pro_feature.md`` digest becomes Pro-only after soak.
+``project_alerts_pro_feature.md`` dispatch is Cloud-Pro; Free sees an
+upsell CTA in the JSON response instead of a silent paywall.
 """
 from __future__ import annotations
 
@@ -35,19 +43,55 @@ _HISTORY_DIR = Path(
 _PREVIEW_CACHE: dict = {"digest": None, "ts": 0.0}
 _PREVIEW_TTL_SECS = 6 * 3600  # 6h
 
+# Single-source upsell copy. NO em-dashes / double-dashes per
+# ``feedback_no_em_dashes_in_user_facing_copy.md``.
+_UPGRADE_CTA = (
+    "Want this delivered to Slack every Monday at 9am? Upgrade to Cloud-Pro."
+)
+
 
 def _feature_enabled() -> bool:
+    """Legacy explicit-on env-var override. When set, all gates open
+    (used by CI / tests / emergency kill switch). When unset, tier check
+    decides."""
     return os.environ.get("CLAWMETRY_INSIGHTS", "").strip() == "1"
 
 
-def _gated() -> Response | None:
-    """Return a 404 Response when the feature flag is off, else None."""
-    if _feature_enabled():
-        return None
-    return jsonify({
-        "error": "feature_disabled",
-        "hint": "Set CLAWMETRY_INSIGHTS=1 to enable Weekly Insights Digest.",
-    }), 404  # type: ignore[return-value]
+def _is_pro() -> bool:
+    """Pro-tier check via ``dashboard._is_pro_user()``. Fail-closed: any
+    import / lookup failure returns False so we never leak Pro dispatch
+    onto a Free / OSS node."""
+    try:
+        import dashboard as _d
+        return bool(_d._is_pro_user())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _can_view() -> bool:
+    """View tier = Free + Pro + OSS. Always True today because the
+    weekly dashboard digest is ClawMetry-subsidised (~$0.05/user fits CAC).
+    Kept as a function so a future quota check has one place to land."""
+    return True
+
+
+def _can_dispatch() -> bool:
+    """Dispatch tier = Pro only. Env-var override still wins for tests
+    so existing flag-on integration tests don't need an account."""
+    return _feature_enabled() or _is_pro()
+
+
+def _upgrade_payload() -> dict:
+    """Standard non-Pro upsell envelope. Embedded in every preview /
+    history / config response when the caller isn't on Cloud-Pro so the
+    UI can render a one-line conversion button (per
+    ``project_free_plan_upsell.md`` — every click is a conversion event,
+    no silent failures)."""
+    return {
+        "_upgrade_cta": _UPGRADE_CTA,
+        "_upgrade_url": "/cloud/billing",
+        "_tier": "pro" if _is_pro() else "free",
+    }
 
 
 def _persist_history(digest_dict: dict) -> None:
@@ -81,9 +125,14 @@ def _load_history(weeks: int = 4) -> list[dict]:
 
 @bp_insights.route("/api/insights/preview", methods=["GET"])
 def api_preview():
-    gated = _gated()
-    if gated is not None:
-        return gated
+    # ALL tiers can view. Free / OSS pay zero — the synthesis cost
+    # (~$0.05/user/week) fits inside CAC and is ClawMetry-subsidised.
+    # TODO #1420 P0b: cloud-relayed Anthropic key for Pro users (separate
+    # PR). For now, callers without ANTHROPIC_API_KEY get the "no data"
+    # fallback digest produced by WeeklyDigestGenerator (the same path
+    # test_generate_on_empty_store_no_api_key already exercises).
+    if not _can_view():
+        return jsonify({"error": "feature_disabled"}), 404
     refresh = request.args.get("refresh", "0") == "1"
     now = time.time()
     if (
@@ -91,7 +140,10 @@ def api_preview():
         and _PREVIEW_CACHE["digest"] is not None
         and (now - _PREVIEW_CACHE["ts"]) < _PREVIEW_TTL_SECS
     ):
-        return jsonify(_PREVIEW_CACHE["digest"])
+        out = dict(_PREVIEW_CACHE["digest"])
+        if not _is_pro():
+            out.update(_upgrade_payload())
+        return jsonify(out)
 
     from clawmetry.insights import WeeklyDigestGenerator
     digest = WeeklyDigestGenerator().generate()
@@ -99,23 +151,37 @@ def api_preview():
     _PREVIEW_CACHE["digest"] = out
     _PREVIEW_CACHE["ts"] = now
     _persist_history(out)
-    return jsonify(out)
+    # Attach CTA to the response only (don't poison the cache, in case
+    # the user upgrades mid-TTL and we want a clean payload on next hit).
+    resp = dict(out)
+    if not _is_pro():
+        resp.update(_upgrade_payload())
+    return jsonify(resp)
 
 
 @bp_insights.route("/api/insights/history", methods=["GET"])
 def api_history():
-    gated = _gated()
-    if gated is not None:
-        return gated
+    if not _can_view():
+        return jsonify({"error": "feature_disabled"}), 404
     weeks = request.args.get("weeks", 4, type=int)
-    return jsonify({"digests": _load_history(weeks)})
+    payload: dict = {"digests": _load_history(weeks)}
+    if not _is_pro():
+        payload.update(_upgrade_payload())
+    return jsonify(payload)
 
 
 @bp_insights.route("/api/insights/send-now", methods=["POST"])
 def api_send_now():
-    gated = _gated()
-    if gated is not None:
-        return gated
+    # Pro-only: dispatch (Slack/Telegram/email) is the Cloud-Pro value-add.
+    # Free callers get the standard 402 + upsell envelope so the UI can
+    # render a conversion CTA instead of a silent failure (per
+    # ``project_free_plan_upsell.md`` and ``project_alerts_pro_feature.md``).
+    if not _can_dispatch():
+        return jsonify({
+            "ok": False,
+            "error": "pro_required",
+            **_upgrade_payload(),
+        }), 402
     from clawmetry.insights import WeeklyDigestGenerator, deliver, load_config
     cfg = load_config()
     digest = WeeklyDigestGenerator(cfg).generate()
@@ -130,31 +196,33 @@ def api_config():
     # GET always returns 200 with `{enabled: bool, ...}` so the dashboard's
     # nav-tab-reveal probe (`app.js` IIFE checking /api/insights/config) can
     # render the tab in either an active or a Pro-locked state without the
-    # browser console-erroring on a 404. POSTs (writes) still 404 when the
-    # feature flag is off — writes only make sense when the feature is on.
+    # browser console-erroring on a 404. Writes (POST) still require Pro
+    # because the only thing they configure is dispatch (channel + creds).
     #
     # Fixes #1431 (Pro-locked vs invisible-when-off) AND removes the need
     # for the cloud-contract 404 allowlist entry from PR #1435.
     from clawmetry.insights import load_config, save_config
-    enabled = _feature_enabled()
     if request.method == "POST":
-        if not enabled:
+        # Writes touch dispatch config — Pro-gated.
+        if not _can_dispatch():
             return jsonify({
-                "error": "feature_disabled",
-                "hint": "Set CLAWMETRY_INSIGHTS=1 to enable Weekly Insights Digest.",
-            }), 404
+                "ok": False,
+                "error": "pro_required",
+                **_upgrade_payload(),
+            }), 402
         data = request.get_json(silent=True) or {}
         cfg = save_config(data)
         return jsonify({"ok": True, "enabled": True, "config": cfg})
-    # GET: always 200. When disabled, return only the enabled flag (no
-    # config payload — nothing to expose to a viewer who hasn't opted in).
-    if not enabled:
-        return jsonify({"enabled": False})
+    # GET: always 200. View tier opens the panel for all callers; we
+    # return the full config so the dashboard nav-tab probe reveals the
+    # tab, and attach the upsell CTA for Free / OSS so the UI can render
+    # the conversion button.
     cfg = load_config()
-    # Don't leak the API key back to the browser — return only a presence flag.
     cfg_safe = dict(cfg)
     cfg_safe["anthropic_api_key"] = "***" if cfg_safe.get("anthropic_api_key") else ""
     cfg_safe["enabled"] = True
+    if not _is_pro():
+        cfg_safe.update(_upgrade_payload())
     return jsonify(cfg_safe)
 
 
@@ -208,6 +276,12 @@ _INSIGHTS_HTML = """<!doctype html>
     &larr; Dashboard</a>
 </div>
 <div class="summary" id="summary">—</div>
+<div id="upsell" style="display:none;background:#1f6feb1a;border:1px solid #1f6feb;
+     border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:13px">
+  <span id="upsell-text"></span>
+  <a id="upsell-link" href="/cloud/billing" style="color:#58a6ff;margin-left:8px;
+     text-decoration:none;font-weight:600">Upgrade →</a>
+</div>
 <div id="insights"></div>
 <div id="toast" role="status" aria-live="polite"></div>
 <script>
@@ -223,12 +297,22 @@ async function refresh(force){
   document.getElementById('meta').textContent = 'Generating…';
   const r = await fetch(url);
   if(!r.ok){document.getElementById('meta').innerHTML =
-    '<span class="err">Feature disabled. Set CLAWMETRY_INSIGHTS=1.</span>'; return;}
+    '<span class="err">Insights unavailable on this node.</span>'; return;}
   const d = await r.json();
   document.getElementById('meta').textContent =
-    'Week of ' + d.week_start + ' — generated ' + d.generated_at +
+    'Week of ' + d.week_start + ', generated ' + d.generated_at +
     ' (cost ~$' + d.cost_usd.toFixed(3) + ', ' + d.tokens_used + ' tokens)';
   document.getElementById('summary').textContent = d.summary || '(no summary)';
+  // Tier-split upsell (#1420). Pro callers get _tier='pro' and no banner;
+  // Free / OSS get a one-line conversion button linking to /cloud/billing.
+  const upsell = document.getElementById('upsell');
+  if (d._upgrade_cta) {
+    document.getElementById('upsell-text').textContent = d._upgrade_cta;
+    if (d._upgrade_url) document.getElementById('upsell-link').href = d._upgrade_url;
+    upsell.style.display = '';
+  } else {
+    upsell.style.display = 'none';
+  }
   const c = document.getElementById('insights');
   c.innerHTML = '';
   for(const ins of (d.insights||[])){
@@ -251,6 +335,16 @@ async function sendNow(){
   btn.disabled = true; btn.textContent = 'Sending…';
   try {
     const r = await fetch('/api/insights/send-now', {method:'POST'});
+    if (r.status === 402){
+      // Tier-split: Free / OSS hit the Pro paywall. Surface the upsell
+      // CTA from the response (no silent failure per
+      // project_free_plan_upsell.md). Click takes the user to billing.
+      const j = await r.json().catch(function(){return {};});
+      const cta = (j && j._upgrade_cta) || 'Upgrade to Cloud-Pro for dispatch.';
+      const url = (j && j._upgrade_url) || '/cloud/billing';
+      showToast(cta + ' (open ' + url + ')', 'err');
+      return;
+    }
     if (!r.ok){ showToast('Send failed: HTTP ' + r.status, 'err'); return; }
     const j = await r.json();
     const d = (j && j.delivery) || {};
@@ -283,11 +377,13 @@ refresh(false);
 
 @bp_insights.route("/insights", methods=["GET"])
 def insights_page():
-    if not _feature_enabled():
+    # View tier is universal under the tier-split (#1420 P0a). The page
+    # itself fetches /api/insights/preview which carries the upsell CTA
+    # for non-Pro callers; the inline JS renders it as a one-line button.
+    if not _can_view():
         return Response(
             "<h2>Weekly Insights Digest</h2>"
-            "<p>This feature is gated by <code>CLAWMETRY_INSIGHTS=1</code>. "
-            "Restart with the env var set to enable.</p>",
+            "<p>Disabled on this node.</p>",
             mimetype="text/html",
             status=404,
         )
