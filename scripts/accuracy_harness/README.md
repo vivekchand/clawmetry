@@ -2,8 +2,9 @@
 
 Synthetic ground-truth verifiers for ClawMetry features. **Tokens** was the
 proof-of-concept (PR #1395); **approvals** is the second harness;
-**alerts** is the third, and the same shape extends to channels / crons
-next.
+**alerts** is the third; **all.py** is the meta-runner skeleton that wraps
+every sub-harness and produces ONE scoreboard. The same shape extends to
+channels / crons next.
 
 ## Why
 
@@ -38,6 +39,16 @@ threshold. Steps 1/3/4/5/6 stay identical — that's the harness shape.
 ## Running it
 
 ```bash
+# Meta-runner: shell out to every sub-harness, aggregate scoreboard.
+python3 scripts/accuracy_harness/all.py
+
+# Subset.
+python3 scripts/accuracy_harness/all.py --harnesses tokens,alerts
+
+# Smoke-test the runner without touching OpenClaw / spending LLM budget.
+python3 scripts/accuracy_harness/all.py --dry-run --no-issue
+
+# Or run individual harnesses ─────────────────────────────────────────
 # Tokens: default 3 messages, auto-detect dashboard on 8900/8903/8905
 python3 scripts/accuracy_harness/tokens.py
 
@@ -60,6 +71,35 @@ python3 scripts/accuracy_harness/tokens.py --file-issues
 python3 scripts/accuracy_harness/approvals.py --file-issues
 CLAWMETRY_HARNESS_HOOKS=1 python3 scripts/accuracy_harness/alerts.py --file-issues
 ```
+
+### Meta-runner (`all.py`)
+
+`all.py` is a thin runner: it shells out to each registered sub-harness
+(`tokens.py`, `approvals.py`, `alerts.py`) with a 180s per-harness
+timeout, parses each one's `summary: N pass / N drift` line, prints a
+single scoreboard, and exits with the worst observed status. **It does
+not re-implement any harness logic** — sub-harnesses already own
+ground-truth driving and per-endpoint assertions.
+
+| flag | meaning |
+|---|---|
+| `--harnesses tokens,approvals,alerts` | comma-separated subset (default: all registered) |
+| `--no-issue` | skip the (future) consolidated drift-issue filer |
+| `--dry-run` | short-circuit before shelling out — proves the runner skeleton without spending LLM budget. **Not passed through**: sub-harnesses don't yet support `--dry-run`. |
+
+Exit codes:
+
+| code | meaning |
+|---:|---|
+| 0 | every sub-harness PASS-ed |
+| 1 | at least one drift, no errors |
+| 2 | at least one harness errored or timed out |
+
+The consolidated GitHub-issue filer is intentionally **not** implemented
+in this PR — `file_consolidated_issue` only PRINTS what it would file
+(`Would file consolidated issue: N drifts across M harnesses`). Live
+filing lands in the follow-up iteration once the runner is proven in
+production. Wire to a cloud cron once that lands.
 
 ### Prerequisites
 
@@ -239,7 +279,8 @@ scripts/accuracy_harness/
 ├── _lib.py         # shared discovery + HTTP + drift-issue helpers
 ├── tokens.py       # tokens harness (PR #1395)
 ├── approvals.py    # approvals queue harness (PR #1397)
-└── alerts.py       # alert-rule round-trip harness (this PR)
+├── alerts.py       # alert-rule round-trip harness (PR #1399)
+└── all.py          # meta-runner skeleton — sub-runs + aggregate scoreboard
 ```
 
 Shared shims live in `_lib.py` (`discover_dashboard_url`,
