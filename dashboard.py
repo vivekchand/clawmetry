@@ -683,17 +683,34 @@ def _duckdb_cost_since(since_iso: str) -> float:
 
     Issue #1404: without this, ~99% of OSS installs see a zero spend metric
     inside the alert evaluator and no real-spend rule ever fires.
+
+    Issue #1453: route through the daemon-proxy (memory
+    ``feedback_daemon_proxy_pattern.md``) so /api/budget/status doesn't
+    block on the daemon's exclusive DuckDB writer lock under the standard
+    launchd/systemd install. Direct ``get_store()`` was taking 2.5 s per
+    call on a real install with sync daemon writing — three calls (daily /
+    weekly / monthly) compounded to 7-10 s p50 for the endpoint, stalling
+    the Budget panel on every dashboard load. Fall back to a read-only
+    direct open for single-process boots (tests, dev mode) where the
+    daemon proxy isn't running.
     """
+    # 1. Daemon-proxy fast path — cross-process HTTP call into the sync
+    #    daemon's local_server, which holds the DuckDB writer lock. Returns
+    #    None when the daemon isn't discoverable (single-process boot).
+    rows = None
     try:
-        from clawmetry import local_store
-        store = local_store.get_store()
-        # ``query_aggregates`` is a per-day SUM(cost_usd) rollup keyed by
-        # ``substr(ts, 1, 10)`` — exactly the shape we need to roll back up
-        # into daily / weekly / monthly totals. Cheap on DuckDB (columnar
-        # SUM over a single column with a ts range scan).
-        rows = store.query_aggregates(since=since_iso)
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_aggregates", since=since_iso)
     except Exception:
-        return 0.0
+        rows = None
+    # 2. Read-only direct fallback — tests, dev mode, daemon-down boots.
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_aggregates(since=since_iso)
+        except Exception:
+            return 0.0
     total = 0.0
     for r in rows or []:
         try:
