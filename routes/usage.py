@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, make_response, request
 from clawmetry.config import is_local_store_read_enabled
+from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
 bp_usage = Blueprint('usage', __name__)
 
@@ -511,11 +512,16 @@ def _try_local_store_usage_by_plugin(threshold_pct):
         return None
     if not evs:
         return None
+    # Issue #1451: sibling-dedupe so v3 assistant + model.completed pairs
+    # don't double-count per-plugin tokens.
+    bucket_max = build_sibling_bucket_max(evs)
     plugin_stats = defaultdict(lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0})
     saw_any = False
     for ev in evs:
         plugin = _ls_event_plugin(ev)
         if not plugin:
+            continue
+        if is_sibling_dup(ev, bucket_max):
             continue
         saw_any = True
         plugin_stats[plugin]["tokens"] += float(ev.get("token_count") or 0)
@@ -570,6 +576,9 @@ def _try_local_store_usage_by_plugin_trend(days_back):
     day_list = [(today - timedelta(days=i)).strftime("%Y-%m-%d")
                 for i in range(days_back - 1, -1, -1)]
     day_set = set(day_list)
+    # Issue #1451: sibling-dedupe so v3 assistant + model.completed pairs
+    # don't double-count per-plugin daily totals.
+    bucket_max = build_sibling_bucket_max(evs)
     # plugin -> day -> stats
     plugin_daily: dict = defaultdict(lambda: defaultdict(
         lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0}
@@ -581,6 +590,8 @@ def _try_local_store_usage_by_plugin_trend(days_back):
             continue
         plugin = _ls_event_plugin(ev)
         if not plugin:
+            continue
+        if is_sibling_dup(ev, bucket_max):
             continue
         saw_any = True
         bucket = plugin_daily[plugin][day]
@@ -635,54 +646,20 @@ def _try_local_store_cost_comparison():
     cutoff = datetime.now() - timedelta(days=30)
     cutoff_iso = cutoff.strftime("%Y-%m-%d")
 
-    # Sibling-dedup: per (session_id, ts_sec, ±1 s) bucket, keep only the
-    # richest-envelope row. `assistant`/`message` outrank `model.completed`
-    # for the same turn (writer race emits both ~100 ms apart). Two passes
-    # because `query_events` returns DESC and we'd otherwise count both when
-    # the slim sibling lands first.
-    _RICHER = {"assistant": 2, "message": 2, "model.completed": 1}
+    # Sibling-dedup (issue #1451 / PR #1446): per (session_id, ts_sec, ±1 s)
+    # bucket, keep only the richest-envelope row. ``assistant``/``message``
+    # outrank ``model.completed`` for the same turn (writer race emits both
+    # ~100 ms apart). Helper in ``routes/_dedupe.py``.
+    in_window = [ev for ev in evs if (ev.get("ts", "") or "") >= cutoff_iso]
+    bucket_max = build_sibling_bucket_max(in_window)
 
-    def _ts_sec(ts_str: str) -> int:
-        if not ts_str:
-            return 0
-        try:
-            return int(datetime.fromisoformat(
-                ts_str.replace("Z", "+00:00")).timestamp())
-        except Exception:
-            return 0
-
-    # Pass 1: compute richest rank per (sid, sec) bucket across the ±1 s
-    # writer-race window.
-    bucket_max: dict = {}
-    in_window: list = []
-    for ev in evs:
-        ts = ev.get("ts", "") or ""
-        if ts < cutoff_iso:
-            continue
-        in_window.append(ev)
-        et = (ev.get("event_type") or "").strip()
-        if et not in _RICHER:
-            continue
-        sid_v = ev.get("session_id") or ""
-        sec = _ts_sec(ts)
-        rank = _RICHER[et]
-        for key in ((sid_v, sec - 1), (sid_v, sec), (sid_v, sec + 1)):
-            if bucket_max.get(key, 0) < rank:
-                bucket_max[key] = rank
-
-    # Pass 2: count tokens, skipping any sibling whose rank is strictly less
-    # than the richest in its (sid, sec±1) bucket.
     actual_tokens = 0
     actual_cost = 0.0
     model_token_map: dict = {}
     saw_any = False
     for ev in in_window:
-        et = (ev.get("event_type") or "").strip()
-        if et in _RICHER:
-            sid_v = ev.get("session_id") or ""
-            sec = _ts_sec(ev.get("ts") or "")
-            if bucket_max.get((sid_v, sec), 0) > _RICHER[et]:
-                continue
+        if is_sibling_dup(ev, bucket_max):
+            continue
         saw_any = True
         tok = int(ev.get("token_count") or 0)
         actual_tokens += tok
@@ -1378,6 +1355,9 @@ def _try_local_store_sessions_clusters(days: int):
         return None
     # One bulk events fetch; group by session_id (avoids N+1 daemon hops).
     events = _ls_call("query_events", since=cutoff_iso, limit=20000) or []
+    # Issue #1451: sibling-dedupe so the per-session token fallback below
+    # doesn't double-count assistant + model.completed pairs on v3 installs.
+    bucket_max = build_sibling_bucket_max(events)
     by_session: dict = defaultdict(list)
     for ev in events:
         sid = ev.get("session_id")
@@ -1398,7 +1378,20 @@ def _try_local_store_sessions_clusters(days: int):
         has_cron = False
         has_subagent = False
         turn_count = 0
-        s_tokens = int(s.get("token_count") or 0)
+        # Issue #1451: ``query_sessions`` returns ``SUM(token_count)`` from
+        # the events table, which on real v3 installs double-counts the
+        # ``assistant`` + ``model.completed`` sibling pair for every billable
+        # turn. Compute s_tokens from the deduped event list instead so the
+        # cluster aggregator doesn't inflate per-session totals. Falls back
+        # to the (still-inflated) session-row sum only when no events were
+        # joined in for this session.
+        s_tokens = sum(
+            int(ev.get("token_count") or 0)
+            for ev in evs
+            if not is_sibling_dup(ev, bucket_max)
+        )
+        if s_tokens == 0:
+            s_tokens = int(s.get("token_count") or 0)
         for ev in evs:
             data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
             msg = data.get("message") if isinstance(data.get("message"), dict) else {}
@@ -1419,9 +1412,6 @@ def _try_local_store_sessions_clusters(days: int):
                 has_subagent = True
             if etype == "message":
                 turn_count += 1
-        # Token fallback: derive from event-level token_count if sessions row was zero.
-        if s_tokens == 0:
-            s_tokens = sum(int(ev.get("token_count") or 0) for ev in evs)
         if s_tokens == 0 and not tool_counts:
             continue
         total_tools = sum(tool_counts.values())

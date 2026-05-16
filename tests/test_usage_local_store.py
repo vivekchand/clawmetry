@@ -881,3 +881,78 @@ def test_query_daily_usage_splits_skips_zero_usage_rows(fast_path_app):
 
     rows = store.query_daily_usage_splits()
     assert rows[0]["event_count"] == 1
+
+
+# ── issue #1451: sibling-dedupe across remaining surfaces ─────────────────
+
+
+def _ingest_v3_pair(store, *, sid, ts_iso, plugin="bash", tokens=150):
+    """Seed one v3 assistant + model.completed sibling pair. Both rows
+    carry ``token_count=tokens`` — a blind sum returns 2×, a deduped sum
+    returns ``tokens``. Used by all #1451 regression tests."""
+    base = {
+        "node_id": "agent+test", "agent_id": "main", "session_id": sid,
+        "cost_usd": 0.0, "token_count": tokens, "model": "claude-opus-4-7",
+    }
+    store.ingest({**base, "id": f"asst-{sid}", "event_type": "assistant",
+                  "ts": ts_iso,
+                  "data": {"plugin": plugin, "message": {"role": "assistant"}}})
+    store.ingest({**base, "id": f"mc-{sid}", "event_type": "model.completed",
+                  "ts": ts_iso, "data": {"plugin": plugin}})
+
+
+def test_by_plugin_does_not_double_count_v3_sibling_pairs(fast_path_app):
+    """Regression: /api/usage/by-plugin summed ``token_count`` per plugin
+    without skipping the slim ``model.completed`` sibling — every turn was
+    counted twice. Shared dedupe helper (issue #1451) must collapse to 1×."""
+    app, ls, _u = fast_path_app
+    _ingest_v3_pair(ls.get_store(), sid="sess-plug-dup",
+                     ts_iso=_iso(time.time() - 3600))
+    _wait_flush(ls.get_store())
+
+    body = app.test_client().get("/api/usage/by-plugin").get_json()
+    assert body["_source"] == "local_store"
+    bash_row = next((r for r in body["plugins"] if r["plugin"] == "bash"), None)
+    assert bash_row is not None, "expected bash plugin row"
+    assert bash_row["total_tokens"] == 150, (
+        f"by-plugin double-counted sibling pair: got "
+        f"{bash_row['total_tokens']}, expected 150"
+    )
+
+
+def test_by_plugin_trend_does_not_double_count_v3_sibling_pairs(fast_path_app):
+    """Same regression as the by-plugin scalar route but for the daily
+    bucket aggregator at /api/usage/by-plugin/trend."""
+    app, ls, _u = fast_path_app
+    today = datetime.now().strftime("%Y-%m-%d")
+    _ingest_v3_pair(ls.get_store(), sid="sess-trend-dup",
+                     ts_iso=f"{today}T10:00:00.100Z")
+    _wait_flush(ls.get_store())
+
+    body = app.test_client().get("/api/usage/by-plugin/trend?days=14").get_json()
+    assert body["_source"] == "local_store"
+    today_entry = next((e for e in (body["plugins"].get("bash") or [])
+                         if e["day"] == today), None)
+    assert today_entry is not None, "expected today entry in bash trend"
+    assert today_entry["tokens"] == 150, (
+        f"by-plugin/trend double-counted sibling pair: got "
+        f"{today_entry['tokens']}, expected 150"
+    )
+
+
+def test_sessions_clusters_does_not_double_count_v3_sibling_pairs(fast_path_app):
+    """Regression: the session aggregator at routes/usage.py:1372 read
+    ``token_count`` from ``query_sessions`` (which returns ``SUM`` over
+    events) and never deduped — every session's tokens were 2× on v3.
+    Shared dedupe helper must collapse to 1×."""
+    app, ls, _u = fast_path_app
+    _ingest_v3_pair(ls.get_store(), sid="sess-clust-dup",
+                     ts_iso=_iso(time.time() - 3600))
+    _wait_flush(ls.get_store())
+
+    body = app.test_client().get("/api/sessions/clusters?days=30").get_json()
+    total = sum(c.get("total_tokens", 0) for c in body.get("clusters", []))
+    assert total == 150, (
+        f"sessions/clusters double-counted sibling pair: got {total}, "
+        f"expected 150"
+    )

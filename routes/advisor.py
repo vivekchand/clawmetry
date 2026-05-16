@@ -145,39 +145,10 @@ def _try_local_store_advisor_context(limit_events: int = MAX_CONTEXT_EVENTS) -> 
     # ``assistant`` and a sibling ``model.completed`` row ~100 ms apart,
     # both stamped with the same ``token_count`` value. Without dedup
     # per-session totals + today_tokens come out 2× reality and the
-    # advisor's recommendations are based on inflated numbers. Same
-    # 2-pass approach as routes/usage.py:_try_local_store_cost_comparison.
-    _RICHER = {"assistant": 2, "message": 2, "model.completed": 1}
-
-    def _ts_sec(ts_str: str) -> int:
-        if not ts_str or not isinstance(ts_str, str):
-            return 0
-        try:
-            from datetime import datetime as _dt
-            return int(_dt.fromisoformat(
-                ts_str.replace("Z", "+00:00")).timestamp())
-        except Exception:
-            return 0
-
-    _bucket_max: dict = {}
-    for _r in rows:
-        _et = (_r.get("event_type") or "").strip()
-        if _et not in _RICHER:
-            continue
-        _sid = _r.get("session_id") or ""
-        _sec = _ts_sec(_r.get("ts") or "")
-        _rank = _RICHER[_et]
-        for _key in ((_sid, _sec - 1), (_sid, _sec), (_sid, _sec + 1)):
-            if _bucket_max.get(_key, 0) < _rank:
-                _bucket_max[_key] = _rank
-
-    def _is_sibling_dup(_r) -> bool:
-        _et = (_r.get("event_type") or "").strip()
-        if _et not in _RICHER:
-            return False
-        _sid = _r.get("session_id") or ""
-        _sec = _ts_sec(_r.get("ts") or "")
-        return _bucket_max.get((_sid, _sec), 0) > _RICHER[_et]
+    # advisor's recommendations are based on inflated numbers. Shared
+    # helper in ``routes/_dedupe.py``.
+    from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
+    _bucket_max = build_sibling_bucket_max(rows)
 
     for r in rows:
         t = (r.get("ts") or "")[:19]
@@ -204,7 +175,7 @@ def _try_local_store_advisor_context(limit_events: int = MAX_CONTEXT_EVENTS) -> 
         # slim sibling of a richer envelope we already counted. We still
         # populate sessions_seen metadata (model, started_at) since those
         # are tag-set not totals.
-        _is_dup = _is_sibling_dup(r)
+        _is_dup = is_sibling_dup(r, _bucket_max)
         if sid_key:
             entry = sessions_seen.setdefault(sid_key, {
                 "session_id": sid_key[:8],
