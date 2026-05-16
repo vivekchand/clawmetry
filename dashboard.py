@@ -4466,8 +4466,8 @@ function clawmetryLogout(){
   </div>
   <script>
   (function(){
-    // Cutoff epoch per issue #1430 (2026-05-15 00:00 UTC, day 0.12.230 shipped).
-    var TOKENS_CUTOFF_EPOCH = 1779062400;
+    // Cutoff epoch: 2026-05-15 00:00 UTC, day 0.12.230 shipped.
+    var TOKENS_CUTOFF_EPOCH = 1778803200;
     var FLAG = 'clawmetry_tokens_attribution_banner_shown_v1';
     try {
       if (typeof localStorage !== 'undefined' && localStorage.getItem(FLAG) === '1') return;
