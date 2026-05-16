@@ -117,6 +117,7 @@ jobs:
         env:
           CLAWMETRY_LOCAL_STORE_PATH: /tmp/base.duckdb
           CLAWMETRY_LOCAL_STORE_READ: "1"
+          CLAWMETRY_HISTORY_DB: /tmp/base-history.db
           OPENCLAW_GATEWAY_TOKEN: ""
           CLAWMETRY_ANON: "1"
         run: |
@@ -129,6 +130,7 @@ jobs:
         env:
           CLAWMETRY_LOCAL_STORE_PATH: /tmp/head.duckdb
           CLAWMETRY_LOCAL_STORE_READ: "1"
+          CLAWMETRY_HISTORY_DB: /tmp/head-history.db
           OPENCLAW_GATEWAY_TOKEN: ""
           CLAWMETRY_ANON: "1"
         run: |
