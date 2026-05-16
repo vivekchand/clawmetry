@@ -185,7 +185,11 @@ def test_ingest_loop_signal_invalid_inputs_are_dropped(fresh_store):
 
 def test_api_loop_signals_returns_rows_from_local_store(fresh_store, monkeypatch):
     """``GET /api/loop-signals`` reads the DuckDB rows and returns them
-    in ``signals`` with the right shape and ordering."""
+    in ``signals`` with the right shape and ordering.
+
+    Force the Pro path so the OSS row-cap (#1376) doesn't truncate the
+    seeded fixture; the cap behaviour has its own dedicated test below.
+    """
     ls, store = fresh_store
     store.ingest_loop_signal(
         session_id="ss-1", signature="abcd1234efgh", repeat_count=8,
@@ -203,6 +207,11 @@ def test_api_loop_signals_returns_rows_from_local_store(fresh_store, monkeypatch
     import routes.health as rh
     importlib.reload(rh)
 
+    # Default this round-trip test to a Pro user so the OSS cap added in
+    # #1376 doesn't drop the second seeded row.
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
     from flask import Flask
     app = Flask(__name__)
     app.register_blueprint(rh.bp_health)
@@ -212,6 +221,8 @@ def test_api_loop_signals_returns_rows_from_local_store(fresh_store, monkeypatch
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["count"] == 2
+    assert body["total_count"] == 2
+    assert body["capped_pro_gated"] is False
     sigs = body["signals"]
     assert len(sigs) == 2
     # Newest last_seen first.
@@ -242,7 +253,60 @@ def test_api_loop_signals_empty_when_no_rows(fresh_store, monkeypatch):
     resp = client.get("/api/loop-signals")
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body == {"signals": [], "count": 0}
+    assert body["signals"] == []
+    assert body["count"] == 0
+    # Empty store → nothing to cap, regardless of Pro status.
+    assert body["total_count"] == 0
+    assert body["capped_pro_gated"] is False
+
+
+# ── 5. OSS row-cap + Pro gate (issue #1376) ─────────────────────────────────
+
+
+def test_api_loop_signals_oss_capped_to_single_teaser_row(fresh_store, monkeypatch):
+    """OSS / Cloud-Free callers see one teaser row plus ``capped_pro_gated``
+    so the UI can render the upgrade CTA. Loop history + alert dispatch is
+    a Cloud-Pro value — shipping unbounded rows in OSS leaks it."""
+    ls, store = fresh_store
+    for i in range(5):
+        store.ingest_loop_signal(
+            session_id=f"sess-{i}",
+            signature=f"sig-{i}",
+            repeat_count=i + 3,
+            first_seen=f"2026-05-15T10:0{i}:00",
+            last_seen=f"2026-05-15T10:0{i}:00",
+        )
+
+    sys.modules.pop("routes.health", None)
+    import routes.health as rh
+    importlib.reload(rh)
+
+    # Force OSS / non-Pro path.
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: False)
+
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(rh.bp_health)
+    client = app.test_client()
+
+    resp = client.get("/api/loop-signals?limit=20&since_minutes=0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    # Cap drops to 1 row; total_count reflects the un-capped value so the
+    # badge can still show "5 loops" while the table only renders 1.
+    assert body["count"] == 1
+    assert body["total_count"] == 5
+    assert body["capped_pro_gated"] is True
+    assert len(body["signals"]) == 1
+
+    # Pro caller sees the full list and the flag flips off.
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+    resp_pro = client.get("/api/loop-signals?limit=20&since_minutes=0")
+    body_pro = resp_pro.get_json()
+    assert body_pro["count"] == 5
+    assert body_pro["total_count"] == 5
+    assert body_pro["capped_pro_gated"] is False
 
 
 # ── 4. LoopDetector → LocalStore wiring ────────────────────────────────────

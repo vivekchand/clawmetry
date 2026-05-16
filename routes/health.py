@@ -2652,11 +2652,20 @@ def api_loop_signals():
            "first_seen": str, "last_seen": str, "severity": str,
            "agent_type": str, "details": dict|str|None}
         ],
-        "count": <int>
+        "count": <int>,
+        "total_count": <int>,         # rows the store would have returned
+        "capped_pro_gated": <bool>    # True when OSS cap dropped rows
       }
 
     Empty-list fallback (HTTP 200) on any error so the badge never breaks
     the page.
+
+    OSS / Cloud-Free gating (issue #1376): Cloud-Pro is the home of loop
+    history, alert-on-N-loops, and Slack/PagerDuty dispatch. Shipping the
+    full table in OSS leaks that value. We cap OSS callers to a single
+    teaser row and flag the response so the UI can render the upgrade CTA.
+    Cloud-Pro users (validated by ``dashboard._is_pro_user``) keep the
+    full table.
     """
     try:
         limit = int(request.args.get("limit", 20))
@@ -2667,6 +2676,13 @@ def api_loop_signals():
     except (TypeError, ValueError):
         since_minutes = 60
 
+    # Pro gate (issue #1376). Fail closed: any error → OSS cap applies.
+    try:
+        import dashboard as _d
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
+
     rows = _ls_call(
         "query_recent_loop_signals",
         limit=limit,
@@ -2674,7 +2690,19 @@ def api_loop_signals():
     )
     if rows is None:
         rows = []
-    return jsonify({"signals": rows, "count": len(rows)})
+
+    total_count = len(rows)
+    capped_pro_gated = False
+    if not is_pro and total_count > 1:
+        rows = rows[:1]
+        capped_pro_gated = True
+
+    return jsonify({
+        "signals": rows,
+        "count": len(rows),
+        "total_count": total_count,
+        "capped_pro_gated": capped_pro_gated,
+    })
 
 
 # ---------------------------------------------------------------------------

@@ -5086,11 +5086,14 @@ function clawmetryLogout(){
         <div style="color:var(--text-muted);padding:20px;font-size:12px;">Loading spans...</div>
       </div>
     </div>
-    <!-- Loop signals list — collapsed until the badge is clicked. -->
+    <!-- Loop signals list — collapsed until the badge is clicked.
+         OSS shows a 1-row teaser; Cloud-Pro sees the full table.
+         The /api/loop-signals response carries ``capped_pro_gated`` so
+         the JS knows to render the upgrade CTA below the table. -->
     <div id="brain-loops-panel" style="display:none;background:var(--bg-secondary);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <span style="font-size:11px;font-weight:600;color:#ef4444;text-transform:uppercase;letter-spacing:1px;">Loops detected (proxy)</span>
-        <span style="font-size:10px;color:var(--text-muted);">From clawmetry proxy LoopDetector — last 60 min</span>
+        <span style="font-size:10px;color:var(--text-muted);">From clawmetry proxy LoopDetector (last 60 min)</span>
       </div>
       <div id="brain-loops-table" style="font-size:11px;font-family:'JetBrains Mono','SF Mono',monospace;color:var(--text-secondary);"></div>
     </div>
