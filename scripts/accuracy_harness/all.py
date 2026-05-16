@@ -3,8 +3,10 @@
 
 Shells out to each sub-harness, parses its `summary: N pass / N drift`
 line, prints a scoreboard, exits with worst status (0 PASS / 1 DRIFT /
-2 ERROR). Consolidated GitHub-issue filing is deferred to a follow-up PR
-— `file_consolidated_issue` only PRINTS what it would file today.
+2 ERROR). When the meta detects drift or harness errors, it also files
+ONE consolidated GitHub issue summarising every harness in the run —
+idempotent per UTC date (re-runs EDIT today's issue rather than open a
+new one). See `_lib.file_consolidated_issue` for the filer.
 
 Sub-harnesses do NOT support --dry-run; the meta `--dry-run` short-
 circuits before shelling out so the runner skeleton is provable without
@@ -13,11 +15,16 @@ spending real LLM budget.
 from __future__ import annotations
 
 import argparse
+import os as _os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+# Allow ``python3 scripts/accuracy_harness/all.py`` to import ``_lib``.
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from _lib import file_consolidated_issue  # noqa: E402
 
 HARNESSES: list[tuple[str, str]] = [
     ("tokens",    "scripts/accuracy_harness/tokens.py"),
@@ -38,6 +45,8 @@ class HarnessResult:
     drift_count: int     # -1 if summary line unparseable
     status: str          # "pass" | "drift" | "error"
     note: str = ""
+    stdout: str = field(default="", repr=False)  # captured for issue body
+    stderr: str = field(default="", repr=False)  # captured for issue body
 
     @property
     def parsed(self) -> bool:
@@ -52,9 +61,14 @@ def run_one(name: str, rel_path: str) -> HarnessResult:
         proc = subprocess.run([sys.executable, str(abs_path)],
                               capture_output=True, text=True,
                               timeout=PER_HARNESS_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
+        # Preserve any partial output the timed-out harness already emitted
+        # so the consolidated issue body still has evidence to work from.
+        partial_out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, (bytes, bytearray)) else (e.stdout or "")
+        partial_err = (e.stderr or b"").decode("utf-8", "replace") if isinstance(e.stderr, (bytes, bytearray)) else (e.stderr or "")
         return HarnessResult(name, 2, -1, -1, "error",
-                             f"timed out after {PER_HARNESS_TIMEOUT_S}s")
+                             f"timed out after {PER_HARNESS_TIMEOUT_S}s",
+                             stdout=partial_out, stderr=partial_err)
     except Exception as e:
         return HarnessResult(name, 2, -1, -1, "error", f"exec failed: {e}")
 
@@ -62,10 +76,12 @@ def run_one(name: str, rel_path: str) -> HarnessResult:
     if not matches:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:]
         return HarnessResult(name, max(proc.returncode, 2), -1, -1, "error",
-                             f"unparseable summary; rc={proc.returncode}; tail={tail!r}")
+                             f"unparseable summary; rc={proc.returncode}; tail={tail!r}",
+                             stdout=proc.stdout or "", stderr=proc.stderr or "")
     p, d = map(int, matches[-1])
     status = {0: "pass", 1: "drift"}.get(proc.returncode, "error")
-    return HarnessResult(name, proc.returncode, p, d, status, f"rc={proc.returncode}")
+    return HarnessResult(name, proc.returncode, p, d, status, f"rc={proc.returncode}",
+                         stdout=proc.stdout or "", stderr=proc.stderr or "")
 
 
 def print_scoreboard(results: list[HarnessResult]) -> None:
@@ -89,14 +105,6 @@ def overall_exit_code(results: list[HarnessResult]) -> int:
     if any(r.status == "error" for r in results): return 2
     if any(r.status == "drift" for r in results): return 1
     return 0
-
-
-def file_consolidated_issue(results: list[HarnessResult]) -> None:
-    # Skeleton — gh-issue filing lands in the follow-up PR. Print only.
-    n_drifts = sum(r.drift_count for r in results if r.parsed and r.drift_count > 0)
-    n_h = sum(1 for r in results if r.status != "pass")
-    print(f"[meta] Would file consolidated issue: {n_drifts} drifts across "
-          f"{n_h} harness(es) (filer not yet implemented)")
 
 
 def parse_args() -> argparse.Namespace:
@@ -132,9 +140,16 @@ def main() -> int:
             if r.status == "error":
                 print(f"[meta] {r.name}: ERROR — {r.note}", file=sys.stderr)
     print_scoreboard(results)
-    if not args.no_issue:
-        file_consolidated_issue(results)
-    return overall_exit_code(results)
+    exit_code = overall_exit_code(results)
+    # File ONE consolidated GitHub issue per UTC date. Skip when nothing
+    # actionable (overall PASS, exit_code=0) or when caller opted out.
+    if exit_code != 0 and not args.no_issue:
+        url = file_consolidated_issue(results)
+        if url:
+            print(f"[meta] consolidated issue: {url}")
+    elif exit_code == 0:
+        print("[meta] all harnesses PASS — no consolidated issue to file.")
+    return exit_code
 
 
 if __name__ == "__main__":
