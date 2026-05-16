@@ -33,6 +33,13 @@ def app(tmp_path, monkeypatch):
     import routes.sessions as sessions_mod
     importlib.reload(sessions_mod)
 
+    # Issue #1448: the historical 2026-05-11 timestamps these tests seed
+    # fall outside the OSS 24h retention cap. Default this fixture to a Pro
+    # user so the pre-cap aggregation/fastpath assertions still pass; the
+    # cap-specific tests live in test_sessions_retention_cap.py and
+    # monkeypatch ``_is_pro_user`` explicitly.
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
     a = Flask(__name__)
     a.register_blueprint(sessions_mod.bp_sessions)
     yield a, ls
