@@ -329,6 +329,19 @@ def api_alert_rules():
     if is_local_store_read_enabled():
         fast = _try_local_store_alert_rules()
         if fast is not None:
+            # DuckDB holds cloud-synced rules; fleet_db (SQLite) holds
+            # locally-created ones written by the POST path above. Without
+            # this merge, a POST-then-GET round-trip drops the new rule
+            # because the fast path returns only DuckDB rows (drift #1406).
+            cloud_ids = {r.get("id") for r in (fast.get("rules") or [])}
+            try:
+                local_only = [r for r in _d._get_alert_rules()
+                              if r.get("id") not in cloud_ids]
+                if local_only:
+                    fast = dict(fast)
+                    fast["rules"] = list(fast.get("rules") or []) + local_only
+            except Exception:
+                pass
             return jsonify(fast)
     return jsonify({"rules": _d._get_alert_rules()})
 

@@ -144,7 +144,7 @@ except ImportError:
     metrics_service_pb2 = None
     trace_service_pb2 = None
 
-__version__ = "0.12.232"
+__version__ = "0.12.233"
 
 # Extensions (Phase 2) — load plugins at import time; safe no-op if package not installed
 try:
@@ -3933,6 +3933,7 @@ function clawmetryLogout(){
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
+    <a class="nav-tab" id="insights-tab" href="/insights" style="display:none;text-decoration:none;color:inherit;" title="Weekly LLM-over-DuckDB digest (set CLAWMETRY_INSIGHTS=1 to enable)">Insights</a>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   </div>
@@ -4377,6 +4378,19 @@ function clawmetryLogout(){
   
   <!-- Cost Warnings -->
   <div id="cost-warnings" style="display:none; margin-bottom: 16px;"></div>
+
+
+  <!-- One-time banner: token splits now accurate (issue #1401) -->
+  <div id="tokens-fix-banner" style="display:none;margin-bottom:16px;padding:10px 14px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:13px;color:#60ff80;display:flex;align-items:center;justify-content:space-between;">
+    <span>&#128200; Token splits now include cache reads/writes &mdash; numbers are accurate from this version. <a href="https://github.com/vivekchand/clawmetry/issues/1394" target="_blank" rel="noopener" style="color:#60ff80;text-decoration:underline;">See issue #1394</a></span>
+    <button onclick="document.getElementById('tokens-fix-banner').style.display='none';localStorage.setItem('clawmetry_tokens_fix_banner_v1','1');" style="background:transparent;border:none;cursor:pointer;font-size:16px;color:#60ff80;padding:0 0 0 12px;">&times;</button>
+  </div>
+  <script>
+  (function(){
+    var b = document.getElementById('tokens-fix-banner');
+    if(b && !localStorage.getItem('clawmetry_tokens_fix_banner_v1')) b.style.display='flex';
+  })();
+  </script>
 
   <!-- Main Usage Stats -->
   <div class="grid">
@@ -10042,6 +10056,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
     <div class="nav-tab" onclick="switchTab('security')">Security</div>
     <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
+    <a class="nav-tab" id="insights-tab" href="/insights" style="display:none;text-decoration:none;color:inherit;" title="Weekly LLM-over-DuckDB digest (set CLAWMETRY_INSIGHTS=1 to enable)">Insights</a>
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
