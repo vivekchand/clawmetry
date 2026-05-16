@@ -198,6 +198,13 @@ def test_brain_history_surfaces_chokepoint_row(tmp_path, monkeypatch):
         # Hit /api/brain-history through a real Flask test client.
         import routes.brain as brain
         importlib.reload(brain)
+        # PR #1481 added a 24h retention cap for non-Pro users. The seeded
+        # channel msg has a 2026-05-14 ts (older than 24h) which the cap
+        # would correctly drop. This test is about the chokepoint write
+        # path, not the cap — bypass via Pro stub. Mirrors the fixture
+        # pattern PR #1481 added to test_brain_local_fastpath.py.
+        import dashboard as _d
+        monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
         app = Flask(__name__)
         app.register_blueprint(brain.bp_brain)
         client = app.test_client()
