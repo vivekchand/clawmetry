@@ -82,30 +82,45 @@ def run(endpoints: Iterable[str] = ENDPOINTS) -> int:
     print("-" * len(header))
 
     failures: list[str] = []
+    annotations: list[str] = []
     for path in endpoints:
         if path in SKIP:
             print(f"{path:<40} {'-':>8} {'-':>8} {'-':>8}  skip    SKIP")
             continue
         samples, status, err = _probe_one(session, path)
         p50, p95, smax = _percentile(samples, 50), _percentile(samples, 95), max(samples)
-        verdict, breach_bits = "OK", []
+        verdict, breach_bits, ann_bits = "OK", [], []
         # Network errors / 5xx are a hard fail — the endpoint is down, not slow.
         if status is None or status >= 500:
             verdict = "FAIL"
             breach_bits.append(f"status={status or err or 'connerr'}")
+            ann_bits.append(f"status={status or err or 'connerr'}")
         if p50 > P50_BUDGET_MS:
             verdict = "FAIL"
             breach_bits.append(f"p50={p50:.0f}ms>{P50_BUDGET_MS:.0f}ms")
+            ann_bits.append(
+                f"p50={p50:.0f}ms exceeds {P50_BUDGET_MS:.0f}ms budget by {p50 - P50_BUDGET_MS:.0f}ms"
+            )
         if p95 > P95_BUDGET_MS:
             verdict = "FAIL"
             breach_bits.append(f"p95={p95:.0f}ms>{P95_BUDGET_MS:.0f}ms")
+            ann_bits.append(
+                f"p95={p95:.0f}ms exceeds {P95_BUDGET_MS:.0f}ms budget by {p95 - P95_BUDGET_MS:.0f}ms"
+            )
         print(f"{path:<40} {p50:>7.0f}ms {p95:>7.0f}ms {smax:>7.0f}ms"
               f"  {status if status is not None else '---':>4}    {verdict}")
         if verdict != "OK":
             failures.append(f"{path}: " + ", ".join(breach_bits))
+            # Machine-readable GitHub annotation, distinct from [setup-flake]
+            # so devs and downstream automation can filter the two classes.
+            annotations.append(f"::error::[regression] {path} {'; '.join(ann_bits)}")
 
     print()
     if failures:
+        # Emit GH annotations AFTER the table so the human-readable summary
+        # stays grouped together; annotations float to the run summary anyway.
+        for ann in annotations:
+            print(ann)
         print(f"FAIL: {len(failures)} endpoint(s) breached the latency gate:")
         for line in failures:
             print(f"  - {line}")

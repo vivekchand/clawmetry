@@ -77,6 +77,10 @@ jobs:
         # Daemon owns the DuckDB lock and publishes its local-query port to
         # ~/.clawmetry/local_query.json. Dashboard proxies through that for
         # /api/local/* reads. Both running = the contention shape we test.
+        #
+        # Failures here are SETUP FLAKES, not perf regressions — emit a
+        # distinct `[setup-flake]` annotation so devs (and downstream
+        # automation) can tell "re-run the workflow" from "fix your code".
         env:
           CLAWMETRY_INGEST_URL: http://127.0.0.1:9
         run: |
@@ -88,8 +92,8 @@ jobs:
             sleep 1
           done
           if [ ! -f "$HOME/.clawmetry/local_query.json" ]; then
-            echo "::error::daemon never published local_query.json"
-            tail -100 .smoke/daemon.log; exit 1
+            echo "::error::[setup-flake] Gate setup failed: daemon did not publish local_query.json within 30s (this is NOT a regression). Re-run the workflow."
+            tail -100 .smoke/daemon.log; exit 2
           fi
           nohup /tmp/vsmoke/bin/clawmetry --port 8900 --no-debug \
             > .smoke/dashboard.log 2>&1 &
@@ -102,8 +106,8 @@ jobs:
           done
           curl -sf -H "Authorization: Bearer $CLAWMETRY_TOKEN" \
             http://localhost:8900/api/health > /dev/null || {
-            echo "::error::dashboard /api/health never returned 200"
-            tail -100 .smoke/dashboard.log; exit 1; }
+            echo "::error::[setup-flake] Gate setup failed: dashboard /api/health never returned 200 within 30s (this is NOT a regression). Re-run the workflow."
+            tail -100 .smoke/dashboard.log; exit 2; }
 
       - name: Probe endpoints + assert p50/p95 budgets
         env:
