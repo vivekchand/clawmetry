@@ -92,23 +92,25 @@ def _telegram_inbound_frame(text: str = "hello from diya",
 
 
 def test_normalize_telegram_inbound(tap_env):
-    """The standard inbound shape projects into the canonical row."""
-    norm = tap_env["tap"]._normalize_frame(_telegram_inbound_frame())
-    assert norm is not None
+    """The standard inbound shape projects into the canonical row.
 
-    ev = norm["events"]
-    assert ev["event_type"] == "channel.in"
-    assert ev["id"] == "telegram:1532693273:9001"
-    assert ev["data"]["text"] == "hello from diya"
-    assert ev["data"]["_clawmetry_source"] == "channel:telegram:in"
-
-    ch = norm["channel"]
+    Post-#1220: ``_normalize_frame`` returns ONE flat ``channel_msg``
+    dict (not the prior ``{events, channel}`` tuple). The events-table
+    projection is now derived inside ``LocalStore.ingest_channel_event``
+    so a single chokepoint owns both writes.
+    """
+    ch = tap_env["tap"]._normalize_frame(_telegram_inbound_frame())
+    assert ch is not None
+    assert ch["id"] == "telegram:1532693273:9001"
     assert ch["provider"] == "telegram"
     assert ch["channel_id"] == "1532693273"
     assert ch["body"] == "hello from diya"
     assert ch["direction"] == "in"
     assert ch["sender_id"] == "42"
     assert ch["sender_name"] == "diya"
+    # raw_blob carries the full payload + WS-tap source breadcrumb.
+    assert ch["raw_blob"]["text"] == "hello from diya"
+    assert ch["raw_blob"]["_clawmetry_source"] == "gateway.ws"
 
 
 def test_normalize_outbound_inferred_from_event_name(tap_env):
@@ -125,10 +127,10 @@ def test_normalize_outbound_inferred_from_event_name(tap_env):
             "role": "assistant",
         },
     }
-    norm = tap_env["tap"]._normalize_frame(frame)
-    assert norm is not None
-    assert norm["channel"]["direction"] == "out"
-    assert norm["channel"]["body"] == "ack body present"
+    ch = tap_env["tap"]._normalize_frame(frame)
+    assert ch is not None
+    assert ch["direction"] == "out"
+    assert ch["body"] == "ack body present"
 
 
 def test_normalize_health_frame_returns_none(tap_env):
@@ -146,9 +148,9 @@ def test_normalize_epoch_seconds_coerced_to_iso(tap_env):
     events.ts column stays sortable as a string."""
     frame = _telegram_inbound_frame()
     frame["payload"]["ts"] = 1778750855  # epoch seconds
-    norm = tap_env["tap"]._normalize_frame(frame)
-    assert norm is not None
-    assert norm["events"]["ts"].startswith("2026-")
+    ch = tap_env["tap"]._normalize_frame(frame)
+    assert ch is not None
+    assert ch["ts"].startswith("2026-")
 
 
 # ── 2. _handle_frame writes through to DuckDB ────────────────────────────

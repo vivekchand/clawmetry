@@ -121,14 +121,21 @@ _ENABLE_ENV = "CLAWMETRY_ENABLE_WS_TAP"
 # Required: provider, ts. Everything else is best-effort with a sane
 # default. Returning ``None`` skips the frame entirely.
 def _normalize_frame(frame: dict) -> dict | None:
-    """Project a gateway WS event frame into a (events, channel_messages)
-    tuple-shaped dict, or ``None`` if the frame is not a chat message.
+    """Project a gateway WS event frame into a ``channel_messages`` row
+    dict, or ``None`` if the frame is not a chat message.
 
     The gateway's own per-channel event names vary
     (``sessions.message``, ``telegram.inbound``, ``channel.message``,
     …). We accept any frame whose ``payload`` carries enough fields to
     pin a channel + a timestamp. Heartbeats / health / status frames
     fall through to ``None`` and the caller drops them.
+
+    The returned dict is passed straight to
+    ``LocalStore.ingest_channel_event`` (issue #1220) which fans it
+    onto BOTH the ``channel_messages`` and ``events`` tables in a
+    single chokepoint — earlier versions of this module hand-rolled
+    a parallel ``events`` row here, which drifted out of contract
+    every time the projection logic was touched.
     """
     if not isinstance(frame, dict):
         return None
@@ -267,26 +274,7 @@ def _normalize_frame(frame: dict) -> dict | None:
         or sender_block.get("name")
     )
 
-    events_row = {
-        "id": eid,
-        "agent_id": "main",
-        "event_type": f"channel.{direction}",
-        "ts": ts,
-        "session_id": None,
-        "workspace_id": None,
-        # Tag the frame's source so brain filters can split WS-tap rows
-        # from log-parser rows when debugging. Stays inside `data` so
-        # it doesn't bloat the events schema.
-        "data": {
-            **payload,
-            "_clawmetry_source": f"channel:{provider}:{direction}",
-            "_clawmetry_event": event_name,
-        },
-        "cost_usd": None,
-        "token_count": None,
-        "model": None,
-    }
-    channel_row = {
+    return {
         "id": eid,
         "agent_id": "main",
         "provider": provider,
@@ -297,13 +285,17 @@ def _normalize_frame(frame: dict) -> dict | None:
         "ts": ts,
         "direction": direction,
         "session_key": payload.get("session_id") or payload.get("session_key"),
+        # raw_blob preserves the full payload + WS-tap source
+        # breadcrumbs. ``ingest_channel_event`` flattens it into the
+        # events-table ``data`` blob so brain filters can split WS-tap
+        # rows from log-parser rows when debugging without us having
+        # to maintain two parallel projections.
         "raw_blob": {
             **payload,
             "_clawmetry_source": "gateway.ws",
             "_clawmetry_event": event_name,
         },
     }
-    return {"events": events_row, "channel": channel_row}
 
 
 # ── The tap loop ────────────────────────────────────────────────────────
@@ -553,25 +545,24 @@ class GatewayTap:
             except Exception:
                 pass
 
-        norm = _normalize_frame(frame)
-        if norm is None:
+        channel_msg = _normalize_frame(frame)
+        if channel_msg is None:
             return
 
-        # Stamp node_id + agent_type onto the events row so the
-        # multi-node fleet view can filter correctly.
-        events_row = norm["events"]
-        events_row["node_id"] = self.node_id
-        events_row["agent_type"] = "openclaw"
-
+        # Issue #1220: single chokepoint writes channel_messages +
+        # events atomically. The previous version of this method
+        # called ingest_many() for the events projection and
+        # ingest_channel_message() for the per-channel row — the two
+        # writers drifted out of contract every time the projection
+        # logic was touched on one side and not the other (the
+        # original P0 #1212 bug).
         try:
-            self.store.ingest_many([events_row])
-        except Exception as e:  # noqa: BLE001
-            log.debug("gateway WS tap: events ingest skipped (%s)", e)
-        try:
-            self.store.ingest_channel_message(norm["channel"])
+            self.store.ingest_channel_event(
+                channel_msg, node_id=self.node_id,
+            )
             self.rows_written += 1
         except Exception as e:  # noqa: BLE001
-            log.debug("gateway WS tap: channel_message skipped (%s)", e)
+            log.debug("gateway WS tap: channel_event ingest skipped (%s)", e)
 
 
 # ── Daemon entry point ──────────────────────────────────────────────────
