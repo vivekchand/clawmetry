@@ -187,7 +187,19 @@ def api_budget_root():
         for row in overrides_list
         if row.get("agent_id")
     }
-    return jsonify({"config": cfg, "agents": overrides})
+    # Issue #1168: per-agent LIMITS are OSS table-stakes, but Telegram
+    # dispatch on per-agent thresholds is Cloud-Pro only. Surface the
+    # gate so the UI can show an upsell row instead of pretending alerts
+    # will fire when they will not.
+    try:
+        pro_dispatch_enabled = bool(_d._is_pro_user())
+    except Exception:
+        pro_dispatch_enabled = False
+    return jsonify({
+        "config": cfg,
+        "agents": overrides,
+        "pro_dispatch_enabled": pro_dispatch_enabled,
+    })
 
 
 @bp_budget.route("/api/agents/<agent_id>/budget", methods=["GET"])

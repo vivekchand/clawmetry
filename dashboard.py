@@ -808,6 +808,53 @@ def _get_budget_status():
     }
 
 
+# ── Pro-tier gate (issue #1168) ────────────────────────────────────────
+#
+# Per-agent budget LIMITS are OSS table-stakes (cost control). Per-agent
+# alert DISPATCH (Telegram/Slack) is the Cloud-Pro value-add — see
+# ``project_alerts_pro_feature.md``: Alerts Center is Cloud-Pro, OSS sees
+# a soft paywall, Cloud-Free sees an upgrade CTA. Centralised here so the
+# rule is applied consistently from any per-feature dispatch path.
+#
+# Liveness rule used by the OSS daemon (no async cloud RPC at fire-time):
+#   * No ``cm_`` token on disk           → OSS-only           → NOT pro
+#   * Has ``cm_`` token + cached plan="cloud_pro"|"pro"|"trial" → pro
+#   * Has ``cm_`` token but no cached plan, or plan="free"     → NOT pro
+#
+# The cached plan is populated by the cloud-CTA status route the dashboard
+# already polls; we read it best-effort and fall back to the conservative
+# "not pro" answer so we never accidentally fire paid dispatch on a free
+# node. This means Cloud-Free users see the same paywall OSS users do
+# until they upgrade, which matches the strategic split.
+def _is_pro_user():
+    """Best-effort, fail-closed Pro check used to gate paid dispatch.
+
+    Returns True only when both signals are present:
+      1. ``cm_`` cloud token resolvable on disk (user is paired), and
+      2. The cached plan tier is one of ``cloud_pro`` / ``pro`` / ``trial``.
+
+    Any failure (no token, missing cache, exception) returns False so we
+    never leak a Cloud-Pro dispatch path onto a free / OSS-only node.
+    """
+    try:
+        token = _read_cloud_token() or ""
+    except Exception:
+        token = ""
+    if not isinstance(token, str) or not token.startswith("cm_"):
+        return False
+    # Best-effort plan cache lookup. Populated by the cloud-CTA status
+    # route on each /api/cloud-cta/status hit (see routes/overview.py).
+    plan = ""
+    try:
+        cache = globals().get("_cloud_plan_cache") or {}
+        plan = str(cache.get("plan") or "").strip().lower()
+    except Exception:
+        plan = ""
+    if plan in ("cloud_pro", "pro", "trial"):
+        return True
+    return False
+
+
 # ── Per-agent budgets (issue #951) ─────────────────────────────────────
 #
 # Per-agent overrides live in the DuckDB ``agent_budgets`` table (see
@@ -997,6 +1044,19 @@ def _budget_check_for_agent(agent_id, *, auto_pause_enabled=None,
     today_start, today_key, month_start, month_key = _period_bounds()
     pause_triggered = False
 
+    # Issue #1168: per-agent LIMITS are OSS table-stakes, but per-agent
+    # Telegram dispatch is a Cloud-Pro feature. OSS / Cloud-Free nodes
+    # still get the in-app banner + history row (so the user sees the
+    # breach and the bar paints red), they just don't get the paid
+    # Telegram fan-out. The UI surfaces an inline "Upgrade for Telegram
+    # alerts" link on the per-agent panel.
+    _pro = False
+    try:
+        _pro = bool(_is_pro_user())
+    except Exception:
+        _pro = False
+    _agent_alert_channels = ["banner", "telegram"] if _pro else ["banner"]
+
     for period, period_start, period_key, override_key, global_key in (
         ("daily", today_start, today_key, "daily_limit_usd", "daily_limit"),
         ("monthly", month_start, month_key, "monthly_limit_usd", "monthly_limit"),
@@ -1026,7 +1086,7 @@ def _budget_check_for_agent(agent_id, *, auto_pause_enabled=None,
                         f"BUDGET CRITICAL: agent '{agent_id}' {period} spend "
                         f"${spent:.2f} of ${limit:.2f} (100%) limit"
                     ),
-                    channels=["banner", "telegram"],
+                    channels=_agent_alert_channels,
                 )
                 if auto_pause_enabled:
                     pause_triggered = True
@@ -1045,7 +1105,7 @@ def _budget_check_for_agent(agent_id, *, auto_pause_enabled=None,
                         f"Budget warning: agent '{agent_id}' {period} spend "
                         f"${spent:.2f} is {pct:.0f}% of ${limit:.2f} limit"
                     ),
-                    channels=["banner", "telegram"],
+                    channels=_agent_alert_channels,
                 )
 
     return pause_triggered
@@ -5442,13 +5502,27 @@ function switchBudgetTab(tab, el) {
 }
 
 // Per-agent budgets (issue #951)
+// Issue #1168: per-agent LIMITS are free in OSS, but Telegram dispatch
+// on per-agent thresholds is a Cloud-Pro feature. Server returns
+// `pro_dispatch_enabled` on /api/budget; render an inline upsell when
+// it's false so the user knows the bar will paint red but no message
+// will reach Telegram until they upgrade.
 async function loadAgentBudgets() {
   try {
     var data = await fetch('/api/budget').then(function(r){return r.json();});
     var agents = (data && data.agents) || {};
+    var proEnabled = !!(data && data.pro_dispatch_enabled);
+    var upsellHtml = '';
+    if (!proEnabled) {
+      upsellHtml = '<div style="margin-bottom:10px;padding:10px 12px;background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:8px;font-size:12px;color:var(--text-secondary);">'
+        + '<span style="font-weight:600;color:var(--text-primary);">Limits are free.</span> '
+        + 'Telegram alerts on per-agent budgets are a Cloud Pro feature. '
+        + '<a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--bg-accent);text-decoration:underline;font-weight:600;">Upgrade to send alerts</a>'
+        + '</div>';
+    }
     var ids = Object.keys(agents);
     if (ids.length === 0) {
-      document.getElementById('agent-budget-list').innerHTML =
+      document.getElementById('agent-budget-list').innerHTML = upsellHtml +
         '<div style="padding:20px;text-align:center;color:var(--text-muted);">No per-agent overrides yet.</div>';
       return;
     }
@@ -5481,7 +5555,7 @@ async function loadAgentBudgets() {
       html += '</tr>';
     });
     html += '</table>';
-    document.getElementById('agent-budget-list').innerHTML = html;
+    document.getElementById('agent-budget-list').innerHTML = upsellHtml + html;
   } catch(e) {
     document.getElementById('agent-budget-list').textContent = 'Failed to load';
   }
