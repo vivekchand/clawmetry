@@ -3828,6 +3828,10 @@ async function loadBrainPage(silent) {
     var streamEl = document.getElementById('brain-stream');
     var wasAtTop = !streamEl || streamEl.scrollTop < 40;
     renderBrainStream(events);
+    // Issue #1448 surface 3 — OSS / Cloud-Free users are capped to the
+    // last 24h. Render a one-line upgrade CTA above the brain stream so
+    // they know full history exists on Cloud-Pro.
+    _renderBrainHistoryCap(!!(data && data.capped_at_24h));
     // Issue #1195 — One-time "Live event details restored" toast for users
     // who lived through the 0.12.182 empty-detail regression. Fires only if
     // (a) at least one event has a non-empty detail, (b) the user hasn't
@@ -3867,6 +3871,30 @@ async function loadBrainPage(silent) {
   }
   // Loop-signals badge (#1364) — fire-and-forget; never blocks the Brain tab.
   loadLoopSignals();
+}
+
+
+// Render a one-line OSS retention CTA above the Brain stream when the
+// /api/brain-history response carries capped_at_24h (issue #1448 surface
+// 3). Lives in its own container above #brain-stream so the stream itself
+// stays a pure event feed.
+function _renderBrainHistoryCap(capped) {
+  var host = document.getElementById('brain-history-cap-cta');
+  if (!host) {
+    var streamEl = document.getElementById('brain-stream');
+    if (!streamEl || !streamEl.parentElement) return;
+    host = document.createElement('div');
+    host.id = 'brain-history-cap-cta';
+    host.style.cssText = 'padding:10px 14px;margin-bottom:8px;font-size:12px;color:var(--text-muted);border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-secondary,rgba(124,92,255,0.06));display:none;';
+    streamEl.parentElement.insertBefore(host, streamEl);
+  }
+  if (capped) {
+    host.style.display = '';
+    host.innerHTML = 'Brain history older than 24 hours is on Cloud-Pro. <a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;">Upgrade for full conversation context.</a>';
+  } else {
+    host.style.display = 'none';
+    host.innerHTML = '';
+  }
 }
 
 

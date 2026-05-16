@@ -72,6 +72,13 @@ def _build_app(tmp_path, monkeypatch, *, enable_fast_path: bool):
     import routes.brain as br
     importlib.reload(br)
 
+    # Pre-#1448 fixtures seed historical 2026-05-11 timestamps that fall
+    # outside the OSS 24h retention cap. Default to a Pro user so the
+    # contract + latency assertions still pass; the cap-specific tests
+    # live in test_brain_local_fastpath.py and monkeypatch explicitly.
+    import dashboard as _d
+    monkeypatch.setattr(_d, "_is_pro_user", lambda: True)
+
     app = Flask(__name__)
     app.register_blueprint(br.bp_brain)
     return app, ls, br
