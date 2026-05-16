@@ -272,6 +272,11 @@ def _try_local_store_brain(limit, include_artifacts, since=None):
             "tokens":     r.get("token_count") or 0,
             "cost":       float(r.get("cost_usd") or 0.0),
             "model":      r.get("model") or "",
+            # Issue #568 (LLM-call timeline view): expose the event row id
+            # so the Brain-tab UI can request a per-call lifecycle timeline
+            # via /api/llm-call-timeline/<event_id>. Cheap to add — the JSON
+            # carries one extra short string per row.
+            "eventId":    r.get("id") or "",
         }
         # ── Channel-event enrichment (PR aca53ec8 / Telegram ingest) ─────
         # Channel turns land here as event_type=channel.in|channel.out with
@@ -991,6 +996,349 @@ def api_brain_history():
         oldest_key = min(_BRAIN_HISTORY_CACHE, key=lambda k: _BRAIN_HISTORY_CACHE[k][0])
         _BRAIN_HISTORY_CACHE.pop(oldest_key, None)
     return jsonify(payload)
+
+
+# ── Per-LLM-call lifecycle timeline (issue #568) ─────────────────────────
+#
+# Goal: turn the flat Brain stream into a per-call breakdown so the user
+# can see how much wall-clock each call's reasoning vs generation cost.
+# Reading from the DuckDB events table (DuckDB-first rule), we walk the
+# chain of v3 events the sync.py mapper persists:
+#
+#   prompt.submitted -> trace.artifacts(reasoning) -> model.completed
+#
+# Phase layout (5 markers for reasoning models, 3 when the model emitted
+# no reasoning artifacts — Sonnet without extended-thinking, Haiku, GPT-4
+# without ``o1`` etc.):
+#
+#   prompt_received      | ts of prompt.submitted
+#   reasoning_started    | first trace.artifacts.kind="reasoning"   (if any)
+#   reasoning_completed  | last  trace.artifacts.kind="reasoning"   (if any)
+#   first_output_token   | derived: completion ts - generation_ms
+#   completion           | ts of model.completed
+#
+# For non-reasoning models we still synthesise first_output_token from
+# completion - generation_ms so the bar is at least 3-phase (prompt /
+# first-token / completion). When no usage breakdown is available we
+# collapse to the 2 hard markers (prompt + completion).
+#
+# Cap on chain length: 200 events. Real chains are <50 — this is a guard
+# against pathological agent runs that wedge the read.
+
+_LLM_TIMELINE_REASONING_TYPES = frozenset({
+    "trace.artifacts",          # OpenClaw v3 mapper: reasoning text under data.artifacts
+    "thinking",                 # legacy trajectory parser: assistant thinking blocks
+    "reasoning",                # OpenAI o-series style
+})
+
+
+def _parse_iso_ts(ts):
+    """Best-effort ISO-8601 → epoch-ms parser. Returns None on failure.
+
+    DuckDB rows ship ts as either a plain string ("2026-05-11T12:00:00Z")
+    or a ``datetime`` object — handle both rather than crash on the rare
+    typed return path.
+    """
+    if not ts:
+        return None
+    if isinstance(ts, datetime):
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return int(ts.timestamp() * 1000)
+    if not isinstance(ts, str):
+        return None
+    s = ts.strip()
+    if not s:
+        return None
+    # Accept trailing "Z" (RFC 3339) by swapping in +00:00 for fromisoformat.
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
+def _fetch_session_chain(session_id, limit=200):
+    """Pull every event for ``session_id`` from the local DuckDB store.
+
+    Returns a list of raw event rows (oldest first), or ``None`` when the
+    store is unreachable. Uses the daemon proxy first so we never collide
+    with the daemon's writer lock (issue #1088); falls back to direct open
+    for single-process boots (tests + dev mode — same pattern as
+    ``_try_local_store_brain`` above).
+    """
+    if not session_id:
+        return None
+    rows = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon(
+            "query_events", session_id=session_id, limit=limit
+        )
+    except Exception:
+        rows = None
+    if rows is None:
+        try:
+            from clawmetry import local_store
+            store = local_store.get_store(read_only=True)
+            rows = store.query_events(session_id=session_id, limit=limit)
+        except Exception:
+            return None
+    if not rows:
+        return []
+    # query_events returns most-recent-first; the timeline walker is
+    # easier to read oldest-first, so flip once here.
+    rows = list(rows)
+    rows.sort(key=lambda r: r.get("ts") or "")
+    return rows
+
+
+def _find_event_by_id(rows, event_id):
+    if not rows or not event_id:
+        return None
+    for r in rows:
+        if r.get("id") == event_id:
+            return r
+    return None
+
+
+def _is_reasoning_event(row):
+    """Return True when ``row`` represents a reasoning / thinking artifact.
+
+    Two shapes covered:
+      * v3 mapper: event_type == "trace.artifacts" with data.kind="reasoning"
+        OR data.artifacts containing a "thinking" block.
+      * Legacy trajectory: event_type starts with "thinking" / "reasoning"
+        OR the data carries a thinking block at top level.
+    """
+    et = (row.get("event_type") or "").lower()
+    if et in _LLM_TIMELINE_REASONING_TYPES:
+        return True
+    if et.startswith("thinking") or et.startswith("reasoning"):
+        return True
+    data = row.get("data") if isinstance(row, dict) else None
+    if isinstance(data, dict):
+        kind = (data.get("kind") or "").lower()
+        if kind in {"reasoning", "thinking"}:
+            return True
+        artifacts = data.get("artifacts")
+        if isinstance(artifacts, list):
+            for a in artifacts:
+                if isinstance(a, dict):
+                    if (a.get("type") or "").lower() in {"thinking", "reasoning"}:
+                        return True
+        msg = data.get("message")
+        if isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, list):
+                for blk in content:
+                    if isinstance(blk, dict) and blk.get("type") == "thinking":
+                        return True
+    return False
+
+
+def _completion_tokens(row):
+    """Best-effort completion-token count from a model.completed row.
+
+    DuckDB stamps token_count on the row for billing; the v3 mapper also
+    nests usage under data.usage / data.data.usage. Prefer the row total
+    when present.
+    """
+    n = row.get("token_count") or 0
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    if n > 0:
+        return n
+    data = row.get("data") if isinstance(row, dict) else None
+    if isinstance(data, dict):
+        for blob in (data.get("usage"), (data.get("data") or {}).get("usage")):
+            if isinstance(blob, dict):
+                v = blob.get("output_tokens") or blob.get("completion_tokens")
+                try:
+                    return int(v or 0)
+                except (TypeError, ValueError):
+                    continue
+    return 0
+
+
+def _build_llm_call_timeline(rows, anchor):
+    """Walk ``rows`` (oldest first) to build a 3- or 5-phase timeline.
+
+    ``anchor`` is the model.completed (or assistant) row the user clicked.
+    We anchor on it (its ts is the END of the call) and walk backwards to
+    find the nearest preceding ``prompt.submitted`` row in the same chain.
+    Between those two anchors we scan for reasoning artifacts to fill in
+    the 5-phase shape; if none, we synthesise the 3-phase shape so every
+    LLM call gets SOMETHING visual.
+    """
+    if not anchor:
+        return None
+    anchor_idx = None
+    for i, r in enumerate(rows):
+        if r.get("id") == anchor.get("id"):
+            anchor_idx = i
+            break
+    if anchor_idx is None:
+        return None
+    completion_ts = _parse_iso_ts(anchor.get("ts"))
+    model = anchor.get("model") or ""
+    if isinstance(anchor.get("data"), dict):
+        model = model or anchor["data"].get("modelId") or ""
+    # Walk backwards to the nearest prompt.submitted (or user role).
+    prompt_row = None
+    reasoning_rows = []
+    for j in range(anchor_idx - 1, -1, -1):
+        r = rows[j]
+        et = (r.get("event_type") or "").lower()
+        if et in {"prompt.submitted", "user"}:
+            prompt_row = r
+            break
+        if _is_reasoning_event(r):
+            reasoning_rows.append(r)
+    # Reverse so reasoning_rows is oldest-first (we walked backwards).
+    reasoning_rows.reverse()
+    prompt_ts = _parse_iso_ts(prompt_row.get("ts")) if prompt_row else None
+    if prompt_ts is None:
+        # No matching prompt — fall back to the anchor ts so the bar still
+        # renders (just shows the completion marker on its own).
+        prompt_ts = completion_ts
+
+    phases = []
+    base = prompt_ts or completion_ts or 0
+
+    def _ms(ts):
+        return max(0, (ts or base) - base)
+
+    phases.append({
+        "phase": "prompt_received",
+        "ts":    prompt_row.get("ts") if prompt_row else anchor.get("ts"),
+        "ms":    0,
+        "model": model,
+    })
+    has_reasoning = bool(reasoning_rows)
+    if has_reasoning:
+        first_r = reasoning_rows[0]
+        last_r = reasoning_rows[-1]
+        phases.append({
+            "phase":  "reasoning_started",
+            "ts":     first_r.get("ts"),
+            "ms":     _ms(_parse_iso_ts(first_r.get("ts"))),
+            "tokens": _completion_tokens(first_r) or None,
+        })
+        phases.append({
+            "phase":  "reasoning_completed",
+            "ts":     last_r.get("ts"),
+            "ms":     _ms(_parse_iso_ts(last_r.get("ts"))),
+            "tokens": sum(_completion_tokens(r) for r in reasoning_rows) or None,
+        })
+    # First-output-token: synthesised marker positioned between the last
+    # known "thinking" event (reasoning_completed when present, else
+    # prompt_received) and completion. Two cases:
+    #   * usage.output_tokens present → estimate generation slice at
+    #     ~80 tok/s, clamp to 10..90% of the post-reasoning span.
+    #   * no usage breakdown → plant at 70% of the post-reasoning span
+    #     so the marker is visible and ordered correctly.
+    # Marked "estimated":True so the UI can render an honest label.
+    span_ms = max(0, (completion_ts or base) - (prompt_ts or base))
+    out_tokens = _completion_tokens(anchor)
+    # Post-reasoning span is what we slice up for generation; without
+    # reasoning the floor is prompt_received (ms=0).
+    post_reasoning_ms = phases[-1]["ms"] if has_reasoning else 0
+    gen_span_ms = max(0, span_ms - post_reasoning_ms)
+    if gen_span_ms > 0:
+        if out_tokens > 0:
+            gen_ms = int(out_tokens * 1000 / 80)
+            gen_ms = max(int(gen_span_ms * 0.10),
+                         min(gen_ms, int(gen_span_ms * 0.90)))
+        else:
+            gen_ms = int(gen_span_ms * 0.30)
+        first_tok_ms = post_reasoning_ms + max(0, gen_span_ms - gen_ms)
+        phases.append({
+            "phase":  "first_output_token",
+            "ts":     None,  # synthesised — no row-level ts
+            "ms":     first_tok_ms,
+            "estimated": True,
+        })
+    phases.append({
+        "phase":  "completion",
+        "ts":     anchor.get("ts"),
+        "ms":     span_ms,
+        "tokens": out_tokens or None,
+        "model":  model,
+    })
+    return {
+        "event_id":      anchor.get("id"),
+        "session_id":    anchor.get("session_id") or "",
+        "model":         model,
+        "reasoning":     has_reasoning,
+        "phase_count":   len(phases),
+        "total_ms":      span_ms,
+        "phases":        phases,
+    }
+
+
+@bp_brain.route("/api/llm-call-timeline/<event_id>")
+def api_llm_call_timeline(event_id):
+    """Return the per-call lifecycle timeline for one LLM call.
+
+    Reads the DuckDB events table (DuckDB-first rule, ``feedback_duckdb_
+    first_rule.md``) — no JSONL fallback. The endpoint is cheap (one
+    indexed read by session_id, capped at 200 rows) so we don't cache.
+
+    Query params:
+        session_id (optional) — when supplied, narrows the search to one
+            session instead of scanning the full local store. The Brain
+            UI always knows the session of the chip it just rendered, so
+            it should pass this on every click.
+    """
+    sid = (request.args.get("session_id") or "").strip()
+    rows = None
+    if sid:
+        rows = _fetch_session_chain(sid)
+    if rows is None and not sid:
+        # Without a session hint, fall back to a broad read. Capped at the
+        # 200-row default so a runaway local store can't blow up the read.
+        try:
+            from routes.local_query import local_store_via_daemon
+            rows = local_store_via_daemon("query_events", limit=200)
+        except Exception:
+            rows = None
+    if rows is None:
+        return jsonify({"error": "local store unavailable", "event_id": event_id}), 503
+    anchor = _find_event_by_id(rows, event_id)
+    if anchor is None and not sid:
+        return jsonify({"error": "event not found", "event_id": event_id}), 404
+    if anchor is None and sid:
+        return jsonify({"error": "event not found in session",
+                        "event_id": event_id, "session_id": sid}), 404
+    # Anchor must be a model-output row to make sense as an LLM call.
+    et = (anchor.get("event_type") or "").lower()
+    if et not in {"model.completed", "assistant", "message"} and not et.startswith("model"):
+        return jsonify({
+            "error":      "event is not an LLM-call anchor",
+            "event_id":   event_id,
+            "event_type": et,
+        }), 400
+    timeline = _build_llm_call_timeline(rows, anchor)
+    if timeline is None:
+        return jsonify({"error": "could not build timeline",
+                        "event_id": event_id}), 500
+    try:
+        import dashboard as _d
+        _d._ext_emit("brain.llm_call_timeline", {
+            "event_id": event_id,
+            "phase_count": timeline["phase_count"],
+            "reasoning": timeline["reasoning"],
+        })
+    except Exception:
+        pass
+    return jsonify(timeline)
 
 
 @bp_brain.route("/api/brain-stream")
