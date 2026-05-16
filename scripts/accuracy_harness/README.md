@@ -171,6 +171,50 @@ per full run** on opus-4-7.
 | 1 | one or more drifts (issue filed if `--file-issues`) |
 | 2 | harness itself failed (dashboard down, no openclaw, etc.) |
 
+## CI gate (closes #1396)
+
+`.github/workflows/release-on-merge.yml` runs the meta-harness as a
+**hard gate** on every `[RELEASE]`-titled PR merge, _before_ the PyPI
+publish step. The gate is the `Accuracy meta-harness — structural gate`
+step in the `release` job, inserted between dependency-install and
+version-bump. Any non-zero exit aborts the job, so the wheel never
+builds, twine never uploads, and no GitHub release tag is created.
+
+The CI runner has no `openclaw` binary, no LLM API key, and no live
+sync daemon, so the gate runs in two **structural** modes (not live):
+
+| mode | what it catches |
+|---|---|
+| `import` every registered sub-harness (`_lib`, `tokens`, `approvals`, `alerts`) by file path | sub-harness rename / deletion, top-level `import` errors, `dataclass` field-type regressions, `all.py`'s `_lib.file_consolidated_issue` import drifting |
+| `python3 all.py --dry-run --no-issue` | `all.py` skeleton crashes, scoreboard formatting bugs, exit-code path regressions |
+| HARNESSES-registry cross-check vs. CI's expected list | `all.py` silently dropping a sub-harness (regression of #1394's silent-zero class) |
+
+The CI step writes a PASS/FAIL block to `$GITHUB_STEP_SUMMARY` so the
+PR author sees the scoreboard on the run page without expanding logs.
+
+### Why not live ground-truth runs in CI?
+
+Sub-harnesses drive REAL `openclaw agent` turns (~$0.05 of LLM spend
+per run) against a REAL sync daemon writing to DuckDB. Wiring a
+synthetic OpenClaw + daemon stub into the runner matrix is tracked
+against #1396's follow-up: once the consolidated GitHub-issue filer
+in `all.py` is wired against staging, a periodic cloud cron will run
+the full harness nightly against a real cluster and file drift issues
+with the `accuracy-meta` label. Until then, the structural gate covers
+the failure class that previously let #1394's 85K-token `cache_read`
+drift ship silently (sub-harness present in repo but never invoked).
+
+### Reproducing the gate locally
+
+```bash
+# Exactly what CI runs (no env required):
+python3 scripts/accuracy_harness/all.py --dry-run --no-issue
+```
+
+If the gate fails on your `[RELEASE]` PR, the workflow's
+`Accuracy meta-harness — structural gate` step prints the full
+stderr; re-run locally with the same command to reproduce.
+
 ## What's covered today
 
 ### Tokens (`tokens.py`)
