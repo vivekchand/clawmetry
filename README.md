@@ -70,6 +70,39 @@ git clone https://github.com/vivekchand/clawmetry.git
 cd clawmetry && pip install flask && python3 dashboard.py
 ```
 
+## v2 Frontend Development
+
+The v2 React app lives in `frontend/` and is served at `/v2` when the Flask
+server is started with v2 enabled.
+
+Use two terminals while developing:
+
+```bash
+# Terminal 1: Flask API/server on :8900
+CLAWMETRY_V2=1 python3 dashboard.py
+```
+
+```bash
+# Terminal 2: Vite dev server on :5173
+cd frontend
+nvm use
+npm ci
+npm run dev
+```
+
+Open `http://localhost:5173/v2/`. Vite proxies `/api` requests to
+`http://localhost:8900`, so the React app can talk to the local Flask server
+without extra CORS setup.
+
+To build the bundle that ships with the Python package:
+
+```bash
+cd frontend
+npm run build
+```
+
+The production bundle is written to `clawmetry/static/v2/dist/`.
+
 ## Configuration
 
 Most people don't need any config. ClawMetry auto-detects your workspace, logs, sessions, and crons.
