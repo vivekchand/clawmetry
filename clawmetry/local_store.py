@@ -190,12 +190,26 @@ _DDL = [
         outcome                 VARCHAR,
         outcome_confidence      DOUBLE,
         outcome_classified_at   BIGINT,
+        -- Issue #1619 Phase 1 — LLM-as-judge eval scores. Columns are
+        -- populated by clawmetry/eval_runner.py via persist_eval_score().
+        -- Adjacent to (not replacing) the #1614 outcome columns; the two
+        -- views are complementary (outcome = did the session finish well;
+        -- eval = how good was the actual response, 0-5).
+        eval_score              DOUBLE,
+        eval_reason             VARCHAR,
+        eval_judge_model        VARCHAR,
+        eval_scored_at          BIGINT,
+        eval_rubric             VARCHAR,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_sessions_active    ON sessions(agent_type, last_active_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_outcome   ON sessions(outcome, last_active_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_node      ON sessions(node_id, last_active_at)",
+    # Issue #1619 Phase 1 — speeds up /api/evals/recent (ORDER BY
+    # eval_scored_at DESC) and the scheduler's unscored-session probe
+    # (WHERE eval_score IS NULL).
+    "CREATE INDEX IF NOT EXISTS idx_sessions_eval_scored_at ON sessions(eval_scored_at)",
     """
     CREATE TABLE IF NOT EXISTS daily_aggregates (
         agent_type    VARCHAR NOT NULL DEFAULT 'openclaw',
@@ -610,6 +624,16 @@ _MIGRATIONS_V2 = [
     ("sessions", "outcome",                "VARCHAR"),
     ("sessions", "outcome_confidence",     "DOUBLE"),
     ("sessions", "outcome_classified_at",  "BIGINT"),
+    # Issue #1619 Phase 1 — LLM-as-judge eval columns. Idempotent column-adds
+    # so existing v2 stores pick up the eval surface without a fresh DB. The
+    # DDL above carries the same columns for fresh stores. Composes cleanly
+    # with the #1614 outcome-labeling columns above (separate names, same
+    # ALTER pattern — both engineers verified compose-clean before merging).
+    ("sessions", "eval_score",        "DOUBLE"),
+    ("sessions", "eval_reason",       "VARCHAR"),
+    ("sessions", "eval_judge_model",  "VARCHAR"),
+    ("sessions", "eval_scored_at",    "BIGINT"),
+    ("sessions", "eval_rubric",       "VARCHAR"),
 ]
 
 
@@ -3924,6 +3948,184 @@ class LocalStore:
         params.append(int(limit))
         cols = ["agent_type", "node_id", "ts", "kind", "data"]
         return _decode_data_blob_rows(self._fetch(sql, params), cols)
+
+    # ── Evals (issue #1619 Phase 1) ──────────────────────────────────────
+
+    def persist_eval_score(
+        self,
+        *,
+        session_id: str,
+        score: float,
+        reason: str,
+        judge_model: str,
+        scored_at: int,
+        rubric: str = "default",
+    ) -> None:
+        """Persist a single LLM-as-judge score onto the ``sessions`` row.
+
+        Writes through the same single-writer connection (guarded by
+        ``_write_lock``) as the regular ingest path so concurrent ticks
+        of the eval scheduler don't trip the DuckDB writer-exclusive
+        lock. Upsert semantics — re-scoring the same session overwrites
+        the prior score in place; we keep one row per session and treat
+        the eval columns as the latest evaluation rather than time-
+        series. (History will land in a sibling ``eval_history`` table
+        in Phase 2; keeping the latest-only shape here matches what the
+        overview tile + sessions list want to render today.)
+        """
+        with self._write_lock:
+            try:
+                self._conn.execute(
+                    """
+                    UPDATE sessions
+                       SET eval_score        = ?,
+                           eval_reason       = ?,
+                           eval_judge_model  = ?,
+                           eval_scored_at    = ?,
+                           eval_rubric       = ?
+                     WHERE session_id        = ?
+                    """,
+                    [float(score), reason or "", judge_model or "",
+                     int(scored_at), rubric or "default", session_id],
+                )
+            except Exception:
+                log.exception("local store: persist_eval_score failed for %s",
+                              session_id)
+
+    def query_unscored_sessions(
+        self,
+        *,
+        limit: int = 10,
+        lookback_hours: int = 24,
+    ) -> list[dict[str, Any]]:
+        """Return up to ``limit`` completed sessions that have NOT been
+        eval-scored yet. Drives the background scheduler.
+
+        Filter logic:
+          * ``eval_score IS NULL`` — un-scored.
+          * ``last_active_at`` within ``lookback_hours`` — bound the
+            backfill so a fresh install doesn't burn through judge spend
+            on stale sessions.
+          * ``ended_at IS NOT NULL OR status IN ('completed', 'failed',
+            'escalated')`` — skip in-flight sessions; their transcript
+            is still mutating.
+        """
+        try:
+            from datetime import datetime, timedelta, timezone
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
+        except Exception:
+            cutoff = ""
+        sql = """
+            SELECT session_id, agent_type, agent_id, title, last_active_at,
+                   ended_at, status, total_tokens
+              FROM sessions
+             WHERE eval_score IS NULL
+               AND total_tokens IS NOT NULL
+               AND total_tokens > 0
+               AND (
+                    ended_at IS NOT NULL
+                    OR status IN ('completed', 'failed', 'escalated', 'success', 'error')
+               )
+               AND (? = '' OR COALESCE(last_active_at, started_at, '') >= ?)
+             ORDER BY COALESCE(last_active_at, started_at) DESC NULLS LAST
+             LIMIT ?
+        """
+        rows = self._fetch(sql, [cutoff, cutoff, int(limit)])
+        cols = ["session_id", "agent_type", "agent_id", "title",
+                "last_active_at", "ended_at", "status", "total_tokens"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def query_recent_evals(
+        self,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return recently-scored sessions, newest first. Drives
+        ``/api/evals/recent``."""
+        sql = """
+            SELECT session_id, agent_type, agent_id, title, last_active_at,
+                   total_tokens, cost_usd,
+                   eval_score, eval_reason, eval_judge_model,
+                   eval_scored_at, eval_rubric
+              FROM sessions
+             WHERE eval_score IS NOT NULL
+             ORDER BY eval_scored_at DESC NULLS LAST
+             LIMIT ?
+        """
+        rows = self._fetch(sql, [int(limit)])
+        cols = ["session_id", "agent_type", "agent_id", "title",
+                "last_active_at", "total_tokens", "cost_usd",
+                "eval_score", "eval_reason", "eval_judge_model",
+                "eval_scored_at", "eval_rubric"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def query_eval_summary(
+        self,
+        *,
+        window_hours: int = 24,
+    ) -> dict[str, Any]:
+        """Aggregate scores over the recent window. Drives
+        ``/api/evals/summary``.
+
+        Returns ``{avg_score, total, scored, p50, p10, window_hours}``.
+        ``total`` is sessions touched in the window (scored OR not);
+        ``scored`` is the subset with a numeric eval_score. The ratio
+        ``scored/total`` surfaces coverage on the overview tile.
+        """
+        try:
+            from datetime import datetime, timedelta, timezone
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=int(window_hours))).isoformat()
+        except Exception:
+            cutoff = ""
+        # Two queries — one for totals (scored + un-scored), one for the
+        # quantile/avg over the scored subset. Keeps the SQL readable
+        # without a CTE that would have to handle NULLs in two places.
+        try:
+            total_row = self._fetch(
+                """
+                SELECT COUNT(*) AS total,
+                       COUNT(eval_score) AS scored
+                  FROM sessions
+                 WHERE (? = '' OR COALESCE(last_active_at, started_at, '') >= ?)
+                """,
+                [cutoff, cutoff],
+            )
+        except Exception as e:
+            log.warning("local store: eval summary totals failed: %s", e)
+            total_row = [(0, 0)]
+        total = int(total_row[0][0] or 0) if total_row else 0
+        scored = int(total_row[0][1] or 0) if total_row else 0
+
+        avg = 0.0
+        p50 = 0.0
+        p10 = 0.0
+        if scored > 0:
+            try:
+                stats = self._fetch(
+                    """
+                    SELECT AVG(eval_score)                      AS avg_score,
+                           quantile_cont(eval_score, 0.5)       AS p50,
+                           quantile_cont(eval_score, 0.1)       AS p10
+                      FROM sessions
+                     WHERE eval_score IS NOT NULL
+                       AND (? = '' OR COALESCE(last_active_at, started_at, '') >= ?)
+                    """,
+                    [cutoff, cutoff],
+                )
+                if stats:
+                    avg = float(stats[0][0] or 0.0)
+                    p50 = float(stats[0][1] or 0.0)
+                    p10 = float(stats[0][2] or 0.0)
+            except Exception as e:
+                log.warning("local store: eval summary quantiles failed: %s", e)
+        return {
+            "avg_score":     round(avg, 2),
+            "total":         total,
+            "scored":        scored,
+            "p50":           round(p50, 2),
+            "p10":           round(p10, 2),
+            "window_hours":  int(window_hours),
+        }
 
     def query_sessions_table(
         self,

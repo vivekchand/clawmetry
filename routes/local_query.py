@@ -427,6 +427,13 @@ _DAEMON_METHODS = frozenset({
     # classifies any unlabeled rows so the dashboard never paints "0%".
     "query_outcomes",
     "reclassify_session_outcome",
+    # Issue #1619 Phase 1: LLM-as-judge eval surface. Reads + the persist
+    # write all go via the daemon (writer-lock owner) so the dashboard
+    # process can render scores without opening DuckDB itself.
+    "query_unscored_sessions",
+    "query_recent_evals",
+    "query_eval_summary",
+    "persist_eval_score",
     "health",
 })
 
