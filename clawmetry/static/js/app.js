@@ -2150,7 +2150,94 @@ async function loadMiniWidgets(overview, usage) {
   
   // 🐝 Worker Bees (Sub-Agents)
   loadSubAgents();
-  
+
+  // Issue #1619 Phase 1 — eval score tile. Lazy, non-blocking; tile shows
+  // a dash on miss so a slow daemon doesn't gate the overview render.
+  loadEvalSummary();
+}
+
+// Issue #1619 Phase 1 — pull aggregate score for the overview tile.
+// Reads /api/evals/summary?window=24h and renders avg + coverage. Score
+// is shown as "4.2 / 5" with a color band; coverage as "220 / 247 scored".
+async function loadEvalSummary() {
+  var avgEl = document.getElementById('eval-avg-score');
+  var covEl = document.getElementById('eval-coverage');
+  if (!avgEl) return;
+  try {
+    var data = await fetch('/api/evals/summary?window=24h').then(function(r){return r.json();}).catch(function(){return null;});
+    if (!data || typeof data.scored !== 'number') {
+      avgEl.textContent = '--';
+      if (covEl) covEl.textContent = '';
+      return;
+    }
+    if (data.scored === 0) {
+      avgEl.textContent = '--';
+      avgEl.style.color = 'var(--text-muted)';
+      if (covEl) covEl.textContent = 'no scored sessions yet';
+      return;
+    }
+    var avg = Number(data.avg_score || 0);
+    avgEl.textContent = avg.toFixed(1) + ' / 5';
+    // Color band: 4+ green, 3-4 yellow, <3 red. Matches the per-session pill.
+    avgEl.style.color = avg >= 4 ? '#22c55e' : avg >= 3 ? '#f59e0b' : '#ef4444';
+    if (covEl) covEl.textContent = data.scored + ' / ' + data.total + ' scored';
+  } catch (e) {
+    avgEl.textContent = '--';
+    if (covEl) covEl.textContent = '';
+  }
+}
+
+// Issue #1619 Phase 1 — rubric editor. Modal opens with the current YAML;
+// Save POSTs back to /api/evals/rubric which validates parse before write.
+async function openEvalRubricModal() {
+  var modal = document.getElementById('eval-rubric-modal');
+  var ta = document.getElementById('eval-rubric-yaml');
+  var status = document.getElementById('eval-rubric-status');
+  var pathEl = document.getElementById('eval-rubric-path');
+  if (!modal || !ta) return;
+  modal.style.display = 'flex';
+  if (status) status.textContent = 'Loading...';
+  try {
+    var data = await fetch('/api/evals/rubric').then(function(r){return r.json();});
+    ta.value = data.yaml || '';
+    if (pathEl && data.rubric_path) pathEl.textContent = data.rubric_path;
+    if (status) {
+      status.textContent = data.enabled === false
+        ? 'Evals are disabled (CLAWMETRY_EVALS_ENABLED=0).'
+        : 'Loaded.';
+    }
+  } catch (e) {
+    if (status) status.textContent = 'Failed to load: ' + e.message;
+  }
+}
+
+function closeEvalRubricModal() {
+  var modal = document.getElementById('eval-rubric-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function saveEvalRubric() {
+  var ta = document.getElementById('eval-rubric-yaml');
+  var status = document.getElementById('eval-rubric-status');
+  if (!ta) return;
+  var body = JSON.stringify({yaml: ta.value || ''});
+  if (status) status.textContent = 'Saving...';
+  try {
+    var resp = await fetch('/api/evals/rubric', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: body,
+    });
+    var data = await resp.json();
+    if (!resp.ok || data.error) {
+      if (status) status.textContent = 'Save failed: ' + (data.error || resp.status);
+      return;
+    }
+    if (status) status.textContent = 'Saved. New scores use this rubric on the next scheduler tick.';
+    setTimeout(closeEvalRubricModal, 1200);
+  } catch (e) {
+    if (status) status.textContent = 'Save failed: ' + e.message;
+  }
 }
 
 async function loadSubAgents() {
@@ -5682,7 +5769,7 @@ async function loadSessions() {
     // In cloud mode: /api/sessions and /api/subagents already handle CLOUD_MODE server-side
     // fetch interceptor appends node_id+token so these hit the cloud endpoints correctly
   }
-  var [sessData, saData, anomalyData, costData, chainData, riskBrain] = await Promise.all([
+  var [sessData, saData, anomalyData, costData, chainData, riskBrain, evalData] = await Promise.all([
     fetch('/api/sessions').then(r => r.json()).catch(function() { return {sessions:[]}; }),
     fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; }),
     fetch('/api/usage/anomalies').then(r => r.json()).catch(function() { return {anomalies:[]}; }),
@@ -5692,8 +5779,17 @@ async function loadSessions() {
     // warning on any session whose latest LLM call tripped the band.
     // 200 events is enough to cover the active window without blowing
     // the page-load budget; the fast path serves this in <50 ms.
-    fetch('/api/brain-history?limit=200').then(r => r.json()).catch(function() { return {events:[]}; })
+    fetch('/api/brain-history?limit=200').then(r => r.json()).catch(function() { return {events:[]}; }),
+    // Issue #1619 Phase 1 — eval scores. Joined client-side onto the
+    // sessions list so the Score column doesn't require a server-side
+    // join with the in-flight #1614 outcome columns.
+    fetch('/api/evals/recent?limit=200').then(r => r.json()).catch(function() { return {evals:[]}; })
   ]);
+  // Build a session_id → eval lookup for O(1) overlay.
+  var evalMap = {};
+  ((evalData && evalData.evals) || []).forEach(function(e) {
+    if (e && e.session_id) evalMap[e.session_id] = e;
+  });
   // Build cost lookup map by session_id suffix
   var costMap = {};
   (costData.sessions || []).forEach(function(c) {
@@ -5749,6 +5845,15 @@ async function loadSessions() {
     if (s.channel !== 'unknown') html += '<span><span class="badge channel">' + s.channel + '</span></span>';
     if (sessCost && sessCost.cost_usd > 0) {
       html += '<span style="font-size:11px;color:var(--text-success);font-weight:600;">💰 $' + Number(sessCost.cost_usd||0).toFixed(4) + ' total</span>';
+    }
+    // Issue #1619 Phase 1 — Score pill. Color band matches the overview
+    // tile (4+ green, 3-4 yellow, <3 red). Hover shows the judge's reason.
+    var evalRow = evalMap[sid];
+    if (evalRow && evalRow.eval_score !== null && evalRow.eval_score !== undefined) {
+      var scoreVal = Number(evalRow.eval_score);
+      var scoreColor = scoreVal >= 4 ? '#22c55e' : scoreVal >= 3 ? '#f59e0b' : '#ef4444';
+      var reason = String(evalRow.eval_reason || '').replace(/"/g, '&quot;');
+      html += '<span title="' + reason + ' (judge: ' + escHtml(evalRow.eval_judge_model || '') + ')" style="font-size:11px;font-weight:700;color:' + scoreColor + ';padding:1px 8px;border:1px solid ' + scoreColor + ';border-radius:10px;">⭐ ' + scoreVal.toFixed(1) + '</span>';
     }
     html += '<span>Updated ' + timeAgo(s.updatedAt) + '</span>';
     html += '</div>';

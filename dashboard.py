@@ -118,6 +118,7 @@ from routes.workspaces import bp_workspaces
 from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
 from routes.review import bp_review
+from routes.evals import bp_evals
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -4453,6 +4454,32 @@ function clawmetryLogout(){
         <div class="stats-footer-value" id="reliability-direction">--</div>
       </div>
       <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail"></span>
+    </div>
+    <!-- Issue #1619 Phase 1 — eval score tile. Click opens the rubric editor. -->
+    <div class="stats-footer-item" id="eval-card" style="cursor:pointer;" title="Click to edit the rubric" onclick="openEvalRubricModal()">
+      <span class="stats-footer-icon">⭐</span>
+      <div>
+        <div class="stats-footer-label">Eval score (24h)</div>
+        <div class="stats-footer-value" id="eval-avg-score">--</div>
+      </div>
+      <span class="stats-footer-sub" style="margin-left:auto;" id="eval-coverage"></span>
+    </div>
+  </div>
+
+  <!-- Issue #1619 Phase 1 — rubric editor modal. Loaded lazily; hidden by default. -->
+  <div id="eval-rubric-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:12px;padding:20px;max-width:640px;width:90%;max-height:80vh;display:flex;flex-direction:column;gap:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3 style="margin:0;font-size:14px;font-weight:700;color:var(--text-primary);">Eval rubric</h3>
+        <button onclick="closeEvalRubricModal()" style="background:transparent;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;">&times;</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);">Edit the YAML rubric used by the local LLM judge. Saved to <code id="eval-rubric-path">~/.clawmetry/evals.yaml</code>. Disable scoring entirely with <code>CLAWMETRY_EVALS_ENABLED=0</code>.</div>
+      <textarea id="eval-rubric-yaml" style="font-family:monospace;font-size:12px;width:100%;min-height:280px;padding:10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:8px;resize:vertical;" spellcheck="false"></textarea>
+      <div id="eval-rubric-status" style="font-size:11px;color:var(--text-muted);min-height:14px;"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;">
+        <button onclick="closeEvalRubricModal()" style="background:transparent;color:var(--text-muted);border:1px solid var(--border-primary);border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">Cancel</button>
+        <button onclick="saveEvalRubric()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+      </div>
     </div>
   </div>
 
@@ -10282,6 +10309,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_bootstrap)
     app.register_blueprint(bp_insights)
     app.register_blueprint(bp_review)
+    app.register_blueprint(bp_evals)
 
     # ── v2 React SPA (opt-in) ───────────────────────────────────────────────
     # Default OFF so existing v1 users notice nothing. Enabled when the user

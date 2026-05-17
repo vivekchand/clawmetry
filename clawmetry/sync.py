@@ -7982,6 +7982,13 @@ def run_daemon() -> None:
     # exercise the dispatch path immediately if rules + matching events are
     # already present from startup backfill.
     last_alerts_eval = 0.0
+    # Issue #1619 Phase 1 — LLM-as-judge scheduler. Sister cadence to the
+    # alerts evaluator; 5-minute tick picks up to EVAL_BATCH unscored
+    # completed sessions and persists scores in-process via the user's
+    # existing API key (no cloud roundtrip). Default-on; CLAWMETRY_EVALS_
+    # ENABLED=0 disables cleanly. 0 = fire on first cycle so a daemon
+    # restart scores the backlog without waiting 5 min.
+    last_evals_run = 0.0
 
     while True:
         try:
@@ -8142,6 +8149,27 @@ def run_daemon() -> None:
                     save_state(state)
                 except Exception:
                     pass
+
+            # ── Eval scheduler (issue #1619 Phase 1) ──
+            # Sister of the alerts evaluator. Picks unscored completed
+            # sessions from DuckDB and runs them through the LLM-as-
+            # judge runner. Failure swallowed so a judge outage can't
+            # take down the sync cycle.
+            now_evals = time.time()
+            if (now_evals - last_evals_run) >= EVAL_INTERVAL_SEC:
+                try:
+                    from clawmetry import eval_runner as _eval_runner
+                    if _eval_runner.is_enabled():
+                        n_scored = _eval_runner.score_pending_sessions(
+                            batch_size=EVAL_BATCH,
+                        )
+                        if n_scored:
+                            log.info(
+                                "evals: scored %d session(s)", n_scored
+                            )
+                except Exception as _ee:
+                    log.warning("evals: scheduler tick errored: %s", _ee)
+                last_evals_run = now_evals
 
             # Re-mirror Docker data if running in Docker mode
             if hasattr(detect_paths, "_docker_cid") or any(
@@ -8792,6 +8820,14 @@ def sync_autonomy(config, state, paths):
 
 
 ALERTS_EVAL_INTERVAL_SEC = 60  # Re-evaluate alerts every 60s (PRD #779)
+
+# Issue #1619 Phase 1 — LLM-as-judge eval scheduler cadence. 300s (5 min)
+# matches the PRD: every 5 min, pick up to EVAL_BATCH unscored completed
+# sessions and persist their scores. Lower bound is the rate limiter
+# (100/hour cap in clawmetry/eval_runner.py), so a chatty workspace
+# self-throttles regardless of interval.
+EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_EVALS_INTERVAL_SEC", "300"))
+EVAL_BATCH = int(os.environ.get("CLAWMETRY_EVALS_BATCH", "10"))
 # Window for the events read from DuckDB on each tick. Wider than the
 # evaluation interval so a slow tick doesn't drop events on the floor.
 _ALERTS_EVENT_LOOKBACK_SEC = 600
