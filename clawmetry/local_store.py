@@ -593,6 +593,27 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status, sampled_at)",
     "CREATE INDEX IF NOT EXISTS idx_review_queue_agent  ON review_queue(agent_id, sampled_at)",
+    # ── Issue #1619 Phase 2 — golden test set runs ────────────────────────
+    # Persists one row per (suite, test, run) so trend analysis can chart
+    # regression-rate over time and the dashboard can show "evals broken
+    # at SHA abc123". status enum: pass / fail / error. Phase 1's
+    # ``sessions.eval_score`` columns measure production traffic; this
+    # table measures the golden test bench. Both feed the same overview
+    # tile but answer different questions.
+    """
+    CREATE TABLE IF NOT EXISTS eval_suite_runs (
+        suite_name   VARCHAR NOT NULL,
+        test_name    VARCHAR NOT NULL,
+        status       VARCHAR NOT NULL,
+        score        DOUBLE,
+        reason       VARCHAR,
+        ran_at       BIGINT  NOT NULL,
+        sha          VARCHAR,
+        PRIMARY KEY (suite_name, test_name, ran_at)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_eval_suite_runs_ran_at ON eval_suite_runs(ran_at)",
+    "CREATE INDEX IF NOT EXISTS idx_eval_suite_runs_suite  ON eval_suite_runs(suite_name, ran_at)",
     """
     CREATE TABLE IF NOT EXISTS schema_version (
         version    INTEGER PRIMARY KEY,
@@ -4150,6 +4171,76 @@ class LocalStore:
             "p10":           round(p10, 2),
             "window_hours":  int(window_hours),
         }
+
+    # ── Issue #1619 Phase 2 — golden test suite runs ────────────────────────
+
+    def persist_eval_suite_run(
+        self,
+        *,
+        suite_name: str,
+        test_name: str,
+        status: str,
+        score: float | None,
+        reason: str,
+        ran_at: int,
+        sha: str = "",
+    ) -> None:
+        """Write one row of the ``eval_suite_runs`` table. Idempotent on
+        ``(suite_name, test_name, ran_at)`` — re-running with the same
+        timestamp overwrites in place; a new run gets a new ``ran_at`` so
+        the trend history grows by one row per (test, invocation)."""
+        with self._write_lock:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO eval_suite_runs
+                        (suite_name, test_name, status, score, reason, ran_at, sha)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        suite_name or "",
+                        test_name or "",
+                        status or "error",
+                        None if score is None else float(score),
+                        (reason or "")[:500],
+                        int(ran_at),
+                        (sha or "")[:40],
+                    ],
+                )
+            except Exception:
+                log.exception(
+                    "local store: persist_eval_suite_run failed for %s/%s",
+                    suite_name, test_name,
+                )
+
+    def query_recent_suite_runs(
+        self,
+        *,
+        suite_name: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return recent ``eval_suite_runs`` rows, newest first. Optional
+        ``suite_name`` filter for the per-suite trend chart."""
+        if suite_name:
+            sql = (
+                "SELECT suite_name, test_name, status, score, reason, ran_at, sha "
+                "FROM eval_suite_runs WHERE suite_name = ? "
+                "ORDER BY ran_at DESC LIMIT ?"
+            )
+            params: list[Any] = [suite_name, int(limit)]
+        else:
+            sql = (
+                "SELECT suite_name, test_name, status, score, reason, ran_at, sha "
+                "FROM eval_suite_runs ORDER BY ran_at DESC LIMIT ?"
+            )
+            params = [int(limit)]
+        cols = ["suite_name", "test_name", "status", "score", "reason", "ran_at", "sha"]
+        try:
+            rows = self._fetch(sql, params)
+        except Exception as e:
+            log.warning("local store: query_recent_suite_runs failed: %s", e)
+            return []
+        return [dict(zip(cols, r)) for r in rows]
 
     def query_sessions_table(
         self,

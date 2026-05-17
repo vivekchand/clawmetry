@@ -1,0 +1,68 @@
+# ClawMetry golden-eval gate for release branches.
+#
+# Drop this file into .github/workflows/clawmetry-evals.yml in your agent
+# repo. It runs every golden test in evals/golden.yaml on every pull
+# request and blocks the merge if any test fails.
+#
+# Setup (2 minutes):
+#   1. Commit your suite to your repo at evals/golden.yaml
+#      (template below; see docs/EVALS_CI_INTEGRATION.md for the schema).
+#   2. Add ANTHROPIC_API_KEY (or OPENAI_API_KEY) to your repo Secrets.
+#   3. Drop this workflow file in and push.
+#
+# Cost guard: 100 judge calls/hour ceiling (per CLAWMETRY_EVALS_RATE_LIMIT)
+# plus skip-trivial-sessions filter caps spend at ~$0.001 per test with
+# the default claude-haiku-4-5 judge. A 20-test suite costs ~$0.02.
+
+name: ClawMetry Evals
+
+on:
+  pull_request:
+    paths:
+      - "evals/**"
+      - "prompts/**"
+      - "src/**"
+  workflow_dispatch:
+
+jobs:
+  golden-evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ClawMetry
+        run: |
+          python -m pip install --upgrade pip
+          pip install clawmetry pyyaml
+
+      - name: Stage golden suite
+        run: |
+          mkdir -p ~/.clawmetry/evals
+          cp evals/golden.yaml ~/.clawmetry/evals/golden.yaml
+
+      - name: Run golden evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAWMETRY_EVALS_AGENT_CMD: ${{ env.CLAWMETRY_EVALS_AGENT_CMD || 'python -m your_agent --eval-mode' }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          clawmetry eval --suite golden
+
+      - name: Upload result JSON
+        if: always()
+        run: |
+          clawmetry eval --suite golden --no-persist --json > eval-result.json || true
+        # Stored as a build artefact so a failed run leaves a paste-able
+        # diagnosis for the PR author.
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: clawmetry-eval-result
+          path: eval-result.json
