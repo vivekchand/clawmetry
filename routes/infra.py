@@ -228,6 +228,108 @@ def _try_local_store_flow_events(limit=200, since=None):
     return events
 
 
+def _try_local_store_cost_optimizer():
+    """DuckDB fast path for /api/cost-optimizer's data-derived fields.
+
+    Tier-1 surface #12 in the 2026-05-17 DuckDB coverage audit
+    (issue #1565). The legacy handler reads ``todayCost`` and
+    ``projectedMonthlyCost`` from ``dashboard._metrics_store`` (an
+    in-memory ring populated by the OTLP/HTTP interceptor) and
+    ``expensiveOps`` from the same ring. On a fresh install or after a
+    process restart the ring is empty — the optimizer renders $0 / no
+    optimisation candidates even when DuckDB holds weeks of real usage
+    rows. This helper closes that gap.
+
+    Returns a dict the route merges into its response (keeps host-state
+    fields — system, localModels, taskRecommendations, ollamaInstalled,
+    llmfitAvailable — on the legacy path; only swaps the data slice).
+    Returns ``None`` when DuckDB has zero cost-bearing rows so the
+    caller can keep the legacy in-memory values.
+
+    Source preference (same call order as ``_try_local_store_usage_forecast``
+    in routes/usage.py — see ``feedback_usage_dedupe_pattern.md``):
+      * ``query_aggregates`` — SQL-deduped daily rollup over the FULL
+        events table; safe for cost (covers tool retries / fallback
+        rows the splits walker drops).
+      * ``query_events`` — recent high-cost individual rows for
+        ``expensiveOps`` (descending by cost). Capped at 200 rows so a
+        many-week DuckDB stays cheap to scan.
+    """
+    from routes.sessions import _ls_call  # late import to avoid cycle
+    from datetime import datetime as _dt, timezone as _tz
+
+    agg_rows = _ls_call("query_aggregates") or []
+    if not agg_rows:
+        # No cost-bearing rows in DuckDB → defer to legacy path so a
+        # fresh install still gets the in-memory ring values (which
+        # may have been populated by the live interceptor before the
+        # daemon flushed anything to disk).
+        return None
+
+    today = _dt.now(_tz.utc).date().isoformat()
+    month_prefix = today[:7]  # "YYYY-MM"
+    today_cost = 0.0
+    month_cost = 0.0
+    days_seen: set[str] = set()
+    for r in agg_rows:
+        day = (r.get("day") or "")
+        if not day:
+            continue
+        c = float(r.get("cost_usd") or 0.0)
+        if day == today:
+            today_cost += c
+        if day.startswith(month_prefix):
+            month_cost += c
+            days_seen.add(day)
+
+    # Daily-average projection over the days we actually observed this
+    # month, scaled to a 30-day month so the figure matches the legacy
+    # _get_cost_summary formula (which projects month/days * 30).
+    days_in_window = max(1, len(days_seen))
+    projected = (month_cost / days_in_window) * 30.0 if month_cost > 0 else 0.0
+
+    # expensiveOps: top recent rows by cost_usd. Walk the same row shape
+    # _get_expensive_operations builds (model + cost + tokens + timeAgo).
+    expensive_ops: list[dict] = []
+    try:
+        evs = _ls_call("query_events", limit=200) or []
+    except Exception:
+        evs = []
+    candidates = []
+    for ev in evs:
+        cost = float(ev.get("cost_usd") or 0.0)
+        if cost <= 0.01:
+            continue
+        model = (ev.get("model") or "").strip() or "unknown"
+        tokens = int(ev.get("token_count") or 0)
+        ts = ev.get("ts") or ""
+        time_ago = ""
+        if ts:
+            try:
+                time_ago = _dt.fromisoformat(
+                    ts.replace("Z", "+00:00")
+                ).strftime("%H:%M")
+            except Exception:
+                time_ago = ""
+        candidates.append({
+            "model": model,
+            "cost": cost,
+            "tokens": f"{tokens:,}" if tokens > 0 else "unknown",
+            "timeAgo": time_ago,
+            "canOptimize": False,
+        })
+    expensive_ops = sorted(
+        candidates, key=lambda x: x["cost"], reverse=True
+    )[:10]
+
+    return {
+        "todayCost": round(today_cost, 4),
+        "projectedMonthlyCost": round(projected, 4),
+        "expensiveOps": expensive_ops,
+        "_source": "local_store",
+    }
+
+
 @bp_logs.route("/api/flow-events")
 @bp_logs.route("/api/flow")
 def api_flow_events():
@@ -998,6 +1100,20 @@ def api_cost_optimizer():
         costs = _d._get_cost_summary()
         expensive_ops = _d._get_expensive_operations()
         ollama_installed = _d._detect_ollama()
+        # DuckDB fast path (refs #1565). The legacy ``_get_cost_summary``
+        # + ``_get_expensive_operations`` helpers read from the in-memory
+        # ``metrics_store`` ring (populated by the HTTP interceptor);
+        # that ring resets on process restart so the optimizer renders
+        # $0 / no candidates even when DuckDB holds weeks of real usage
+        # rows. When the local store has data, swap in its values for
+        # the data-derived slice (todayCost / projectedMonthlyCost /
+        # expensiveOps) and tag _source so the audit canary fires.
+        ls_slice = None
+        if is_local_store_read_enabled():
+            try:
+                ls_slice = _try_local_store_cost_optimizer()
+            except Exception:
+                ls_slice = None
 
         # Run llmfit
         llmfit_raw = {}
@@ -1142,19 +1258,27 @@ def api_cost_optimizer():
         today = costs.get("today", 0) or 0
         projected = costs.get("projected", 0) or (today * 30)
 
-        return jsonify(
-            {
-                "system": system_out,
-                "localModels": local_models,
-                "taskRecommendations": task_recs[:6],
-                "todayCost": today,
-                "projectedMonthlyCost": projected,
-                "potentialSavings": "60-80% with local models for crons/heartbeats",
-                "expensiveOps": expensive_ops,
-                "ollamaInstalled": ollama_installed,
-                "llmfitAvailable": bool(llmfit_raw),
-            }
-        )
+        payload = {
+            "system": system_out,
+            "localModels": local_models,
+            "taskRecommendations": task_recs[:6],
+            "todayCost": today,
+            "projectedMonthlyCost": projected,
+            "potentialSavings": "60-80% with local models for crons/heartbeats",
+            "expensiveOps": expensive_ops,
+            "ollamaInstalled": ollama_installed,
+            "llmfitAvailable": bool(llmfit_raw),
+        }
+        if ls_slice is not None:
+            payload["todayCost"] = ls_slice["todayCost"]
+            payload["projectedMonthlyCost"] = ls_slice["projectedMonthlyCost"]
+            # Only override expensiveOps when DuckDB actually surfaced
+            # candidates — keep the in-memory list if the local store is
+            # populated but no row crossed the $0.01 threshold.
+            if ls_slice.get("expensiveOps"):
+                payload["expensiveOps"] = ls_slice["expensiveOps"]
+            payload["_source"] = "local_store"
+        return jsonify(payload)
     except Exception as e:
         # Hard fallback path: even llmfit + everything else broke. Use real
         # host detection so we never lie about the user's machine.
