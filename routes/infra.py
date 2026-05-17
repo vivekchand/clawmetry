@@ -83,6 +83,253 @@ def api_logs():
     return jsonify({"lines": lines, "date": date_str})
 
 
+# Tool-name → flow-tab short key. OpenClaw emits these tool names verified
+# against production session JSONLs. Mapped to the short key our Flow SVG
+# path ids expect (exec / browser / search / memory / session / cron / tts).
+# Shared between the legacy SSE parser and the DuckDB fast-path helper so
+# both surfaces emit the same `tool` field for the front-end.
+_FLOW_TOOL_MAP = {
+    "exec": "exec", "process": "exec", "read": "exec", "write": "exec",
+    "write_file": "exec", "edit": "exec", "Bash": "exec", "Read": "exec",
+    "Write": "exec", "Edit": "exec",
+    "web_search": "search", "ollama_web_search": "search",
+    "web_fetch": "browser", "ollama_web_fetch": "browser",
+    "browser": "browser", "image": "browser",
+    "memory_search": "memory", "memory_get": "memory",
+    "sessions_spawn": "session",
+    "cron": "cron", "tts": "tts",
+}
+
+# Channel-label hints carried inside `Sender (untrusted metadata)` user blocks.
+_FLOW_CHANNEL_LABELS = {
+    "openclaw-tui":        "tui",
+    "openclaw-control-ui": "webchat",
+    "openclaw-webchat":    "webchat",
+}
+
+
+def _try_local_store_flow_events(limit=200, since=None):
+    """DuckDB fast path for /api/flow-events. Returns a chronologically-
+    ordered list of normalised flow events ({type, channel|tool, ts,
+    session_id}) drawn from the daemon-ingested ``events`` table, OR
+    ``None`` when the local store has no relevant rows (callers fall
+    through to the legacy JSONL/gateway-log tail).
+
+    Shape mirrors what the SSE parser yields (msg_in / msg_out /
+    tool_call / tool_result) so downstream consumers can treat the JSON
+    envelope as a snapshot prefix of the live stream. Tagged
+    ``_source: 'local_store'`` by the caller. Closes the Tier-1 audit
+    candidate for `/api/flow-events` (refs #1565)."""
+    from routes.sessions import _ls_call  # late import to avoid cycle
+    rows = _ls_call("query_events", since=since, limit=limit) or []
+    if not rows:
+        return None
+
+    # The daemon-normalised v3 event types that map to flow lanes. Real
+    # OpenClaw v3 ingest emits these (see
+    # reference_openclaw_v3_event_types.md); we also accept legacy and
+    # tool-call alternates so older sessions still surface. If NONE of
+    # the rows match we return None so the legacy parser still drives
+    # the SSE timeline (pre-v3 / non-OpenClaw agents).
+    _FLOW_TYPES = frozenset({
+        "prompt.submitted", "model.completed", "model.changed",
+        "tool.call", "tool_call", "tool.result", "tool_use_result",
+        "message", "assistant", "user",
+    })
+    matched = [r for r in rows if r.get("event_type") in _FLOW_TYPES]
+    if not matched:
+        return None
+
+    def _extract_channel(payload):
+        """Pull a channel hint from a `data` blob. Looks at top-level
+        ``channel``/``provider`` first, then walks Sender-metadata in
+        prompt text the same way the SSE parser does."""
+        if not isinstance(payload, dict):
+            return None
+        for key in ("channel", "provider", "origin"):
+            v = payload.get(key)
+            if isinstance(v, str) and v:
+                lk = v.lower()
+                return _FLOW_CHANNEL_LABELS.get(lk, lk)
+        text = payload.get("finalPromptText") or ""
+        if not isinstance(text, str) or "Sender (untrusted metadata)" not in text:
+            return None
+        try:
+            start = text.index("```json")
+            end = text.index("```", start + 8)
+            meta = json.loads(text[start + 7:end].strip())
+            label = str(meta.get("label") or meta.get("id") or "").lower()
+            return _FLOW_CHANNEL_LABELS.get(label, label) or None
+        except Exception:
+            return None
+
+    events: list = []
+    for row in matched:
+        et = row.get("event_type") or ""
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        sid = row.get("session_id") or ""
+        ts = row.get("ts") or ""
+
+        if et == "prompt.submitted" or (et in ("message", "user")
+                                         and (data.get("role") == "user")):
+            ch = _extract_channel(data) or "telegram"
+            events.append({"type": "msg_in", "channel": ch,
+                           "ts": ts, "session_id": sid,
+                           "_source": "local_store"})
+            continue
+
+        if et == "model.completed" or (et in ("message", "assistant")
+                                        and data.get("role") == "assistant"):
+            # Surface tool invocations carried inside the assistant turn
+            # as separate tool_call events so the Flow timeline matches
+            # the SSE shape. Outer assistant reply itself is the
+            # "gateway bubble" — emitted as msg_out so the channel lane
+            # lights up.
+            tool_metas = []
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            for src in (data.get("toolMetas"), inner.get("toolMetas")):
+                if isinstance(src, list):
+                    tool_metas.extend(src)
+            for tm in tool_metas:
+                if not isinstance(tm, dict):
+                    continue
+                name = tm.get("name") or ""
+                tool_key = _FLOW_TOOL_MAP.get(name, name)
+                events.append({"type": "tool_call", "tool": tool_key,
+                               "ts": ts, "session_id": sid,
+                               "_source": "local_store"})
+            ch = _extract_channel(data) or "telegram"
+            events.append({"type": "msg_out", "channel": ch,
+                           "ts": ts, "session_id": sid,
+                           "_source": "local_store"})
+            continue
+
+        if et in ("tool.call", "tool_call"):
+            name = (data.get("tool") or data.get("tool_name")
+                    or data.get("name") or "")
+            tool_key = _FLOW_TOOL_MAP.get(name, name)
+            events.append({"type": "tool_call", "tool": tool_key,
+                           "ts": ts, "session_id": sid,
+                           "_source": "local_store"})
+            continue
+
+        if et in ("tool.result", "tool_use_result"):
+            name = (data.get("tool") or data.get("tool_name")
+                    or data.get("name") or "")
+            tool_key = _FLOW_TOOL_MAP.get(name, name or "exec")
+            events.append({"type": "tool_result", "tool": tool_key,
+                           "ts": ts, "session_id": sid,
+                           "_source": "local_store"})
+            continue
+
+    # query_events returns DESC; reverse so the caller gets a
+    # chronological snapshot prefix (matches what the SSE stream emits).
+    events.reverse()
+    return events
+
+
+def _try_local_store_cost_optimizer():
+    """DuckDB fast path for /api/cost-optimizer's data-derived fields.
+
+    Tier-1 surface #12 in the 2026-05-17 DuckDB coverage audit
+    (issue #1565). The legacy handler reads ``todayCost`` and
+    ``projectedMonthlyCost`` from ``dashboard._metrics_store`` (an
+    in-memory ring populated by the OTLP/HTTP interceptor) and
+    ``expensiveOps`` from the same ring. On a fresh install or after a
+    process restart the ring is empty — the optimizer renders $0 / no
+    optimisation candidates even when DuckDB holds weeks of real usage
+    rows. This helper closes that gap.
+
+    Returns a dict the route merges into its response (keeps host-state
+    fields — system, localModels, taskRecommendations, ollamaInstalled,
+    llmfitAvailable — on the legacy path; only swaps the data slice).
+    Returns ``None`` when DuckDB has zero cost-bearing rows so the
+    caller can keep the legacy in-memory values.
+
+    Source preference (same call order as ``_try_local_store_usage_forecast``
+    in routes/usage.py — see ``feedback_usage_dedupe_pattern.md``):
+      * ``query_aggregates`` — SQL-deduped daily rollup over the FULL
+        events table; safe for cost (covers tool retries / fallback
+        rows the splits walker drops).
+      * ``query_events`` — recent high-cost individual rows for
+        ``expensiveOps`` (descending by cost). Capped at 200 rows so a
+        many-week DuckDB stays cheap to scan.
+    """
+    from routes.sessions import _ls_call  # late import to avoid cycle
+    from datetime import datetime as _dt, timezone as _tz
+
+    agg_rows = _ls_call("query_aggregates") or []
+    if not agg_rows:
+        # No cost-bearing rows in DuckDB → defer to legacy path so a
+        # fresh install still gets the in-memory ring values (which
+        # may have been populated by the live interceptor before the
+        # daemon flushed anything to disk).
+        return None
+
+    today = _dt.now(_tz.utc).date().isoformat()
+    month_prefix = today[:7]  # "YYYY-MM"
+    today_cost = 0.0
+    month_cost = 0.0
+    days_seen: set[str] = set()
+    for r in agg_rows:
+        day = (r.get("day") or "")
+        if not day:
+            continue
+        c = float(r.get("cost_usd") or 0.0)
+        if day == today:
+            today_cost += c
+        if day.startswith(month_prefix):
+            month_cost += c
+            days_seen.add(day)
+
+    # Daily-average projection over the days we actually observed this
+    # month, scaled to a 30-day month so the figure matches the legacy
+    # _get_cost_summary formula (which projects month/days * 30).
+    days_in_window = max(1, len(days_seen))
+    projected = (month_cost / days_in_window) * 30.0 if month_cost > 0 else 0.0
+
+    # expensiveOps: top recent rows by cost_usd. Walk the same row shape
+    # _get_expensive_operations builds (model + cost + tokens + timeAgo).
+    expensive_ops: list[dict] = []
+    try:
+        evs = _ls_call("query_events", limit=200) or []
+    except Exception:
+        evs = []
+    candidates = []
+    for ev in evs:
+        cost = float(ev.get("cost_usd") or 0.0)
+        if cost <= 0.01:
+            continue
+        model = (ev.get("model") or "").strip() or "unknown"
+        tokens = int(ev.get("token_count") or 0)
+        ts = ev.get("ts") or ""
+        time_ago = ""
+        if ts:
+            try:
+                time_ago = _dt.fromisoformat(
+                    ts.replace("Z", "+00:00")
+                ).strftime("%H:%M")
+            except Exception:
+                time_ago = ""
+        candidates.append({
+            "model": model,
+            "cost": cost,
+            "tokens": f"{tokens:,}" if tokens > 0 else "unknown",
+            "timeAgo": time_ago,
+            "canOptimize": False,
+        })
+    expensive_ops = sorted(
+        candidates, key=lambda x: x["cost"], reverse=True
+    )[:10]
+
+    return {
+        "todayCost": round(today_cost, 4),
+        "projectedMonthlyCost": round(projected, 4),
+        "expensiveOps": expensive_ops,
+        "_source": "local_store",
+    }
+
+
 @bp_logs.route("/api/flow-events")
 @bp_logs.route("/api/flow")
 def api_flow_events():
@@ -94,7 +341,20 @@ def api_flow_events():
     # E2E health checks and non-SSE clients get a lightweight JSON response
     accept = request.headers.get("Accept", "")
     if request.method == "HEAD" or "text/event-stream" not in accept:
-        return jsonify({"ok": True, "type": "flow-events", "streaming": True})
+        envelope = {"ok": True, "type": "flow-events", "streaming": True}
+        # DuckDB fast path (refs #1565). Hydrate the JSON envelope with a
+        # snapshot of recent flow events so callers that can't (or don't
+        # want to) hold an SSE connection still see real data. SSE is the
+        # only path that yields LIVE updates; this path is the snapshot.
+        if is_local_store_read_enabled():
+            try:
+                snap = _try_local_store_flow_events(limit=200)
+            except Exception:
+                snap = None
+            if snap is not None:
+                envelope["events"] = snap
+                envelope["_source"] = "local_store"
+        return jsonify(envelope)
     import glob as _glob
 
     def _find_active_jsonl():
@@ -840,6 +1100,20 @@ def api_cost_optimizer():
         costs = _d._get_cost_summary()
         expensive_ops = _d._get_expensive_operations()
         ollama_installed = _d._detect_ollama()
+        # DuckDB fast path (refs #1565). The legacy ``_get_cost_summary``
+        # + ``_get_expensive_operations`` helpers read from the in-memory
+        # ``metrics_store`` ring (populated by the HTTP interceptor);
+        # that ring resets on process restart so the optimizer renders
+        # $0 / no candidates even when DuckDB holds weeks of real usage
+        # rows. When the local store has data, swap in its values for
+        # the data-derived slice (todayCost / projectedMonthlyCost /
+        # expensiveOps) and tag _source so the audit canary fires.
+        ls_slice = None
+        if is_local_store_read_enabled():
+            try:
+                ls_slice = _try_local_store_cost_optimizer()
+            except Exception:
+                ls_slice = None
 
         # Run llmfit
         llmfit_raw = {}
@@ -984,19 +1258,27 @@ def api_cost_optimizer():
         today = costs.get("today", 0) or 0
         projected = costs.get("projected", 0) or (today * 30)
 
-        return jsonify(
-            {
-                "system": system_out,
-                "localModels": local_models,
-                "taskRecommendations": task_recs[:6],
-                "todayCost": today,
-                "projectedMonthlyCost": projected,
-                "potentialSavings": "60-80% with local models for crons/heartbeats",
-                "expensiveOps": expensive_ops,
-                "ollamaInstalled": ollama_installed,
-                "llmfitAvailable": bool(llmfit_raw),
-            }
-        )
+        payload = {
+            "system": system_out,
+            "localModels": local_models,
+            "taskRecommendations": task_recs[:6],
+            "todayCost": today,
+            "projectedMonthlyCost": projected,
+            "potentialSavings": "60-80% with local models for crons/heartbeats",
+            "expensiveOps": expensive_ops,
+            "ollamaInstalled": ollama_installed,
+            "llmfitAvailable": bool(llmfit_raw),
+        }
+        if ls_slice is not None:
+            payload["todayCost"] = ls_slice["todayCost"]
+            payload["projectedMonthlyCost"] = ls_slice["projectedMonthlyCost"]
+            # Only override expensiveOps when DuckDB actually surfaced
+            # candidates — keep the in-memory list if the local store is
+            # populated but no row crossed the $0.01 threshold.
+            if ls_slice.get("expensiveOps"):
+                payload["expensiveOps"] = ls_slice["expensiveOps"]
+            payload["_source"] = "local_store"
+        return jsonify(payload)
     except Exception as e:
         # Hard fallback path: even llmfit + everything else broke. Use real
         # host detection so we never lie about the user's machine.
@@ -1076,22 +1358,159 @@ def api_cost_optimization():
         )
 
 
+# Tool keys that the legacy log-scanner tracked as "command" patterns. We
+# preserve the exact shape here so the unchanged ``_generate_automation_suggestions``
+# transformer (in ``dashboard.py``) still emits the same suggestion rows
+# for cron / skill candidates (curl, git, npm, systemctl, grep, find, ls).
+# Real OpenClaw v3 tool names are mapped onto these legacy buckets so the
+# fast path produces equivalent recommendations without re-walking
+# moltbot-*.log files that don't exist on most installs.
+_AUTOMATION_TOOL_TO_LEGACY = {
+    # Bash/exec family → "curl"/"git"/"npm"/"systemctl" classification is
+    # delegated to the suggestion transformer via raw tool name. For tools
+    # without a legacy bucket we still surface the pattern but the
+    # transformer skips the cron/skill upsell — fine, the universal
+    # suggestions still land.
+    "Bash": "bash",
+    "exec": "bash",
+    "process": "bash",
+    "Read": "read",
+    "read": "read",
+    "Write": "write",
+    "write": "write",
+    "write_file": "write",
+    "Edit": "edit",
+    "edit": "edit",
+    "Grep": "grep",
+    "grep": "grep",
+    "Glob": "find",
+    "find": "find",
+    "web_search": "curl",       # external HTTP → same bucket as curl
+    "ollama_web_search": "curl",
+    "web_fetch": "curl",
+    "ollama_web_fetch": "curl",
+}
+
+
+def _try_local_store_automation_analysis():
+    """Tier-1 DuckDB fast path for /api/automation-analysis (refs #1565).
+
+    Replaces the legacy ``dashboard._analyze_work_patterns`` scanner,
+    which reads ``~/.openclaw/logs/moltbot-YYYY-MM-DD.log`` files and
+    journalctl output to count tool/command frequency. On modern OpenClaw
+    installs those log files don't exist (the agent runtime now writes
+    structured JSONL events into the session transcripts, ingested into
+    DuckDB by the sync daemon) — so the legacy path silently returns an
+    empty pattern list on every fresh install, which then makes the
+    suggestion transformer emit ONLY universal fallback rows (no
+    tool-driven cron / skill candidates). Same silent-zero hazard as the
+    cost-optimizer in-memory ring (see PR #1576).
+
+    This helper queries the daemon-normalised ``events`` table for the
+    last 7 days of tool invocations, buckets them by tool name, and
+    builds the same ``{title, description, frequency, confidence,
+    priority, type, target}`` rows the legacy scanner produced. The
+    downstream transformer (``_generate_automation_suggestions``) is
+    pure-Python and unchanged — same suggestion shape, same dedupe, same
+    8-row cap.
+
+    Returns ``None`` when:
+      * the daemon proxy is unreachable AND direct DuckDB open fails
+      * the events table has no tool-call rows in the 7d window
+        (caller falls back to the legacy log scanner so journalctl users
+        keep working)
+    """
+    from routes.sessions import _ls_call  # late import: avoid cycle
+    since_iso = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    rows = _ls_call(
+        "query_tool_call_invocations", since=since_iso, limit=50_000
+    ) or []
+    if not rows:
+        return None
+
+    # Bucket invocations by legacy tool key. We accept both the v3 native
+    # name (e.g. "Bash") and the legacy log-scanner key (e.g. "bash") so
+    # the suggestion transformer's hard-coded match list keeps working.
+    freq: dict = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        raw = (r.get("name") or "").strip()
+        if not raw:
+            continue
+        key = _AUTOMATION_TOOL_TO_LEGACY.get(raw, raw.lower())
+        freq[key] = freq.get(key, 0) + 1
+
+    if not freq:
+        return None
+
+    patterns: list = []
+    for cmd, count in freq.items():
+        # Same threshold as the legacy scanner — 5+ uses/week. Keeps the
+        # noise floor identical so callers don't see a flood of new low-
+        # confidence rows just because DuckDB has every event.
+        if count < 5:
+            continue
+        confidence = min(90, count * 10)
+        priority = "high" if count >= 15 else "medium" if count >= 10 else "low"
+        patterns.append({
+            "title": f'Frequent "{cmd}" command usage',
+            "description": (
+                f'Command "{cmd}" has been used {count} times in the past '
+                f'week. This might be a candidate for automation.'
+            ),
+            "frequency": f"{count} times/week",
+            "confidence": confidence,
+            "priority": priority,
+            "type": "command",
+            "target": cmd,
+            "_source": "local_store",
+        })
+
+    if not patterns:
+        return None
+    patterns.sort(
+        key=lambda x: (
+            x["priority"] == "high",
+            x["priority"] == "medium",
+            x["confidence"],
+        ),
+        reverse=True,
+    )
+    return patterns
+
+
 @bp_config.route("/api/automation-analysis")
 def api_automation_analysis():
     """Automation pattern analysis and suggestions for new cron jobs or skills."""
     import dashboard as _d
     try:
-        # Analyze recent patterns
-        patterns = _d._analyze_work_patterns()
+        patterns = None
+        source = None
+        if is_local_store_read_enabled():
+            try:
+                patterns = _try_local_store_automation_analysis()
+            except Exception:
+                patterns = None
+            if patterns is not None:
+                source = "local_store"
+        if patterns is None:
+            # Legacy log-scanner fallback (journalctl + moltbot-*.log).
+            patterns = _d._analyze_work_patterns()
 
-        # Generate automation suggestions
+        # Pure-Python transformer — unchanged shape. Works on both the
+        # DuckDB rows and the legacy log-scanner rows since they share
+        # the same {type, target, ...} schema.
         suggestions = _d._generate_automation_suggestions(patterns)
 
-        return jsonify({
+        body = {
             'patterns': patterns,
             'suggestions': suggestions,
-            'lastAnalysis': datetime.now(timezone.utc).isoformat()
-        })
+            'lastAnalysis': datetime.now(timezone.utc).isoformat(),
+        }
+        if source:
+            body['_source'] = source
+        return jsonify(body)
     except Exception as e:
         return jsonify({
             'patterns': [],

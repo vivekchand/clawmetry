@@ -730,10 +730,22 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
             s = str(val)
         return s if len(s) <= limit else s[:limit] + "…"
 
+    # v3 turn / lifecycle event types — presence of ANY of these in DuckDB
+    # for the session means the daemon HAS ingested it. We must therefore
+    # serve from the fast path even when there are zero tool calls, so the
+    # legacy JSONL fallback is reserved for genuinely missing-from-DuckDB
+    # sessions. See reference_openclaw_v3_event_types.md.
+    _V3_TURN_TYPES = frozenset({
+        "session.started", "prompt.submitted", "model.completed",
+        "model.changed", "tool.call", "tool.result", "tool_use",
+        "tool_use_result", "custom",
+    })
+
     calls: dict = {}
     result_by_id: dict = {}
     turn_index = 0
     saw_any = False
+    earliest_ts_ms = 0
     for ev in rows:
         et = ev.get("event_type")
         data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
@@ -741,14 +753,21 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
             (data.get("timestamp") if isinstance(data, dict) else None)
             or ev.get("ts")
         )
+        if ev_ts_ms and (earliest_ts_ms == 0 or ev_ts_ms < earliest_ts_ms):
+            earliest_ts_ms = ev_ts_ms
+
+        # Any recognised v3 lifecycle / turn event proves the daemon has
+        # ingested this session. Mark saw_any so we return a populated
+        # (possibly tool-empty) structure instead of falling back to JSONL.
+        if et in _V3_TURN_TYPES:
+            saw_any = True
 
         # v3 standalone tool_call row: self-contained call+result pair.
-        # Real OpenClaw v3 emits these instead of the legacy nested
-        # ``data.message.content[].toolCall`` blocks. Synthesize a tcid
-        # from the event id so the pairing logic below treats it as
-        # an immediately-resolved call.
-        if et == "tool_call":
-            saw_any = True
+        # Accepts the legacy ``tool_call`` name AND the daemon-normalised
+        # ``tool.call`` dot.separated name. Synthesize a tcid from the
+        # event id so the pairing logic below treats it as an
+        # immediately-resolved call.
+        if et in ("tool_call", "tool.call"):
             turn_index += 1
             tcid = ev.get("id") or f"tc-{ev_ts_ms}-{len(calls)}"
             tool_name = ""
@@ -759,7 +778,8 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                 tool_name = (data.get("tool") or data.get("tool_name")
                              or data.get("name") or "")
                 args_val = (data.get("args") if data.get("args") is not None
-                            else data.get("arguments"))
+                            else data.get("arguments") if data.get("arguments") is not None
+                            else data.get("input"))
                 result_val = data.get("result")
                 is_error = bool(data.get("is_error") or data.get("isError")
                                 or data.get("error"))
@@ -786,7 +806,81 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
                 }
             continue
 
-        # Legacy: nested toolCall / toolResult inside message blobs.
+        # v3 tool result event: pairs with a prior tool_use block by id.
+        # Daemon-normalised name is ``tool.result``; ``tool_use_result``
+        # is the raw v3 source type (rarely makes it through, but accept
+        # both for safety).
+        if et in ("tool.result", "tool_use_result"):
+            tcid = (data.get("tool_use_id") or data.get("toolUseId")
+                    or data.get("id") or "")
+            if tcid:
+                result_val = (data.get("output") if data.get("output") is not None
+                              else data.get("result"))
+                is_error = bool(data.get("is_error") or data.get("isError"))
+                try:
+                    rs = len(json.dumps(result_val, separators=(",", ":")))
+                except Exception:
+                    rs = len(str(result_val or ""))
+                result_by_id[tcid] = {
+                    "end_ms":         ev_ts_ms,
+                    "is_error":       is_error,
+                    "result_size":    rs,
+                    "result_preview": _truncate(result_val, result_chars),
+                }
+            continue
+
+        # v3 assistant turn (``model.completed``): tool invocations live as
+        # Anthropic-style ``tool_use`` blocks inside ``data.toolMetas`` (the
+        # ingest in clawmetry/sync.py::_v3_extract_tool_metas projects them
+        # to ``{id, name, input}``) and/or inside ``data.data.toolMetas``
+        # / ``data.message.content[]`` for raw envelopes. Walk all known
+        # locations so we don't miss any.
+        if et == "model.completed":
+            turn_index += 1
+            msg_model = (ev.get("model")
+                         or (data.get("modelId") if isinstance(data, dict) else "")
+                         or "")
+            msg_provider = (data.get("provider") if isinstance(data, dict) else "") or ""
+            msg_cost = float(ev.get("cost_usd") or 0.0)
+            tool_metas: list = []
+            inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+            for src in (data.get("toolMetas"), inner.get("toolMetas")):
+                if isinstance(src, list):
+                    tool_metas.extend(src)
+            # Also walk message.content[] for raw Anthropic-shape tool_use.
+            for envelope in (data.get("message"), inner.get("message")):
+                if isinstance(envelope, dict):
+                    content = envelope.get("content")
+                    if isinstance(content, list):
+                        for blk in content:
+                            if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                                tool_metas.append({
+                                    "id":    blk.get("id"),
+                                    "name":  blk.get("name") or "tool",
+                                    "input": blk.get("input") or {},
+                                })
+            seen_ids: set = set()
+            for meta in tool_metas:
+                if not isinstance(meta, dict):
+                    continue
+                tcid = meta.get("id") or ""
+                if not tcid or tcid in seen_ids:
+                    continue
+                seen_ids.add(tcid)
+                calls[tcid] = {
+                    "tool_call_id":     tcid,
+                    "tool_name":        meta.get("name", "") or "",
+                    "arguments":        _truncate(meta.get("input"), args_chars),
+                    "start_ms":         ev_ts_ms,
+                    "turn_index":       turn_index,
+                    "model":            msg_model,
+                    "provider":         msg_provider,
+                    "message_cost_usd": msg_cost,
+                }
+            continue
+
+        # Legacy: nested toolCall / toolResult inside ``message`` event rows
+        # (pre-v3 OpenClaw envelopes — kept for backward compatibility).
         if et != "message":
             continue
         saw_any = True
@@ -872,6 +966,11 @@ def _try_local_store_session_tools(sid: str, args_chars: int, result_chars: int,
     ]
     first_start = min((r["start_ms"] for r in tools if r.get("start_ms")), default=0)
     last_end = max((r.get("end_ms", 0) for r in tools), default=0)
+    # Tool-empty v3 sessions still need a sensible timeline anchor so the
+    # UI can render a "session ran, no tools" state — fall back to the
+    # earliest lifecycle event (typically session.started).
+    if not first_start and earliest_ts_ms:
+        first_start = earliest_ts_ms
     return {
         "session_id": sid,
         "tools": tools,
@@ -1255,13 +1354,168 @@ def api_cost_split():
     return jsonify({"sessions": top, "totals": totals})
 
 
+def _try_local_store_task_runs(*, limit, status_filter, parent_filter,
+                               requester_filter):
+    """Fast path for /api/task-runs. Reads the pre-aggregated ``subagents``
+    DuckDB table — the same source PR #1569 wired into
+    ``_try_local_store_subagents``. OpenClaw's ``~/.openclaw/tasks/runs.sqlite``
+    and the subagents snapshot the sync daemon write-throughs from each
+    system-snapshot pass (see ``clawmetry/sync.py`` ``ingest_subagent`` call
+    site) carry the same lifecycle rows — the ``subagents`` table schema
+    comment in ``clawmetry/local_store.py`` calls this out explicitly
+    ("Shared by OpenClaw subagents + Claude Code Task tool.").
+
+    Audit hint for #1565 was "derive from query_events task lifecycle
+    types" — verified 2026-05-17 against ``sync.py::_parse_v3_event``:
+    no ``task.started`` / ``task.completed`` event types exist in v3
+    ingest. The canonical DuckDB source for task lifecycle IS the
+    ``subagents`` table; the audit hint was directionally correct
+    (DuckDB, not sqlite/JSONL) but pointed at the wrong table.
+
+    Returns ``None`` when the table is empty so the legacy
+    ``~/.openclaw/tasks/runs.sqlite`` fallback fires for installs whose
+    daemon hasn't snapshotted yet. Field shape matches the legacy
+    handler's output exactly so the Subagents modal (``app.js``
+    ``renderModalSubagents``) — which keys on ``task_id``,
+    ``parent_task_id``, ``child_session_key``, ``status``,
+    ``duration_ms``, ``label``, ``task``, ``terminal_outcome`` —
+    keeps working bit-for-bit.
+    """
+    rows = _ls_call("query_subagents", limit=max(limit, 500))
+    if not rows:
+        return None
+
+    # Snapshot status (from gateway subagents list) uses a different
+    # vocabulary than runs.sqlite. The UI keys on the runs.sqlite shape
+    # (`running` / `succeeded` / `failed` / `pending`) for colour pills
+    # and the "Failed" stat chip — normalise so the modal renders
+    # consistently across data sources.
+    _status_map = {
+        "active":    "running",
+        "running":   "running",
+        "idle":      "running",
+        "completed": "succeeded",
+        "succeeded": "succeeded",
+        "done":      "succeeded",
+        "failed":    "failed",
+        "error":     "failed",
+        "pending":   "pending",
+        "stale":     "pending",
+    }
+
+    tasks: list = []
+    counts: dict = {}
+    for r in rows:
+        sid = r.get("subagent_id") or ""
+        if not sid:
+            continue
+        extra = r.get("data") if isinstance(r.get("data"), dict) else {}
+
+        # Derive the runs.sqlite field names from subagents columns + data blob.
+        # ``subagent_id`` IS the task_id (one row per task spawn). The
+        # ``child_session_key`` is OpenClaw's canonical key shape; the
+        # parent (``requester_session_key``) is the session that issued
+        # the spawn. ``parent_task_id`` is only set for nested spawns and
+        # may not exist in the snapshot — fall back to extra dict.
+        parent_sid = r.get("parent_session_id") or extra.get("spawnedBy") or ""
+        child_key = extra.get("key") or f"agent:main:subagent:{sid}"
+        requester_key = (extra.get("requester_session_key")
+                         or (f"agent:main:{parent_sid}" if parent_sid else ""))
+
+        # Apply caller filters BEFORE building the row so the response
+        # honours ``status=`` / ``parent_task_id=`` / ``requester_session_key=``
+        # exactly like the legacy sqlite WHERE clause.
+        raw_status = (r.get("status") or "").strip().lower()
+        mapped_status = _status_map.get(raw_status, raw_status or "unknown")
+        if status_filter and mapped_status != status_filter and raw_status != status_filter:
+            continue
+        if parent_filter and (extra.get("parent_task_id") or "") != parent_filter:
+            continue
+        if requester_filter and requester_key != requester_filter:
+            continue
+
+        # started/ended come from the snapshot's ms timestamps (data blob)
+        # when available; spawned_at/ended_at strings are best-effort
+        # ISO fallbacks. duration_ms mirrors the legacy formula.
+        started_ms = int(extra.get("started_at_ms")
+                         or extra.get("updated_at_ms") or 0)
+        ended_ms = int(extra.get("ended_at_ms") or 0)
+        if not started_ms and r.get("spawned_at"):
+            try:
+                started_ms = int(datetime.fromisoformat(
+                    str(r["spawned_at"]).replace("Z", "+00:00")
+                ).timestamp() * 1000)
+            except Exception:
+                started_ms = 0
+        if not ended_ms and r.get("ended_at"):
+            try:
+                ended_ms = int(datetime.fromisoformat(
+                    str(r["ended_at"]).replace("Z", "+00:00")
+                ).timestamp() * 1000)
+            except Exception:
+                ended_ms = 0
+        duration_ms = max(0, ended_ms - started_ms) if started_ms and ended_ms else 0
+
+        task_d = {
+            "task_id":              sid,
+            "parent_task_id":       extra.get("parent_task_id") or "",
+            "child_session_key":    child_key,
+            "requester_session_key": requester_key,
+            "agent_id":             extra.get("agent_id") or "main",
+            "run_id":               extra.get("runId") or extra.get("run_id") or "",
+            "label":                extra.get("label") or extra.get("displayName") or "",
+            "task":                 r.get("task") or "",
+            "status":               mapped_status,
+            "delivery_status":      extra.get("delivery_status") or "",
+            "task_kind":            extra.get("task_kind") or "subagent",
+            "parent_flow_id":       extra.get("parent_flow_id") or "",
+            "created_at":           started_ms,
+            "started_at":           started_ms,
+            "ended_at":             ended_ms,
+            "last_event_at":        int(extra.get("updated_at_ms") or 0),
+            "error":                extra.get("error") or "",
+            "progress_summary":     extra.get("progress_summary") or "",
+            "terminal_summary":     extra.get("terminal_summary")
+                                    or extra.get("completionResult") or "",
+            "terminal_outcome":     extra.get("terminal_outcome")
+                                    or extra.get("completionStatus") or "",
+            "duration_ms":          duration_ms,
+        }
+        tasks.append(task_d)
+        counts[mapped_status] = counts.get(mapped_status, 0) + 1
+        if len(tasks) >= limit:
+            break
+
+    # Sort newest-first by started_at then created_at, matching the
+    # legacy ``ORDER BY COALESCE(started_at, created_at, 0) DESC`` clause.
+    tasks.sort(key=lambda t: t.get("started_at") or t.get("created_at") or 0,
+               reverse=True)
+
+    total = len(tasks)
+    failed = counts.get("failed", 0)
+    err_rate = round(failed / total * 100, 1) if total else 0
+    return {
+        "tasks":   tasks,
+        "counts":  counts,
+        "stats": {
+            "total":          total,
+            "succeeded":      counts.get("succeeded", 0),
+            "failed":         failed,
+            "running":        counts.get("running", 0),
+            "error_rate_pct": err_rate,
+        },
+        "_source": "local_store",
+    }
+
+
 @bp_sessions.route("/api/task-runs")
 def api_task_runs():
-    """Read ~/.openclaw/tasks/runs.sqlite — the canonical subagent/task registry."""
+    """Subagent / task registry. Prefers the DuckDB ``subagents`` table
+    fast path (populated by the sync daemon's snapshot pass); falls
+    back to OpenClaw's ``~/.openclaw/tasks/runs.sqlite`` for installs
+    whose daemon hasn't run yet.
+    """
     import sqlite3
-    p = os.path.expanduser("~/.openclaw/tasks/runs.sqlite")
-    if not os.path.isfile(p):
-        return jsonify({"tasks": [], "counts": {}, "note": "runs.sqlite not found"})
     try:
         limit = max(1, min(int(request.args.get("limit", "500")), 5000))
     except ValueError:
@@ -1269,6 +1523,22 @@ def api_task_runs():
     status_filter = (request.args.get("status", "") or "").strip()
     parent_filter = (request.args.get("parent_task_id", "") or "").strip()
     requester_filter = (request.args.get("requester_session_key", "") or "").strip()
+
+    # DuckDB fast path — skips the sqlite open entirely when the daemon
+    # has snapshotted at least one subagent row.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_task_runs(
+            limit=limit,
+            status_filter=status_filter,
+            parent_filter=parent_filter,
+            requester_filter=requester_filter,
+        )
+        if fast is not None:
+            return jsonify(fast)
+
+    p = os.path.expanduser("~/.openclaw/tasks/runs.sqlite")
+    if not os.path.isfile(p):
+        return jsonify({"tasks": [], "counts": {}, "note": "runs.sqlite not found"})
     where = []
     args = []
     if status_filter:
@@ -1522,12 +1792,137 @@ def _scan_spawn_events_from_jsonl(sessions_dir, max_files=None, tail_bytes=None)
     return subs
 
 
+def _try_local_store_subagents():
+    """Fast path for /api/subagents. Reads the pre-aggregated ``subagents``
+    table that the sync daemon write-throughs from each system-snapshot
+    pass (see ``clawmetry/sync.py`` ``ingest_subagent`` call site). Each
+    row carries the same fields the JSONL-walking legacy path derives, so
+    we can serve the dashboard's Subagent Tracker tab without re-scanning
+    every session JSONL on every request.
+
+    Returns ``None`` when the table is empty so the legacy gateway-RPC +
+    JSONL fallback fires for older OpenClaw versions / installs whose
+    daemon hasn't snapshotted yet. Returns a populated shell (subagents=[],
+    counts zero'd) when the daemon HAS run but no subagents have been
+    spawned — keeps the route off the 100-file JSONL walker for the
+    common empty case.
+    """
+    rows = _ls_call("query_subagents", limit=500)
+    # Distinguish "store missing entirely" (rows is None) from "store is
+    # there but no subagent rows yet" (rows == []). Both return None so
+    # the legacy gateway-RPC + JSONL fallback fires — older OpenClaw
+    # installs whose daemon hasn't snapshotted to the table yet still
+    # surface their subagents via the JSONL spawn scan.
+    if not rows:
+        return None
+
+    now_ms = time.time() * 1000
+    subagents: list = []
+    counts = {"total": 0, "active": 0, "idle": 0, "stale": 0, "failed": 0}
+
+    def _parse_ts_ms(ts):
+        if not ts:
+            return 0
+        if isinstance(ts, (int, float)):
+            return int(ts)
+        try:
+            return int(datetime.fromisoformat(
+                str(ts).replace("Z", "+00:00")
+            ).timestamp() * 1000)
+        except Exception:
+            return 0
+
+    for r in rows:
+        sid = r.get("subagent_id") or ""
+        if not sid:
+            continue
+        # ``data`` BLOB carries the fields not promoted to first-class
+        # columns (model, label, displayName, sessionFile, updated_at_ms,
+        # runtime_ms). _decode_data_blob_rows already deserialised it.
+        extra = r.get("data") if isinstance(r.get("data"), dict) else {}
+        updated_at_ms = (extra.get("updated_at_ms")
+                         or _parse_ts_ms(r.get("updated_at"))
+                         or 0)
+        spawned_at_ms = _parse_ts_ms(r.get("spawned_at")) or updated_at_ms
+        runtime_ms = int(extra.get("runtime_ms") or 0)
+        if not runtime_ms and spawned_at_ms:
+            runtime_ms = max(0, int(now_ms - spawned_at_ms))
+
+        # Status: prefer the daemon's explicit classification verbatim
+        # (it may emit ``completed`` / ``running`` / etc. that aren't in
+        # the legacy bucket set — the UI handles those directly).
+        # Fall back to age-derived bucket only when status is missing.
+        status = (r.get("status") or "").strip().lower()
+        if not status:
+            age_ms = now_ms - (updated_at_ms or 0)
+            if age_ms < 120000:
+                status = "active"
+            elif age_ms < 600000:
+                status = "idle"
+            else:
+                status = "stale"
+
+        token_count = int(r.get("token_count") or 0)
+        # Build key in OpenClaw's canonical shape so Active-Tasks modal
+        # lookups keep working when the legacy path falls back later.
+        key = extra.get("key") or f"agent:main:subagent:{sid}"
+        display = (extra.get("displayName") or extra.get("label")
+                   or (r.get("task") or "")[:80] or sid[:20])
+        model = extra.get("model") or "unknown"
+
+        elapsed_s = runtime_ms // 1000
+        if elapsed_s < 60:
+            runtime = f"{elapsed_s}s"
+        elif elapsed_s < 3600:
+            runtime = f"{elapsed_s // 60}m"
+        else:
+            runtime = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+
+        counts["total"] += 1
+        counts[status] = counts.get(status, 0) + 1
+        subagents.append({
+            "sessionId":        sid,
+            "key":              key,
+            "displayName":      display,
+            "model":            model,
+            "status":           status,
+            "depth":            int(extra.get("depth") or 1),
+            "parent":           r.get("parent_session_id") or extra.get("spawnedBy"),
+            "totalTokens":      token_count,
+            "runtime":          runtime,
+            "runtimeMs":        runtime_ms,
+            "startedAt":        spawned_at_ms or updated_at_ms,
+            "updatedAt":        updated_at_ms,
+            "task":             r.get("task") or "",
+            "error":            extra.get("error") or "",
+            "completionResult": extra.get("completionResult") or "",
+            "completionStatus": extra.get("completionStatus") or "",
+            "completionTs":     extra.get("completionTs") or "",
+            "runtimeFormatted": extra.get("runtimeFormatted") or runtime,
+            "tokensIn":         int(extra.get("tokensIn") or 0),
+            "tokensOut":        int(extra.get("tokensOut") or 0),
+            "spawnAck":         extra.get("spawnAck") or "",
+            "runId":            extra.get("runId") or "",
+        })
+
+    _status_rank = {"active": 0, "idle": 1, "stale": 2, "failed": 3}
+    subagents.sort(key=lambda x: (_status_rank.get(x["status"], 9), x["depth"]))
+    return {
+        "subagents": subagents,
+        "counts":    counts,
+        "_source":   "local_store",
+    }
+
+
 @bp_sessions.route("/api/subagents")
 def api_subagents():
     """Return sub-agent list with depth/parent fields for the tree view.
 
     Data sources merged (in priority order):
 
+    0. DuckDB ``subagents`` table fast path (when the local store is
+       enabled) — pre-aggregated by the sync daemon's snapshot pass, so
+       we don't re-walk every session JSONL on every dashboard render.
     1. OpenClaw's canonical `subagents action=list` registry — live +
        last-30-min recent, with status explicitly.
     2. `sessions_list` gateway RPC filtered by key substring — catches
@@ -1545,6 +1940,16 @@ def api_subagents():
         cached = _SUBAGENTS_CACHE.get("data")
         if cached is not None and (time.time() - float(_SUBAGENTS_CACHE.get("ts") or 0)) < _SUBAGENTS_CACHE_TTL_SECONDS:
             return jsonify(cached)
+
+    # Source 0: DuckDB fast path. Skips the JSONL spawn-scan + gateway RPC
+    # entirely. ``full_scan`` still defers to the legacy path so the "force
+    # a complete JSONL rescan" escape hatch keeps working.
+    if not full_scan and is_local_store_read_enabled():
+        fast = _try_local_store_subagents()
+        if fast is not None:
+            _SUBAGENTS_CACHE["data"] = fast
+            _SUBAGENTS_CACHE["ts"] = time.time()
+            return jsonify(fast)
 
     # Source 1: canonical subagent registry
     reg_active = []
@@ -4012,12 +4417,84 @@ def _detect_model_transitions(path):
     return transitions
 
 
+def _try_local_store_model_transitions(sid: str):
+    """Tier-1 DuckDB fast path for /api/sessions/<sid>/model-transitions
+    (issue #1565). Reads ``event_type='model.changed'`` rows for one
+    session out of the DuckDB ``events`` table and folds them into the
+    same ``transitions`` shape the legacy JSONL walker produces.
+
+    Real OpenClaw v3 emits an explicit ``model_change`` JSONL event for
+    every model switch, which the sync daemon namespaces to
+    ``model.changed`` (see ``reference_openclaw_v3_event_types.md`` +
+    ``tests/test_v3_schema_parser.py::test_v3_model_change_becomes_model_changed``).
+    Each row's ``data`` blob carries ``modelId`` + ``provider`` — the
+    only fields the response needs. ``turn`` is the 1-based ordinal of
+    the transition (i.e. position in the model.changed sequence) since
+    we no longer have a cheap assistant-message counter without a
+    second query.
+
+    Returns ``None`` when no ``model.changed`` rows exist for the
+    session so the legacy JSONL walker still fires for older OpenClaw
+    installs (pre-v3 daemons, or sessions ingested before the namespace
+    rewrite landed).
+    """
+    if not sid:
+        return None
+    rows = _ls_call(
+        "query_events",
+        session_id=sid,
+        event_type="model.changed",
+        limit=5000,
+    )
+    if not rows:
+        return None
+    # ``query_events`` returns most-recent first; transitions need chronological.
+    rows = sorted(rows, key=lambda r: (r.get("ts") or "", r.get("id") or 0))
+
+    transitions: list = []
+    prev_model = None
+    prev_provider = None
+    turn = 0
+    for r in rows:
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        model = (data.get("modelId") or data.get("model") or r.get("model") or "").strip()
+        provider = (data.get("provider") or "").strip()
+        if not model:
+            continue
+        turn += 1
+        if prev_model is not None and (
+            model != prev_model or provider != prev_provider
+        ):
+            transitions.append({
+                "turn":          turn,
+                "ts":            r.get("ts") or "",
+                "from_model":    prev_model,
+                "from_provider": prev_provider,
+                "to_model":      model,
+                "to_provider":   provider,
+            })
+        prev_model = model
+        prev_provider = provider
+
+    return {
+        "sessionId":       sid,
+        "transitions":     transitions,
+        "count":           len(transitions),
+        "has_transitions": bool(transitions),
+        "_source":         "local_store",
+    }
+
+
 @bp_sessions.route("/api/sessions/<sid>/model-transitions")
 def api_session_model_transitions(sid):
     """Return model/provider transitions detected within a single session."""
     import dashboard as _d
     if not sid or any(c in sid for c in ("/", "\\", "..")):
         return jsonify({"error": "invalid session id"}), 400
+    if is_local_store_read_enabled():
+        fast = _try_local_store_model_transitions(sid)
+        if fast is not None:
+            return jsonify(fast)
     sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
         "~/.openclaw/agents/main/sessions"
     )

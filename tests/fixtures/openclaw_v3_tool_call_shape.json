@@ -1,0 +1,45 @@
+{
+  "_note": "Reference shapes for a real OpenClaw v3 tool-call run AFTER daemon normalisation in clawmetry/sync.py::_parse_v3_event. Seeded synthetically from tests/fixtures/openclaw/v3-session.jsonl so Eng A's fix/session-tools-v3-fast-path branch has a concrete target. test_live_tool_call_lands_in_duckdb in tests/test_moat_live_openclaw_e2e.py OVERWRITES this with a real-LLM dump when run with ANTHROPIC_API_KEY set. Field paths the dashboard cares about: data.toolMetas[].{id,name,input} on model.completed; data.tool_use_id + data.output on tool.result.",
+  "events": [
+    {
+      "event_type": "model.completed",
+      "_source_v3_type": "message",
+      "data": {
+        "type": "model.completed",
+        "completionText": "I will run a tool",
+        "modelId": "claude-opus-4-7",
+        "provider": "anthropic",
+        "stopReason": "tool_use",
+        "toolMetas": [
+          {"id": "toolu_01moat", "name": "bash",
+           "input": {"command": "echo HELLO_FROM_MOAT_E2E_42"}}
+        ],
+        "promptCache": {"lastCallUsage": {"input": 120, "output": 42, "total": 162}},
+        "message": {
+          "role": "assistant",
+          "content": [
+            {"type": "text", "text": "I will run a tool"},
+            {"type": "tool_use", "id": "toolu_01moat", "name": "bash",
+             "input": {"command": "echo HELLO_FROM_MOAT_E2E_42"}}
+          ],
+          "api": "anthropic-messages",
+          "provider": "anthropic",
+          "model": "claude-opus-4-7"
+        },
+        "_v3_type": "message"
+      }
+    },
+    {
+      "event_type": "tool.result",
+      "_source_v3_type": "tool_use_result",
+      "data": {
+        "type": "tool.result",
+        "tool_use_id": "toolu_01moat",
+        "output": "HELLO_FROM_MOAT_E2E_42\n",
+        "result": "HELLO_FROM_MOAT_E2E_42\n",
+        "is_error": false,
+        "_v3_type": "tool_use_result"
+      }
+    }
+  ]
+}
