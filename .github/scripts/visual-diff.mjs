@@ -10,18 +10,26 @@
  * call `switchTab(<name>)` via Playwright `evaluate`, settle, and screenshot.
  *
  * Inputs (env):
- *   BASE_URL              http://127.0.0.1:8081
- *   HEAD_URL              http://127.0.0.1:8082
- *   OUT_DIR               directory for *.png + manifest.json
- *   PR_SCREENSHOT_TABS    comma-separated tab names (default below)
+ *   BASE_URL                     http://127.0.0.1:8081
+ *   HEAD_URL                     http://127.0.0.1:8082
+ *   OUT_DIR                      directory for *.png + manifest.json
+ *   PR_SCREENSHOT_TABS           comma-separated tab names (default below)
+ *   CLAWMETRY_VISUAL_DIFF_TOKEN  gateway token to seed into localStorage
+ *                                BEFORE navigation, dismisses login overlay.
+ *                                MUST match each dashboard's
+ *                                OPENCLAW_GATEWAY_TOKEN, otherwise every
+ *                                shot is a login overlay (bot is theater).
  *
  * Output:
  *   $OUT_DIR/<view>__<slug>__before.png
  *   $OUT_DIR/<view>__<slug>__after.png
  *   $OUT_DIR/<view>__<slug>__diff.png
- *   $OUT_DIR/manifest.json — [{view, tab, slug, diffPct, hasDiff, baseOk, headOk}]
+ *   $OUT_DIR/manifest.json — [{view, tab, slug, diffPct, hasDiff,
+ *                              baseOk, headOk, baseStatus, headStatus}]
  *
- * Exits 0 even with diffs — workflow consumes manifest.json and decides.
+ * Exits 0 on clean run (with or without pixel diffs).
+ * Exits 3 if any '/' fetch came back non-200 (auth gap): the workflow
+ *   surfaces this as a clear failure so the bot isn't silently green.
  */
 import { chromium } from "playwright";
 import pixelmatch from "pixelmatch";
@@ -32,12 +40,16 @@ import path from "node:path";
 const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:8081";
 const HEAD_URL = process.env.HEAD_URL || "http://127.0.0.1:8082";
 const OUT_DIR = process.env.OUT_DIR || "screenshots";
+// Token seeded into localStorage before navigation. Must match the
+// OPENCLAW_GATEWAY_TOKEN env that booted both dashboards, otherwise the
+// bootstrap JS shows the login overlay and every screenshot is just that.
+const AUTH_TOKEN = process.env.CLAWMETRY_VISUAL_DIFF_TOKEN || "";
 
 // Tabs that actually exist on the OSS dashboard nav (see dashboard.py
 // switchTab() handlers + the .nav-tab buttons). `overview` is the implicit
 // default — listed first so we get a `root` baseline shot.
 const DEFAULT_TABS =
-  "overview,flow,brain,approvals,alerts,notifications,context,usage,crons,memory,security";
+  "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,context,limits,clusters,history";
 const TABS = (process.env.PR_SCREENSHOT_TABS || DEFAULT_TABS)
   .split(",")
   .map((p) => p.trim())
@@ -86,7 +98,27 @@ async function shoot(browser, baseUrl, view, tab, file) {
     style.appendChild(document.createTextNode(css));
     document.documentElement.appendChild(style);
   });
+  // Seed the gateway token into localStorage BEFORE any dashboard script
+  // runs. The bootstrap path in dashboard.py calls
+  //   fetch('/api/auth/check?token=' + encodeURIComponent(stored))
+  // on every page load (see DASHBOARD_HTML inline <script>). If the token
+  // matches OPENCLAW_GATEWAY_TOKEN the login overlay never shows; otherwise
+  // every screenshot is just the overlay (the bug we're fixing). The same
+  // injected fetch wrapper then attaches the Authorization header to every
+  // subsequent /api/* call, so tabs that hit gateway-protected endpoints
+  // render real data instead of 401.
+  if (AUTH_TOKEN) {
+    await page.addInitScript((token) => {
+      try {
+        localStorage.setItem("clawmetry-token", token);
+        localStorage.setItem("clawmetry-gw-token", token);
+      } catch {
+        /* Storage disabled in some headless modes; harmless fallthrough. */
+      }
+    }, AUTH_TOKEN);
+  }
   let ok = true;
+  let httpStatus = 0;
   try {
     // The dashboard opens long-lived SSE streams (logs/brain/health), so
     // waiting for `networkidle` deadlocks. Use `domcontentloaded` and rely
@@ -95,7 +127,13 @@ async function shoot(browser, baseUrl, view, tab, file) {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
+    httpStatus = resp ? resp.status() : 0;
     if (!resp || resp.status() >= 400) ok = false;
+    // Auth-gap canary: a 3xx on '/' means the dashboard redirected us off
+    // the SPA root (e.g. to a sign-in page on a future variant). Treat as
+    // a hard auth failure so the workflow loudly fails instead of posting
+    // a wall of identical "login" screenshots.
+    if (resp && resp.status() >= 300 && resp.status() < 400) ok = false;
 
     // Switch to the requested tab via the page's own router. Overview is the
     // default landing tab so we only call switchTab() for everything else.
@@ -114,6 +152,29 @@ async function shoot(browser, baseUrl, view, tab, file) {
     // stream is open, so just dwell.
     await page.waitForTimeout(1200);
 
+    // Auth-gap canary #2: if the login overlay or the gateway-setup
+    // overlay is visible after dwell, the token seed didn't take. Surface
+    // it now so the workflow can fail loudly instead of publishing a wall
+    // of identical overlay shots.
+    const overlayBlocking = await page.evaluate(() => {
+      const seen = [];
+      for (const id of ["login-overlay", "gw-setup-overlay"]) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        const cs = getComputedStyle(el);
+        if (cs.display !== "none" && cs.visibility !== "hidden") {
+          seen.push(id);
+        }
+      }
+      return seen;
+    });
+    if (overlayBlocking.length > 0) {
+      ok = false;
+      console.error(
+        `[auth-gap] ${baseUrl} tab=${tab} overlay still visible: ${overlayBlocking.join(", ")}`
+      );
+    }
+
     // Scroll the active panel into view + back to top so lazy-rendered
     // sections fire their IntersectionObservers.
     await page.evaluate(async () => {
@@ -128,14 +189,15 @@ async function shoot(browser, baseUrl, view, tab, file) {
     });
 
     await page.screenshot({ path: file, fullPage: true });
-  } catch {
+  } catch (err) {
     ok = false;
+    console.error(`[shoot] ${baseUrl} tab=${tab} threw:`, err && err.message);
     const placeholder = new PNG({ width: 1, height: 1 });
     await fs.writeFile(file, PNG.sync.write(placeholder));
   } finally {
     await ctx.close();
   }
-  return ok;
+  return { ok, status: httpStatus };
 }
 
 async function diffPair(beforeFile, afterFile, diffFile) {
@@ -175,6 +237,7 @@ async function main() {
 
   const browser = await chromium.launch();
   const manifest = [];
+  const authGaps = [];
 
   for (const view of VIEWS) {
     for (const tab of TABS) {
@@ -183,23 +246,38 @@ async function main() {
       const afterFile = path.join(OUT_DIR, `${view.name}__${slug}__after.png`);
       const diffFile = path.join(OUT_DIR, `${view.name}__${slug}__diff.png`);
 
-      const baseOk = await shoot(browser, BASE_URL, view, tab, beforeFile);
-      const headOk = await shoot(browser, HEAD_URL, view, tab, afterFile);
+      const baseRes = await shoot(browser, BASE_URL, view, tab, beforeFile);
+      const headRes = await shoot(browser, HEAD_URL, view, tab, afterFile);
       const diffPct = await diffPair(beforeFile, afterFile, diffFile);
+
+      // Sanity gate: '/' must return HTTP 200. Anything else (3xx redirect,
+      // 401, 5xx) means the dashboard didn't render the SPA and we just
+      // captured a login/error page. Collect and fail the workflow at the
+      // end so reviewers see one clear message instead of N silent overlays.
+      for (const [label, res] of [["base", baseRes], ["head", headRes]]) {
+        if (res.status !== 200) {
+          authGaps.push(
+            `${label} ${view.name}/${tab}: HTTP ${res.status || "no-response"} (expected 200)`
+          );
+        }
+      }
+
       const entry = {
         view: view.name,
         tab,
         slug,
         diffPct,
         hasDiff: diffPct > 0.01,
-        baseOk,
-        headOk,
+        baseOk: baseRes.ok,
+        headOk: headRes.ok,
+        baseStatus: baseRes.status,
+        headStatus: headRes.status,
       };
       manifest.push(entry);
       console.log(
         `[diff] ${view.name} ${tab} -> ${(diffPct * 100).toFixed(2)}%${
           entry.hasDiff ? " (FLAGGED)" : ""
-        }${baseOk && headOk ? "" : " [render-error]"}`
+        }${baseRes.ok && headRes.ok ? "" : " [render-error]"} base=${baseRes.status} head=${headRes.status}`
       );
     }
   }
@@ -210,6 +288,17 @@ async function main() {
     JSON.stringify(manifest, null, 2)
   );
   console.log(`Wrote ${manifest.length} comparisons to ${OUT_DIR}/`);
+
+  if (authGaps.length > 0) {
+    console.error(
+      "\nAuth gap: one or more routes returned a non-200 response. " +
+        "The gateway token wasn't honored, so the captured PNGs are likely " +
+        "login overlays, not real tabs. Fix the boot config "+
+        "(OPENCLAW_GATEWAY_TOKEN + CLAWMETRY_VISUAL_DIFF_TOKEN must match)."
+    );
+    for (const gap of authGaps) console.error("  - " + gap);
+    process.exit(3);
+  }
 }
 
 main().catch((e) => {
