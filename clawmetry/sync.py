@@ -7998,6 +7998,11 @@ def run_daemon() -> None:
 
 
 # ── Telegram gateway-log ingest (#1192 follow-up) ──────────────────────────
+# DEPRECATED WHEN OPENCLAW PERSISTS: Remove this entire block (down through
+# sync_telegram_from_gateway_log and its helpers) once OpenClaw writes Telegram
+# sessions to disk like every other channel. The ``_CHANNEL_DIRS`` directory
+# watcher in sync.py already covers that future path — on the day OpenClaw
+# persists, this log parser becomes redundant and should be deleted.
 #
 # Why this exists
 # ---------------
