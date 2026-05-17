@@ -871,6 +871,207 @@ def api_component_network():
     return jsonify({"items": items})
 
 
+def _try_local_store_component_gateway(limit: int, offset: int):
+    """Tier-1 DuckDB fast path for /api/component/gateway (refs #1565).
+
+    Sources the routing-event list and the four "today_*" counters
+    (messages / heartbeats / crons / errors) from the daemon-ingested
+    ``events`` table instead of re-parsing today's ``gateway.log``.
+
+    Row → route shape mapping (real OpenClaw v3 names per
+    ``reference_openclaw_v3_event_types.md``; legacy aliases included so
+    pre-v3 / non-OpenClaw installs still light up the panel):
+
+      * ``prompt.submitted`` / ``user`` (data.role=user)  → message in
+      * ``model.completed`` / ``assistant``               → message out
+        (``message`` event whose ``data.message.role`` says ``assistant``
+        is also accepted — that's the Anthropic-SDK envelope shape the
+        daemon writes for v2 sessions.)
+      * ``cron.run.*``                                    → cron
+      * ``heartbeat.*`` / ``gateway.metric``              → heartbeat
+      * any row whose data carries ``errorCode`` / ``error``/
+        ``is_error`` / event_type endswith ``.error``    → bumps errors
+
+    Returns ``None`` (defer to legacy log parser) when the local store
+    isn't reachable, holds zero rows, or holds rows but NONE of them
+    map to a gateway-flow lane (covers the "store present for unrelated
+    agent type" case so legacy gateway.log still drives the panel).
+
+    Side-channel fields (``active_sessions``, ``config``, ``uptime``,
+    ``restarts``) come from live OS / FS state — exempt from the
+    DuckDB-first rule per ``feedback_duckdb_first_rule.md`` (live OS
+    snapshot is exempt; only historical TREND must persist).
+    """
+    # Late imports avoid pulling DuckDB / routes.sessions on Flask boot
+    # for users who never hit the gateway component panel.
+    try:
+        from routes.sessions import _ls_call  # daemon-proxy wrapper
+    except Exception:
+        return None
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    rows = _ls_call("query_events", since=today, limit=2000) or []
+    if not rows:
+        return None
+
+    # Map daemon-normalised v3 names + legacy aliases to one of the four
+    # routing categories. Unknown event_types are skipped so the panel
+    # doesn't fill with telemetry noise.
+    _MSG_IN = {"prompt.submitted", "user"}
+    _MSG_OUT = {"model.completed", "assistant"}
+    _CRON = {"cron.run.started", "cron.run.completed", "cron.run.failed"}
+    _HEARTBEAT = {"heartbeat", "heartbeat.tick", "gateway.metric"}
+
+    def _classify(et: str, data: dict):
+        """Return (route_type, stat_bucket) or (None, None) to skip."""
+        if et in _MSG_IN:
+            return "message", "today_messages"
+        if et in _MSG_OUT:
+            return "message", "today_messages"
+        if et == "message" and isinstance(data, dict):
+            inner = data.get("message") if isinstance(data.get("message"), dict) else data
+            role = (inner or {}).get("role") if isinstance(inner, dict) else None
+            if role in ("user", "assistant"):
+                return "message", "today_messages"
+        if et in _CRON or et.startswith("cron."):
+            return "cron", "today_crons"
+        if et in _HEARTBEAT or et.startswith("heartbeat"):
+            return "heartbeat", "today_heartbeats"
+        return None, None
+
+    def _is_error_row(et: str, data: dict) -> bool:
+        if et.endswith(".error") or et.endswith(".failed"):
+            return True
+        if not isinstance(data, dict):
+            return False
+        for k in ("errorCode", "error", "is_error"):
+            v = data.get(k)
+            if v not in (None, False, "", 0):
+                return True
+        return False
+
+    def _extract_channel(data: dict) -> str:
+        """Pull a channel hint mirroring the legacy parser's ``from`` slot."""
+        if not isinstance(data, dict):
+            return ""
+        for key in ("channel", "messageChannel", "provider", "origin"):
+            v = data.get(key)
+            if isinstance(v, str) and v:
+                return v
+        return ""
+
+    def _extract_model(data: dict) -> str:
+        if not isinstance(data, dict):
+            return ""
+        for key in ("model", "modelId"):
+            v = data.get(key)
+            if isinstance(v, str) and v:
+                return v
+        inner = data.get("message") if isinstance(data.get("message"), dict) else None
+        if isinstance(inner, dict):
+            v = inner.get("model")
+            if isinstance(v, str) and v:
+                return v
+        return ""
+
+    routes_out: list = []
+    stats = {
+        "today_messages":   0,
+        "today_heartbeats": 0,
+        "today_crons":      0,
+        "today_errors":     0,
+    }
+
+    for r in rows:
+        ts = r.get("ts") or ""
+        if not ts.startswith(today):
+            continue
+        et = (r.get("event_type") or "").strip()
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        rtype, bucket = _classify(et, data)
+        if rtype is None:
+            continue
+        sid = (r.get("session_id") or "")[:12]
+        is_err = _is_error_row(et, data)
+        if is_err:
+            stats["today_errors"] += 1
+        if bucket:
+            stats[bucket] = stats.get(bucket, 0) + 1
+        # Subagent annotation matches the legacy parser's heuristic.
+        if "subagent" in sid.lower() or "subagent" in (r.get("agent_id") or "").lower():
+            rtype = "subagent"
+        routes_out.append({
+            "timestamp": ts,
+            "from":      _extract_channel(data),
+            "to":        _extract_model(data),
+            "session":   sid,
+            "type":      rtype,
+            "status":    "error" if is_err else "ok",
+        })
+
+    # If the store HAS rows but NONE were gateway-shape, defer so the
+    # legacy parser handles the gateway.log surface (non-OpenClaw agents
+    # whose events live in DuckDB without touching the gateway flow).
+    if not routes_out:
+        return None
+
+    routes_out.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    total = len(routes_out)
+    page = routes_out[offset: offset + limit]
+
+    # --- Side-channel snapshot fields (live OS state — exempt from
+    # DuckDB-first per feedback_duckdb_first_rule.md). Best-effort; any
+    # failure leaves the field empty so the panel still renders.
+
+    import dashboard as _d
+    active_sessions = 0
+    try:
+        sess_file = os.path.join(
+            _d.SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions"),
+            "sessions.json",
+        )
+        with open(sess_file) as f:
+            sess_data = json.load(f)
+        now_ts = time.time() * 1000
+        for sid, sinfo in sess_data.items():
+            updated = sinfo.get("updatedAt", 0)
+            if now_ts - updated < 3600_000:
+                active_sessions += 1
+    except Exception:
+        pass
+
+    config_summary: dict = {}
+    for cf in (
+        os.path.expanduser("~/.clawdbot/openclaw.json"),
+        os.path.expanduser("~/.openclaw/openclaw.json"),
+    ):
+        try:
+            with open(cf) as f:
+                cfg = json.load(f)
+            plugins = cfg.get("plugins", {}).get("entries", {})
+            config_summary["channels"] = [k for k, v in plugins.items() if v.get("enabled")]
+            ad = cfg.get("agents", {}).get("defaults", {})
+            config_summary["max_concurrent"] = ad.get("maxConcurrent", "?")
+            config_summary["max_subagents"] = ad.get("subagents", {}).get("maxConcurrent", "?")
+            config_summary["heartbeat"] = ad.get("heartbeat", {}).get("every", "?")
+            config_summary["workspace"] = ad.get("workspace", "?")
+            break
+        except Exception:
+            continue
+
+    stats["active_sessions"] = active_sessions
+    stats["config"]          = config_summary
+    stats["uptime"]          = ""       # filled by legacy path; snapshot-only here
+    stats["restarts"]        = []       # ditto
+
+    return {
+        "routes":  page,
+        "stats":   stats,
+        "total":   total,
+        "_source": "local_store",
+    }
+
+
 @bp_components.route("/api/component/gateway")
 def api_component_gateway():
     """Parse gateway routing events from today's log file.
@@ -880,12 +1081,27 @@ def api_component_gateway():
       2. Current rolling plain-text: gateway.log (OpenClaw 2026.4+)
          Format: "ISO-TS [tag] message", e.g.
            2026-04-15T09:36:55.977+02:00 [ws] ⇄ res ✗ cron.list 0ms errorCode=...
+
+    Tier-1 DuckDB fast path (refs #1565): when
+    ``CLAWMETRY_LOCAL_STORE_READ=1`` and the daemon-ingested ``events``
+    table holds rows that map to a gateway-flow lane, serve the panel
+    from DuckDB instead of re-parsing today's gateway.log. Falls through
+    to the legacy parser on empty store / unreachable daemon / any
+    error — never crashes the panel.
     """
     import dashboard as _d
     import re
 
     limit = int(request.args.get("limit", 50))
     offset = int(request.args.get("offset", 0))
+
+    if is_local_store_read_enabled():
+        try:
+            fast = _try_local_store_component_gateway(limit, offset)
+        except Exception:
+            fast = None
+        if fast is not None:
+            return jsonify(fast)
     today = datetime.now().strftime("%Y-%m-%d")
     log_dirs = [d for d in [_d.LOG_DIR, *_d._get_log_dirs()] if d]
     log_dirs = list(dict.fromkeys(log_dirs))
